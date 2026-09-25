@@ -160,13 +160,14 @@ function DegradedList({
   readonly reload: () => void;
   readonly capabilityLabel: string;
 }) {
+  const t = useT();
   if (status === 'loading') {
     return <SkeletonRows count={4} label={`Loading ${capabilityLabel}`} />;
   }
   return (
     <ErrorBanner
       error={error}
-      title={`无法加载 Could not load ${capabilityLabel}`}
+      title={t(`无法加载 ${capabilityLabel}`, `Could not load ${capabilityLabel}`)}
       onRetry={reload}
       testId="catalog-error"
     />
@@ -447,10 +448,10 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     return (
       <EmptyState
         icon="grid"
-        title={t('还没有导入任何', 'Operation No operations imported yet')}
+        title={t('还没有导入任何 Operation', 'No operations imported yet')}
         body={t(
-          'Operation 来自系统接入的清单（publish_manifest）或接入向导的提议。',
-          "Operations come from a connected system's manifest or the onboarding wizard's proposals.",
+          'Operation 来自已接入系统发布的清单，或接入向导的提议。',
+          "Operations come from a connected system's published manifest, or the onboarding wizard's proposals.",
         )}
         testId="catalog-empty"
       />
@@ -545,8 +546,11 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                       impact={
                         usage
                           ? [
-                              `${usage.calls} 次调用 calls in the trailing window`,
-                              `${usage.approved} 次批准 approved`,
+                              t(
+                                `${usage.calls} 次调用`,
+                                `${usage.calls} calls in the trailing window`,
+                              ),
+                              t(`${usage.approved} 次批准`, `${usage.approved} approved`),
                             ]
                           : undefined
                       }
@@ -1317,7 +1321,10 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} 已弃用 deprecated`,
+        title: t(
+          `${definitionName([row], row.id, row.version) ?? row.id} 已弃用`,
+          `${definitionName([row], row.id, row.version) ?? row.id} deprecated`,
+        ),
       });
       refresh();
     } catch (err) {

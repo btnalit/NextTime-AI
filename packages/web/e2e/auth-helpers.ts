@@ -16,7 +16,7 @@ import { type Page, expect } from '@playwright/test';
 export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
   const forgetKey = page.getByRole('button', { name: '清除密钥' });
   const apiKeySummary = page.getByText('用 API key 登录');
-  const passwordLoginButton = page.getByRole('button', { name: 'Log in' });
+  const passwordLoginButton = page.getByRole('button', { name: '登录' });
 
   await expect
     .poll(
@@ -66,5 +66,5 @@ export async function loginWithPassword(
 ): Promise<void> {
   await page.locator('#login-name').fill(login);
   await page.locator('#login-password').fill(password);
-  await page.getByRole('button', { name: 'Log in' }).click();
+  await page.getByRole('button', { name: '登录' }).click();
 }

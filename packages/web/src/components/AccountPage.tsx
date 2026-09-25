@@ -10,7 +10,6 @@ import {
 } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
-import { roleLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
@@ -21,6 +20,7 @@ import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
+import { StatusChip } from './ui/StatusChip.js';
 
 export interface AccountPageProps {
   /** `null` in API-key mode (`GET /api/auth/me` is never called for that channel — there is no
@@ -435,11 +435,21 @@ function MembershipsCard({ memberships }: { readonly memberships: readonly WireM
           {t('你还不属于任何工作区', 'You are not a member of any workspace.')}
         </p>
       ) : (
-        <ul className="stack-s" data-testid="account-memberships">
+        // S8 W4 (audit AC1 "工作区行有无意义的左缩进；角色 chip 原样 owner"): the browser's default
+        // `<ul>` padding was never reset here (unlike every other list in this codebase, which
+        // resets it alongside `list-style`), and the role showed as a bare `.tag` instead of the
+        // same `StatusChip` machine every other role display in this console already uses.
+        <ul
+          className="stack-s"
+          data-testid="account-memberships"
+          style={{ listStyle: 'none', padding: 0 }}
+        >
           {memberships.map((m) => (
             <li key={m.workspaceId} className="row" style={{ justifyContent: 'space-between' }}>
-              <span>{m.workspaceName}</span>
-              <span className="tag">{roleLabel(m.role, t)}</span>
+              {/* S8 W4 (audit S15 "我的账户里写明'在 X 工作区中你是 owner'"): explicit "在 … 中你
+               *  是 …" phrasing instead of a bare name + chip pair. */}
+              <span>{t(`在 ${m.workspaceName} 中你是`, `In ${m.workspaceName}, you are`)}</span>
+              <StatusChip machine="role" status={m.role} size="s" />
             </li>
           ))}
         </ul>

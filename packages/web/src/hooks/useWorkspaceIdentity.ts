@@ -9,6 +9,10 @@ export interface WorkspaceIdentity {
    *  yet, still loading, or the call failed) — the Sidebar never shows a blank line. */
   readonly workspaceName: string;
   readonly role: WorkspaceRole;
+  /** S8 W4 (audit S15 "成员页不标你"): `get_workspace.caller.id` once loaded, `null` while
+   *  loading/failed/not yet deployed — lets a page mark the row matching the signed-in caller
+   *  without a second read. */
+  readonly principalId: string | null;
 }
 
 const FALLBACK_NAME = 'Workspace console';
@@ -32,5 +36,6 @@ export function useWorkspaceIdentity(http: CapabilityCaller): WorkspaceIdentity 
     workspace.state.status === 'ready'
       ? { kind: 'known', role: workspace.state.data.caller.role }
       : { kind: 'inferred', role: inferRole(permissions) };
-  return { workspaceName, role };
+  const principalId = workspace.state.status === 'ready' ? workspace.state.data.caller.id : null;
+  return { workspaceName, role, principalId };
 }

@@ -50,10 +50,15 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   const models = useCapabilityList<ModelRow>(http, 'list_models');
   const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  // S8 W4 (audit M1 "把入口定义当 Worker 展示"): `kind: 'worker'` excludes the workspace's own
+  // `kind: 'entry'` definition — `enabledWorkerDefinitions` narrows which Workers a principal may
+  // `invoke_worker`, never the entry definition itself, and an entry row typically has no
+  // `definition.name` (it is not authored through the catalog's name field), so an unfiltered read
+  // showed it in this checklist as a bare, unlabelled id.
   const workerDefinitions = useCapabilityList<WorkerDefinitionSummary>(
     http,
     'list_worker_definitions',
-    {},
+    { kind: 'worker' },
     { autoLoadAll: true },
   );
   const principals = useCapabilityList<PrincipalRow>(
@@ -209,61 +214,77 @@ function EffectivePanel({
       <div className="section-header">
         <h2 id="agent-effective-title">{t('当前生效', 'Currently effective')}</h2>
       </div>
-      <dl className="definition-list">
-        <dt>{t('模型', 'Model')}</dt>
-        <dd className="mono">{effective.model}</dd>
-        <dt>Skills</dt>
-        <dd className="row-wrap">
-          {effective.enabledSkills.length > 0
-            ? effective.enabledSkills.map((id) => (
-                <RefChip
-                  key={id}
-                  kind="object"
-                  id={id}
-                  name={nameOf(skillNames, id)}
-                  href={hrefs.catalog('skills')}
-                  size="s"
-                />
-              ))
-            : '—'}
-        </dd>
-        <dt>{t('系统接入', 'Systems')}</dt>
-        <dd className="row-wrap">
-          {effective.enabledGatekeepers.length > 0
-            ? effective.enabledGatekeepers.map((id) => (
-                <RefChip
-                  key={id}
-                  kind="gatekeeper"
-                  id={id}
-                  name={nameOf(gatekeeperNames, id)}
-                  href={hrefs.gatekeeper(id)}
-                  size="s"
-                />
-              ))
-            : '—'}
-        </dd>
-        <dt>{t('Worker 定义', 'Worker definitions')}</dt>
-        <dd className="row-wrap">
-          {effective.enabledWorkerDefinitions.length > 0
-            ? effective.enabledWorkerDefinitions.map((id) => (
-                <RefChip
-                  key={id}
-                  kind="workerDefinition"
-                  id={id}
-                  name={nameOf(workerDefinitionNames, id)}
-                  href={hrefs.catalog('workers')}
-                  size="s"
-                />
-              ))
-            : '—'}
-        </dd>
-        <dt>{t('提示词附加', 'Prompt addendum')}</dt>
-        <dd className="pre-wrap">
-          {effective.promptAddendum.length > 0 ? effective.promptAddendum : '—'}
-        </dd>
-        <dt>{t('自动批准低风险', 'Auto-approve low risk')}</dt>
-        <dd>{effective.autoApproveLow ? t('是', 'Yes') : t('否', 'No')}</dd>
-      </dl>
+      {/* S8 W4 (audit L10 "同一张卡里只读摘要用「标签在左」，可编辑表单用「标签在上」"): `.field`/
+       *  `.field-label` (label-on-top, the same classes `AgentProfileForm`'s own fields use)
+       *  instead of `.definition-list` (a label-left grid) — the read-only summary above the
+       *  editable form now shares one layout convention. */}
+      <div className="stack-s">
+        <div className="field">
+          <span className="field-label">{t('模型', 'Model')}</span>
+          <span className="mono">{effective.model}</span>
+        </div>
+        <div className="field">
+          <span className="field-label">Skills</span>
+          <span className="row-wrap">
+            {effective.enabledSkills.length > 0
+              ? effective.enabledSkills.map((id) => (
+                  <RefChip
+                    key={id}
+                    kind="object"
+                    id={id}
+                    name={nameOf(skillNames, id)}
+                    href={hrefs.catalog('skills')}
+                    size="s"
+                  />
+                ))
+              : '—'}
+          </span>
+        </div>
+        <div className="field">
+          <span className="field-label">{t('系统接入', 'Systems')}</span>
+          <span className="row-wrap">
+            {effective.enabledGatekeepers.length > 0
+              ? effective.enabledGatekeepers.map((id) => (
+                  <RefChip
+                    key={id}
+                    kind="gatekeeper"
+                    id={id}
+                    name={nameOf(gatekeeperNames, id)}
+                    href={hrefs.gatekeeper(id)}
+                    size="s"
+                  />
+                ))
+              : '—'}
+          </span>
+        </div>
+        <div className="field">
+          <span className="field-label">{t('Worker 定义', 'Worker definitions')}</span>
+          <span className="row-wrap">
+            {effective.enabledWorkerDefinitions.length > 0
+              ? effective.enabledWorkerDefinitions.map((id) => (
+                  <RefChip
+                    key={id}
+                    kind="workerDefinition"
+                    id={id}
+                    name={nameOf(workerDefinitionNames, id)}
+                    href={hrefs.catalog('workers')}
+                    size="s"
+                  />
+                ))
+              : '—'}
+          </span>
+        </div>
+        <div className="field">
+          <span className="field-label">{t('提示词附加', 'Prompt addendum')}</span>
+          <span className="pre-wrap">
+            {effective.promptAddendum.length > 0 ? effective.promptAddendum : '—'}
+          </span>
+        </div>
+        <div className="field">
+          <span className="field-label">{t('自动批准低风险', 'Auto-approve low risk')}</span>
+          <span>{effective.autoApproveLow ? t('是', 'Yes') : t('否', 'No')}</span>
+        </div>
+      </div>
     </section>
   );
 }

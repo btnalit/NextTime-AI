@@ -184,8 +184,10 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
       />
       {residue.length > 0 ? (
         <Notice tone="warn" testId="platform-residue-banner">
-          验收残留 {residue.length} 个工作区待清除（已停用或已到期的临时工作区）。 {residue.length}{' '}
-          workspaces of acceptance residue await purging (disabled, or ephemeral past expiry).{' '}
+          {t(
+            `验收残留 ${residue.length} 个工作区待清除（已停用或已到期的临时工作区）。`,
+            `${residue.length} workspace(s) of acceptance residue await purging (disabled, or ephemeral past expiry).`,
+          )}{' '}
           <a href={residueWorkspacesHref()} data-testid="platform-residue-link">
             {t('去清理', 'Review and purge')}
           </a>

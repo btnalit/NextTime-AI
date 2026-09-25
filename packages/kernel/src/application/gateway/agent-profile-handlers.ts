@@ -101,7 +101,16 @@ export async function assertPrincipalExists(
  * reach — including for an owner, who gets no automatic full-Grant-list here: I14's owner
  * override is a *validation-time* allowance to explicitly select any registered Gatekeeper, not a
  * standing grant, so it plays no role in this "what's available to inherit" ceiling), and every
- * currently-published WorkerDefinition.
+ * currently-published `kind: 'worker'` WorkerDefinition — S8 W4 (audit M1 "把入口定义当 Worker
+ * 展示"): the workspace's own `kind: 'entry'` definition is excluded, `kind`-filtered at the
+ * query itself rather than passing every published definition unfiltered as this function did
+ * before that fix. `enabledWorkerDefinitions` narrows which Workers a principal may
+ * `invoke_worker`, never the entry definition itself (there is nothing to "invoke" about the
+ * definition currently running); an unfiltered ceiling meant an "inherit" AgentProfile's
+ * `effective.enabledWorkerDefinitions` — and the console's own allow-list checklist, which reads
+ * from this same published set — silently included the entry definition's id, which typically
+ * carries no `definition.name` either (it is not authored through the catalog's name field), so
+ * it rendered as a bare, unlabelled id among real Workers.
  */
 // Exported (S8 W1-C) for `execution-readiness-handler.ts` to reuse the exact same "what would
 // this principal's entry Handle gate scope resolve to right now" computation
@@ -118,7 +127,7 @@ export async function resolveAvailableResources(
     principalId: targetPrincipalId,
     resourceType: GATEKEEPER_GRANT_CAPABILITY,
   });
-  const publishedWorkerDefinitions = await listWorkerDefinitions(client, workspaceId);
+  const publishedWorkerDefinitions = await listWorkerDefinitions(client, workspaceId, 'worker');
   return {
     publishedSkillIds,
     grantedGatekeeperIds,

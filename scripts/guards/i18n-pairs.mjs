@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // scripts/guards/i18n-pairs.mjs — S8 W1-A9 (docs/development-tasks.md §5e F5 "界面语言中文为主，
 // 英文收进语言切换"; audit S4/S7) + W1-A12 (batch design review round 2: two shapes slipped past
-// the original guard — see detectors (c)/(d) below). Fails on a *new* "中文 English" literal pair
-// — CJK text immediately followed by a Latin-script tail in the same string/JSX-text literal —
+// the original guard — see detectors (c)/(d) below) + S8 W4 item 5 (leftover 85 "i18n 守卫不查插值
+// 模板里的中英对" — detector (e) below). Fails on a *new* "中文 English" literal pair — CJK text
+// immediately followed by a Latin-script tail in the same string/JSX-text/template literal —
 // outside a `t(zh, en)` call (`packages/web/src/lib/i18n.tsx`), a raw English-only piece of UI
 // copy, or a CJK sentence with its full English translation glued into the same literal instead of
 // split across `t()`'s two arguments. W1-A9's codemod split every short pair it could safely reach
@@ -10,7 +11,7 @@
 // instead of reintroducing a doubled bilingual label (the audit's S4 "全站标签…翻倍…折行" root
 // cause) or shipping English-only copy in a Chinese-first console.
 //
-// Four literal shapes are scanned, all text-based (not an AST parse — same trade-off `css-tokens
+// Five literal shapes are scanned, all text-based (not an AST parse — same trade-off `css-tokens
 // .mjs`'s TW_ARBITRARY_VALUE/UI_IMPORT checks document):
 //   (a) JSX text — text directly between `>` and `<` (no `{`/`}` in between, so it is never
 //       already an expression like `{t(...)}`) that contains the *short* pair pattern (W1-A9).
@@ -45,9 +46,21 @@
 //       W1-A12 sweep found and fixed both kinds by hand, this guard is the regression net going
 //       forward. (c) and (d) skip `*.test.ts(x)` files entirely — assertions and fixture strings
 //       are not rendered UI copy, and would otherwise flood the baseline.
+//   (e) S8 W4 item 5: the same (b)/(d) checks — short unsplit pair, glued-sentence tail — run
+//       against a **template literal**'s (backtick string) *flattened* static text: every
+//       `${...}` interpolation replaced with a single space before testing, so a dynamic value
+//       (an id, a count) never participates in the CJK/Latin-tail matching either way, e.g.
+//       `` `弃用 ${x} Deprecate ${x}` `` flattens to "弃用   Deprecate  " → a glued pair, flagged.
+//       `STRING_RE` above never matches backticks at all ((b)'s own doc comment: "deliberately
+//       not... template-literal aware"), so this closes a real, previously unguarded gap — see
+//       `findTemplateLiteralSpans`'s own doc comment for the nested-`${}`-aware scanner this
+//       needs (an expression can itself contain nested template literals/strings/braces). Same
+//       `t(` exemption as (b) (an already-split `t(\`zh ${x}\`, \`en ${x}\`)` call), same
+//       unconditional (no exemption) glued-sentence check as (d), same `*.test.ts(x)` skip as
+//       (c)/(d) (a template literal in a test is overwhelmingly a fixture/expected-value string).
 //
 // Ratchet baseline (`i18n-pairs-baseline.json`, `{ "<file>": ["<exact violation text>", …] }`):
-// shared by all four detectors (a violation is identified by its exact text within a file,
+// shared by all five detectors (a violation is identified by its exact text within a file,
 // regardless of which detector found it). W1-A9's codemod could not safely auto-convert every
 // pre-existing short pair (module-level wire-code/enum label maps — `lib/status-tone.ts`-shaped
 // non-component helpers — and a handful of multi-line JSX fragments with embedded markup); W1-A12
@@ -74,7 +87,7 @@ export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const WEB_SRC_DIR = 'packages/web/src';
 export const BASELINE_FILE = fileURLToPath(new URL('./i18n-pairs-baseline.json', import.meta.url));
 
-const LATIN_TAIL_CHAR = "[A-Za-z0-9\\s,./()'’\"%:_+\\-;!?&]";
+const LATIN_TAIL_CHAR = '[A-Za-z0-9\\s,./()\'’"%:_+\\-;!?&]';
 
 /** Full-width / CJK punctuation that can directly abut an English tail with *no* space in
  *  between (e.g. "继承（不覆盖）Inherit workspace default" — the codemod's own split heuristic and
@@ -92,9 +105,7 @@ function isUnsplitPair(text) {
   const tailRe = new RegExp(LATIN_TAIL_CHAR);
   while (i > 0 && tailRe.test(text[i - 1]) && !cjkRe.test(text[i - 1])) i--;
   const zh = text.slice(0, i).replace(/\s+$/, '');
-  const en = text
-    .slice(i)
-    .replace(/^\s+/, '');
+  const en = text.slice(i).replace(/^\s+/, '');
   if (zh.length === 0 || en.length === 0) return false;
   if (!/^[A-Za-z]/.test(en)) return false;
   if (!cjkRe.test(zh)) return false;
@@ -141,7 +152,15 @@ const JSX_TEXT_EN_RE = />([^<>{};]{1,200})</g;
 
 /** (c)'s attribute half — a user-facing JSX prop whose value is a plain quoted string literal (an
  *  `attr={t(...)}` expression container never matches this — no quote directly after `=`). */
-const ATTR_NAMES = ['title', 'aria-label', 'placeholder', 'label', 'description', 'hint', 'subtitle'];
+const ATTR_NAMES = [
+  'title',
+  'aria-label',
+  'placeholder',
+  'label',
+  'description',
+  'hint',
+  'subtitle',
+];
 const ATTR_RE = new RegExp(`\\b(?:${ATTR_NAMES.join('|')})=(["'])((?:(?!\\1)[^\\n])*)\\1`, 'g');
 
 function wordCount(text) {
@@ -183,6 +202,116 @@ function hasGluedEnglishSentence(text) {
   const tail = text.slice(lastCjk + 1).trim();
   if (!tail || CODE_HINT_RE.test(tail)) return false;
   return wordCount(tail) >= 4;
+}
+
+/**
+ * (e) W1-A13 (S8 W4 item 5, leftover 85 "i18n 守卫不查插值模板里的中英对"): a template literal
+ * (backtick string) whose *static* text — the parts outside any `${...}` interpolation — glues a
+ * CJK phrase to its own English translation, the same "unsplit pair"/"glued sentence" shapes (b)/
+ * (d) already catch for plain quoted strings. `STRING_RE` never matches backticks at all (the file
+ * header's own note on (b): "deliberately not... template-literal aware"), so this was a real,
+ * unguarded gap — the exact shape #282 fixed five instances of by hand (`i18n-pairs-baseline.json`
+ * predates this detector, hence the initial baseline entries this task's own sweep adds).
+ *
+ * `findTemplateLiteralSpans` walks the source once, tracking a stack of "am I inside a template
+ * literal's static text, or inside one of its `${...}` expressions" frames — needed because an
+ * expression can itself contain nested template literals (`${a ? \`x\` : \`y\`}`), ordinary quoted
+ * strings (whose own `` ` ``/`{`/`}` characters must not perturb the outer template's own nesting),
+ * and arbitrary brace-nesting (`${fn({a: 1})}`). Each span's *flattened* text — every `${...}`
+ * replaced with a single space, so a dynamic value never fools the CJK/Latin-tail detectors either
+ * way — is what both (b)'s `isUnsplitPair` and (d)'s `hasGluedEnglishSentence` run against, and
+ * what gets reported/baselined (not the raw source substring, which would still carry the
+ * un-evaluated `${...}` expressions).
+ */
+function findTemplateLiteralSpans(source) {
+  const spans = [];
+  const stack = [];
+  let i = 0;
+  function topIsTemplate() {
+    const top = stack[stack.length - 1];
+    return top !== undefined && top.type === 'template';
+  }
+  while (i < source.length) {
+    const top = stack[stack.length - 1];
+    if (top === undefined) {
+      const ch = source[i];
+      if (ch === '`') {
+        stack.push({ type: 'template', parts: [], textStart: i + 1, spanStart: i });
+        i++;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        const quote = ch;
+        i++;
+        while (i < source.length && source[i] !== quote) {
+          if (source[i] === '\\') i++;
+          i++;
+        }
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (topIsTemplate()) {
+      const ch = source[i];
+      if (ch === '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        top.parts.push(source.slice(top.textStart, i));
+        stack.pop();
+        spans.push({ start: top.spanStart, end: i + 1, flatText: top.parts.join(' ') });
+        i++;
+        continue;
+      }
+      if (ch === '$' && source[i + 1] === '{') {
+        top.parts.push(source.slice(top.textStart, i));
+        stack.push({ type: 'expr', depth: 1 });
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // Inside a `${...}` expression.
+    const ch = source[i];
+    if (ch === '`') {
+      stack.push({ type: 'template', parts: [], textStart: i + 1, spanStart: i });
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      i++;
+      while (i < source.length && source[i] !== quote) {
+        if (source[i] === '\\') i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '{') {
+      top.depth++;
+      i++;
+      continue;
+    }
+    if (ch === '}') {
+      top.depth--;
+      if (top.depth === 0) {
+        stack.pop();
+        const parent = stack[stack.length - 1];
+        if (parent && parent.type === 'template') parent.textStart = i + 1;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return spans;
 }
 
 /** For every index in `source`, is that position lexically inside the argument list of a call to
@@ -278,6 +407,23 @@ export function findViolations(source, { isTestFile = false } = {}) {
     }
   }
 
+  // (e): skips test files, same reasoning (c)/(d) already give — a template literal in a
+  // `*.test.ts(x)` file is overwhelmingly a fixture/expected-value string, not rendered UI copy.
+  if (!isTestFile) {
+    for (const span of findTemplateLiteralSpans(blanked)) {
+      const text = span.flatText.trim().replace(/\s+/g, ' ');
+      if (!text) continue;
+      const before = blanked.slice(Math.max(0, span.start - 4), span.start);
+      const isTArg = /t\(\s*$/.test(before); // first argument of a t(...) call — already split
+      if (isUnsplitPair(text) && !isTArg) {
+        push(span.start, text);
+      }
+      if (hasGluedEnglishSentence(text)) {
+        push(span.start, text);
+      }
+    }
+  }
+
   if (!isTestFile) {
     const insideT = computeInsideTMap(blanked);
     JSX_TEXT_EN_RE.lastIndex = 0;
@@ -361,7 +507,7 @@ function main() {
     console.error(
       '  Wrap in t(zh, en) (packages/web/src/lib/i18n.ts). If this is a pre-existing pair a ' +
         'non-component helper cannot split yet, add its exact text to ' +
-        'scripts/guards/i18n-pairs-baseline.json under the file (see that guard\'s own header).',
+        "scripts/guards/i18n-pairs-baseline.json under the file (see that guard's own header).",
     );
     process.exit(1);
   }

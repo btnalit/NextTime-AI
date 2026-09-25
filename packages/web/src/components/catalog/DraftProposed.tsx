@@ -70,12 +70,18 @@ export function DraftProposed({
     try {
       const result = await onPublish();
       setStatus(result.status);
-      toast.push({ tone: 'ok', title: `已发布 Published · ${draft.name ?? draft.id}` });
+      toast.push({
+        tone: 'ok',
+        title: t(`已发布 · ${draft.name ?? draft.id}`, `Published · ${draft.name ?? draft.id}`),
+      });
     } catch (err) {
       setError(err);
       toast.push({
         tone: 'danger',
-        title: `无法发布 Could not publish ${draft.name ?? draft.id}`,
+        title: t(
+          `无法发布 ${draft.name ?? draft.id}`,
+          `Could not publish ${draft.name ?? draft.id}`,
+        ),
         description: describeError(err).message,
       });
     } finally {

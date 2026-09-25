@@ -88,6 +88,9 @@
         "id": {
           "type": "string"
         },
+        "internal": {
+          "type": "boolean"
+        },
         "kind": {
           "enum": [
             "human",
@@ -117,7 +120,8 @@
         "displayName",
         "createdAt",
         "hasApiKey",
-        "disabledAt"
+        "disabledAt",
+        "internal"
       ],
       "type": "object"
     }
@@ -1999,6 +2003,9 @@
             "id": {
               "type": "string"
             },
+            "internal": {
+              "type": "boolean"
+            },
             "kind": {
               "enum": [
                 "human",
@@ -2028,7 +2035,8 @@
             "displayName",
             "createdAt",
             "hasApiKey",
-            "disabledAt"
+            "disabledAt",
+            "internal"
           ],
           "type": "object"
         }
@@ -2913,6 +2921,9 @@
         "id": {
           "type": "string"
         },
+        "internal": {
+          "type": "boolean"
+        },
         "kind": {
           "enum": [
             "human",
@@ -2942,7 +2953,8 @@
         "displayName",
         "createdAt",
         "hasApiKey",
-        "disabledAt"
+        "disabledAt",
+        "internal"
       ],
       "type": "object"
     }
@@ -9022,6 +9034,9 @@
               "id": {
                 "type": "string"
               },
+              "internal": {
+                "type": "boolean"
+              },
               "kind": {
                 "enum": [
                   "human",
@@ -9051,7 +9066,8 @@
               "displayName",
               "createdAt",
               "hasApiKey",
-              "disabledAt"
+              "disabledAt",
+              "internal"
             ],
             "type": "object"
           },
@@ -16806,6 +16822,9 @@
         "id": {
           "type": "string"
         },
+        "internal": {
+          "type": "boolean"
+        },
         "kind": {
           "enum": [
             "human",
@@ -16835,7 +16854,8 @@
         "displayName",
         "createdAt",
         "hasApiKey",
-        "disabledAt"
+        "disabledAt",
+        "internal"
       ],
       "type": "object"
     }

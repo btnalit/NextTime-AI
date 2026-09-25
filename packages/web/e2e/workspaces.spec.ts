@@ -80,7 +80,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
     // A previous (retried) run already changed the password away from the initial one — try the
     // deterministic changed password instead, exactly as login.spec.ts does.
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await page.getByRole('button', { name: '登录' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
@@ -96,7 +96,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
 
 async function signOut(page: Page): Promise<void> {
   await page.getByRole('button', { name: /登出/ }).click();
-  await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
 }
 
 /** The 工作区 list's `<tr>` for the workspace named `name`. */
@@ -266,7 +266,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
       // A previous (retried) run already changed the password away from the temporary one — try
       // the deterministic new one instead, exactly as login.spec.ts does.
       await page.locator('#login-password').fill(newPassword);
-      await page.getByRole('button', { name: 'Log in' }).click();
+      await page.getByRole('button', { name: '登录' }).click();
       await expect(changePasswordHeading.or(wsStatus)).toBeVisible({ timeout: 15_000 });
     }
 

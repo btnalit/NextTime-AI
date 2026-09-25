@@ -123,7 +123,7 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     // --- 0. 全新工作区 + 登入自己的 owner（"空"状态覆盖：见本文件顶部说明） -------------------
     const { ownerLogin, ownerTemporaryPassword } = await createFreshWorkspace(page);
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     // 新用户同时是平台默认工作区的 member（`create_user` 的默认行为，见 helpers.ts
     // `selectOwnedWorkspace` 的 doc comment）和这个新工作区的 owner——切到后者。

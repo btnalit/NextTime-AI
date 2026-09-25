@@ -44,6 +44,91 @@ function toggle(list: readonly string[], id: string): readonly string[] {
   return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
 }
 
+/**
+ * S8 W4 (audit GM1 "'全不勾 = 不限制'是反向语义"): an allow-list here has only two domain states —
+ * `[]` (unrestricted) or a non-empty explicit list — so unchecking the last box used to *loosen*
+ * the policy, the opposite of what unchecking a box usually means. This wraps the same underlying
+ * `[]`-means-unrestricted state behind an explicit "不限制" toggle (UI-only `restricted` state,
+ * seeded from whether the incoming policy already had an explicit list) so loosening to
+ * unrestricted is a deliberate flip, not an emergent side effect of deselecting everything; if a
+ * reader still empties the list while `restricted` stays on, an inline note explains the
+ * equivalence rather than silently reinterpreting it.
+ */
+function AllowListField({
+  legend,
+  options,
+  selected,
+  onChange,
+  disabled,
+  error,
+  testId,
+}: {
+  readonly legend: string;
+  readonly options: readonly { readonly id: string; readonly label: string }[];
+  readonly selected: readonly string[];
+  readonly onChange: (next: readonly string[]) => void;
+  readonly disabled: boolean;
+  readonly error?: string;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [restricted, setRestricted] = useState(selected.length > 0);
+
+  function setRestrictedMode(next: boolean): void {
+    setRestricted(next);
+    if (!next) {
+      onChange([]);
+    } else if (selected.length === 0) {
+      // Seed with everything currently available — switching into restricted mode must not
+      // silently change effective behavior at the moment of the toggle.
+      onChange(options.map((option) => option.id));
+    }
+  }
+
+  return (
+    <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+      <legend className="field-label">{legend}</legend>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={!restricted}
+          onChange={(event) => setRestrictedMode(!event.target.checked)}
+          disabled={disabled}
+        />
+        <span>{t('不限制（全部可用）', 'Unrestricted (everything available)')}</span>
+      </label>
+      {restricted ? (
+        <div className="stack-s" data-testid={testId} style={{ paddingTop: 8 }}>
+          {options.map((option) => (
+            <label className="checkbox" key={option.id}>
+              <input
+                type="checkbox"
+                checked={selected.includes(option.id)}
+                onChange={() => onChange(toggle(selected, option.id))}
+                disabled={disabled}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+          {selected.length === 0 ? (
+            <p className="field-hint">
+              {t(
+                '未勾选任何项等价于"不限制"。',
+                'Selecting nothing here has the same effect as "unrestricted".',
+              )}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </fieldset>
+  );
+}
+
 function fieldForPolicyError(message: string): string | undefined {
   const lower = message.toLowerCase();
   if (lower.includes('maxpromptaddendumchars')) return 'maxPromptAddendumChars';
@@ -152,33 +237,15 @@ export function AgentPolicyForm({
       noValidate
       data-testid="agent-policy-form"
     >
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">
-          {t('可选模型', 'Allowed models')}
-          <span className="field-hint" style={{ margin: 0 }}>
-            {' '}
-            {t('— 空 = 不限制', 'empty = unrestricted')}
-          </span>
-        </legend>
-        <div className="stack-s" data-testid="agent-policy-allowed-models">
-          {models.map((m) => (
-            <label className="checkbox" key={m.id}>
-              <input
-                type="checkbox"
-                checked={state.allowedModels.includes(m.id)}
-                onChange={() => update('allowedModels', toggle(state.allowedModels, m.id))}
-                disabled={submitting}
-              />
-              <span>{m.id}</span>
-            </label>
-          ))}
-        </div>
-        {fieldErrors.allowedModels ? (
-          <p className="field-error" role="alert">
-            {fieldErrors.allowedModels}
-          </p>
-        ) : null}
-      </fieldset>
+      <AllowListField
+        legend={t('可选模型', 'Allowed models')}
+        options={models.map((m) => ({ id: m.id, label: m.id }))}
+        selected={state.allowedModels}
+        onChange={(next) => update('allowedModels', next)}
+        disabled={submitting}
+        error={fieldErrors.allowedModels}
+        testId="agent-policy-allowed-models"
+      />
 
       <Field
         id="ap-default-model"
@@ -207,7 +274,7 @@ export function AgentPolicyForm({
           onChange={(event) => update('memberCanEditProfile', event.target.checked)}
           disabled={submitting}
         />
-        <span>{t('Member 可编辑自己的智能体配置', 'Members may edit their own AgentProfile')}</span>
+        <span>{t('成员可编辑自己的智能体配置', 'Members may edit their own Agent profile')}</span>
       </label>
 
       <Field
@@ -231,53 +298,25 @@ export function AgentPolicyForm({
         />
       </Field>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">
-          {t('可选', 'Skills Allowed skills')}
-          <span className="field-hint" style={{ margin: 0 }}>
-            {' '}
-            {t('— 空 = 不限制', 'empty = unrestricted')}
-          </span>
-        </legend>
-        <div className="stack-s" data-testid="agent-policy-allowed-skills">
-          {publishedSkills.map((s) => (
-            <label className="checkbox" key={s.id}>
-              <input
-                type="checkbox"
-                checked={state.allowedSkills.includes(s.id)}
-                onChange={() => update('allowedSkills', toggle(state.allowedSkills, s.id))}
-                disabled={submitting}
-              />
-              <span>{s.name}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <AllowListField
+        legend={t('可选 Skill', 'Allowed Skills')}
+        options={publishedSkills.map((s) => ({ id: s.id, label: s.name }))}
+        selected={state.allowedSkills}
+        onChange={(next) => update('allowedSkills', next)}
+        disabled={submitting}
+        error={fieldErrors.allowedSkills}
+        testId="agent-policy-allowed-skills"
+      />
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">
-          {t('可选系统接入', 'Allowed connected systems')}
-          <span className="field-hint" style={{ margin: 0 }}>
-            {' '}
-            {t('— 空 = 不限制', 'empty = unrestricted')}
-          </span>
-        </legend>
-        <div className="stack-s" data-testid="agent-policy-allowed-gatekeepers">
-          {gatekeepers.map((g) => (
-            <label className="checkbox" key={g.id}>
-              <input
-                type="checkbox"
-                checked={state.allowedGatekeepers.includes(g.id)}
-                onChange={() =>
-                  update('allowedGatekeepers', toggle(state.allowedGatekeepers, g.id))
-                }
-                disabled={submitting}
-              />
-              <span>{g.name}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <AllowListField
+        legend={t('可选系统接入', 'Allowed connected systems')}
+        options={gatekeepers.map((g) => ({ id: g.id, label: g.name }))}
+        selected={state.allowedGatekeepers}
+        onChange={(next) => update('allowedGatekeepers', next)}
+        disabled={submitting}
+        error={fieldErrors.allowedGatekeepers}
+        testId="agent-policy-allowed-gatekeepers"
+      />
 
       <label className="checkbox">
         <input
@@ -295,16 +334,13 @@ export function AgentPolicyForm({
       </label>
 
       {submitError !== null ? (
-        <ErrorBanner
-          error={submitError}
-          title={t('无法保存 AgentPolicy', 'Could not save AgentPolicy')}
-        />
+        <ErrorBanner error={submitError} title={t('无法保存策略', 'Could not save the policy')} />
       ) : null}
 
       <Notice>
         {t(
-          '变更立即影响所有未显式覆盖该项的',
-          'AgentProfile Changes apply immediately to every AgentProfile that has not explicitly overridden the affected field.',
+          '变更立即影响所有未显式覆盖该项的智能体配置。',
+          'Changes apply immediately to every Agent profile that has not explicitly overridden this field.',
         )}
       </Notice>
 

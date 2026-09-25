@@ -78,7 +78,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
       // A previous (retried) run already changed the password away from the initial one — try
       // the deterministic changed password instead.
       await page.locator('#login-password').fill(changedPassword);
-      await page.getByRole('button', { name: 'Log in' }).click();
+      await page.getByRole('button', { name: '登录' }).click();
       await expect(
         changePasswordHeading.or(overviewHeading).or(platformOverviewNav).first(),
       ).toBeVisible({ timeout: 15_000 });
@@ -105,7 +105,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     });
 
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
   });
 
   test('owner: password login -> shell -> sign out -> GET /api/auth/me is 401', async ({
@@ -123,7 +123,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
 
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
 
     const res = await page.request.get('/api/auth/me');
     expect(res.status()).toBe(401);
@@ -151,7 +151,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
       // A previous (retried) run already changed the password away from the original temporary
       // one — try the deterministic new one instead.
       await page.locator('#login-password').fill(newPassword);
-      await page.getByRole('button', { name: 'Log in' }).click();
+      await page.getByRole('button', { name: '登录' }).click();
       await expect(changePasswordHeading.or(wsStatus)).toBeVisible({ timeout: 15_000 });
     }
 
@@ -169,7 +169,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     await expect(wsStatus).toHaveAttribute('data-status', 'connected', { timeout: 15_000 });
 
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
 
     // Sign in again with the NEW password.
     await reachLoginForm(page);
@@ -190,7 +190,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     for (let attempt = 0; attempt < 5; attempt++) {
       await page.locator('#login-name').fill(adminLogin);
       await page.locator('#login-password').fill('definitely-the-wrong-password');
-      await page.getByRole('button', { name: 'Log in' }).click();
+      await page.getByRole('button', { name: '登录' }).click();
       // Tolerant of an already-locked account (a retried run of this same test) — either message
       // is a valid "that attempt did not succeed" outcome.
       await expect(
@@ -203,7 +203,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     // "the real password" here since only the lock message matters for this assertion.
     await page.locator('#login-name').fill(adminLogin);
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await page.getByRole('button', { name: '登录' }).click();
     await expect(page.getByText(LOCKED_MESSAGE)).toBeVisible();
   });
 });

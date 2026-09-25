@@ -143,7 +143,10 @@ describe('AgentProfilePage', () => {
     expect(within(effective).getByText('anthropic/claude')).toBeTruthy();
 
     const form = await screen.findByTestId('agent-profile-form');
-    expect(within(form).getByLabelText(/模型/)).toHaveProperty('value', 'anthropic/claude');
+    expect(within(form).getByRole('combobox', { name: /模型/ })).toHaveProperty(
+      'value',
+      'anthropic/claude',
+    );
   });
 
   it('renders a get_agent_profile not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
@@ -204,7 +207,7 @@ describe('AgentProfilePage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
-    const select = within(form).getByLabelText(/模型/) as HTMLSelectElement;
+    const select = within(form).getByRole('combobox', { name: /模型/ }) as HTMLSelectElement;
     await waitFor(() => {
       const values = Array.from(select.options).map((o) => o.value);
       expect(values).toContain('anthropic/claude');

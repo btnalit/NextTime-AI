@@ -7,16 +7,21 @@
 
 - 平台已部署，`caddy` 已经把 `/mcp` 反代到 `kernel:8080`（`deploy/caddy/Caddyfile`；本机开发直连
   `kernel` 自己的端口也可以，跳过 caddy/TLS）。
-- 你是这个 workspace 的 **owner**：`issue_handle` 当前是 `channel:'human'`、`minRole:'owner'`
-  能力（design doc §9.3 governance 行），还没有对应的控制台按钮（S3.11 web 侧未落地这一步），需要
-  owner 自己的 API key 直接调用一次能力接口。
+- 你是这个 workspace 的 **owner**：`issue_handle` 是 `channel:'human'`、`minRole:'owner'` 能力
+  （design doc §9.3 governance 行）。
 - 若走公网面（`https://<host>:8443`），Caddy 用内网自签 CA——先按
   `docs/runbooks/host-caddy.md` §E8.2 把根证书导入本机信任库，否则 TLS 握手会失败（或临时用
   `curl -k`/客户端的"忽略证书"选项验证连通性，正式接入前仍建议导入 CA）。
 
 ## 第 1 步：拿一个 Handle
 
-用你的 API key 调用 `issue_handle`（`sessionKind` 目前只接受字面量 `'interactive'`）：
+**控制台（推荐）**：登录后打开「访问」页（`#/govern/access`），在「接 Claude Code / MCP」卡片里
+点「签发」——有效期、能力范围、可用的门都在表单里选，签出的 Handle 只显示一次，卡片同时给出下一步
+要粘贴的 `claude mcp add` 命令（用你控制台的实际地址替换下面示例里的 `<host>:8443`）。跳到
+[第 2 步](#第-2-步把-handle-配成-claude-code-的-mcp-server)。
+
+**命令行（等价）**：用你的 API key 调用 `issue_handle`（`sessionKind` 目前只接受字面量
+`'interactive'`）：
 
 ```bash
 curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \

@@ -11,6 +11,7 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { GrantGateDrawer } from './access/GrantGateDrawer.js';
+import { IssueOwnHandleSection } from './access/IssueOwnHandleSection.js';
 import { PageHeader } from './kit/page-header.js';
 import { DashboardCard } from './kit/section.js';
 import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
@@ -156,12 +157,12 @@ export function AccessPage({ http }: AccessPageProps) {
             hint={
               principals.length > 0
                 ? t(
-                    '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。',
-                    'Pick a member from the suggestions, or type a principal id and press Enter. Empty = all members.',
+                    '从建议里选一个成员，或输入其 ID 后按 Enter；留空 = 全部成员。',
+                    'Pick a member from the suggestions, or type their ID and press Enter. Empty = all members.',
                   )
                 : t(
-                    'Principal id（可选），按 Enter 应用；留空 = 全部成员。',
-                    'Principal id (optional) — press Enter to apply. Empty = all members.',
+                    '成员 ID（可选），按 Enter 应用；留空 = 全部成员。',
+                    'Member ID (optional) — press Enter to apply. Empty = all members.',
                   )
             }
           >
@@ -348,6 +349,12 @@ export function AccessPage({ http }: AccessPageProps) {
           />
         ) : null}
       </DashboardCard>
+
+      {canManage ? (
+        <DashboardCard title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>
+          <IssueOwnHandleSection http={http} />
+        </DashboardCard>
+      ) : null}
 
       {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 

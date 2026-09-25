@@ -47,7 +47,7 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       `Journey member ${suffix}`,
     );
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
 
     // Step 2: owner adds them by login, from 成员与授权's own "添加成员" entry point.
     await asOwner(page);

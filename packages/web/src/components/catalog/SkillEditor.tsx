@@ -1,4 +1,6 @@
-import { type FormEvent, useState } from 'react';
+import type { SkillDetailWire } from '@nexttime/shared';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { useCapability } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import {
   EMPTY_SKILL_FORM,
@@ -22,8 +24,10 @@ import { MarkdownPreview } from './MarkdownPreview.js';
 
 export interface SkillEditorProps {
   readonly http: CapabilityCaller;
-  /** "编辑（生成新草稿版本）": the row to copy from. `list_skills` carries no `markdown`, so the
-   *  body starts empty; and `propose_skill` addresses no family, so the result is a *new* Skill. */
+  /** "编辑（生成新草稿版本）": the row to copy from. `propose_skill` addresses no family, so the
+   *  result is a *new* Skill (new id, v1), not a new version of this one — S8 W4 (leftover 48
+   *  "无 get_skill") only fixes the *prefill*: `get_skill{skillId}` now exists, so the body no
+   *  longer has to be re-typed from scratch. */
   readonly copyOf?: SkillRow;
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
@@ -58,6 +62,29 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
+
+  // S8 W4 (leftover 48 "无 get_skill"): fetches the current version's full body to prefill the
+  // Markdown field, which `list_skills`/`copyOf` never carries. Skipped entirely (no network
+  // call) when this is a fresh draft (`copyOf` undefined) via the `load` override, the same
+  // pattern `access/GrantGateForm.tsx` uses to skip `list_operations` while no single gate is
+  // targeted.
+  const skillDetail = useCapability<SkillDetailWire | null>(
+    http,
+    'get_skill',
+    copyOf ? { skillId: copyOf.id } : undefined,
+    { load: copyOf ? undefined : async () => null },
+  );
+  // Applies the fetched body to the form exactly once — a ref, not a `useEffect` dependency on
+  // `form`/`update`, so typing in the Markdown field before the read resolves is never clobbered
+  // by a second application, and the effect does not need `form`/`setForm` in its own deps.
+  const appliedDetail = useRef(false);
+  useEffect(() => {
+    if (appliedDetail.current) return;
+    if (skillDetail.state.status !== 'ready' || skillDetail.state.data === null) return;
+    appliedDetail.current = true;
+    const detail = skillDetail.state.data;
+    setForm((prev) => ({ ...prev, markdown: detail.markdown }));
+  }, [skillDetail.state]);
 
   function update<K extends keyof SkillForm>(key: K, value: SkillForm[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -114,14 +141,14 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         <Notice tone="warn" testId="skill-copy-notice">
           {t(
             <>
-              从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：内核的 propose_skill 不接受
-              skillId，提交会创建一个<strong>新的</strong> Skill（新 id、v1），不是同一 Skill
-              的新版本；list_skills 不返回正文，正文需重新填写。
+              从 <strong>{copyOf.name}</strong> v{copyOf.version}{' '}
+              复制（已预填当前版本的正文）：内核的 propose_skill 不接受 skillId，提交会创建一个
+              <strong>新的</strong> Skill（新 id、v1），不是 同一 Skill 的新版本。
             </>,
             <>
-              Copied from {copyOf.name} v{copyOf.version}: propose_skill takes no skillId, so
-              submitting creates a <strong>new</strong> Skill (new id, v1), not a new version of
-              this one; list_skills carries no body, so the Markdown must be re-entered.
+              Copied from {copyOf.name} v{copyOf.version} (the current version’s body is
+              pre-filled): propose_skill takes no skillId, so submitting creates a{' '}
+              <strong>new</strong> Skill (new id, v1), not a new version of this one.
             </>,
           )}
         </Notice>
@@ -227,12 +254,17 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         {bodyView === 'edit' ? (
           <Field
             id="skill-markdown"
-            label={t(
-              'SKILL.md 正文（不含 frontmatter） Body only —',
-              'the frontmatter is generated from the fields above',
-            )}
+            label={t('SKILL.md 正文（不含 frontmatter）', 'SKILL.md body (no frontmatter)')}
             required
             error={errors.markdown || null}
+            hint={
+              copyOf && skillDetail.state.status === 'loading'
+                ? t('正在加载当前版本的正文…', 'Loading the current version’s body…')
+                : t(
+                    '这段正文会替换 fields 生成的 frontmatter 以外的内容。',
+                    'This is everything below the fields-generated frontmatter.',
+                  )
+            }
           >
             <Textarea
               id="skill-markdown"
@@ -240,10 +272,10 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
               onChange={(event) => update('markdown', event.target.value)}
               rows={14}
               mono
-              disabled={busy}
+              disabled={busy || (copyOf !== undefined && skillDetail.state.status === 'loading')}
               invalid={!!errors.markdown}
               spellCheck={false}
-              aria-describedby={describedBy('skill-markdown', false, !!errors.markdown)}
+              aria-describedby={describedBy('skill-markdown', true, !!errors.markdown)}
             />
           </Field>
         ) : (

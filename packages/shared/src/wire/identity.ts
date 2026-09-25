@@ -18,6 +18,12 @@ export const PrincipalWireSchema = z
     workerDefinitionId: z.string().optional(),
     hasApiKey: z.boolean(),
     disabledAt: z.string().nullable(),
+    /** S8 W4 (leftover 88): true for the platform's own internal service Principals
+     *  (`__gatekeeper_service__`, `__draft_reaper__`) — derived by the kernel from a reserved
+     *  `displayName` naming convention (`members-handlers.ts`'s `isInternalPrincipalDisplayName`),
+     *  never from a client-side name list. Consumers (the Access page's service-Handle picker,
+     *  the Members page) filter these out or label them distinctly rather than guessing. */
+    internal: z.boolean(),
   })
   .strict();
 export type PrincipalWire = z.infer<typeof PrincipalWireSchema>;
