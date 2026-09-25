@@ -5,6 +5,7 @@ import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
+import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -136,93 +137,99 @@ export function ModulesTab({ http }: ModulesTabProps) {
           testId="catalog-modules-empty"
         />
       ) : (
-        <div className="table-scroll">
-          <table className="data-table" data-testid="catalog-modules-table">
-            <thead>
-              <tr>
-                <th>{t('名称', 'Name')}</th>
-                <th>{t('状态', 'Status')}</th>
-                <th>{t('已装版本', 'Installed')}</th>
-                <th>{t('最新版本', 'Latest')}</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((module) => {
-                const target = targetVersionOf(module);
-                const label =
-                  module.status === 'not_installed'
-                    ? t('安装', 'Install')
-                    : module.status === 'up_to_date'
-                      ? null
-                      : target
-                        ? t(`升级到 v${target.version}`, `Upgrade to v${target.version}`)
-                        : null;
-                return (
-                  <tr key={module.name} data-testid={`catalog-module-row-${module.name}`}>
-                    <td className="mono">{module.name}</td>
-                    <td>{t(STATUS_LABEL[module.status].zh, STATUS_LABEL[module.status].en)}</td>
-                    <td className="mono">
-                      {module.installedVersion === null ? '—' : `v${module.installedVersion}`}
-                    </td>
-                    <td className="mono">v{module.latestVersion}</td>
-                    <td>
-                      {canWrite && label ? (
-                        <Confirm
-                          tier="medium"
-                          open={confirmFor === module.name}
-                          onOpenChange={(open) => setConfirmFor(open ? module.name : null)}
-                          anchor={
-                            <Button
-                              variant="secondary"
-                              size="s"
-                              disabled={pending === module.name}
-                              onClick={() => onAction(module)}
-                              data-testid={`catalog-module-action-${module.name}`}
-                            >
-                              {label}
-                            </Button>
-                          }
-                          title={t(
-                            `确认安装/升级 ${module.name}`,
-                            `Confirm install/upgrade ${module.name}`,
-                          )}
-                          description={
-                            module.status === 'customized'
-                              ? t(
-                                  '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。',
-                                  'The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.',
-                                )
-                              : t(
-                                  '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。',
-                                  'Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.',
-                                )
-                          }
-                          target={
-                            target
-                              ? `v${target.version}${target.notes ? ` — ${target.notes}` : ''}`
-                              : undefined
-                          }
-                          confirmLabel={t('确认', 'Confirm')}
-                          danger={breakingRangeCrossed(module)}
-                          onConfirm={() => run(module.name, true)}
-                          testId={`catalog-module-confirm-${module.name}`}
-                        />
-                      ) : null}
-                      {rowError[module.name] ? (
-                        <ErrorBanner
-                          error={rowError[module.name]}
-                          title={t('操作失败', 'Action failed')}
-                          testId={`catalog-module-error-${module.name}`}
-                        />
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        // S8 W4 (audit CM1 "裸表格没有卡片容器，与其他列表不一致"): same `DashboardCard`
+        // (`kit/section.tsx`) every other table on this style of page already sits inside
+        // (`ModelsPage`'s own `<DashboardCard><table className="data-table">`) — one bordered
+        // list-container convention, not a bare table only here.
+        <DashboardCard padded={false}>
+          <div className="table-scroll">
+            <table className="data-table" data-testid="catalog-modules-table">
+              <thead>
+                <tr>
+                  <th>{t('名称', 'Name')}</th>
+                  <th>{t('状态', 'Status')}</th>
+                  <th>{t('已装版本', 'Installed')}</th>
+                  <th>{t('最新版本', 'Latest')}</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((module) => {
+                  const target = targetVersionOf(module);
+                  const label =
+                    module.status === 'not_installed'
+                      ? t('安装', 'Install')
+                      : module.status === 'up_to_date'
+                        ? null
+                        : target
+                          ? t(`升级到 v${target.version}`, `Upgrade to v${target.version}`)
+                          : null;
+                  return (
+                    <tr key={module.name} data-testid={`catalog-module-row-${module.name}`}>
+                      <td className="mono">{module.name}</td>
+                      <td>{t(STATUS_LABEL[module.status].zh, STATUS_LABEL[module.status].en)}</td>
+                      <td className="mono">
+                        {module.installedVersion === null ? '—' : `v${module.installedVersion}`}
+                      </td>
+                      <td className="mono">v{module.latestVersion}</td>
+                      <td>
+                        {canWrite && label ? (
+                          <Confirm
+                            tier="medium"
+                            open={confirmFor === module.name}
+                            onOpenChange={(open) => setConfirmFor(open ? module.name : null)}
+                            anchor={
+                              <Button
+                                variant="secondary"
+                                size="s"
+                                disabled={pending === module.name}
+                                onClick={() => onAction(module)}
+                                data-testid={`catalog-module-action-${module.name}`}
+                              >
+                                {label}
+                              </Button>
+                            }
+                            title={t(
+                              `确认安装/升级 ${module.name}`,
+                              `Confirm install/upgrade ${module.name}`,
+                            )}
+                            description={
+                              module.status === 'customized'
+                                ? t(
+                                    '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。',
+                                    'The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.',
+                                  )
+                                : t(
+                                    '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。',
+                                    'Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.',
+                                  )
+                            }
+                            target={
+                              target
+                                ? `v${target.version}${target.notes ? ` — ${target.notes}` : ''}`
+                                : undefined
+                            }
+                            confirmLabel={t('确认', 'Confirm')}
+                            danger={breakingRangeCrossed(module)}
+                            onConfirm={() => run(module.name, true)}
+                            testId={`catalog-module-confirm-${module.name}`}
+                          />
+                        ) : null}
+                        {rowError[module.name] ? (
+                          <ErrorBanner
+                            error={rowError[module.name]}
+                            title={t('操作失败', 'Action failed')}
+                            testId={`catalog-module-error-${module.name}`}
+                          />
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </DashboardCard>
       )}
     </div>
   );

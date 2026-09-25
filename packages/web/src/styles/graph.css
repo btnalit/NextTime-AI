@@ -5,7 +5,13 @@
 
 .graph-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  /* S8 W4 (audit G2 "1440 下左列表只有约 285px，sha256 名称截断"): was `minmax(280px, 360px)` — a
+   * hard 360px ceiling left the search pane cramped well before the object pane needed the room,
+   * so a sha256-identified row (Image/Container ontology objects, ontology/modules.yaml's
+   * ops-assets module) had nowhere to breathe even with its `RefChip` already truncating +
+   * tooltipping. `minmax(320px, 30%)` keeps the pane from crowding a genuinely narrow window
+   * (960–1200px) while giving it real width at 1440+. */
+  grid-template-columns: minmax(320px, 30%) minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
@@ -38,6 +44,14 @@
   color: var(--text-2);
   background: var(--surface-2);
   border: 1px solid var(--border);
+}
+
+/* S8 W4 (audit G2): the browse page's per-type group heading (`components/graph/ObjectSearch`). */
+.graph-type-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-1);
 }
 
 /* Focused object header */

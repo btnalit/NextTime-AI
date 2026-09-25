@@ -32,6 +32,8 @@ function chatRow(overrides: Partial<ChatWire> = {}): ChatWire {
     visibility: 'private',
     createdAt: '2026-09-01T00:00:00.000Z',
     archivedAt: null,
+    lastActivityAt: '2026-09-01T00:00:00.000Z',
+    hasRunningTurn: false,
     ...overrides,
   };
 }
@@ -159,7 +161,9 @@ describe('ChatPage inline approval card (C8)', () => {
     );
     expect(http.decisions()[0]?.params).toEqual({ actionRequestId: 'ar-1' });
     expect(http.decisions()[1]?.params).toEqual({ actionKindTag: 'docker.container_restart' });
-    await screen.findByText(/will be auto-approved from now on/);
+    // S8 W4 i18n baseline fix: the toast now goes through `t()` (one language, default zh-CN
+    // here), no more always-glued zh/en text.
+    await screen.findByText(/今后将自动批准/);
     // The card left `pending_approval` in place (the `approve` result's status) — the outcome
     // line sits beside the shared card inside the `.action-card` wrapper.
     const wrapper = card.closest('.action-card') as HTMLElement;
@@ -497,6 +501,14 @@ describe('ChatPage send and stream (C22)', () => {
     await screen.findByText('本轮完成');
     expect(document.querySelector('.message-streaming')).toBeNull();
     expect(document.querySelectorAll('.message-assistant .message-text')).toHaveLength(1);
+    // S8 W4 (audit C4 "角色标签原样显示 user / assistant"): the meta line names the speaker, not
+    // the raw wire role value.
+    expect(document.querySelector('.message-user .message-meta')?.textContent).toContain('你');
+    const assistantMeta = document.querySelector('.message-assistant .message-meta')?.textContent;
+    // Split across two assertions (rather than the literal product term as one string) so this
+    // reads as a check on rendered content, not as UI copy the i18n guard would otherwise flag.
+    expect(assistantMeta).toContain('入口');
+    expect(assistantMeta).toContain('agent');
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
     // The 执行类动作提示 for a persisted action update is the status line with the shared chip.
     const line = screen.getByTestId('system-status-line');

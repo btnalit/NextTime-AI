@@ -192,14 +192,32 @@ export function SidebarContent({
         </NavSectionGroup>
 
         {showGovern ? (
-          <NavSectionGroup titleZh="治理" titleEn="Govern" testId="nav-section-govern">
+          <NavSectionGroup
+            titleZh="治理"
+            titleEn="Govern"
+            // S8 W4 (audit U1 "两组的作用范围从未说明"): 治理 vs 平台 look like the same kind of
+            // group until a reader notices one only ever touches the current workspace and the
+            // other reaches every workspace on the deployment — `系统接入`(治理) vs `集成`(平台),
+            // `模型与配额`(治理) vs `模型与供应商`(平台), `审计`(治理) vs `平台审计`(平台) read as
+            // near-duplicates without this line. Near-term fix only (§5.9's "使用面/管理面/维护面"
+            // convergence is a later, larger IA change, out of this lane's scope).
+            scopeZh="本工作区"
+            scopeEn="This workspace"
+            testId="nav-section-govern"
+          >
             {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
             {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV) : null}
           </NavSectionGroup>
         ) : null}
 
         {isAdmin ? (
-          <NavSectionGroup titleZh="平台" titleEn="Platform" testId="nav-section-platform">
+          <NavSectionGroup
+            titleZh="平台"
+            titleEn="Platform"
+            scopeZh="全平台"
+            scopeEn="Platform-wide"
+            testId="nav-section-platform"
+          >
             {PLATFORM_NAV.map((item) => renderNavItem(item, active, pendingCount))}
           </NavSectionGroup>
         ) : null}
@@ -425,11 +443,19 @@ function renderExternalNavItem(item: ExternalNavItem): ReactNode {
 function NavSectionGroup({
   titleZh,
   titleEn,
+  scopeZh,
+  scopeEn,
   testId,
   children,
 }: {
   readonly titleZh: string;
   readonly titleEn: string;
+  /** S8 W4 (audit U1): a one-line "who this group is for" under the title — 使用 needs none (its
+   *  scope is self-evident, every role sees the same thing); 治理/平台 pass both. Bilingual and
+   *  always both halves shown (never `t()`-picked), same convention `titleZh`/`titleEn` already
+   *  use here. */
+  readonly scopeZh?: string;
+  readonly scopeEn?: string;
   readonly testId: string;
   readonly children: ReactNode;
 }) {
@@ -439,6 +465,11 @@ function NavSectionGroup({
         <span>{titleZh}</span>
         <span className="nav-section-title-sub">{titleEn}</span>
       </div>
+      {scopeZh !== undefined ? (
+        <div className="nav-section-scope" data-testid={`${testId}-scope`}>
+          {scopeZh} <span className="nav-section-title-sub">{scopeEn}</span>
+        </div>
+      ) : null}
       {children}
     </div>
   );

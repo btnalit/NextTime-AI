@@ -210,9 +210,39 @@ describe('LlmAdminClient', () => {
     const missing = await client.listProviders().catch((err: unknown) => err);
     expect(llmAdminErrorMessage(missing, zhT)).toContain('secrets/llm-proxy.env');
 
+    // S8 W4 i18n baseline: `http_error` used to be unmapped (raw glued zh/en `Error.message`
+    // shown verbatim) — now it gets the same bilingual treatment as every other known code.
     const opaque = await client.listProviders().catch((err: unknown) => err);
     expect(opaque).toMatchObject({ status: 502, code: 'http_error' });
-    expect(llmAdminErrorMessage(opaque, zhT)).toBeNull();
+    expect(llmAdminErrorMessage(opaque, zhT)).toContain('HTTP 502');
+    // A non-`LlmAdminError` is still unmapped — this function only ever translates its own type.
     expect(llmAdminErrorMessage(new Error('x'), zhT)).toBeNull();
+  });
+
+  it('maps a fetch failure to a bilingual "network" error carrying the underlying detail', async () => {
+    const http = scriptedHttp(() => tokenWire());
+    const fetchImpl: typeof fetch = async () => {
+      throw new Error('getaddrinfo ENOTFOUND llm-proxy');
+    };
+    const client = new LlmAdminClient(http, { fetchImpl });
+    client.forgetToken();
+
+    const err = await client.listProviders().catch((caught: unknown) => caught);
+    expect(err).toMatchObject({ status: 0, code: 'network' });
+    const message = llmAdminErrorMessage(err, zhT);
+    expect(message).toContain('无法连接模型代理');
+    expect(message).toContain('getaddrinfo ENOTFOUND llm-proxy');
+  });
+
+  it('maps a non-JSON 200 response to a bilingual "invalid_response" error', async () => {
+    const http = scriptedHttp(() => tokenWire());
+    const fetchImpl: typeof fetch = async () =>
+      new Response('not json', { status: 200, headers: { 'content-type': 'text/plain' } });
+    const client = new LlmAdminClient(http, { fetchImpl });
+    client.forgetToken();
+
+    const err = await client.listProviders().catch((caught: unknown) => caught);
+    expect(err).toMatchObject({ status: 200, code: 'invalid_response' });
+    expect(llmAdminErrorMessage(err, zhT)).toContain('HTTP 200');
   });
 });

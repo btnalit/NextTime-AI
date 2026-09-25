@@ -20,7 +20,7 @@ export function FreshnessLegend() {
       <summary>
         <Icon name="chevron-right" size="s" className="icon-chevron" />
         {t('新鲜度图例', 'Freshness legend')} · {t('窗口', 'window')}{' '}
-        {formatWindow(OBSERVATION_WINDOW_MS)}
+        {freshnessLabel(formatWindow(OBSERVATION_WINDOW_MS), t)}
       </summary>
       <div className="disclosure-body">
         <ul className="graph-legend-list">
@@ -33,11 +33,21 @@ export function FreshnessLegend() {
             </li>
           ))}
         </ul>
+        {/* S8 W4 (audit G3, i18n correctness): was a raw Chinese lead-in followed by
+         *  `{t(zh, en)}` and then a hardcoded English tail rendered unconditionally after it — the
+         *  English sentence showed up even in zh-CN. Both halves now go through `t()` whole, so
+         *  exactly one language renders. */}
         <p className="text-3 text-small">
-          窗口取内核 <code>ops.collector_silent</code>{' '}
-          {t('的默认值（2 小时）；内核尚未通过能力暴露该窗口。', 'The window mirrors the kernel’s')}{' '}
-          <code>ops.collector_silent</code> default (2 h); no capability exposes the deployment’s
-          own value yet.
+          {t(
+            <>
+              窗口取内核 <code>ops.collector_silent</code> 的默认值（2
+              小时）；内核尚未通过能力暴露该窗口。
+            </>,
+            <>
+              The window mirrors the kernel’s <code>ops.collector_silent</code> default (2 h); no
+              capability exposes the deployment’s own value yet.
+            </>,
+          )}
         </p>
       </div>
     </details>

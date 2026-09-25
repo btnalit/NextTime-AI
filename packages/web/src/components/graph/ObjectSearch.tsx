@@ -2,6 +2,7 @@ import type { ObjectWire, OntologyObjectTypeWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { groupObjectsByType } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { DataList } from '../ui/DataList.js';
@@ -75,6 +76,13 @@ export function ObjectSearch({
   }
 
   const browsing = q === '' && type === '';
+  // S8 W4 (audit G2): only the unfiltered browse page groups by type — a type-filtered or
+  // text-searched result is already one group (`lib/graph-view.ts`'s own doc comment).
+  const groups = useMemo(
+    () => (browsing && items ? groupObjectsByType(items) : undefined),
+    [browsing, items],
+  );
+
   return (
     <div className="stack graph-search" data-testid="graph-search">
       <form
@@ -83,11 +91,13 @@ export function ObjectSearch({
         data-testid="graph-search-form"
       >
         <TypeFilter id="graph-type" value={draftType} onChange={setDraftType} types={types} />
-        <Field
-          id="graph-q"
-          label={t('关键字', 'Query')}
-          hint={t('按属性与身份子串匹配', 'Substring over properties / identity')}
-        >
+        {/* S8 W4 (audit G3 "查询/类型表单上下错位"): the hint used to live inside this `Field`
+         *  (`ui/Field`'s own `hint` slot renders below the control), so the Query field's block was
+         *  taller than the Type field's — `.inline-form`'s `align-items: flex-end` then bottom-
+         *  aligned the two blocks, leaving the Type select visibly higher than the Query input. The
+         *  hint now renders once, below the whole row, so both `Field`s are the same height
+         *  (label + control only) and line up. */}
+        <Field id="graph-q" label={t('关键字', 'Query')}>
           <Input
             id="graph-q"
             value={draftQ}
@@ -100,6 +110,9 @@ export function ObjectSearch({
           {t('搜索', 'Search')}
         </Button>
       </form>
+      <p className="field-hint" id="graph-q-hint">
+        {t('按属性与身份子串匹配', 'Substring over properties / identity')}
+      </p>
 
       <div className="section-header">
         <h2 className="section-title">
@@ -145,19 +158,49 @@ export function ObjectSearch({
               onRetry={() => void results.reload()}
             />
           ) : null}
-          <DataList ariaLabel="Objects" testId="graph-results">
-            {results.state.data.items.map((object) => (
-              <ObjectRow
-                key={object.id}
-                object={object}
-                identityKeys={identityKeys.get(object.objectType)}
-                asOf={asOf}
-                onOpen={onOpen}
-                selected={object.id === selectedId}
-                testId="graph-result-row"
-              />
-            ))}
-          </DataList>
+          {groups && groups.length > 1 ? (
+            // S8 W4 (audit G2): the unfiltered browse page, grouped by type — see
+            // `lib/graph-view.ts`'s `groupObjectsByType` for why. One outer `graph-results`
+            // testid (not one per group) so `e2e/graph.spec.ts`'s
+            // `getByTestId('graph-results').toBeVisible()` still matches exactly one element.
+            <div className="stack" aria-label="Objects" data-testid="graph-results">
+              {groups.map((group) => (
+                <div key={group.objectType} className="stack-s">
+                  <div className="graph-type-group-header">
+                    <span className="tag graph-type-tag">{group.objectType}</span>
+                    <span className="text-3 text-small">{group.objects.length}</span>
+                  </div>
+                  <DataList ariaLabel={group.objectType}>
+                    {group.objects.map((object) => (
+                      <ObjectRow
+                        key={object.id}
+                        object={object}
+                        identityKeys={identityKeys.get(object.objectType)}
+                        asOf={asOf}
+                        onOpen={onOpen}
+                        selected={object.id === selectedId}
+                        testId="graph-result-row"
+                      />
+                    ))}
+                  </DataList>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <DataList ariaLabel="Objects" testId="graph-results">
+              {results.state.data.items.map((object) => (
+                <ObjectRow
+                  key={object.id}
+                  object={object}
+                  identityKeys={identityKeys.get(object.objectType)}
+                  asOf={asOf}
+                  onOpen={onOpen}
+                  selected={object.id === selectedId}
+                  testId="graph-result-row"
+                />
+              ))}
+            </DataList>
+          )}
           {results.loadMoreError !== null ? (
             <ErrorBanner
               error={results.loadMoreError}
