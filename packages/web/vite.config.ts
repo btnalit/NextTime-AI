@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { woff2OnlyFonts } from './vite-plugins/woff2-only-fonts.js';
 
 // Minimal Vite config: no @vitejs/plugin-react dependency, esbuild already strips TS/JSX for
 // .tsx sources (see package.json's minimal-deps note). Output lands in dist/, which
@@ -24,7 +25,10 @@ export default defineConfig({
   // preflight — base.css already resets) and restricts class scanning to components/kit/ via
   // `source(none)` + `@source`, so no existing page markup can accidentally start matching a
   // generated utility. See that file's own header comment for the full rationale.
-  plugins: [tailwindcss()],
+  // S8 W3 F1 (leftover 49): strips the unused `.woff` fallback @fontsource ships alongside every
+  // `.woff2` — see the plugin's own doc comment for why this writes `styles/fonts.css` to disk in
+  // `buildStart` rather than intercepting it inside Vite's own plugin pipeline.
+  plugins: [tailwindcss(), woff2OnlyFonts()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
