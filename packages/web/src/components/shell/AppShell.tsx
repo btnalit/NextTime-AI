@@ -76,8 +76,9 @@ export function AppShell({
       : null;
   const isNarrow = useNarrowViewport(NARROW_BREAKPOINT_PX);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Closes the drawer on navigation (kit/sheet's own doc comment on `NavDrawer`) — every nav link
-  // click changes `active`, whether it lands on a different section or (S3.14) the same one.
+  // Closes the drawer on navigation (kit/sheet's own doc comment on `NavDrawer`) when `active`
+  // changes; a click on the current section's own link changes nothing here, so `NavDrawer` also
+  // closes itself on any nav link click.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only `active` should retrigger this
   useEffect(() => setDrawerOpen(false), [active]);
   const pageTitle = breadcrumbFor(active).at(-1)?.label ?? '';
