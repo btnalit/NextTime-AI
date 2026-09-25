@@ -124,7 +124,10 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
         open
         onClose={onClose}
         title={t('清理结果', 'Purge results')}
-        subtitle={`已清理 ${result.purgedCount} / ${result.outcomes.length} Purged ${result.purgedCount} of ${result.outcomes.length}`}
+        subtitle={t(
+          `已清理 ${result.purgedCount} / ${result.outcomes.length}`,
+          `Purged ${result.purgedCount} of ${result.outcomes.length}`,
+        )}
         testId="purge-users-results"
         footer={
           <Button variant="primary" onClick={onClose} data-testid="purge-users-done">

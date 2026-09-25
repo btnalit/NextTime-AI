@@ -178,6 +178,45 @@ describe('registerWorkerMode', () => {
     expect(result.details).toEqual({ status: 'ok', data: { quantity: 3 } });
   });
 
+  it('a gate tool truncates a result larger than the cap (S8 W3-K1, leftover 75 first half)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'stock.list',
+            operation: { params_schema: { type: 'object' }, mode: 'observe' },
+          },
+        ],
+      },
+    }));
+    // Comfortably over the default 16_000-char cap once JSON.stringify'd.
+    const hugeResult = {
+      status: 'ok',
+      items: Array.from({ length: 2000 }, (_, i) => ({ sku: `SKU-${i}`, qty: i })),
+    };
+    kernel.setHandler('request_action', () => ({ ok: true, result: hugeResult }));
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+
+    const tool = fake.tools.get('inventory_stock_list');
+    if (!tool) throw new Error('gate tool not registered');
+    const result = await tool.execute('call-1', {}, undefined, undefined, fakeCtx());
+
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    const fullLength = JSON.stringify(hugeResult, null, 2).length;
+    expect(fullLength).toBeGreaterThan(16_000);
+    expect(text.length).toBeLessThan(fullLength);
+    expect(text).toContain('more characters omitted');
+    expect(text).toContain('the full result is not shown');
+    // `details` still carries the untruncated result — only the model-facing text is capped.
+    expect(result.details).toEqual(hugeResult);
+  });
+
   it('a gate tool returns (does not throw) the simulate text and actionRequestId on pending_approval — the loop is not blocked', async () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,

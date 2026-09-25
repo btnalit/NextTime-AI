@@ -3,16 +3,20 @@ import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type GatekeeperByEndpointEntry,
+  diffOperationGovernanceFields,
   findGatekeepersByEndpoint,
   getOperation,
   importManifest,
   publishOperation,
+  refreshOperationGovernance,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
   findGateLinkByGate,
+  findGateLinkByGatekeeper,
   getConnector,
   getGateInstance,
   insertGateLink,
@@ -71,7 +75,10 @@ export class GateInstanceNotAvailableError extends Error {
     // S8 W2-K2 (leftover 73): more than one existing Gatekeeper in this workspace shares the
     // instance's endpoint — `resolveGateLinkTarget` refuses rather than guess which one is "the"
     // instance's prior registration.
-    | 'ambiguous_existing_gatekeeper';
+    | 'ambiguous_existing_gatekeeper'
+    // S8 W3-K1 (leftover 79): `refresh_operation_governance`'s target Gatekeeper has no linked
+    // platform gate instance (`findGateLinkByGatekeeper` returned null) — nothing to refresh from.
+    | 'no_announced_manifest';
   constructor(code: GateInstanceNotAvailableError['code'], message: string) {
     super(message);
     this.name = 'GateInstanceNotAvailableError';
@@ -415,14 +422,14 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       autoApprovable: existingRecord.operation.auto_approvable,
       status: existingRecord.status,
     };
+    // S8 W3-K1: the exact comparison `refresh_operation_governance` (governance/gatekeepers/
+    // manifest.ts's `diffOperationGovernanceFields`) reuses for its own write decision — one
+    // judgment function, never two that could drift.
     operationsAlreadyPresent.push({
       name: operation.name,
       existing: existingFields,
       announced,
-      differs:
-        existingFields.mode !== announced.mode ||
-        existingFields.blastRadius !== announced.blastRadius ||
-        existingFields.autoApprovable !== announced.autoApprovable,
+      differs: diffOperationGovernanceFields(existingFields, announced).differs,
     });
   }
 
@@ -442,6 +449,88 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     },
     resourceType: 'gate_instance',
     resourceId: gateId,
+  };
+};
+
+/**
+ * `refresh_operation_governance(gatekeeperId, operationNames?)` (S8 W3-K1, leftover 79, audit
+ * CO2): the owner-authorized write half of `preview_gate_instance_enable`'s `differs` flag —
+ * applies the gate's currently-announced `mode`/`blastRadius`/`autoApprovable` to every selected,
+ * already-deployed Operation of `gatekeeperId` whose fields disagree with it. `gatekeeperId` here
+ * is the workspace's own Gatekeeper Object id (not a platform `gateId`) — `findGateLinkByGatekeeper`
+ * resolves which platform gate instance's manifest (if any) it was enabled from.
+ *
+ * No linked gate instance (a legacy `register-gatekeeper`/`create_connection` registration, or one
+ * this workspace never enabled through the platform catalog) → `GateInstanceNotAvailableError`
+ * (`no_announced_manifest`), before any write. The domain write itself
+ * (`governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`) is in-place, not a new
+ * Operation version — see that module's own doc comment for why.
+ *
+ * One AuditRecord per refreshed Operation, in the same transaction as its write — complementary to
+ * `application/gateway/dispatch.ts`'s own per-call audit row (which only carries `params`, not the
+ * before/after this domain transition needs), the same "two rows, not duplicates" split
+ * `governance/approval/transition-log.ts`'s `recordTransition` documents for its own module.
+ */
+export const refreshOperationGovernanceHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  if (!ctx?.principal) {
+    throw new Error('refresh_operation_governance: no resolved human principal in context');
+  }
+  const { gatekeeperId, operationNames } = params as {
+    gatekeeperId: string;
+    operationNames?: readonly string[];
+  };
+
+  const link = await findGateLinkByGatekeeper(client, workspaceId, gatekeeperId);
+  if (!link) {
+    throw new GateInstanceNotAvailableError(
+      'no_announced_manifest',
+      `gatekeeper "${gatekeeperId}" has no linked platform gate instance — there is no announced manifest to refresh from`,
+    );
+  }
+
+  const announcedOperations = operationsOf(await rawOperations(client, link.gateId));
+  const outcome = await refreshOperationGovernance(client, workspaceId, {
+    gatekeeperId,
+    announcedOperations,
+    ...(operationNames !== undefined ? { operationNames } : {}),
+  });
+
+  for (const entry of outcome.refreshed) {
+    await writeAudit(client, {
+      workspaceId,
+      actorPrincipalId: ctx.principal.id,
+      action: 'operation.governance_refreshed',
+      resourceType: 'operation',
+      // `audit_records.resource_id` is `uuid` — the Operation's own Object id (a real uuid,
+      // unlike the `{gatekeeperId, name}` identity pair), same convention `publish_operation`/
+      // `deprecate_operation` would use if they had one in scope. The composite reference still
+      // goes in the payload, where any string is fine.
+      resourceId: entry.id,
+      payload: {
+        gatekeeperId,
+        name: entry.name,
+        before: entry.before,
+        after: entry.after,
+        direction: entry.direction,
+      },
+    });
+  }
+
+  return {
+    result: {
+      gatekeeperId,
+      // `entry.id` is kernel-internal bookkeeping for the AuditRecord above, not part of this
+      // capability's wire result shape (`RefreshOperationGovernanceResultWireSchema` has no `id`).
+      refreshed: outcome.refreshed.map(({ id: _id, ...rest }) => rest),
+      unchanged: outcome.unchanged,
+    },
+    resourceType: 'gatekeeper',
+    resourceId: gatekeeperId,
   };
 };
 

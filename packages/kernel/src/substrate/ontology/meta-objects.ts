@@ -382,3 +382,59 @@ export async function setOperationStatusObject(
     properties: { status },
   });
 }
+
+/**
+ * S8 W3-K1 (leftover 79, `governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`):
+ * merges `{mode, blast_radius, auto_approvable}` into one specific, already-versioned Operation
+ * Object's properties — same "no identity/transition check, caller has already confirmed the
+ * write is authorized and targets the right row" contract as `setOperationStatusObject` right
+ * above, just for the governance fields instead of `status`. Deliberately **in place** (never a
+ * new `version`, unlike `proposeOperation`'s revision-draft path) — see `manifest.ts`'s own doc
+ * comment on `refreshOperationGovernance` for why this call is trusted the same way
+ * `publishOperation`/`deprecateOperation`/`updateGateInstance` already are, not routed through
+ * the propose→publish workflow that exists to gate *unreviewed* Handle-channel proposals. */
+export async function setOperationGovernanceFieldsObject(
+  client: PoolClient,
+  workspaceId: string,
+  identity: OperationIdentity,
+  fields: {
+    readonly mode: Operation['mode'];
+    readonly blastRadius: Operation['blast_radius'];
+    readonly autoApprovable: boolean;
+  },
+): Promise<GraphObject> {
+  return graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Operation',
+    identity: {
+      gatekeeperId: identity.gatekeeperId,
+      name: identity.name,
+      version: identity.version,
+    },
+    properties: {
+      mode: fields.mode,
+      blast_radius: fields.blastRadius,
+      auto_approvable: fields.autoApprovable,
+    },
+  });
+}
+
+/** S8 W3-K1 (leftover 81): merges `{description}` into one specific, already-versioned Operation
+ *  Object's properties — same in-place contract as `setOperationGovernanceFieldsObject` above,
+ *  for the one field that is documentation, not governance (`manifest.ts`'s
+ *  `updateOperationDescription` doc comment). */
+export async function setOperationDescriptionObject(
+  client: PoolClient,
+  workspaceId: string,
+  identity: OperationIdentity,
+  description: string,
+): Promise<GraphObject> {
+  return graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Operation',
+    identity: {
+      gatekeeperId: identity.gatekeeperId,
+      name: identity.name,
+      version: identity.version,
+    },
+    properties: { description },
+  });
+}

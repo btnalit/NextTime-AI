@@ -15,18 +15,24 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
 import {
+  OperationDescriptionInvalidError,
   OperationDescriptionRequiredError,
   OperationIdentityConflictError,
   OperationNotFoundError,
+  classifyOperationGovernanceChange,
   deprecateOperation,
+  diffOperationGovernanceFields,
   getOperation,
   getPublishedOperation,
   importManifest,
   listOperations,
   listPublishedOperationsForGatekeepers,
+  operationGovernanceFieldsOf,
   proposeOperation,
   publishManifest,
   publishOperation,
+  refreshOperationGovernance,
+  updateOperationDescription,
 } from './manifest.js';
 import { registerGatekeeper } from './registry.js';
 
@@ -874,6 +880,300 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(stillPublished?.status).toBe('published');
       // testOperation()'s own default ('observe') — the reimport's 'execute' never landed.
       expect(stillPublished?.operation.mode).toBe('observe');
+    });
+  });
+
+  describe('S8 W3-K1 (leftover 81): updateOperationDescription', () => {
+    it('trims and applies a new description in place — no status/version change', async () => {
+      const op = testOperation({ name: `desc.update.${randomUUID()}` });
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [op],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const before = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(before?.status).toBe('draft');
+
+      const updated = await inTx((client) =>
+        updateOperationDescription(client, workspaceId, {
+          gatekeeperId,
+          name: op.name,
+          description: '  A freshly written description.  ',
+        }),
+      );
+      expect(updated.operation.description).toBe('A freshly written description.');
+      expect(updated.status).toBe('draft');
+      expect(updated.version).toBe(before?.version);
+
+      const after = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(after?.operation.description).toBe('A freshly written description.');
+      // Governance fields untouched by a description-only edit.
+      expect(after?.operation.mode).toBe(before?.operation.mode);
+      expect(after?.operation.blast_radius).toBe(before?.operation.blast_radius);
+    });
+
+    it('rejects a blank (post-trim) description, and one over the length bound, writing nothing', async () => {
+      const op = testOperation({ name: `desc.reject.${randomUUID()}` });
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [op],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+
+      await expect(
+        inTx((client) =>
+          updateOperationDescription(client, workspaceId, {
+            gatekeeperId,
+            name: op.name,
+            description: '   ',
+          }),
+        ),
+      ).rejects.toMatchObject({ name: 'OperationDescriptionInvalidError', reason: 'empty' });
+
+      await expect(
+        inTx((client) =>
+          updateOperationDescription(client, workspaceId, {
+            gatekeeperId,
+            name: op.name,
+            description: 'x'.repeat(2001),
+          }),
+        ),
+      ).rejects.toMatchObject({ name: 'OperationDescriptionInvalidError', reason: 'too_long' });
+
+      const unchanged = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(unchanged?.operation.description).toBe(op.description);
+    });
+
+    it('an unknown Operation identity throws OperationNotFoundError', async () => {
+      await expect(
+        inTx((client) =>
+          updateOperationDescription(client, workspaceId, {
+            gatekeeperId,
+            name: 'does.not.exist',
+            description: 'anything',
+          }),
+        ),
+      ).rejects.toThrow(OperationNotFoundError);
+    });
+  });
+
+  describe('S8 W3-K1 (leftover 79): diffOperationGovernanceFields / classifyOperationGovernanceChange', () => {
+    const observeLow = operationGovernanceFieldsOf(
+      testOperation({ mode: 'observe', blast_radius: 'low', auto_approvable: true }),
+    );
+    const executeHigh = operationGovernanceFieldsOf(
+      testOperation({ mode: 'execute', blast_radius: 'high', auto_approvable: false }),
+    );
+
+    it('diffs report no changed fields, and differs:false, when every field matches', () => {
+      expect(diffOperationGovernanceFields(observeLow, observeLow)).toEqual({
+        differs: false,
+        changedFields: [],
+      });
+    });
+
+    it('classifies execute→observe, high→low blastRadius, and false→true autoApprovable as loosened', () => {
+      const diff = diffOperationGovernanceFields(executeHigh, observeLow);
+      expect(diff.differs).toBe(true);
+      expect(new Set(diff.changedFields)).toEqual(
+        new Set(['mode', 'blastRadius', 'autoApprovable']),
+      );
+      expect(classifyOperationGovernanceChange(executeHigh, observeLow, diff.changedFields)).toBe(
+        'loosened',
+      );
+    });
+
+    it('classifies observe→execute, low→high blastRadius, and true→false autoApprovable as tightened', () => {
+      const diff = diffOperationGovernanceFields(observeLow, executeHigh);
+      expect(diff.differs).toBe(true);
+      expect(classifyOperationGovernanceChange(observeLow, executeHigh, diff.changedFields)).toBe(
+        'tightened',
+      );
+    });
+
+    it('classifies a mix of loosening and tightening changes as mixed', () => {
+      // mode execute -> observe (loosens); blastRadius low -> high (tightens).
+      const before = operationGovernanceFieldsOf(
+        testOperation({ mode: 'execute', blast_radius: 'low', auto_approvable: true }),
+      );
+      const after = operationGovernanceFieldsOf(
+        testOperation({ mode: 'observe', blast_radius: 'high', auto_approvable: true }),
+      );
+      const diff = diffOperationGovernanceFields(before, after);
+      expect(classifyOperationGovernanceChange(before, after, diff.changedFields)).toBe('mixed');
+    });
+
+    it('throws on an empty changedFields — callers only classify a diff that actually differs', () => {
+      expect(() => classifyOperationGovernanceChange(observeLow, observeLow, [])).toThrow();
+    });
+  });
+
+  describe('S8 W3-K1 (leftover 79): refreshOperationGovernance', () => {
+    it('applies the announced fields in place to a differing published Operation, classifies the change, and leaves a matching one unchanged', async () => {
+      const drifted = testOperation({
+        name: `gov.drift.${randomUUID()}`,
+        mode: 'execute',
+        blast_radius: 'high',
+        auto_approvable: false,
+      });
+      const matching = testOperation({
+        name: `gov.matching.${randomUUID()}`,
+        mode: 'observe',
+        blast_radius: 'low',
+        auto_approvable: true,
+      });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [drifted, matching],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: drifted.name }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: matching.name }),
+      );
+
+      // The gate now announces looser fields for `drifted` (deployed still has the old ones) and
+      // the same fields for `matching`.
+      const announcedDrifted = {
+        ...drifted,
+        mode: 'observe' as const,
+        blast_radius: 'low' as const,
+        auto_approvable: true,
+      };
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          announcedOperations: [announcedDrifted, matching],
+        }),
+      );
+
+      expect(outcome.unchanged).toEqual([matching.name]);
+      expect(outcome.refreshed).toHaveLength(1);
+      const [entry] = outcome.refreshed;
+      expect(entry?.name).toBe(drifted.name);
+      expect(entry?.direction).toBe('loosened');
+      expect(entry?.before).toEqual({
+        mode: 'execute',
+        blastRadius: 'high',
+        autoApprovable: false,
+      });
+      expect(entry?.after).toEqual({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+
+      const persisted = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, drifted.name),
+      );
+      expect(persisted?.operation.mode).toBe('observe');
+      expect(persisted?.operation.blast_radius).toBe('low');
+      expect(persisted?.operation.auto_approvable).toBe(true);
+      // In place — same version, still published, no new draft/revision.
+      expect(persisted?.version).toBe(1);
+      expect(persisted?.status).toBe('published');
+
+      // A second refresh against the now-matching manifest reports it unchanged.
+      const again = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          announcedOperations: [announcedDrifted],
+        }),
+      );
+      expect(again.refreshed).toEqual([]);
+      expect(again.unchanged).toEqual([drifted.name]);
+    });
+
+    it('operationNames narrows the selection — only the named Operations are touched, the rest are silently absent', async () => {
+      const opA = testOperation({
+        name: `gov.subset.a.${randomUUID()}`,
+        mode: 'execute',
+        auto_approvable: false,
+      });
+      const opB = testOperation({
+        name: `gov.subset.b.${randomUUID()}`,
+        mode: 'execute',
+        auto_approvable: false,
+      });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [opA, opB],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: opA.name }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: opB.name }),
+      );
+
+      const announcedA = { ...opA, auto_approvable: true };
+      const announcedB = { ...opB, auto_approvable: true };
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          announcedOperations: [announcedA, announcedB],
+          operationNames: [opA.name],
+        }),
+      );
+
+      expect(outcome.refreshed.map((r) => r.name)).toEqual([opA.name]);
+      expect(outcome.unchanged).toEqual([]);
+
+      // opB was never selected — still has its original (pre-drift) fields.
+      const stillB = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, opB.name),
+      );
+      expect(stillB?.operation.auto_approvable).toBe(false);
+    });
+
+    it('a draft (never-published) Operation has nothing "already present" to refresh — reported unchanged, left as a draft', async () => {
+      const draftOnly = testOperation({ name: `gov.draft-only.${randomUUID()}`, mode: 'execute' });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [draftOnly],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+
+      const announced = { ...draftOnly, mode: 'observe' as const };
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(outcome.refreshed).toEqual([]);
+      expect(outcome.unchanged).toEqual([draftOnly.name]);
+
+      const stillDraft = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, draftOnly.name),
+      );
+      expect(stillDraft?.status).toBe('draft');
+      expect(stillDraft?.operation.mode).toBe('execute');
     });
   });
 });

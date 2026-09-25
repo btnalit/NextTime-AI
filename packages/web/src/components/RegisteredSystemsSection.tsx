@@ -1,10 +1,15 @@
-import type { AvailableGateInstanceWire } from '@nexttime/shared';
+import type {
+  AvailableGateInstanceWire,
+  PreviewGateInstanceEnableResultWire,
+  RefreshOperationGovernanceResultWire,
+} from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GatekeeperView,
   type OperationView,
   groupOperationsByStatus,
+  isLooseningGovernanceChange,
 } from '../lib/connections.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
@@ -17,6 +22,7 @@ import { RefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { CopyId } from './ui/CopyId.js';
+import { Drawer } from './ui/Drawer.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -29,6 +35,9 @@ export interface GatekeeperCardProps {
   /** Owner-only actions hidden when the session has been told 403 for them. */
   readonly canPublish: boolean;
   readonly canGrant: boolean;
+  /** S8 W3-K1 (leftover 79) — owner-only, and only offered when `platformInstance` is non-null
+   *  (there is nothing to preview/refresh from otherwise). */
+  readonly canRefreshGovernance: boolean;
   readonly onChanged: () => void;
   readonly onForbidden: (capabilityName: string) => void;
   /** Opens the S3.11 health/operations detail drawer (`get_gatekeeper`) for this gate. Optional —
@@ -66,6 +75,7 @@ export function GatekeeperCard({
   operations,
   canPublish,
   canGrant,
+  canRefreshGovernance,
   onChanged,
   onForbidden,
   onOpenDetail,
@@ -81,6 +91,13 @@ export function GatekeeperCard({
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<unknown | null>(null);
   const [error, setError] = useState<unknown | null>(null);
+  // S8 W3-K1 (leftover 79): "按公告刷新治理字段" — preview + select + confirm.
+  const [govDrawerOpen, setGovDrawerOpen] = useState(false);
+  const [govPreview, setGovPreview] = useState<PreviewGateInstanceEnableResultWire | null>(null);
+  const [govLoading, setGovLoading] = useState(false);
+  const [govError, setGovError] = useState<unknown | null>(null);
+  const [govSelected, setGovSelected] = useState<ReadonlySet<string>>(new Set());
+  const [govConfirmOpen, setGovConfirmOpen] = useState(false);
   const groups = groupOperationsByStatus(operations);
   const draftCount = operations.filter((operation) => operation.status === 'draft').length;
   // S8 W2-U1 (audit R5/U2): active grants scoped to exactly this gate — a workspace-wide "全部门"
@@ -135,6 +152,87 @@ export function GatekeeperCard({
       setRevokeError(err);
     } finally {
       setRevoking(null);
+    }
+  }
+
+  // S8 W3-K1 (leftover 79, audit CO2): "按公告刷新治理字段" — loads the same read-only preview
+  // `enable_gate_instance`'s own ConfirmTier uses (`preview_gate_instance_enable`), defaults the
+  // selection to every Operation whose governance fields differ, and applies the selected ones
+  // through `refresh_operation_governance`.
+  async function openGovernanceRefresh(): Promise<void> {
+    if (!platformInstance) return;
+    setGovDrawerOpen(true);
+    setGovLoading(true);
+    setGovError(null);
+    setGovPreview(null);
+    try {
+      const result = await http.call<PreviewGateInstanceEnableResultWire>(
+        'preview_gate_instance_enable',
+        { gateId: platformInstance.gateId },
+      );
+      setGovPreview(result);
+      setGovSelected(
+        new Set(result.operationsAlreadyPresent.filter((op) => op.differs).map((op) => op.name)),
+      );
+    } catch (err) {
+      if (isForbiddenError(err)) onForbidden('preview_gate_instance_enable');
+      setGovError(err);
+    } finally {
+      setGovLoading(false);
+    }
+  }
+
+  function closeGovernanceRefresh(): void {
+    setGovDrawerOpen(false);
+    setGovPreview(null);
+    setGovError(null);
+    setGovSelected(new Set());
+    setGovConfirmOpen(false);
+  }
+
+  function toggleGovSelection(name: string): void {
+    setGovSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  }
+
+  const govDiffering = govPreview
+    ? govPreview.operationsAlreadyPresent.filter((op) => op.differs)
+    : [];
+  const govSelectedOps = govDiffering.filter((op) => govSelected.has(op.name));
+  const govAnyLoosening = govSelectedOps.some((op) =>
+    isLooseningGovernanceChange(op.existing, op.announced),
+  );
+
+  async function applyGovernanceRefresh(): Promise<void> {
+    try {
+      const result = await http.call<RefreshOperationGovernanceResultWire>(
+        'refresh_operation_governance',
+        { gatekeeperId: gatekeeper.id, operationNames: [...govSelected] },
+      );
+      toast.push({
+        tone: 'ok',
+        title:
+          result.refreshed.length > 0
+            ? t(
+                `已刷新 ${result.refreshed.length} 个 Operation 的治理字段`,
+                `Refreshed governance fields on ${result.refreshed.length} operation${result.refreshed.length === 1 ? '' : 's'}`,
+              )
+            : t('没有需要刷新的 Operation', 'Nothing needed refreshing'),
+        description: gatekeeper.name,
+      });
+      closeGovernanceRefresh();
+      onChanged();
+    } catch (err) {
+      if (isForbiddenError(err)) onForbidden('refresh_operation_governance');
+      // Re-thrown so `Confirm` renders it inline and keeps the confirm open (its own contract).
+      throw err;
     }
   }
 
@@ -200,6 +298,18 @@ export function GatekeeperCard({
               data-testid="gatekeeper-grant-button"
             >
               {t('授权给成员', 'Grant to a member')}
+            </Button>
+          ) : null}
+          {/* S8 W3-K1 (leftover 79): only offered for a gate enabled through the platform catalog
+           *  — a legacy registration has no announced manifest to refresh from at all. */}
+          {canRefreshGovernance && platformInstance !== null ? (
+            <Button
+              variant="secondary"
+              size="s"
+              onClick={() => void openGovernanceRefresh()}
+              data-testid="gatekeeper-refresh-governance-button"
+            >
+              {t('按公告刷新治理字段', 'Refresh governance fields from manifest')}
             </Button>
           ) : null}
         </>
@@ -361,6 +471,116 @@ export function GatekeeperCard({
           onGrantsChanged?.();
         }}
       />
+      <Drawer
+        open={govDrawerOpen}
+        onClose={closeGovernanceRefresh}
+        title={t('按公告刷新治理字段', 'Refresh governance fields from manifest')}
+        subtitle={gatekeeper.name}
+        testId="gatekeeper-refresh-governance-drawer"
+        footer={
+          govPreview && govDiffering.length > 0 ? (
+            <span className="row-wrap" style={{ justifyContent: 'flex-end', width: '100%' }}>
+              <Confirm
+                tier={govAnyLoosening ? 'irreversible' : 'medium'}
+                open={govConfirmOpen}
+                onOpenChange={setGovConfirmOpen}
+                anchor={
+                  <Button
+                    variant="primary"
+                    size="s"
+                    onClick={() => setGovConfirmOpen(true)}
+                    disabled={govSelected.size === 0}
+                    data-testid="gatekeeper-refresh-governance-apply"
+                  >
+                    {t(`刷新所选（${govSelected.size}）`, `Refresh selected (${govSelected.size})`)}
+                  </Button>
+                }
+                title={t('刷新治理字段', 'Refresh governance fields')}
+                description={
+                  govAnyLoosening
+                    ? t(
+                        '放松后该 Operation 可能不再需要人工审批。',
+                        'Once loosened, this Operation may no longer require human approval.',
+                      )
+                    : t(
+                        '所选 Operation 的治理字段会立即改为公告的值，并记入平台审计。',
+                        "The selected Operations' governance fields will immediately change to the announced values, recorded in the platform audit.",
+                      )
+                }
+                target={gatekeeper.name}
+                impact={govSelectedOps.map((op) => op.name)}
+                danger={govAnyLoosening}
+                confirmLabel={t('刷新', 'Refresh')}
+                onConfirm={applyGovernanceRefresh}
+                testId="gatekeeper-refresh-governance-confirm"
+              />
+            </span>
+          ) : undefined
+        }
+      >
+        {govLoading ? (
+          <Notice>{t('正在加载公告清单……', 'Loading the announced manifest…')}</Notice>
+        ) : govError !== null ? (
+          <ErrorBanner
+            error={govError}
+            title={t('无法加载预览', 'Could not load the preview')}
+            onRetry={() => void openGovernanceRefresh()}
+          />
+        ) : govDiffering.length === 0 ? (
+          <Notice>
+            {t(
+              '当前部署的 Operation 治理字段与门的公告一致，没有可刷新的差异。',
+              "The deployed Operations' governance fields already match the gate's announced manifest — nothing to refresh.",
+            )}
+          </Notice>
+        ) : (
+          <div className="stack-s">
+            {govDiffering.map((op) => {
+              const loosens = isLooseningGovernanceChange(op.existing, op.announced);
+              return (
+                <label
+                  key={op.name}
+                  className="row-wrap"
+                  data-testid={`gatekeeper-refresh-governance-row-${op.name}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={govSelected.has(op.name)}
+                    onChange={() => toggleGovSelection(op.name)}
+                  />
+                  <span className="mono">{op.name}</span>
+                  {loosens ? (
+                    <span
+                      className="tag"
+                      title={t(
+                        '放松：该 Operation 可能不再需要人工审批',
+                        'Loosens — this Operation may no longer require human approval',
+                      )}
+                    >
+                      {t('放松', 'Loosens')}
+                    </span>
+                  ) : null}
+                  <StatusChip machine="operationMode" status={op.existing.mode} size="s" />
+                  {op.existing.blastRadius !== 'low' ? (
+                    <StatusChip machine="blastRadius" status={op.existing.blastRadius} size="s" />
+                  ) : null}
+                  {op.existing.autoApprovable ? (
+                    <StatusChip machine="autoApprovable" status="true" size="s" />
+                  ) : null}
+                  <span aria-hidden="true">→</span>
+                  <StatusChip machine="operationMode" status={op.announced.mode} size="s" />
+                  {op.announced.blastRadius !== 'low' ? (
+                    <StatusChip machine="blastRadius" status={op.announced.blastRadius} size="s" />
+                  ) : null}
+                  {op.announced.autoApprovable ? (
+                    <StatusChip machine="autoApprovable" status="true" size="s" />
+                  ) : null}
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </Drawer>
     </Card>
   );
 }
