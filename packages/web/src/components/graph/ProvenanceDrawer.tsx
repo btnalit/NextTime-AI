@@ -84,6 +84,12 @@ function ProvenanceBody({
   const t = useT();
   const explain = useCapability<ExplainResultWire>(http, 'explain', { nodeId: fact.id });
   const inConflict = conflicts.length > 0;
+  const lastObservedRelative = formatRelative(fact.lastObservedAt, asOf);
+  const lastObservedZh = `最近观测 ${lastObservedRelative}`;
+  const lastObservedEn = `Last observed ${lastObservedRelative}`;
+  const recordedRelative = formatRelative(fact.recordedAt, asOf);
+  const recordedZh = `记录 ${recordedRelative}`;
+  const recordedEn = `Recorded ${recordedRelative}`;
   return (
     <div className="stack">
       <div className="row-wrap">
@@ -100,9 +106,7 @@ function ProvenanceBody({
           testId="graph-provenance-freshness"
         />
         <span className="text-3 text-small" title={formatDateTime(fact.lastObservedAt)}>
-          {fact.lastObservedAt
-            ? `最近观测 Last observed ${formatRelative(fact.lastObservedAt, asOf)}`
-            : `记录 Recorded ${formatRelative(fact.recordedAt, asOf)}`}
+          {fact.lastObservedAt ? t(lastObservedZh, lastObservedEn) : t(recordedZh, recordedEn)}
         </span>
       </div>
       {inConflict ? (

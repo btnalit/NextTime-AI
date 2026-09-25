@@ -94,6 +94,17 @@ export interface ChatRow {
    *  only affects `listChats`'s default filter — every other read of the Chat and its Turns is
    *  unchanged (docs/console-completion-plan.md §4 "归档只影响列表可见性"). */
   readonly archivedAt: Date | null;
+  /** S8 W4 (audit C1 "对话行副标题显示 chats.created_at，看起来像很久没动过"): the newest of the
+   *  Chat's own `created_at` and its `chat_messages.created_at` (max), so a Chat with today's Turn
+   *  reads as "today", not stuck at the instant the row was first created. Read-only projection —
+   *  no new column, computed by `listChats`'s own query (a fresh `newChat` row has no messages yet,
+   *  so its `lastActivityAt` is simply its own `createdAt`). */
+  readonly lastActivityAt: Date;
+  /** S8 W4 (audit C1 "状态副标题"): whether this Chat currently has a Turn in `status='running'` —
+   *  the same partial unique index `activities_one_running_turn_per_chat_uidx`
+   *  (migrations/core/0008_chat_messages.sql) `sendChatMessage` relies on to keep one Turn per
+   *  Chat, read back here instead of written anywhere new. */
+  readonly hasRunningTurn: boolean;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'system';
@@ -126,6 +137,8 @@ interface ChatDbRow {
   visibility: string;
   created_at: Date;
   archived_at: Date | null;
+  last_activity_at: Date;
+  has_running_turn: boolean;
 }
 
 interface ChatMessageDbRow {
@@ -145,6 +158,33 @@ const CHAT_COLUMNS =
 const CHAT_MESSAGE_COLUMNS =
   'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at, source_outbox_id';
 
+// S8 W4 (audit C1): `last_activity_at`/`has_running_turn` are read-only projections — no new
+// column, no new write path — shared by every query below that returns a wire-facing `ChatRow`
+// (`listChats`, `requireChatAccess`, `renameChat`, `setChatArchived`), not only `listChats`: a
+// splice of a stale `renameChat`/`setChatArchived` result would otherwise silently regress these
+// two fields in the console's own cache right after the very write that's supposed to keep it
+// current (`chat-lifecycle.ts`'s `spliceChat`). Every call site aliases the source row `c`. The
+// running-Turn lookup reuses the exact index `sendChatMessage`'s one-running-Turn-per-Chat guard
+// already maintains (`activities_one_running_turn_per_chat_uidx`, migrations/core/
+// 0008_chat_messages.sql), so this is an index-backed lookup, not a new scan pattern.
+const CHAT_ACTIVITY_JOIN_SQL = `
+  left join lateral (
+    select max(cm.created_at) as last_message_at
+    from chat_messages cm
+    where cm.workspace_id = c.workspace_id and cm.chat_id = c.id
+  ) m on true
+  left join lateral (
+    select true as running
+    from activities a
+    where a.workspace_id = c.workspace_id and a.chat_id = c.id
+      and a.kind = 'agent_turn' and a.status = 'running'
+    limit 1
+  ) r on true`;
+const CHAT_ACTIVITY_SELECT_SQL = `coalesce(m.last_message_at, c.created_at) as last_activity_at,
+    coalesce(r.running, false) as has_running_turn`;
+const CHAT_COLUMNS_C =
+  'c.workspace_id, c.id, c.owner_principal_id, c.title, c.visibility, c.created_at, c.archived_at';
+
 function mapChatRow(row: ChatDbRow): ChatRow {
   return {
     workspaceId: row.workspace_id,
@@ -154,6 +194,8 @@ function mapChatRow(row: ChatDbRow): ChatRow {
     visibility: row.visibility,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
+    lastActivityAt: row.last_activity_at,
+    hasRunningTurn: row.has_running_turn,
   };
 }
 
@@ -244,10 +286,12 @@ export async function listChats(
   input: ListChatsInput = {},
 ): Promise<readonly ChatRow[]> {
   const result = await client.query<ChatDbRow>(
-    `select ${CHAT_COLUMNS} from chats
-     where workspace_id = $1 and owner_principal_id = $2
-       and ($3::boolean or archived_at is null)
-     order by created_at desc`,
+    `select ${CHAT_COLUMNS_C}, ${CHAT_ACTIVITY_SELECT_SQL}
+     from chats c
+     ${CHAT_ACTIVITY_JOIN_SQL}
+     where c.workspace_id = $1 and c.owner_principal_id = $2
+       and ($3::boolean or c.archived_at is null)
+     order by c.created_at desc`,
     [workspaceId, principalId, input.includeArchived === true],
   );
   return result.rows.map(mapChatRow);
@@ -263,10 +307,13 @@ export async function newChat(
   principalId: string,
   input: NewChatInput,
 ): Promise<ChatRow> {
+  // A brand-new Chat has no messages and no Turn yet — `lastActivityAt` is just its own
+  // `created_at`, `hasRunningTurn` is always false, both known without a join (see `listChats`'s
+  // own comment for why those two are computed there instead of stored).
   const result = await client.query<ChatDbRow>(
     `insert into chats (workspace_id, owner_principal_id, title)
      values ($1, $2, $3)
-     returning ${CHAT_COLUMNS}`,
+     returning ${CHAT_COLUMNS}, created_at as last_activity_at, false as has_running_turn`,
     [workspaceId, principalId, input.title ?? null],
   );
   const row = result.rows[0];
@@ -288,7 +335,10 @@ export async function requireChatAccess(
   chatId: string,
 ): Promise<ChatRow> {
   const result = await client.query<ChatDbRow>(
-    `select ${CHAT_COLUMNS} from chats where workspace_id = $1 and id = $2`,
+    `select ${CHAT_COLUMNS_C}, ${CHAT_ACTIVITY_SELECT_SQL}
+     from chats c
+     ${CHAT_ACTIVITY_JOIN_SQL}
+     where c.workspace_id = $1 and c.id = $2`,
     [workspaceId, chatId],
   );
   const row = result.rows[0];
@@ -584,10 +634,20 @@ export async function renameChat(
     );
   }
   const before = await requireChatAccess(client, workspaceId, input.chatId);
+  // Wrapped in a CTE (`updated`, aliased `c`) rather than a plain `UPDATE ... RETURNING` — Postgres
+  // has no `RETURNING ... FROM` to join against `chat_messages`/`activities` directly, and the
+  // console splices this result straight into its own `list_chats` cache (`chat-lifecycle.ts`'s
+  // `spliceChat`), so `last_activity_at`/`has_running_turn` must be as current here as they are in
+  // `listChats` (see `CHAT_ACTIVITY_JOIN_SQL`'s own comment).
   const result = await client.query<ChatDbRow>(
-    `update chats set title = $3
-     where workspace_id = $1 and id = $2
-     returning ${CHAT_COLUMNS}`,
+    `with updated as (
+       update chats set title = $3
+       where workspace_id = $1 and id = $2
+       returning ${CHAT_COLUMNS}
+     )
+     select ${CHAT_COLUMNS_C}, ${CHAT_ACTIVITY_SELECT_SQL}
+     from updated c
+     ${CHAT_ACTIVITY_JOIN_SQL}`,
     [workspaceId, input.chatId, title],
   );
   const row = result.rows[0];
@@ -627,14 +687,26 @@ export async function setChatArchived(
   workspaceId: string,
   input: SetChatArchivedInput,
 ): Promise<ChatRow> {
+  // See `renameChat`'s own comment on the CTE wrapper: same reason (splice target, needs current
+  // `last_activity_at`/`has_running_turn`), same shape.
   const result = await client.query<ChatDbRow>(
     input.archived
-      ? `update chats set archived_at = coalesce(archived_at, now())
-         where workspace_id = $1 and id = $2
-         returning ${CHAT_COLUMNS}`
-      : `update chats set archived_at = null
-         where workspace_id = $1 and id = $2
-         returning ${CHAT_COLUMNS}`,
+      ? `with updated as (
+           update chats set archived_at = coalesce(archived_at, now())
+           where workspace_id = $1 and id = $2
+           returning ${CHAT_COLUMNS}
+         )
+         select ${CHAT_COLUMNS_C}, ${CHAT_ACTIVITY_SELECT_SQL}
+         from updated c
+         ${CHAT_ACTIVITY_JOIN_SQL}`
+      : `with updated as (
+           update chats set archived_at = null
+           where workspace_id = $1 and id = $2
+           returning ${CHAT_COLUMNS}
+         )
+         select ${CHAT_COLUMNS_C}, ${CHAT_ACTIVITY_SELECT_SQL}
+         from updated c
+         ${CHAT_ACTIVITY_JOIN_SQL}`,
     [workspaceId, input.chatId],
   );
   const row = result.rows[0];

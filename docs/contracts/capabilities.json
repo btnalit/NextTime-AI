@@ -416,7 +416,13 @@
         "createdAt": {
           "type": "string"
         },
+        "hasRunningTurn": {
+          "type": "boolean"
+        },
         "id": {
+          "type": "string"
+        },
+        "lastActivityAt": {
           "type": "string"
         },
         "ownerPrincipalId": {
@@ -438,7 +444,9 @@
         "title",
         "visibility",
         "createdAt",
-        "archivedAt"
+        "archivedAt",
+        "lastActivityAt",
+        "hasRunningTurn"
       ],
       "type": "object"
     }
@@ -7522,7 +7530,13 @@
               "createdAt": {
                 "type": "string"
               },
+              "hasRunningTurn": {
+                "type": "boolean"
+              },
               "id": {
+                "type": "string"
+              },
+              "lastActivityAt": {
                 "type": "string"
               },
               "ownerPrincipalId": {
@@ -7544,7 +7558,9 @@
               "title",
               "visibility",
               "createdAt",
-              "archivedAt"
+              "archivedAt",
+              "lastActivityAt",
+              "hasRunningTurn"
             ],
             "type": "object"
           },
@@ -10693,7 +10709,13 @@
         "createdAt": {
           "type": "string"
         },
+        "hasRunningTurn": {
+          "type": "boolean"
+        },
         "id": {
+          "type": "string"
+        },
+        "lastActivityAt": {
           "type": "string"
         },
         "ownerPrincipalId": {
@@ -10715,7 +10737,9 @@
         "title",
         "visibility",
         "createdAt",
-        "archivedAt"
+        "archivedAt",
+        "lastActivityAt",
+        "hasRunningTurn"
       ],
       "type": "object"
     }
@@ -13742,7 +13766,13 @@
         "createdAt": {
           "type": "string"
         },
+        "hasRunningTurn": {
+          "type": "boolean"
+        },
         "id": {
+          "type": "string"
+        },
+        "lastActivityAt": {
           "type": "string"
         },
         "ownerPrincipalId": {
@@ -13764,7 +13794,9 @@
         "title",
         "visibility",
         "createdAt",
-        "archivedAt"
+        "archivedAt",
+        "lastActivityAt",
+        "hasRunningTurn"
       ],
       "type": "object"
     }
@@ -18228,7 +18260,13 @@
         "createdAt": {
           "type": "string"
         },
+        "hasRunningTurn": {
+          "type": "boolean"
+        },
         "id": {
+          "type": "string"
+        },
+        "lastActivityAt": {
           "type": "string"
         },
         "ownerPrincipalId": {
@@ -18250,7 +18288,9 @@
         "title",
         "visibility",
         "createdAt",
-        "archivedAt"
+        "archivedAt",
+        "lastActivityAt",
+        "hasRunningTurn"
       ],
       "type": "object"
     }

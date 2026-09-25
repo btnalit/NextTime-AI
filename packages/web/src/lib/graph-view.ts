@@ -90,6 +90,36 @@ export function objectTypeOptions(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export interface ObjectTypeGroup {
+  readonly objectType: string;
+  readonly objects: readonly ObjectWire[];
+}
+
+/** S8 W4 (audit G2 "默认『最近更新』被镜像 sha256 占满"): groups the unfiltered browse page
+ *  (`ObjectSearch`'s own `search{query:''}`) by `objectType`, most-recently-updated type first
+ *  (each group's own newest `updatedAt`) — server order within a group is untouched (still
+ *  recency). A single high-churn type (e.g. `ontology/modules.yaml`'s ops-assets `Image`) filling
+ *  every slot no longer visually reads as "this workspace only has one kind of Object"; it reads
+ *  as one busy section among the others. Deliberately not an *exclude* filter — nothing here is
+ *  ontology-type-name-aware, so a workspace whose noisiest type is something else entirely still
+ *  groups the same way, with no hardcoded name to keep in sync with `ontology/*.yaml`. Only
+ *  meaningful for the unfiltered page: a type-filtered or text-searched result is already one
+ *  group, and callers should not call this then. */
+export function groupObjectsByType(objects: readonly ObjectWire[]): readonly ObjectTypeGroup[] {
+  const order: string[] = [];
+  const byType = new Map<string, ObjectWire[]>();
+  for (const object of objects) {
+    const existing = byType.get(object.objectType);
+    if (existing) {
+      existing.push(object);
+    } else {
+      byType.set(object.objectType, [object]);
+      order.push(object.objectType);
+    }
+  }
+  return order.map((objectType) => ({ objectType, objects: byType.get(objectType) ?? [] }));
+}
+
 // -------------------------------------------------------------------------------------------
 // Facts around an Object
 // -------------------------------------------------------------------------------------------

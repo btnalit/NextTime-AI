@@ -65,6 +65,7 @@ export function TaskDetail({
       ? Math.min(100, Math.round((task.tokensUsed / task.tokenBudget) * 100))
       : null;
   const runningRuns = task.workerRuns.filter((run) => run.terminatedAt === null).length;
+  const tokensUsedText = task.tokensUsed.toLocaleString();
 
   return (
     <div className="stack" data-testid="task-detail" data-task-id={task.id}>
@@ -103,9 +104,9 @@ export function TaskDetail({
             )}
             target={definitionName ?? task.id}
             impact={[
-              `任务 Task: ${task.id}`,
-              `运行中的 WorkerRun Running runs: ${runningRuns}`,
-              `已用 Token Tokens used: ${task.tokensUsed.toLocaleString()}`,
+              t(`任务 ${task.id}`, `Task: ${task.id}`),
+              t(`运行中的 WorkerRun ${runningRuns}`, `Running runs: ${runningRuns}`),
+              t(`已用 Token ${tokensUsedText}`, `Tokens used: ${tokensUsedText}`),
               t('取消后不能恢复；需要时重新委派', 'Cannot be resumed — delegate again if needed'),
             ]}
             confirmLabel={t('确认取消', 'Cancel task')}

@@ -42,7 +42,9 @@ describe('GraphPage', () => {
     expect(rows).toHaveLength(2);
     expect(screen.getByText('最近更新')).toBeTruthy();
     expect(screen.getByTestId('graph-no-object')).toBeTruthy();
-    expect(screen.getByTestId('graph-legend').textContent).toContain('2 小时 2 h');
+    // S8 W4 (audit G3, i18n correctness fix): `formatWindow` now returns one language via `t()`
+    // (default zh-CN here) instead of always gluing both together.
+    expect(screen.getByTestId('graph-legend').textContent).toContain('2 小时');
     // Names come from the identity key (Host: hostname) and never a bare uuid.
     expect(within(rows[0] as HTMLElement).getByText('node-a')).toBeTruthy();
     expect(within(rows[1] as HTMLElement).getByText('web')).toBeTruthy();

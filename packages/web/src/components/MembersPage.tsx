@@ -19,6 +19,7 @@ import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
+import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
@@ -189,6 +190,20 @@ export function MembersPage({ http }: MembersPageProps) {
           ))}
         </DataList>
       )}
+      {canManage &&
+      principals.state.status === 'ready' &&
+      principals.state.data.nextCursor === undefined &&
+      rows.length > 0 &&
+      rows.length <= 2 ? (
+        // S8 W4 (audit L11 "成员...只有 1-2 行时，下方空白像没做完"): points back at the page's own
+        // primary action instead of leaving bare canvas below a short list.
+        <Notice testId="members-short-list-hint">
+          {t(
+            '还可以添加更多成员，或签发服务凭证。',
+            'You can add more members, or issue a service credential.',
+          )}
+        </Notice>
+      ) : null}
       {principals.state.status === 'ready' && principals.state.data.nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button

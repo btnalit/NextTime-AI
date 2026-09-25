@@ -21,6 +21,15 @@ export const ChatWireSchema = z
      *  `status: 'active' | 'archived'` enum because the timestamp *is* the status and the console
      *  wants to show "archived <relative time>" — one field, no second source of truth. */
     archivedAt: z.string().nullable(),
+    /** S8 W4 (audit C1 "对话行副标题显示 chats.created_at"): the newer of `createdAt` and the
+     *  Chat's own newest `chat_messages.created_at` — a read-only projection (`toWireChat`,
+     *  application/gateway/resource-wire.ts), never a stored column. Equals `createdAt` for a
+     *  Chat with no messages yet. */
+    lastActivityAt: z.string(),
+    /** S8 W4 (audit C1 "状态副标题"): whether the Chat currently has a Turn in `status='running'`
+     *  — read back from the same partial unique index `sendChatMessage` relies on
+     *  (`activities_one_running_turn_per_chat_uidx`), not a second source of truth. */
+    hasRunningTurn: z.boolean(),
   })
   .strict();
 export type ChatWire = z.infer<typeof ChatWireSchema>;

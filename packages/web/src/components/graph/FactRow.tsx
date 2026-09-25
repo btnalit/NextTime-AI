@@ -93,13 +93,16 @@ export function FactRow({
     },
     asOf,
   );
+  const observedRelative = formatRelative(fact.lastObservedAt, asOf);
+  const recordedRelative = formatRelative(fact.recordedAt, asOf);
   const clock = fact.lastObservedAt
-    ? `观测 Observed ${formatRelative(fact.lastObservedAt, asOf)}`
-    : `记录 Recorded ${formatRelative(fact.recordedAt, asOf)}`;
+    ? t(`观测 ${observedRelative}`, `Observed ${observedRelative}`)
+    : t(`记录 ${recordedRelative}`, `Recorded ${recordedRelative}`);
+  const validFrom = formatDateTime(fact.validFrom);
   const validity =
     fact.validUntil === null
-      ? `自 from ${formatDateTime(fact.validFrom)}`
-      : `${formatDateTime(fact.validFrom)} – ${formatDateTime(fact.validUntil)}`;
+      ? t(`自 ${validFrom}`, `from ${validFrom}`)
+      : `${validFrom} – ${formatDateTime(fact.validUntil)}`;
 
   return (
     <li

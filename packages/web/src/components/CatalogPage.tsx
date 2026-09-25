@@ -45,6 +45,7 @@ import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Textarea, describedBy } from './ui/Field.js';
+import { Notice } from './ui/Notice.js';
 import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -1542,6 +1543,21 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
             ))}
           </DataList>
         )}
+        {canPropose &&
+        workers.state.status === 'ready' &&
+        workers.state.data.nextCursor === undefined &&
+        workerRows.length > 0 &&
+        workerRows.length <= 2 ? (
+          // S8 W4 (audit L11 "Workers 只有 1-2 行时，下方空白像没做完"): the row's own remedy
+          // example — point back at the toolbar's "新建 Worker 定义草稿" / "从模板创建" above,
+          // instead of leaving bare canvas below a short list.
+          <Notice testId="workers-short-list-hint">
+            {t(
+              '还可以新建 Worker 定义草稿，或从模板创建（ops-runner）快速开始。',
+              'You can start another Worker definition draft, or create one from the ops-runner template.',
+            )}
+          </Notice>
+        ) : null}
       </div>
       {workers.state.status === 'ready' && workers.state.data.nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>

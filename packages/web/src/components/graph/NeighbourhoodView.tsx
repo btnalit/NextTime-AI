@@ -108,13 +108,16 @@ export function NeighbourhoodView({
   }
 
   const centreLabel = objectName ?? shortId(objectId);
+  const neighbourCount = all.length;
+  const neighbourLabelZh = `${centreLabel} 与 ${neighbourCount} 个邻居`;
+  const neighbourLabelEn = `${centreLabel} with ${neighbourCount} neighbours`;
   return (
     <figure className="graph-picture" data-testid="graph-picture">
       <svg
         className="graph-svg"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
-        aria-label={`${centreLabel} 与 ${all.length} 个邻居 and ${all.length} neighbours`}
+        aria-label={t(neighbourLabelZh, neighbourLabelEn)}
       >
         <title>
           {centreLabel} — {all.length} {t('邻居', 'neighbours')}
@@ -151,7 +154,7 @@ export function NeighbourhoodView({
               // biome-ignore lint/a11y/useSemanticElements: an SVG node cannot be a <button>; the group carries role / tabIndex / Enter+Space itself, and the same action is a real button in the list below.
               role="button"
               tabIndex={0}
-              aria-label={`聚焦 Focus ${label}`}
+              aria-label={t(`聚焦 ${label}`, `Focus ${label}`)}
               data-testid="graph-node"
               data-object-id={node.id}
               onClick={() => onFocus(node.id)}

@@ -16,6 +16,7 @@ import { DataList, DataRow } from './ui/DataList.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
+import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { Tabs } from './ui/Tabs.js';
 
@@ -218,9 +219,31 @@ export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) 
                       </span>
                     </span>
                   ) : (
-                    <time title={formatDateTime(chat.createdAt)}>
-                      {formatRelative(chat.createdAt)}
-                    </time>
+                    // S8 W4 (audit C1): `lastActivityAt` — the newest of the Chat's own
+                    // `createdAt` and its newest message — not `createdAt` alone, which used to
+                    // read as "4d ago" for a Chat with a Turn today. `hasRunningTurn` is the row's
+                    // "状态副标题" — the one status worth a chip here (idle carries no chip, same
+                    // convention as every other status vocabulary in this console: only the
+                    // notable state gets a chip).
+                    <span className="row-wrap">
+                      {chat.hasRunningTurn ? (
+                        // Same tone/live pairing `lib/status-tone.ts` uses for every other
+                        // machine's own `running` state (`chip-info chip-live`) — one status
+                        // vocabulary, not a page-local color choice.
+                        <span
+                          className="chip chip-s chip-info chip-live"
+                          data-testid="chat-running-chip"
+                        >
+                          {t('运行中', 'Running')}
+                        </span>
+                      ) : null}
+                      <time
+                        title={formatDateTime(chat.lastActivityAt)}
+                        data-testid="chat-last-activity-at"
+                      >
+                        {formatRelative(chat.lastActivityAt)}
+                      </time>
+                    </span>
                   )
                 }
                 trailing={
@@ -241,6 +264,17 @@ export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) 
               />
             ))}
           </DataList>
+          {filter === 'active' && visible.length <= 2 ? (
+            // S8 W4 (audit L11 "对话...只有 1-2 行时，下方 70-90% 是空背景，看起来像没做完"): a
+            // short list points back at its own primary action instead of leaving bare canvas
+            // below it.
+            <Notice testId="chats-short-list-hint">
+              {t(
+                '随时可以开一段新对话——每个对话都是与入口 agent 的独立线程。',
+                'Start another conversation anytime — each Chat is its own thread with the entry agent.',
+              )}
+            </Notice>
+          ) : null}
         </>
       )}
 
