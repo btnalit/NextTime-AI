@@ -177,10 +177,14 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     }
     await expect(statusToggle).toHaveText('禁用', { timeout: 15_000 });
 
+    // Asserted on `data-status` (the raw wire value `StatusChip` always carries), not the chip's
+    // Chinese label text, which S8 W4-C stopped leaving as the raw enum.
     await drawer.getByTestId('gate-instance-test').click();
-    await expect(drawer.getByTestId('gate-instance-test-result')).toContainText('unreachable', {
-      timeout: 15_000,
-    });
+    await expect(drawer.getByTestId('gate-instance-test-health')).toHaveAttribute(
+      'data-status',
+      'unreachable',
+      { timeout: 15_000 },
+    );
 
     const trustToggle = drawer.getByTestId('gate-instance-trust-toggle');
     const trustLabel = (await trustToggle.textContent())?.trim();

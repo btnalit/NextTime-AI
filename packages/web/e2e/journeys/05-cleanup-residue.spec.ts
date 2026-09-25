@@ -98,6 +98,25 @@ test.describe('Journey ⑤: 清理验收残留', () => {
     // The purge flow itself (preview → retype name → executed) is workspaces.spec.ts's own S6-A A1
     // coverage — not repeated here (this file's own doc comment explains why).
 
+    // --- cleanup: re-enable the fixture workspace before this test ends. Disabling it for <7 days
+    // makes it residue (`isResidueWorkspace`) but not yet `purgeable` (that needs the retention
+    // window, or an expired ephemeral row) — left disabled, it would sit in the shared CI stack's
+    // `?residue=1` view for every test that runs after this one in the same job, including
+    // workspaces.spec.ts's own "admin: the default view hides residue" test, whose empty-state
+    // branch assumes no such row exists. Same hygiene `workspaces.spec.ts`'s own "disable W2, then
+    // re-enable it" test already follows, for the same reason (see that test's own comment).
+    await residueRow.click();
+    const cleanupDrawer = page.getByTestId('workspace-drawer');
+    await expect(cleanupDrawer.getByTestId('workspace-detail')).toBeVisible({ timeout: 15_000 });
+    await cleanupDrawer.getByTestId('workspace-status-toggle').click();
+    await expect(residueRow.getByTestId('workspace-status')).toHaveAttribute(
+      'data-status',
+      'active',
+      { timeout: 15_000 },
+    );
+    await page.keyboard.press('Escape');
+    await expect(cleanupDrawer).toBeHidden();
+
     // --- 草稿定义 / 已退出的入口容器: structural only (see this file's doc comment for the CI-stack
     // limits) — the cards render without an error banner, and never leak a draft's own content or
     // an internal tracking number into visible text.

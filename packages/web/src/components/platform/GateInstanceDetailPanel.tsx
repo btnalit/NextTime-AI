@@ -229,7 +229,11 @@ export function GateInstanceDetailPanel({
           {testResult ? (
             <div className="stack-s" data-testid="gate-instance-test-result">
               <dl className="definition-list">
-                <dt>{t('健康', 'Health')}</dt>
+                {/* "状态", not "健康": the `ok` tone's own label text is also "健康" — pairing a
+                 *  "健康" row label with a "健康" chip value read as a stutter ("健康健康") once
+                 *  the raw enum stopped being shown verbatim. "状态" describes the field, the chip
+                 *  still carries the actual health value (`data-status`, e2e's own stable hook). */}
+                <dt>{t('状态', 'Status')}</dt>
                 <dd>
                   <StatusChip
                     machine="gateHealth"

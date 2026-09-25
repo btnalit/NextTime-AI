@@ -283,11 +283,15 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     });
 
     // --- 测试连接: the gate host's own health probe against the fixture, through the take-over
-    //     from the previous test — never `unreachable` once taken over. ---
+    //     from the previous test — never `unreachable` once taken over. Asserted on `data-status`
+    //     (the raw wire value `StatusChip` always carries — lib/status-tone.ts's own doc comment),
+    //     not the chip's Chinese label text, which S8 W4-C stopped leaving as the raw enum. ---
     await drawer.getByTestId('gate-instance-test').click();
-    await expect(drawer.getByTestId('gate-instance-test-result')).toContainText('ok', {
-      timeout: 15_000,
-    });
+    await expect(drawer.getByTestId('gate-instance-test-health')).toHaveAttribute(
+      'data-status',
+      'ok',
+      { timeout: 15_000 },
+    );
 
     // --- 启用: a hosted instance lands `discovered` (review decision — the administrator reviews the
     //     host's endpoint and Operations before workspaces may enable it, same as a packaged gate).
