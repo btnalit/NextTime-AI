@@ -67,6 +67,9 @@ export const OperationSummaryWireSchema = z
     autoApprovable: z.boolean(),
     version: z.number().int().positive(),
     status: PublishableStatusSchema,
+    /** S8 W3-K1 (leftover 81): absent (never an empty string) for an Operation with no description
+     *  — mirrors `OperationSchema.description`'s own optionality (action-description.ts). */
+    description: z.string().optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
@@ -125,6 +128,16 @@ export const OperationDeprecateResultWireSchema = z
     gatekeeperId: z.string(),
     name: z.string(),
     status: PublishableStatusSchema,
+  })
+  .strict();
+
+/** `update_operation_description`'s result (S8 W3-K1, leftover 81) — the Operation's new
+ *  description, so the catalog row can refresh without a full reload. */
+export const UpdateOperationDescriptionResultWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    name: z.string(),
+    description: z.string(),
   })
   .strict();
 

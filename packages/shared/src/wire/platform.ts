@@ -589,13 +589,18 @@ export type GateInstanceEnablePreviewOperationWire = z.infer<
   typeof GateInstanceEnablePreviewOperationWireSchema
 >;
 
-const GateInstanceEnablePreviewGovernanceFieldsWireSchema = z
+/** S8 W3-K1 (leftover 79): the three fields `refresh_operation_governance` reads/writes and
+ *  `preview_gate_instance_enable`'s own `differs` already compared — shared here so the two never
+ *  drift on what "governance fields" means (`governance/gatekeepers/manifest.ts`'s
+ *  `OperationGovernanceFields` is this same shape on the kernel side). */
+export const OperationGovernanceFieldsWireSchema = z
   .object({
     mode: OperationModeSchema,
     blastRadius: BlastRadiusSchema,
     autoApprovable: z.boolean(),
   })
   .strict();
+export type OperationGovernanceFieldsWire = z.infer<typeof OperationGovernanceFieldsWireSchema>;
 
 export const GateInstanceEnablePreviewOperationPresentWireSchema = z
   .object({
@@ -603,15 +608,15 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
     /** The deployed Operation's own current governance fields (plus its `status` — always
      *  `published` or `deprecated`; `importManifest`'s own draft-vs-terminal split is exactly why
      *  a `draft` row is never in this list — see the module doc comment on the handler). */
-    existing: GateInstanceEnablePreviewGovernanceFieldsWireSchema.extend({
+    existing: OperationGovernanceFieldsWireSchema.extend({
       status: PublishableStatusSchema,
     }).strict(),
     /** What the gate's manifest announces for the same name right now. */
-    announced: GateInstanceEnablePreviewGovernanceFieldsWireSchema,
+    announced: OperationGovernanceFieldsWireSchema,
     /** `true` when `existing` and `announced` disagree on mode/blastRadius/autoApprovable — CO2's
      *  "deployed Operation whose fields no longer match the announced manifest" case. Surfaced
-     *  only; refreshing `existing` to match `announced` is a separate maintainer decision, never
-     *  done by this preview or by `enable_gate_instance` itself. */
+     *  here; `refresh_operation_governance` (leftover 79) is the owner-authorized capability that
+     *  actually corrects it — never done by this preview or by `enable_gate_instance` itself. */
     differs: z.boolean(),
   })
   .strict();
@@ -638,6 +643,41 @@ export const PreviewGateInstanceEnableResultWireSchema = z
   .strict();
 export type PreviewGateInstanceEnableResultWire = z.infer<
   typeof PreviewGateInstanceEnableResultWireSchema
+>;
+
+// -------------------------------------------------------------------------------------------
+// refresh_operation_governance (S8 W3-K1, leftover 79, audit CO2): the write half of the preview
+// above — applies the announced manifest's governance fields to every selected Operation whose
+// fields differ, in place (governance/gatekeepers/manifest.ts's own doc comment on why).
+// -------------------------------------------------------------------------------------------
+
+export const OperationGovernanceDirectionSchema = z.enum(['loosened', 'tightened', 'mixed']);
+export type OperationGovernanceDirectionWire = z.infer<typeof OperationGovernanceDirectionSchema>;
+
+export const RefreshedOperationGovernanceWireSchema = z
+  .object({
+    name: z.string(),
+    before: OperationGovernanceFieldsWireSchema,
+    after: OperationGovernanceFieldsWireSchema,
+    direction: OperationGovernanceDirectionSchema,
+  })
+  .strict();
+export type RefreshedOperationGovernanceWire = z.infer<
+  typeof RefreshedOperationGovernanceWireSchema
+>;
+
+export const RefreshOperationGovernanceResultWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    refreshed: z.array(RefreshedOperationGovernanceWireSchema),
+    /** Every selected (or, when `operationNames` was omitted, every announced) Operation name that
+     *  was not refreshed — already matching the manifest, or with nothing "already present" to
+     *  refresh (no deployed row, or a pending revision draft — see the handler's own doc comment). */
+    unchanged: z.array(z.string()),
+  })
+  .strict();
+export type RefreshOperationGovernanceResultWire = z.infer<
+  typeof RefreshOperationGovernanceResultWireSchema
 >;
 
 /** P-B2a (决定 ⑩): the 5-minute platform JWT the browser presents to the gate host when it posts a

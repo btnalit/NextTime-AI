@@ -156,7 +156,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
                     : module.status === 'up_to_date'
                       ? null
                       : target
-                        ? `升级到 v${target.version} Upgrade to v${target.version}`
+                        ? t(`升级到 v${target.version}`, `Upgrade to v${target.version}`)
                         : null;
                 return (
                   <tr key={module.name} data-testid={`catalog-module-row-${module.name}`}>

@@ -76,3 +76,42 @@ export function gateToolDescription(op: AllowedOperationWire, label: string): st
       : '';
   return `${base} ${modeSentence}${blastSentence}`;
 }
+
+// -------------------------------------------------------------------------------------------
+// gate tool result truncation (S8 W3-K1, leftover 75 first half, docs/STATUS.md §4 row 75: "门
+// 操作原始输出未截断" — a real inventory-scan Worker's own raw gate-tool output alone burned
+// ~120k token, 59% of one Task's budget). Shared by `entry` and `worker` mode's own gate-projected
+// tool result paths (`modes/worker.ts`'s `buildGateTool`, `modes/entry.ts`'s `buildGateObserveTool`) — the one
+// place both modes stringify a gate's raw response for the model.
+// -------------------------------------------------------------------------------------------
+
+const DEFAULT_GATE_TOOL_RESULT_MAX_CHARS = 16_000;
+
+/** Reads `NEXTTIME_GATE_TOOL_RESULT_MAX_CHARS` once, at module load (= once per mode's process
+ *  start — this package's `NEXTTIME_*` env var convention, `index.ts`'s own `readRequiredEnv`
+ *  callers). An unset, unparsable, or non-positive value falls back to the default — a malformed
+ *  override is worth ignoring, never worth crashing a Worker/entry container over. */
+function resolveGateToolResultMaxChars(): number {
+  const raw = process.env.NEXTTIME_GATE_TOOL_RESULT_MAX_CHARS;
+  if (!raw) return DEFAULT_GATE_TOOL_RESULT_MAX_CHARS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GATE_TOOL_RESULT_MAX_CHARS;
+}
+
+/** The cap this process was started with — computed once, not re-read per call. */
+export const GATE_TOOL_RESULT_MAX_CHARS = resolveGateToolResultMaxChars();
+
+/** Keeps the head of `text` up to `maxChars` (default: this process's `GATE_TOOL_RESULT_MAX_CHARS`)
+ *  and appends one marker line stating how many characters were omitted and that the full result
+ *  is not shown. Text at or under the limit is returned byte-for-byte unchanged (no marker line —
+ *  a caller composing further text after this call, e.g. `worker.ts`'s pending-approval guidance
+ *  sentence, must be able to tell truncation happened only by comparing lengths, never by a marker
+ *  appearing on an untouched result). */
+export function truncateToolResult(
+  text: string,
+  maxChars: number = GATE_TOOL_RESULT_MAX_CHARS,
+): string {
+  if (text.length <= maxChars) return text;
+  const omittedChars = text.length - maxChars;
+  return `${text.slice(0, maxChars)}\n\n[... ${omittedChars} more characters omitted — the full result is not shown ...]`;
+}

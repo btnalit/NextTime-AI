@@ -4,6 +4,8 @@ import type { PoolClient } from 'pg';
 import type { OperationOrigin } from '../../substrate/ontology/index.js';
 import {
   registerOperationDraftObject,
+  setOperationDescriptionObject,
+  setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 
@@ -808,6 +810,285 @@ export async function deprecateOperation(
     'deprecated',
   );
   return { ...existing, status: 'deprecated' };
+}
+
+// -------------------------------------------------------------------------------------------
+// S8 W3-K1 (leftover 81): update_operation_description — human channel, no minRole (same as
+// publish_operation/deprecate_operation right above — §9.3 names no role for it explicitly).
+// -------------------------------------------------------------------------------------------
+
+/** Matches `update_operation_description`'s own `paramsSchema` bound (packages/shared/src/
+ *  capabilities.ts) — no existing import-path limit to match (checked: OperationSchema.description
+ *  and every other manifest-import path carry no `.max()` of their own), so this is a fresh, sane
+ *  bound for a documentation string. */
+export const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
+
+/** Thrown by `updateOperationDescription` for a blank (after trim) or over-length description —
+ *  named distinctly from `OperationDescriptionRequiredError` above (that one is `importManifest`'s
+ *  own "the gate's manifest must declare one" rule; this is a human directly editing one Operation's
+ *  documentation and gets its own message rather than borrowing `import_manifest`'s wording). */
+export class OperationDescriptionInvalidError extends Error {
+  readonly operationName: string;
+  readonly reason: 'empty' | 'too_long';
+  constructor(operationName: string, reason: 'empty' | 'too_long') {
+    super(
+      reason === 'empty'
+        ? `update_operation_description: Operation "${operationName}" description must not be blank`
+        : `update_operation_description: Operation "${operationName}" description exceeds ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
+    );
+    this.name = 'OperationDescriptionInvalidError';
+    this.operationName = operationName;
+    this.reason = reason;
+  }
+}
+
+export interface UpdateOperationDescriptionInput {
+  readonly gatekeeperId: string;
+  readonly name: string;
+  readonly description: string;
+}
+
+/**
+ * `update_operation_description(gatekeeperId, name, description)` (S8 W3-K1, leftover 81, audit
+ * CO1 "页面允许 owner 补写描述"): edits one already-registered Operation's `description` **in
+ * place** — description is documentation, not a governance field (§ module doc comment's own
+ * "governance decisions ... published row stays live" reasoning does not apply to a field that
+ * carries no policy weight), so there is no draft/publish two-step here, the same way
+ * `updateGateInstance`'s `displayName` patch needs none. Targets the identity's *current* row
+ * (`requireOperation`'s draft-first priority, same target `publishOperation` resolves against) —
+ * draft, published, or deprecated all accept a description edit; only the identity itself
+ * (unknown name) is an error (`OperationNotFoundError`).
+ *
+ * `description` must be non-blank after trimming and at most `OPERATION_DESCRIPTION_MAX_LENGTH`
+ * characters (`OperationDescriptionInvalidError`) — checked before any write, so a rejected call
+ * touches nothing.
+ */
+export async function updateOperationDescription(
+  client: PoolClient,
+  workspaceId: string,
+  input: UpdateOperationDescriptionInput,
+): Promise<OperationRecord> {
+  const trimmed = input.description.trim();
+  if (trimmed.length === 0) {
+    throw new OperationDescriptionInvalidError(input.name, 'empty');
+  }
+  if (trimmed.length > OPERATION_DESCRIPTION_MAX_LENGTH) {
+    throw new OperationDescriptionInvalidError(input.name, 'too_long');
+  }
+
+  const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
+  await setOperationDescriptionObject(
+    client,
+    workspaceId,
+    { gatekeeperId: input.gatekeeperId, name: input.name, version: existing.version },
+    trimmed,
+  );
+  return { ...existing, operation: { ...existing.operation, description: trimmed } };
+}
+
+// -------------------------------------------------------------------------------------------
+// S8 W3-K1 (leftover 79): refresh_operation_governance — human channel, owner only. The shared
+// "does this Operation's governance disagree with the gate's announced manifest" judgment
+// `preview_gate_instance_enable` (application/gateway/gate-instance-handlers.ts) already computes
+// inline for its own `differs` flag now lives here, as `diffOperationGovernanceFields` — both that
+// preview and `refreshOperationGovernance` below call it, so "which fields count as governance"
+// and "when do they differ" can never drift between the read and the write.
+// -------------------------------------------------------------------------------------------
+
+/** The three fields `preview_gate_instance_enable`'s own `differs` flag already compared before
+ *  this task (module doc comment) — deliberately not `await_decision`/`reversibility`/the MCP
+ *  trust hints, which that preview never compared either; "governance fields" for this capability
+ *  means exactly these three, not the full `Operation` shape. */
+export interface OperationGovernanceFields {
+  readonly mode: Operation['mode'];
+  readonly blastRadius: Operation['blast_radius'];
+  readonly autoApprovable: boolean;
+}
+
+export function operationGovernanceFieldsOf(operation: Operation): OperationGovernanceFields {
+  return {
+    mode: operation.mode,
+    blastRadius: operation.blast_radius,
+    autoApprovable: operation.auto_approvable,
+  };
+}
+
+export type OperationGovernanceFieldName = 'mode' | 'blastRadius' | 'autoApprovable';
+
+export interface OperationGovernanceDiff {
+  readonly differs: boolean;
+  readonly changedFields: readonly OperationGovernanceFieldName[];
+}
+
+/** The exact comparison `preview_gate_instance_enable` used inline for its own `differs` flag
+ *  before this task — extracted here so `refreshOperationGovernance` reuses it verbatim rather
+ *  than a second, potentially-drifting comparison (dispatch contract). */
+export function diffOperationGovernanceFields(
+  existing: OperationGovernanceFields,
+  announced: OperationGovernanceFields,
+): OperationGovernanceDiff {
+  const changedFields: OperationGovernanceFieldName[] = [];
+  if (existing.mode !== announced.mode) changedFields.push('mode');
+  if (existing.blastRadius !== announced.blastRadius) changedFields.push('blastRadius');
+  if (existing.autoApprovable !== announced.autoApprovable) changedFields.push('autoApprovable');
+  return { differs: changedFields.length > 0, changedFields };
+}
+
+export type OperationGovernanceDirection = 'loosened' | 'tightened' | 'mixed';
+
+/** Strictness rank per field value — lower means *less* governance friction (loosened when the
+ *  announced value ranks lower than the existing one). `observe` needs no approval at all
+ *  (`request_action`'s handler routes it straight through), `execute` always creates an
+ *  ActionRequest — so `execute → observe` is a loosening exactly like the task brief's own
+ *  example, and blast radius / auto-approvable follow their natural order. */
+const MODE_STRICTNESS: Readonly<Record<Operation['mode'], number>> = { observe: 0, execute: 1 };
+const BLAST_RADIUS_STRICTNESS: Readonly<Record<Operation['blast_radius'], number>> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
+function fieldDirection(
+  field: OperationGovernanceFieldName,
+  existing: OperationGovernanceFields,
+  announced: OperationGovernanceFields,
+): 'loosened' | 'tightened' {
+  if (field === 'mode') {
+    return MODE_STRICTNESS[announced.mode] < MODE_STRICTNESS[existing.mode]
+      ? 'loosened'
+      : 'tightened';
+  }
+  if (field === 'blastRadius') {
+    return BLAST_RADIUS_STRICTNESS[announced.blastRadius] <
+      BLAST_RADIUS_STRICTNESS[existing.blastRadius]
+      ? 'loosened'
+      : 'tightened';
+  }
+  // autoApprovable
+  return announced.autoApprovable && !existing.autoApprovable ? 'loosened' : 'tightened';
+}
+
+/** Classifies a non-empty set of changed governance fields (`diffOperationGovernanceFields`'s own
+ *  `changedFields`) as `loosened` (every changed field reduces governance friction — lower blast
+ *  radius, `autoApprovable` false→true, `execute→observe`), `tightened` (every changed field
+ *  increases it), or `mixed` (some of each). Throws on an empty `changedFields` — callers only
+ *  classify a diff that actually differs. */
+export function classifyOperationGovernanceChange(
+  existing: OperationGovernanceFields,
+  announced: OperationGovernanceFields,
+  changedFields: readonly OperationGovernanceFieldName[],
+): OperationGovernanceDirection {
+  if (changedFields.length === 0) {
+    throw new Error(
+      'classifyOperationGovernanceChange: changedFields is empty — nothing to classify',
+    );
+  }
+  const directions = new Set(
+    changedFields.map((field) => fieldDirection(field, existing, announced)),
+  );
+  return directions.size > 1 ? 'mixed' : ([...directions][0] as OperationGovernanceDirection);
+}
+
+export interface RefreshOperationGovernanceInput {
+  readonly gatekeeperId: string;
+  /** The gate instance's announced manifest right now (`operationsOf(rawOperations(...))` —
+   *  `application/gateway/gate-instance-handlers.ts` reads it; this module has no dependency on
+   *  `application/gates`, same layering `getOperation`/`importManifest` already keep). */
+  readonly announcedOperations: readonly Operation[];
+  /** Narrows which announced Operations are considered — `undefined`/omitted means every one. */
+  readonly operationNames?: readonly string[];
+}
+
+export interface RefreshedOperationGovernance {
+  /** The Operation Object's own id (`OperationRecord.id`) — a real uuid, unlike the
+   *  `{gatekeeperId, name}` identity pair. The handler (`refreshOperationGovernanceHandler`,
+   *  gate-instance-handlers.ts) uses this as its per-Operation AuditRecord's `resource_id`
+   *  (`audit_records.resource_id` is `uuid`) and strips it back out of the wire result, which has
+   *  no `id` field — this is kernel-internal, not part of the capability's public result shape. */
+  readonly id: string;
+  readonly name: string;
+  readonly before: OperationGovernanceFields;
+  readonly after: OperationGovernanceFields;
+  readonly direction: OperationGovernanceDirection;
+}
+
+export interface RefreshOperationGovernanceResult {
+  readonly refreshed: readonly RefreshedOperationGovernance[];
+  /** Every selected name that was not refreshed — already matching the manifest, not present at
+   *  all under this identity, or currently a pending draft (module doc comment: refreshing a
+   *  pending revision draft is out of scope, same as `preview_gate_instance_enable`'s own
+   *  draft-is-"to import"-not-"already present" branch). */
+  readonly unchanged: readonly string[];
+}
+
+/**
+ * Applies the gate's announced governance fields to every selected, already-deployed Operation
+ * whose fields disagree with it — the write half of `preview_gate_instance_enable`'s `differs`
+ * (audit CO2). For each announced Operation in `input.operationNames` (or all of them, when
+ * omitted):
+ *
+ *   - `getOperation` resolves the identity's *current* row (draft-first priority, `manifest.ts`'s
+ *     own module doc comment) — `null` or a `draft` row means there is nothing "already present"
+ *     to refresh (exactly `preview_gate_instance_enable`'s own branch), so the name goes to
+ *     `unchanged` untouched;
+ *   - otherwise `diffOperationGovernanceFields` (the exact function `preview_gate_instance_enable`
+ *     uses) decides whether it differs; no difference → `unchanged`; a difference → the announced
+ *     fields are written **in place** (no new `version` — this module's own doc comment on why)
+ *     and the entry is classified (`classifyOperationGovernanceChange`) and returned in
+ *     `refreshed`.
+ *
+ * Writes nothing for a name that never appears in the announced manifest (silently absent from
+ * both `refreshed` and `unchanged` — there is no governance drift to report for an Operation the
+ * gate does not currently declare at all).
+ */
+export async function refreshOperationGovernance(
+  client: PoolClient,
+  workspaceId: string,
+  input: RefreshOperationGovernanceInput,
+): Promise<RefreshOperationGovernanceResult> {
+  const selected = input.operationNames
+    ? input.announcedOperations.filter((operation) =>
+        input.operationNames?.includes(operation.name),
+      )
+    : input.announcedOperations;
+
+  const refreshed: RefreshedOperationGovernance[] = [];
+  const unchanged: string[] = [];
+
+  for (const operation of selected) {
+    const existingRecord = await getOperation(
+      client,
+      workspaceId,
+      input.gatekeeperId,
+      operation.name,
+    );
+    if (existingRecord === null || existingRecord.status === 'draft') {
+      unchanged.push(operation.name);
+      continue;
+    }
+    const before = operationGovernanceFieldsOf(existingRecord.operation);
+    const after = operationGovernanceFieldsOf(operation);
+    const diff = diffOperationGovernanceFields(before, after);
+    if (!diff.differs) {
+      unchanged.push(operation.name);
+      continue;
+    }
+    await setOperationGovernanceFieldsObject(
+      client,
+      workspaceId,
+      { gatekeeperId: input.gatekeeperId, name: operation.name, version: existingRecord.version },
+      after,
+    );
+    refreshed.push({
+      id: existingRecord.id,
+      name: operation.name,
+      before,
+      after,
+      direction: classifyOperationGovernanceChange(before, after, diff.changedFields),
+    });
+  }
+
+  return { refreshed, unchanged };
 }
 
 export { IllegalTransition };

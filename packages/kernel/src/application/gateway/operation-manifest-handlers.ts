@@ -2,10 +2,13 @@ import { OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 import {
   deprecateOperation,
+  getOperation,
   proposeOperation,
   publishManifest,
   publishOperation,
+  updateOperationDescription,
 } from '../../governance/gatekeepers/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -37,6 +40,14 @@ import type { CapabilityHandler } from './capability-handler.js';
  * itself asserts no Fact and previously needed no Activity at all (`substrate/ontology/
  * meta-objects.ts`'s own doc comment: Objects carry no provenance chain of their own) — this one
  * exists purely for that audit trail, not to satisfy an `activityId` requirement.
+ *
+ * S8 W3-K1 addition (leftover 81): `update_operation_description` — human channel, same `minRole`
+ * as `publish_operation`/`deprecate_operation` (none named by §9.3), edits one Operation's
+ * documentation-only `description` in place (no draft/publish step — `governance/gatekeepers/
+ * manifest.ts`'s `updateOperationDescription` doc comment). `refresh_operation_governance`
+ * (leftover 79, the sibling *governance*-field write) lives in `gate-instance-handlers.ts` instead,
+ * next to `preview_gate_instance_enable`'s `differs` judgment it reuses — not here, since it has
+ * nothing to do with the propose/publish manifest flow this file otherwise owns.
  */
 
 const ProposeOperationParamsSchema = z.object({
@@ -139,6 +150,64 @@ export const deprecateOperationHandler: CapabilityHandler = async (client, works
   const record = await deprecateOperation(client, workspaceId, { gatekeeperId, name });
   return {
     result: { gatekeeperId: record.gatekeeperId, name: record.name, status: record.status },
+    resourceType: 'operation',
+    resourceId: `${record.gatekeeperId}:${record.name}`,
+  };
+};
+
+/** `update_operation_description(gatekeeperId, name, description)` (S8 W3-K1, leftover 81): edits
+ *  one Operation's documentation-only `description` in place (`manifest.ts`'s own doc comment on
+ *  `updateOperationDescription` for why this needs no draft/publish step). One explicit AuditRecord
+ *  with before/after, in the same transaction as the write — same "complementary to dispatch.ts's
+ *  own per-call row" reasoning `refreshOperationGovernanceHandler` (gate-instance-handlers.ts)
+ *  documents for its own audit rows. */
+export const updateOperationDescriptionHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { gatekeeperId, name, description } = params as {
+    gatekeeperId: string;
+    name: string;
+    description: string;
+  };
+  // Best-effort before-snapshot for the audit row — `updateOperationDescription` re-reads the
+  // same "current row" (`getOperation`'s draft-first priority) internally; a `null` here (unknown
+  // identity) just means the call below throws `OperationNotFoundError` and nothing is audited.
+  const existing = await getOperation(client, workspaceId, gatekeeperId, name);
+  const before = existing?.operation.description ?? '';
+  const record = await updateOperationDescription(client, workspaceId, {
+    gatekeeperId,
+    name,
+    description,
+  });
+
+  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: principalId,
+    action: 'operation.description_updated',
+    resourceType: 'operation',
+    // `audit_records.resource_id` is `uuid` — `record.id` (`OperationRecord.id`) is the Operation
+    // Object's own id, a real uuid; the `{gatekeeperId, name}` identity pair (not a uuid) goes in
+    // the payload instead, same fix `refreshOperationGovernanceHandler` (gate-instance-handlers.ts)
+    // applies to its own per-Operation AuditRecord.
+    resourceId: record.id,
+    payload: {
+      gatekeeperId: record.gatekeeperId,
+      name: record.name,
+      before,
+      after: record.operation.description ?? '',
+    },
+  });
+
+  return {
+    result: {
+      gatekeeperId: record.gatekeeperId,
+      name: record.name,
+      description: record.operation.description ?? '',
+    },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
   };

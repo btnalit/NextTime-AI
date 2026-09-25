@@ -40,9 +40,16 @@ export {
   publishOperation,
   publishManifest,
   deprecateOperation,
+  updateOperationDescription,
+  refreshOperationGovernance,
+  operationGovernanceFieldsOf,
+  diffOperationGovernanceFields,
+  classifyOperationGovernanceChange,
+  OPERATION_DESCRIPTION_MAX_LENGTH,
   OperationNotFoundError,
   OperationIdentityConflictError,
   OperationDescriptionRequiredError,
+  OperationDescriptionInvalidError,
   IllegalTransition,
 } from './manifest.js';
 export type {
@@ -55,6 +62,14 @@ export type {
   PublishManifestInput,
   PublishManifestResult,
   DeprecateOperationInput,
+  UpdateOperationDescriptionInput,
+  RefreshOperationGovernanceInput,
+  RefreshOperationGovernanceResult,
+  RefreshedOperationGovernance,
+  OperationGovernanceFields,
+  OperationGovernanceFieldName,
+  OperationGovernanceDiff,
+  OperationGovernanceDirection,
 } from './manifest.js';
 export type { OperationOrigin } from '../../substrate/ontology/index.js';
 

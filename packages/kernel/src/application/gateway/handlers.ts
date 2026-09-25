@@ -132,6 +132,7 @@ import {
   issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
   previewGateInstanceEnableHandler,
+  refreshOperationGovernanceHandler,
 } from './gate-instance-handlers.js';
 import {
   getGatekeeperHandler,
@@ -164,6 +165,7 @@ import {
   proposeOperationHandler,
   publishManifestHandler,
   publishOperationHandler,
+  updateOperationDescriptionHandler,
 } from './operation-manifest-handlers.js';
 import {
   createGateInstanceHandler,
@@ -1480,6 +1482,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
+  // S8 W3-K1 (leftover 79) — the write half of preview_gate_instance_enable's `differs`.
+  ['refresh_operation_governance', refreshOperationGovernanceHandler],
   ['issue_service_handle', issueServiceHandleHandler],
   // P-B2a gate-host instances
   ['create_gate_instance', createGateInstanceHandler],
@@ -1550,6 +1554,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
   ['deprecate_operation', deprecateOperationHandler],
+  // S8 W3-K1 (leftover 81) — documentation-only edit, no draft/publish step.
+  ['update_operation_description', updateOperationDescriptionHandler],
   // S2.14 (docs/development-tasks.md S2.14) — skill-procedure-handlers.ts.
   ['propose_skill', proposeSkillHandler],
   ['publish_skill', publishSkillHandler],

@@ -6,10 +6,16 @@ import type {
 import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS, getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import {
+  type AllowedOperationWire,
+  gateToolDescription,
+  gateToolName,
+  truncateToolResult,
+} from './gate-tools.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
- *  which an entry Handle does not hold) and returns the observed data verbatim. */
+ *  which an entry Handle does not hold) and returns the observed data verbatim (truncated — S8
+ *  W3-K1, leftover 75 first half, `gate-tools.ts`'s own `truncateToolResult` doc comment). */
 function buildGateObserveTool(
   op: AllowedOperationWire,
   kernelClient: KernelClient,
@@ -29,7 +35,7 @@ function buildGateObserveTool(
         params,
       });
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
         details: result,
       };
     },

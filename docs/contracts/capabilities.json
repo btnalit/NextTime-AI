@@ -5321,6 +5321,9 @@
                 ],
                 "type": "string"
               },
+              "description": {
+                "type": "string"
+              },
               "gatekeeperId": {
                 "type": "string"
               },
@@ -8515,6 +8518,9 @@
                   "medium",
                   "high"
                 ],
+                "type": "string"
+              },
+              "description": {
                 "type": "string"
               },
               "gatekeeperId": {
@@ -13156,6 +13162,139 @@
         "id",
         "status",
         "turnId"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "refresh_operation_governance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operationNames": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "refreshed": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "after": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable"
+                ],
+                "type": "object"
+              },
+              "before": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable"
+                ],
+                "type": "object"
+              },
+              "direction": {
+                "enum": [
+                  "loosened",
+                  "tightened",
+                  "mixed"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "before",
+              "after",
+              "direction"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "unchanged": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "refreshed",
+        "unchanged"
       ],
       "type": "object"
     }
@@ -18282,6 +18421,58 @@
         "definition",
         "createdAt",
         "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "meta",
+    "mode": "write",
+    "name": "update_operation_description",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "description"
       ],
       "type": "object"
     }
