@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import {
   type AgentPolicy,
   type AgentProfile,
@@ -9,7 +9,8 @@ import {
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
+import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { definitionName } from '../lib/tasks.js';
 import { Button } from './ui/Button.js';
@@ -167,140 +168,183 @@ export function AgentProfileForm({
       {editForbidden ? (
         <Notice tone="warn" testId="agent-profile-edit-forbidden">
           {t(
-            '工作区策略不允许成员编辑自己的智能体配置',
-            'Workspace policy does not allow members to edit their own Agent configuration (',
+            '工作区策略不允许成员编辑自己的智能体配置，请工作区所有者在「模型与配额」页开放。',
+            'Workspace policy does not allow members to edit their own Agent configuration — ask the workspace owner to allow it on Models & Quotas.',
           )}
-          <code>memberCanEditProfile</code>). Ask the workspace owner to change it in 模型与配额.
         </Notice>
       ) : null}
 
-      <Field
-        id="ap-model"
-        label={t('模型', 'Model')}
-        error={fieldErrors.model}
-        hint={t(
-          '可选模型来自工作区的模型清单，并按工作区策略收窄。',
-          'Options come from the workspace model allow-list, narrowed by workspace policy.',
-        )}
-      >
-        <Select
+      {/* S8 W4 (audit M2 "长单列表单无分节"): 模型 / 能力 / 提示词 / 自动批准 四节，与
+       *  `EffectivePanel`（同一页只读摘要）共用 `.section`/`.section-header` 外观。 */}
+      <section className="section" aria-labelledby="ap-section-model-title">
+        <div className="section-header">
+          <h2 id="ap-section-model-title">{t('模型', 'Model')}</h2>
+        </div>
+        <Field
           id="ap-model"
-          value={state.model}
-          onChange={(event) => update('model', event.target.value)}
-          disabled={disabled}
-          invalid={!!fieldErrors.model}
-          aria-describedby={describedBy('ap-model', !fieldErrors.model, !!fieldErrors.model)}
+          label={t('模型', 'Model')}
+          error={fieldErrors.model}
+          hint={t(
+            '可选模型来自工作区的模型清单，并按工作区策略收窄。',
+            'Options come from the workspace model allow-list, narrowed by workspace policy.',
+          )}
         >
-          <option value={INHERIT_MODEL}>{t('继承工作区默认', 'Inherit workspace default')}</option>
-          {allowedModels.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.id}
+          <Select
+            id="ap-model"
+            value={state.model}
+            onChange={(event) => update('model', event.target.value)}
+            disabled={disabled}
+            invalid={!!fieldErrors.model}
+            aria-describedby={describedBy('ap-model', !fieldErrors.model, !!fieldErrors.model)}
+          >
+            <option value={INHERIT_MODEL}>
+              {t('继承工作区默认', 'Inherit workspace default')}
             </option>
-          ))}
-        </Select>
-      </Field>
+            {allowedModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.id}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </section>
 
-      <ChecklistField
-        title="Skills"
-        subtitle={t(
-          '已发布的 Skill，工作区策略可收窄',
-          'Published Skills, narrowed by workspace policy',
-        )}
-        inherit={state.skillsInherit}
-        onInheritChange={(value) => update('skillsInherit', value)}
-        options={allowedSkills.map((s) => ({ id: s.id, label: s.name }))}
-        selected={state.skills}
-        onToggle={(id) => update('skills', toggleItem(state.skills, id))}
-        disabled={disabled}
-        error={fieldErrors.enabledSkills}
-        testId="agent-profile-skills"
-      />
-
-      <ChecklistField
-        title={t('系统接入', 'Connected systems')}
-        subtitle={t(
-          '调用方可见的门，工作区策略可收窄',
-          'Gatekeepers you can see, narrowed by workspace policy',
-        )}
-        inherit={state.gatekeepersInherit}
-        onInheritChange={(value) => update('gatekeepersInherit', value)}
-        options={allowedGatekeepers.map((g) => ({ id: g.id, label: g.name }))}
-        selected={state.gatekeepers}
-        onToggle={(id) => update('gatekeepers', toggleItem(state.gatekeepers, id))}
-        disabled={disabled}
-        error={fieldErrors.enabledGatekeepers}
-        testId="agent-profile-gatekeepers"
-      />
-
-      <ChecklistField
-        title={t('Worker 定义', 'Worker definitions')}
-        subtitle={t('可选', 'Optional')}
-        inherit={state.workerDefsInherit}
-        onInheritChange={(value) => update('workerDefsInherit', value)}
-        options={workerDefinitions.map((w) => ({
-          id: w.id,
-          label: definitionName([w], w.id, w.version) ?? w.id,
-        }))}
-        selected={state.workerDefs}
-        onToggle={(id) => update('workerDefs', toggleItem(state.workerDefs, id))}
-        disabled={disabled}
-        error={fieldErrors.enabledWorkerDefinitions}
-        testId="agent-profile-worker-definitions"
-      />
-
-      <Field
-        id="ap-prompt"
-        label={t('提示词附加', 'Prompt addendum')}
-        error={fieldErrors.promptAddendum}
-        hint={
-          <span data-testid="agent-profile-prompt-count">
-            {state.promptAddendum.length}
-            {maxChars !== undefined ? ` / ${maxChars}` : ''} characters
-            {overLimit ? ' — over the workspace limit' : ''}
-          </span>
-        }
-      >
-        <Textarea
-          id="ap-prompt"
-          value={state.promptAddendum}
-          onChange={(event) => update('promptAddendum', event.target.value)}
-          rows={4}
+      <section className="section" aria-labelledby="ap-section-capabilities-title">
+        <div className="section-header">
+          <h2 id="ap-section-capabilities-title">{t('能力', 'Capabilities')}</h2>
+        </div>
+        <ChecklistField
+          title="Skills"
+          subtitle={t(
+            '已发布的 Skill，工作区策略可收窄',
+            'Published Skills, narrowed by workspace policy',
+          )}
+          inherit={state.skillsInherit}
+          onInheritChange={(value) => update('skillsInherit', value)}
+          options={allowedSkills.map((s) => ({ id: s.id, label: s.name }))}
+          selected={state.skills}
+          onToggle={(id) => update('skills', toggleItem(state.skills, id))}
           disabled={disabled}
-          invalid={!!fieldErrors.promptAddendum || overLimit}
-          aria-describedby={describedBy(
-            'ap-prompt',
-            !fieldErrors.promptAddendum,
-            !!fieldErrors.promptAddendum,
+          error={fieldErrors.enabledSkills}
+          testId="agent-profile-skills"
+          effectiveSummary={effectiveNote(
+            t,
+            profile.effective.enabledSkills,
+            (id) => skills.find((s) => s.id === id)?.name ?? id,
+            hrefs.models(),
           )}
         />
-      </Field>
 
-      <label className="checkbox" data-testid="agent-profile-auto-approve-low">
-        <input
-          type="checkbox"
-          checked={state.autoApproveLow}
-          onChange={(event) => update('autoApproveLow', event.target.checked)}
-          disabled={disabled || autoApproveLowDisabled}
+        <ChecklistField
+          title={t('系统接入', 'Connected systems')}
+          subtitle={t(
+            '调用方可见的门，工作区策略可收窄',
+            'Gatekeepers you can see, narrowed by workspace policy',
+          )}
+          inherit={state.gatekeepersInherit}
+          onInheritChange={(value) => update('gatekeepersInherit', value)}
+          options={allowedGatekeepers.map((g) => ({ id: g.id, label: g.name }))}
+          selected={state.gatekeepers}
+          onToggle={(id) => update('gatekeepers', toggleItem(state.gatekeepers, id))}
+          disabled={disabled}
+          error={fieldErrors.enabledGatekeepers}
+          testId="agent-profile-gatekeepers"
+          effectiveSummary={effectiveNote(
+            t,
+            profile.effective.enabledGatekeepers,
+            (id) => gatekeepers.find((g) => g.id === id)?.name ?? id,
+            hrefs.models(),
+          )}
         />
-        <span>
-          {t('低风险动作自动批准', 'Auto-approve low blast-radius actions')}
-          {autoApproveLowDisabled && !editForbidden ? (
-            <span className="text-3 text-small">
-              {' '}
-              {t(
-                '— 工作区策略未开放"允许自动批准低风险动作"',
-                'workspace policy does not allow "auto-approve low-impact actions"',
-              )}
-            </span>
-          ) : null}
-        </span>
-      </label>
 
-      {fieldErrors.autoApproveLow ? (
-        <p className="field-error" role="alert">
-          {fieldErrors.autoApproveLow}
-        </p>
-      ) : null}
+        <ChecklistField
+          title={t('Worker 定义', 'Worker definitions')}
+          subtitle={t('可选', 'Optional')}
+          inherit={state.workerDefsInherit}
+          onInheritChange={(value) => update('workerDefsInherit', value)}
+          options={workerDefinitions.map((w) => ({
+            id: w.id,
+            label: definitionName([w], w.id, w.version) ?? w.id,
+          }))}
+          selected={state.workerDefs}
+          onToggle={(id) => update('workerDefs', toggleItem(state.workerDefs, id))}
+          disabled={disabled}
+          error={fieldErrors.enabledWorkerDefinitions}
+          testId="agent-profile-worker-definitions"
+          effectiveSummary={effectiveNote(
+            t,
+            profile.effective.enabledWorkerDefinitions,
+            (id) => definitionName(workerDefinitions, id, 0) ?? id,
+            hrefs.catalog('workers'),
+          )}
+        />
+      </section>
+
+      <section className="section" aria-labelledby="ap-section-prompt-title">
+        <div className="section-header">
+          <h2 id="ap-section-prompt-title">{t('提示词', 'Prompt')}</h2>
+        </div>
+        <Field
+          id="ap-prompt"
+          label={t('提示词附加', 'Prompt addendum')}
+          error={fieldErrors.promptAddendum}
+          hint={
+            <span data-testid="agent-profile-prompt-count">
+              {t(
+                `${state.promptAddendum.length}${maxChars !== undefined ? ` / ${maxChars}` : ''} 字`,
+                `${state.promptAddendum.length}${maxChars !== undefined ? ` / ${maxChars}` : ''} characters`,
+              )}
+              {overLimit ? t('（超出工作区上限）', ' (over the workspace limit)') : ''}
+            </span>
+          }
+        >
+          <Textarea
+            id="ap-prompt"
+            value={state.promptAddendum}
+            onChange={(event) => update('promptAddendum', event.target.value)}
+            rows={4}
+            disabled={disabled}
+            invalid={!!fieldErrors.promptAddendum || overLimit}
+            aria-describedby={describedBy(
+              'ap-prompt',
+              !fieldErrors.promptAddendum,
+              !!fieldErrors.promptAddendum,
+            )}
+          />
+        </Field>
+      </section>
+
+      <section className="section" aria-labelledby="ap-section-auto-approve-title">
+        <div className="section-header">
+          <h2 id="ap-section-auto-approve-title">{t('自动批准', 'Auto-approve')}</h2>
+        </div>
+        <label className="checkbox" data-testid="agent-profile-auto-approve-low">
+          <input
+            type="checkbox"
+            checked={state.autoApproveLow}
+            onChange={(event) => update('autoApproveLow', event.target.checked)}
+            disabled={disabled || autoApproveLowDisabled}
+          />
+          <span>
+            {t('低风险动作自动批准', 'Auto-approve low blast-radius actions')}
+            {autoApproveLowDisabled && !editForbidden ? (
+              <span className="text-3 text-small">
+                {' '}
+                {t(
+                  '— 工作区策略未开放"允许自动批准低风险动作"',
+                  'workspace policy does not allow "auto-approve low-impact actions"',
+                )}
+              </span>
+            ) : null}
+          </span>
+        </label>
+
+        {fieldErrors.autoApproveLow ? (
+          <p className="field-error" role="alert">
+            {fieldErrors.autoApproveLow}
+          </p>
+        ) : null}
+      </section>
 
       {submitError !== null ? (
         <ErrorBanner
@@ -325,6 +369,26 @@ export function AgentProfileForm({
   );
 }
 
+/** S8 W4 (audit U4 "「继承（不覆盖）」都看不到工作区默认值是什么，也没有链接过去"): the summary
+ *  line shown under the inherit checkbox while it is checked — the names `profile.effective`
+ *  already resolved (Grants ∩ AgentPolicy) for this exact field, so "inherit" stops being an
+ *  opaque toggle, plus a link to the page that actually sets that default. */
+function effectiveNote(
+  t: Translate,
+  effectiveIds: readonly string[],
+  nameOf: (id: string) => string,
+  governanceHref: string,
+): ReactNode {
+  return (
+    <p className="field-hint" data-testid="agent-profile-effective-note">
+      {t('当前默认值：', 'Current default: ')}
+      {effectiveIds.length > 0 ? effectiveIds.map(nameOf).join('、') : t('（无）', '(none)')}
+      {' — '}
+      <a href={governanceHref}>{t('查看治理设置', 'View governance settings')}</a>
+    </p>
+  );
+}
+
 function ChecklistField({
   title,
   subtitle,
@@ -336,6 +400,7 @@ function ChecklistField({
   disabled,
   error,
   testId,
+  effectiveSummary,
 }: {
   readonly title: string;
   readonly subtitle: string;
@@ -347,6 +412,7 @@ function ChecklistField({
   readonly disabled: boolean;
   readonly error?: string;
   readonly testId: string;
+  readonly effectiveSummary?: ReactNode;
 }) {
   const t = useT();
   return (
@@ -362,9 +428,10 @@ function ChecklistField({
         />
         <span>{t('继承（不覆盖）', 'Inherit workspace default')}</span>
       </label>
+      {inherit ? effectiveSummary : null}
       {!inherit ? (
         options.length === 0 ? (
-          <p className="text-3 text-small">Nothing available.</p>
+          <p className="text-3 text-small">{t('没有可选项。', 'Nothing available.')}</p>
         ) : (
           <fieldset
             className="stack-s"

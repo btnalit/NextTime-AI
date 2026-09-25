@@ -82,8 +82,11 @@ function parseNames(raw: string): readonly string[] {
  */
 export function IssueServiceHandleSection({ http, principals }: IssueServiceHandleSectionProps) {
   const t = useT();
+  // S8 W4 (leftover 88 "内部服务主体...会列出它们，可以给内部主体签 Handle"): the platform's own
+  // internal service principals (`__gatekeeper_service__`, `__draft_reaper__`) never authenticate
+  // as an external runtime — they never appear in this picker.
   const servicePrincipals = principals.filter(
-    (principal) => principal.kind === 'service' && !principal.disabledAt,
+    (principal) => principal.kind === 'service' && !principal.disabledAt && !principal.internal,
   );
   const maxTtlDays = Math.floor(serviceHandleMaxTtlSeconds() / SECONDS_PER_DAY);
   const catalog = useMemo(() => handleScopeCapabilities(), []);
@@ -195,7 +198,7 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           error={
             ttlValid
               ? null
-              : `必须是 1 到 ${maxTtlDays} 的整数 Must be an integer from 1 to ${maxTtlDays}`
+              : t(`必须是 1 到 ${maxTtlDays} 的整数`, `Must be an integer from 1 to ${maxTtlDays}`)
           }
         >
           <Input
@@ -268,7 +271,10 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           )}
           error={
             unknownPasted.length > 0
-              ? `不是可签发的能力名 Not issuable to a service Handle: ${unknownPasted.join(', ')}`
+              ? t(
+                  `不是可签发的能力名：${unknownPasted.join(', ')}`,
+                  `Not issuable to a service Handle: ${unknownPasted.join(', ')}`,
+                )
               : null
           }
         >

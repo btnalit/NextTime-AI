@@ -58,7 +58,7 @@ export function MembersPage({ http }: MembersPageProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
-  const { role } = useWorkspaceIdentity(http);
+  const { role, principalId: ownPrincipalId } = useWorkspaceIdentity(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
 
@@ -78,7 +78,13 @@ export function MembersPage({ http }: MembersPageProps) {
     setDrawer({ kind: 'detail', principal: updated });
   }
 
-  const rows = principals.state.status === 'ready' ? principals.state.data.items : [];
+  // S8 W4 (leftover 88 "内部服务主体...也不能作为普通成员显示"): `__gatekeeper_service__` /
+  // `__draft_reaper__` never appear on this page — they are platform plumbing, not a member of
+  // this workspace anyone manages.
+  const rows =
+    principals.state.status === 'ready'
+      ? principals.state.data.items.filter((row) => !row.internal)
+      : [];
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
 
   return (
@@ -150,6 +156,13 @@ export function MembersPage({ http }: MembersPageProps) {
               title={
                 <>
                   <span className="truncate">{row.displayName}</span>
+                  {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
+                   *  principal id, once `get_workspace` resolves it. */}
+                  {ownPrincipalId !== null && row.id === ownPrincipalId ? (
+                    <span className="tag" data-testid="member-row-you">
+                      {t('你', 'You')}
+                    </span>
+                  ) : null}
                   {row.kind !== 'human' ? (
                     <span className="tag">{principalKindLabel(row.kind, t)}</span>
                   ) : null}
@@ -245,7 +258,10 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `已创建 ${principal.displayName} created` });
+              toast.push({
+                tone: 'ok',
+                title: t(`已创建 ${principal.displayName}`, `${principal.displayName} created`),
+              });
               refreshList();
             }}
           />
