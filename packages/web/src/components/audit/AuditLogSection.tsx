@@ -8,6 +8,7 @@ import {
   downloadJson,
   downloadName,
   isEmptyFilter,
+  isReadAuditAction,
   resourceHref,
 } from '../../lib/audit.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -65,6 +66,13 @@ export function AuditLogSection({
   const [resourceType, setResourceType] = useState(requestedFilter?.resourceType ?? '');
   const [resourceId, setResourceId] = useState(requestedFilter?.resourceId ?? '');
   const [applied, setApplied] = useState<AuditFilter>(requestedFilter ?? {});
+  // S8 W4-A (ui-audit S11/PA1): default hides pure reads — a deep link that names a specific
+  // action (`?action=`) or comes from an approval/explain context is almost always about a
+  // write/decision already, but shows reads anyway once the reader explicitly asked for a
+  // specific action, so a read-mode `?action=list_grants` deep link is never hidden from itself.
+  const [showReads, setShowReads] = useState(
+    () => requestedFilter?.action !== undefined && isReadAuditAction(requestedFilter.action),
+  );
 
   useEffect(() => {
     if (!requestedFilter) return;
@@ -73,6 +81,7 @@ export function AuditLogSection({
     setResourceType(requestedFilter.resourceType ?? '');
     setResourceId(requestedFilter.resourceId ?? '');
     setApplied(requestedFilter);
+    setShowReads(requestedFilter.action !== undefined && isReadAuditAction(requestedFilter.action));
   }, [requestedFilter]);
 
   const params = useMemo(
@@ -84,6 +93,11 @@ export function AuditLogSection({
   const forbidden = audit.state.status === 'error' && isForbiddenError(audit.state.error);
   const rows = audit.state.status === 'ready' ? audit.state.data.items : [];
   const nextCursor = audit.state.status === 'ready' ? audit.state.data.nextCursor : undefined;
+  const visibleRows = useMemo(
+    () => (showReads ? rows : rows.filter((row) => !isReadAuditAction(row.action))),
+    [rows, showReads],
+  );
+  const hiddenReadCount = rows.length - visibleRows.length;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -102,14 +116,14 @@ export function AuditLogSection({
         exportedAt: new Date().toISOString(),
         filter: applied,
         truncated: nextCursor !== undefined,
-        count: rows.length,
-        items: rows,
+        count: visibleRows.length,
+        items: visibleRows,
       },
     );
     toast.push({
       tone: saved ? 'ok' : 'warn',
       title: saved
-        ? `已导出 ${rows.length} 条审计记录 Exported ${rows.length} audit rows`
+        ? `已导出 ${visibleRows.length} 条审计记录 Exported ${visibleRows.length} audit rows`
         : t('浏览器不支持下载', 'Download not supported in this browser'),
     });
   }
@@ -120,7 +134,15 @@ export function AuditLogSection({
     <section className="section" aria-labelledby="audit-query-title" data-testid="audit-log">
       <div className="section-header">
         <h2 id="audit-query-title">{t('审计流', 'Audit log')}</h2>
-        {rows.length > 0 ? (
+        <label className="row-wrap text-small" data-testid="audit-show-reads-toggle">
+          <input
+            type="checkbox"
+            checked={showReads}
+            onChange={(event) => setShowReads(event.target.checked)}
+          />
+          {t('显示读操作', 'Show reads')}
+        </label>
+        {visibleRows.length > 0 ? (
           <Button variant="secondary" size="s" onClick={handleExport} data-testid="audit-export">
             {t('导出本页', 'Export loaded rows')}
           </Button>
@@ -229,13 +251,36 @@ export function AuditLogSection({
           title={t('没有匹配的审计记录', 'No matching audit rows')}
           testId="audit-empty"
         />
+      ) : visibleRows.length === 0 ? (
+        <EmptyState
+          icon="search"
+          title={t('已加载的记录全部是读操作', 'Every loaded row is a read')}
+          body={t(
+            `已隐藏 ${hiddenReadCount} 条——勾选上方“显示读操作”查看。`,
+            `${hiddenReadCount} hidden — check “Show reads” above to see them.`,
+          )}
+          action={
+            <Button variant="secondary" size="s" onClick={() => setShowReads(true)}>
+              {t('显示读操作', 'Show reads')}
+            </Button>
+          }
+          testId="audit-empty-reads-hidden"
+        />
       ) : (
         <>
           {audit.state.refreshError ? (
             <ErrorBanner error={audit.state.refreshError} onRetry={() => void audit.reload()} />
           ) : null}
+          {hiddenReadCount > 0 ? (
+            <p className="text-3 text-small" data-testid="audit-hidden-reads-note">
+              {t(
+                `已隐藏 ${hiddenReadCount} 条读操作`,
+                `${hiddenReadCount} read ${hiddenReadCount === 1 ? 'row' : 'rows'} hidden`,
+              )}
+            </p>
+          ) : null}
           <ul className="data-list" aria-label="Audit log" data-testid="audit-list">
-            {rows.map((row) => (
+            {visibleRows.map((row) => (
               <li className="data-row" key={row.id} data-testid="audit-row">
                 <div className="data-row-main">
                   <div className="data-row-title">
