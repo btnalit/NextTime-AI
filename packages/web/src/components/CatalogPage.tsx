@@ -29,6 +29,7 @@ import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
 import { Confirm } from './kit/confirm.js';
 import { PageHeader } from './kit/page-header.js';
+import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -111,6 +112,7 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
           'Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts.',
         )}
       />
+      <ExecutionPrerequisiteBar http={http} />
       <div className="page-toolbar">
         <Tabs<CatalogTab>
           ariaLabel="Catalog section"

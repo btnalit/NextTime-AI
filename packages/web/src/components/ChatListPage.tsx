@@ -10,6 +10,7 @@ import { ChatArchiveConfirm } from './chat/ChatArchiveConfirm.js';
 import { ChatLifecycleActions, useRestoreChat } from './chat/ChatLifecycleActions.js';
 import { ChatRenameForm } from './chat/ChatRenameForm.js';
 import { PageHeader } from './kit/page-header.js';
+import { ExecutionReadinessCard } from './readiness/ExecutionReadinessCard.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -24,6 +25,12 @@ export interface ChatListPageProps {
   /** The WS client — `list_chats` / `new_chat` / `archive_chat` / `unarchive_chat` /
    *  `rename_chat` are `chat`-group capabilities (WS-eligible). */
   readonly client: CapabilityCaller;
+  /** S8 W2 U3a (ui-audit-2026-09-23 J1): `execution_readiness` is `group:'governance'`, not
+   *  `chat` — the `ws` client above only carries `chat`-group capabilities
+   *  (`lib/clients.ts`'s own doc comment) — so `ExecutionReadinessCard` needs the workspace `http`
+   *  caller separately. See that component's own doc comment for why this page, rather than
+   *  `PlatformOverviewPage`, is where J1's "执行就绪" check lives. */
+  readonly http: CapabilityCaller;
   readonly onSelectChat: (chatId: string) => void;
 }
 
@@ -39,7 +46,7 @@ type Filter = 'active' | 'archived';
  * besides a reload. A chat with no title yet reads as "新对话 New chat": the kernel writes the
  * auto-title when the first user message lands.
  */
-export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
+export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) {
   const t = useT();
   const load = useCallback(
     () =>
@@ -108,6 +115,8 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
         )}
         primaryAction={newChatButton}
       />
+
+      <ExecutionReadinessCard http={http} />
 
       <div className="page-toolbar">
         <Tabs<Filter>
