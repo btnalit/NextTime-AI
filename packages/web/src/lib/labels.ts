@@ -80,6 +80,10 @@ export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
   no_enabled_gate: { zh: '没有已启用的门', en: 'No gate enabled' },
   no_grant: { zh: '未授权', en: 'Not granted' },
   no_published_worker: { zh: '没有已发布的 Worker 定义', en: 'No published Worker definition' },
+  no_worker_gate: {
+    zh: '已发布的 Worker 都没有可作用的门',
+    en: 'No published Worker reaches a gate',
+  },
 };
 
 export function executionReadinessMissingCodeLabel(

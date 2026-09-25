@@ -29,8 +29,8 @@ import type { CapabilityHandler } from './capability-handler.js';
  * ui-audit-2026-09-23 J1/O1/J2 — "让入口 agent 能执行" needs gate-enablement + grant + published
  * `kind=worker` WorkerDefinition to all show up in one place, and none of the three today do).
  *
- * **Invariant this handler exists to guarantee**: `ready`/`workers[].delegable` must never
- * disagree with what a real `invoke_worker` call would do. It achieves this by calling the exact
+ * **Invariant this handler exists to guarantee**: `workers[].delegable` (and each Worker's
+ * `reachableGateCount`) must never disagree with what a real `invoke_worker` call would do. It achieves this by calling the exact
  * same functions the enforcement path calls, not a re-derived approximation:
  *
  *   - The entry Handle's own gate scope — `application/host-bridge/agent-host-runtime.ts`'s
@@ -50,6 +50,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  *     `declaredGates` defaulting, `defaultWorkerCapabilities`). `delegable` is simply whether that
  *     call throws `InvokeWorkerAttenuationError`.
  *
+ * `ready` is stricter than "some Worker is delegable": it also needs that Worker's child scope — the
+ * same `computeChildHandleScope` result — to contain at least one Gatekeeper. A Worker with no
+ * execute-class need has every declared-but-ungranted gate silently dropped rather than refused
+ * (handle-mint.ts's own comment), so "delegable" alone would read as ready while the delegated
+ * Worker reaches no system at all; "让入口 agent 能执行" is about reaching a system.
+ *
  * `blockedBy`'s per-gate detail is presentational, not a second authorization decision: once
  * `computeChildHandleScope` has already decided `delegable: false`, the specific gate ids named in
  * `blockedBy` are a plain set difference (`declaredGates` not in the resolved scope) — describing
@@ -57,7 +63,7 @@ import type { CapabilityHandler } from './capability-handler.js';
  */
 
 interface ExecutionReadinessMissing {
-  readonly code: 'no_enabled_gate' | 'no_grant' | 'no_published_worker';
+  readonly code: 'no_enabled_gate' | 'no_grant' | 'no_published_worker' | 'no_worker_gate';
   readonly gateId?: string;
   readonly workerDefinitionId?: string;
 }
@@ -178,10 +184,22 @@ export const executionReadinessHandler: CapabilityHandler = async (
     const declaredGates = content.gates ?? [];
 
     let delegable: boolean;
+    let reachableGateCount = 0;
     const blockedBy: ExecutionReadinessMissing[] = [];
     try {
-      computeChildHandleScope({ parentAuthority, declaredCapabilities, declaredGates });
+      const childScope = computeChildHandleScope({
+        parentAuthority,
+        declaredCapabilities,
+        declaredGates,
+      });
       delegable = true;
+      reachableGateCount = childScope.resources.gatekeeper?.length ?? 0;
+      // Delegable, but declared gates the principal holds no grant for were silently dropped
+      // from the child scope — each is still a gap worth naming.
+      const reachable = new Set(childScope.resources.gatekeeper ?? []);
+      for (const gateId of declaredGates) {
+        if (!reachable.has(gateId)) addMissing({ code: 'no_grant', gateId });
+      }
     } catch (err) {
       if (!(err instanceof InvokeWorkerAttenuationError)) throw err;
       delegable = false;
@@ -207,6 +225,7 @@ export const executionReadinessHandler: CapabilityHandler = async (
       version: definition.version,
       ...(typeof content.name === 'string' && content.name !== '' ? { name: content.name } : {}),
       delegable,
+      reachableGateCount,
       blockedBy,
     };
   });
@@ -224,8 +243,18 @@ export const executionReadinessHandler: CapabilityHandler = async (
     addMissing({ code: 'no_grant' });
   }
   if (definitions.length === 0) addMissing({ code: 'no_published_worker' });
+  // Published Workers exist but none declares any gate: delegating reaches no system whatever is
+  // granted — fixed in the Worker definition itself, not by a grant.
+  if (
+    definitions.length > 0 &&
+    definitions.every(
+      (definition) => ((definition.definition as WorkerDefinitionContent).gates ?? []).length === 0,
+    )
+  ) {
+    addMissing({ code: 'no_worker_gate' });
+  }
 
-  const ready = workers.some((worker) => worker.delegable);
+  const ready = workers.some((worker) => worker.delegable && worker.reachableGateCount > 0);
 
   return {
     result: {
