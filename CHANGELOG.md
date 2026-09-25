@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.22.0](https://github.com/btnalit/NextTime-AI/compare/v0.21.0...v0.22.0) (2026-09-25)
+
+
+### Features
+
+* **web:** S8 W4 lane C — platform pages and journey ⑤ ([#299](https://github.com/btnalit/NextTime-AI/issues/299)) ([8b8b131](https://github.com/btnalit/NextTime-AI/commit/8b8b1317f06826389d5b9ef2c6a65b8c53421e17))
+* **web:** S8 W4 lane D — 对话/图谱/目录余项 + 旅程② ([#297](https://github.com/btnalit/NextTime-AI/issues/297)) ([49bdb41](https://github.com/btnalit/NextTime-AI/commit/49bdb41abbac3cc99cad55b14c0cb294f054188d))
+
+
+### Bug Fixes
+
+* **kernel:** guard WorkerRun status writes against concurrent termination (leftover 90) ([#300](https://github.com/btnalit/NextTime-AI/issues/300)) ([b8d48d2](https://github.com/btnalit/NextTime-AI/commit/b8d48d29349c8bb7e9c6d162579d0211cb1226a4))
+* **ops:** S8 W5 lane C — 运维遗留收尾（遗留 58/59/60/61/62/63/65/76/77） ([#296](https://github.com/btnalit/NextTime-AI/issues/296)) ([a5630f1](https://github.com/btnalit/NextTime-AI/commit/a5630f105b07c8ecd86832f2f71cc8082bf9301c))
+
 ## [0.21.0](https://github.com/btnalit/NextTime-AI/compare/v0.20.0...v0.21.0) (2026-09-25)
 
 
