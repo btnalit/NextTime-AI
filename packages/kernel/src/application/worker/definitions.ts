@@ -434,6 +434,10 @@ export async function listWorkerDefinitions(
 // keeps neither one guessing at a default `limit` it does not need). Same
 // `(date_trunc('milliseconds', created_at), id)` cursor shape, `desc` — preserves the pre-existing
 // `order by created_at desc` for the no-`limit` case.
+//
+// S8 W2-U2b (audit R6): also the one entry point that can return the caller's own `draft` rows
+// (`includeOwnDrafts`, `ListWorkerDefinitionsPageFilter`'s own doc comment) — `listWorkerDefinitions`
+// above stays published-only, unchanged, for its existing unpaginated callers.
 // -------------------------------------------------------------------------------------------
 export const DEFAULT_LIST_WORKER_DEFINITIONS_LIMIT = 100;
 export const MAX_LIST_WORKER_DEFINITIONS_LIMIT = 500;
@@ -472,6 +476,16 @@ export interface ListWorkerDefinitionsPageFilter {
   readonly kind?: WorkerDefinitionKind;
   readonly limit?: number;
   readonly cursor?: string;
+  /** S8 W2-U2b (audit R6 "草稿保存后找不回"): when true, additionally includes `status='draft'`
+   *  rows proposed by `callerPrincipalId` — never another principal's draft (same I16 read-privacy
+   *  predicate `application/worker/skills.ts`'s `listSkills` already established: `status =
+   *  'published' or (status = 'draft' and proposed_by = caller)`). Default/omitted is `false`,
+   *  which reproduces the pre-existing "published only" query byte-for-byte (the `$N::boolean and
+   *  …` clause below is simply never true) — every existing caller (`find_workers`'s candidate
+   *  resolution via the separate unpaginated `listWorkerDefinitions`, `resolveAvailableResources`,
+   *  `execution_readiness`) is unaffected because none of them sets this flag, and the unpaginated
+   *  `listWorkerDefinitions` function below does not expose it at all. */
+  readonly includeOwnDrafts?: boolean;
 }
 
 export interface WorkerDefinitionsPage {
@@ -483,24 +497,37 @@ export interface WorkerDefinitionsPage {
 export async function listWorkerDefinitionsPage(
   client: PoolClient,
   workspaceId: string,
+  callerPrincipalId: string,
   filter: ListWorkerDefinitionsPageFilter = {},
 ): Promise<WorkerDefinitionsPage> {
   const requestedLimit = filter.limit ?? DEFAULT_LIST_WORKER_DEFINITIONS_LIMIT;
   const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_WORKER_DEFINITIONS_LIMIT);
   const cursor = decodeListWorkerDefinitionsCursor(filter.cursor);
+  const includeOwnDrafts = filter.includeOwnDrafts === true;
 
   const result = await client.query<WorkerDefinitionDbRow>(
     `select ${SELECT_COLUMNS} from worker_definitions
      where workspace_id = $1
-       and status = 'published'
        and ($2::text is null or kind = $2)
+       and (
+         status = 'published'
+         or ($6::boolean and status = 'draft' and proposed_by = $7)
+       )
        and (
          $3::timestamptz is null
          or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
        )
      order by date_trunc('milliseconds', created_at) desc, id desc
      limit $5`,
-    [workspaceId, filter.kind ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+    [
+      workspaceId,
+      filter.kind ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      limit + 1,
+      includeOwnDrafts,
+      callerPrincipalId,
+    ],
   );
 
   const rows = result.rows.slice(0, limit).map(mapRow);

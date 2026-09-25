@@ -23,12 +23,13 @@ export interface DraftProposedProps {
   readonly onDone: () => void;
   /** Extra caveat (e.g. "the Workers tab only lists published versions"). */
   readonly note?: string;
-  /** R6 fallback: when the caller has no `list_*` capability that can ever show this draft again
-   *  once this screen closes without publishing (today: `list_worker_definitions`, unlike
-   *  `list_skills`/`list_procedures`, never returns a caller's own draft), pass the exact
-   *  consequence of clicking "完成 Done" instead of "发布 Publish" — shown as a `warn` Notice in
-   *  place of `note`, and the Publish button receives focus on mount so Enter/Space publishes
-   *  right away. */
+  /** R6: an extra nudge for a draft that is easy to lose track of once this screen closes without
+   *  publishing — pass the exact consequence of clicking "完成 Done" instead of "发布 Publish" —
+   *  shown as a `warn` Notice in place of `note`, and the Publish button receives focus on mount
+   *  so Enter/Space publishes right away. (Originally added when `list_worker_definitions` had no
+   *  way to show the caller's own draft again at all, S8 W2-U2b's `includeOwnDrafts` fixed that —
+   *  the Workers tab's own "我的草稿" section is the fallback now, this prop just keeps the nudge
+   *  toward publishing front and center on the screen that already has the draft in view.) */
   readonly unpublishedConsequence?: string;
 }
 

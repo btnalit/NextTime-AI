@@ -88,8 +88,10 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
         },
       },
     });
-    expect(screen.getByTestId('draft-private-notice').textContent).toContain('只显示已发布版本');
-    // R6: the Publish button already has focus (no list can find this draft again otherwise).
+    expect(screen.getByTestId('draft-private-notice').textContent).toContain('我的草稿');
+    // R6: the Publish button already has focus — publishing straight from this screen is still
+    // the fastest path, even though the Workers tab's own "我的草稿" section can now find the
+    // draft too.
     expect(document.activeElement).toBe(screen.getByTestId('draft-publish'));
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() =>
