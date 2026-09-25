@@ -46,7 +46,11 @@ test.describe('CI smoke: 图谱 Graph page', () => {
     await expect(
       page.getByTestId('graph-type-select').or(page.getByTestId('graph-type-input')),
     ).toBeVisible();
-    await expect(page.getByTestId('graph-legend')).toContainText('2 小时 2 h');
+    // S8 W4 (audit G3, i18n correctness fix): the legend summary used to glue both languages
+    // together ("2 小时 2 h") regardless of the selected language — `formatWindow` now returns
+    // one language via `t()`, same as every other label on this page, so the default zh-CN
+    // session shows only the Chinese half.
+    await expect(page.getByTestId('graph-legend')).toContainText('2 小时');
     await expect(page.getByTestId('graph-no-object')).toBeVisible();
   });
 
