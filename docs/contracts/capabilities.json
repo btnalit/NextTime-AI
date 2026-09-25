@@ -2949,6 +2949,67 @@
   },
   {
     "channel": "human",
+    "group": "worker",
+    "mode": "execute",
+    "name": "discard_draft",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "worker_definition",
+            "skill",
+            "procedure"
+          ],
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "worker_definition",
+            "skill",
+            "procedure"
+          ],
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "write",
