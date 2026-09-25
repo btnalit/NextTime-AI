@@ -67,6 +67,7 @@ interface ExecutionReadinessResult {
     readonly version: number;
     readonly name?: string;
     readonly delegable: boolean;
+    readonly reachableGateCount: number;
     readonly blockedBy: readonly { readonly code: string; readonly gateId?: string }[];
   }[];
 }
@@ -159,6 +160,57 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         return { definitionId: published.id, version: published.version };
       });
+    }
+
+    /** A fresh workspace with one owner principal — for cases that must not see the shared
+     *  workspace's accumulated gates / Workers. */
+    async function adminFreshWorkspaceOwner(
+      name: string,
+    ): Promise<{ workspaceId: string; ownerId: string }> {
+      const freshWorkspaceId = await adminInsertWorkspace(name);
+      const freshOwnerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: freshWorkspaceId, principalId: freshOwnerId },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'owner')`,
+            [freshWorkspaceId, freshOwnerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      return { workspaceId: freshWorkspaceId, ownerId: freshOwnerId };
+    }
+
+    /** Publishes a `kind=worker` WorkerDefinition with no declared capabilities (the worker
+     *  ceiling minus execute-class — the ops-runner template's shape) and the given gates. */
+    async function adminPublishObserveWorker(
+      inWorkspaceId: string,
+      actorId: string,
+      name: string,
+      gates: readonly string[],
+    ): Promise<{ definitionId: string }> {
+      return withWorkspace(
+        pool,
+        { workspaceId: inWorkspaceId, principalId: actorId },
+        async (client) => {
+          const draft = await proposeWorkerDefinition(client, inWorkspaceId, actorId, {
+            kind: 'worker',
+            definition: {
+              systemPrompt: 'You observe the registered gate.',
+              name,
+              ...(gates.length > 0 ? { gates: [...gates] } : {}),
+            },
+          });
+          const published = await publishWorkerDefinition(client, inWorkspaceId, actorId, {
+            definitionId: draft.id,
+            version: draft.version,
+          });
+          return { definitionId: published.id };
+        },
+      );
     }
 
     /** The real `find_workers` production dry run (`application/task/service.ts`'s `findWorkers`)
@@ -266,6 +318,94 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect.arrayContaining([{ code: 'no_grant' }, { code: 'no_published_worker' }]),
       );
       expect(result.missing.some((m) => m.code === 'no_enabled_gate')).toBe(false);
+    });
+
+    it('observe-only Worker declaring an ungranted gate: delegable but reaches no gate, so not ready until the grant', async () => {
+      const fresh = await adminFreshWorkspaceOwner('execution-readiness-reach-workspace');
+      const gatekeeperId = await adminRegisterGatekeeper(
+        'gate-reach',
+        fresh.workspaceId,
+        fresh.ownerId,
+      );
+      const { definitionId } = await adminPublishObserveWorker(
+        fresh.workspaceId,
+        fresh.ownerId,
+        'observer',
+        [gatekeeperId],
+      );
+      const owner = humanCaller(fresh.workspaceId, fresh.ownerId, 'owner');
+
+      const before = (await dispatchCapability(
+        { pool },
+        owner,
+        'execution_readiness',
+        {},
+      )) as ExecutionReadinessResult;
+      const workerBefore = before.workers.find((w) => w.definitionId === definitionId);
+      // Same answer invoke_worker would give: delegable, the ungranted gate silently dropped.
+      expect(workerBefore?.delegable).toBe(true);
+      expect(workerBefore?.reachableGateCount).toBe(0);
+      expect(before.ready).toBe(false);
+      expect(before.missing).toEqual(
+        expect.arrayContaining([{ code: 'no_grant', gateId: gatekeeperId }]),
+      );
+
+      await withWorkspace(
+        pool,
+        { workspaceId: fresh.workspaceId, principalId: fresh.ownerId },
+        (client) =>
+          grantCapability(client, fresh.workspaceId, {
+            principalId: fresh.ownerId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: fresh.ownerId,
+          }),
+      );
+
+      const after = (await dispatchCapability(
+        { pool },
+        owner,
+        'execution_readiness',
+        {},
+      )) as ExecutionReadinessResult;
+      const workerAfter = after.workers.find((w) => w.definitionId === definitionId);
+      expect(workerAfter?.delegable).toBe(true);
+      expect(workerAfter?.reachableGateCount).toBe(1);
+      expect(after.ready).toBe(true);
+      expect(after.missing).toEqual([]);
+    });
+
+    it('granted gate but no published Worker declares any gate: no_worker_gate, not ready', async () => {
+      const fresh = await adminFreshWorkspaceOwner('execution-readiness-no-worker-gate-workspace');
+      const gatekeeperId = await adminRegisterGatekeeper(
+        'gate-unused',
+        fresh.workspaceId,
+        fresh.ownerId,
+      );
+      await withWorkspace(
+        pool,
+        { workspaceId: fresh.workspaceId, principalId: fresh.ownerId },
+        (client) =>
+          grantCapability(client, fresh.workspaceId, {
+            principalId: fresh.ownerId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: fresh.ownerId,
+          }),
+      );
+      await adminPublishObserveWorker(fresh.workspaceId, fresh.ownerId, 'gateless', []);
+      const owner = humanCaller(fresh.workspaceId, fresh.ownerId, 'owner');
+
+      const result = (await dispatchCapability(
+        { pool },
+        owner,
+        'execution_readiness',
+        {},
+      )) as ExecutionReadinessResult;
+      expect(result.workers[0]?.delegable).toBe(true);
+      expect(result.workers[0]?.reachableGateCount).toBe(0);
+      expect(result.ready).toBe(false);
+      expect(result.missing).toEqual([{ code: 'no_worker_gate' }]);
     });
 
     it('published worker + registered gate, no grant: ready:false, no_grant, agrees with findWorkers refusing', async () => {

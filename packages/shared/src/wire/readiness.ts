@@ -18,6 +18,8 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
   'no_enabled_gate',
   'no_grant',
   'no_published_worker',
+  /** Published Workers exist but none declares any gate — delegating reaches no system. */
+  'no_worker_gate',
 ]);
 export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMissingCodeSchema>;
 
@@ -53,6 +55,11 @@ export const ExecutionReadinessWorkerWireSchema = z
      *  for `principalId`'s entry agent — computed by the same dry run `find_workers` already uses
      *  (`application/task/handle-mint.ts`'s `computeChildHandleScope`), never a separate guess. */
     delegable: z.boolean(),
+    /** How many Gatekeepers the child Handle `invoke_worker` would mint right now actually carries
+     *  (`computeChildHandleScope`'s own `resources.gatekeeper`) — declared gates this principal
+     *  holds no grant for are dropped there, not refused, for a Worker with no execute-class need.
+     *  `ready` requires some Worker that is both `delegable` and reaches at least one gate. */
+    reachableGateCount: z.number().int().nonnegative(),
     /** Populated only when `delegable` is `false` — which of this WorkerDefinition's own declared
      *  gates block it (a set difference against the principal's granted gates, presentational —
      *  the accept/reject decision itself is `computeChildHandleScope`'s, not re-derived here). */
