@@ -10971,6 +10971,56 @@
     "channel": "human",
     "group": "platform",
     "mode": "observe",
+    "name": "platform_draft_residue",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "type": "string"
+        },
+        "expiryThresholdDays": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "procedures": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skills": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workerDefinitions": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workerDefinitions",
+        "skills",
+        "procedures",
+        "total",
+        "expiryThresholdDays",
+        "checkedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
     "name": "platform_overview",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -11031,7 +11081,15 @@
               "minimum": 0,
               "type": "integer"
             },
+            "pendingActionRequests": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "pendingActivationUsers": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runningTasks": {
               "minimum": 0,
               "type": "integer"
             },
@@ -11051,7 +11109,32 @@
             "workspaces",
             "activeWorkspaces",
             "gatekeepers",
-            "modelsAvailable"
+            "modelsAvailable",
+            "pendingActionRequests",
+            "runningTasks"
+          ],
+          "type": "object"
+        },
+        "graphFreshness": {
+          "additionalProperties": false,
+          "properties": {
+            "affectedWorkspaceCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "staleSourceCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "staleThresholdMs": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "staleThresholdMs",
+            "staleSourceCount",
+            "affectedWorkspaceCount"
           ],
           "type": "object"
         },
@@ -11167,6 +11250,7 @@
       "required": [
         "version",
         "counts",
+        "graphFreshness",
         "health",
         "checklist",
         "recentAudit"

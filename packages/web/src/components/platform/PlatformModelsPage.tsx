@@ -3,11 +3,14 @@ import type {
   LlmProviderListWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
+  PlatformWorkspaceWire,
 } from '@nexttime/shared';
 import { useCallback, useMemo, useState } from 'react';
+import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -15,10 +18,12 @@ import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { PageHeader } from '../kit/page-header.js';
+import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
+import { Icon } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
@@ -577,6 +582,8 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         )}
       </section>
 
+      <WorkspaceModelMatrix http={http} />
+
       <Drawer
         open={drawer.kind === 'create'}
         title={t('新增供应商', 'Add provider')}
@@ -699,5 +706,122 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         ) : null}
       </Drawer>
     </div>
+  );
+}
+
+/**
+ * S8 W4-C (ui-audit PMo1 "缺基线的'工作区 × 模型矩阵'（现只在单个工作区抽屉里配）"): §5.9's own
+ * page prototype for 模型与供应商 calls for a workspace × model matrix; today the only way to see
+ * which models a workspace allows is opening that one workspace's own drawer
+ * (`WorkspaceDetailPanel`'s `AllowedModelsChecklist`) — there was no page that showed every
+ * workspace's choice at once. Read-only here (editing stays in that drawer, the one place
+ * `set_allowed_models`'s validation against the workspace's own entry model is actually checked);
+ * `layout="sticky"` pins the workspace name and lets one column per catalog model scroll
+ * underneath, the same shape the providers table above already uses for "too many columns".
+ *
+ * `list_workspaces{status:'active', includeExpired:false}` — the same default (residue-hidden)
+ * filter the workspaces page itself defaults to (ui-audit O3 "计数与列表同口径"): an accept-*
+ * workspace's model allow-list is not interesting here. `list_platform_models` (not this page's
+ * own llm-proxy-admin `providers` list) is the id space `workspace.allowedModels` is actually
+ * written in (`<providerId>/<modelId>`, `ModelRow.id`) — using the admin list's own, differently
+ * shaped ids here would silently never match.
+ */
+function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
+  const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces', {
+    status: 'active',
+    includeExpired: false,
+  });
+  const models = useCapabilityList<ModelRow>(http, 'list_platform_models');
+
+  const workspaceRows = workspaces.state.status === 'ready' ? workspaces.state.data.items : [];
+  const modelRows = models.state.status === 'ready' ? models.state.data.items : [];
+
+  const columns = useMemo<readonly DataTableColumn<PlatformWorkspaceWire>[]>(() => {
+    const base: DataTableColumn<PlatformWorkspaceWire>[] = [
+      {
+        id: 'workspace',
+        header: t('工作区', 'Workspace'),
+        priority: 'primary',
+        width: 200,
+        cell: (workspace) => <span className="truncate">{workspace.name}</span>,
+      },
+      {
+        id: 'allowed',
+        header: t('允许', 'Allowed'),
+        priority: 'high',
+        width: 90,
+        cell: (workspace) =>
+          workspace.allowedModels.length === 0 ? (
+            <span className="text-3 text-small">{t('全部', 'All')}</span>
+          ) : (
+            <span className="mono text-small">{workspace.allowedModels.length}</span>
+          ),
+      },
+    ];
+    for (const model of modelRows) {
+      base.push({
+        id: `model:${model.id}`,
+        header: model.id,
+        headerClassName: 'mono',
+        cell: (workspace) =>
+          workspace.allowedModels.length === 0 || workspace.allowedModels.includes(model.id) ? (
+            <Icon name="check" label={t('允许', 'Allowed')} />
+          ) : (
+            <span aria-hidden="true">—</span>
+          ),
+      });
+    }
+    return base;
+  }, [modelRows, t]);
+
+  return (
+    <DashboardCard
+      title={t('工作区 × 模型矩阵', 'Workspace × model matrix')}
+      padded={false}
+      data-testid="workspace-model-matrix"
+    >
+      {workspaces.state.status === 'loading' || models.state.status === 'loading' ? (
+        <SkeletonRows
+          count={3}
+          label={t('正在加载矩阵…', 'Loading the matrix')}
+          testId="workspace-model-matrix-loading"
+        />
+      ) : workspaces.state.status === 'error' ? (
+        <ErrorBanner
+          error={workspaces.state.error}
+          title={t('无法加载工作区列表', 'Could not load the workspace list')}
+          onRetry={() => void workspaces.reload()}
+          testId="workspace-model-matrix-error"
+        />
+      ) : models.state.status === 'error' ? (
+        <ErrorBanner
+          error={models.state.error}
+          title={t('无法加载模型目录', 'Could not load the model catalog')}
+          onRetry={() => void models.reload()}
+          testId="workspace-model-matrix-models-error"
+        />
+      ) : workspaceRows.length === 0 ? (
+        <EmptyState
+          icon="grid"
+          title={t('没有活跃的工作区', 'No active workspaces')}
+          testId="workspace-model-matrix-empty"
+        />
+      ) : modelRows.length === 0 ? (
+        <p className="text-3" style={{ padding: 'var(--space-4)' }}>
+          {t('模型目录还没有可用模型。', 'No models in the catalog yet.')}
+        </p>
+      ) : (
+        <DataTable
+          columns={columns}
+          data={workspaceRows}
+          getRowId={(workspace) => workspace.id}
+          ariaLabel={t('工作区 × 模型矩阵', 'Workspace × model matrix')}
+          layout="sticky"
+          testId="workspace-model-matrix-table"
+          rowTestId={(workspace) => `workspace-model-matrix-row-${workspace.id}`}
+        />
+      )}
+    </DashboardCard>
   );
 }

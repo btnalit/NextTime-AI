@@ -250,6 +250,18 @@ export const SURFACES: readonly Surface[] = [
     role: 'admin',
     ready: (page) => heading(page, '平台审计'), // PlatformAuditPage.tsx
   },
+  {
+    id: 'platform-residue',
+    labelZh: '平台 · 验收残留',
+    hash: '#/platform/residue',
+    role: 'admin',
+    // PlatformResiduePage.tsx loads three independent sources, each with its own `*-loading`
+    // Notice — ready only once none of them is still loading.
+    ready: (page) =>
+      page
+        .getByTestId('platform-residue-page')
+        .filter({ hasNot: page.locator('[data-testid$="-loading"]') }),
+  },
 ];
 
 /** Signs in for `surface.role` and navigates to it, waiting for its ready signal — the one place

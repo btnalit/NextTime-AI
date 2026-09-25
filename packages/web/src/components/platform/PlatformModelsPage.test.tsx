@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import type { LlmProviderListWire, LlmProviderWire, PlatformSettingsWire } from '@nexttime/shared';
+import type {
+  LlmProviderListWire,
+  LlmProviderWire,
+  PlatformSettingsWire,
+  PlatformWorkspaceWire,
+} from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -526,5 +531,66 @@ describe('PlatformModelsPage', () => {
       expect(error.textContent).toContain('not in the llm-proxy catalog');
       expect(screen.queryByTestId('platform-default-model-saved')).toBeNull();
     });
+  });
+});
+
+/** S8 W4-C (ui-audit PMo1 "缺基线的'工作区 × 模型矩阵'"). */
+describe('PlatformModelsPage workspace × model matrix (PMo1)', () => {
+  function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWorkspaceWire {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      status: 'active',
+      entryModel: null,
+      allowedModels: [],
+      ontologyEnforcement: 'reject',
+      purpose: 'standard',
+      expiresAt: null,
+      disabledAt: null,
+      purgeable: false,
+      isDefault: true,
+      memberCount: 1,
+      owners: [],
+      createdAt: '2026-09-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('shows a check for a model in the allow-list, none for one outside it, and "全部" for an unrestricted workspace', async () => {
+    const http = scriptedHttp({
+      get_platform_settings: () => platformSettings(),
+      list_workspaces: (params) => {
+        expect(params).toEqual({ status: 'active', includeExpired: false });
+        return {
+          items: [
+            workspace({ id: 'ws-1', name: 'Acme', allowedModels: ['openai/gpt-4o'] }),
+            workspace({ id: 'ws-2', name: 'Beta', isDefault: false, allowedModels: [] }),
+          ],
+        };
+      },
+      list_platform_models: () => ({
+        items: [
+          { id: 'openai/gpt-4o', provider: 'openai', model: 'gpt-4o' },
+          { id: 'anthropic/claude-3', provider: 'anthropic', model: 'claude-3' },
+        ],
+      }),
+    });
+    const proxy = scriptedProxy({ 'GET /providers': () => ({ status: 200, body: listWire([]) }) });
+    renderPage(http, proxy.fetchImpl);
+
+    const table = await screen.findByTestId('workspace-model-matrix-table');
+    const acmeRow = within(table).getByTestId('workspace-model-matrix-row-ws-1');
+    const betaRow = within(table).getByTestId('workspace-model-matrix-row-ws-2');
+
+    // Acme: only gpt-4o is allowed — its cell has the check icon, claude-3's does not.
+    const acmeCells = acmeRow.querySelectorAll('td');
+    expect(acmeCells[2]?.querySelector('svg')).toBeTruthy(); // gpt-4o column
+    expect(acmeCells[3]?.textContent).toBe('—'); // claude-3 column
+
+    // Beta: empty allow-list means every model — both columns show the check icon.
+    expect(betaRow.textContent).toContain('全部');
+    const betaCells = betaRow.querySelectorAll('td');
+    expect(betaCells[2]?.querySelector('svg')).toBeTruthy();
+    expect(betaCells[3]?.querySelector('svg')).toBeTruthy();
   });
 });

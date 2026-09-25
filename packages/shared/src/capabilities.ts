@@ -2495,7 +2495,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformOverviewWireSchema,
     description:
-      'The administrator landing page in one read: kernel version and applied migrations, user / workspace / gatekeeper counts, a service-health summary, the first-run checklist (live state of each page, never a wizard), and the most recent platform audit rows.',
+      'The administrator landing page in one read: kernel version and applied migrations, user / workspace / gatekeeper counts (plus cross-workspace pending-approval and running-Task counts, and graph freshness — S8 W4-C), a service-health summary, the first-run checklist (live state of each page, never a wizard), and the most recent platform audit rows.',
   },
   {
     name: 'list_users',
@@ -3057,6 +3057,20 @@ const platformCapabilities: readonly Capability[] = [
     resultSchema: wire.LlmAdminTokenWireSchema,
     description:
       'S6-B: a 5-minute platform JWT (signed with the Handle key, distinct typ / aud — never accepted as a Handle) that lets the administrator’s browser call llm-proxy’s provider-management endpoints via caddy `/api/llm-admin/*`. Audited as `platform.llm_admin_token_issued` with the token’s `jti`; llm-proxy’s own audit lines carry the same `jti`. The token carries no provider key and the kernel stores none.',
+  },
+  // S8 W4-C (journey ⑤ 清理验收残留): a cross-workspace **count** of draft WorkerDefinition/Skill/
+  // Procedure rows — never their content (I16 keeps a draft visible only to its own proposer).
+  // Handler in application/gateway/platform-residue-handler.ts.
+  {
+    name: 'platform_draft_residue',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformDraftResidueWireSchema,
+    description:
+      'Cross-workspace draft counts by kind (WorkerDefinition/Skill/Procedure) — never their content or proposer. The periodic sweep (`DRAFT_EXPIRY_DAYS`, default 30) deletes anything this count includes once it goes stale; this capability exists only so a human can see the queue before it empties itself.',
   },
   // S7-E (P-C, docs/platform-admin-design.md §6.5 / §6.7; development-tasks.md §5d S7-E 决定
   // E1–E4): the runtime layer (active image / inventory / rollback / pi drift) and platform

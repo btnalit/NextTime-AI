@@ -182,6 +182,31 @@ export const PlatformOverviewWireSchema = z
         activeWorkspaces: z.number().int().nonnegative(),
         gatekeepers: z.number().int().nonnegative(),
         modelsAvailable: z.number().int().nonnegative(),
+        /** S8 W4-C (ui-audit O1/L1, convergence-plan-2026-09-25.md §6 W4): a cross-workspace
+         *  `action_requests` count (`status = 'pending_approval'`), scoped to the same
+         *  non-residue workspace set `gatekeepers` already counts over (§ this schema's own
+         *  `gatekeepers` field) — an accept-* residue workspace's stray approvals should not
+         *  inflate what the control tower calls "needs a human". */
+        pendingActionRequests: z.number().int().nonnegative(),
+        /** S8 W4-C: a cross-workspace `tasks` count (`status = 'running'`), same non-residue
+         *  workspace scope as `pendingActionRequests`. */
+        runningTasks: z.number().int().nonnegative(),
+      })
+      .strict(),
+    /** S8 W4-C (ui-audit O1/L1/G1; leftover 62/70): the same `ops.collector_silent` predicate
+     *  `substrate/audit/invariant-checks.ts` already runs on a timer and `graph_freshness`
+     *  (S8 W4-A) restates per-workspace, aggregated here across every non-residue workspace —
+     *  `staleThresholdMs` is always `DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS` (2 hours), never a
+     *  parameter, for the same reason `graph_freshness`'s own doc comment gives. */
+    graphFreshness: z
+      .object({
+        staleThresholdMs: z.number().int().positive(),
+        /** Sources (collectors, external runtimes) that have observed at least once but not
+         *  within `staleThresholdMs` — never counts a Source with no observation at all (it never
+         *  established a cadence to fall silent from). */
+        staleSourceCount: z.number().int().nonnegative(),
+        /** Distinct workspaces contributing at least one row to `staleSourceCount`. */
+        affectedWorkspaceCount: z.number().int().nonnegative(),
       })
       .strict(),
     health: z.array(ServiceHealthWireSchema),
@@ -379,6 +404,7 @@ export const ConnectorModeWireSchema = z.enum(['disabled', 'self_serve', 'platfo
 export type ConnectorModeWire = z.infer<typeof ConnectorModeWireSchema>;
 
 export const GateTransportKindWireSchema = z.enum(['http', 'mcp', 'cli', 'ssh']);
+export type GateTransportKindWire = z.infer<typeof GateTransportKindWireSchema>;
 
 export const ConnectorWireSchema = z
   .object({
@@ -882,6 +908,31 @@ export const PlatformStatusWireSchema = z
   })
   .strict();
 export type PlatformStatusWire = z.infer<typeof PlatformStatusWireSchema>;
+
+/**
+ * `platform_draft_residue` (S8 W4-C, journey ⑤ 清理验收残留; leftover 82's own draft lifecycle):
+ * a cross-workspace **count** of `worker_definitions` / `skills` / `procedures` rows still
+ * `status = 'draft'` — never their content or proposer, which I16 keeps visible only to the
+ * proposer themselves (a platform admin reading this capability is not the proposer). Counting is
+ * the one thing that does not need to be — the periodic `expireDraftsOnce` sweep already deletes
+ * anything past `expiryThresholdDays` on its own; this capability exists only so a human can see
+ * that queue exists at all before it empties itself, per journey ⑤'s own "预览，不是直接删除" step
+ * (there is deliberately no admin-triggered bulk-delete here — a draft's own proposer already has
+ * `discard_draft`, and the periodic sweep is the platform-wide backstop).
+ */
+export const PlatformDraftResidueWireSchema = z
+  .object({
+    workerDefinitions: z.number().int().nonnegative(),
+    skills: z.number().int().nonnegative(),
+    procedures: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    /** `DRAFT_EXPIRY_DAYS` (env), or `DEFAULT_DRAFT_EXPIRY_DAYS` when unset — `0` means the
+     *  periodic sweep is disabled and every draft counted above simply waits for `discard_draft`. */
+    expiryThresholdDays: z.number().int().nonnegative(),
+    checkedAt: z.string(),
+  })
+  .strict();
+export type PlatformDraftResidueWire = z.infer<typeof PlatformDraftResidueWireSchema>;
 
 // -------------------------------------------------------------------------------------------
 // P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D 决定 D1–D4):

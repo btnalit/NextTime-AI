@@ -9,6 +9,7 @@ import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { useToast } from '../ui/Toast.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface PlatformModulesPageProps {
@@ -31,6 +32,7 @@ export interface PlatformModulesPageProps {
  */
 export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
   const t = useT();
+  const toast = useToast();
   const modules = useCapabilityList<ModuleWire>(http, 'list_modules', {});
   const settings = useCapability<PlatformSettingsWire>(http, 'get_platform_settings');
   const [defaultModules, setDefaultModules] = useState<readonly string[] | null>(null);
@@ -42,12 +44,25 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
   const effectiveDefaults =
     defaultModules ?? (settings.state.status === 'ready' ? settings.state.data.defaultModules : []);
 
-  async function toggleDefault(name: string): Promise<void> {
+  // ui-audit PM1 ("复选框行内立即写入，无标签"): the checkbox already had a machine-usable
+  // accessible name; what it lacked was any acknowledgement of the write it just made — toggling
+  // it flipped a platform-wide default (every future `create_workspace`) with nothing on screen
+  // to say so or to undo it. Save is still immediate (no separate confirm step: this is a default,
+  // not a destructive action, and reverting is one click away) — now surfaced as a toast with an
+  // 撤销 Undo action.
+  //
+  // `applyDefaults` takes the *target* list explicitly rather than re-deriving "add or remove
+  // `name`" from `effectiveDefaults` at call time — the undo button's `onClick` closes over
+  // whatever `effectiveDefaults` was at the moment the toast was created (a stale value once a
+  // later render has already flipped it), so recomputing the toggle direction from it there would
+  // silently redo the same change instead of reverting it. Passing `previous` (captured once, by
+  // `toggleDefault`, before its own write) sidesteps that entirely.
+  async function applyDefaults(
+    next: readonly string[],
+    toastFor: { readonly name: string; readonly adding: boolean; readonly undo: () => void } | null,
+  ): Promise<void> {
     if (savingDefault) return;
-    const next = effectiveDefaults.includes(name)
-      ? effectiveDefaults.filter((m) => m !== name)
-      : [...effectiveDefaults, name];
-    setSavingDefault(name);
+    setSavingDefault(toastFor?.name ?? '');
     setDefaultError(null);
     try {
       const updated = await http.call<PlatformSettingsWire>('set_default_modules', {
@@ -55,11 +70,40 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
       });
       setDefaultModules(updated.defaultModules);
       settings.mutate(() => updated);
+      if (toastFor) {
+        toast.push({
+          tone: 'ok',
+          title: toastFor.adding
+            ? t(`已加入默认模块：${toastFor.name}`, `Added to default modules: ${toastFor.name}`)
+            : t(
+                `已移出默认模块：${toastFor.name}`,
+                `Removed from default modules: ${toastFor.name}`,
+              ),
+          description: t(
+            '新建工作区起生效，不影响既有工作区。',
+            'Takes effect for new workspaces only — existing workspaces are unaffected.',
+          ),
+          action: { label: t('撤销', 'Undo'), onClick: toastFor.undo },
+          key: `default-module:${toastFor.name}`,
+        });
+      }
     } catch (err) {
       setDefaultError(err);
     } finally {
       setSavingDefault(null);
     }
+  }
+
+  function toggleDefault(name: string): void {
+    if (savingDefault) return;
+    const previous = effectiveDefaults;
+    const adding = !previous.includes(name);
+    const next = adding ? [...previous, name] : previous.filter((m) => m !== name);
+    void applyDefaults(next, {
+      name,
+      adding,
+      undo: () => void applyDefaults(previous, null),
+    });
   }
 
   return (
@@ -171,7 +215,7 @@ function ModuleRow({
             checked={isDefault}
             disabled={savingDefault}
             onChange={onToggleDefault}
-            aria-label={`${module.name} 默认安装 install by default`}
+            aria-label={t(`${module.name}：默认安装`, `${module.name}: install by default`)}
             data-testid={`module-default-${module.name}`}
           />
         </td>

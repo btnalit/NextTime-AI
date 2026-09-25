@@ -262,4 +262,33 @@ describe('GateInstanceDetailPanel', () => {
     expect(within(section).queryByTestId('gate-instance-own-workspace')).toBeNull();
     expect(within(section).getByTestId('gate-instance-systems-link')).toBeTruthy();
   });
+
+  it('S8 W4-C (ui-audit PI3): lists the enabling workspaces by name when the wire carries them, and notes any left out of a truncated list', () => {
+    const http = scriptedHttp({});
+    renderPanel(
+      http,
+      gateInstance({
+        enabledWorkspaceCount: 4,
+        enablingWorkspaces: [
+          { id: 'ws-1', name: 'Acme' },
+          { id: 'ws-2', name: 'Beta' },
+        ],
+      }),
+    );
+    const section = screen.getByTestId('gate-instance-workspaces');
+    const list = within(section).getByTestId('gate-instance-enabling-workspaces');
+    expect(list.textContent).toContain('Acme');
+    expect(list.textContent).toContain('Beta');
+    expect(section.textContent).toContain('另有 2 个未列出');
+  });
+
+  it('renders the transport kind and Operation table headers through the language switcher, never a raw enum or English-only header', () => {
+    const http = scriptedHttp({});
+    renderPanel(http, gateInstance({ transportKind: 'cli' }));
+    const detail = screen.getByTestId('gate-instance-detail');
+    expect(detail.textContent).toContain('CLI');
+    const table = screen.getByTestId('gate-instance-operations-table');
+    expect(table.textContent).toContain('影响级');
+    expect(table.textContent).toContain('提示');
+  });
 });

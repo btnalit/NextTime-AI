@@ -9,7 +9,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { connectorModeLabel } from '../../lib/labels.js';
+import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
@@ -281,7 +281,7 @@ function ConnectorRow({
     <>
       <tr data-testid={`connector-row-${connector.name}`}>
         <td className="mono">{connector.name}</td>
-        <td>{connector.kind}</td>
+        <td>{transportKindLabel(connector.kind, t)}</td>
         <td>{connector.packaged ? t('预置', 'Packaged') : t('通用', 'Generic')}</td>
         <td>
           <Confirm

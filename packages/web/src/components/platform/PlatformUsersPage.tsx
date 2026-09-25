@@ -267,6 +267,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           data={rows}
           getRowId={(row) => row.id}
           ariaLabel={t('用户', 'Users')}
+          // S8 W4-C (ui-audit PU1 "1280 预算列折 4 行、表头折行；LOGIN 折行"): nine columns is too
+          // many to fit one screen even at 1280 — `layout="sticky"` (the same fix
+          // `PlatformModelsPage`'s providers table already uses for the identical problem) pins
+          // displayName/status/actions and lets login/role/workspaces/budget/dates scroll
+          // underneath, instead of the browser compressing every column until text wraps.
+          layout="sticky"
           testId="platform-users-table"
           rowTestId={() => 'platform-user-row'}
           rowDataAttrs={(row) => ({ 'data-login': row.login })}

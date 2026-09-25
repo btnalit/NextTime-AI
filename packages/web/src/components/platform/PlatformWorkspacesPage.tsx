@@ -317,6 +317,11 @@ export function PlatformWorkspacesPage({
           data={rows}
           getRowId={(row) => row.id}
           ariaLabel="Workspaces"
+          // S8 W4-C (ui-audit PW3 "1280 表格溢出，'配置 Configure' 被截"): eight columns squeezed
+          // the actions column at 1280 — `layout="sticky"` (same fix as the users table / the
+          // providers table) pins name/status/actions and scrolls purpose/lifecycle/models/owners
+          // underneath instead.
+          layout="sticky"
           testId="platform-workspaces-table"
           onRowClick={(row) => setPanel({ kind: 'workspace', workspaceId: row.id })}
           rowTestId={(row) => `workspace-row-${row.id}`}
@@ -427,6 +432,9 @@ function workspaceColumns(
       header: '',
       priority: 'high',
       hideInCard: true,
+      // Sticky layout (PW3): the pinned column's fixed width has to fit two buttons
+      // (清除/Purge + 配置/Configure) side by side, wider than the 140px `high` default.
+      width: 200,
       cell: (workspace) => {
         const canPurge = workspace.purgeable && !workspace.isDefault;
         return (

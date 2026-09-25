@@ -136,6 +136,41 @@ describe('GatekeeperCard legacy badge (SY1)', () => {
   });
 });
 
+/** S8 W4-C (ui-audit PI2 "docker 接入包 KIND 显示 http，而系统接入页同一个 docker 显示 cli"): the
+ *  card shows the *live* platform instance's `transportKind`, not the possibly-stale one the
+ *  legacy Gatekeeper Object was first registered with. */
+describe('GatekeeperCard transport kind (PI2)', () => {
+  it('prefers the linked platform instance’s transportKind over the registered one', () => {
+    const http = scriptedHttp();
+    renderCard(http, vi.fn(), {
+      gatekeeper: { ...GATEKEEPER, transportKind: 'cli' },
+      platformInstance: {
+        gateId: 'gate-1',
+        connector: 'docker',
+        displayName: 'Docker prod',
+        transportKind: 'http',
+        target: 'docker://prod',
+        status: 'enabled',
+        trust: 'byo',
+        health: 'ok',
+        operationCount: 3,
+        gatekeeperId: 'gk-1',
+      },
+    });
+    expect(screen.getByText('HTTP')).toBeTruthy();
+    expect(screen.queryByText('CLI')).toBeNull();
+  });
+
+  it('falls back to the registered transportKind when there is no linked platform instance', () => {
+    const http = scriptedHttp();
+    renderCard(http, vi.fn(), {
+      gatekeeper: { ...GATEKEEPER, transportKind: 'cli' },
+      platformInstance: null,
+    });
+    expect(screen.getByText('CLI')).toBeTruthy();
+  });
+});
+
 /** S8 W2-U1 (audit R5/U2 "卡片上看不到谁已获授权"): the card's own access list, scoped to its
  *  `resourceId`, with a revoke action per grant. */
 describe('GatekeeperCard access list (R5/U2)', () => {
