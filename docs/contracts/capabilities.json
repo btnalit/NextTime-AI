@@ -6202,10 +6202,6 @@
         },
         "resourceType": {
           "type": "string"
-        },
-        "scope": {
-          "additionalProperties": {},
-          "type": "object"
         }
       },
       "required": [
