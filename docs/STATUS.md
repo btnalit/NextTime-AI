@@ -345,7 +345,7 @@
 | 82 | Worker 草稿没有丢弃能力：`deprecate_worker_definition` 只作用于已发布版本，"我的草稿"（#274）里废弃的草稿会一直留着；"继续编辑"因此没做（续写会再多一个草稿版本）。需要一个丢弃自己草稿的写能力，属写路径，待维护者决定 | P3 | 待维护者决定 | 开放 |
 | 83 | CI 的 e2e 栈（`AGENT_RUNTIME=fake`，只回显；无 agent-host / worker-supervisor）触发不了真实 `invoke_worker`：旅程①在 CI 里止于"三项前提齐备 + 对话可用"，委派本身只由 `accept_s2`（主机，API 级）与维护者页面验收证明 | P2 | S8 W4（评估给 CI 栈加一个会调用 `invoke_worker` 的假运行时，或接受现状并写进旅程说明） | 开放 |
 | 84 | ops-runner 模板不声明能力，默认为 Worker 上限去掉执行类能力——不含 `request_action`，按模板发布的 Worker 只能观测、不能提出执行类动作；要执行需在 Worker 编辑器里勾上 `request_action`。模板是否默认带上它（仍经审批）是产品决定 | P2 | 待维护者决定 | 开放（执行就绪已按"能碰到门"判定，#276） |
-| 85 | 截图里仍可见的中英混排：侧栏底部"Connected / Forget key"、平台概览"开始使用"里的 default workspace 说明、系统接入"待启用的平台实例"空态的 "An administrator sets a connector to 平台预置"（i18n 守卫只查 3 词以上与整句粘连，漏掉了这类短句） | P3 | S8 W3（S4 收尾） | 开放 |
+| 85 | 截图里仍可见的中英混排：侧栏底部"Connected / Forget key"、平台概览"开始使用"里的 default workspace 说明、系统接入"待启用的平台实例"空态的 "An administrator sets a connector to 平台预置"、侧栏登出按钮的 title "Sign out"（i18n 守卫只查 3 词以上与整句粘连，漏掉了这类短句） | P3 | S8 W3（S4 收尾） | 开放 |
 
 ## 5. 更新规则
 
