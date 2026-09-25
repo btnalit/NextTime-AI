@@ -110,8 +110,8 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
           value={kind}
           onChange={(event) => setKind(event.target.value as 'fact' | 'decision')}
         >
-          <option value="fact">{t('事实 Fact', 'Fact')}</option>
-          <option value="decision">{t('决定 Decision', 'Decision')}</option>
+          <option value="fact">{t('事实', 'Fact')}</option>
+          <option value="decision">{t('决定', 'Decision')}</option>
         </Select>
         <Field id="causal-chain-node-id" label={t('id', 'id')}>
           <input

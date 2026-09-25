@@ -61,14 +61,14 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
   if (profile.state.status === 'loading') {
     return (
       <div className="chat-header-meta text-small text-3" data-testid="chat-model-line">
-        {t('模式 Mode：入口 agent', 'Entry agent')}
+        {t('模式：入口 agent', 'Mode: entry agent')}
       </div>
     );
   }
   if (profile.state.status === 'error') {
     return (
       <div className="chat-header-meta text-small text-3" data-testid="chat-model-line">
-        模式 Mode：入口 agent Entry agent · 模型 Model：—
+        {t('模式：入口 agent · 模型：—', 'Mode: entry agent · Model: —')}
       </div>
     );
   }
@@ -109,7 +109,10 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
       toast.push({
         tone: 'ok',
         title: t('下一轮生效', 'Takes effect next turn'),
-        description: `模型 Model：${modelLabel(saved.effective.model, models)}`,
+        description: t(
+          `模型：${modelLabel(saved.effective.model, models)}`,
+          `Model: ${modelLabel(saved.effective.model, models)}`,
+        ),
         key: 'chat-model-switch',
       });
     } catch (err) {
@@ -131,10 +134,10 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
       data-testid="chat-model-line"
       data-source={override === null ? 'workspace_default' : 'override'}
     >
-      <span>{t('模式 Mode：入口 agent', 'Entry agent')}</span>
+      <span>{t('模式：入口 agent', 'Mode: entry agent')}</span>
       <span aria-hidden>·</span>
       <label htmlFor={selectId} className="row">
-        <span>模型 Model：</span>
+        <span>{t('模型：', 'Model:')}</span>
         <Select
           id={selectId}
           value={override ?? WORKSPACE_DEFAULT}

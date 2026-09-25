@@ -144,7 +144,7 @@ describe('ModelSwitcher', () => {
   it('renders the mode line without a control when the profile read fails', async () => {
     renderSwitcher(http({}));
     await waitFor(() =>
-      expect(screen.getByTestId('chat-model-line').textContent).toContain('模型 Model：—'),
+      expect(screen.getByTestId('chat-model-line').textContent).toContain('模型：—'),
     );
     expect(screen.queryByTestId('chat-model-select')).toBeNull();
   });

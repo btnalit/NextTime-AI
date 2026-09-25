@@ -542,7 +542,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     renderChat(fake.client, http);
     const line = await screen.findByTestId('chat-model-line');
     await waitFor(() => expect(within(line).getByTestId('chat-model-select')).toBeTruthy());
-    expect(line.textContent).toContain('模式 Mode：入口');
+    expect(line.textContent).toContain('模式：入口');
     expect(screen.getByTestId('chat-model-source').textContent).toContain('工作区默认');
     const select = screen.getByTestId('chat-model-select') as HTMLSelectElement;
     expect(select.disabled).toBe(false);
