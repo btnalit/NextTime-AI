@@ -68,6 +68,39 @@ jobs:
             echo "| @earendil-works/pi-ai | $PINNED | $LATEST_AI |"
           } >>"$GITHUB_STEP_SUMMARY"
 
+      # leftover 59 (docs/STATUS.md): the kernel's `pi_drift` capability (application/platform/
+      # runtime.ts) reads a small CI-produced JSON at PI_DRIFT_FILE (default /data/config/
+      # pi-drift.json) — `{"pinnedPiVersion": "...", "checkedAt": "<ISO>"}` — and compares it
+      # against the *deployed runtime image's own* `ai.nexttime.pi-version` label to answer "did
+      # the host forget to rebuild after the last pi.version bump". That is a different axis from
+      # this workflow's own pinned-vs-@latest compatibility check above — this step only ever
+      # records what `pi.version` says on the commit this run checked out (nightly = main's HEAD),
+      # independent of whether the pi@latest test run above passed or failed.
+      #
+      # No host in this deployment pulls GitHub Actions artifacts automatically (see docs/runbooks/
+      # pi-upgrade.md §6 and backup-restore.md's own "no new infra" precedent) — an operator who
+      # wants a live pi_drift reading downloads this artifact by hand
+      # (`gh run download --repo <owner>/<repo> --name pi-drift -D /tmp/pi-drift` after a run, or
+      # `gh run download <run-id> --name pi-drift`) and copies pi-drift.json to
+      # `${NEXTTIME_DATA}/config/pi-drift.json` on the host (docs/runbooks/pi-upgrade.md §6 has the
+      # exact commands). Without that manual step the page honestly says so instead of "unknown"
+      # (application/platform/runtime.ts's own `detail` text, PlatformRuntimePage.tsx).
+      - name: Write pi-drift.json (PI_DRIFT_FILE shape)
+        run: |
+          set -eu
+          printf '{"pinnedPiVersion":"%s","checkedAt":"%s"}\n' \
+            "${{ steps.versions.outputs.pinned }}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >pi-drift.json
+          cat pi-drift.json
+
+      - name: Upload pi-drift.json as a workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-drift
+          path: pi-drift.json
+          retention-days: 14
+
       # Throwaway override: this checkout's own packages/platform-extension/package.json is
       # rewritten in place by `pnpm add`, but nothing in this job ever runs `git commit`/`git
       # push` — the change dies with the runner. Both pi packages the extension actually imports

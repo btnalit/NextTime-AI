@@ -119,6 +119,45 @@ wait_for_gate_health() {
   return 1
 }
 
+# leftover 63 (host egress / DNS jitter): retry_http_code <max_attempts> <backoff_seconds>
+# <cmd...> — runs <cmd...> (its stdout must be exactly an HTTP status code, e.g. `curl -o /dev/null
+# -w '%{http_code}' ...`) up to <max_attempts> times, sleeping <backoff_seconds> between tries,
+# stopping at the first attempt whose output is "200". 2026-09-23 host acceptance saw the host's
+# direct public-internet reachability flap (half the requests failing, recovering minutes later);
+# 2026-09-25 accept_s2.sh's own step6-registered-egress-ok failed twice in a row with curl 000
+# while egress-proxy's own log showed `allowed:true` / `bytesDown:0` (an upstream TLS stall, not a
+# platform rejection) — a transient network condition indistinguishable, from inside the container,
+# from a real regression, so this is a targeted retry on the *specific* probes that hit it, not a
+# blanket retry around every acceptance step.
+#
+# Only ever wraps a *positive* egress probe (expects 200) — a *negative* probe (egress-internal-
+# denied, step6-direct-lan-fails, step6-unregistered-source-denied: all denied-by-design) must keep
+# failing closed on its first answer and must never call this helper.
+#
+# Callers invoke this via command substitution (`out=$(retry_http_code ...)`), which POSIX sh runs
+# in a subshell — a side-channel global variable set inside this function would be lost the moment
+# it returns, so the attempt count travels the only way that survives the subshell: printed on the
+# same stdout line as the code, space-separated ("<code> <attempts>"). Split it back apart with
+# plain parameter expansion (no external `cut`/`awk` needed):
+#   out=$(retry_http_code 3 5 docker exec ... curl ... -w '%{http_code}' ...)
+#   code=${out% *}
+#   attempts=${out#* }
+retry_http_code() {
+  retry_max="$1"
+  retry_backoff="$2"
+  shift 2
+  retry_attempt=1
+  while :; do
+    retry_code=$("$@" </dev/null 2>/dev/null)
+    if [ "$retry_code" = "200" ] || [ "$retry_attempt" -ge "$retry_max" ]; then
+      printf '%s %s' "$retry_code" "$retry_attempt"
+      return 0
+    fi
+    sleep "$retry_backoff"
+    retry_attempt=$((retry_attempt + 1))
+  done
+}
+
 # --------------------------------------------------------------------------------------------
 # Fake provider via compose override (W6, retrospective §5.3). `accept_provider_up` generates the
 # fake-provider models.json into ${NEXTTIME_DATA}/accept/ and recreates llm-proxy /

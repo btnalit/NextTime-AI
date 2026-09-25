@@ -21,8 +21,8 @@
 #   DATA_DIR=/data         — bind mount of ${NEXTTIME_DATA} (compose: "${NEXTTIME_DATA}:/data").
 #
 # One backup = one pg_dump custom-format dump of the whole `nexttime` DB, plus one tar.gz of
-# workspaces/ config/ gatekeepers/ caddy/ (never secrets/ — it holds credentials, not backup
-# content). caddy/ (lane-7 P2 fix) holds the internal CA's private key
+# workspaces/ config/ gatekeepers/ caddy/ llm-proxy/ models/ (never secrets/ — it holds
+# credentials, not backup content). caddy/ (lane-7 P2 fix) holds the internal CA's private key
 # (deploy/caddy/Dockerfile's persisted /data) — without it, losing the host means every client
 # that trusted the old CA must re-import a freshly-generated one; it is included precisely because
 # it is as security-sensitive as anything else backed up here, not despite that. gatekeepers/ is
@@ -35,6 +35,17 @@
 # fix), so every `*/store.key` path is excluded from the tar regardless of which directory it is
 # under. Both land under $DATA_DIR/backups/{db,files}/, named with a UTC timestamp so lexical sort
 # == chronological order (used by the retention step below).
+#
+# leftover 58 (S8 W5): llm-proxy/ and models/ were missing from both this tar list AND the
+# backup service's own docker-compose.yml mounts — the S6-B/S7-A console-managed
+# providers.json/keys.json (LLM provider API keys) and models.json existed nowhere in any backup.
+# `tar` preserves each source file's mode bits by default (no `--no-same-permissions`), so
+# keys.json's 0600 (key-store.ts's own atomic write) survives into the tarball and back out on
+# restore unchanged — **this means `files-<ts>.tgz` now contains real, usable provider API keys
+# in plaintext and must be protected exactly like `secrets/` is** (see docs/runbooks/
+# backup-restore.md, which now says so): restrict backups/ access to the same operators who may
+# already read secrets/, and treat every retained files-*.tgz as key material when deciding where
+# it may be copied off-host.
 
 set -eu
 
@@ -122,17 +133,19 @@ run_backup() {
 	dump_size=$(wc -c <"$dump_file" | tr -d ' ')
 	log "ok: $dump_file ($dump_size bytes)"
 
-	# workspaces/ config/ gatekeepers/ caddy/ — never secrets/ (credentials, not backup content).
-	# `*/store.key` is excluded regardless of which of these directories it turns up under (see
-	# this file's own header comment) — a connected_account-mode gate's encrypted credential
-	# store's *key* must never land in an unencrypted backup tarball.
-	log "starting: tar workspaces config gatekeepers caddy -> $tar_file"
+	# workspaces/ config/ gatekeepers/ caddy/ llm-proxy/ models/ — never secrets/ (credentials, not
+	# backup content). `*/store.key` is excluded regardless of which of these directories it turns
+	# up under (see this file's own header comment) — a connected_account-mode gate's encrypted
+	# credential store's *key* must never land in an unencrypted backup tarball. llm-proxy/'s own
+	# keys.json is NOT excluded (leftover 58) — see this file's header comment: the tarball itself
+	# must now be handled as key material.
+	log "starting: tar workspaces config gatekeepers caddy llm-proxy models -> $tar_file"
 	tar_sources=""
-	for d in workspaces config gatekeepers caddy; do
+	for d in workspaces config gatekeepers caddy llm-proxy models; do
 		[ -d "$DATA_DIR/$d" ] && tar_sources="$tar_sources $d"
 	done
 	if [ -z "$tar_sources" ]; then
-		log "ERROR: none of workspaces/ config/ gatekeepers/ caddy/ exist under $DATA_DIR"
+		log "ERROR: none of workspaces/ config/ gatekeepers/ caddy/ llm-proxy/ models/ exist under $DATA_DIR"
 		return 1
 	fi
 	# shellcheck disable=SC2086

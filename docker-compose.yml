@@ -1222,13 +1222,22 @@ services:
 
   backup:
     image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 # 与 postgres 同大版本
-    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy tar.gz，保留 N 份（S1.12）
+    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy/llm-proxy/models tar.gz，保留 N 份（S1.12；leftover 58 补 llm-proxy/models）
     # Mounts narrowed (lane-7 P2 fix) from one blanket rw `${NEXTTIME_DATA}:/data` (which handed
     # this container write access to pgdata/, secrets/, and every other host-data subtree it never
     # touches) to exactly what deploy/backup/backup.sh reads (ro) and writes (rw): workspaces/
-    # config/ gatekeepers/ caddy/ are backup *sources*, never destinations — secrets/ is
-    # deliberately absent (never backed up, see backup.sh's own header comment); backups/ is the
-    # one directory this container actually writes to.
+    # config/ gatekeepers/ caddy/ llm-proxy/ models/ are backup *sources*, never destinations —
+    # secrets/ is deliberately absent (never backed up, see backup.sh's own header comment);
+    # backups/ is the one directory this container actually writes to.
+    #
+    # leftover 58: llm-proxy/ (providers.json, and S7-A's keys.json — the console-written provider
+    # API keys, 0600) and models/ (models.json) were missing here entirely — not merely excluded
+    # from backup.sh's own tar list, but never mounted into this container at all, so backup.sh
+    # could not have read them even if it tried. Read-only, same as every other backup source
+    # above; the `cap_add: [DAC_READ_SEARCH]` below already lets this root container read into
+    # llm-proxy/ despite it being uid-10001-owned 0750 (host-llm-proxy-init.sh /
+    # host-env-init.sh) — the same mechanism that already lets it read gatekeepers/'s per-gate
+    # uid-owned state.
     volumes:
       [
         "./deploy/backup/backup.sh:/backup.sh:ro",
@@ -1236,6 +1245,8 @@ services:
         "${NEXTTIME_DATA:?}/config:/data/config:ro",
         "${NEXTTIME_DATA:?}/gatekeepers:/data/gatekeepers:ro",
         "${NEXTTIME_DATA:?}/caddy:/data/caddy:ro",
+        "${NEXTTIME_DATA:?}/llm-proxy:/data/llm-proxy:ro",
+        "${NEXTTIME_DATA:?}/models:/data/models:ro",
         "${NEXTTIME_DATA:?}/backups:/data/backups",
       ]
     environment: { TZ: "${TZ:-UTC}", BACKUP_TIME: "${BACKUP_TIME:-03:30}", RETENTION: "${BACKUP_RETENTION:-7}", PGHOST: postgres, HOME: /tmp }

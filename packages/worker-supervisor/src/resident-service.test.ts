@@ -705,6 +705,38 @@ describe('resident-service stop', () => {
   });
 });
 
+describe('resident-service reclaim (S8 W5 leftover 77)', () => {
+  it('force-removes the container (not just stop) and deletes the workspace directory', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const workspaceDir = join(dir, 'workspaces', 'alice');
+    expect(existsSync(workspaceDir)).toBe(true);
+
+    await service.reclaim('alice');
+
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.stopCalls).toEqual([]); // reclaim never calls stop() — remove() force-stops
+    expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
+    expect(existsSync(workspaceDir)).toBe(false);
+    expect(await service.status('alice')).toBeUndefined();
+  });
+
+  it('is a no-op when nothing was ever spawned for that principal (no container, no directory)', async () => {
+    const { service, docker } = setup();
+    await expect(service.reclaim('nobody')).resolves.toBeUndefined();
+    expect(docker.removeCalls).toEqual(['nexttime-entry-nobody']);
+  });
+
+  it('still removes the container when the workspace directory was already gone', async () => {
+    const { service, docker } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    rmSync(join(dir, 'workspaces', 'alice'), { recursive: true, force: true });
+
+    await expect(service.reclaim('alice')).resolves.toBeUndefined();
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+  });
+});
+
 describe('resident-service status', () => {
   it('returns undefined when nothing has been spawned', async () => {
     const { service } = setup();

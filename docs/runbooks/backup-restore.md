@@ -18,8 +18,10 @@ caddy 目录改成组可读——是为了让容器"看起来"非 root 而削弱
 
 **这个 root 被什么约束住。** 除读/目录搜索权限绕过外无任何 capability（没有 `DAC_OVERRIDE`、
 `CHOWN`、`SETUID`…），根文件系统只读，`no-new-privileges`，挂载只有 `workspaces/ config/
-gatekeepers/ caddy/`（只读）与 `backups/`（读写）——它写不到任何原本写不到的地方，也碰不到
-Docker socket 或其他服务。
+gatekeepers/ caddy/ llm-proxy/ models/`（只读）与 `backups/`（读写）——它写不到任何原本写不到的
+地方，也碰不到 Docker socket 或其他服务。`llm-proxy/` 归 uid 10001、0750（`host-llm-proxy-init.sh`
+/ `host-env-init.sh`）——同一个 `DAC_READ_SEARCH` 也是它能读进这个目录的原因，和读
+`gatekeepers/`、`caddy/` 走的是同一条路。
 
 **为什么需要 `DAC_READ_SEARCH`（而不是 chmod/chown）。** `caddy` 以 root 跑，`caddyserver/certmagic`
 的 `FileStorage` 把每次证书/密钥写入都硬编码成 `0600`/`0700`、root 属主、原子 rename 替换 inode
@@ -51,11 +53,21 @@ docker compose run --rm --no-deps --entrypoint sh backup -c 'id -u; grep -E "^Ca
 
 `backup` 容器（`postgres:17-alpine`）每日 `BACKUP_TIME`（容器 `TZ`，默认 UTC 03:30）跑一次：
 - `pg_dump -Fc` 整个 `nexttime` 库 → `${NEXTTIME_DATA}/backups/db/nexttime-<UTC时间戳>.dump`
-- `tar -czf` 打包 `workspaces/ config/ gatekeepers/ caddy/`（**不含** `secrets/`，`caddy/` 下的
-  内部 CA 私钥本身就是要备份的内容；`gatekeepers/*/store.key`——某个 `connected_account` 模式
-  门的加密凭证存储密钥——按文件名排除，其余 `gatekeepers/` 内容照常打包）→
+- `tar -czf` 打包 `workspaces/ config/ gatekeepers/ caddy/ llm-proxy/ models/`（**不含**
+  `secrets/`，`caddy/` 下的内部 CA 私钥本身就是要备份的内容；`gatekeepers/*/store.key`——某个
+  `connected_account` 模式门的加密凭证存储密钥——按文件名排除，其余 `gatekeepers/` 内容照常打包）→
   `${NEXTTIME_DATA}/backups/files/files-<ts>.tgz`。容器挂载已收窄为按目录只读（`workspaces/
-  config/ gatekeepers/ caddy/`）+ `backups/` 读写，不再是整个 `${NEXTTIME_DATA}` 读写。
+  config/ gatekeepers/ caddy/ llm-proxy/ models/`）+ `backups/` 读写，不再是整个 `${NEXTTIME_DATA}`
+  读写。
+
+**归档现在含真实密钥（S8 leftover 58）。** `llm-proxy/` 里的 `keys.json`（S7-A 控制台写入的供应商
+API key）与 `providers.json` 一并进了 `files-<ts>.tgz`；`tar` 默认保留每个源文件的权限位，
+`keys.json` 的 `0600` 原样进档、原样出档（不需要额外参数）。**这意味着每一份 `files-<ts>.tgz`
+现在和 `secrets/` 一样敏感**：只给能读 `secrets/` 的运维人员访问 `backups/` 目录与其中的
+`files-*.tgz`；异地转存 / 拷贝这些归档时按密钥材料对待（加密传输、加密静态存储，绝不进公开或共享
+存储）；轮换某个供应商的 key 后，旧的 `files-*.tgz` 里仍留着已轮换前的旧 key，按
+`BACKUP_RETENTION` 自然过期，不做特殊清除。`models/` 只含 `models.json`（可用 `make gen-models`
+重建，非敏感，一并备份只是图省事）。
 
 每类各保留最新 `BACKUP_RETENTION`（默认 7）份，旧的自动删除；成功后写
 `${NEXTTIME_DATA}/backups/last-success`（时间戳 + 两个产物大小）。失败不中断循环，下次
@@ -86,7 +98,10 @@ docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "
 `nexttime` 的连接，或写入即将被 `pg_restore --clean` 清空重建的同一份数据），脚本退出时（无论
 成功还是失败）通过 trap 自动 `docker compose start` 把四者拉回来——`postgres` 本身不停，恢复过程
 中始终可达。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
-config/`。
+config/ gatekeepers/ caddy/ llm-proxy/ models/` 任何一个活目录——把 `llm-proxy/keys.json` 之类
+的供应商 key 挪回 `${NEXTTIME_DATA}/llm-proxy/` 前先核对是不是真要覆盖当前值，覆盖前建议先把
+当前 `keys.json` 另存一份；暂存目录本身继承了归档里 `keys.json` 的 `0600`，但目录本身按当前
+umask 创建，操作完成后记得清理 `${NEXTTIME_DATA}/restore/<ts>/`（同一份密钥材料，不要留在暂存区）。
 
 ## 验证（自动化演练：`scripts/drill-restore.sh`）
 

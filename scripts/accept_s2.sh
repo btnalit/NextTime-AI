@@ -113,12 +113,41 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
-# Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
-# whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
-# to run this script), which would otherwise kill the shell without running the EXIT trap.
+# `set -u` is active from the top of this script — pre-set every variable cleanup_step reads so
+# it is always safe to call from the EXIT trap below, even when preflight_step itself is what
+# failed and bootstrap_step (which normally assigns these) never ran.
+WORKSPACE_ID=""
+ALICE_PRINCIPAL_ID=""
+BOB_PRINCIPAL_ID=""
+CLEANUP_DONE=0
+
+# leftover 76: cleanup_step (defined below) used to run only on the two explicit success paths at
+# the bottom of this script (fake and --real mode) — a `fail()` anywhere in between (`fail()` is
+# `exit 1`) skipped it entirely and left every accept-s2-* fixture/gate container running. Routing
+# every exit through this one wrapper, registered on EXIT *and* on the signals that would
+# otherwise bypass EXIT-trap-less shells outright (a dropped ssh session, the documented way to
+# run this script), makes cleanup_step run exactly once on every exit path — success, `fail()`, or
+# a signal — instead of only the two success paths. `CLEANUP_DONE` guards against running it twice
+# when a signal's own `exit 130` re-enters this same trap. `cleanup_step`'s definition (below, well
+# before the "Run" section that actually calls any step) is registered with the shell long before
+# this trap can ever fire, so referencing it here by name is safe even though its body sits later
+# in the file — the same forward-reference the existing accept_provider_restore trap already relies
+# on (that one's defined in the sourced lib, so this was never in question for it).
+on_exit() {
+  rc=$?
+  if [ "$CLEANUP_DONE" -eq 0 ]; then
+    CLEANUP_DONE=1
+    cleanup_step
+  fi
+  if [ "$REAL" -eq 0 ]; then
+    accept_provider_restore
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 130' INT TERM HUP PIPE
+
 if [ "$REAL" -eq 0 ]; then
-  trap accept_provider_restore EXIT
-  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
   pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
@@ -901,9 +930,18 @@ echo "UNREGISTERED_CODE=$unregistered_code"
     entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
   fi
   [ "$entry_running" = "true" ] || fail "step6-registered-egress-ok" "alice's entry container $entry_container is not running (State.Running='$entry_running') — steps 2–3 should have left it up"
-  registered_code=$(docker exec "$entry_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' -x http://egress-proxy:3128 https://example.com </dev/null 2>/dev/null)
-  [ "$registered_code" = "200" ] || fail "step6-registered-egress-ok" "proxied curl https://example.com from alice's registered entry container -> '$registered_code' (expected 200)"
-  pass "step6-registered-egress-ok" "registered entry container -> https://example.com 200 via egress-proxy"
+  # leftover 63: bounded retry (3 attempts, 5s backoff — well under a minute total) on this
+  # *positive* probe only. 2026-09-25 host acceptance (v0.21.0): this exact check failed twice in a
+  # row with curl 000 while egress-proxy's own log showed the request as `allowed:true`,
+  # `bytesDown:0` — an upstream TLS stall, not a platform rejection; the same probe run by hand
+  # minutes later returned 200 three times. step6-direct-lan-fails / step6-unregistered-source-
+  # denied above stay single, un-retried, fail-closed checks — never retry a probe that expects to
+  # be denied.
+  registered_retry_out=$(retry_http_code 3 5 docker exec "$entry_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' -x http://egress-proxy:3128 https://example.com)
+  registered_code=${registered_retry_out% *}
+  registered_attempts=${registered_retry_out#* }
+  [ "$registered_code" = "200" ] || fail "step6-registered-egress-ok" "proxied curl https://example.com from alice's registered entry container -> '$registered_code' (expected 200, after $registered_attempts/3 attempts)"
+  pass "step6-registered-egress-ok" "registered entry container -> https://example.com 200 via egress-proxy (attempt $registered_attempts/3)"
 }
 
 # S2.12 step 7: the Facts written from the Worker result contract land in the graph with epistemic

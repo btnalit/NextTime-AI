@@ -18,7 +18,6 @@ import { PageHeader } from '../kit/page-header.js';
 import { RefChip as KitRefChip } from '../kit/ref-chip.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
-import { CopyId } from '../ui/CopyId.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Notice } from '../ui/Notice.js';
@@ -384,8 +383,31 @@ function RuntimeBody({
       cell: (resident) => <RefChip kind="principal" id={resident.principalId} size="s" />,
     },
     {
+      // S8 W5 (audit RT1): the wire already carried `running`/`status` (worker-supervisor's own
+      // `ResidentInventoryEntry`) but the page never rendered them — every row, including one
+      // that has already exited (e.g. an orphaned container from a purged workspace, leftover 77),
+      // read as indistinguishable from a live one save for the unrelated "待重建" chip.
+      id: 'containerState',
+      header: t('容器', 'Container'),
+      priority: 'high',
+      cell: (resident) =>
+        resident.running ? (
+          <span className="chip chip-ok" data-testid="runtime-resident-running">
+            {t('运行中', 'Running')}
+          </span>
+        ) : (
+          <span
+            className="chip chip-neutral"
+            title={resident.status}
+            data-testid="runtime-resident-exited"
+          >
+            {t('已退出', 'Exited')}
+          </span>
+        ),
+    },
+    {
       id: 'status',
-      header: t('状态', 'Status'),
+      header: t('重建', 'Rebuild'),
       priority: 'high',
       cell: (resident) =>
         resident.needsRebuild ? (
@@ -442,9 +464,47 @@ function RuntimeBody({
 
   return (
     <>
+      {!data.activeImageInfo ? (
+        // S8 W5 (audit L7): this used to live inside its own "活动镜像" card alongside a `<dl>`
+        // that duplicated fields the 镜像清单 table below already shows for the same image (see
+        // that card's own removal below) — this unresolved-state warning is the one piece of
+        // information that table cannot show (there is no row for an image that was never found),
+        // so it stays, just no longer wrapped in a now-gone card.
+        <Notice tone="warn" testId="runtime-active-image-unresolved">
+          {data.activeImage ? (
+            <>
+              {t(
+                <>
+                  活动镜像引用 <span className="mono">{data.activeImage}</span>（来源：
+                  {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh}
+                  ）不在下面的镜像清单里——可能没打平台 label，或 worker-supervisor
+                  不可达；此时下方“待重建”一律按“无法判断”显示为否，不猜测。
+                </>,
+                <>
+                  The active image reference <span className="mono">{data.activeImage}</span>{' '}
+                  (source: {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en}) is not in the
+                  inventory below (missing platform labels, or worker-supervisor unreachable) —
+                  every "needs rebuild" below reads false rather than guessing.
+                </>,
+              )}
+            </>
+          ) : (
+            <>
+              {t(
+                '未设置活动镜像，且无法读到 worker-supervisor 自身的缺省镜像。',
+                "No active image is set, and worker-supervisor's own default could not be read.",
+              )}
+            </>
+          )}
+        </Notice>
+      ) : null}
+
       <Card
-        title={t('活动镜像', 'Active image')}
+        title={t('镜像清单', 'Images')}
+        padded={false}
         actions={
+          // S8 W5 (audit L7): moved out of the removed "活动镜像" card — it was never a per-row
+          // action, so it belongs at the table's own header, not inside any one row.
           <Confirm
             tier="medium"
             open={rollbackOpen}
@@ -487,60 +547,6 @@ function RuntimeBody({
           />
         }
       >
-        {data.activeImageInfo ? (
-          <dl className="definition-list" data-testid="runtime-active-image">
-            <dt>{t('标签', 'Tags')}</dt>
-            <dd className="mono">{data.activeImageInfo.tags.join(', ') || '—'}</dd>
-            <dt>{t('镜像 id', 'Image id')}</dt>
-            <dd>
-              <CopyId id={data.activeImageInfo.id} label="Image" full />
-            </dd>
-            <dt>pi 版本</dt>
-            <dd className="mono">{data.activeImageInfo.piVersion ?? '—'}</dd>
-            <dt>platform-extension 版本</dt>
-            <dd className="mono">{data.activeImageInfo.platformExtensionVersion ?? '—'}</dd>
-            <dt>{t('构建来源', 'Built from')}</dt>
-            <dd className="mono">{data.activeImageInfo.builtFrom ?? '—'}</dd>
-            <dt>{t('来源', 'Source')}</dt>
-            <dd>
-              {t(
-                ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh,
-                ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en,
-              )}
-            </dd>
-          </dl>
-        ) : (
-          <Notice tone="warn" testId="runtime-active-image-unresolved">
-            {data.activeImage ? (
-              <>
-                {t(
-                  <>
-                    活动镜像引用 <span className="mono">{data.activeImage}</span>（来源：
-                    {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh}
-                    ）不在下面的镜像清单里——可能没打平台 label，或 worker-supervisor
-                    不可达；此时下方“待重建”一律按“无法判断”显示为否，不猜测。
-                  </>,
-                  <>
-                    The active image reference <span className="mono">{data.activeImage}</span>{' '}
-                    (source: {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en}) is not in the
-                    inventory below (missing platform labels, or worker-supervisor unreachable) —
-                    every "needs rebuild" below reads false rather than guessing.
-                  </>,
-                )}
-              </>
-            ) : (
-              <>
-                {t(
-                  '未设置活动镜像，且无法读到 worker-supervisor 自身的缺省镜像。',
-                  "No active image is set, and worker-supervisor's own default could not be read.",
-                )}
-              </>
-            )}
-          </Notice>
-        )}
-      </Card>
-
-      <Card title={t('镜像清单', 'Images')} padded={false}>
         {data.images.length === 0 ? (
           <EmptyState
             icon="cpu"
@@ -559,6 +565,12 @@ function RuntimeBody({
             ariaLabel="Runtime images"
             testId="runtime-images-table"
             rowTestId={(image) => `runtime-image-row-${image.id}`}
+            // S8 W5 (audit L7): the active image's row is highlighted instead of being repeated
+            // in a separate card — `aria-current` is the same "this is the current one" semantic
+            // convention `ui/DataList`'s own `.data-row[aria-current="true"]` rule already uses.
+            rowDataAttrs={(image): Readonly<Record<string, string>> =>
+              image.id === data.activeImageInfo?.id ? { 'aria-current': 'true' } : {}
+            }
           />
         )}
       </Card>
@@ -619,7 +631,25 @@ function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
       <dd className="mono">{data.platformExtensionVersion ?? '—'}</dd>
       <dt>{t('详情', 'Detail')}</dt>
       <dd>
-        {data.status === 'unknown' ? (
+        {data.status === 'unknown' && data.pinnedPiVersion === null ? (
+          // S8 leftover 59: no host in this deployment pulls the nightly pi-drift.yml artifact
+          // automatically (docs/runbooks/pi-upgrade.md §6 has the manual `gh run download` steps)
+          // — say that plainly instead of leaving "未知" as the only visible signal, with the
+          // kernel's own technical detail (PI_DRIFT_FILE path) still one click away for an
+          // operator who wants it.
+          <>
+            <p data-testid="pi-drift-unknown-honest">
+              {t(
+                '由 CI 夜间检测（pi-drift 工作流），本次部署尚未接收比对结果——见运行手册 pi-upgrade.md §6。',
+                'Checked nightly by CI (the pi-drift workflow) — this deployment has not received the comparison result yet; see the pi-upgrade runbook §6.',
+              )}
+            </p>
+            <details className="disclosure">
+              <summary>{t('技术细节', 'Technical details')}</summary>
+              <p className="text-3 text-small">{data.detail}</p>
+            </details>
+          </>
+        ) : data.status === 'unknown' ? (
           // S8 W1-A10 (audit S14): the kernel's `unknown` detail can name PI_DRIFT_FILE and "see
           // docs/runbooks" (application/platform/runtime.ts) — never shown inline; behind a
           // disclosure for an operator who needs it.
