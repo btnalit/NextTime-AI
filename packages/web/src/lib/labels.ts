@@ -1,5 +1,6 @@
 import type {
   ExecutionReadinessMissingCode,
+  GateTransportKindWire,
   PrincipalKind,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
@@ -156,4 +157,27 @@ export function roleLabel(role: string, t: Translate): string {
  *  `platform-integrations`). */
 export function connectorModeLabel(mode: string, t: Translate): string {
   return labelText(statusChipStyle('connectorMode', mode), t);
+}
+
+// -------------------------------------------------------------------------------------------
+// Gate transport kind (`@nexttime/shared` `GateTransportKindWireSchema`) — the integrations
+// page's connector table (S8 W4-C, ui-audit PI1 "显示原始枚举") and the gate instance detail
+// drawer (ui-audit PI3). Not a state machine (no lifecycle, no tone) so it lives here rather than
+// `lib/status-tone.ts` — same shape `workerDefinitionKindLabel` above already uses for a
+// non-machine enum.
+// -------------------------------------------------------------------------------------------
+
+const GATE_TRANSPORT_KIND_LABELS: Readonly<Record<GateTransportKindWire, BilingualLabel>> = {
+  http: { zh: 'HTTP', en: 'HTTP' },
+  mcp: { zh: 'MCP', en: 'MCP' },
+  cli: { zh: 'CLI', en: 'CLI' },
+  ssh: { zh: 'SSH', en: 'SSH' },
+};
+
+/** Takes a plain `string` (not the narrower `GateTransportKindWire`) for the same reason
+ *  `workerDefinitionKindLabel` does — an unrecognized value still renders visibly, never silently
+ *  hidden. */
+export function transportKindLabel(kind: string, t: Translate): string {
+  const entry = (GATE_TRANSPORT_KIND_LABELS as Readonly<Record<string, BilingualLabel>>)[kind];
+  return entry ? label(entry, t) : kind;
 }

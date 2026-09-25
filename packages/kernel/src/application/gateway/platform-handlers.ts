@@ -16,7 +16,9 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
+import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { hashPassword } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
@@ -1578,24 +1580,88 @@ export const platformAuditQueryHandler: CapabilityHandler = async (
 // overview
 // -------------------------------------------------------------------------------------------
 
-async function countGatekeepers(
+/** S8 W4-C (ui-audit O3, convergence-plan-2026-09-25.md §6 W4 "计数与列表同口径"): the same
+ *  "验收残留" predicate `packages/web/src/lib/platform-workspaces.ts`'s `isResidueWorkspace`
+ *  applies client-side — a disabled workspace, or an expired ephemeral one. Every cross-workspace
+ *  count this file computes for the control tower excludes these, matching what the workspaces
+ *  page's own default (residue-hidden) view would count. */
+function isResidueWorkspaceRow(row: OverviewWorkspaceRow, now: Date = new Date()): boolean {
+  if (row.status === 'disabled') return true;
+  if (row.purpose === 'ephemeral' && row.expires_at !== null) {
+    return row.expires_at.getTime() < now.getTime();
+  }
+  return false;
+}
+
+interface OverviewWorkspaceRow {
+  readonly id: string;
+  readonly name: string;
+  readonly status: 'active' | 'disabled';
+  readonly purpose: WorkspacePurpose;
+  readonly expires_at: Date | null;
+}
+
+interface CrossWorkspaceOverviewCounts {
+  readonly gatekeepers: number;
+  readonly pendingActionRequests: number;
+  readonly runningTasks: number;
+  readonly staleSourceCount: number;
+  readonly affectedWorkspaceCount: number;
+}
+
+/**
+ * S8 W4-C (ui-audit O1/O3/L1/G1): one per-workspace loop, `setWorkspaceContext` + ordinary RLS-
+ * scoped queries — same shape `countGatekeepers` (its predecessor) already established, extended
+ * to also total the control tower's "待处理" / "运行中" / "图谱新鲜度" metrics instead of a second
+ * loop each. `workspaces` is expected pre-filtered to the non-residue set (`isResidueWorkspaceRow`)
+ * — see this function's own call site. Graph freshness reuses `listSourceFreshness` (the exact
+ * `ops.collector_silent` predicate `graph_freshness`, S8 W4-A, restates per-workspace) rather than
+ * a third copy of that query.
+ */
+async function computeCrossWorkspaceOverview(
   client: PoolClient,
-  workspaces: readonly WorkspaceDbRow[],
-): Promise<number> {
-  // Gatekeepers are `objects` rows (object_type 'Gatekeeper', governance/gatekeepers/registry.ts)
-  // behind the workspace RLS policy — count per workspace under its GUC.
-  let total = 0;
+  workspaces: readonly OverviewWorkspaceRow[],
+): Promise<CrossWorkspaceOverviewCounts> {
+  const NIL_PRINCIPAL = '00000000-0000-0000-0000-000000000000';
+  let gatekeepers = 0;
+  let pendingActionRequests = 0;
+  let runningTasks = 0;
+  let staleSourceCount = 0;
+  let affectedWorkspaceCount = 0;
   for (const workspace of workspaces) {
-    await setWorkspaceContext(client, workspace.id, '00000000-0000-0000-0000-000000000000');
-    const result = await client.query<{ n: string }>(
+    await setWorkspaceContext(client, workspace.id, NIL_PRINCIPAL);
+    // Gatekeepers are `objects` rows (object_type 'Gatekeeper', governance/gatekeepers/registry.ts).
+    const gatekeeperResult = await client.query<{ n: string }>(
       `select count(*)::text as n from objects where workspace_id = $1 and object_type = 'Gatekeeper'`,
       [workspace.id],
     );
-    total += Number(result.rows[0]?.n ?? '0');
+    gatekeepers += Number(gatekeeperResult.rows[0]?.n ?? '0');
+
+    const pendingResult = await client.query<{ n: string }>(
+      `select count(*)::text as n from action_requests
+        where workspace_id = $1 and status = 'pending_approval'`,
+      [workspace.id],
+    );
+    pendingActionRequests += Number(pendingResult.rows[0]?.n ?? '0');
+
+    const runningResult = await client.query<{ n: string }>(
+      `select count(*)::text as n from tasks where workspace_id = $1 and status = 'running'`,
+      [workspace.id],
+    );
+    runningTasks += Number(runningResult.rows[0]?.n ?? '0');
+
+    const freshness = await listSourceFreshness(
+      client,
+      workspace.id,
+      DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS,
+    );
+    const silentHere = freshness.filter((source) => source.silent).length;
+    staleSourceCount += silentHere;
+    if (silentHere > 0) affectedWorkspaceCount += 1;
   }
   await client.query("select set_config('app.workspace_id', '', true)");
   await client.query("select set_config('app.principal_id', '', true)");
-  return total;
+  return { gatekeepers, pendingActionRequests, runningTasks, staleSourceCount, affectedWorkspaceCount };
 }
 
 export const platformOverviewHandler: CapabilityHandler = async (client) => {
@@ -1606,8 +1672,8 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
             count(*) filter (where not has_password)::text as pending
        from users`,
   );
-  const workspaces = await client.query<WorkspaceDbRow>(
-    'select id, name, status from workspaces order by created_at',
+  const workspaces = await client.query<OverviewWorkspaceRow>(
+    'select id, name, status, purpose, expires_at from workspaces order by created_at',
   );
   const migrations = await client
     // Inside the platform transaction: a failed statement would abort the whole transaction,
@@ -1623,7 +1689,14 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
   } catch {
     modelsStatus = 'down';
   }
-  const gatekeepers = await countGatekeepers(client, workspaces.rows);
+  // S8 W4-C (ui-audit O3 "计数与列表同口径"): the cross-workspace counts below (gatekeepers,
+  // pending ActionRequests, running Tasks, graph freshness) are computed only over non-residue
+  // workspaces — an accept-* workspace disabled or past its ephemeral expiry never inflates them.
+  // `counts.workspaces`/`activeWorkspaces` below stay the literal totals (unchanged, pre-existing
+  // meaning); the workspaces page's own residue banner is where "残留单独显示" already lives.
+  const nonResidueWorkspaces = workspaces.rows.filter((row) => !isResidueWorkspaceRow(row));
+  const { gatekeepers, pendingActionRequests, runningTasks, staleSourceCount, affectedWorkspaceCount } =
+    await computeCrossWorkspaceOverview(client, nonResidueWorkspaces);
   const recent = await queryPlatformAudit(client, { limit: 20 });
 
   const activeWorkspaces = workspaces.rows.filter((w) => w.status === 'active');
@@ -1645,6 +1718,13 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
       activeWorkspaces: activeWorkspaces.length,
       gatekeepers,
       modelsAvailable,
+      pendingActionRequests,
+      runningTasks,
+    },
+    graphFreshness: {
+      staleThresholdMs: DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS,
+      staleSourceCount,
+      affectedWorkspaceCount,
     },
     health: [
       { service: 'kernel', status: 'ok' },

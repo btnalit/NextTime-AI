@@ -215,6 +215,9 @@ import {
   setDefaultModulesHandler,
   upgradeModuleHandler,
 } from './platform-modules-handlers.js';
+// S8 W4-C (journey ⑤ 清理验收残留) — same one-capability-per-file convention as
+// graph-freshness-handler.ts above.
+import { platformDraftResidueHandler } from './platform-residue-handler.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
@@ -1459,6 +1462,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_platform_settings', getPlatformSettingsHandler],
   ['update_platform_settings', updatePlatformSettingsHandler],
   ['platform_audit_query', platformAuditQueryHandler],
+  // S8 W4-C (journey ⑤): draft-residue counts (platform-residue-handler.ts).
+  ['platform_draft_residue', platformDraftResidueHandler],
   // P-A2: workspaces as platform objects (platform-handlers.ts "workspaces").
   ['list_workspaces', listWorkspacesHandler],
   ['list_platform_models', listPlatformModelsHandler],

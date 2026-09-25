@@ -9,6 +9,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
@@ -197,7 +198,7 @@ export function GateInstanceDetailPanel({
             <dt>{t('接入包', 'Connector')}</dt>
             <dd className="mono">{instance.connector}</dd>
             <dt>{t('种类', 'Transport')}</dt>
-            <dd>{instance.transportKind}</dd>
+            <dd>{transportKindLabel(instance.transportKind, t)}</dd>
             <dt>{t('目标', 'Target')}</dt>
             <dd className="mono">{instance.target}</dd>
             <dt>{t('端点', 'Endpoint')}</dt>
@@ -221,7 +222,7 @@ export function GateInstanceDetailPanel({
                 </time>
               )}
             </dd>
-            <dt>启用它的工作区数</dt>
+            <dt>{t('启用它的工作区数', 'Enabling workspaces')}</dt>
             <dd className="mono">{instance.enabledWorkspaceCount}</dd>
           </dl>
 
@@ -229,8 +230,15 @@ export function GateInstanceDetailPanel({
             <div className="stack-s" data-testid="gate-instance-test-result">
               <dl className="definition-list">
                 <dt>{t('健康', 'Health')}</dt>
-                <dd>{testResult.health}</dd>
-                <dt>描述的 Operation 数</dt>
+                <dd>
+                  <StatusChip
+                    machine="gateHealth"
+                    status={testResult.health}
+                    size="s"
+                    testId="gate-instance-test-health"
+                  />
+                </dd>
+                <dt>{t('描述的 Operation 数', 'Described operations')}</dt>
                 <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
                 <dt>{t('检查时间', 'Checked')}</dt>
                 <dd>
@@ -243,7 +251,12 @@ export function GateInstanceDetailPanel({
           ) : null}
 
           <div className="stack-s">
-            <span>Announced operations ({instance.operations.length})</span>
+            <span>
+              {t(
+                `已 announce 的 Operation（${instance.operations.length}）`,
+                `Announced operations (${instance.operations.length})`,
+              )}
+            </span>
             {instance.operations.length === 0 ? (
               <p className="text-3">
                 {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
@@ -255,8 +268,8 @@ export function GateInstanceDetailPanel({
                     <tr>
                       <th>{t('名称', 'Name')}</th>
                       <th>{t('模式', 'Mode')}</th>
-                      <th>Blast radius</th>
-                      <th>Hints</th>
+                      <th>{t('影响级', 'Blast radius')}</th>
+                      <th>{t('提示', 'Hints')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -537,11 +550,13 @@ function StatusToggle({
   );
 }
 
-/** §5.6 instance → connection link. The platform wire exposes only `enabledWorkspaceCount`
- *  (`GateInstanceWireSchema`; the per-workspace list would be a kernel extension), so this shows
- *  the count, a link to the workspace 系统接入 page, and — for the session's own workspace, when
- *  it has one — that workspace's Gatekeeper for this instance as a `RefChip`. The workspace read
- *  fails quietly (403 / no workspace on a platform-only session): nothing is rendered for it. */
+/** §5.6 instance → connection link. S8 W4-C (ui-audit PI3 "'4 个工作区已启用'但不列出是哪 4 个"):
+ *  the platform wire now also exposes `enablingWorkspaces` (W1-C, leftover 48) — up to
+ *  `ENABLING_WORKSPACES_LIMIT` names, newest link first; `enabledWorkspaceCount` stays the true
+ *  total even when the list is shorter (kernel-side truncation, never guessed). Also shows a link
+ *  to the workspace 系统接入 page, and — for the session's own workspace, when it has one — that
+ *  workspace's Gatekeeper for this instance as a `RefChip`. The workspace read fails quietly
+ *  (403 / no workspace on a platform-only session): nothing is rendered for it. */
 function WorkspacesUsingSection({
   http,
   instance,
@@ -559,14 +574,39 @@ function WorkspacesUsingSection({
     available.state.status === 'ready'
       ? available.state.data.items.find((row) => row.gateId === instance.gateId)
       : undefined;
+  const enablingWorkspaces = instance.enablingWorkspaces ?? [];
+  const unlistedCount = instance.enabledWorkspaceCount - enablingWorkspaces.length;
   return (
     <div className="stack-s" data-testid="gate-instance-workspaces">
       <span className="section-title">{t('启用它的工作区', 'Workspaces using it')}</span>
-      <p className="text-2">
-        {instance.enabledWorkspaceCount === 0
-          ? t('还没有工作区启用它。', 'No workspace has enabled it yet.')
-          : `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。 ${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's 系统接入 page.`}
-      </p>
+      {instance.enabledWorkspaceCount === 0 ? (
+        <p className="text-2">{t('还没有工作区启用它。', 'No workspace has enabled it yet.')}</p>
+      ) : enablingWorkspaces.length > 0 ? (
+        <>
+          <ul data-testid="gate-instance-enabling-workspaces">
+            {enablingWorkspaces.map((workspace) => (
+              <li key={workspace.id} className="text-2">
+                {workspace.name}
+              </li>
+            ))}
+          </ul>
+          {unlistedCount > 0 ? (
+            <p className="text-3 text-small">
+              {t(`另有 ${unlistedCount} 个未列出`, `${unlistedCount} more not shown`)}
+            </p>
+          ) : null}
+        </>
+      ) : (
+        // `enablingWorkspaces` omitted or empty while `enabledWorkspaceCount > 0` (a pre-W1-C
+        // fixture, or the kernel-side list came back empty for another reason) — the count-only
+        // sentence this section rendered before W4-C, kept as a fallback.
+        <p className="text-2">
+          {t(
+            `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。`,
+            `${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's 系统接入 page.`,
+          )}
+        </p>
+      )}
       {own?.gatekeeperId ? (
         <div className="row-wrap" data-testid="gate-instance-own-workspace">
           <span className="text-3">{t('当前工作区', 'Current workspace:')}</span>

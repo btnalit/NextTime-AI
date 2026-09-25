@@ -83,7 +83,7 @@ describe('PlatformSettingsPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('platform-settings-form');
-    expect(screen.getByText(/这会进入所有 agent 的/)).toBeTruthy();
+    expect(screen.getByText(/这会附加到所有 agent 的/)).toBeTruthy();
   });
 
   it('saves only the changed fields and shows a success banner', async () => {

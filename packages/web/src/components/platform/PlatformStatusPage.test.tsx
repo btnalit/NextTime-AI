@@ -70,6 +70,51 @@ describe('PlatformStatusPage', () => {
     expect(usage.textContent).toContain('$12.50');
   });
 
+  it('ui-audit ST2: each health row shows the service name before the chip, and the egress-proxy unknown status carries a visible explanation', async () => {
+    const http = scriptedHttp({ platform_status: () => status() });
+    renderPage(http);
+
+    const entries = await screen.findAllByTestId('status-health-entry');
+    const egress = entries.find((entry) => entry.textContent?.includes('egress-proxy'));
+    expect(egress).toBeTruthy();
+    // Name renders before the chip's own text in DOM order (default zh-CN: chip reads "未知").
+    const nameIndex = egress?.textContent?.indexOf('egress-proxy') ?? -1;
+    const chipIndex = egress?.textContent?.indexOf('未知') ?? -1;
+    expect(nameIndex).toBeGreaterThanOrEqual(0);
+    expect(nameIndex).toBeLessThan(chipIndex);
+
+    const note = screen.getByTestId('status-egress-proxy-unknown-note');
+    expect(note.textContent).toContain('按设计不对外暴露');
+    // The kernel's own internal-path-bearing detail never renders as visible text.
+    expect(egress?.textContent).not.toContain('packages/egress-proxy');
+
+    // A different service does not get the egress-only note.
+    const kernelEntry = entries.find((entry) => entry.textContent?.includes('kernel'));
+    expect(kernelEntry?.querySelector('[data-testid="status-egress-proxy-unknown-note"]')).toBe(
+      null,
+    );
+  });
+
+  it('ui-audit ST2: 30-day usage numbers render with thousands separators', async () => {
+    const http = scriptedHttp({
+      platform_status: () =>
+        status({
+          llmUsage30d: {
+            windowDays: 30,
+            totalCostUsd: 1234.5,
+            totalInputTokens: 1234567,
+            totalOutputTokens: 89012,
+            callCount: 3456,
+          },
+        }),
+    });
+    renderPage(http);
+    const usage = await screen.findByTestId('status-llm-usage');
+    expect(usage.textContent).toContain((3456).toLocaleString());
+    expect(usage.textContent).toContain((1234567).toLocaleString());
+    expect(usage.textContent).toContain((89012).toLocaleString());
+  });
+
   it('shows an empty state with zero platform audit rows', async () => {
     const http = scriptedHttp({ platform_status: () => status({ recentAudit: [] }) });
     renderPage(http);

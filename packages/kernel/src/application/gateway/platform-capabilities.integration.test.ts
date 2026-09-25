@@ -806,6 +806,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(overview.counts.activeWorkspaces).toBeGreaterThanOrEqual(1);
         expect(overview.version.migrationsApplied).toBeGreaterThan(0);
 
+        // S8 W4-C (ui-audit O1/L1): the control tower's three cross-workspace metrics — no
+        // seeded pending ActionRequest/running Task in this file's own database, so this only
+        // pins the shape and non-negativity, not a specific count.
+        expect(overview.counts.pendingActionRequests).toBeGreaterThanOrEqual(0);
+        expect(overview.counts.runningTasks).toBeGreaterThanOrEqual(0);
+        expect(overview.graphFreshness.staleThresholdMs).toBeGreaterThan(0);
+        expect(overview.graphFreshness.staleSourceCount).toBeGreaterThanOrEqual(0);
+        expect(overview.graphFreshness.affectedWorkspaceCount).toBeGreaterThanOrEqual(0);
+
         expect(overview.checklist).toHaveLength(5);
         const defaultWorkspace = overview.checklist.find((item) => item.key === 'defaultWorkspace');
         expect(defaultWorkspace?.done).toBe(true);

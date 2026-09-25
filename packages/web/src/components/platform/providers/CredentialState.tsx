@@ -52,12 +52,18 @@ export function CredentialState({ provider, withInstruction = false }: Credentia
                 'Set below by an administrator, held in the proxy’s own state directory (keys.json); never echoed back.',
               )
             : credentialSource === 'env'
-              ? `密钥来自 llm-proxy 容器环境变量 ${provider.apiKeyEnv}（主机 secrets/llm-proxy.env）。也可以在下方为这个供应商单独设置控制台密钥，控制台密钥优先。 The key is read from the llm-proxy container env var ${provider.apiKeyEnv} (secrets/llm-proxy.env on the host). A console key set below takes priority over it.`
+              ? t(
+                  `密钥来自 llm-proxy 容器环境变量 ${provider.apiKeyEnv}（主机 secrets/llm-proxy.env）。也可以在下方为这个供应商单独设置控制台密钥，控制台密钥优先。`,
+                  `The key is read from the llm-proxy container env var ${provider.apiKeyEnv} (secrets/llm-proxy.env on the host). A console key set below takes priority over it.`,
+                )
               : provider.apiKeyEnv
-                ? `尚未配置：可在下方设置控制台密钥，或由操作员在主机 secrets/llm-proxy.env 里加一行 ${provider.apiKeyEnv}=<密钥> 后重建 llm-proxy。 Not configured yet — set a console key below, or have the operator add ${provider.apiKeyEnv}=<key> to secrets/llm-proxy.env and recreate llm-proxy.`
+                ? t(
+                    `尚未配置：可在下方设置控制台密钥，或由操作员在主机 secrets/llm-proxy.env 里加一行 ${provider.apiKeyEnv}=<密钥> 后重建 llm-proxy。`,
+                    `Not configured yet — set a console key below, or have the operator add ${provider.apiKeyEnv}=<key> to secrets/llm-proxy.env and recreate llm-proxy.`,
+                  )
                 : t(
-                    '尚未配置：可在下方设置控制台密钥（这个供应商没有配置环境变量名）。 Not configured yet —',
-                    'set a console key below (this provider has no env var name configured).',
+                    '尚未配置：可在下方设置控制台密钥（这个供应商没有配置环境变量名）。',
+                    'Not configured yet — set a console key below (this provider has no env var name configured).',
                   )}
         </p>
       ) : null}

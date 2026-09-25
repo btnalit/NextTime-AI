@@ -52,11 +52,18 @@ export interface WorkspaceDetailPanelProps {
  * ontology enforcement), `set_allowed_models`, `set_workspace_status`, and owner delegation
  * through the platform's own `add_membership` / `set_membership_role`.
  *
+ * S8 W4-C (ui-audit PW3 "配置抽屉里 4 个独立'保存'"): name / entry model / ontology enforcement
+ * share one draft and one `update_workspace` call behind one 保存 button (`saveBasics`) — the
+ * three used to be independent saves, two of them firing on `<select>` change with no visible
+ * button at all. `set_allowed_models` stays its own write (see this file's own note on
+ * `saveAllowedModels`'s call site below for why).
+ *
  * The 本体强制 select is S5.1's rollout switch (`workspaces.ontology_enforcement`,
  * `ontology-guard.ts`): `reject` (default) fails a Link write the workspace's published ontology
- * does not license; `warn` writes it anyway, audits it, and counts it in the I-S5-1 invariant —
- * for a host whose writers were never validated against the ontology yet. Saved on change like
- * the entry-model select below, for the same one-control-no-batch reason.
+ * does not license; `warn` writes it anyway and audits it, for a host whose writers were never
+ * validated against the ontology yet — the hint text stays in product language (no `/internal/
+ * metrics` or invariant id; an administrator reads it as "watch the audit for a while, then
+ * switch back").
  *
  * 用途 (S5.3 `workspaces.purpose` / `expires_at`) is read-only here: it is decided at creation
  * (`create-workspace --purpose ephemeral --ttl <n>h`). S6-A A1: an expired ephemeral workspace, or
@@ -86,14 +93,19 @@ export function WorkspaceDetailPanel({
 }: WorkspaceDetailPanelProps) {
   const t = useT();
   const [name, setName] = useState(workspace.name);
-  const [savingName, setSavingName] = useState(false);
-  const [nameError, setNameError] = useState<unknown | null>(null);
-
-  const [savingEntryModel, setSavingEntryModel] = useState(false);
-  const [entryModelError, setEntryModelError] = useState<unknown | null>(null);
-
-  const [savingOntologyEnforcement, setSavingOntologyEnforcement] = useState(false);
-  const [ontologyEnforcementError, setOntologyEnforcementError] = useState<unknown | null>(null);
+  // S8 W4-C (ui-audit PW3 "配置抽屉里 4 个独立'保存'"): name / entry model / ontology enforcement
+  // used to be three independent writes (two of them silent "save on change", no undo before the
+  // request fired) — now one draft, one `update_workspace` call, one 保存 button. `allowedModels`
+  // stays its own write below: `set_allowed_models` is a different capability with its own
+  // validation (`entry_model_not_allowed`), and the entry-model options here are read from the
+  // workspace's *saved* allow-list, not this draft — batching them would make the two controls
+  // silently reorder-dependent.
+  const [entryModelDraft, setEntryModelDraft] = useState<string | null>(workspace.entryModel);
+  const [ontologyEnforcementDraft, setOntologyEnforcementDraft] = useState<OntologyEnforcementWire>(
+    workspace.ontologyEnforcement,
+  );
+  const [savingBasics, setSavingBasics] = useState(false);
+  const [basicsError, setBasicsError] = useState<unknown | null>(null);
 
   const [allowedModels, setAllowedModels] = useState<readonly string[]>(workspace.allowedModels);
   const [savingAllowed, setSavingAllowed] = useState(false);
@@ -108,69 +120,37 @@ export function WorkspaceDetailPanel({
   const [delegateError, setDelegateError] = useState<unknown | null>(null);
 
   const nameDirty = name.trim() !== workspace.name && name.trim().length > 0;
+  const entryModelDirty = entryModelDraft !== null && entryModelDraft !== workspace.entryModel;
+  const ontologyEnforcementDirty = ontologyEnforcementDraft !== workspace.ontologyEnforcement;
+  const basicsDirty = nameDirty || entryModelDirty || ontologyEnforcementDirty;
   const allowedDirty =
     allowedModels.length !== workspace.allowedModels.length ||
     allowedModels.some((model) => !workspace.allowedModels.includes(model));
   const entryModelOptions =
     workspace.allowedModels.length > 0 ? workspace.allowedModels : models.map((model) => model.id);
 
-  async function saveName(): Promise<void> {
-    if (!nameDirty || savingName) return;
-    setSavingName(true);
-    setNameError(null);
+  /** One `update_workspace` call for whichever of name / entry model / ontology enforcement
+   *  actually changed — never a field that did not (an unchanged `entryModel` would otherwise
+   *  re-assert the current value pointlessly, and `entryModel` specifically cannot carry `null`:
+   *  the drawer offers no "clear" choice, same invariant the three separate savers used to keep
+   *  independently). */
+  async function saveBasics(): Promise<void> {
+    if (!basicsDirty || savingBasics) return;
+    setSavingBasics(true);
+    setBasicsError(null);
     try {
       onChanged(
         await http.call<PlatformWorkspaceWire>('update_workspace', {
           workspaceId: workspace.id,
-          name: name.trim(),
+          ...(nameDirty ? { name: name.trim() } : {}),
+          ...(entryModelDirty && entryModelDraft !== null ? { entryModel: entryModelDraft } : {}),
+          ...(ontologyEnforcementDirty ? { ontologyEnforcement: ontologyEnforcementDraft } : {}),
         }),
       );
     } catch (err) {
-      setNameError(err);
+      setBasicsError(err);
     } finally {
-      setSavingName(false);
-    }
-  }
-
-  /** Saved as it is picked (a one-control section with no other field to batch it with), the way
-   *  `UserMembershipsPanel`'s own role select writes on change. */
-  async function saveEntryModel(entryModel: string | null): Promise<void> {
-    if (savingEntryModel || entryModel === null) return; // the drawer offers no "clear" choice
-    setSavingEntryModel(true);
-    setEntryModelError(null);
-    try {
-      onChanged(
-        await http.call<PlatformWorkspaceWire>('update_workspace', {
-          workspaceId: workspace.id,
-          entryModel,
-        }),
-      );
-    } catch (err) {
-      setEntryModelError(err);
-    } finally {
-      setSavingEntryModel(false);
-    }
-  }
-
-  /** Saved as it is picked, the same one-control shape as `saveEntryModel` above — there is no
-   *  other field on this row to batch it with. */
-  async function saveOntologyEnforcement(
-    ontologyEnforcement: OntologyEnforcementWire,
-  ): Promise<void> {
-    if (savingOntologyEnforcement || ontologyEnforcement === workspace.ontologyEnforcement) return;
-    setSavingOntologyEnforcement(true);
-    setOntologyEnforcementError(null);
-    try {
-      onChanged(
-        await http.call<PlatformWorkspaceWire>('update_workspace', {
-          workspaceId: workspace.id,
-          ontologyEnforcement,
-        }),
-      );
-    } catch (err) {
-      setOntologyEnforcementError(err);
-    } finally {
-      setSavingOntologyEnforcement(false);
+      setSavingBasics(false);
     }
   }
 
@@ -334,39 +314,58 @@ export function WorkspaceDetailPanel({
               id="wd-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              disabled={savingName}
+              disabled={savingBasics}
             />
           </Field>
-          <PlatformError
-            error={nameError}
-            title={t('无法重命名', 'Could not rename this workspace')}
-          />
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <Button
-              variant="secondary"
-              onClick={() => void saveName()}
-              loading={savingName}
-              disabled={!nameDirty}
-            >
-              {t('保存', 'Save')}
-            </Button>
-          </div>
-
-          <div className="divider" />
 
           <EntryModelSelect
             id="wd-entry-model"
             options={entryModelOptions}
-            value={workspace.entryModel}
+            value={entryModelDraft}
             allowPlatformDefault={false}
-            onChange={(entryModel) => void saveEntryModel(entryModel)}
-            disabled={savingEntryModel || !modelsReady}
+            onChange={setEntryModelDraft}
+            disabled={savingBasics || !modelsReady}
             testId="workspace-entry-model"
           />
+
+          <Field
+            id="wd-ontology-enforcement"
+            label={t('本体强制', 'Ontology enforcement')}
+            hint={t(
+              '写入的关系必须符合这个工作区已发布的本体；"记录并放行" 只审计、不拒绝写入——用于刚上线、还不确定既有写入者是否都符合本体的过渡期，观察一段时间没有异常审计后再切回"拒绝"。',
+              '"记录并放行" only audits a write that breaks the published ontology, it still goes through — use it during a rollout window, then switch back to "拒绝" once nothing shows up as an exception.',
+            )}
+          >
+            <Select
+              id="wd-ontology-enforcement"
+              value={ontologyEnforcementDraft}
+              onChange={(event) =>
+                setOntologyEnforcementDraft(event.target.value as OntologyEnforcementWire)
+              }
+              disabled={savingBasics}
+              data-testid="workspace-ontology-enforcement"
+            >
+              <option value="reject">{t('拒绝', 'reject')}</option>
+              <option value="warn">{t('记录并放行', 'warn')}</option>
+            </Select>
+          </Field>
+
           <PlatformError
-            error={entryModelError}
-            title={t('无法设置入口模型', 'Could not set the entry model')}
+            error={basicsError}
+            title={t('无法保存', 'Could not save')}
+            testId="workspace-basics-error"
           />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="secondary"
+              onClick={() => void saveBasics()}
+              loading={savingBasics}
+              disabled={!basicsDirty}
+              data-testid="workspace-save-basics"
+            >
+              {t('保存', 'Save')}
+            </Button>
+          </div>
 
           <div className="divider" />
 
@@ -392,35 +391,6 @@ export function WorkspaceDetailPanel({
               {t('保存允许的模型', 'Save allowed models')}
             </Button>
           </div>
-
-          <div className="divider" />
-
-          <Field
-            id="wd-ontology-enforcement"
-            label={t('本体强制', 'Ontology enforcement')}
-            hint={t(
-              '写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。',
-              "warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0.",
-            )}
-          >
-            <Select
-              id="wd-ontology-enforcement"
-              value={workspace.ontologyEnforcement}
-              onChange={(event) =>
-                void saveOntologyEnforcement(event.target.value as OntologyEnforcementWire)
-              }
-              disabled={savingOntologyEnforcement}
-              data-testid="workspace-ontology-enforcement"
-            >
-              <option value="reject">{t('拒绝', 'reject')}</option>
-              <option value="warn">{t('记录并放行', 'warn')}</option>
-            </Select>
-          </Field>
-          <PlatformError
-            error={ontologyEnforcementError}
-            title={t('无法设置本体强制', 'Could not set the ontology enforcement')}
-            testId="workspace-ontology-enforcement-error"
-          />
 
           <div className="divider" />
 
