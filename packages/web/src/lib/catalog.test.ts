@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_STEP,
+  opsRunnerTemplateForm,
   parseJsonObject,
   parseMarkdownBlocks,
   procedureContentFromForm,
@@ -199,5 +200,50 @@ describe('helpers', () => {
     expect(parseMarkdownBlocks('```\nunclosed')).toEqual([
       { kind: 'code', lang: '', text: 'unclosed' },
     ]);
+  });
+});
+
+// S8 W3 K2 (leftover 84): opsRunnerTemplateForm's own capabilities-prefill rule — no hardcoded
+// capability list, driven purely by `list_capability_names`' own `mode` field.
+describe('opsRunnerTemplateForm (leftover 84 — capabilities prefill)', () => {
+  it('preselects every non-execute-mode name plus request_action, in that order', () => {
+    const form = opsRunnerTemplateForm([
+      { name: 'assert_fact', mode: 'write' },
+      { name: 'find_workers', mode: 'observe' },
+      { name: 'propose_skill', mode: 'propose' },
+      { name: 'request_action', mode: 'execute' },
+    ]);
+    expect(form.name).toBe('ops-runner');
+    expect(form.kind).toBe('worker');
+    expect(splitList(form.capabilities)).toEqual([
+      'assert_fact',
+      'find_workers',
+      'propose_skill',
+      'request_action',
+    ]);
+  });
+
+  it('never submits only request_action — an empty directory still yields request_action alone, not an empty list', () => {
+    const form = opsRunnerTemplateForm([]);
+    expect(splitList(form.capabilities)).toEqual(['request_action']);
+  });
+
+  it('does not double-list request_action when the directory already reports it', () => {
+    const form = opsRunnerTemplateForm([
+      { name: 'get_object', mode: 'observe' },
+      { name: 'request_action', mode: 'execute' },
+    ]);
+    expect(splitList(form.capabilities)).toEqual(['get_object', 'request_action']);
+  });
+
+  it('excludes every execute-mode name except request_action', () => {
+    const form = opsRunnerTemplateForm([
+      { name: 'get_object', mode: 'observe' },
+      { name: 'publish_skill', mode: 'execute' },
+      { name: 'request_action', mode: 'execute' },
+    ]);
+    const capabilities = splitList(form.capabilities);
+    expect(capabilities).not.toContain('publish_skill');
+    expect(capabilities.filter((name) => name === 'request_action')).toHaveLength(1);
   });
 });

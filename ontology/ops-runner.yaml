@@ -18,6 +18,20 @@
 #
 # `kind` is a sibling of `definition`, not a field of the content schema — see
 # `ontology/entry-agent.yaml`'s own comment for why.
+#
+# `capabilities` (S8 W3 K2, leftover 84): deliberately absent here, same as `model`/`name`/
+# `description` above — this checked-in template carries no capability list of its own. The
+# console's "从模板创建（ops-runner）" button (`packages/web/src/lib/catalog.ts`'s
+# `opsRunnerTemplateForm`) fills one in at prefill time: every non-execute-class capability the
+# worker ceiling offers (`list_capability_names`) plus `request_action` — never `capabilities`
+# omitted entirely (the kernel's own default for an *undeclared* `capabilities`,
+# `defaultWorkerCapabilities` in `packages/kernel/src/application/task/handle-mint.ts`, is the
+# worker ceiling minus every execute-class capability, which silently excludes `request_action` —
+# this systemPrompt's own §2 explicitly talks about the approval flow, so a Worker spawned from
+# this template with no way to ever call `request_action` would never be able to follow it).
+# Proposing/publishing this template by hand (not through the button) still omits `capabilities`
+# and gets that same kernel default — no `request_action` — which is a legitimate, narrower choice
+# for a purely observational Worker, just not what the console's own button produces.
 
 kind: worker
 
