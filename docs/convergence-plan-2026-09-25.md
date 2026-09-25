@@ -168,9 +168,10 @@ W7 的小项随时可插，三个大版本升级放在 W6 之后。每个波次�
 - 拆微服务、引入图数据库、重写路由或状态管理。
 - S8 F1 之外的新功能（`promote_template` 等继续推后）。
 
-## 10. 待维护者决定
+## 10. 维护者决定（2026-09-25，均按推荐）
 
-1. Renovate：装 App 接管依赖更新，还是删掉 `renovate.json` 只留 Dependabot（推荐：只留 Dependabot，已在跑、够用）。
-2. 草稿过期天数（推荐 30 天，平台设置可调）。
-3. 遗留 80 的可选清理：`grant_capability` 不再接受新 `scope`（推荐做，去掉误导性入参）。
-4. 三个大版本升级何时做（推荐 W6 之后，先看评估报告）。
+1. Renovate：删掉 `renovate.json`（App 从未安装），常规依赖升级按 W7 波次手动做；Dependabot 只做安全告警 /
+   安全更新 PR（npm 的 PR 在 pnpm workspace 里可能因 lockfile 失败，失败即在波次里手动处理）。
+2. 草稿过期天数：30 天（内核 `DRAFT_EXPIRY_DAYS` 默认值）。
+3. 遗留 80 的清理：`grant_capability` 不再接受 `scope`。
+4. 三个大版本升级：W6 之后先出评估报告再定。

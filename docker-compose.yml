@@ -5,7 +5,7 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
     # user: postgres (uid/gid 999) — 遗留20/S5.5 加固. pgvector/pgvector:pg17 is `FROM
     # postgres:17-bookworm` plus only the pgvector extension build — its own Dockerfile does no
     # useradd/groupadd/chown (verified by reading it at its current tag), so this 'postgres' system
@@ -1202,7 +1202,7 @@ services:
   # restarts this container via `container.restart`, never a real business container (host-
   # gatekeepers.md's own "不做": "不对现有业务容器 execute").
   accept-s2-restart-target:
-    image: alpine:3.20
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
     profiles: ["accept-s2"]
     networks: [control]
@@ -1214,14 +1214,14 @@ services:
   # Fact must be retired `not_reobserved` (migrations/core/0026, STATUS leftover 28) while its
   # Container Object stays. `rm`, not `stop`: the collector lists stopped containers too.
   accept-s3-ephemeral:
-    image: alpine:3.20
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
     profiles: ["accept-s3"]
     networks: [control]
     restart: "no"
 
   backup:
-    image: postgres:17-alpine # 与 postgres 同大版本
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 # 与 postgres 同大版本
     entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy tar.gz，保留 N 份（S1.12）
     # Mounts narrowed (lane-7 P2 fix) from one blanket rw `${NEXTTIME_DATA}:/data` (which handed
     # this container write access to pgdata/, secrets/, and every other host-data subtree it never
