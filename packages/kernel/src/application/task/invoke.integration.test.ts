@@ -23,7 +23,12 @@ import { withAdminClient } from '../gateway/auth.js';
 import { composeSystemPrompt, updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { invokeWorker } from './invoke.js';
-import { reactToSupervisorStatus, readTaskRow, readWorkerRunRow } from './lifecycle.js';
+import {
+  completeTaskWithResult,
+  reactToSupervisorStatus,
+  readTaskRow,
+  readWorkerRunRow,
+} from './lifecycle.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
 import {
@@ -567,6 +572,132 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     } finally {
       resetTaskRuntimeForTests();
     }
+  });
+
+  describe('leftover 67 — status-guarded Task UPDATEs (docs/STATUS.md §4)', () => {
+    /** `RacingSupervisorClient.spawn` deterministically injects a concurrent `terminateTask`
+     *  (`cancel_task`) call exactly inside the window `invokeWorkerCreate`'s own guarded UPDATEs
+     *  are meant to close — between the Task's own INSERT (`queued`) and either of
+     *  `invokeWorkerCreate`'s own follow-up UPDATEs. This mirrors `lifecycle.test.ts`'s own "no
+     *  real race needed" convention (scripting the exact interleaving deterministically rather
+     *  than relying on real concurrency timing) while still exercising the real, unmodified
+     *  `terminateTask`/`invokeWorkerCreate` code paths end to end against real Postgres. */
+    class RacingSupervisorClient extends FakeTaskSupervisorClient {
+      capturedTaskId: string | undefined;
+      private readonly failSpawn: boolean;
+      constructor(failSpawn: boolean) {
+        super();
+        this.failSpawn = failSpawn;
+      }
+      override async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+        this.capturedTaskId = input.taskId;
+        // The WorkerRun row (+ its Handle) already exists by this point — `spawnWorkerRun`
+        // (spawn.ts) creates and commits it *before* calling this method — so `terminateTask`'s own
+        // "terminate every non-terminated WorkerRun under the Task" sweep finds and terminates it.
+        await terminateTask(workspaceId, ownerId, input.taskId);
+        if (this.failSpawn) throw new Error('supervisor unreachable (simulated race)');
+        return super.spawn(input);
+      }
+    }
+
+    it('a Task cancelled while spawnWorkerRun is in flight is not reverted to running by the guarded queued -> running UPDATE', async () => {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new RacingSupervisorClient(false);
+      const runtimeDeps = deps(supervisorClient);
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      try {
+        await invokeWorker(
+          workspaceId,
+          { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+          { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+          runtimeDeps,
+        );
+
+        const taskId = supervisorClient.capturedTaskId as string;
+        const task = await inTx(ownerId, (client) => readTaskRow(client, workspaceId, taskId));
+        // Before the fix: the unconditional `update tasks set status = 'running' ...` would have
+        // silently reverted the just-cancelled Task back to `running`.
+        expect(task?.status).toBe('cancelled');
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
+
+    it('a Task cancelled while spawnWorkerRun fails is not overwritten by the guarded queued -> failed:spawn_failed UPDATE', async () => {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new RacingSupervisorClient(true);
+      const runtimeDeps = deps(supervisorClient);
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      try {
+        await expect(
+          invokeWorker(
+            workspaceId,
+            { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+            { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+            runtimeDeps,
+          ),
+        ).rejects.toThrow();
+
+        const taskId = supervisorClient.capturedTaskId as string;
+        const task = await inTx(ownerId, (client) => readTaskRow(client, workspaceId, taskId));
+        // Before the fix: the unconditional `update tasks set status = 'failed', failure_reason =
+        // 'spawn_failed' ...` would have silently overwritten the just-cancelled Task.
+        expect(task?.status).toBe('cancelled');
+        expect(task?.failureReason).not.toBe('spawn_failed');
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
+
+    it('terminateTask does not revert a Task that completes concurrently while its own cancellation is in flight', async () => {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+
+      const spawnResult = await invokeWorker(
+        workspaceId,
+        { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      );
+
+      // Override `.terminate` (called from inside `terminateTask`'s own WorkerRun sweep) to
+      // simulate a Worker's real `report_task_result` landing — via the real, unmodified
+      // `completeTaskWithResult` — exactly while `terminateTask` is still in flight, deterministic
+      // same as `RacingSupervisorClient` above.
+      const originalTerminate = supervisorClient.terminate.bind(supervisorClient);
+      supervisorClient.terminate = async (workerRunId: string) => {
+        await inTx(ownerId, (client) =>
+          completeTaskWithResult(client, workspaceId, ownerId, spawnResult.taskId, workerRunId, {
+            summary: 'completed concurrently with cancellation',
+          }),
+        );
+        return originalTerminate(workerRunId);
+      };
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      try {
+        const cancelled = await terminateTask(workspaceId, ownerId, spawnResult.taskId);
+        // Before the fix: the unconditional `update tasks set status = 'cancelled' ...` would have
+        // silently reverted the just-completed Task back to `cancelled`.
+        expect(cancelled.status).toBe('completed');
+
+        const task = await inTx(ownerId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(task?.status).toBe('completed');
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
   });
 
   it('budget 100% marks the Task failed: budget_exhausted and terminates the WorkerRun', async () => {

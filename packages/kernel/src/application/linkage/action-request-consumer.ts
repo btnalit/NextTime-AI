@@ -1,14 +1,16 @@
 import type { ActionRequestStatus, SystemMessageContent } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { computeActionRequestHolders, getActionRequest } from '../../governance/approval/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
+import type { ChatRow } from '../chat/index.js';
 import {
   insertChatMessage,
   publishChatPushEvent,
   publishPrincipalPushEvent,
 } from '../chat/index.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
-import { resolveDefaultChat } from './chat-targets.js';
+import { resolveActionRequestChat, resolveDefaultChat } from './chat-targets.js';
 import { buildActionPendingContent, buildActionUpdateContent } from './content.js';
 import type { LinkageDeps } from './deps.js';
 import { insertPendingContextItem } from './store.js';
@@ -104,9 +106,16 @@ async function writeActionMessage(
    *  holder", is the right condition). `subjectId` is always `actionRequestId`. */
   isRequester: boolean,
   subjectId: string,
+  /** Which Chat this message belongs to (leftover 78, docs/STATUS.md §4) — `resolveDefaultChat`
+   *  for the original `system.action_pending` message (there is nothing yet to pin to), or
+   *  `resolveActionRequestChat` for every later `system.action_update` message on the same
+   *  ActionRequest, so they land in whichever Chat the pending card did. Resolved by the caller
+   *  (not here) because the two events need different rules, and both need the same
+   *  `withWorkspace`-scoped `client` this function already opens. */
+  resolveChat: (client: PoolClient, workspaceId: string, principalId: string) => Promise<ChatRow>,
 ): Promise<void> {
   await withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
-    const chat = await resolveDefaultChat(client, workspaceId, principalId);
+    const chat = await resolveChat(client, workspaceId, principalId);
     const message = await insertChatMessage(client, workspaceId, {
       chatId: chat.id,
       turnId: null,
@@ -195,6 +204,7 @@ export function registerActionRequestConsumers(
         meta.outboxId,
         principalId === actionRequest.onBehalfOf,
         event.actionRequestId,
+        resolveDefaultChat,
       );
     }
 
@@ -248,6 +258,7 @@ export function registerActionRequestConsumers(
         meta.outboxId,
         principalId === actionRequest.onBehalfOf,
         event.actionRequestId,
+        (client, ws, pid) => resolveActionRequestChat(client, ws, pid, event.actionRequestId),
       );
     }
 
