@@ -106,7 +106,7 @@ pnpm contract:check  # capability 注册表快照
 
 CI 三个 job：`guards` / `quality` / `test`；另有 e2e、CodeQL、Scorecard、镜像扫描与 pi 漂移检测。
 改动走分支加 PR，Conventional Commits，单 commit 的 PR 用 squash 合并；release-please 据此生成
-CHANGELOG 与版本，Renovate 处理依赖更新。测试分层与每层的命令见 [`docs/testing.md`](docs/testing.md)，
+CHANGELOG 与版本；依赖升级按计划波次手动进行（Dependabot 安全告警作输入）。测试分层与每层的命令见 [`docs/testing.md`](docs/testing.md)，
 线上契约约定见 [`docs/wire-contract-conventions.md`](docs/wire-contract-conventions.md)。
 
 ## 文档
