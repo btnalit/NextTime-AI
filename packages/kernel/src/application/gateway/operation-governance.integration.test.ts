@@ -38,6 +38,15 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const DATABASE_URL = process.env.DATABASE_URL;
 
+/** `connectors`/`gate_instances` are platform-scope tables — only `*_read_all` (select) and
+ *  `*_platform_admin` (app_platform()) RLS policies exist on them, no policy at all admits a
+ *  normal workspace `nexttime_app` write (migrations/core/0023_gate_instances.sql). The real
+ *  `POST /internal/gates/announce` route (interfaces/http/internal/gates.ts) writes them the same
+ *  way: `withWorkspace` with `skipRoleSwitch: true`, staying on the connection's login role
+ *  instead of switching to `nexttime_app` — mirrored here rather than standing up a full HTTP
+ *  server just to seed one announcement. */
+const ADMIN_PLACEHOLDER = '00000000-0000-0000-0000-000000000000';
+
 function testOperation(overrides: Partial<Operation> = {}): Operation {
   return {
     name: `test.op.${randomUUID()}`,
@@ -127,6 +136,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, fn);
     }
 
+    async function asAdmin<T>(fn: Parameters<typeof withWorkspace<T>>[2]): Promise<T> {
+      return withWorkspace(
+        pool,
+        { workspaceId: ADMIN_PLACEHOLDER, principalId: ADMIN_PLACEHOLDER },
+        fn,
+        { skipRoleSwitch: true },
+      );
+    }
+
     async function newActivity(): Promise<string> {
       return inTx(async (client) => {
         const result = await client.query<{ id: string }>(
@@ -175,7 +193,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       const gateId = `linked-gate-instance-${randomUUID().slice(0, 8)}`;
-      await inTx((client) =>
+      await asAdmin((client) =>
         upsertAnnouncement(client, {
           gateId,
           connector: 'http',
@@ -246,10 +264,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         const audit = await inTx((client) =>
           queryAudit(client, workspaceId, { action: 'operation.governance_refreshed' }),
         );
-        const row = audit.find((r) => r.resourceId === `${gatekeeperId}:${op.name}`);
+        // `resource_id` is the Operation Object's own uuid (`audit_records.resource_id` is `uuid`
+        // — see gate-instance-handlers.ts's `refreshOperationGovernanceHandler`), not the
+        // `{gatekeeperId, name}` identity pair — that pair lives in the payload instead.
+        const row = audit.find((r) => r.resourceId === persisted?.id);
         expect(row).toBeDefined();
         expect(row?.actorPrincipalId).toBe(ownerId);
-        expect(row?.payload).toMatchObject({ direction: 'loosened', name: op.name });
+        expect(row?.payload).toMatchObject({
+          direction: 'loosened',
+          name: op.name,
+          gatekeeperId,
+        });
       });
 
       it('a member (non-owner) is refused with ForbiddenError, nothing is written', async () => {
@@ -336,10 +361,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         const audit = await inTx((client) =>
           queryAudit(client, workspaceId, { action: 'operation.description_updated' }),
         );
-        const row = audit.find((r) => r.resourceId === `${gatekeeperId}:${op.name}`);
+        // `resource_id` is the Operation Object's own uuid (`audit_records.resource_id` is
+        // `uuid`) — the `{gatekeeperId, name}` identity pair lives in the payload instead.
+        const row = audit.find((r) => r.resourceId === persisted?.id);
         expect(row).toBeDefined();
         expect(row?.actorPrincipalId).toBe(memberId);
-        expect(row?.payload).toMatchObject({ before: 'original', after: 'updated by a member' });
+        expect(row?.payload).toMatchObject({
+          before: 'original',
+          after: 'updated by a member',
+          gatekeeperId,
+          name: op.name,
+        });
       });
 
       it('a blank description is rejected through dispatch too, writing nothing', async () => {
