@@ -1001,6 +1001,43 @@ async function stopEntryContainers(principalIds: readonly string[]): Promise<voi
   }
 }
 
+/**
+ * S8 W5 (leftover 77): best-effort, after a workspace purge actually executed (never called for
+ * a preview) — ask worker-supervisor to permanently reclaim each purged Principal's resident entry
+ * container (`POST /resident/reclaim`: force-removed, not just stopped — the Principal is gone for
+ * good, so nothing will ever reuse this container again) and its `workspaces/<principalId>` data
+ * directory. The kernel still never touches a host path or the underlying container runtime itself
+ * (design's own "agent / kernel 进程不持凭证"): this only calls worker-supervisor's existing
+ * internal-plane HTTP API, over the same client `stopEntryContainers` above already uses, just a
+ * different route. Same
+ * shape as the CLI path (`scripts/delete-workspace.sh`'s host-side cleanup, driven by the
+ * `purgeWorkspace` result's own `principalIds` — see `PurgeWorkspaceResultWire`'s doc comment) —
+ * this closes the gap for the *other* entry point, the console's `purge_workspace` capability,
+ * where no operator ever runs that script. Tries every principal id regardless of kind: a
+ * service/agent Principal never had a container or directory, and worker-supervisor's `reclaim`
+ * already tolerates "not found" as a no-op (`resident-service.ts`). Never throws — a failure here
+ * leaves host-side residue for the operator script to still catch, exactly as it did before this
+ * existed, never a reason to fail an already-committed purge.
+ */
+async function reclaimEntryContainers(principalIds: readonly string[]): Promise<void> {
+  if (principalIds.length === 0) return;
+  let reclaim: ((principalId: string) => Promise<boolean>) | undefined;
+  try {
+    const client = getConfiguredTaskRuntime().supervisorClient;
+    reclaim = client.reclaimResident?.bind(client);
+  } catch {
+    return; // no task runtime configured (unit tests / CLI) — nothing to reclaim
+  }
+  if (!reclaim) return;
+  for (const principalId of principalIds) {
+    try {
+      await reclaim(principalId);
+    } catch {
+      // Logged nowhere on purpose, same convention as stopEntryContainers above.
+    }
+  }
+}
+
 export const listWorkspacesHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   // S6 A1: no filter = every workspace, as before; `status` / `purpose` narrow; `includeExpired:
   // false` drops ephemeral workspaces past their expiry (the console's default view passes
@@ -1329,11 +1366,18 @@ export const purgeWorkspaceHandler: CapabilityHandler = async (
     resourceId: row.id,
     afterCommit: async (pool: PoolLike): Promise<PurgeWorkspaceResultWire> => {
       try {
-        return await purgeWorkspace(pool, {
+        const purgeResult = await purgeWorkspace(pool, {
           workspaceId: row.id,
           confirm,
           actorUserId: acting.id,
         });
+        // Leftover 77: only once the cascade actually ran (never for a `confirm: false` preview)
+        // — see reclaimEntryContainers's own doc comment for why this, not the CLI script, is now
+        // the console purge path's host-side cleanup.
+        if (purgeResult.executed) {
+          await reclaimEntryContainers(purgeResult.principalIds);
+        }
+        return purgeResult;
       } catch (err) {
         // The row-locked re-check refused (re-enabled, or purged concurrently): surface it as
         // the same 404 / 409 the phase-1 guard would have — the phase-1 audit row records an

@@ -123,6 +123,31 @@ describe('TaskSupervisorClient', () => {
     await expect(client.terminate('wr1')).resolves.toBe(false);
   });
 
+  it('reclaimResident: posts to /resident/reclaim and 204 returns true (S8 W5 leftover 77)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(204));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.reclaimResident?.('p1')).resolves.toBe(true);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://x/resident/reclaim');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ principalId: 'p1' });
+  });
+
+  it('reclaimResident: 404 returns false', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(404));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.reclaimResident?.('p1')).resolves.toBe(false);
+  });
+
+  it('reclaimResident: unexpected status maps to http_error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(500));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.reclaimResident?.('p1')).rejects.toMatchObject({
+      kind: 'http_error',
+      status: 500,
+    });
+  });
+
   it('status: 200 returns the parsed TaskStatus', async () => {
     const statusBody = {
       workerRunId: 'wr1',

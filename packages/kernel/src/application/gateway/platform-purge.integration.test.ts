@@ -11,18 +11,62 @@ import type {
   UserWire,
 } from '@nexttime/shared';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type {
+  ResidentInventoryEntry,
+  RuntimeImageInfo,
+  TaskSpawnOutcome,
+  TaskSupervisorClientPort,
+  TaskSupervisorStatus,
+} from '../../adapters/supervisor-client/index.js';
+import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { createPlatformAdmin, createUser } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { discoverWorkspaceScopedSchema, updatePlatformSettings } from '../platform/index.js';
+import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { withAdminClient } from './auth.js';
 import { dispatchCapability } from './dispatch.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+
+/** S8 W5 (leftover 77): a minimal fake `TaskSupervisorClientPort` recording every
+ *  `reclaimResident` call — `purge_workspace`'s `afterCommit` is the only thing this file's
+ *  `purge_workspace reclaims entry containers` block below exercises against it; every other
+ *  method throws if the handler ever reached it, the same "unused methods throw" convention
+ *  `platform-runtime.integration.test.ts`'s `FakeRuntimeSupervisorClient` already uses. */
+class FakeReclaimSupervisorClient implements TaskSupervisorClientPort {
+  readonly reclaimedPrincipalIds: string[] = [];
+  reclaimShouldThrow = false;
+
+  async spawn(): Promise<TaskSpawnOutcome> {
+    throw new Error('FakeReclaimSupervisorClient.spawn is not exercised by this test file');
+  }
+  async terminate(): Promise<boolean> {
+    throw new Error('FakeReclaimSupervisorClient.terminate is not exercised by this test file');
+  }
+  async status(): Promise<TaskSupervisorStatus | undefined> {
+    throw new Error('FakeReclaimSupervisorClient.status is not exercised by this test file');
+  }
+  async reclaimResident(principalId: string): Promise<boolean> {
+    if (this.reclaimShouldThrow) throw new Error('simulated: worker-supervisor unreachable');
+    this.reclaimedPrincipalIds.push(principalId);
+    return true;
+  }
+  async listImages(): Promise<{
+    defaultImage: string;
+    images: RuntimeImageInfo[];
+    allowedImages: readonly string[];
+  }> {
+    throw new Error('FakeReclaimSupervisorClient.listImages is not exercised by this test file');
+  }
+  async listResidents(): Promise<ResidentInventoryEntry[]> {
+    throw new Error('FakeReclaimSupervisorClient.listResidents is not exercised by this test file');
+  }
+}
 
 /**
  * application/gateway/platform-purge.integration.test: DB-gated (real Postgres; auto-skip without
@@ -595,6 +639,79 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
         () => callAsAdmin('purge_workspace', { workspaceId: ws.workspaceId, confirm: true }),
         'workspace_not_found',
       );
+    });
+  });
+
+  // ---- purge_workspace reclaims entry containers (S8 W5 leftover 77) ----------------------------
+
+  describe('purge_workspace reclaims entry containers (S8 W5 leftover 77)', () => {
+    let supervisor: FakeReclaimSupervisorClient;
+
+    beforeEach(async () => {
+      supervisor = new FakeReclaimSupervisorClient();
+      const { privateKey } = await generateEphemeralHandleKeyPair();
+      configureTaskRuntime({ pool, privateKey, supervisorClient: supervisor });
+    });
+
+    afterEach(() => {
+      resetTaskRuntimeForTests();
+    });
+
+    it('execute (confirm: true): calls reclaimResident once per purged principal id, after commit', async () => {
+      const ws = await seedWorkspace({
+        name: `purge-reclaim-${randomUUID().slice(0, 8)}`,
+        purpose: 'ephemeral',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      const rows = await seedRows(ws);
+
+      const result = await callAsAdmin<PurgeWorkspaceResultWire>('purge_workspace', {
+        workspaceId: ws.workspaceId,
+        confirm: true,
+      });
+      expect(result.executed).toBe(true);
+      expect(result.principalIds).toHaveLength(2); // owner + the service Principal seedRows adds
+      expect(result.principalIds).toContain(ws.ownerPrincipalId);
+      expect(result.principalIds).toContain(rows.servicePrincipalId);
+
+      // dispatchCapability awaits `afterCommit` before resolving (dispatch.ts) and
+      // reclaimEntryContainers itself awaits every reclaimResident call — no poll/wait needed.
+      expect(supervisor.reclaimedPrincipalIds.sort()).toEqual([...result.principalIds].sort());
+    });
+
+    it('preview (no confirm): never calls reclaimResident — nothing was actually purged', async () => {
+      const ws = await seedWorkspace({
+        name: `purge-reclaim-preview-${randomUUID().slice(0, 8)}`,
+        purpose: 'ephemeral',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await seedRows(ws);
+
+      const preview = await callAsAdmin<PurgeWorkspaceResultWire>('purge_workspace', {
+        workspaceId: ws.workspaceId,
+      });
+      expect(preview.executed).toBe(false);
+      expect(supervisor.reclaimedPrincipalIds).toEqual([]);
+
+      // Clean up so this workspace doesn't linger for later assertions in this describe block.
+      await callAsAdmin('purge_workspace', { workspaceId: ws.workspaceId, confirm: true });
+    });
+
+    it('a reclaim failure (worker-supervisor unreachable) never fails the purge itself', async () => {
+      supervisor.reclaimShouldThrow = true;
+      const ws = await seedWorkspace({
+        name: `purge-reclaim-fails-${randomUUID().slice(0, 8)}`,
+        purpose: 'ephemeral',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await seedRows(ws);
+
+      const result = await callAsAdmin<PurgeWorkspaceResultWire>('purge_workspace', {
+        workspaceId: ws.workspaceId,
+        confirm: true,
+      });
+      expect(result.executed).toBe(true);
+      expect(supervisor.reclaimedPrincipalIds).toEqual([]);
     });
   });
 
