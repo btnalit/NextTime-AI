@@ -9991,6 +9991,9 @@
         "cursor": {
           "type": "string"
         },
+        "includeOwnDrafts": {
+          "type": "boolean"
+        },
         "kind": {
           "enum": [
             "entry",

@@ -1946,17 +1946,25 @@ const workerCapabilities: readonly Capability[] = [
     // filter — keyset-paginated, newest first; omitting `limit` keeps today's "every published
     // WorkerDefinition" behavior up to the new default (`application/worker/definitions.ts`'s
     // `listWorkerDefinitions` own doc comment).
+    // S8 W2-U2b (audit R6 "草稿保存后找不回", the same read-privacy shape `list_skills` already
+    // has): `includeOwnDrafts` defaults to false, reproducing today's "published only" result
+    // byte-for-byte — when true, additionally includes the caller's own `draft` rows (never
+    // another principal's, `application/worker/definitions.ts`'s `listWorkerDefinitionsPage` own
+    // doc comment). Each row already carries `status` (`wire.WorkerDefinitionWireSchema`), so a
+    // client can tell a draft row apart from a published one.
     paramsSchema: z
       .object({
         kind: z.enum(['entry', 'worker']).optional(),
         limit: z.number().int().positive().optional(),
         cursor: z.string().optional(),
+        includeOwnDrafts: z.boolean().optional(),
       })
       .strict(),
     resultSchema: listEnvelope(wire.WorkerDefinitionWireSchema),
     description:
       'List published WorkerDefinitions, optionally filtered by kind; keyset-paginated (limit, ' +
-      'cursor → nextCursor).',
+      'cursor → nextCursor). With includeOwnDrafts, also includes the caller’s own draft ' +
+      'WorkerDefinitions.',
   },
 ];
 

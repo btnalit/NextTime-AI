@@ -823,13 +823,23 @@ const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, works
 // paginated `listWorkerDefinitionsPage` (kept separate from `listWorkerDefinitions`, which
 // `find_workers`/`resolveAvailableResources` still call unpaginated — see that function's own doc
 // comment).
+// S8 W2-U2b (audit R6 "草稿保存后找不回"): `includeOwnDrafts` (default false, unchanged behavior)
+// additionally surfaces the caller's own `draft` rows — `listWorkerDefinitionsPage`'s own doc
+// comment carries the I16 read-privacy predicate.
 const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { kind, limit, cursor } = params as {
+  const { kind, limit, cursor, includeOwnDrafts } = params as {
     kind?: WorkerDefinitionKind;
     limit?: number;
     cursor?: string;
+    includeOwnDrafts?: boolean;
   };
-  const page = await listWorkerDefinitionsPage(client, workspaceId, { kind, limit, cursor });
+  const principalId = await currentPrincipalId(client);
+  const page = await listWorkerDefinitionsPage(client, workspaceId, principalId, {
+    kind,
+    limit,
+    cursor,
+    includeOwnDrafts,
+  });
   return {
     result: {
       items: page.items.map(toWireWorkerDefinition),

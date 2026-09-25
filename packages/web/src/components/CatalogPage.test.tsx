@@ -288,6 +288,99 @@ describe('CatalogPage', () => {
     expect(within(workerRow).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
+  // S8 W2-U2b (audit R6 "保存草稿后找不回它"): the Workers tab makes a second
+  // `list_worker_definitions{includeOwnDrafts: true}` call for "我的草稿" — these three tests
+  // script that second call by branching on `params.includeOwnDrafts` the same way the kernel's
+  // own handler does (additive: published rows come back from it too, only `status === 'draft'`
+  // rows belong in the section).
+  describe('Workers tab: "我的草稿" (R6)', () => {
+    it('renders no section at all when the caller has no draft rows', async () => {
+      const http = scriptedHttp({
+        // Same items regardless of `includeOwnDrafts` — no draft either way, matching the kernel's
+        // own additive semantics (published rows come back whether or not the flag is set).
+        list_worker_definitions: () => ({
+          items: [
+            {
+              id: 'wd-1',
+              version: 1,
+              kind: 'worker',
+              status: 'published',
+              definition: { name: 'Fixer' },
+            },
+          ],
+        }),
+      });
+      renderPage(http, 'workers');
+      await screen.findByTestId('catalog-row');
+      await waitFor(() =>
+        expect(http.calls.some((c) => c.name === 'list_worker_definitions')).toBe(true),
+      );
+      expect(screen.queryByTestId('workers-my-drafts-section')).toBeNull();
+    });
+
+    it('lists only the caller’s own draft rows, never the published ones the same call also returns', async () => {
+      const http = scriptedHttp({
+        list_worker_definitions: (params) => {
+          const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+          const published = {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          };
+          const draft = {
+            id: 'wd-2',
+            version: 1,
+            kind: 'worker',
+            status: 'draft',
+            definition: { name: 'Patcher' },
+          };
+          return { items: includeOwnDrafts ? [published, draft] : [published] };
+        },
+      });
+      renderPage(http, 'workers');
+      const section = await screen.findByTestId('workers-my-drafts-section');
+      const rows = within(section).getAllByTestId('workers-my-draft-row');
+      expect(rows).toHaveLength(1);
+      expect(within(rows[0] as HTMLElement).getByText('Patcher')).toBeTruthy();
+      expect(within(section).queryByText('Fixer')).toBeNull();
+    });
+
+    it('Publish calls publish_worker_definition, and the row moves to the published Worker section on refresh', async () => {
+      let published = false;
+      const http = scriptedHttp({
+        list_worker_definitions: (params) => {
+          const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+          const row = {
+            id: 'wd-2',
+            version: 1,
+            kind: 'worker',
+            status: published ? 'published' : 'draft',
+            definition: { name: 'Patcher' },
+          };
+          if (includeOwnDrafts) return { items: [row] };
+          return { items: published ? [row] : [] };
+        },
+        publish_worker_definition: (params) => {
+          expect(params).toEqual({ definitionId: 'wd-2', version: 1 });
+          published = true;
+          return { id: 'wd-2', version: 1, status: 'published' };
+        },
+      });
+      renderPage(http, 'workers');
+      const section = await screen.findByTestId('workers-my-drafts-section');
+      fireEvent.click(within(section).getByTestId('worker-draft-publish'));
+
+      await waitFor(() =>
+        expect(http.calls.some((c) => c.name === 'publish_worker_definition')).toBe(true),
+      );
+      await waitFor(() => expect(screen.queryByTestId('workers-my-drafts-section')).toBeNull());
+      const workerSection = screen.getByTestId('workers-worker-section');
+      expect(within(workerSection).getByText('Patcher')).toBeTruthy();
+    });
+  });
+
   // S8 W2 U2 (audit J7/CW1): "从模板创建（ops-runner）" opens the editor prefilled rather than
   // inventing new template content — the button only exposes the checked-in ops-runner template
   // through the existing propose/publish path (F1).
