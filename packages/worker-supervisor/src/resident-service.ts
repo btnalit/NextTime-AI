@@ -184,6 +184,16 @@ export interface ResidentServiceDeps {
 export interface ResidentService {
   spawn(input: SpawnRequest): Promise<SpawnOutcome>;
   stop(principalId: string): Promise<void>;
+  /** S8 W5 (leftover 77): permanently reclaims one principal's resident entry container and its
+   *  `workspaces/<principalId>` data directory — force-removes the container (`docker rm -f`,
+   *  unlike `stop`, which only stops it so a later `spawn` can reuse it) and deletes the directory
+   *  from this host. Only ever called for a principal whose Workspace has just been purged
+   *  (irreversible) — never for disable/idle-stop, where a stopped-but-present container is the
+   *  point. Safe to call for a principal that never had a container or directory: both operations
+   *  already tolerate "not found"/a missing path as a no-op, matching the loop
+   *  `scripts/delete-workspace.sh`'s host-side cleanup runs over every `PRINCIPAL=` id regardless
+   *  of Principal kind. */
+  reclaim(principalId: string): Promise<void>;
   status(principalId: string): Promise<ResidentStatus | undefined>;
   /** Refreshes the idle clock for `principalId`. Returns `false` when the container isn't known
    *  (never spawned, or spawned by a supervisor instance that has since restarted and not yet
@@ -600,6 +610,36 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       await docker.stop(name, STOP_TIMEOUT_SECONDS);
       unregisterEgress(ip);
       registry.delete(principalId);
+    },
+
+    async reclaim(principalId: string): Promise<void> {
+      const name = entryContainerName(principalId);
+      const entry = registry.get(principalId);
+      const existing = entry ? undefined : await docker.inspectByName(name);
+      const ip = entry?.ip ?? existing?.ip;
+
+      await docker.remove(name);
+      unregisterEgress(ip);
+      registry.delete(principalId);
+
+      // Best-effort, same convention as registerEgress/writeSystemPromptIfChanged above: a purge
+      // is already irreversible and already recorded in the platform audit row regardless, so a
+      // failed directory removal here (permissions, an already-gone path) must never surface as an
+      // error the caller retries — the container is what actually mattered for "reclaim access",
+      // this is just freeing disk sooner than the operator would notice on their own.
+      const dir = workspacePaths(config, principalId).localWorkspaceDir;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            level: 'warn',
+            msg: 'reclaim: workspace directory removal failed',
+            principalId,
+            error: String(err),
+          }),
+        );
+      }
     },
 
     async status(principalId: string): Promise<ResidentStatus | undefined> {

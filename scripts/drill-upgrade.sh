@@ -185,8 +185,30 @@ pass() {
   printf 'PASS %s %s\n' "$1" "$2"
 }
 
+# leftover 60: a FAIL anywhere from up_step("to") onward (migrations already applied — MIGRATIONS_
+# APPLIED set below, right after migrate_step succeeds) used to exit 1 here with no more than the
+# one FAIL line, skipping probe_step and rollback_step entirely — the host was left checked out at
+# v(n), migrated to v(n)'s schema, silently, with no printed indication that a rollback was ever
+# needed (2026-09-23 this actually happened: `drill-upgrade.sh --to v0.16.0` aborted on an S1
+# out-of-band egress/DNS failure and stayed on v0.16.0 until the maintainer treated it as the real
+# upgrade). fail() itself is the one choke point every step's failure already goes through, so this
+# is where the loud, exact rollback recipe belongs rather than duplicating it at every call site.
+# Deliberately NOT an automatic rollback: restore.sh overwrites the live database, and a failure
+# here is exactly the moment an operator may want to inspect what broke before doing that again —
+# printing the commands (not running them) matches what the leftover asked for.
 fail() {
   printf 'FAIL %s %s\n' "$1" "$2" >&2
+  if [ "$MIGRATIONS_APPLIED" -eq 1 ]; then
+    printf '\n' >&2
+    printf '*** HOST LEFT ON %s — migrations already applied, no automatic rollback was run ***\n' "${TO_TAG:-<target>}" >&2
+    printf 'to roll back by hand, from the checkout root:\n' >&2
+    printf '  sh scripts/restore.sh --db %s --target-db nexttime --i-know\n' "$DUMP_PATH" >&2
+    printf '  git checkout %s\n' "${FROM_REF:-$FROM_COMMIT}" >&2
+    printf '  export KERNEL_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo dev) ($(git rev-parse --short HEAD))"\n' >&2
+    printf '  docker compose --profile test build && docker compose build worker-runtime\n' >&2
+    printf '  docker compose --profile test up -d\n' >&2
+    printf '(restore.sh restarts kernel/agent-host/worker-supervisor/backup itself — the checkout/build/up above must land BEFORE it for that restart to come up on %s code, not %s)\n' "${FROM_REF:-$FROM_COMMIT}" "${TO_TAG:-<target>}" >&2
+  fi
   exit 1
 }
 
@@ -200,6 +222,7 @@ cleanup_tmp() {
 }
 trap cleanup_tmp EXIT INT TERM
 
+MIGRATIONS_APPLIED=0
 FROM_COMMIT=""
 FROM_TAG=""
 FROM_BRANCH=""
@@ -398,6 +421,9 @@ migrate_step() {
     fail "migrate" "migrate.js exited $apply_rc: $(printf '%s' "$apply_out" | tail -30)"
   fi
   pass "migrate" "applied (see --dry-run listing above for what was pending)"
+  # leftover 60: from here on, a fail() anywhere (up-to, accept-*-to) prints the rollback recipe —
+  # the schema is v(n)'s regardless of whether a later step also succeeds.
+  MIGRATIONS_APPLIED=1
 }
 
 # accept_step <label> <script> <ok-line>: runs one accept_*.sh, requires exit 0 and the exact
@@ -481,6 +507,11 @@ rollback_step() {
     fail "rollback-restore" "scripts/restore.sh exited $restore_rc — see output above"
   fi
   pass "rollback-restore" "restored $DUMP_PATH over the live 'nexttime' database"
+  # The host is genuinely back on v(n-1) code with the pre-upgrade dump restored now — a fail()
+  # from here on (the post-rollback accept_s1 check) is a *different* problem (rollback itself
+  # already succeeded; verifying it did not) and must not print "HOST LEFT ON v(n)" instructions
+  # that are no longer true.
+  MIGRATIONS_APPLIED=0
 }
 
 # --------------------------------------------------------------------------------------------

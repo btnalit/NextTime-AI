@@ -9,15 +9,18 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { deriveOntologyPackId, publishOntologyDomainPack } from '../../substrate/ontology/index.js';
+import { withAdminClient } from '../gateway/auth.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import {
   ModuleConfirmRequiredError,
   type ModuleRegistryEntry,
+  checkDefaultModules,
   countModuleInstallations,
   installOrUpgradeModule,
   loadModuleRegistry,
   loadWorkspaceModuleStates,
 } from './modules.js';
+import { readPlatformSettings, updatePlatformSettings } from './settings.js';
 
 /**
  * application/platform/modules.integration.test: DB-gated (real Postgres, shared CI database, the
@@ -394,5 +397,70 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     });
     expect(outcome.skippedDefaultModules).toEqual(['no-such-module-a', 'no-such-module-b']);
     expect(outcome.workspaceId).toBeDefined();
+  });
+
+  // S8 W5 (leftover 65): checkDefaultModules is the startup-time guard for platform_settings.
+  // defaultModules drifting stale against the deployed module index. platform_settings is a
+  // global singleton this DB-gated suite's own module doc comment already flags as shared across
+  // every file in a serial run — each test below saves the current value first and restores it in
+  // a `finally`, so a failure mid-test never leaves a stale defaultModules for a later file.
+  describe('checkDefaultModules (leftover 65)', () => {
+    async function withSavedDefaultModules(
+      next: readonly string[],
+      run: () => Promise<void>,
+    ): Promise<void> {
+      const before = await withAdminClient(pool, (client) => readPlatformSettings(client));
+      await withAdminClient(pool, (client) =>
+        updatePlatformSettings(client, { defaultModules: next }, null),
+      );
+      try {
+        await run();
+      } finally {
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { defaultModules: before.settings.defaultModules }, null),
+        );
+      }
+    }
+
+    it('warns once, naming every defaultModules entry no longer in the module index — a known name is not listed', async () => {
+      await withSavedDefaultModules(['test-mod', 'no-such-module-checkdefault'], async () => {
+        const lines: string[] = [];
+        const missing = await checkDefaultModules(pool, {
+          ontologyDir: fixtureDir,
+          log: (line) => lines.push(line),
+        });
+        expect(missing).toEqual(['no-such-module-checkdefault']);
+        expect(lines).toHaveLength(1);
+        const parsed = JSON.parse(lines[0] as string) as { level: string; names: string[] };
+        expect(parsed.level).toBe('warn');
+        expect(parsed.names).toEqual(['no-such-module-checkdefault']);
+      });
+    });
+
+    it('every name resolving never warns', async () => {
+      await withSavedDefaultModules(['test-mod'], async () => {
+        const lines: string[] = [];
+        const missing = await checkDefaultModules(pool, {
+          ontologyDir: fixtureDir,
+          log: (line) => lines.push(line),
+        });
+        expect(missing).toEqual([]);
+        expect(lines).toEqual([]);
+      });
+    });
+
+    it('no defaultModules configured never warns and never loads the module registry', async () => {
+      await withSavedDefaultModules([], async () => {
+        const lines: string[] = [];
+        const missing = await checkDefaultModules(pool, {
+          // A directory that does not exist: if this were reached, loadModuleRegistry would
+          // throw — proving the empty-defaultModules short-circuit never touches the registry.
+          ontologyDir: path.join(fixtureDir, 'does-not-exist'),
+          log: (line) => lines.push(line),
+        });
+        expect(missing).toEqual([]);
+        expect(lines).toEqual([]);
+      });
+    });
   });
 });

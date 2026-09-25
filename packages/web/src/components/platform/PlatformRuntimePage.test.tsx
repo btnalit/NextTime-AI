@@ -123,7 +123,7 @@ function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWork
 }
 
 describe('PlatformRuntimePage', () => {
-  it('renders the active image, the image inventory and the pi drift panel', async () => {
+  it('renders the image inventory (active row highlighted, no separate card — audit L7) and the pi drift panel', async () => {
     const http = scriptedHttp({
       runtime_inventory: () => inventory(),
       pi_drift: () => piDrift({ status: 'consistent', pinnedPiVersion: '0.84.4' }),
@@ -131,12 +131,20 @@ describe('PlatformRuntimePage', () => {
     });
     renderPage(http);
 
-    const activeImage = await screen.findByTestId('runtime-active-image');
-    expect(activeImage.textContent).toContain('nexttime-ai-worker-runtime:v1');
-    expect(activeImage.textContent).toContain('0.84.4');
+    // S8 W5 (audit L7): the old "活动镜像" card (a `<dl>` duplicating fields the table already
+    // shows) is gone — the active image's own row in 镜像清单 carries aria-current instead, and
+    // there is no separate `runtime-active-image` element any more.
+    expect(screen.queryByTestId('runtime-active-image')).toBeNull();
 
-    const imagesTable = screen.getByTestId('runtime-images-table');
+    const imagesTable = await screen.findByTestId('runtime-images-table');
     expect(within(imagesTable).getByTestId('runtime-image-active-chip')).toBeTruthy();
+    const activeRow = await screen.findByTestId(`runtime-image-row-${image().id}`);
+    expect(activeRow.getAttribute('aria-current')).toBe('true');
+    expect(activeRow.textContent).toContain('nexttime-ai-worker-runtime:v1');
+    expect(activeRow.textContent).toContain('0.84.4');
+
+    // The rollback action now lives on the 镜像清单 card's own header, not a removed 活动镜像 card.
+    expect(screen.getByTestId('runtime-rollback')).toBeTruthy();
 
     const drift = await screen.findByTestId('pi-drift-body');
     // S8 W1-A10: the pi-drift chip is a StatusChip now (bilingual label; default zh-CN renders
@@ -163,6 +171,54 @@ describe('PlatformRuntimePage', () => {
     const notice = await screen.findByTestId('runtime-active-image-unresolved');
     expect(notice.textContent).toContain('not-in-inventory');
     expect(screen.queryByTestId('runtime-active-image')).toBeNull();
+  });
+
+  it('resident containers show a running/exited state (audit RT1)', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () =>
+        inventory({
+          residentContainers: [
+            resident({
+              principalId: 'p-running',
+              containerId: 'container-running',
+              running: true,
+              status: 'running',
+            }),
+            resident({
+              principalId: 'p-exited',
+              containerId: 'container-exited',
+              running: false,
+              status: 'exited',
+            }),
+          ],
+        }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const runningRow = await screen.findByTestId('runtime-resident-row-p-running');
+    expect(within(runningRow).getByTestId('runtime-resident-running')).toBeTruthy();
+    expect(within(runningRow).queryByTestId('runtime-resident-exited')).toBeNull();
+
+    const exitedRow = await screen.findByTestId('runtime-resident-row-p-exited');
+    expect(within(exitedRow).getByTestId('runtime-resident-exited')).toBeTruthy();
+    expect(within(exitedRow).queryByTestId('runtime-resident-running')).toBeNull();
+  });
+
+  it('pi drift: no CI-produced file reads honestly instead of a bare "unknown" (leftover 59)', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory(),
+      pi_drift: () => piDrift(), // default fixture: status 'unknown', pinnedPiVersion null
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const honest = await screen.findByTestId('pi-drift-unknown-honest');
+    expect(honest.textContent).toContain('pi-drift');
+    // The kernel's own technical detail is still reachable, just not the primary message.
+    const drift = screen.getByTestId('pi-drift-body');
+    expect(drift.textContent).toContain('技术细节');
   });
 
   it('设为活动', async () => {

@@ -558,12 +558,14 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
 // pi_drift (E3)
 // -------------------------------------------------------------------------------------------
 
-/** The path to the CI-produced static JSON — never a live npm/GitHub lookup (E3 "不出网"). This
- *  repo's current `pi-drift.yml` (2026-09-22) checks pi@latest test compatibility and opens a
- *  tracking issue; it does not yet emit this comparison file, so `pinnedPiVersion` is `null` and
- *  `status` is always `'unknown'` until a future CI change writes one here (documented assumption
- *  — see the PR body). Expected shape: `{ "pinnedPiVersion": "0.84.4", "checkedAt": "<ISO>" }`,
- *  extra fields tolerated. */
+/** The path to the CI-produced static JSON — never a live npm/GitHub lookup (E3 "不出网"). S8
+ *  leftover 59: `.github/workflows/pi-drift.yml` now writes and uploads this exact shape
+ *  (`{ "pinnedPiVersion": "0.84.4", "checkedAt": "<ISO>" }`, extra fields tolerated) as a workflow
+ *  artifact on every nightly run — but no host in this deployment pulls GitHub Actions artifacts
+ *  automatically (no new outbound-from-host infra for this), so `pinnedPiVersion` still reads
+ *  `null` — and `status` stays `'unknown'` — on any host where an operator has not manually copied
+ *  that artifact to this path (`docs/runbooks/pi-upgrade.md` §6 has the exact `gh run download`
+ *  steps). The `'unknown'` detail text below says this honestly instead of implying a bug. */
 const PI_DRIFT_FILE_ENV = 'PI_DRIFT_FILE';
 const DEFAULT_PI_DRIFT_FILE = '/data/config/pi-drift.json';
 
@@ -602,7 +604,9 @@ export const piDriftHandler: CapabilityHandler = async (client) => {
   if (pinnedPiVersion === null) {
     status = 'unknown';
     detail =
-      'no CI-produced pi-drift file found in this deployment (PI_DRIFT_FILE / /data/config/pi-drift.json) — see docs/runbooks';
+      'no pi-drift.json found at PI_DRIFT_FILE (default /data/config/pi-drift.json) — ' +
+      'checked nightly by CI (.github/workflows/pi-drift.yml), which uploads it as a workflow ' +
+      'artifact; an operator copies it here manually (docs/runbooks/pi-upgrade.md §6)';
   } else if (activeImagePiVersion === null) {
     status = 'unknown';
     detail = 'the active runtime image was not found, or carries no ai.nexttime.pi-version label';

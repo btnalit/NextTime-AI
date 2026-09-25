@@ -386,6 +386,58 @@ describe('POST /resident/stop', () => {
   });
 });
 
+describe('POST /resident/reclaim (S8 W5 leftover 77)', () => {
+  it('204s and force-removes (not just stops) the container', async () => {
+    const { app, docker } = setup();
+    await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/reclaim',
+      headers: AUTH,
+      payload: { principalId: ALICE },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(docker.removeCalls).toEqual([`nexttime-entry-${ALICE}`]);
+  });
+
+  it('is a no-op 204 for a principal with no container', async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/reclaim',
+      headers: AUTH,
+      payload: { principalId: NOBODY },
+    });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it('400s on an invalid body', async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/reclaim',
+      headers: AUTH,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('401s without the internal-plane token', async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/reclaim',
+      payload: { principalId: ALICE },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe('GET /resident/:principalId', () => {
   it('404s when nothing has been spawned', async () => {
     const { app } = setup();

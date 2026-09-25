@@ -122,6 +122,33 @@ list --label pi-drift` 查是否已有未关闭的，有就编辑标题/正文+�
 关闭该 issue。这个 workflow **没有** `pull_request`/`push` 触发器，永远不会出现在任何 PR 的
 required checks 里，`ci.yml` 完全不受影响。
 
+**与控制台"运行层"页的 pi 漂移卡片是两回事（S8 leftover 59）**。本节上面说的"漂移"是"pinned
+`pi.version` vs npm 上的 `@latest`"（升级值不值得做）；控制台运行层页的"pi 版本漂移"卡片问的是另一
+件事——"主机当前跑的 worker-runtime 镜像，是不是拿最新的 `pi.version` 构建的"（有没有忘记在改
+`pi.version` 之后重新构建/切换镜像），由内核 `pi_drift` 能力读取 `PI_DRIFT_FILE`（缺省
+`/data/config/pi-drift.json`，形状 `{"pinnedPiVersion": "...", "checkedAt": "<ISO>"}`）与已部署镜像
+自带的 `ai.nexttime.pi-version` label 比较得出。
+
+`pi-drift.yml` 现在额外把这份 JSON（内容就是触发这次 run 的那个提交上 `pi.version` 的值，与
+上面 pi@latest 测试是否通过无关）写成一个工作流 artifact（`pi-drift`，保留 14 天）——但**没有任何
+主机自动去拉取它**（本仓库不给主机引入新的、从 GitHub 主动出网取产物的基础设施，见
+`docs/runbooks/backup-restore.md` 同类"不为了单个 P3 需求加新基础设施"的取舍）。想让控制台的这张
+卡片显示真实状态而不是"由 CI 夜间检测，见仓库 pi-drift 相关内容，见本节"，运维手动做一次：
+
+```bash
+# 在能访问 GitHub 的机器上（不必是目标主机本身）：
+gh run list --repo <owner>/<repo> --workflow pi-drift.yml --limit 1
+gh run download <run-id> --repo <owner>/<repo> --name pi-drift -D /tmp/pi-drift
+
+# 把产物放到目标主机的 ${NEXTTIME_DATA}/config/pi-drift.json（scp / 手动拷贝均可）：
+scp /tmp/pi-drift/pi-drift.json <目标主机>:${NEXTTIME_DATA}/config/pi-drift.json
+```
+
+不是发版流程的强制步骤——运行层页在没有这份文件时如实显示"由 CI 夜间检测，见仓库 pi-drift 相关
+内容，见本手册 §6"而不是裸的"未知"，链接回本节；放了这份文件之后，`pi_drift` 才会给出
+`consistent`/`drifted` 的真实判断（而不是永远 `unknown`）。文件不会被自动清理，下次想刷新按上面
+两条命令重新放一份（`checkedAt` 一起更新）即可，主机侧没有过期机制。
+
 **依赖更新**：pi（`@earendil-works/*`，`packages/platform-extension` 下那两个包）不接受任何 bot 版本更新——
 2026-09-25 起仓库不再用 Renovate，也没有 Dependabot 版本更新配置（见 `docs/runbooks/automation.md`
 "依赖更新怎么做"）；万一 Dependabot 安全更新碰到这两个包，`.github/workflows/auto-merge.yml` 会打

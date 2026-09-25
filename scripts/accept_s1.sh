@@ -390,11 +390,17 @@ egress_step() {
   egress_turn_id=$(parse_kv "$send_out" TURN_ID)
   [ -n "$egress_turn_id" ] || fail "egress-turn-start" "no TURN_ID in driver output: $send_out"
 
-  public_code=$(docker exec "$alice_container" curl -sS -o /dev/null -w '%{http_code}' https://example.com 2>/dev/null)
+  # leftover 63: bounded retry (3 attempts, 5s backoff, -m 10 per attempt — well under a minute
+  # total) on this *positive* probe only; host egress/DNS jitter (2026-09-23) has twice made a
+  # single genuinely-allowed request read as a failure. egress-internal-denied right below stays a
+  # single, un-retried, fail-closed check — never retry a probe that expects to be denied.
+  public_retry_out=$(retry_http_code 3 5 docker exec "$alice_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' https://example.com)
+  public_code=${public_retry_out% *}
+  public_attempts=${public_retry_out#* }
   if [ "$public_code" != "200" ]; then
-    fail "egress-public-allowed" "docker exec $alice_container curl https://example.com -> '$public_code' (expected 200)"
+    fail "egress-public-allowed" "docker exec $alice_container curl https://example.com -> '$public_code' (expected 200, after $public_attempts/3 attempts)"
   fi
-  pass "egress-public-allowed" "https://example.com -> 200"
+  pass "egress-public-allowed" "https://example.com -> 200 (attempt $public_attempts/3)"
 
   internal_code=$(docker exec "$alice_container" curl -m 5 -sS -o /dev/null -w '%{http_code}' http://postgres:5432 2>/dev/null)
   internal_rc=$?
