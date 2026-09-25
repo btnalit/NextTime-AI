@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.0](https://github.com/btnalit/NextTime-AI/compare/v0.20.0...v0.21.0) (2026-09-25)
+
+
+### Features
+
+* **kernel:** grant_capability no longer accepts scope ([#288](https://github.com/btnalit/NextTime-AI/issues/288)) ([615372f](https://github.com/btnalit/NextTime-AI/commit/615372fcc5e2f33fbb590874c166ac0641fc5d55))
+* **kernel:** worker artifact durability and gate-observation write-back (leftover 74/75) ([#290](https://github.com/btnalit/NextTime-AI/issues/290)) ([0db3933](https://github.com/btnalit/NextTime-AI/commit/0db39333da669d64428cee5d4e4dd034e4e58cdb))
+* **web:** S8 W4 lane B — governance and access gaps ([#292](https://github.com/btnalit/NextTime-AI/issues/292)) ([72c66bf](https://github.com/btnalit/NextTime-AI/commit/72c66bf8386240325975aee9a46360cba7591624))
+* **web:** S8 W4-A 溯源与图谱 — graph freshness, epistemic actions, journey 4 ([#291](https://github.com/btnalit/NextTime-AI/issues/291)) ([bbed773](https://github.com/btnalit/NextTime-AI/commit/bbed773e2b5bfc516e4dbe473d647e9dcc5699c7))
+
+
+### Bug Fixes
+
+* **kernel:** task status guards, action_update chat pinning, roll_entry_containers race, agent-host touch prune (S8 W5 lane B) ([#293](https://github.com/btnalit/NextTime-AI/issues/293)) ([2cf2199](https://github.com/btnalit/NextTime-AI/commit/2cf2199d45a034bb0fa1fd53d0b20ba024d7917e))
+
 ## [0.20.0](https://github.com/btnalit/NextTime-AI/compare/v0.19.0...v0.20.0) (2026-09-25)
 
 

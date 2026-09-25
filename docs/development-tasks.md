@@ -3153,6 +3153,19 @@ W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审
 
 W3 合入顺序：#280 → #281 → #282；只有 #281、#282 改截图，#282 先合 main 再重拍。子代理开的 PR 标题两次不符合 Conventional Commits（`lint-pr-title` 失败），此后派发时写明标题格式。
 
+**W4 / W5 第一批实现说明**（2026-09-25，收敛方案 §10 四项决定落地 + W4-A / W4-B / W5-A / W5-B）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| §10 供应链 | #287 | 删 `renovate.json`（App 从未安装）与 auto-merge 的 renovate job；Dependabot 只做安全更新 / 告警，常规依赖升级按 W7 波次手动做（npm 的 Dependabot 版本更新在 pnpm workspace 里会 lockfile 失败，所以不恢复 `dependabot.yml`）；pgvector / postgres / alpine 按主机在跑的镜像钉 digest | 遗留 86 关闭 |
+| §10 授权 scope | #288 | `grant_capability` 不再接受 `scope`（strict schema 拒绝）；新授权写 `{}`，历史行照旧回显为"范围备注" | 遗留 80 收尾 |
+| W5-A | #290 | 遗留 74：结果契约的 `artifacts[]` 可带文本 `content`（每件 ≤ 32 000 字、每份 ≤ 8 件），随 `tasks.result` 持久，任务详情可读；容器内路径的旧产物显示"无法读取"。遗留 75 后半：Worker 每次门调用（observe 直调、execute 走到 executed / failed）在该 WorkerRun 自己的 `worker_run` Source 上写一条截断的 Observation（每条 ≤ 8 000 字、每次运行 ≤ 200 条），只写观测不写 Fact；刻意不挂在门调用自己的 Activity 上（避免一个 Activity 两个 Source 破坏单一来源判定）。无迁移 | 可见性与任务结果相同（工作区可见）。CI 首跑一处测试假设有误（无 `result_mapping` 的门本来不写 Observation），已改并补一例有映射的隔离测试 |
+| W4-A | #291 | 旅程④真跑：对话回复里的 id 经 `explain` 核实后才渲染为可点引用，点进溯源链；CI 用 API 夹具（本体发布 → 登记来源 → 提交观测）造一条 Fact。`verify_fact`（事实行"验证"）与 `resolve_conflict`（冲突面板）有了界面；四个推理链能力进审计页；新增只读能力 `graph_freshness`（工作区级）与图谱页新鲜度提示；审计流默认隐藏读操作、平台审计不再要求手输 UUID（文案守卫该页 UUID 2 → 0）；"Send"改"发送" | CI 抓到：全是读操作时审计流空白、768 宽溯源链横向溢出（主会话改为 960 以下单列 + 长 id 可断行）、`t()` 中文参数里夹英文（"事实 Fact"等，主会话修）。人不能附证据，`verify_fact` 多数会被拒（遗留 89） |
+| W5-B | #293 | 遗留 67：Task 其余无条件状态更新（`failTaskRow`、`terminateTask`、invoke 的两处）改为按当前状态条件更新，丢失竞争时不覆盖终态；遗留 78：`system.action_update` 钉在收到 `action_pending` 的那个对话；遗留 64：滚动入口容器与新 Turn 之间用按成员的 advisory lock 串行（`sendChatMessage` 开 Turn 前取事务级锁）；遗留 66：容器真正关闭时清掉 agent-host 的 `lastTouchAt` | `spawn.ts` 里 WorkerRun 的两处无条件状态更新同类问题未改（遗留 90） |
+| W4-B | #292 | 策略 / 配额可编辑（放松走不可逆档）；自助签发 MCP Handle（"不限"与显式范围分开，空数组 = 零能力）；Skill 编辑用 `get_skill` 预填；遗留 88：内核给内部服务主体标 `internal`，成员页与签发下拉过滤；S15 显示名统一取用户表、M1 可用 Worker 不含入口定义、M2 / U4 / L10 / AC1 我的智能体与账户页整理；"Log in"改"登录"（14 个 e2e 文件随改）；i18n 守卫新增"插值模板里的中英对"检测，找到 59 处，本车道修 8 处、其余 51 处先记基线 | CI 抓到新增的 axe `link-in-text-block`（行内链接只靠颜色区分）→ `.field-hint a` 加下划线；合并时旅程④ 还在选 "Log in"，主会话改 |
+
+本批合入顺序：#287 → #288 → #290 → #293 → #291 → #292；只有 #291、#292 改截图。经验：并行车道各自改了按钮文案时，别的车道新写的 e2e 仍会用旧文案选元素——合并前 `grep` 一遍旧文案。
+
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
 三档截图基线经独立设计评审认可（2026-09-24 维护者决定，不逐个交维护者）。
 
