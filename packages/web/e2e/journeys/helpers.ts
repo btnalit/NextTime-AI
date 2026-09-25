@@ -1,4 +1,5 @@
 import { type Page, expect } from '@playwright/test';
+import { loginWithPassword, reachLoginForm } from '../auth-helpers.js';
 import { loginAsAdmin, loginAsOwner } from '../lib/auth.js';
 
 /**
@@ -199,4 +200,56 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
 
   return { workspaceName, ownerLogin, ownerTemporaryPassword };
+}
+
+/**
+ * Signs the freshly created platform user in through the password form (always on the initial
+ * temporary password — unlike `loginAsAdmin`'s tolerant retry, this login has never been attempted
+ * before) and completes the forced password change every first login requires (P-A1). Assumes the
+ * caller is not currently signed in as anyone else (sign out of whichever session created the
+ * fresh workspace first — `createFreshWorkspace` leaves the admin session signed in). Returns the
+ * new, permanent password, in case a caller needs to sign this owner back in later in the same
+ * test. Same field-by-id reasoning as `loginWithPassword`'s own doc comment
+ * (`06-add-member.spec.ts`'s step 3 is the byte-identical precedent this is factored out of).
+ */
+export async function signInAsFreshOwner(
+  page: Page,
+  login: string,
+  temporaryPassword: string,
+): Promise<string> {
+  await page.goto('/');
+  await reachLoginForm(page);
+  await loginWithPassword(page, login, temporaryPassword);
+  await expect(page.getByRole('heading', { name: /需要更改密码/ })).toBeVisible({
+    timeout: 15_000,
+  });
+  const newPassword = `${temporaryPassword}-1`;
+  await page.locator('#cp-current-password').fill(temporaryPassword);
+  await page.locator('#cp-new-password').fill(newPassword);
+  await page.locator('#cp-confirm-password').fill(newPassword);
+  await page.getByRole('button', { name: /更改密码/ }).click();
+  return newPassword;
+}
+
+/**
+ * Picks this signed-in user's own ('所有者') workspace membership from the switcher — needed
+ * whenever the caller also belongs to the platform default workspace, which every platform user
+ * does unless created with an explicit "不加入任何工作区" choice (`create_user`'s own default,
+ * `CreateUserForm.tsx` — `createPlatformUser` above leaves the picker at that default), so a fresh
+ * owner has two memberships and the switcher renders. Same pattern `gate-host.spec.ts`/
+ * `integrations.spec.ts` each keep as a local `ensureOwnedWorkspaceSelected` (those callers are the
+ * platform administrator, not this function's caller, hence not reused directly) —
+ * `06-add-member.spec.ts` instead picks its target workspace by name because its new member is not
+ * that workspace's owner; this one is.
+ */
+export async function selectOwnedWorkspace(page: Page): Promise<void> {
+  const switcher = page.getByTestId('workspace-switcher');
+  await expect(switcher).toBeVisible({ timeout: 15_000 });
+  const option = switcher.locator('option', { hasText: '(所有者)' });
+  await expect(option).toHaveCount(1);
+  const workspaceId = await option.getAttribute('value');
+  expect(workspaceId ?? '').not.toBe('');
+  await switcher.selectOption(workspaceId as string);
+  await expect(switcher).toHaveValue(workspaceId as string, { timeout: 15_000 });
+  await expect(switcher).toBeEnabled();
 }
