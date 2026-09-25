@@ -190,10 +190,18 @@ describe('ConnectionsPage', () => {
     expect(within(launcher).getByTestId('launcher-kind-ssh')).toBeTruthy();
   });
 
-  it('SY3: the systems page states the three execution prerequisites', async () => {
-    const http = scriptedHttp({});
+  it('SY3: the systems page states the three execution prerequisites while not ready', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => ({
+        principalId: 'p-1',
+        ready: false,
+        missing: [{ code: 'no_published_worker' }],
+        gates: [],
+        workers: [],
+      }),
+    });
     renderPage(http);
-    const notice = await screen.findByTestId('systems-prerequisites');
+    const notice = await screen.findByTestId('execution-prerequisite-bar');
     expect(notice.textContent).toContain('门已在本工作区启用');
     expect(notice.textContent).toContain('已授权给该成员');
     expect(notice.textContent).toContain('已发布');

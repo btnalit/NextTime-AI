@@ -27,7 +27,10 @@ export function missingCauseText(
 ): string {
   switch (item.code) {
     case 'no_enabled_gate':
-      return t('工作区还没有启用任何门。', 'No gate is enabled in this workspace yet.');
+      return t(
+        '入口 agent 还没有任何可以作用的系统，先在系统接入启用一个门。',
+        'Your entry agent has no system to act on yet — enable a gate under Systems first.',
+      );
     case 'no_grant': {
       const name = item.gateId ? gateNames.get(item.gateId) : undefined;
       if (name) {
@@ -43,8 +46,8 @@ export function missingCauseText(
     }
     case 'no_published_worker':
       return t(
-        '还没有发布任何可委派的 Worker 定义。',
-        'No delegable Worker definition has been published yet.',
+        '入口 agent 委派任务时找不到可用的 Worker，先发布一个 Worker 定义（可从 ops-runner 模板开始）。',
+        'Your entry agent finds no Worker to delegate to — publish a Worker definition first (the ops-runner template is a quick start).',
       );
   }
 }

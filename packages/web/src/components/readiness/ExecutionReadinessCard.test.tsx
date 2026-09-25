@@ -84,7 +84,7 @@ describe('ExecutionReadinessCard', () => {
     render(<ExecutionReadinessCard http={http} />);
     const item = await screen.findByTestId('execution-readiness-missing-item');
     expect(item.textContent).not.toContain('no_enabled_gate');
-    expect(item.textContent).toContain('还没有启用任何门');
+    expect(item.textContent).toContain('还没有任何可以作用的系统');
     const link = item.querySelector('a');
     expect(link?.getAttribute('href')).toBe('#/govern/systems');
   });
@@ -113,7 +113,7 @@ describe('ExecutionReadinessCard', () => {
     });
     render(<ExecutionReadinessCard http={http} />);
     const item = await screen.findByTestId('execution-readiness-missing-item');
-    expect(item.textContent).toContain('还没有发布任何可委派的 Worker 定义');
+    expect(item.textContent).toContain('委派任务时找不到可用的');
     const link = item.querySelector('a');
     expect(link?.getAttribute('href')).toBe('#/govern/catalog/workers');
   });

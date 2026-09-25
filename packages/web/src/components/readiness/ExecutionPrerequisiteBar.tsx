@@ -48,6 +48,12 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
     <LocalNotice tone="warn" testId="execution-prerequisite-bar">
       <div className="stack-s">
         <strong>{t('执行前提尚未满足', 'Execution prerequisites not met yet')}</strong>
+        <span data-testid="execution-prerequisite-rule">
+          {t(
+            '执行需要三样都齐：门已在本工作区启用、门已授权给该成员、该成员的入口 agent 能用到引用它的已发布 Worker。',
+            'Execution needs all three: the gate enabled in this workspace, the gate granted to the member, and a published Worker their entry agent can reach that references it.',
+          )}
+        </span>
         <ul
           className="stack-s"
           style={{ listStyle: 'none', margin: 0, padding: 0 }}

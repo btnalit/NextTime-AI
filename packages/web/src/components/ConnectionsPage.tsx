@@ -262,16 +262,9 @@ export function ConnectionsPage({
         }
       />
 
-      <Notice testId="systems-prerequisites">
-        {t(
-          '执行需要三样都齐：门已在本工作区启用、门已授权给该成员、该成员的入口 agent 能用到引用它的已发布 Worker。',
-          'Execution needs all three: the gate enabled in this workspace, the gate granted to the member, and a published Worker their entry agent can reach that references it.',
-        )}
-      </Notice>
-      {/* S8 W2 U3a: the general reminder above (origin/main's W2-U1 "systems-prerequisites") is
-          static — the same text regardless of state. This one is live: it reads
-          execution_readiness for the current user and, once anything is actually missing, names
-          it and links to where to fix it; it renders nothing once this workspace is ready. */}
+      {/* SY3 + J1: one live bar instead of a static reminder stacked on top of it — it states the
+          three execution prerequisites and what is missing for the current user, and renders
+          nothing once this workspace is ready. */}
       <ExecutionPrerequisiteBar http={http} />
 
       <section className="section" aria-labelledby="connection-requests-title">
