@@ -202,6 +202,18 @@ describe('AppShell', () => {
       expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
     });
 
+    it("closes the drawer on a click on the current page's own nav link (no route change)", async () => {
+      stubNarrow();
+      const http = scriptedHttp(baseHandlers());
+      renderShell(http);
+      await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
+      fireEvent.click(screen.getByTestId('nav-open'));
+      const dialog = await screen.findByRole('dialog');
+      // active="chats": the link points at the page already shown, so `active` never changes.
+      fireEvent.click(within(dialog).getByTestId('nav-chats'));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
     it('closes the drawer when `active` changes (a simulated navigation)', async () => {
       stubNarrow();
       const http = scriptedHttp(baseHandlers());
