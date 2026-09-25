@@ -1,8 +1,11 @@
 import type { ConflictWire, FactWire } from '@nexttime/shared';
+import { useState } from 'react';
+import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
 import { type FactDirection, factDirection, neighbourId } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
 import { RefChip } from '../ui/RefChip.js';
 import { FreshnessChip } from './FreshnessChip.js';
@@ -19,6 +22,13 @@ export interface FactRowProps {
   readonly onExpand: (neighbourObjectId: string) => void;
   /** "溯源 Provenance": open the drawer with `explain{nodeId: fact.id}`. */
   readonly onProvenance: (fact: FactWire) => void;
+  /** S8 W4-A (ui-audit epistemic gap "verify_fact"): present only when the row can offer "验证
+   *  Verify" — omitted (e.g. a read-only rendering, a test fixture) simply hides the action, same
+   *  degrade as `onExpand`'s own self-loop check above. */
+  readonly http?: CapabilityCaller;
+  /** Called after a successful `verify_fact` — the caller re-reads `state_at` so this row's own
+   *  `epistemicStatus` reflects the write without a full page reload. */
+  readonly onVerified?: () => void;
 }
 
 const DIRECTION_GLYPH: Readonly<Record<FactDirection, string>> = {
@@ -44,7 +54,16 @@ const DIRECTION_LABEL: Readonly<
  * `<li>`). The Fact's own id is copyable through its chip so "溯源" can be cross-checked on the
  * audit page.
  */
-export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenance }: FactRowProps) {
+export function FactRow({
+  fact,
+  objectId,
+  asOf,
+  conflicts,
+  onExpand,
+  onProvenance,
+  http,
+  onVerified,
+}: FactRowProps) {
   const t = useT();
   const { nameOf, hrefFor } = useGraphObjects();
   const direction = factDirection(fact, objectId);
@@ -52,6 +71,17 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
   // Only a rendered row asks for its neighbour's name — collapsed groups cost nothing.
   useResolvedObjects(otherId === objectId ? [] : [otherId]);
   const inConflict = conflicts !== undefined && conflicts.length > 0;
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  // "验证 Verify" is offered only for an active, not-yet-verified Fact (I3.6's own `verify_fact`
+  // check — no Evidence on file — is discovered at confirm time via the 409 the call returns, not
+  // pre-checked here: this console has no read for "does this Fact have Evidence" cheaper than
+  // just trying the write, and every other write-gap in this app degrades the same way, through
+  // the confirm's own inline error rather than a second round trip first).
+  const canVerify =
+    http !== undefined &&
+    fact.epistemicStatus !== 'verified' &&
+    fact.supersededAt === null &&
+    fact.invalidatedAt === null;
   const freshness = freshnessOf(
     {
       lastObservedAt: fact.lastObservedAt,
@@ -146,6 +176,35 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
             {t('展开', 'Expand')}
           </Button>
         )}
+        {canVerify ? (
+          <Confirm
+            tier="medium"
+            open={verifyOpen}
+            onOpenChange={setVerifyOpen}
+            anchor={
+              <Button
+                variant="ghost"
+                size="s"
+                icon="check"
+                onClick={() => setVerifyOpen(true)}
+                data-testid="graph-fact-verify"
+              >
+                {t('验证', 'Verify')}
+              </Button>
+            }
+            title={t('把该事实标记为已验证', 'Mark this Fact as verified')}
+            description={t(
+              '把认知状态提升为“已验证”——需要该事实已经附有证据，否则会被拒绝。此操作会写入审计。',
+              'Promotes the epistemic status to “verified” — the Fact must already have Evidence on file, or the call is refused. Recorded in the audit log.',
+            )}
+            confirmLabel={t('验证', 'Verify')}
+            onConfirm={async () => {
+              await (http as CapabilityCaller).call('verify_fact', { factId: fact.id });
+              onVerified?.();
+            }}
+            testId="graph-fact-verify-confirm"
+          />
+        ) : null}
       </div>
     </li>
   );

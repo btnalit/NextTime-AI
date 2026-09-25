@@ -112,3 +112,42 @@ export const ResolvedRefWireSchema = z
   })
   .strict();
 export type ResolvedRefWire = z.infer<typeof ResolvedRefWireSchema>;
+
+/**
+ * wire/readiness (continued): `graph_freshness`'s result shape (S8 W4-A, ui-audit-2026-09-23 G1;
+ * STATUS leftover 70/62; convergence-plan-2026-09-25.md §6 W4 "G1 图谱新鲜度告警"). One row per
+ * `sources` owned by a `kind:'service'` Principal (a collector, an external runtime) in this
+ * workspace — the same population `substrate/audit/invariant-checks.ts`'s `ops.collector_silent`
+ * scans, but workspace-scoped (RLS) rather than the cross-workspace admin sweep that check runs on
+ * a timer. A human-channel read model closes the gap the 09-18 incident named: the graph itself
+ * only ever coloured a *Fact* "陈旧 aging" days after its Source actually went silent (`lib/
+ * graph-freshness.ts`) — nothing said "this workspace's whole graph stopped updating", so neither
+ * the entry agent nor a person watching the console noticed for five days (STATUS leftover 70).
+ */
+export const GraphFreshnessSourceWireSchema = z
+  .object({
+    sourceId: z.string(),
+    kind: z.string(),
+    name: z.string().nullable(),
+    /** `null` — registered but never observed (never counts as silent; see `silent` below). */
+    lastObservedAt: z.string().nullable(),
+    /** `lastObservedAt` is non-null and older than `staleThresholdMs` — mirrors
+     *  `ops.collector_silent`'s own predicate exactly (a Source that never observed once is not
+     *  silent, it never established a cadence to fall silent from). */
+    silent: z.boolean(),
+  })
+  .strict();
+export type GraphFreshnessSourceWire = z.infer<typeof GraphFreshnessSourceWireSchema>;
+
+export const GraphFreshnessWireSchema = z
+  .object({
+    /** `ops.collector_silent`'s own default (`DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS`, 2 hours) —
+     *  echoed back rather than hard-coded a second time on the client. */
+    staleThresholdMs: z.number().int().positive(),
+    /** The newest `lastObservedAt` across every Source below — `null` when the workspace has no
+     *  service-owned Source that has ever observed anything (nothing to be stale relative to). */
+    workspaceLastObservedAt: z.string().nullable(),
+    sources: z.array(GraphFreshnessSourceWireSchema),
+  })
+  .strict();
+export type GraphFreshnessWire = z.infer<typeof GraphFreshnessWireSchema>;

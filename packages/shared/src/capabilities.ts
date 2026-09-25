@@ -491,6 +491,24 @@ const graphCapabilities: readonly Capability[] = [
     description: 'Bitemporal read: the Object’s state as of a given instant.',
   },
   {
+    // S8 W4-A (ui-audit G1; STATUS leftover 70/62): real handler (`application/gateway/
+    // graph-freshness-handler.ts`), a thin workspace-scoped restatement of `substrate/audit/
+    // invariant-checks.ts`'s own `ops.collector_silent` sweep — see that handler's own doc
+    // comment.
+    name: 'graph_freshness',
+    group: 'graph',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: noParams,
+    resultSchema: wire.GraphFreshnessWireSchema,
+    description:
+      'Per-Source observation freshness for this workspace — every Source owned by a service ' +
+      'Principal (a collector, an external runtime), its newest observation, and whether that ' +
+      'observation is older than the collector-silence threshold. Surfaces the same signal ' +
+      '`ops.collector_silent` checks cross-workspace, scoped to the caller’s own workspace.',
+  },
+  {
     name: 'find_operations',
     group: 'graph',
     mode: 'observe',

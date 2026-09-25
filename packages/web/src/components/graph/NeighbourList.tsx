@@ -1,5 +1,6 @@
 import type { ConflictWire, FactWire } from '@nexttime/shared';
 import { useState } from 'react';
+import type { CapabilityCaller } from '../../lib/clients.js';
 import type { FactDirection, FactGroup } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
@@ -12,6 +13,9 @@ export interface NeighbourListProps {
   readonly conflicts: ReadonlyMap<string, readonly ConflictWire[]>;
   readonly onExpand: (neighbourObjectId: string) => void;
   readonly onProvenance: (fact: FactWire) => void;
+  /** Threaded straight through to each `FactRow` — see its own doc comment. */
+  readonly http?: CapabilityCaller;
+  readonly onVerified?: () => void;
 }
 
 /** Rows shown per group before "显示全部 Show all" — a Host's `runs_on` group can be hundreds of
@@ -45,6 +49,8 @@ export function NeighbourList({
   conflicts,
   onExpand,
   onProvenance,
+  http,
+  onVerified,
 }: NeighbourListProps) {
   const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -86,6 +92,8 @@ export function NeighbourList({
                   conflicts={conflicts.get(fact.id)}
                   onExpand={onExpand}
                   onProvenance={onProvenance}
+                  http={http}
+                  onVerified={onVerified}
                 />
               ))}
             </ul>

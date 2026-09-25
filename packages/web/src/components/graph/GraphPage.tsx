@@ -12,7 +12,9 @@ import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { PageHeader } from '../kit/page-header.js';
 import { EmptyState } from '../ui/EmptyState.js';
+import { ConflictsPanel } from './ConflictsPanel.js';
 import { FreshnessLegend } from './FreshnessLegend.js';
+import { GraphFreshnessNotice } from './GraphFreshnessNotice.js';
 import { GraphObjectsProvider } from './GraphObjectsContext.js';
 import { ObjectSearch } from './ObjectSearch.js';
 import { ObjectView } from './ObjectView.js';
@@ -102,6 +104,7 @@ export function GraphPage({ http }: GraphPageProps) {
           'Browse Objects, expand neighbours, trace a Fact’s provenance; colour is freshness.',
         )}
       />
+      <GraphFreshnessNotice http={http} />
       <GraphObjectsProvider http={http} identityKeys={identityKeys} baseQuery={query}>
         <div className="graph-layout" data-object-open={objectId !== undefined}>
           <aside className="graph-search-pane" aria-label="Search">
@@ -117,6 +120,12 @@ export function GraphPage({ http }: GraphPageProps) {
               types={typeOptions}
               identityKeys={identityKeys}
               asOf={asOf}
+            />
+            <ConflictsPanel
+              http={http}
+              conflicts={conflictRows ?? []}
+              loading={conflicts.state.status === 'loading'}
+              onResolved={() => void conflicts.reload()}
             />
             <FreshnessLegend />
           </aside>
