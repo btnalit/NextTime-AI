@@ -115,7 +115,9 @@ test.describe('Journey ②: 接入一个新系统', () => {
     const enableButton = workspaceSide.getByTestId('launcher-workspace-enable-button');
     await expect(enableButton).toBeVisible({ timeout: 15_000 });
     await enableButton.click();
-    const enableConfirm = workspaceSide.getByTestId('launcher-workspace-enable-button-confirm');
+    // kit/confirm renders its popover through a Radix portal into document.body — outside the
+    // launcher's own subtree — so it is located from the page, as journey ① does.
+    const enableConfirm = page.getByTestId('launcher-workspace-enable-button-confirm');
     await expect(enableConfirm).toBeVisible({ timeout: 15_000 });
 
     // --- 3. 门注册成功后，看到它声明的 Operation 列表（发布前的预览，非管理员 owner 的实际路径）
