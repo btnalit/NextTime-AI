@@ -3,16 +3,17 @@ import type {
   GateLinkDriftWire,
   PreviewGateInstanceEnableResultWire,
 } from '@nexttime/shared';
-import { type ReactNode, useState } from 'react';
+import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
-import { type StatusMachine, labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
+import { StatusChip } from '../kit/status-chip.js';
 
 export interface EnableGateConfirmProps {
   readonly http: CapabilityCaller;
@@ -47,11 +48,6 @@ export interface EnableGateConfirmProps {
  * existing (legacy) registration this call would link instead of duplicating. The confirm's own
  * `onConfirm` is the actual `enable_gate_instance` call; success calls `onEnabled` with the full
  * result (`linkedExisting` incl.) so the caller's own toast can report it (J4's own ask).
- *
- * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
- * status chip / notice rendering are small local replicas of `ui/StatusChip` / `ui/Notice` over
- * the same `lib/status-tone.ts` data and CSS classes — not a new dependency, just no component
- * wrapper import.
  */
 export function EnableGateConfirm({
   http,
@@ -118,7 +114,7 @@ export function EnableGateConfirm({
   return (
     <div className="stack-s" data-testid={testId ? `${testId}-wrapper` : undefined}>
       {preview && preview.ambiguousCandidates.length > 0 ? (
-        <LocalNotice tone="warn" testId={testId ? `${testId}-ambiguous` : undefined}>
+        <Notice tone="warn" testId={testId ? `${testId}-ambiguous` : undefined}>
           <div className="stack-s">
             <span>
               {t(
@@ -138,13 +134,13 @@ export function EnableGateConfirm({
               )}
             </span>
           </div>
-        </LocalNotice>
+        </Notice>
       ) : null}
       {previewError !== null ? (
-        <LocalNotice tone="warn" testId={testId ? `${testId}-preview-error` : undefined}>
+        <Notice tone="warn" testId={testId ? `${testId}-preview-error` : undefined}>
           {t('读不到启用预览：', 'Could not load the enable preview: ')}
           {describeError(previewError).message}
-        </LocalNotice>
+        </Notice>
       ) : null}
       <Confirm
         tier="medium"
@@ -164,42 +160,6 @@ export function EnableGateConfirm({
         {preview ? <EnablePreviewBody preview={preview} http={http} /> : null}
       </Confirm>
     </div>
-  );
-}
-
-/** A small local `ui/Notice` replica (no icon) — this file may not import `components/ui/*`. */
-function LocalNotice({
-  tone = 'info',
-  testId,
-  children,
-}: {
-  readonly tone?: 'info' | 'warn';
-  readonly testId?: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <div className={`notice${tone === 'warn' ? ' notice-warn' : ''}`} data-testid={testId}>
-      <div className="grow">{children}</div>
-    </div>
-  );
-}
-
-/** A small local `ui/StatusChip` replica over the same `lib/status-tone.ts` data — this file may
- *  not import `components/ui/*`. */
-function LocalStatusChip({
-  machine,
-  status,
-}: { readonly machine: StatusMachine; readonly status: string }) {
-  const t = useT();
-  const style = statusChipStyle(machine, status);
-  const text = labelText(style, t);
-  const classes = ['chip', `chip-${style.tone}`, 'chip-s', style.unknown ? 'chip-unknown' : '']
-    .filter(Boolean)
-    .join(' ');
-  return (
-    <span className={classes} data-status={status} data-tone={style.tone}>
-      {text}
-    </span>
   );
 }
 
@@ -237,8 +197,8 @@ function EnablePreviewBody({
             {preview.operationsToImport.map((operation) => (
               <li key={operation.name} className="row-wrap">
                 <span className="mono">{operation.name}</span>
-                <LocalStatusChip machine="operationMode" status={operation.mode} />
-                <LocalStatusChip machine="blastRadius" status={operation.blastRadius} />
+                <StatusChip machine="operationMode" status={operation.mode} size="s" />
+                <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
                 {operation.mode === 'execute' || operation.blastRadius === 'high' ? (
                   <span className="tag" data-testid="enable-preview-high-impact">
                     {t('高影响', 'High impact')}
@@ -261,7 +221,7 @@ function EnablePreviewBody({
             {preview.operationsAlreadyPresent.map((operation) => (
               <li key={operation.name} className="row-wrap">
                 <span className="mono">{operation.name}</span>
-                <LocalStatusChip machine="publishable" status={operation.existing.status} />
+                <StatusChip machine="publishable" status={operation.existing.status} size="s" />
                 {operation.differs ? (
                   <span className="tag" data-testid="enable-preview-differs">
                     {t('治理字段与公告不一致', 'Governance fields differ from the manifest')}

@@ -1,15 +1,17 @@
 import type { OperationSummaryWire } from '@nexttime/shared';
-import { type ReactNode, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
 import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
-import { type StatusMachine, labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { ErrorBanner } from '../kit/error-banner.js';
+import { Field } from '../kit/field.js';
+import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
+import { StatusChip } from '../kit/status-chip.js';
 
 export interface GrantGateFormProps {
   readonly http: CapabilityCaller;
@@ -44,11 +46,6 @@ export interface GrantGateFormProps {
  * enforces `capability_grants.scope` today (it is stored and echoed back, never read by any
  * authorization check), so a per-Operation checklist would be a control that narrows nothing. A
  * grant covers the whole gate, and the Operations list says so instead of offering a choice.
- *
- * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
- * field/notice/error-banner/status-chip rendering are small local replicas of the `ui/*`
- * equivalents over the same CSS classes / `lib/status-tone.ts` data — not a new dependency, just
- * no component-wrapper import.
  */
 export function GrantGateForm({
   http,
@@ -177,7 +174,7 @@ export function GrantGateForm({
 
   return (
     <div className="stack" data-testid={testId ?? 'grant-gate-form'}>
-      <LocalField
+      <Field
         id="ggf-member-query"
         label={t('成员', 'Member')}
         required
@@ -194,7 +191,7 @@ export function GrantGateForm({
           placeholder={t('搜索成员…', 'Search members…')}
           disabled={submitting}
         />
-      </LocalField>
+      </Field>
       <select
         id="ggf-member-select"
         className="select"
@@ -226,17 +223,17 @@ export function GrantGateForm({
       ) : null}
 
       {lockedGatekeeper ? (
-        <LocalField id="ggf-locked-gate" label={t('门', 'Gatekeeper')}>
+        <Field id="ggf-locked-gate" label={t('门', 'Gatekeeper')}>
           <RefChip
             kind="gatekeeper"
             id={lockedGatekeeper.id}
             name={lockedGatekeeper.name}
             testId="ggf-locked-gate-chip"
           />
-        </LocalField>
+        </Field>
       ) : (
         <div className="stack-s" data-testid="ggf-gate-picker">
-          <LocalField
+          <Field
             id="ggf-gate-query"
             label={t('门', 'Gatekeeper')}
             required
@@ -253,7 +250,7 @@ export function GrantGateForm({
               placeholder={t('搜索门…', 'Search gates…')}
               disabled={submitting || allGates}
             />
-          </LocalField>
+          </Field>
           <div className="stack-s" data-testid="ggf-gate-list">
             {gatekeepers.state.status === 'loading' ? (
               <p className="text-3 text-small">{t('正在加载…', 'Loading…')}</p>
@@ -345,8 +342,8 @@ export function GrantGateForm({
               {operationOptions.map((operation) => (
                 <li key={operation.name} className="row-wrap">
                   <span className="mono">{operation.name}</span>
-                  <LocalStatusChip machine="operationMode" status={operation.mode} />
-                  <LocalStatusChip machine="blastRadius" status={operation.blastRadius} />
+                  <StatusChip machine="operationMode" status={operation.mode} size="s" />
+                  <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
                 </li>
               ))}
             </ul>
@@ -355,27 +352,23 @@ export function GrantGateForm({
       ) : null}
 
       {allGates ? (
-        <LocalNotice tone="warn" testId="ggf-all-gates-notice">
+        <Notice tone="warn" testId="ggf-all-gates-notice">
           {t(
             '已选择「全部门」：成员可以请求本工作区每个门的全部 Operation，包括以后新接入的门；执行类仍按审批规则处理。',
             'Every gate is selected: the member may request every operation of every gate in this workspace, including gates connected later; execute-class ones still follow the approval rules.',
           )}
-        </LocalNotice>
+        </Notice>
       ) : null}
 
       {granted.length > 0 ? (
-        <LocalNotice testId="ggf-granted-summary">
+        <Notice testId="ggf-granted-summary">
           {t('本次已授予：', 'Granted so far: ')}
           {granted.length}
-        </LocalNotice>
+        </Notice>
       ) : null}
 
       {error !== null ? (
-        <LocalErrorBanner
-          error={error}
-          title={t('无法授予', 'Could not grant')}
-          testId="ggf-error"
-        />
+        <ErrorBanner error={error} title={t('无法授予', 'Could not grant')} testId="ggf-error" />
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -394,111 +387,5 @@ export function GrantGateForm({
         </Button>
       </div>
     </div>
-  );
-}
-
-/** A small local `ui/Field` replica (label + control + hint) — this file may not import
- *  `components/ui/*`. */
-function LocalField({
-  id,
-  label,
-  hint,
-  required = false,
-  children,
-}: {
-  readonly id: string;
-  readonly label: ReactNode;
-  readonly hint?: ReactNode;
-  readonly required?: boolean;
-  readonly children: ReactNode;
-}) {
-  return (
-    <div className="field">
-      <label className="field-label" htmlFor={id}>
-        {label}
-        {required ? (
-          <span className="field-required" aria-hidden>
-            *
-          </span>
-        ) : null}
-      </label>
-      {children}
-      {hint !== undefined ? (
-        <p className="field-hint" id={`${id}-hint`}>
-          {hint}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/** A small local `ui/Notice` replica (no icon) — this file may not import `components/ui/*`. */
-function LocalNotice({
-  tone = 'info',
-  testId,
-  children,
-}: {
-  readonly tone?: 'info' | 'warn';
-  readonly testId?: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <div className={`notice${tone === 'warn' ? ' notice-warn' : ''}`} data-testid={testId}>
-      <div className="grow">{children}</div>
-    </div>
-  );
-}
-
-/** A small local `ui/ErrorBanner` replica (no retry) — this file may not import
- *  `components/ui/*`. */
-function LocalErrorBanner({
-  error,
-  title,
-  testId,
-}: {
-  readonly error: unknown;
-  readonly title?: string;
-  readonly testId?: string;
-}) {
-  const described = describeError(error);
-  return (
-    <div
-      className="error-banner"
-      role="alert"
-      data-testid={testId}
-      data-error-code={described.code}
-    >
-      <div className="error-banner-body">
-        <div className="error-banner-title">
-          <span>{title ?? described.title}</span>
-          <code className="error-banner-code">{described.code}</code>
-        </div>
-        {described.message && described.message !== described.title ? (
-          <p className="error-banner-message">{described.message}</p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/** A small local `ui/StatusChip` replica over the same `lib/status-tone.ts` data — this file may
- *  not import `components/ui/*`. */
-function LocalStatusChip({
-  machine,
-  status,
-}: {
-  readonly machine: StatusMachine;
-  readonly status: string;
-}) {
-  const t = useT();
-  const style = statusChipStyle(machine, status);
-  const text = labelText(style, t);
-  const classes = ['chip', `chip-${style.tone}`, 'chip-s', style.unknown ? 'chip-unknown' : '']
-    .filter(Boolean)
-    .join(' ');
-  return (
-    <span className={classes} data-status={status} data-tone={style.tone}>
-      {text}
-    </span>
   );
 }
