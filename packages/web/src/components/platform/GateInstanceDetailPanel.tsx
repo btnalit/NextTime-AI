@@ -603,7 +603,7 @@ function WorkspacesUsingSection({
         <p className="text-2">
           {t(
             `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。`,
-            `${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's 系统接入 page.`,
+            `${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's own Systems page.`,
           )}
         </p>
       )}

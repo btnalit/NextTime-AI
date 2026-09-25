@@ -16,8 +16,8 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
-import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { hashPassword } from '../identity/password.js';
@@ -1661,7 +1661,13 @@ async function computeCrossWorkspaceOverview(
   }
   await client.query("select set_config('app.workspace_id', '', true)");
   await client.query("select set_config('app.principal_id', '', true)");
-  return { gatekeepers, pendingActionRequests, runningTasks, staleSourceCount, affectedWorkspaceCount };
+  return {
+    gatekeepers,
+    pendingActionRequests,
+    runningTasks,
+    staleSourceCount,
+    affectedWorkspaceCount,
+  };
 }
 
 export const platformOverviewHandler: CapabilityHandler = async (client) => {
@@ -1695,8 +1701,13 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
   // `counts.workspaces`/`activeWorkspaces` below stay the literal totals (unchanged, pre-existing
   // meaning); the workspaces page's own residue banner is where "残留单独显示" already lives.
   const nonResidueWorkspaces = workspaces.rows.filter((row) => !isResidueWorkspaceRow(row));
-  const { gatekeepers, pendingActionRequests, runningTasks, staleSourceCount, affectedWorkspaceCount } =
-    await computeCrossWorkspaceOverview(client, nonResidueWorkspaces);
+  const {
+    gatekeepers,
+    pendingActionRequests,
+    runningTasks,
+    staleSourceCount,
+    affectedWorkspaceCount,
+  } = await computeCrossWorkspaceOverview(client, nonResidueWorkspaces);
   const recent = await queryPlatformAudit(client, { limit: 20 });
 
   const activeWorkspaces = workspaces.rows.filter((w) => w.status === 'active');

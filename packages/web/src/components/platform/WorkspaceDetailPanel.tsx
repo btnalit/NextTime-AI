@@ -333,7 +333,7 @@ export function WorkspaceDetailPanel({
             label={t('本体强制', 'Ontology enforcement')}
             hint={t(
               '写入的关系必须符合这个工作区已发布的本体；"记录并放行" 只审计、不拒绝写入——用于刚上线、还不确定既有写入者是否都符合本体的过渡期，观察一段时间没有异常审计后再切回"拒绝"。',
-              '"记录并放行" only audits a write that breaks the published ontology, it still goes through — use it during a rollout window, then switch back to "拒绝" once nothing shows up as an exception.',
+              '"Log and allow" only audits a write that breaks the published ontology, it still goes through — use it during a rollout window, then switch back to "Reject" once nothing shows up as an exception.',
             )}
           >
             <Select

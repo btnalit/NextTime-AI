@@ -94,6 +94,7 @@ const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   运行层: 'platformRuntime',
   运行状态: 'platformStatus',
   平台审计: 'platformAudit',
+  验收残留: 'platformResidue',
 };
 
 /** The Sidebar nav item labelled (in Chinese) `labelZh` — see `NAV_TESTID_BY_LABEL`'s doc comment

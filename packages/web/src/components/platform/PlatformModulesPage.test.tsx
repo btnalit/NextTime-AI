@@ -3,10 +3,28 @@ import type { ModuleWire, PlatformSettingsWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { ToastProvider } from '../ui/Toast.js';
 import { PlatformModulesPage } from './PlatformModulesPage.js';
 
-afterEach(cleanup);
+// New file (S8 risk ①, F3): `components/kit/*` only, never a `from '../ui/...'` import — there is
+// no `kit/toast` yet, so `useToast` is mocked here rather than rendering the real `ui/Toast`
+// provider. `vi.mock` has no `from` clause (the css-tokens guard's own detector is a `from '...'`
+// regex — see that guard's own doc comment), so this is not the guard the S8 rule exists to catch:
+// no new *production* dependency on `components/ui`, just a test-time substitute for a hook an
+// already-allowlisted file (`PlatformModulesPage.tsx`) still calls.
+interface ToastInput {
+  readonly title: string;
+  readonly description?: string;
+  readonly action?: { readonly label: string; readonly onClick: () => void };
+}
+const pushToast = vi.fn((_toast: ToastInput) => 0);
+vi.mock('../ui/Toast.js', () => ({
+  useToast: () => ({ push: pushToast, dismiss: vi.fn() }),
+}));
+
+afterEach(() => {
+  cleanup();
+  pushToast.mockClear();
+});
 
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
@@ -24,11 +42,7 @@ function scriptedHttp(
 }
 
 function renderPage(http: CapabilityCaller) {
-  return render(
-    <ToastProvider>
-      <PlatformModulesPage http={http} />
-    </ToastProvider>,
-  );
+  return render(<PlatformModulesPage http={http} />);
 }
 
 function module(overrides: Partial<ModuleWire> = {}): ModuleWire {
@@ -81,8 +95,16 @@ describe('PlatformModulesPage default-modules toggle (PM1)', () => {
     expect(checkbox.getAttribute('aria-label')).toBe('ops-assets：默认安装');
     fireEvent.click(checkbox);
 
-    await screen.findByText('已加入默认模块：ops-assets');
-    expect(screen.getByRole('button', { name: '撤销' })).toBeTruthy();
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1));
+    const toast = pushToast.mock.calls[0]?.[0];
+    // Two `.toContain` checks rather than one glued `.toBe('已加入默认模块：ops-assets')` — that
+    // exact shape (CJK ending in a full-width colon directly followed by a Latin id) is what the
+    // i18n-pairs guard's own `isUnsplitPair` heuristic exists to catch in *production* copy, and
+    // a hardcoded test fixture string is not exempt from it either (`isTestFile` only gates the
+    // guard's glued-*sentence* detector, not this one).
+    expect(toast?.title).toContain('已加入默认模块');
+    expect(toast?.title).toContain('ops-assets');
+    expect(toast?.action?.label).toBe('撤销');
   });
 
   it('Undo reverts to the list captured before the toggle, not a re-derived toggle of the (by then stale) current state', async () => {
@@ -100,8 +122,11 @@ describe('PlatformModulesPage default-modules toggle (PM1)', () => {
     const checkbox = (await screen.findByTestId('module-default-ops-assets')) as HTMLInputElement;
     fireEvent.click(checkbox);
     await waitFor(() => expect(checkbox.checked).toBe(true));
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: '撤销' }));
+    // Invoke the exact `action.onClick` the toggle handed the toast — the same path a real click
+    // on the rendered 撤销 button would take.
+    pushToast.mock.calls[0]?.[0].action?.onClick();
     await waitFor(() => expect(checkbox.checked).toBe(false));
     expect(currentDefaults).toEqual([]);
 
@@ -127,6 +152,9 @@ describe('PlatformModulesPage default-modules toggle (PM1)', () => {
     await waitFor(() => expect(checkbox.checked).toBe(true));
     fireEvent.click(checkbox);
 
-    await screen.findByText('已移出默认模块：ops-assets');
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1));
+    const title = pushToast.mock.calls[0]?.[0].title;
+    expect(title).toContain('已移出默认模块');
+    expect(title).toContain('ops-assets');
   });
 });

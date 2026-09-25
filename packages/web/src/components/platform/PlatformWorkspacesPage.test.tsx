@@ -252,7 +252,7 @@ describe('PlatformWorkspacesPage', () => {
     expect(error.getAttribute('data-error-code')).toBe('entry_model_not_allowed');
   });
 
-  it('shows the saved ontology enforcement and switching it posts update_workspace', async () => {
+  it('S8 W4-C: shows the saved ontology enforcement, and switching it enables the shared 保存 button which posts update_workspace', async () => {
     const acme = workspace({ ontologyEnforcement: 'warn' });
     const http = scriptedHttp({
       ...baseHandlers([acme]),
@@ -272,7 +272,11 @@ describe('PlatformWorkspacesPage', () => {
     ) as HTMLSelectElement;
     expect(select.value).toBe('warn');
 
+    const save = within(detail).getByTestId('workspace-save-basics');
+    expect(save.hasAttribute('disabled')).toBe(true);
     fireEvent.change(select, { target: { value: 'reject' } });
+    expect(save.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(save);
 
     await waitFor(() => expect(select.value).toBe('reject'));
     expect(http.calls.some((call) => call.name === 'update_workspace')).toBe(true);
@@ -299,7 +303,7 @@ describe('PlatformWorkspacesPage', () => {
     expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
   });
 
-  it('a failed ontology-enforcement switch rolls back to the saved value and shows the error', async () => {
+  it('S8 W4-C: a failed save shows the shared error and keeps the picked (unsaved) value on screen', async () => {
     const http = scriptedHttp({
       ...baseHandlers([workspace()]),
       update_workspace: () =>
@@ -317,11 +321,13 @@ describe('PlatformWorkspacesPage', () => {
     expect(select.value).toBe('reject');
 
     fireEvent.change(select, { target: { value: 'warn' } });
+    fireEvent.click(within(detail).getByTestId('workspace-save-basics'));
 
-    await within(detail).findByTestId('workspace-ontology-enforcement-error');
-    // Not echoed through local state — the select is bound to the saved `workspace` prop, so a
-    // failed write leaves it showing what is actually saved, no separate rollback step needed.
-    expect(select.value).toBe('reject');
+    await within(detail).findByTestId('workspace-basics-error');
+    // The consolidated draft is not reset on failure — an administrator sees exactly what they
+    // tried to save and can retry, rather than a silent revert (this drawer's save is no longer
+    // three fire-and-forget writes bound straight to the saved prop).
+    expect(select.value).toBe('warn');
   });
 
   it('the platform default workspace cannot be disabled from the page at all', async () => {

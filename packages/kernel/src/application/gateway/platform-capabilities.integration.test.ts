@@ -5,6 +5,7 @@ import type {
   CreateUserResultWire,
   ListEnvelope,
   PlatformAuditRecordWire,
+  PlatformDraftResidueWire,
   PlatformOverviewWire,
   PlatformSettingsWire,
   UserMembershipWire,
@@ -15,13 +16,16 @@ import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool } from '../../adapters/db/pool.js';
+import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { addPrincipal } from '../../cli/bootstrap.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 import { CONSOLE_SESSION_COOKIE, createPlatformAdmin, createUser } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { updatePlatformSettings } from '../platform/index.js';
+import { proposeWorkerDefinition } from '../worker/definitions.js';
+import { proposeProcedure } from '../worker/procedures.js';
+import { proposeSkill } from '../worker/skills.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { generateApiKey, hashApiKey, withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
@@ -821,6 +825,46 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(overview.health.map((service) => service.service)).toContain('postgres');
         expect(overview.recentAudit.length).toBeGreaterThan(0);
+      });
+    });
+
+    // S8 W4-C (journey ⑤ 清理验收残留): platform_draft_residue counts drafts across every
+    // workspace — never their content (I16). A baseline read before creating drafts, then an
+    // exact delta after, keeps this independent of whatever else this file's shared database
+    // already has.
+    describe('platform_draft_residue', () => {
+      it('counts a fresh draft of each kind, and only drafts — never a published row', async () => {
+        const before = await callAsAdmin<PlatformDraftResidueWire>('platform_draft_residue');
+
+        const proposer = await addPrincipal(pool, workspaceId, 'Draft Residue Proposer');
+        await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
+          proposeWorkerDefinition(client, workspaceId, proposer.principalId, {
+            kind: 'worker',
+            definition: { systemPrompt: 'You are a test worker.' },
+          }),
+        );
+        await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
+          proposeSkill(client, workspaceId, proposer.principalId, {
+            name: 'residue-test-skill',
+            description: 'exists only to be counted',
+            markdown: 'do nothing',
+          }),
+        );
+        await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
+          proposeProcedure(client, workspaceId, proposer.principalId, {
+            name: 'residue-test-procedure',
+            description: 'exists only to be counted',
+            steps: [],
+          }),
+        );
+
+        const after = await callAsAdmin<PlatformDraftResidueWire>('platform_draft_residue');
+        expect(after.workerDefinitions).toBe(before.workerDefinitions + 1);
+        expect(after.skills).toBe(before.skills + 1);
+        expect(after.procedures).toBe(before.procedures + 1);
+        expect(after.total).toBe(before.total + 3);
+        expect(after.expiryThresholdDays).toBeGreaterThanOrEqual(0);
+        expect(after.checkedAt).toBeTruthy();
       });
     });
   },
