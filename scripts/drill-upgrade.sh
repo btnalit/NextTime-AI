@@ -317,7 +317,8 @@ dump_step() {
   db_dir="${NEXTTIME_DATA}/backups/db"
   newest=""
   if [ -d "$db_dir" ]; then
-    for f in "$db_dir"/nexttime-*.dump; do
+    # backup.sh's own timestamped names only — a foreign `nexttime-pre-*.dump` would sort last.
+    for f in "$db_dir"/nexttime-[0-9]*.dump; do
       [ -e "$f" ] && newest="$f"
     done
   fi

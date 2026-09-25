@@ -22,7 +22,7 @@
 #   --keep              skip dropping the temp database afterward — leaves it for manual
 #                       inspection (`docker compose exec -T postgres psql -U nexttime -d <name>`).
 #
-# Without --db: looks for the newest ${NEXTTIME_DATA}/backups/db/nexttime-*.dump (filenames are
+# Without --db: looks for the newest ${NEXTTIME_DATA}/backups/db/nexttime-<ts>.dump (filenames are
 # UTC-timestamped so lexical sort == chronological order, same convention backup.sh's own retention
 # pruning already relies on); if none exists yet (a fresh host that has never run a backup), this
 # drill triggers one itself (`docker compose run --rm -e BACKUP_NOW=1 backup` — docs/runbooks/
@@ -130,7 +130,8 @@ resolve_dump_step() {
     # POSIX pathname expansion sorts matches in ascending collating order — UTC-timestamped
     # filenames (backup.sh's own convention) therefore sort chronologically; the last match is
     # the newest. `2>/dev/null` + the literal-glob fallback check handles "no matches yet".
-    for f in "$DB_DIR"/nexttime-*.dump; do
+    # `[0-9]`: backup.sh's own names only — a foreign `nexttime-pre-*.dump` would sort last.
+    for f in "$DB_DIR"/nexttime-[0-9]*.dump; do
       [ -e "$f" ] && newest="$f"
     done
   fi
@@ -150,7 +151,7 @@ resolve_dump_step() {
 
   newest=""
   if [ -d "$DB_DIR" ]; then
-    for f in "$DB_DIR"/nexttime-*.dump; do
+    for f in "$DB_DIR"/nexttime-[0-9]*.dump; do
       [ -e "$f" ] && newest="$f"
     done
   fi

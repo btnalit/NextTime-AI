@@ -158,8 +158,11 @@ run_backup() {
 	tar_size=$(wc -c <"$tar_file" | tr -d ' ')
 	log "ok: $tar_file ($tar_size bytes)"
 
-	prune "$DB_DIR" "nexttime-*.dump" "$RETENTION"
-	prune "$FILES_DIR" "files-*.tgz" "$RETENTION"
+	# Only this script's own timestamped names (`<prefix>-<UTC ts>`, ts starts with a digit): any
+	# other file an operator drops here (e.g. `nexttime-pre-<tag>.dump`) sorts *after* every
+	# timestamp and would otherwise count as "newest", so the fresh dump would be the one pruned.
+	prune "$DB_DIR" "nexttime-[0-9]*.dump" "$RETENTION"
+	prune "$FILES_DIR" "files-[0-9]*.tgz" "$RETENTION"
 
 	{
 		echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"

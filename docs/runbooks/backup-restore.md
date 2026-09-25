@@ -73,6 +73,11 @@ API key）与 `providers.json` 一并进了 `files-<ts>.tgz`；`tar` 默认保�
 `${NEXTTIME_DATA}/backups/last-success`（时间戳 + 两个产物大小）。失败不中断循环，下次
 `BACKUP_TIME` 再试；日志走 stdout（`docker compose logs backup`）。
 
+`backups/db/` 与 `backups/files/` 归 backup 服务所有：发版 / 演练前的手工 `pg_dump` 放到别的目录
+（例如 `backups/pre-upgrade/`，不参与轮换，按需手动清理）。2026-09-25 前轮换按文件名匹配
+`nexttime-*.dump`，手工放进去的 `nexttime-pre-<tag>.dump` 按名字排在所有时间戳之后、被当成"最新"，
+每天新生成的 dump 反而立刻被删；现在轮换与 `drill-*.sh` 找"最新 dump"都只认 `nexttime-<时间戳>.dump`。
+
 ## 手动跑一次
 ```
 docker compose run --rm -e BACKUP_NOW=1 backup
