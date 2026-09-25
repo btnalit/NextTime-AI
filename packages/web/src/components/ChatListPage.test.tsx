@@ -23,6 +23,10 @@ function chat(overrides: Partial<ChatWire> = {}): ChatWire {
     visibility: 'private',
     createdAt: '2026-09-01T00:00:00.000Z',
     archivedAt: null,
+    // S8 W4 (audit C1): defaults to `createdAt` like a fresh Chat with no messages/Turn yet —
+    // individual fixtures below override `lastActivityAt` where the test cares about it.
+    lastActivityAt: '2026-09-01T00:00:00.000Z',
+    hasRunningTurn: false,
     ...overrides,
   };
 }
@@ -128,6 +132,45 @@ describe('ChatListPage filter (W1)', () => {
     await screen.findByTestId('chats-list');
     fireEvent.click(screen.getByTestId('chats-tab-archived'));
     expect(screen.getByTestId('chats-archived-empty')).toBeTruthy();
+  });
+});
+
+describe('ChatListPage activity subtitle (S8 W4, audit C1)', () => {
+  it('shows lastActivityAt, not the stale createdAt, for an active row', async () => {
+    // Relative offsets from the real clock (not fixed calendar dates) so the assertion is not
+    // coupled to what year the suite happens to run in — `createdAt` is months stale,
+    // `lastActivityAt` is five minutes ago (`formatRelative`'s own minute bucket).
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const client = scriptedClient({
+      list_chats: () => ({
+        items: [
+          chat({
+            id: 'c-stale-created',
+            title: 'Ops chat',
+            createdAt: '2020-01-01T00:00:00.000Z',
+            lastActivityAt: fiveMinutesAgo,
+          }),
+        ],
+      }),
+    });
+    renderList(client);
+    await screen.findByTestId('chats-list');
+    const row = screen.getByTestId('chat-row');
+    const activity = within(row).getByTestId('chat-last-activity-at');
+    expect(activity.textContent).toBe('5 分钟前');
+    expect(within(row).queryByTestId('chat-running-chip')).toBeNull();
+  });
+
+  it('shows a running chip when the Chat has a Turn in progress', async () => {
+    const client = scriptedClient({
+      list_chats: () => ({
+        items: [chat({ id: 'c-running', title: 'Ops chat', hasRunningTurn: true })],
+      }),
+    });
+    renderList(client);
+    await screen.findByTestId('chats-list');
+    const row = screen.getByTestId('chat-row');
+    expect(within(row).getByTestId('chat-running-chip').textContent).toBe('运行中');
   });
 });
 

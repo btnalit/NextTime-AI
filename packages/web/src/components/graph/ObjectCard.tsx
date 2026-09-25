@@ -29,8 +29,11 @@ export function ObjectRow({
   selected,
   testId,
 }: ObjectCardProps & { readonly onOpen: (objectId: string) => void; readonly selected?: boolean }) {
+  const t = useT();
   const { hrefFor } = useGraphObjects();
   const name = objectDisplayName(object, identityKeys);
+  const observedRelative = formatRelative(object.lastObservedAt, asOf);
+  const updatedRelative = formatRelative(object.updatedAt, asOf);
   return (
     <DataRow
       leading={<span className="tag graph-type-tag">{object.objectType}</span>}
@@ -42,8 +45,8 @@ export function ObjectRow({
           <FreshnessChip input={{ lastObservedAt: object.lastObservedAt }} asOf={asOf} size="s" />
           <span className="meta-sep" title={formatDateTime(object.lastObservedAt)}>
             {object.lastObservedAt
-              ? `观测 Observed ${formatRelative(object.lastObservedAt, asOf)}`
-              : `更新 Updated ${formatRelative(object.updatedAt, asOf)}`}
+              ? t(`观测 ${observedRelative}`, `Observed ${observedRelative}`)
+              : t(`更新 ${updatedRelative}`, `Updated ${updatedRelative}`)}
           </span>
         </>
       }

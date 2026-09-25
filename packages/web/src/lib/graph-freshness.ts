@@ -184,12 +184,15 @@ export function freshnessOf(
   return { kind, tone: TONES[kind], label: LABELS[kind], ageMs };
 }
 
-/** "2 小时 2 h" — the window, for the legend. Whole hours when it divides evenly, else minutes. */
-export function formatWindow(windowMs: number = OBSERVATION_WINDOW_MS): string {
+/** The window, for the legend — whole hours when it divides evenly, else minutes. S8 W4
+ *  (i18n baseline "分钟 min"/"小时 h"): returns a `BilingualText` like every other label in this
+ *  module now, instead of a fixed "2 小时 2 h" string that showed both languages regardless of
+ *  `lang` — the caller (`FreshnessLegend`, which has `t`) picks one with `freshnessLabel`. */
+export function formatWindow(windowMs: number = OBSERVATION_WINDOW_MS): BilingualText {
   const minutes = Math.round(windowMs / 60_000);
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} 小时 ${hours} h`;
+    return { zh: `${hours} 小时`, en: `${hours} h` };
   }
-  return `${minutes} 分钟 ${minutes} min`;
+  return { zh: `${minutes} 分钟`, en: `${minutes} min` };
 }

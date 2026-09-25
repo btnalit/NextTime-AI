@@ -99,7 +99,7 @@ describe('freshnessOf', () => {
 
 describe('formatWindow', () => {
   it('prints whole hours, else minutes', () => {
-    expect(formatWindow(2 * HOUR)).toBe('2 小时 2 h');
-    expect(formatWindow(90 * 60 * 1000)).toBe('90 分钟 90 min');
+    expect(formatWindow(2 * HOUR)).toEqual({ zh: '2 小时', en: '2 h' });
+    expect(formatWindow(90 * 60 * 1000)).toEqual({ zh: '90 分钟', en: '90 min' });
   });
 });

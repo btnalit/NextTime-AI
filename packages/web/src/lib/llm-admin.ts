@@ -124,11 +124,13 @@ export class LlmAdminClient {
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch (error) {
-      throw new LlmAdminError(
-        0,
-        'network',
-        `无法连接模型代理 Could not reach the model proxy: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const detail = error instanceof Error ? error.message : String(error);
+      // S8 W4 i18n baseline: `message` here is the `Error.message` fallback for a caller that
+      // never routes through `llmAdminErrorMessage` below (English, matching every other code's
+      // raw `message` — server-originated messages elsewhere in this file are English too); the
+      // `'network'` case added to `llmAdminErrorMessage` is what actually renders in the console,
+      // picking one language via `t()` instead of gluing both.
+      throw new LlmAdminError(0, 'network', `Could not reach the model proxy: ${detail}`, detail);
     }
 
     let parsed: unknown;
@@ -140,7 +142,7 @@ export class LlmAdminClient {
         throw new LlmAdminError(
           response.status,
           'invalid_response',
-          `模型代理返回了无法识别的响应 The model proxy returned an unrecognized response (HTTP ${response.status})`,
+          `The model proxy returned an unrecognized response (HTTP ${response.status})`,
         );
       }
     }
@@ -163,7 +165,7 @@ export class LlmAdminClient {
     throw new LlmAdminError(
       response.status,
       'http_error',
-      `模型代理拒绝了这次请求 The model proxy rejected this request (HTTP ${response.status})`,
+      `The model proxy rejected this request (HTTP ${response.status})`,
     );
   }
 
@@ -221,6 +223,24 @@ export class LlmAdminClient {
 export function llmAdminErrorMessage(error: unknown, t: Translate): string | null {
   if (!(error instanceof LlmAdminError)) return null;
   switch (error.code) {
+    // S8 W4 i18n baseline: these three codes are client-authored (never a server message), so —
+    // unlike the server-originated codes below, which fall through to `error.message` verbatim
+    // when unmatched — they get a real bilingual mapping here instead of `request`'s raw
+    // `Error.message` (English-only fallback for a caller that skips this function).
+    case 'network': {
+      const detail = typeof error.details === 'string' ? error.details : error.message;
+      return t(`无法连接模型代理：${detail}`, `Could not reach the model proxy: ${detail}`);
+    }
+    case 'invalid_response':
+      return t(
+        `模型代理返回了无法识别的响应（HTTP ${error.status}）`,
+        `The model proxy returned an unrecognized response (HTTP ${error.status})`,
+      );
+    case 'http_error':
+      return t(
+        `模型代理拒绝了这次请求（HTTP ${error.status}）`,
+        `The model proxy rejected this request (HTTP ${error.status})`,
+      );
     case 'store_unwritable':
       return t(
         '模型代理的状态目录不可写——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后重建 llm-proxy。',

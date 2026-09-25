@@ -4,7 +4,7 @@ import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
 import { groupFacts, isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
-import { useT } from '../../lib/i18n.js';
+import { useLang, useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -69,6 +69,7 @@ export function ObjectView({
   onAsOfChange,
 }: ObjectViewProps) {
   const t = useT();
+  const { lang } = useLang();
   const state = useCapability<StateAtResult>(http, 'state_at', { objectId, at });
   const { prime, nameOf } = useGraphObjects();
   const asOf = useMemo(() => Date.parse(at), [at]);
@@ -196,6 +197,12 @@ export function ObjectView({
                     <Input
                       id="graph-as-of"
                       type="datetime-local"
+                      // S8 W4 (audit G3 "「截至 As of」用 en-US 原生日期控件 mm/dd/yyyy"): the
+                      // native picker's displayed format follows this element's own `lang`, not
+                      // the document's — without it the browser fell back to the page's runtime
+                      // locale (en-US in CI, and for any reader whose OS/browser locale isn't
+                      // zh-CN) regardless of the console's own language switch.
+                      lang={lang}
                       value={draftAt}
                       onChange={(event) => setDraftAt(event.target.value)}
                       data-testid="graph-as-of-input"

@@ -126,11 +126,11 @@ const KIND_PATH_COPY: Readonly<Record<LauncherKind, { readonly zh: string; reado
       en: 'Also served by the gate host — its tools/list becomes the manifest; an administrator may mark it vetted.',
     },
     ssh: {
-      zh: 'SSH 主机是打包门：需要二进制与私钥，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。',
+      zh: 'SSH 主机是打包门：需要二进制与私钥，走 compose 服务 + 自注册。下一步显示部署清单，门自注册后自动接上后续步骤。',
       en: 'A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
     },
     cli: {
-      zh: '命令行工具是打包门：需要二进制与目标凭证，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。',
+      zh: '命令行工具是打包门：需要二进制与目标凭证，走 compose 服务 + 自注册。下一步显示部署清单，门自注册后自动接上后续步骤。',
       en: 'A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
     },
   };
@@ -504,10 +504,10 @@ function ConnectionStep({
           />
           <Field
             id="launcher-intended-gate-id"
-            label={t('它的', 'GATE_ID Its GATE_ID')}
+            label={t('它的 GATE_ID', 'Its GATE_ID')}
             hint={t(
-              '可选：填了以后清单里的占位符会替换成它，announce 后自动选中。 Optional —',
-              'fills the placeholders above and auto-selects the gate once it announces.',
+              '可选：填了以后清单里的占位符会替换成它，自注册后自动选中。',
+              'Optional — fills the placeholders above and auto-selects the gate once it announces.',
             )}
             error={
               intendedGateId.length > 0 && !GATE_ID_PATTERN.test(intendedGateId.trim())
@@ -624,7 +624,7 @@ function ExistingGatePicker({
         <p className="text-3" data-testid="launcher-gates-empty">
           {t(
             path === 'packaged'
-              ? `还没有 ${kind} 类型的门 announce${isAdmin ? '' : '（并由管理员启用、设为平台预置）'}；每 5 秒重查一次。`
+              ? `还没有 ${kind} 类型的门自注册${isAdmin ? '' : '（并由管理员启用、设为平台预置）'}；每 5 秒重查一次。`
               : `目录里还没有 ${kind} 类型的实例。`,
             path === 'packaged'
               ? `No ${kind} gate has announced itself${isAdmin ? '' : ' (and been enabled + preset by an administrator)'} yet — checking every 5 s.`
@@ -708,7 +708,7 @@ function SelectedGateSummary({
         <Notice tone="warn" testId="launcher-awaiting-announce">
           {platform?.hosted
             ? t(
-                '等待门宿主接管：宿主下一次拉取时导入 Operation 并 announce（默认 60 秒内）。',
+                '等待门宿主接管：宿主下一次拉取时导入 Operation 并自注册（默认 60 秒内）。',
                 'Waiting for the gate host to take it over — it imports the Operations and announces on its next pull.',
               )
             : t('还没有心跳或 Operation。', 'No heartbeat or Operations yet.')}
@@ -790,7 +790,7 @@ function PolicyStep({
       {gate.platform && gate.platform.operations.length > 0 ? (
         <div className="stack-s" data-testid="launcher-announced-operations">
           <span className="section-title">
-            {t('已 announce 的 Operation', 'Announced operations')}{' '}
+            {t('已声明的 Operation', 'Announced operations')}{' '}
             {`(${gate.platform.operations.length})`}
           </span>
           <div className="table-scroll">
@@ -928,9 +928,7 @@ function PlatformEnableSection({
             onClick={() => void setStatus('enabled')}
             loading={busy}
             disabled={!gate.announced}
-            title={
-              !gate.announced ? t('等待它 announce 后再启用', 'Wait for its announce') : undefined
-            }
+            title={!gate.announced ? t('等待它自注册后再启用', 'Wait for its announce') : undefined}
             data-testid="launcher-platform-enable-button"
           >
             {t('启用', 'Enable')}
@@ -1018,6 +1016,7 @@ function WorkspaceEnableSection({
   readonly workspaceReady: boolean;
 }) {
   const t = useT();
+  const publishedCount = enabled?.publishedOperationNames.length ?? 0;
   return (
     <div className="stack" data-testid="launcher-workspace-enable">
       <span className="section-title">{t('工作区侧', 'Workspace side')}</span>
@@ -1042,7 +1041,7 @@ function WorkspaceEnableSection({
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="text-2">
               {t(
-                '在本工作区启用：注册 Gatekeeper、导入并发布它 announce 的 Operation。',
+                '在本工作区启用：注册 Gatekeeper、导入并发布它声明的 Operation。',
                 'Enable here — registers the Gatekeeper and imports + publishes its announced Operations.',
               )}
             </span>
@@ -1072,10 +1071,7 @@ function WorkspaceEnableSection({
           />
           {enabled ? (
             <span className="text-3">
-              {t(
-                `已发布 ${enabled.publishedOperationNames.length} 个 Operation`,
-                `Published ${enabled.publishedOperationNames.length}`,
-              )}
+              {t(`已发布 ${publishedCount} 个 Operation`, `Published ${publishedCount}`)}
             </span>
           ) : null}
         </div>
@@ -1249,7 +1245,7 @@ function HandshakeStep({
       {gate.status === 'enabled' && gate.health === 'ok' && gate.announced ? (
         <Notice testId="launcher-handshake-ok">
           {t(
-            '该门实例可用：已 announce、已启用、健康 ok。',
+            '该门实例可用：已自注册、已启用、健康 ok。',
             'This gate instance is usable — announced, enabled and healthy.',
           )}
         </Notice>

@@ -12,10 +12,10 @@ import { useChatChangeListener } from '../hooks/useChatUpdates.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { actionCardFromPendingContent, isPendingCardMessage } from '../lib/action-card.js';
 import { type ChatSummary, applyChatMetadata, isArchived } from '../lib/chat-lifecycle.js';
-import { insertChatMessage } from '../lib/chat-messages.js';
+import { insertChatMessage, messageRoleLabel } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { formatDateTime, formatTime } from '../lib/format.js';
+import { formatDateTime, formatTime, humanizeKind } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { initialTurnState, streamReducer } from '../lib/streaming-reducer.js';
 import { systemStatusLineFromMessage } from '../lib/system-status.js';
@@ -360,9 +360,15 @@ export function ChatPage({
     }
     try {
       await http.call('set_auto_approved_action_kind', { actionKindTag: card.actionKindTag });
+      // S8 W4 i18n baseline: was a raw un-t()'d template literal splicing the enum value
+      // (`actionKindTag`) straight into glued zh/en text — `humanizeKind` (same helper
+      // `ApprovalQueuePage`'s own toast already uses for this) instead of the raw tag.
       toast.push({
         tone: 'info',
-        title: `${card.actionKindTag} 今后将自动批准 will be auto-approved from now on`,
+        title: t(
+          `今后将自动批准 ${humanizeKind(card.actionKindTag)}`,
+          `Will be auto-approved from now on: ${humanizeKind(card.actionKindTag)}`,
+        ),
       });
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
@@ -478,7 +484,7 @@ export function ChatPage({
           <MessageReferences http={http} text={message.text} />
         ) : null}
         <div className="message-meta">
-          <span>{message.role}</span>
+          <span>{messageRoleLabel(message.role, t)}</span>
           <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
         </div>
       </div>

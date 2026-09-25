@@ -171,8 +171,9 @@ function EnablePreviewBody({
   readonly http: CapabilityCaller;
 }) {
   const t = useT();
-  const noOperations =
-    preview.operationsToImport.length === 0 && preview.operationsAlreadyPresent.length === 0;
+  const toImportCount = preview.operationsToImport.length;
+  const presentCount = preview.operationsAlreadyPresent.length;
+  const noOperations = toImportCount === 0 && presentCount === 0;
   return (
     <div className="stack-s">
       {preview.wouldLink ? (
@@ -188,10 +189,7 @@ function EnablePreviewBody({
       {preview.operationsToImport.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-import">
           <span className="text-12 font-medium text-text-2">
-            {t(
-              `将发布 ${preview.operationsToImport.length} 个 Operation`,
-              `Will publish ${preview.operationsToImport.length} operation(s)`,
-            )}
+            {t(`将发布 ${toImportCount} 个 Operation`, `Will publish ${toImportCount}`)}
           </span>
           <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {preview.operationsToImport.map((operation) => (
@@ -212,10 +210,7 @@ function EnablePreviewBody({
       {preview.operationsAlreadyPresent.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-present">
           <span className="text-12 font-medium text-text-2">
-            {t(
-              `已存在 ${preview.operationsAlreadyPresent.length} 个 Operation`,
-              `${preview.operationsAlreadyPresent.length} operation(s) already there`,
-            )}
+            {t(`已存在 ${presentCount} 个 Operation`, `${presentCount} operation(s) already there`)}
           </span>
           <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {preview.operationsAlreadyPresent.map((operation) => (

@@ -61,8 +61,9 @@ export async function postGateCredential(
       body: JSON.stringify({ onBehalfOf: tokenResult.onBehalfOf, credential }),
     });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
     throw new GateHostError(
-      `无法连接门宿主 Could not reach the gate host: ${error instanceof Error ? error.message : String(error)}`,
+      t(`无法连接门宿主：${detail}`, `Could not reach the gate host: ${detail}`),
     );
   }
 
@@ -72,9 +73,9 @@ export async function postGateCredential(
     );
   }
   if (!response.ok) {
-    throw new GateHostError(
-      `门宿主拒绝了这次写入 The gate host rejected this write (HTTP ${response.status})`,
-    );
+    const rejectedZh = `门宿主拒绝了这次写入（HTTP ${response.status}）`;
+    const rejectedEn = `The gate host rejected this write (HTTP ${response.status})`;
+    throw new GateHostError(t(rejectedZh, rejectedEn));
   }
 
   let body: unknown;

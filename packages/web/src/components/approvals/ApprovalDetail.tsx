@@ -279,14 +279,20 @@ export function ApprovalDetail({
               href={provenance}
               data-testid="approval-provenance-link"
             >
-              查看溯源 View provenance · {humanizeKind(row.actionKindTag)}
+              {t('查看溯源', 'View provenance')} · {humanizeKind(row.actionKindTag)}
             </a>
           </ApprovalCard>
         }
         title={
           pending?.kind === 'reject'
-            ? `拒绝 Reject · ${humanizeKind(row.actionKindTag)}`
-            : `批准高影响动作 Approve a high-impact action · ${humanizeKind(row.actionKindTag)}`
+            ? t(
+                `拒绝 ${humanizeKind(row.actionKindTag)}`,
+                `Reject: ${humanizeKind(row.actionKindTag)}`,
+              )
+            : t(
+                `批准高影响动作 ${humanizeKind(row.actionKindTag)}`,
+                `Approve a high-impact action: ${humanizeKind(row.actionKindTag)}`,
+              )
         }
         description={
           pending?.kind === 'reject'

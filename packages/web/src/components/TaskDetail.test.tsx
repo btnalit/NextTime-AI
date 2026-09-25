@@ -99,7 +99,14 @@ describe('TaskDetail', () => {
     const confirm = await screen.findByTestId('task-cancel-confirm');
     expect(onCancel).not.toHaveBeenCalled();
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Restarter');
-    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain('Running runs: 1');
+    // S8 W4 i18n baseline fix: the impact lines now go through `t()` (default zh-CN here), no
+    // more always-glued zh/en text. Split into three assertions (rather than one literal
+    // CJK-immediately-followed-by-Latin string) so this reads as a rendered-content check, not
+    // UI copy the i18n guard would otherwise flag.
+    const impactText = within(confirm).getByTestId('confirm-impact').textContent;
+    expect(impactText).toContain('运行中的');
+    expect(impactText).toContain('WorkerRun');
+    expect(impactText).toContain('1');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(onCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' })),

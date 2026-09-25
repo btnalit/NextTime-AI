@@ -149,6 +149,8 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('nav-platformSettings')).toBeTruthy();
     expect(screen.getByTestId('nav-platformOverview')).toBeTruthy();
     expect(screen.getByTestId('nav-platformAudit')).toBeTruthy();
+    // S8 W4 (audit U1 "两组的作用范围从未说明"): 平台 carries a "全平台" scope note.
+    expect(screen.getByTestId('nav-section-platform-scope').textContent).toContain('全平台');
   });
 
   it('shows no platform-admin items for a non-admin platformRole, or an apiKey session (no platform user)', () => {
@@ -174,6 +176,8 @@ describe('Sidebar', () => {
       // 治理 still shows — an apiKey session always has an implicit workspace.
       expect(screen.getByTestId('nav-section-govern')).toBeTruthy();
       expect(screen.getByTestId('nav-members')).toBeTruthy();
+      // S8 W4 (audit U1 "两组的作用范围从未说明"): 治理 carries a "本工作区" scope note.
+      expect(screen.getByTestId('nav-section-govern-scope').textContent).toContain('本工作区');
       unmount();
     }
   });

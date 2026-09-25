@@ -4,33 +4,9 @@
   ],
   "packages/web/src/components/ApprovalQueuePage.tsx": ["今后自动批准 Auto-approved from now on ·"],
   "packages/web/src/components/AvailableGateInstancesSection.tsx": ["已发布 个 Operation"],
-  "packages/web/src/components/ChatPage.tsx": ["今后将自动批准 will be auto-approved from now on"],
   "packages/web/src/components/RegisteredSystemsSection.tsx": ["已发布 个 Operation"],
-  "packages/web/src/components/TaskDetail.tsx": [
-    "任务 Task:",
-    "已用 Token Tokens used:",
-    "运行中的 WorkerRun Running runs:"
-  ],
-  "packages/web/src/components/approvals/ApprovalDetail.tsx": [
-    "批准高影响动作 Approve a high-impact action ·"
-  ],
   "packages/web/src/components/audit/AuditLogSection.tsx": [
     "已导出 条审计记录 Exported audit rows"
-  ],
-  "packages/web/src/components/connect/ConnectSystemLauncher.tsx": ["已发布 个 Operation"],
-  "packages/web/src/components/connect/EnableGateConfirm.tsx": [
-    "将发布 个 Operation",
-    "已存在 个 Operation"
-  ],
-  "packages/web/src/components/graph/FactRow.tsx": ["自 from", "观测 Observed", "记录 Recorded"],
-  "packages/web/src/components/graph/NeighbourhoodView.tsx": [
-    "与 个邻居 and neighbours",
-    "聚焦 Focus"
-  ],
-  "packages/web/src/components/graph/ObjectCard.tsx": ["更新 Updated", "观测 Observed"],
-  "packages/web/src/components/graph/ProvenanceDrawer.tsx": [
-    "最近观测 Last observed",
-    "记录 Recorded"
   ],
   "packages/web/src/components/platform/CreateUserForm.tsx": ["默认工作区 Default workspace:"],
   "packages/web/src/components/platform/GateInstanceDetailPanel.tsx": [
@@ -72,15 +48,5 @@
   "packages/web/src/components/platform/providers/CredentialState.tsx": [
     "密钥来自 llm-proxy 容器环境变量 （主机 secrets/llm-proxy.env）。也可以在下方为这个供应商单独设置控制台密钥，控制台密钥优先。 The key is read from the llm-proxy container env var (secrets/llm-proxy.env on the host). A console key set below takes priority over it.",
     "尚未配置：可在下方设置控制台密钥，或由操作员在主机 secrets/llm-proxy.env 里加一行 =<密钥> 后重建 llm-proxy。 Not configured yet — set a console key below, or have the operator add =<key> to secrets/llm-proxy.env and recreate llm-proxy."
-  ],
-  "packages/web/src/lib/gate-host.ts": [
-    "无法连接门宿主 Could not reach the gate host:",
-    "门宿主拒绝了这次写入 The gate host rejected this write (HTTP )"
-  ],
-  "packages/web/src/lib/graph-freshness.ts": ["分钟 min", "小时 h"],
-  "packages/web/src/lib/llm-admin.ts": [
-    "无法连接模型代理 Could not reach the model proxy:",
-    "模型代理拒绝了这次请求 The model proxy rejected this request (HTTP )",
-    "模型代理返回了无法识别的响应 The model proxy returned an unrecognized response (HTTP )"
   ]
 }

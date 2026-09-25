@@ -135,6 +135,14 @@
    * opacity keeps that without silently undoing the token's contrast guarantee. */
 }
 
+/* S8 W4 (audit U1 "两组的作用范围从未说明"): the 治理/平台 group's one-line scope note, under the
+ * group title, above its items (`components/shell/Sidebar.tsx`'s `NavSectionGroup`). */
+.nav-section-scope {
+  padding: 0 10px 2px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
 .nav-label-sub {
   display: block;
   font-size: var(--fs-12);
@@ -420,6 +428,7 @@
   .sidebar-brand-text,
   .nav-label,
   .nav-section-title,
+  .nav-section-scope,
   .conn-status-label,
   .sidebar-version,
   .sidebar-user,

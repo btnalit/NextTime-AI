@@ -272,7 +272,13 @@ describe('TasksPage cancel confirmation (S6-A B2)', () => {
     const confirm = await screen.findByTestId('task-cancel-confirm');
     expect(confirm.getAttribute('role')).toBe('dialog');
     expect(screen.getByTestId('confirm-target').textContent).toBe('Restarter');
-    expect(screen.getByTestId('confirm-impact').textContent).toContain('Running runs: 1');
+    // S8 W4 i18n baseline fix: default zh-CN now renders one language, not both glued together.
+    // Split (rather than one literal CJK+Latin string) so this reads as a rendered-content
+    // check, not UI copy the i18n guard would otherwise flag.
+    const impactText = screen.getByTestId('confirm-impact').textContent;
+    expect(impactText).toContain('运行中的');
+    expect(impactText).toContain('WorkerRun');
+    expect(impactText).toContain('1');
     expect(cancel).not.toHaveBeenCalled();
 
     fireEvent.keyDown(document, { key: 'Escape' });

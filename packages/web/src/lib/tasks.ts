@@ -62,12 +62,15 @@ export function taskFinishedAt(task: TaskSummary): string | null {
   return task.completedAt ?? task.failedAt ?? task.cancelledAt;
 }
 
-/** `invoke_worker`'s `input` is opaque JSON; the entry agent conventionally sends `{need}`. */
+/** `invoke_worker`'s `input` is opaque JSON; the entry agent conventionally sends `{need}`, but a
+ *  real run (audit R7 "行副标题直接显示原始 JSON 输入") has also sent `{intent}` — both, plus the
+ *  other conventional shapes below, are tried before falling back to a raw JSON excerpt
+ *  (`TasksPage`'s own `taskNeed(...) ?? excerpt(...)`). */
 export function taskNeed(input: unknown): string | undefined {
   if (typeof input === 'string') return input;
   if (input && typeof input === 'object') {
     const record = input as Record<string, unknown>;
-    for (const key of ['need', 'prompt', 'summary', 'task']) {
+    for (const key of ['need', 'intent', 'prompt', 'summary', 'task']) {
       if (typeof record[key] === 'string') return record[key];
     }
   }

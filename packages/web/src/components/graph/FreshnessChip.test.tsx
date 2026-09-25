@@ -51,7 +51,13 @@ describe('FreshnessLegend', () => {
     render(<FreshnessLegend />);
     const legend = screen.getByTestId('graph-legend');
     expect(legend.querySelectorAll('.graph-legend-row')).toHaveLength(FRESHNESS_LEGEND.length);
-    expect(legend.textContent).toContain('2 小时 2 h');
+    // S8 W4 (audit G3, i18n correctness fix): `formatWindow` now returns one language via `t()`
+    // (no LangProvider here → default zh-CN) instead of always gluing both together.
+    expect(legend.textContent).toContain('2 小时');
+    expect(legend.textContent).not.toContain('2 h');
     expect(legend.textContent).toContain('ops.collector_silent');
+    // The trailing English sentence used to render unconditionally after the zh/en t() pick —
+    // now it is part of the same t() call and must not appear in the zh-CN default render.
+    expect(legend.textContent).not.toContain('no capability exposes');
   });
 });
