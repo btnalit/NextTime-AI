@@ -10,8 +10,9 @@ import { createFreshWorkspace, goToByLabel } from './helpers.js';
  *      入口容器、残留的 Gatekeeper/Worker 定义草稿。
  *   2. 在相应页面找到"清理/残留"入口 — 平台 · 验收残留页（`PlatformResiduePage`, S8 W4-C）现在把
  *      三类残留放在一起：工作区（链到 平台 · 工作区 的"仅看残留"预设）、草稿定义（只显示数量，不显示
- *      内容 — I16 只对提议者本人可见）、已退出的入口容器（`runtime_inventory`，只读 — 运行层还没有
- *      回收它们的写能力，见页面自身的说明）。
+ *      内容 — I16 只对提议者本人可见）、已退出的入口容器（`runtime_inventory`，只读 — `purge_workspace`
+ *      在 S8 W5 并入 main 后会一并回收所属工作区的容器，但工作区仍在使用中的容器还没有单独回收的入口，
+ *      见页面自身的说明）。
  *   3. 预览将被清除的内容（dry run：数量、原因），不是直接删除 —— 工作区这一类沿用
  *      `PlatformWorkspacesPage`/`PurgeWorkspaceDrawer` 已有的预览 → 确认流程（workspaces.spec.ts 的
  *      S6-A A1 场景已端到端覆盖那条路径本身，这里不重复）。

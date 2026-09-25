@@ -239,15 +239,19 @@ export function PlatformResiduePage({ http }: PlatformResiduePageProps) {
               testId="residue-containers-list"
               rowTestId={() => 'residue-container-row'}
             />
-            {/* ui-audit journey ⑤ / development-tasks.md §5e leftover 77: the kernel has no write
-             *  to reclaim these yet — `roll_entry_containers` only stops a *running* container that
-             *  needs a rebuild, never one already exited. W5-C is adding purge-time container
-             *  reclaim; this note names the gap rather than offering a button that would fail.
-             *  The visible copy names no internal tracking number (F5 文案守卫). */}
+            {/* ui-audit journey ⑤ / development-tasks.md §5e leftover 77: `purge_workspace`'s
+             *  execution now also reclaims the entry container of every principal it purges (S8
+             *  W5 lane C, landed on main while this lane was in flight) — so an exited container
+             *  whose *workspace* is residue is cleaned up as a side effect of using the 工作区
+             *  card's own "去清理" link above. What still has no direct capability is an exited
+             *  container whose workspace is *not* residue (still active) — `roll_entry_containers`
+             *  only stops a *running* container that needs a rebuild, never one already exited.
+             *  This note describes exactly that remaining gap, never an internal tracking number
+             *  (F5 文案守卫). */}
             <p className="text-3 text-small">
               {t(
-                '目前还没有从控制台回收它们的入口——运行层还没有对应的清除能力，后续波次会补上。',
-                'No console action reclaims these yet — the runtime layer has no delete capability for them yet; a later wave adds it.',
+                '所属工作区如果被清除，会一并回收这里列出的容器；工作区仍在使用中的，目前还没有单独回收它的入口。',
+                'A container is reclaimed as soon as its own workspace is purged; one whose workspace is still active has no separate reclaim action yet.',
               )}
             </p>
           </>
