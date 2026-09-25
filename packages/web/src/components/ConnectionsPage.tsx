@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from './kit/dropdown-menu.js';
 import { PageHeader } from './kit/page-header.js';
+import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -261,12 +262,10 @@ export function ConnectionsPage({
         }
       />
 
-      <Notice testId="systems-prerequisites">
-        {t(
-          '执行需要三样都齐：门已在本工作区启用、门已授权给该成员、该成员的入口 agent 能用到引用它的已发布 Worker。',
-          'Execution needs all three: the gate enabled in this workspace, the gate granted to the member, and a published Worker their entry agent can reach that references it.',
-        )}
-      </Notice>
+      {/* SY3 + J1: one live bar instead of a static reminder stacked on top of it — it states the
+          three execution prerequisites and what is missing for the current user, and renders
+          nothing once this workspace is ready. */}
+      <ExecutionPrerequisiteBar http={http} />
 
       <section className="section" aria-labelledby="connection-requests-title">
         <div className="section-header">

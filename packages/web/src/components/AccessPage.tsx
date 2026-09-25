@@ -13,6 +13,7 @@ import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { GrantGateDrawer } from './access/GrantGateDrawer.js';
 import { PageHeader } from './kit/page-header.js';
 import { DashboardCard } from './kit/section.js';
+import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -140,6 +141,8 @@ export function AccessPage({ http }: AccessPageProps) {
           ) : undefined
         }
       />
+
+      <ExecutionPrerequisiteBar http={http} />
 
       <DashboardCard title={t('授权', 'Grants')}>
         <div className="page-toolbar">

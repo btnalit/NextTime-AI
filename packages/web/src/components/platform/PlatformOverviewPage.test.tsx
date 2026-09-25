@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { PlatformOverviewWire } from '@nexttime/shared';
+import type { PlatformOverviewWire, PlatformStatusWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -9,15 +9,38 @@ import { PlatformOverviewPage } from './PlatformOverviewPage.js';
 
 afterEach(cleanup);
 
+/** S8 W2 U3a: every scripted client here answers `platform_status` with a healthy, zero-cost
+ *  default unless a test overrides it — the page now reads it unconditionally for O1's "费用"
+ *  card. Tests that care about the cost figure itself override the handler explicitly. */
+function defaultStatus(): PlatformStatusWire {
+  return {
+    health: [],
+    backup: { configured: false, detail: 'not configured' },
+    llmUsage30d: {
+      windowDays: 30,
+      totalCostUsd: null,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      callCount: 0,
+    },
+    recentAudit: [],
+    checkedAt: '2026-09-10T00:00:00.000Z',
+  };
+}
+
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
   const calls: { name: string; params: unknown }[] = [];
+  const merged: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
+    platform_status: () => defaultStatus(),
+    ...handlers,
+  };
   return {
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
-      const handler = handlers[name];
+      const handler = merged[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
@@ -236,5 +259,93 @@ describe('PlatformOverviewPage', () => {
     );
     expect(screen.queryByTestId('platform-residue-banner')).toBeNull();
     expect(screen.queryByTestId('platform-overview-error')).toBeNull();
+  });
+});
+
+describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
+  it('需要人处理: lists a degraded/down health entry and pending-activation users, each linking to its page', async () => {
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          counts: { ...overview().counts, pendingActivationUsers: 2 },
+          health: [
+            { service: 'kernel', status: 'ok' },
+            { service: 'llm-proxy', status: 'degraded' },
+            { service: 'worker-supervisor', status: 'down' },
+          ],
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    const items = screen.getAllByTestId('platform-attention-item');
+    expect(items).toHaveLength(3);
+    expect(list.textContent).toContain('llm-proxy');
+    expect(list.textContent).toContain('worker-supervisor');
+    expect(list.textContent).toContain('2 位用户待激活');
+    const links = list.querySelectorAll('a');
+    expect(Array.from(links).map((a) => a.getAttribute('href'))).toEqual([
+      '#/platform/status',
+      '#/platform/status',
+      '#/platform/users',
+    ]);
+  });
+
+  it('需要人处理: empty state when every service is healthy and nothing is pending activation', async () => {
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          counts: { ...overview().counts, pendingActivationUsers: 0 },
+          health: [{ service: 'kernel', status: 'ok' }],
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-attention-empty');
+    expect(screen.queryByTestId('platform-attention-item')).toBeNull();
+  });
+
+  it('费用（近 30 天）: renders calls, tokens and cost from platform_status', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+      platform_status: () => ({
+        ...defaultStatus(),
+        llmUsage30d: {
+          windowDays: 30,
+          totalCostUsd: 12.5,
+          totalInputTokens: 1000,
+          totalOutputTokens: 200,
+          callCount: 42,
+        },
+      }),
+    });
+    renderPage(http);
+    const cost = await screen.findByTestId('platform-cost');
+    expect(cost.textContent).toContain('42');
+    expect(cost.textContent).toContain('1000');
+    expect(cost.textContent).toContain('200');
+    expect(screen.getByTestId('platform-cost-value').textContent).toBe('$12.50');
+  });
+
+  it('费用（近 30 天）: shows "no cost recorded" rather than a fake $0.00 when totalCostUsd is null', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-cost');
+    expect(screen.getByTestId('platform-cost-value').textContent).toBe('无费用记录');
+  });
+
+  it('费用（近 30 天）: a platform_status failure shows its own error banner without blocking the rest of the page', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+      platform_status: () => Promise.reject(new HttpError('network', 'boom')),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-cost-error');
+    expect(screen.getByTestId('platform-checklist')).toBeTruthy();
   });
 });
