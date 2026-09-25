@@ -43,10 +43,14 @@ import {
  * 已经是"平台已提供的系统"（J5），`ConnectSystemLauncher` 的向导第一屏会在"使用已接入的系统"里列出
  * 它——选中它直接跳到"能力与策略"步，跳过的正是"填写连接信息、测试连通"这一段真人对着一个全新目标
  * 网络地址走的连接过程（这一段仍然需要真实网络/docker socket，fake 栈没有，留给以后一个专门的 W3
- * fixture 系统去补，不在这里假装接了一个真实系统）；从"能力与策略"步开始——看到它声明的 Operation
- * 列表、点"启用"发布——到"系统接入"列表与"能力目录"确认，是本次新增打通的部分，与
- * `ConnectSystemLauncher.test.tsx`（组件级，scripted http）的
- * "hosted path from the workspace page (non-admin owner)" 用例走的是同一段真实组件代码。
+ * fixture 系统去补，不在这里假装接了一个真实系统）；从"能力与策略"步开始——点"启用"、在确认发布前的
+ * 预览里看到它声明的 Operation 列表（非管理员 owner 读的是 `list_available_gate_instances`，
+ * `fromAvailableRow` 恒 `platform: null`，`PolicyStep` 那张静态"已声明的 Operation"表格只对读
+ * `list_gate_instances` 的管理员视角渲染——这条路径上"看到 Operation 列表"实际发生在
+ * `EnableGateConfirm` 的 `preview_gate_instance_enable` 预览里，不是那张表格）、确认发布——到
+ * "系统接入"列表与"能力目录"确认，是本次新增打通的部分，与 `ConnectSystemLauncher.test.tsx`
+ * （组件级，scripted http）的 "hosted path from the workspace page (non-admin owner)" 用例走的是
+ * 同一段真实组件代码。
  *
  * `01-entry-agent.spec.ts` 已经用同一个 `ci-fixture-mcp` 做过"工作区自己启用"，但走的是 系统接入
  * 列表页自己的内联启用按钮（`AvailableGateInstancesSection`），不是这条旅程要证明的向导本身
@@ -97,22 +101,30 @@ test.describe('Journey ②: 接入一个新系统', () => {
     // 选中"已接入的系统"直接跳到步骤③"能力与策略"（J5），跳过步骤②的连接表单——见本文件顶部说明。
     await expect(launcher).toHaveAttribute('data-step', '2', { timeout: 15_000 });
 
-    // --- 3. 门注册成功后，看到它声明的 Operation 列表 -----------------------------------------
     const policyBody = drawer.getByTestId('launcher-step-policy-body');
     await expect(policyBody).toBeVisible();
-    const announcedOperations = policyBody.getByTestId('launcher-announced-operations');
-    await expect(announcedOperations).toBeVisible({ timeout: 15_000 });
-    await expect(announcedOperations).toContainText(OBSERVE_OP);
-    await expect(announcedOperations).toContainText(EXECUTE_OP);
-
-    // --- 4. 挑选要发布的 Operation：enable_gate_instance 一次性发布全部声明的 Operation --------
     const workspaceSide = policyBody.getByTestId('launcher-workspace-enable');
     await expect(workspaceSide).toBeVisible();
+
+    // 点"启用"先加载只读预览（`preview_gate_instance_enable`）再弹确认——`launcher-announced-
+    // operations` 那张静态表格只在 `gate.platform` 有值时渲染（`fromPlatformRow`，仅管理员读
+    // `list_gate_instances` 的那条路径），工作区 owner 走的是 `list_available_gate_instances`
+    // （`fromAvailableRow` 恒 `platform: null`），这张表格在这条路径上结构性地不会出现。非管理员
+    // owner"看到它声明的 Operation 列表"实际发生在这里——点击启用后、真正确认发布之前的预览里
+    // （`EnableGateConfirm`/`EnablePreviewBody`），不是另一张单独的只读表格。
     const enableButton = workspaceSide.getByTestId('launcher-workspace-enable-button');
     await expect(enableButton).toBeVisible({ timeout: 15_000 });
     await enableButton.click();
     const enableConfirm = workspaceSide.getByTestId('launcher-workspace-enable-button-confirm');
     await expect(enableConfirm).toBeVisible({ timeout: 15_000 });
+
+    // --- 3. 门注册成功后，看到它声明的 Operation 列表（发布前的预览，非管理员 owner 的实际路径）
+    const toImport = enableConfirm.getByTestId('enable-preview-import');
+    await expect(toImport).toBeVisible({ timeout: 15_000 });
+    await expect(toImport).toContainText(OBSERVE_OP);
+    await expect(toImport).toContainText(EXECUTE_OP);
+
+    // --- 4. 挑选要发布的 Operation：确认发布预览里列出的全部 Operation -------------------------
     await enableConfirm.getByTestId('confirm-button').click();
 
     const linked = workspaceSide.getByTestId('launcher-workspace-linked');
