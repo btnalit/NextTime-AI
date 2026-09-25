@@ -105,6 +105,14 @@ describe('registerWorkerMode', () => {
     expect(tool?.parameters).toMatchObject({ type: 'object' });
   });
 
+  it('report_result’s tool schema exposes artifacts[].content, capped (S8 W5-A, leftover 74)', () => {
+    const tool = fake.tools.get('report_result');
+    // biome-ignore lint/suspicious/noExplicitAny: JSON-Schema-shaped, not typed as TSchema's own typebox properties.
+    const parameters = tool?.parameters as any;
+    const contentSchema = parameters?.properties?.artifacts?.items?.properties?.content;
+    expect(contentSchema).toMatchObject({ type: 'string', maxLength: 32_000 });
+  });
+
   it('session_start registers one gate tool per Operation named <gate>.<op> (sanitized, no dots) and sends the kickoff message', async () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
@@ -298,6 +306,58 @@ describe('registerWorkerMode', () => {
     // refuse per entry → no get_task read-back round trip.
     expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(0);
     logSpy.mockRestore();
+  });
+
+  it('report_result forwards artifacts[].content verbatim to report_task_result (S8 W5-A, leftover 74)', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: [] },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await tool.execute(
+      'call-1',
+      {
+        summary: 'wrote a report',
+        artifacts: [
+          { path: '/workspace/report.md', description: 'inventory', content: '# Report\nok' },
+          { path: '/workspace/screenshot.png', description: 'binary, no content' },
+        ],
+      },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const reportCall = kernel.requests.find((r) => r.capability === 'report_task_result');
+    expect(reportCall?.params).toMatchObject({
+      artifacts: [
+        { path: '/workspace/report.md', description: 'inventory', content: '# Report\nok' },
+        { path: '/workspace/screenshot.png', description: 'binary, no content' },
+      ],
+    });
+    logSpy.mockRestore();
+  });
+
+  it('report_result rejects an artifact whose content exceeds ARTIFACT_CONTENT_MAX_CHARS (Zod, before any kernel call)', async () => {
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+
+    await expect(
+      tool.execute(
+        'call-1',
+        {
+          summary: 'too big',
+          artifacts: [{ path: '/workspace/big.txt', content: 'x'.repeat(40_000) }],
+        },
+        undefined,
+        undefined,
+        fakeCtx(),
+      ),
+    ).rejects.toThrow(/invalid contract/);
+    expect(kernel.requests.filter((r) => r.capability === 'report_task_result')).toHaveLength(0);
   });
 
   it('report_result surfaces a kernel rejection as a thrown (isError) tool result the model can act on; a corrected call then posts (leftover 42)', async () => {

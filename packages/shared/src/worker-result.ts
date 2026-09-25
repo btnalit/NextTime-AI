@@ -71,13 +71,48 @@ export const WorkerResultEvidenceSchema = z
   .strict();
 export type WorkerResultEvidence = z.infer<typeof WorkerResultEvidenceSchema>;
 
+/** S8 W5-A (leftover 74): the container `report_result` runs inside exits with the WorkerRun, so
+ *  `path` alone (the in-container location, `/workspace/*` — `${NEXTTIME_DATA}/workspaces/tasks/
+ *  <task_id>/` on the host, S2.8) stops resolving to anything the moment the container is gone —
+ *  the entry agent's later read and the task page both failed on exactly this. `content` is the
+ *  fix: the Worker inlines the artifact's own text into the contract, the same way `evidence[]`
+ *  already inlines command output — recorded verbatim on the Task's stored result (never the
+ *  filesystem; the kernel still never touches a Worker's workspace mount, matching every other
+ *  field of this contract). `ARTIFACT_CONTENT_MAX_CHARS` bounds one artifact, `MAX_ARTIFACTS_PER_
+ *  CONTRACT` how many a single contract may carry — together they cap one Task row's worst case
+ *  (a few hundred KB), not the whole-contract 16 000-char gate-tool-result truncation `platform-
+ *  extension/src/modes/gate-tools.ts`'s `truncateToolResult` applies to what the *model* sees.
+ *  `content` is optional (text only, per the ops-runner prompt) — an artifact the Worker could not
+ *  or chose not to inline (binary, or larger than the cap) keeps `path` alone as a description of
+ *  what was produced, honestly unopenable once the container is gone; the web task page renders
+ *  that case as "not retrievable" rather than pretending `path` still resolves to anything.
+ *
+ *  Storing this on the Task's own row (design decision, not `sources`/a new epistemic Source) —
+ *  weighed and rejected: `sources` models epistemic *inputs* a Fact's origin can be compared
+ *  against (`resolveFactOrigin`, visibility/identity/observation-window machinery that assumes a
+ *  Source stays semantically an input, e.g. the `worker_session` transcript precedent), not a
+ *  Task's own output artifact — coercing "a report a Worker wrote" into that shape would be exactly
+ *  the "database accidentally defines the domain" drift the platform avoids elsewhere. `tasks` has
+ *  no per-row visibility rule (migrations/task/0001_tasks.sql: workspace-wide, unconditionally) —
+ *  the same visibility every other contract field (`summary`/`findings`/Facts, W5.5) already has,
+ *  so artifacts inherit it for free, with no new visibility flag to get wrong. A host-volume path +
+ *  a kernel read capability (the other option this task weighed) was rejected outright: it would be
+ *  the first kernel-process filesystem access into a Worker's workspace mount, which
+ *  `substrate/epistemic/sources.ts`'s own doc comment calls out as a property no kernel process
+ *  needs today — not a boundary worth opening for this. */
+export const ARTIFACT_CONTENT_MAX_CHARS = 32_000;
+export const MAX_ARTIFACTS_PER_CONTRACT = 8;
+
 /** One `artifacts[]` entry — a path under the Task's workspace directory (`/workspace` inside the
- *  Worker container; `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` on the host, S2.8). Recorded
- *  verbatim on the Task's stored result — the kernel never touches the filesystem itself. */
+ *  Worker container; `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` on the host, S2.8), plus its
+ *  own inlined text content when the Worker chose to submit one (see this schema's own doc
+ *  comment above). Recorded verbatim on the Task's stored result — the kernel never touches the
+ *  filesystem itself. */
 export const WorkerResultArtifactSchema = z
   .object({
     path: z.string().min(1),
     description: z.string().optional(),
+    content: z.string().max(ARTIFACT_CONTENT_MAX_CHARS).optional(),
   })
   .strict();
 export type WorkerResultArtifact = z.infer<typeof WorkerResultArtifactSchema>;
@@ -107,7 +142,7 @@ export const WorkerResultContractSchema = z
     findings: z.array(z.string()).optional(),
     factsToAssert: z.array(WorkerResultFactSchema).optional(),
     evidence: z.array(WorkerResultEvidenceSchema).optional(),
-    artifacts: z.array(WorkerResultArtifactSchema).optional(),
+    artifacts: z.array(WorkerResultArtifactSchema).max(MAX_ARTIFACTS_PER_CONTRACT).optional(),
     proposedSkill: ProposeSkillContentSchema.optional(),
     proposedOperations: z.array(WorkerResultProposedOperationSchema).optional(),
   })
