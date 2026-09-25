@@ -295,6 +295,10 @@ function ConnectorRow({
               <Select
                 data-testid={`connector-mode-${connector.name}`}
                 style={CONNECTOR_MODE_SELECT_STYLE}
+                aria-label={t(
+                  `接入包「${connector.name}」的模式`,
+                  `Mode for connector "${connector.name}"`,
+                )}
                 value={pendingMode ?? connector.mode}
                 onChange={(event) => requestModeChange(event.target.value as ConnectorModeWire)}
                 disabled={savingMode}
