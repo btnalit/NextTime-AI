@@ -285,8 +285,8 @@ function PlatformSettingsForm({
           <div className="stack">
             <Notice tone="warn">
               {t(
-                "这会进入所有 agent 的 system prompt。 Appended to every agent's system prompt — 之后启动 的容器生效。",
-                'Takes effect for containers started afterwards.',
+                '这会附加到所有 agent 的 system prompt；只对之后启动的容器生效。',
+                "Appended to every agent's system prompt — takes effect for containers started afterwards.",
               )}
             </Notice>
             <Field id="ps-instance-instructions" label={t('附加指令', 'Appended instructions')}>

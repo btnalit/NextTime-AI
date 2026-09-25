@@ -4,7 +4,7 @@ import type {
   PlatformStatusWire,
   PlatformWorkspaceWire,
 } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -70,7 +70,10 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       activeWorkspaces: 1,
       gatekeepers: 2,
       modelsAvailable: 5,
+      pendingActionRequests: 0,
+      runningTasks: 0,
     },
+    graphFreshness: { staleThresholdMs: 7_200_000, staleSourceCount: 0, affectedWorkspaceCount: 0 },
     health: [
       { service: 'kernel', status: 'ok' },
       { service: 'llm-proxy', status: 'degraded', detail: 'slow' },
@@ -140,7 +143,16 @@ describe('PlatformOverviewPage', () => {
     // instead of the kernel's own `detail` — see `checklistDetail`'s doc comment.
     expect(checklist.textContent).toContain('5 个可用模型');
     expect(checklist.textContent).toContain('Acme');
-    expect(checklist.textContent).toContain('当前经主机配置');
+    // S8 W4-C (ui-audit O2 "过期文案"): `providers` now links to 模型与供应商 like every other
+    // checklist item, since S7-A let the console write a provider's own key — the "当前经主机配置"
+    // fallback text is gone.
+    const providersRow = within(checklist).getByText('模型供应商').closest('li');
+    expect(providersRow).not.toBeNull();
+    expect(
+      within(providersRow as HTMLElement)
+        .getByRole('link', { name: '前往' })
+        .getAttribute('href'),
+    ).toBe('#/platform/models');
 
     const counts = screen.getByTestId('platform-counts');
     expect(counts.textContent).toContain('3');
@@ -378,5 +390,111 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
     renderPage(http);
     await screen.findByTestId('platform-cost-error');
     expect(screen.getByTestId('platform-checklist')).toBeTruthy();
+  });
+
+  it('S8 W4-C: 待处理 / 运行中 render the kernel’s cross-workspace counts', async () => {
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          counts: { ...overview().counts, pendingActionRequests: 4, runningTasks: 2 },
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    expect(
+      (await screen.findByTestId('platform-count-pending-action-requests')).textContent,
+    ).toContain('4');
+    expect(screen.getByTestId('platform-count-running-tasks').textContent).toContain('2');
+  });
+
+  it('S8 W4-C: 图谱新鲜度 reads "全部新鲜" at zero stale sources', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const tile = await screen.findByTestId('platform-count-graph-freshness');
+    expect(tile.textContent).toContain('0');
+    expect(screen.getByTestId('platform-graph-freshness-detail').textContent).toBe('全部新鲜');
+  });
+
+  it('S8 W4-C: 图谱新鲜度 shows the stale count and how many workspaces it spans', async () => {
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          graphFreshness: {
+            staleThresholdMs: 7_200_000,
+            staleSourceCount: 3,
+            affectedWorkspaceCount: 2,
+          },
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const tile = await screen.findByTestId('platform-count-graph-freshness');
+    expect(tile.textContent).toContain('3');
+    expect(screen.getByTestId('platform-graph-freshness-detail').textContent).toBe(
+      '陈旧 · 2 个工作区',
+    );
+  });
+
+  it('ui-audit O3: 工作区 tile excludes residue (disabled/expired-ephemeral), matching the workspaces page default view', async () => {
+    const base = {
+      entryModel: null,
+      allowedModels: [],
+      ontologyEnforcement: 'reject' as const,
+      purpose: 'standard' as const,
+      expiresAt: null,
+      disabledAt: null,
+      purgeable: false,
+      isDefault: false,
+      memberCount: 0,
+      owners: [],
+      createdAt: '2026-09-01T00:00:00.000Z',
+    };
+    const http = scriptedHttp({
+      // Kernel-side counts.workspaces still counts every row (3) — the tile itself must not.
+      platform_overview: () => overview({ counts: { ...overview().counts, workspaces: 3 } }),
+      list_workspaces: () => ({
+        items: [
+          { ...base, id: 'ws-1', name: 'prod', status: 'active', isDefault: true },
+          { ...base, id: 'ws-2', name: 'old', status: 'disabled' },
+          {
+            ...base,
+            id: 'ws-3',
+            name: 'accept-s3',
+            status: 'active',
+            purpose: 'ephemeral',
+            expiresAt: '2020-01-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const tile = await screen.findByTestId('platform-count-workspaces');
+    expect(tile.textContent).toContain('1');
+    expect(tile.textContent).not.toContain('3');
+  });
+
+  it('最近平台审计 caps at 5 rows even when the kernel returns more', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({
+      id: `audit-${i}`,
+      action: `action_${i}`,
+      actorUserId: 'u-admin',
+      actorLogin: 'admin',
+      resourceType: null,
+      resourceId: null,
+      payload: {},
+      createdAt: '2026-09-10T00:00:00.000Z',
+    }));
+    const http = scriptedHttp({
+      platform_overview: () => overview({ recentAudit: rows }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const audit = await screen.findByTestId('platform-overview-audit');
+    expect(screen.getAllByTestId('platform-overview-audit-row')).toHaveLength(5);
+    expect(audit.textContent).toContain('action_0');
+    expect(audit.textContent).not.toContain('action_7');
   });
 });

@@ -94,6 +94,11 @@ const PlatformOverviewPage = lazy(() =>
     default: m.PlatformOverviewPage,
   })),
 );
+const PlatformResiduePage = lazy(() =>
+  import('./components/platform/PlatformResiduePage.js').then((m) => ({
+    default: m.PlatformResiduePage,
+  })),
+);
 const PlatformRuntimePage = lazy(() =>
   import('./components/platform/PlatformRuntimePage.js').then((m) => ({
     default: m.PlatformRuntimePage,
@@ -356,6 +361,9 @@ export function Routed({
     case 'platformAudit':
       page = requireAdmin(session, <PlatformAuditPage http={session.http} />, t);
       break;
+    case 'platformResidue':
+      page = requireAdmin(session, <PlatformResiduePage http={session.http} />, t);
+      break;
   }
 
   return (
@@ -400,7 +408,8 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformSettings' ||
     kind === 'platformRuntime' ||
     kind === 'platformStatus' ||
-    kind === 'platformAudit'
+    kind === 'platformAudit' ||
+    kind === 'platformResidue'
   );
 }
 

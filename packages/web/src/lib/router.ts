@@ -37,7 +37,8 @@ export type NavSection =
   | 'platformSettings'
   | 'platformRuntime'
   | 'platformStatus'
-  | 'platformAudit';
+  | 'platformAudit'
+  | 'platformResidue';
 
 export const CATALOG_TAB_VALUES = [
   'operations',
@@ -72,7 +73,8 @@ export type Route =
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformRuntime' }
   | { readonly kind: 'platformStatus' }
-  | { readonly kind: 'platformAudit' };
+  | { readonly kind: 'platformAudit' }
+  | { readonly kind: 'platformResidue' };
 
 function isCatalogTab(value: string | undefined): value is CatalogTab {
   return value !== undefined && (CATALOG_TAB_VALUES as readonly string[]).includes(value);
@@ -151,6 +153,8 @@ export function routeFromHash(fullHash: string): Route {
   if (hash === '#/platform/runtime') return { kind: 'platformRuntime' };
   if (hash === '#/platform/status') return { kind: 'platformStatus' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
+  // S8 W4-C (journey ⑤ 清理验收残留): cross-category acceptance-residue overview.
+  if (hash === '#/platform/residue') return { kind: 'platformResidue' };
 
   return DEFAULT_ROUTE;
 }
@@ -198,6 +202,7 @@ export const hrefs = {
   platformRuntime: () => '#/platform/runtime',
   platformStatus: () => '#/platform/status',
   platformAudit: () => '#/platform/audit',
+  platformResidue: () => '#/platform/residue',
 } as const;
 
 export function navigate(href: string): void {

@@ -91,7 +91,7 @@ describe('WorkspaceDetailPanel', () => {
     expect(within(detail).queryByTestId('open-workspace-config')).toBeNull();
   });
 
-  it('rename: the save button enables on a real change and posts update_workspace{name}', async () => {
+  it('S8 W4-C: name / entry model / ontology enforcement share one draft and one 保存 button, posting only the changed fields', async () => {
     const row = workspace();
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
@@ -101,7 +101,7 @@ describe('WorkspaceDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, row);
-    const save = screen.getByRole('button', { name: '保存' });
+    const save = screen.getByTestId('workspace-save-basics');
     expect(save.hasAttribute('disabled')).toBe(true);
     fireEvent.change(screen.getByLabelText(/名称/), { target: { value: '  Beta ' } });
     expect(save.hasAttribute('disabled')).toBe(true); // same name after trim
@@ -111,25 +111,61 @@ describe('WorkspaceDetailPanel', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, name: 'Gamma' }));
   });
 
-  it('entry model: options come from the saved allow-list, saved on change; a failure shows inline', async () => {
-    const row = workspace();
+  it('entry model: options come from the saved allow-list; changing it enables the shared save button and posts only that field', async () => {
+    const row = workspace({ allowedModels: ['openai/gpt-4o', 'anthropic/claude-3'] });
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
-      update_workspace: () =>
-        Promise.reject(new HttpError('capability_error', 'no such model', 'unknown_model')),
+      update_workspace: (params) => {
+        expect(params).toEqual({ workspaceId: 'ws-2', entryModel: 'anthropic/claude-3' });
+        return { ...row, entryModel: 'anthropic/claude-3' };
+      },
     });
-    renderPanel(http, row);
+    const { onChanged } = renderPanel(http, row);
     const select = screen.getByTestId('workspace-entry-model') as HTMLSelectElement;
-    // Only the allowed model (plus the disabled "not set" placeholder) — not the whole catalog.
+    // Only the allowed models (plus the disabled "not set" placeholder) — not the whole catalog.
     expect(Array.from(select.options).map((option) => option.value)).toEqual([
       '__default__',
       'openai/gpt-4o',
+      'anthropic/claude-3',
     ]);
-    fireEvent.change(select, { target: { value: 'openai/gpt-4o' } });
+    const save = screen.getByTestId('workspace-save-basics');
+    expect(save.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(select, { target: { value: 'anthropic/claude-3' } });
+    expect(save.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(onChanged).toHaveBeenCalledWith({ ...row, entryModel: 'anthropic/claude-3' }),
+    );
+  });
+
+  it('ontology enforcement: changing it enables the shared save button and posts only that field; a failure shows on the shared error', async () => {
+    const row = workspace({ ontologyEnforcement: 'reject' });
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      update_workspace: (params) => {
+        expect(params).toEqual({ workspaceId: 'ws-2', ontologyEnforcement: 'warn' });
+        return Promise.reject(new HttpError('capability_error', 'nope', 'validation_error'));
+      },
+    });
+    renderPanel(http, row);
+    const select = screen.getByTestId('workspace-ontology-enforcement') as HTMLSelectElement;
+    expect(select.value).toBe('reject');
+    fireEvent.change(select, { target: { value: 'warn' } });
+    const save = screen.getByTestId('workspace-save-basics');
+    expect(save.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(save);
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'update_workspace')).toBe(true),
     );
-    expect((await screen.findByText(/模型不在目录里/)).closest('[data-error-code]')).toBeTruthy();
+    expect(await screen.findByTestId('workspace-basics-error')).toBeTruthy();
+  });
+
+  it('the ontology-enforcement hint never mentions internal metrics paths or invariant ids', () => {
+    const http = scriptedHttp({ list_users: () => ({ items: [] }) });
+    renderPanel(http, workspace());
+    const hint = screen.getByLabelText('本体强制').closest('.field')?.textContent ?? '';
+    expect(hint).not.toContain('/internal/metrics');
+    expect(hint).not.toContain('I-S5-1');
   });
 
   it('allowed models: dirty tracking, then set_allowed_models with the ticked ids', async () => {

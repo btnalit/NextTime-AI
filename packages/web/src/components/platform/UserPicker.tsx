@@ -24,11 +24,24 @@ export interface UserPickerProps {
 
 const PAGE_SIZE = 50;
 
+/** S8 W4-C (ui-audit PW3 "'委托 owner' 下拉列出验收残留用户"): every call site of this picker so
+ *  far is "pick a user to become an owner" — a not-yet-activated account (no password set: could
+ *  be a real invite mid-onboarding, or an acceptance-run's leftover `create_user` nobody ever
+ *  logged into) or an already-disabled one is never a sensible owner to delegate to. Narrower than
+ *  the workspaces page's own `isResidueWorkspace` (that one is about *workspaces*, this is about
+ *  *users*, and this component has no `list_workspaces` read to cross-reference a membership's
+ *  purpose/expiry against) — but it is exactly the population an administrator would call
+ *  "validation residue" showing up where it should not. */
+function isResidueCandidate(user: UserWire): boolean {
+  return !user.hasPassword || user.status === 'disabled';
+}
+
 /**
  * components/platform/UserPicker: "pick a platform user by login" — a search box over
  * `list_users`'s own `query` filter plus a `<select>` of what came back (P-A2, design §5 "成员"页
  * 语义: 按登录名搜索 → 选角色). Used by `CreateWorkspaceForm` (the first owner) and
- * `WorkspaceDetailPanel` (委托 owner).
+ * `WorkspaceDetailPanel` (委托 owner). Both call sites pick a future *owner* — `isResidueCandidate`
+ * above keeps not-yet-activated and disabled accounts out of the list for both.
  *
  * The `list_users` read lives *here* rather than on the page so it is lazy in the only sense that
  * matters: this component is mounted only while a drawer that needs a user is open, so the
@@ -63,7 +76,7 @@ export function UserPicker({
   const excluded = new Set(exclude ?? []);
   const rows =
     users.state.status === 'ready'
-      ? users.state.data.items.filter((row) => !excluded.has(row.id))
+      ? users.state.data.items.filter((row) => !excluded.has(row.id) && !isResidueCandidate(row))
       : [];
 
   function applyQuery(): void {
@@ -113,9 +126,10 @@ export function UserPicker({
         >
           <option value="">{t('选择用户', 'Pick a user')}</option>
           {rows.map((row) => (
+            // `isResidueCandidate` above already excludes disabled/not-yet-activated accounts —
+            // every row here is active with a password set, so no status suffix is needed.
             <option key={row.id} value={row.id}>
               {row.login} — {row.displayName}
-              {row.status === 'disabled' ? '（已停用 disabled）' : ''}
             </option>
           ))}
         </Select>

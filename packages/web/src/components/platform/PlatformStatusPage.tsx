@@ -122,14 +122,27 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
       <Card title={t('服务健康', 'Health')}>
         <div className="row-wrap" data-testid="status-health">
           {data.health.map((entry) => (
-            <span key={entry.service} className="row" title={entry.detail ?? entry.status}>
+            // ui-audit ST2: the service name reads first, the chip second — a name-then-status
+            // order matches every other status listing in the console (e.g. the workspaces
+            // table's own 状态 column). `title` still carries the kernel's own `detail` for a
+            // hover, but that alone left "未知" unexplained (nothing forces a hover) — see
+            // `EgressProxyUnknownNote` below for the one case ST2 named explicitly.
+            <span
+              key={entry.service}
+              className="row"
+              title={entry.detail ?? entry.status}
+              data-testid="status-health-entry"
+            >
+              <span className="text-small">{entry.service}</span>
               <StatusChip
                 machine="serviceHealth"
                 status={entry.status}
                 size="s"
                 testId="status-health-chip"
               />
-              <span className="text-small">{entry.service}</span>
+              {entry.service === 'egress-proxy' && entry.status === 'unknown' ? (
+                <EgressProxyUnknownNote />
+              ) : null}
             </span>
           ))}
         </div>
@@ -153,15 +166,17 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
       </Card>
 
       <Card title={t('30 天用量', '30-day usage')}>
+        {/* ui-audit ST2 ("用量数字无千分位"): `.toLocaleString()` + the same `.tabular`
+         *  (tabular-nums) class `TaskDetail`/`TasksPage` already use for a token count. */}
         <dl className="definition-list" data-testid="status-llm-usage">
           <dt>{t('调用次数', 'Calls')}</dt>
-          <dd>{data.llmUsage30d.callCount}</dd>
+          <dd className="tabular">{data.llmUsage30d.callCount.toLocaleString()}</dd>
           <dt>{t('输入 tokens', 'Input tokens')}</dt>
-          <dd>{data.llmUsage30d.totalInputTokens}</dd>
+          <dd className="tabular">{data.llmUsage30d.totalInputTokens.toLocaleString()}</dd>
           <dt>{t('输出 tokens', 'Output tokens')}</dt>
-          <dd>{data.llmUsage30d.totalOutputTokens}</dd>
+          <dd className="tabular">{data.llmUsage30d.totalOutputTokens.toLocaleString()}</dd>
           <dt>{t('费用', 'Cost')}</dt>
-          <dd>
+          <dd className="tabular">
             {data.llmUsage30d.totalCostUsd !== null
               ? `$${data.llmUsage30d.totalCostUsd.toFixed(2)}`
               : '—'}
@@ -197,5 +212,22 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
         )}
       </Card>
     </>
+  );
+}
+
+/**
+ * ui-audit ST2 ("egress-proxy 健康'未知'无解释"): the kernel's own `detail` for this entry names
+ * an internal file path (`packages/egress-proxy/src/index.ts`) — fine as a hover `title` (an
+ * operator debugging this already has the source open), never as always-visible body text (F5).
+ * This is the one always-visible line instead: egress-proxy's healthz is loopback-only *by
+ * design* (the isolation boundary I10 relies on), so "unknown" here is the expected steady state,
+ * not a symptom — worth saying inline since nothing else on this row makes that reading obvious.
+ */
+function EgressProxyUnknownNote() {
+  const t = useT();
+  return (
+    <span className="text-3 text-small" data-testid="status-egress-proxy-unknown-note">
+      {t('（仅回环探测，按设计不对外暴露，不代表异常）', '(loopback-only by design, not a fault)')}
+    </span>
   );
 }

@@ -574,32 +574,38 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     }
   });
 
-  describe('leftover 67 — status-guarded Task UPDATEs (docs/STATUS.md §4)', () => {
-    /** `RacingSupervisorClient.spawn` deterministically injects a concurrent `terminateTask`
-     *  (`cancel_task`) call exactly inside the window `invokeWorkerCreate`'s own guarded UPDATEs
-     *  are meant to close — between the Task's own INSERT (`queued`) and either of
-     *  `invokeWorkerCreate`'s own follow-up UPDATEs. This mirrors `lifecycle.test.ts`'s own "no
-     *  real race needed" convention (scripting the exact interleaving deterministically rather
-     *  than relying on real concurrency timing) while still exercising the real, unmodified
-     *  `terminateTask`/`invokeWorkerCreate` code paths end to end against real Postgres. */
-    class RacingSupervisorClient extends FakeTaskSupervisorClient {
-      capturedTaskId: string | undefined;
-      private readonly failSpawn: boolean;
-      constructor(failSpawn: boolean) {
-        super();
-        this.failSpawn = failSpawn;
-      }
-      override async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
-        this.capturedTaskId = input.taskId;
-        // The WorkerRun row (+ its Handle) already exists by this point — `spawnWorkerRun`
-        // (spawn.ts) creates and commits it *before* calling this method — so `terminateTask`'s own
-        // "terminate every non-terminated WorkerRun under the Task" sweep finds and terminates it.
-        await terminateTask(workspaceId, ownerId, input.taskId);
-        if (this.failSpawn) throw new Error('supervisor unreachable (simulated race)');
-        return super.spawn(input);
-      }
+  /** `RacingSupervisorClient.spawn` deterministically injects a concurrent `terminateTask`
+   *  (`cancel_task`) call exactly inside the window both `invokeWorkerCreate`'s own guarded Task
+   *  UPDATEs (leftover 67) *and* `spawnWorkerRun`'s own guarded WorkerRun UPDATEs (leftover 90,
+   *  `spawn.ts`) are meant to close — between the Task's own INSERT (`queued`)/the WorkerRun's own
+   *  INSERT (`provisioning`) and any of their respective follow-up UPDATEs. This mirrors
+   *  `lifecycle.test.ts`'s own "no real race needed" convention (scripting the exact interleaving
+   *  deterministically rather than relying on real concurrency timing) while still exercising the
+   *  real, unmodified `terminateTask`/`invokeWorkerCreate`/`spawnWorkerRun` code paths end to end
+   *  against real Postgres. Declared here, at the outer `describe`'s own scope (not nested inside
+   *  the "leftover 67" block below), so the "leftover 90" block further down can reuse it against
+   *  the exact same race window without re-deriving it. */
+  class RacingSupervisorClient extends FakeTaskSupervisorClient {
+    capturedTaskId: string | undefined;
+    capturedWorkerRunId: string | undefined;
+    private readonly failSpawn: boolean;
+    constructor(failSpawn: boolean) {
+      super();
+      this.failSpawn = failSpawn;
     }
+    override async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+      this.capturedTaskId = input.taskId;
+      this.capturedWorkerRunId = input.workerRunId;
+      // The WorkerRun row (+ its Handle) already exists by this point — `spawnWorkerRun`
+      // (spawn.ts) creates and commits it *before* calling this method — so `terminateTask`'s own
+      // "terminate every non-terminated WorkerRun under the Task" sweep finds and terminates it.
+      await terminateTask(workspaceId, ownerId, input.taskId);
+      if (this.failSpawn) throw new Error('supervisor unreachable (simulated race)');
+      return super.spawn(input);
+    }
+  }
 
+  describe('leftover 67 — status-guarded Task UPDATEs (docs/STATUS.md §4)', () => {
     it('a Task cancelled while spawnWorkerRun is in flight is not reverted to running by the guarded queued -> running UPDATE', async () => {
       const sessionId = await insertSession('entry', ownerId, ownerId);
       const issued = await issueTestHandle(sessionId, entryScope());
@@ -694,6 +700,102 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           readTaskRow(client, workspaceId, spawnResult.taskId),
         );
         expect(task?.status).toBe('completed');
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
+  });
+
+  describe('leftover 90 — status-guarded WorkerRun UPDATEs in spawnWorkerRun (docs/STATUS.md §4)', () => {
+    it('a WorkerRun terminated while spawnWorkerRun is in flight is not reverted to running by the guarded provisioning -> running UPDATE, and the orphaned container is best-effort stopped', async () => {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new RacingSupervisorClient(false);
+      const runtimeDeps = deps(supervisorClient);
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      try {
+        // Does not throw — `spawnWorkerRun` never surfaces a lost running-write race as an error
+        // (see that function's own doc comment: the run reached `terminated` through a legitimate
+        // concurrent cancel, not a spawn failure).
+        await invokeWorker(
+          workspaceId,
+          { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+          { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+          runtimeDeps,
+        );
+
+        const workerRunId = supervisorClient.capturedWorkerRunId as string;
+        const workerRun = await inTx(ownerId, (client) =>
+          readWorkerRunRow(client, workspaceId, workerRunId),
+        );
+        // Before the fix: the unconditional `update worker_runs set status = 'running', ...` would
+        // have silently reverted the just-terminated WorkerRun back to `running`.
+        expect(workerRun?.status).toBe('terminated');
+
+        const transitions = await inTx(ownerId, (client) =>
+          client.query<{ action: string }>(
+            `select action from audit_records
+             where workspace_id = $1 and resource_type = 'worker_run' and resource_id = $2`,
+            [workspaceId, workerRunId],
+          ),
+        );
+        // No `worker_run.start` transition was ever recorded for a WorkerRun that never actually
+        // reached `running` — only `terminateTask`'s own sweep (`worker_run.provision` +
+        // `worker_run.terminate`) touched this row.
+        expect(transitions.rows.map((r) => r.action)).not.toContain('worker_run.start');
+
+        // The freshly spawned container is orphaned (the row it belongs to is already terminal) —
+        // `spawnWorkerRun`'s lost-race branch best-effort stops it through the same supervisor
+        // client, in addition to `terminateTask`'s own earlier (pre-spawn-confirmation) stop
+        // attempt — at least two `.terminate()` calls for this workerRunId.
+        expect(
+          supervisorClient.terminated.filter((id) => id === workerRunId).length,
+        ).toBeGreaterThanOrEqual(2);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
+
+    it('a spawn failure on a WorkerRun already terminated concurrently does not write a second worker_run.spawn_failed transition, and the original error still propagates', async () => {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new RacingSupervisorClient(true);
+      const runtimeDeps = deps(supervisorClient);
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      try {
+        await expect(
+          invokeWorker(
+            workspaceId,
+            { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+            { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+            runtimeDeps,
+          ),
+        ).rejects.toThrow('supervisor unreachable (simulated race)');
+
+        const workerRunId = supervisorClient.capturedWorkerRunId as string;
+        const workerRun = await inTx(ownerId, (client) =>
+          readWorkerRunRow(client, workspaceId, workerRunId),
+        );
+        // Already `terminated` — via `terminateTask`'s own sweep, not this catch block's write.
+        expect(workerRun?.status).toBe('terminated');
+
+        const transitions = await inTx(ownerId, (client) =>
+          client.query<{ action: string }>(
+            `select action from audit_records
+             where workspace_id = $1 and resource_type = 'worker_run' and resource_id = $2`,
+            [workspaceId, workerRunId],
+          ),
+        );
+        const actions = transitions.rows.map((r) => r.action);
+        // `terminateTask`'s own sweep already recorded the one legitimate `worker_run.terminate`
+        // transition — before the fix, the catch block's unconditional UPDATE would have written a
+        // second, misleading `worker_run.spawn_failed` transition over the same already-terminal row.
+        expect(actions).toContain('worker_run.terminate');
+        expect(actions).not.toContain('worker_run.spawn_failed');
       } finally {
         resetTaskRuntimeForTests();
       }

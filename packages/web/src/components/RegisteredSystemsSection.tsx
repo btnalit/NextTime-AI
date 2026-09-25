@@ -16,6 +16,7 @@ import { formatDateTime, formatRelative } from '../lib/format.js';
 import { platformGateInstanceHref } from '../lib/gate-instances.js';
 import type { GrantRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { transportKindLabel } from '../lib/labels.js';
 import { GrantGateDrawer } from './access/GrantGateDrawer.js';
 import { Confirm } from './kit/confirm.js';
 import { RefChip } from './kit/ref-chip.js';
@@ -242,7 +243,17 @@ export function GatekeeperCard({
       title={
         <span className="row-wrap">
           <span>{gatekeeper.name}</span>
-          <span className="tag">{gatekeeper.transportKind}</span>
+          {/* S8 W4-C (ui-audit PI2 "docker 接入包 KIND 显示 http，而系统接入页同一个 docker 显示
+           *  cli"): `gatekeeper.transportKind` is the legacy Object's own registered value —
+           *  frozen at whenever it was first written and never refreshed after (only Operation
+           *  governance fields get that, via `refresh_operation_governance`, leftover 79). When
+           *  this Gatekeeper is linked to a live platform instance, that instance's own announced
+           *  `transportKind` is the current truth — `preview_gate_instance_enable`'s own `drift`
+           *  field already flags exactly this kind of disagreement at link time. Prefer it here
+           *  too, falling back to the registered value only when there is no live instance. */}
+          <span className="tag">
+            {transportKindLabel(platformInstance?.transportKind ?? gatekeeper.transportKind, t)}
+          </span>
           {/* S8 W2-U1 (audit SY1 "两套接入机制并存，页面不说哪一套决定 agent 能不能用"): a gate with
            *  no platform-instance link was registered through the older `create_connection` /
            *  CLI path — mark it so, next to the "平台实例" fact below when there is one. */}

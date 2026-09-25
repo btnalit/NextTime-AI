@@ -110,10 +110,12 @@ function checklistDetail(
   }
 }
 
-/** `ChecklistItemWire.key` → where "前往 Go" sends the admin. `providers` and `runtime` have no
- *  page of their own yet (providers is host-configured; runtime is a later P-A wave) — see this
- *  component's own render for their fallback text. */
+/** `ChecklistItemWire.key` → where "前往 Go" sends the admin. `runtime` has no page of its own yet
+ *  (a later wave) — see this component's own render for its fallback text. `providers` used to be
+ *  host-only (`llm-providers.yaml`) and had no link either; S7-A let the console write a provider's
+ *  key too (ui-audit O2 "过期文案"), so it now points at 模型与供应商 like every other item. */
 const CHECKLIST_LINKS: Readonly<Partial<Record<ChecklistItem['key'], string>>> = {
+  providers: hrefs.platformModels(),
   defaultWorkspace: hrefs.platformSettings(),
   integrations: hrefs.systems(),
   users: hrefs.platformUsers(),
@@ -148,15 +150,26 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  * the version card is `platform_overview.version.kernel` (B1's real value lives in the kernel).
  *
  * S8 W2 U3a (ui-audit-2026-09-23 O1, §5.9 控制塔 "待处理 / 运行中 / 图谱新鲜度 / 费用四指标、
- * 「需要人处理」列表"): implemented against **only** capabilities that already exist — F6 forbids
- * a kernel change in this lane. `platform_status`'s 30-day cross-workspace `llmUsage30d` backs
- * "费用"; "需要人处理" is composed client-side from data `platform_overview` already returns
- * (degraded/down `health` entries, `counts.pendingActivationUsers`) — no extra read. "待处理"
- * (a cross-workspace pending-ActionRequest count), "运行中" (a cross-workspace running-Task
- * count) and "图谱新鲜度" (`ops.collector_silent`, computed server-side but not exposed by any
- * capability today — B1/G1's own audit rows) have no existing source and are intentionally not
- * rendered — see this lane's PR report for the gap list, never a fake zero or a "—" standing in
- * for real data.
+ * 「需要人处理」列表"): `platform_status`的 30-day cross-workspace `llmUsage30d` backs "费用"；
+ * "需要人处理" 由 `platform_overview` 已有的数据在客户端拼出（`health` 里的 degraded/down 条目、
+ * `counts.pendingActivationUsers`）——不额外发起读。
+ *
+ * S8 W4-C (本车道补上的缺口): "待处理" / "运行中" / "图谱新鲜度" 现在直接来自
+ * `platform_overview.counts.pendingActionRequests` / `runningTasks` / `graphFreshness`——
+ * `platform-handlers.ts` 自己的按工作区循环（`computeCrossWorkspaceOverview`），限定在与
+ * `gatekeepers` 同一个已排除验收残留的工作区集合上（ui-audit O3）。`graphFreshness.staleSourceCount`
+ * 为 0 即读作"全部新鲜"——读成功后这个字段总是存在，不是给不存在的能力占位的 "—"。
+ *
+ * S8 W4-C (ui-audit O3 "计数与列表同口径，残留单独显示"): 工作区 卡片显示
+ * `nonResidueWorkspaceCount`——由这里已经在读的、未过滤的 `list_workspaces`（残留横幅同一份数据）
+ * 就地算出（`items.length - residue.length`），不是内核原始的 `counts.workspaces`——与工作区页
+ * 默认（隐藏残留）视图的计数口径一致，残留只在横幅里单独出现。`counts.gatekeepers` 已在服务端
+ * 排除残留（同一车道）；`counts.users` 仍统计全部用户（含验收残留的待激活账户）——要收窄它需要
+ * 这个页面目前不发起的 `list_users` 读，留作后续（见本车道的 PR 报告）。
+ *
+ * S8 W4-C (ui-audit L1 "两段式"): 下面的 body 先渲染控制塔指标 + 服务健康 + 需要人处理，再是
+ * 视觉上次要的区域（版本 / 开始使用 / 最近平台审计，审计最多 5 行）——绑定 API key 留在最后，
+ * 已经不在第一屏视线里。
  */
 export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageProps) {
   const t = useT();
@@ -170,6 +183,12 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   const defaultWorkspaceRow =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.find((row) => row.isDefault)
+      : undefined;
+  // ui-audit O3: the same unfiltered read the residue banner above already counts — see this
+  // file's own module doc comment.
+  const nonResidueWorkspaceCount =
+    workspaces.state.status === 'ready'
+      ? workspaces.state.data.items.length - residue.length
       : undefined;
 
   return (
@@ -212,6 +231,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           status={status}
           defaultWorkspaceRow={defaultWorkspaceRow}
           defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
+          nonResidueWorkspaceCount={nonResidueWorkspaceCount}
           onKeyBound={(result) => {
             onKeyBound?.(result);
             void overview.reload();
@@ -222,23 +242,34 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   );
 }
 
+const RECENT_AUDIT_LIMIT = 5;
+
 function PlatformOverviewBody({
   data,
   status,
   defaultWorkspaceRow,
   defaultWorkspaceRowsReady,
+  nonResidueWorkspaceCount,
   onKeyBound,
 }: {
   readonly data: PlatformOverviewWire;
   readonly status: Resource<PlatformStatusWire>;
   readonly defaultWorkspaceRow: PlatformWorkspaceWire | undefined;
   readonly defaultWorkspaceRowsReady: boolean;
+  /** ui-audit O3 — `undefined` while `list_workspaces` is still loading; falls back to the
+   *  kernel's raw `counts.workspaces` for that one frame (see this file's own module doc
+   *  comment). */
+  readonly nonResidueWorkspaceCount: number | undefined;
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
   const attentionItems = buildAttentionItems(data, t);
+  const recentAudit = data.recentAudit.slice(0, RECENT_AUDIT_LIMIT);
   return (
     <>
+      {/* S8 W4-C (ui-audit L1 "两段式"): first screen — control-tower metrics, service health,
+       *  cost, and 需要人处理. Everything below the `divider` (version / getting-started / recent
+       *  audit) is reference material an admin checks less often. */}
       <DashboardCard title={t('需要人处理', 'Needs attention')} padded={false}>
         {attentionItems.length === 0 ? (
           <EmptyState
@@ -264,6 +295,63 @@ function PlatformOverviewBody({
           </DataList>
         )}
       </DashboardCard>
+
+      {/* ui-audit O1: the control tower's own four metrics — 待处理 / 运行中 / 图谱新鲜度 / 费用
+       *  (the latter as `CostCard` below, not a tile: it already carries four figures of its
+       *  own). The scale tiles (用户/工作区/门实例/可用模型) share the same grid — they answer "how
+       *  big is this deployment", a first-screen question too, just a different one. */}
+      <div className="platform-tiles" data-testid="platform-counts">
+        <CountTile
+          testId="platform-count-pending-action-requests"
+          label={t('待处理', 'Pending approvals')}
+          value={data.counts.pendingActionRequests}
+        />
+        <CountTile
+          testId="platform-count-running-tasks"
+          label={t('运行中', 'Running tasks')}
+          value={data.counts.runningTasks}
+        />
+        <GraphFreshnessTile freshness={data.graphFreshness} t={t} />
+        <CountTile
+          testId="platform-count-users"
+          label={t('用户', 'Users')}
+          value={data.counts.users}
+        />
+        <CountTile
+          testId="platform-count-workspaces"
+          label={t('工作区', 'Workspaces')}
+          value={nonResidueWorkspaceCount ?? data.counts.workspaces}
+        />
+        <CountTile
+          testId="platform-count-gatekeepers"
+          label={t('门实例', 'Gatekeepers')}
+          value={data.counts.gatekeepers}
+        />
+        <CountTile
+          testId="platform-count-models"
+          label={t('可用模型', 'Models available')}
+          value={data.counts.modelsAvailable}
+        />
+      </div>
+
+      <DashboardCard title={t('服务健康', 'Health')}>
+        <div className="row-wrap" data-testid="platform-health">
+          {data.health.map((entry) => (
+            <span
+              key={entry.service}
+              className={`chip ${HEALTH_CHIP_CLASS[entry.status]}`}
+              title={entry.detail ?? entry.status}
+              data-testid="platform-health-chip"
+            >
+              {entry.service}: {entry.status}
+            </span>
+          ))}
+        </div>
+      </DashboardCard>
+
+      <CostCard status={status} />
+
+      <div className="divider" data-testid="platform-overview-secondary-divider" />
 
       <DashboardCard title={t('版本', 'Version')}>
         <dl className="definition-list">
@@ -302,52 +390,12 @@ function PlatformOverviewBody({
         </DataList>
       </DashboardCard>
 
-      <div className="platform-tiles" data-testid="platform-counts">
-        <CountTile
-          testId="platform-count-users"
-          label={t('用户', 'Users')}
-          value={data.counts.users}
-        />
-        <CountTile
-          testId="platform-count-workspaces"
-          label={t('工作区', 'Workspaces')}
-          value={data.counts.workspaces}
-        />
-        <CountTile
-          testId="platform-count-gatekeepers"
-          label={t('门实例', 'Gatekeepers')}
-          value={data.counts.gatekeepers}
-        />
-        <CountTile
-          testId="platform-count-models"
-          label={t('可用模型', 'Models available')}
-          value={data.counts.modelsAvailable}
-        />
-      </div>
-
-      <DashboardCard title={t('服务健康', 'Health')}>
-        <div className="row-wrap" data-testid="platform-health">
-          {data.health.map((entry) => (
-            <span
-              key={entry.service}
-              className={`chip ${HEALTH_CHIP_CLASS[entry.status]}`}
-              title={entry.detail ?? entry.status}
-              data-testid="platform-health-chip"
-            >
-              {entry.service}: {entry.status}
-            </span>
-          ))}
-        </div>
-      </DashboardCard>
-
-      <CostCard status={status} />
-
       <DashboardCard
         title={t('最近平台审计', 'Recent platform audit')}
         actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
       >
-        {data.recentAudit.length === 0 ? (
+        {recentAudit.length === 0 ? (
           <EmptyState
             icon="search"
             title={t('暂无平台审计', 'No platform audit rows yet')}
@@ -355,7 +403,7 @@ function PlatformOverviewBody({
           />
         ) : (
           <DataList ariaLabel="Recent platform audit" testId="platform-overview-audit">
-            {data.recentAudit.map((row) => (
+            {recentAudit.map((row) => (
               <DataRow
                 key={row.id}
                 testId="platform-overview-audit-row"
@@ -369,6 +417,35 @@ function PlatformOverviewBody({
 
       {data.counts.pendingActivationUsers > 0 ? <BindApiKeyForm onBound={onKeyBound} /> : null}
     </>
+  );
+}
+
+/** O1's "图谱新鲜度" tile — same `CountTile` shell (the big number is `staleSourceCount`, uniform
+ *  with its sibling tiles), plus a small sub-line: "全部新鲜" at `0`, otherwise how many
+ *  workspaces those stale sources are spread across. */
+function GraphFreshnessTile({
+  freshness,
+  t,
+}: {
+  readonly freshness: PlatformOverviewWire['graphFreshness'];
+  readonly t: Translate;
+}) {
+  const fresh = freshness.staleSourceCount === 0;
+  return (
+    <div className="card platform-tile" data-testid="platform-count-graph-freshness">
+      <div className="platform-tile-label">{t('图谱新鲜度', 'Graph freshness')}</div>
+      <div className="platform-tile-value" data-testid="platform-graph-freshness-value">
+        {freshness.staleSourceCount}
+      </div>
+      <div className="text-3 text-small" data-testid="platform-graph-freshness-detail">
+        {fresh
+          ? t('全部新鲜', 'All fresh')
+          : t(
+              `陈旧 · ${freshness.affectedWorkspaceCount} 个工作区`,
+              `stale · ${freshness.affectedWorkspaceCount} workspace(s)`,
+            )}
+      </div>
+    </div>
   );
 }
 
@@ -465,11 +542,6 @@ function checklistTrailing(item: ChecklistItem, t: Translate) {
       <a href={href} className="inline-flex min-h-9 items-center">
         {t('前往', 'Go')}
       </a>
-    );
-  }
-  if (item.key === 'providers') {
-    return (
-      <span className="text-3 text-small">{t('当前经主机配置', 'Configured on the host')}</span>
     );
   }
   return undefined;

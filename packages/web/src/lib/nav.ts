@@ -174,6 +174,16 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'copy',
     href: hrefs.platformAudit(),
   },
+  // S8 W4-C (journey ⑤ 清理验收残留): a cross-category view of what a run of acceptance/testing
+  // left behind — workspaces, draft definitions, exited entry containers — so an admin does not
+  // have to know to look on three separate pages.
+  {
+    section: 'platformResidue',
+    label: '验收残留',
+    sub: 'Acceptance residue',
+    icon: 'alert',
+    href: hrefs.platformResidue(),
+  },
 ];
 
 /** lib/nav: the single place that names every nav group and page (S8 W1-A1, docs/development-

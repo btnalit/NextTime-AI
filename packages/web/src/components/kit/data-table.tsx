@@ -28,7 +28,7 @@ export interface DataTableColumn<T> {
    * the first pinned column. At most one column should use this.
    *
    * `'high'` — status and the row's primary action belong here. Always visible next to the title
-   * in card mode, and pinned alongside `primary` in `layout="sticky"`. A page typically marks its
+   * in card mode, and pinned alongside `primary` in `layout="sticky"` above 768px. A page typically marks its
    * status column and its one always-visible action column `'high'`.
    *
    * `'low'` (default) — everything else: a label/value pair under the card title in card mode,
@@ -46,9 +46,10 @@ export interface DataTableColumn<T> {
   readonly hideInCard?: boolean;
   readonly headerClassName?: string;
   readonly cellClassName?: string;
-  /** `layout="sticky"` only: the pinned column's fixed width in px, used both for its `min-width`
-   *  and for stacking the next pinned column's `left` offset. Defaults to 200 for `'primary'`, 140
-   *  for `'high'`. Ignored for `'low'` columns (never pinned) and in `layout="card"`. */
+  /** `layout="sticky"` only: the pinned column's fixed width in px, used both for its width and
+   *  for stacking the next pinned column's `left` offset. Defaults to 200 for `'primary'`, 140
+   *  for `'high'`. Ignored for `'low'` columns (never pinned), for `'high'` columns at ≤ 768px
+   *  (only `'primary'` stays pinned there), and in `layout="card"`. */
   readonly width?: number;
 }
 
@@ -87,17 +88,22 @@ const DEFAULT_PINNED_WIDTH: Readonly<Record<DataTableColumnPriority, number>> = 
   low: 160,
 };
 
-function isPinned(priority: DataTableColumnPriority): boolean {
-  return priority !== 'low';
+/** At ≤ 768px only the `primary` column stays pinned — pinning every `high` column too (status +
+ *  actions + an id, ~600px) would leave the scrolling region almost no width at all. */
+function isPinned(priority: DataTableColumnPriority, narrow: boolean): boolean {
+  return priority === 'primary' || (priority === 'high' && !narrow);
 }
 
-/** Cumulative `left` px for every pinned (`primary`/`high`) column, in column order. */
-function pinnedOffsets<T>(columns: readonly DataTableColumn<T>[]): ReadonlyMap<string, number> {
+/** Cumulative `left` px for every pinned column, in column order. */
+function pinnedOffsets<T>(
+  columns: readonly DataTableColumn<T>[],
+  narrow: boolean,
+): ReadonlyMap<string, number> {
   const offsets = new Map<string, number>();
   let left = 0;
   for (const col of columns) {
     const priority = col.priority ?? 'low';
-    if (!isPinned(priority)) continue;
+    if (!isPinned(priority, narrow)) continue;
     offsets.set(col.id, left);
     left += col.width ?? DEFAULT_PINNED_WIDTH[priority];
   }
@@ -275,22 +281,41 @@ export function DataTable<T>({
   }
 
   const sticky = layout === 'sticky';
-  const offsets = sticky ? pinnedOffsets(columns) : undefined;
+  const offsets = sticky ? pinnedOffsets(columns, isNarrow) : undefined;
+  // Sticky mode: the table takes its content's width (never squeezed to the viewport) and cells
+  // never wrap, so the unpinned columns overflow into Table's own `overflow-x-auto` scroller
+  // instead of wrapping one character per line; a pinned cell is exactly its declared width so
+  // the stacked `left` offsets line up, and the table carries the surface colour the pinned cells
+  // already have.
+  const pinStyle = (left: number | undefined, width: number) => ({
+    left,
+    width,
+    minWidth: width,
+    maxWidth: width,
+  });
 
   return (
-    <Table aria-label={ariaLabel} data-testid={testId}>
+    <Table
+      aria-label={ariaLabel}
+      data-testid={testId}
+      className={sticky ? 'w-max min-w-full bg-surface-1' : undefined}
+    >
       <TableHeader className="sticky top-0 z-20 bg-surface-1">
         <TableRow>
           {columns.map((col) => {
             const priority = col.priority ?? 'low';
-            const pinned = sticky && isPinned(priority);
+            const pinned = sticky && isPinned(priority, isNarrow);
             const left = pinned ? offsets?.get(col.id) : undefined;
             const width = pinned ? (col.width ?? DEFAULT_PINNED_WIDTH[priority]) : undefined;
             return (
               <TableHead
                 key={col.id}
-                className={cn(pinned && 'sticky z-30 bg-surface-1', col.headerClassName)}
-                style={pinned ? { left, minWidth: width } : undefined}
+                className={cn(
+                  sticky && 'whitespace-nowrap',
+                  pinned && 'sticky z-30 bg-surface-1',
+                  col.headerClassName,
+                )}
+                style={pinned && width !== undefined ? pinStyle(left, width) : undefined}
               >
                 {renderHeader(col)}
               </TableHead>
@@ -312,14 +337,18 @@ export function DataTable<T>({
             >
               {columns.map((col) => {
                 const priority = col.priority ?? 'low';
-                const pinned = sticky && isPinned(priority);
+                const pinned = sticky && isPinned(priority, isNarrow);
                 const left = pinned ? offsets?.get(col.id) : undefined;
                 const width = pinned ? (col.width ?? DEFAULT_PINNED_WIDTH[priority]) : undefined;
                 return (
                   <TableCell
                     key={col.id}
-                    className={cn(pinned && 'sticky z-10 bg-surface-1', col.cellClassName)}
-                    style={pinned ? { left, minWidth: width } : undefined}
+                    className={cn(
+                      sticky && 'whitespace-nowrap',
+                      pinned && 'sticky z-10 overflow-hidden text-ellipsis bg-surface-1',
+                      col.cellClassName,
+                    )}
+                    style={pinned && width !== undefined ? pinStyle(left, width) : undefined}
                   >
                     {col.cell(row)}
                   </TableCell>

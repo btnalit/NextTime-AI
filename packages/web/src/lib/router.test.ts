@@ -119,6 +119,7 @@ describe('hrefs', () => {
       { kind: 'platformRuntime' },
       { kind: 'platformStatus' },
       { kind: 'platformAudit' },
+      { kind: 'platformResidue' },
     ];
     for (const route of cases) {
       const href = hrefFor(route);
@@ -177,5 +178,7 @@ function hrefFor(route: Route): string {
       return hrefs.platformStatus();
     case 'platformAudit':
       return hrefs.platformAudit();
+    case 'platformResidue':
+      return hrefs.platformResidue();
   }
 }
