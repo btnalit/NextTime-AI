@@ -1,4 +1,5 @@
 import type { PolicyWire, QuotaListEntryWire } from '@nexttime/shared';
+import { useState } from 'react';
 import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
@@ -8,8 +9,12 @@ import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
+import { PolicyEditSheet } from './governance/PolicyEditSheet.js';
+import { QuotaEditSheet } from './governance/QuotaEditSheet.js';
+import { Button } from './kit/button.js';
 import { DataTable, type DataTableColumn } from './kit/data-table.js';
 import { PageHeader } from './kit/page-header.js';
 import { DashboardCard } from './kit/section.js';
@@ -20,33 +25,16 @@ import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
 
-/** The five I18 quota keys (`application/task/quotas.ts` `QUOTA_KEY_VALUES`) with a human label
- *  and unit; an unknown key (a future axis) falls back to the raw key so nothing is hidden. */
-const QUOTA_LABELS: Readonly<
-  Record<string, { readonly zh: string; readonly en: string; readonly unit: string }>
-> = {
-  'task.max_depth': { zh: '派生链深度上限', en: 'Max invoke_worker depth', unit: '' },
-  'task.max_concurrent_worker_runs_per_user': {
-    zh: '每用户并发 WorkerRun 数',
-    en: 'Concurrent WorkerRuns per user',
-    unit: '',
-  },
-  'task.default_token_budget': {
-    zh: '每 Task token 预算',
-    en: 'Per-Task token budget',
-    unit: 'tokens',
-  },
-  'task.default_duration_limit_sec': {
-    zh: '每 Task 时长上限',
-    en: 'Per-Task duration limit',
-    unit: 's',
-  },
-  'task.daily_cost_budget_usd': { zh: '每工作区日成本', en: 'Daily cost budget', unit: 'USD' },
-};
+/** An unknown key (a future I18 axis this console build predates) falls back to the raw key so
+ *  nothing is hidden. */
+function quotaLabel(key: string, t: Translate): string {
+  const info = QUOTA_KEY_INFO[key as QuotaKey];
+  return info ? t(info.zh, info.en) : key;
+}
 
 function quotaValue(row: QuotaListEntryWire, t: Translate): string {
   if (row.value === null) return t('不限', 'unlimited');
-  const unit = QUOTA_LABELS[row.key]?.unit ?? '';
+  const unit = QUOTA_KEY_INFO[row.key as QuotaKey]?.unit ?? '';
   return unit ? `${row.value} ${unit}` : String(row.value);
 }
 
@@ -55,7 +43,10 @@ function quotaValue(row: QuotaListEntryWire, t: Translate): string {
  *  is still pure display, no row-level callback or component-state closure to capture beyond `t`.
  *  `key` is the row's own primary key ("配额 Quota", not a human name), so it is `primary`; the
  *  effective value reads as the row's "status" here. */
-function quotaColumns(t: Translate): readonly DataTableColumn<QuotaListEntryWire>[] {
+function quotaColumns(
+  t: Translate,
+  options: { readonly canManage: boolean; readonly onEdit: (row: QuotaListEntryWire) => void },
+): readonly DataTableColumn<QuotaListEntryWire>[] {
   return [
     {
       id: 'key',
@@ -63,11 +54,7 @@ function quotaColumns(t: Translate): readonly DataTableColumn<QuotaListEntryWire
       priority: 'primary',
       cell: (row) => (
         <>
-          <div>
-            {row.key in QUOTA_LABELS
-              ? t(QUOTA_LABELS[row.key]?.zh ?? row.key, QUOTA_LABELS[row.key]?.en ?? row.key)
-              : row.key}
-          </div>
+          <div>{quotaLabel(row.key, t)}</div>
           <div className="mono text-3 text-small">{row.key}</div>
         </>
       ),
@@ -104,6 +91,25 @@ function quotaColumns(t: Translate): readonly DataTableColumn<QuotaListEntryWire
           '—'
         ),
     },
+    ...(options.canManage
+      ? [
+          {
+            id: 'actions',
+            header: t('操作', 'Actions'),
+            priority: 'high' as const,
+            cell: (row: QuotaListEntryWire) => (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => options.onEdit(row)}
+                data-testid={`quota-edit-${row.key}`}
+              >
+                {t('编辑', 'Edit')}
+              </Button>
+            ),
+          },
+        ]
+      : []),
   ];
 }
 
@@ -111,7 +117,10 @@ function quotaColumns(t: Translate): readonly DataTableColumn<QuotaListEntryWire
  *  factory too. `actionKindTag` is the row's own identity (§1 wire vocabulary — "actionKind" is
  *  only the `{tag,label}` display object, this is the bare tag), so it is `primary`; `blastRadius`
  *  reads as the row's "status". */
-function policyColumns(t: Translate): readonly DataTableColumn<PolicyWire>[] {
+function policyColumns(
+  t: Translate,
+  options: { readonly canManage: boolean; readonly onEdit: (row: PolicyWire) => void },
+): readonly DataTableColumn<PolicyWire>[] {
   return [
     {
       id: 'actionKind',
@@ -166,6 +175,25 @@ function policyColumns(t: Translate): readonly DataTableColumn<PolicyWire>[] {
         <time title={formatDateTime(policy.updatedAt)}>{formatRelative(policy.updatedAt)}</time>
       ),
     },
+    ...(options.canManage
+      ? [
+          {
+            id: 'actions',
+            header: t('操作', 'Actions'),
+            priority: 'high' as const,
+            cell: (policy: PolicyWire) => (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => options.onEdit(policy)}
+                data-testid={`policy-edit-${policy.id}`}
+              >
+                {t('编辑', 'Edit')}
+              </Button>
+            ),
+          },
+        ]
+      : []),
   ];
 }
 
@@ -212,6 +240,34 @@ export function ModelsPage({ http }: ModelsPageProps) {
   const agentPolicy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas');
   const policies = useCapabilityList<PolicyWire>(http, 'list_policies');
+
+  // S8 W4 item 1 (leftover 12 界面缺口 "set_policy/set_quota — 模型页只读，owner 改不了"): both
+  // `set_policy`/`set_quota` are owner-only, same gate `AgentPolicyForm` above already uses.
+  const [policyEditor, setPolicyEditor] = useState<
+    { readonly kind: 'new' } | { readonly kind: 'edit'; readonly row: PolicyWire } | null
+  >(null);
+  const [quotaEditor, setQuotaEditor] = useState<QuotaListEntryWire | null>(null);
+
+  function handlePolicySaved(saved: PolicyWire): void {
+    policies.mutate((data) => {
+      const exists = data.items.some((row) => row.id === saved.id);
+      return {
+        ...data,
+        items: exists
+          ? data.items.map((row) => (row.id === saved.id ? saved : row))
+          : [saved, ...data.items],
+      };
+    });
+    toast.push({ tone: 'ok', title: t('策略已保存', 'Policy saved') });
+  }
+
+  function handleQuotaSaved(saved: QuotaListEntryWire): void {
+    quotas.mutate((data) => ({
+      ...data,
+      items: data.items.map((row) => (row.key === saved.key ? saved : row)),
+    }));
+    toast.push({ tone: 'ok', title: t('配额已保存', 'Quota saved') });
+  }
 
   return (
     <div className="page">
@@ -324,7 +380,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
           />
         ) : (
           <DataTable
-            columns={quotaColumns(t)}
+            columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor })}
             data={quotas.state.data.items}
             getRowId={(row) => row.key}
             ariaLabel="Quotas"
@@ -334,7 +390,21 @@ export function ModelsPage({ http }: ModelsPageProps) {
         )}
       </DashboardCard>
 
-      <DashboardCard title={t('策略', 'Policies')}>
+      <DashboardCard
+        title={t('策略', 'Policies')}
+        actions={
+          isOwner ? (
+            <Button
+              variant="primary"
+              size="s"
+              onClick={() => setPolicyEditor({ kind: 'new' })}
+              data-testid="policy-new"
+            >
+              {t('新增策略', 'New policy')}
+            </Button>
+          ) : undefined
+        }
+      >
         {policies.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />
         ) : policies.state.status === 'error' ? (
@@ -364,7 +434,10 @@ export function ModelsPage({ http }: ModelsPageProps) {
           />
         ) : (
           <DataTable
-            columns={policyColumns(t)}
+            columns={policyColumns(t, {
+              canManage: isOwner,
+              onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
+            })}
             data={policies.state.data.items}
             getRowId={(policy) => policy.id}
             ariaLabel="Policies"
@@ -374,6 +447,30 @@ export function ModelsPage({ http }: ModelsPageProps) {
           />
         )}
       </DashboardCard>
+
+      {/* Mounted only while a target is chosen (never kept around with `open=false`) — a fresh
+       *  instance per edit means each one's `useState(editing/row)` initializer runs against the
+       *  right data, instead of whatever was current the one time an always-mounted instance
+       *  would have first initialized. */}
+      {isOwner && policyEditor !== null ? (
+        <PolicyEditSheet
+          http={http}
+          open
+          onOpenChange={(open) => !open && setPolicyEditor(null)}
+          editing={policyEditor.kind === 'edit' ? policyEditor.row : undefined}
+          onSaved={handlePolicySaved}
+        />
+      ) : null}
+
+      {isOwner && quotaEditor !== null ? (
+        <QuotaEditSheet
+          http={http}
+          open
+          onOpenChange={(open) => !open && setQuotaEditor(null)}
+          row={quotaEditor}
+          onSaved={handleQuotaSaved}
+        />
+      ) : null}
     </div>
   );
 }
