@@ -17,6 +17,7 @@ import {
   getPublishedEntryDefinition,
   getWorkerDefinition,
   listWorkerDefinitions,
+  listWorkerDefinitionsPage,
   proposeWorkerDefinition,
   publishWorkerDefinition,
   requirePublishedWorkerDefinition,
@@ -422,6 +423,166 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           publishedWorkers.every((row) => row.status === 'published' && row.kind === 'worker'),
         ).toBe(true);
+      });
+    });
+
+    describe('listWorkerDefinitionsPage / includeOwnDrafts (S8 W2-U2b, audit R6 "草稿保存后找不回")', () => {
+      it('omits every draft row when includeOwnDrafts is omitted (default false, unchanged behavior)', async () => {
+        const draft = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+
+        const page = await inTx(builderId, (client) =>
+          listWorkerDefinitionsPage(client, workspaceId, builderId, {}),
+        );
+        expect(page.items.some((row) => row.id === draft.id)).toBe(false);
+        expect(page.items.every((row) => row.status === 'published')).toBe(true);
+      });
+
+      it('includes only the caller’s own draft rows when includeOwnDrafts is true', async () => {
+        const ownDraft = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        const othersDraft = await inTx(otherBuilderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+
+        const page = await inTx(builderId, (client) =>
+          listWorkerDefinitionsPage(client, workspaceId, builderId, { includeOwnDrafts: true }),
+        );
+        expect(page.items.some((row) => row.id === ownDraft.id && row.status === 'draft')).toBe(
+          true,
+        );
+        expect(page.items.some((row) => row.id === othersDraft.id)).toBe(false);
+      });
+
+      it('never returns another principal’s draft, even for a caller who also passes includeOwnDrafts', async () => {
+        const othersDraft = await inTx(otherBuilderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+
+        const page = await inTx(ownerId, (client) =>
+          listWorkerDefinitionsPage(client, workspaceId, ownerId, { includeOwnDrafts: true }),
+        );
+        expect(page.items.some((row) => row.id === othersDraft.id)).toBe(false);
+      });
+
+      it('leaves published rows unchanged (still present, still status "published") when includeOwnDrafts is true', async () => {
+        const draft = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: draft.id,
+            version: draft.version,
+          }),
+        );
+
+        const page = await inTx(builderId, (client) =>
+          listWorkerDefinitionsPage(client, workspaceId, builderId, { includeOwnDrafts: true }),
+        );
+        const row = page.items.find((item) => item.id === draft.id);
+        expect(row?.status).toBe('published');
+      });
+
+      it('pages consistently with includeOwnDrafts (every created row surfaces exactly once)', async () => {
+        const freshWorkspaceId = await adminInsertWorkspace('worker-definitions-paging-workspace');
+
+        async function adminInsertFreshPrincipal(
+          role: string,
+          displayName: string,
+        ): Promise<string> {
+          const id = randomUUID();
+          await withWorkspace(
+            pool,
+            { workspaceId: freshWorkspaceId, principalId: id },
+            async (client) => {
+              await client.query(
+                "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', $3, $4)",
+                [freshWorkspaceId, id, role, displayName],
+              );
+            },
+            { skipRoleSwitch: true },
+          );
+          return id;
+        }
+
+        const pagingBuilderId = await adminInsertFreshPrincipal('builder', 'paging-builder');
+        const pagingOwnerId = await adminInsertFreshPrincipal('owner', 'paging-owner');
+
+        async function inFreshTx<T>(
+          principalId: string,
+          fn: (client: import('pg').PoolClient) => Promise<T>,
+        ): Promise<T> {
+          return withWorkspace(pool, { workspaceId: freshWorkspaceId, principalId }, fn);
+        }
+
+        const createdIds: string[] = [];
+        // Three draft-only rows (never published) plus three proposed-then-published rows — every
+        // one of the six must surface exactly once while paging with includeOwnDrafts, at limit=2
+        // (three pages).
+        for (let i = 0; i < 3; i += 1) {
+          const draft = await inFreshTx(pagingBuilderId, (client) =>
+            proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          );
+          createdIds.push(draft.id);
+        }
+        for (let i = 0; i < 3; i += 1) {
+          const draft = await inFreshTx(pagingBuilderId, (client) =>
+            proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+              kind: 'worker',
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          );
+          await inFreshTx(pagingOwnerId, (client) =>
+            publishWorkerDefinition(client, freshWorkspaceId, pagingOwnerId, {
+              definitionId: draft.id,
+              version: draft.version,
+            }),
+          );
+          createdIds.push(draft.id);
+        }
+
+        const seen = new Set<string>();
+        let cursor: string | undefined;
+        let guard = 0;
+        do {
+          const page = await inFreshTx(pagingBuilderId, (client) =>
+            listWorkerDefinitionsPage(client, freshWorkspaceId, pagingBuilderId, {
+              includeOwnDrafts: true,
+              limit: 2,
+              cursor,
+            }),
+          );
+          for (const row of page.items) {
+            expect(seen.has(row.id)).toBe(false);
+            seen.add(row.id);
+          }
+          cursor = page.nextCursor;
+          guard += 1;
+        } while (cursor !== undefined && guard < 10);
+
+        for (const id of createdIds) {
+          expect(seen.has(id)).toBe(true);
+        }
       });
     });
   },
