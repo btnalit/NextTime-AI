@@ -34,6 +34,7 @@ import { ensureInitialAdmin } from './application/identity/index.js';
 import { registerLinkageConsumers } from './application/linkage/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
 import { ensureDefaultWorkspace } from './application/platform/index.js';
+import { checkDefaultModules } from './application/platform/modules.js';
 import {
   configureTaskRuntime,
   registerActionRequestRoutingConsumer,
@@ -1130,6 +1131,19 @@ export function main(): void {
       app.log.error(
         { err },
         'default workspace could not be prepared — create one from the console or with bootstrap.js create-workspace',
+      );
+    }
+    // S8 W5 (leftover 65): warn loudly, once at startup, when platform_settings.defaultModules
+    // names a module family this deployment's own ontology/modules.yaml no longer has — previously
+    // a silent per-workspace skip only (application/workspace/create.ts's skippedDefaultModules).
+    // Own try, same "never fatal" shape as every startup step here: a broken module index read
+    // must not take the kernel down over a diagnostic warning.
+    try {
+      await checkDefaultModules(pool, { log: (line) => app.log.warn(line) });
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not check platform_settings.defaultModules against the module index',
       );
     }
 

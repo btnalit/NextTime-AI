@@ -245,6 +245,18 @@ export interface TaskSupervisorClientPort {
    * `true` when a container was stopped, `false` when worker-supervisor knew of none (404).
    */
   stopResident?(principalId: string): Promise<boolean>;
+  /**
+   * S8 W5 (leftover 77): `POST /resident/reclaim {principalId}` — permanently reclaims one
+   * principal's resident entry container (force-removed, not just stopped) and its
+   * `workspaces/<principalId>` data directory. Called only from `purge_workspace`'s `afterCommit`
+   * (`platform-handlers.ts`'s `reclaimEntryContainers`), once per purged Principal id, and only
+   * once the purge actually executed — a purge is irreversible, so nothing will ever reuse that
+   * container again (unlike `stopResident`, used for disable, where a stopped-but-present
+   * container is the point). Optional on the port for the same reason `stopResident` is. `true`
+   * when worker-supervisor acted, `false` when it knew of no such principal (404 — still a
+   * success from this caller's point of view: nothing was there to reclaim).
+   */
+  reclaimResident?(principalId: string): Promise<boolean>;
   /** S7-E: `GET /images` — every runtime image carrying the platform's `ai.nexttime.*` labels,
    *  plus worker-supervisor's own reported `defaultImage`. Optional on the port for the same
    *  reason `stopResident` is (existing test fakes across `application/task/*.integration.test.ts`
@@ -321,6 +333,24 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     if (status === 204 || status === 200) return true;
     if (status === 404) return false;
     throw new TaskSupervisorError('http_error', `POST /resident/stop returned ${status}`, {
+      status,
+    });
+  }
+
+  async reclaimResident(principalId: string): Promise<boolean> {
+    const { status } = await requestJson(
+      this.fetchImpl,
+      this.timeoutMs,
+      `${this.supervisorUrl}/resident/reclaim`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        body: JSON.stringify({ principalId }),
+      },
+    );
+    if (status === 204 || status === 200) return true;
+    if (status === 404) return false;
+    throw new TaskSupervisorError('http_error', `POST /resident/reclaim returned ${status}`, {
       status,
     });
   }

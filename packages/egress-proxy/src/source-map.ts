@@ -30,10 +30,24 @@ export interface CreateSourceMapOptions {
   onError?: (err: unknown) => void;
 }
 
+/** leftover 61: `egress-map.ts`'s writer is a plain, non-atomic `writeFileSync` (open + truncate +
+ *  write, no rename) — deliberately, since a rename-based atomic write would silently break this
+ *  file's own `fs.watch` hot reload (that file's own doc comment; the trade-off is kept, not
+ *  reversed, here). An `fs.watch` change event landing mid-write is therefore an *expected*, near-
+ *  routine race, not a sign of real corruption — one short retry almost always sees the finished
+ *  write instead. */
+const RETRY_DELAY_MS = 50;
+
 /**
  * Loads `filePath` (if given) and watches it for changes, hot-reloading on every change event. A
  * missing file, invalid JSON, or a schema mismatch is reported via `onError` and leaves the
  * previously-loaded map (or an empty one, on first load) in place rather than crashing the proxy.
+ *
+ * A failed read/parse gets one retry after `RETRY_DELAY_MS` before it is treated as real (see
+ * `RETRY_DELAY_MS`'s own doc comment) — and even a failure that persists past the retry is only
+ * ever reported once per "burst": `erroring` stays set until the next successful load, so a busy
+ * host generating one `fs.watch` event per container spawn/stop no longer logs one error line per
+ * event for what is, underneath, the same torn read repeating.
  */
 export function createSourceMap(
   filePath: string | undefined,
@@ -52,13 +66,31 @@ export function createSourceMap(
       );
     });
 
+  let erroring = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function readOnce(): void {
+    const raw = readFileSync(filePath as string, 'utf8');
+    entries = SourceMapFileSchema.parse(JSON.parse(raw));
+    erroring = false;
+  }
+
   function load(): void {
     if (!filePath) return;
     try {
-      const raw = readFileSync(filePath, 'utf8');
-      entries = SourceMapFileSchema.parse(JSON.parse(raw));
-    } catch (err) {
-      onError(err);
+      readOnce();
+    } catch {
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        try {
+          readOnce();
+        } catch (err) {
+          if (!erroring) {
+            erroring = true;
+            onError(err);
+          }
+        }
+      }, RETRY_DELAY_MS);
     }
   }
 
@@ -78,6 +110,7 @@ export function createSourceMap(
       return entries[clientIp];
     },
     close(): void {
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
       watcher?.close();
     },
   };

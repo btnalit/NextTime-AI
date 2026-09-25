@@ -762,6 +762,15 @@
   background: var(--accent-soft);
 }
 
+/* S8 W5 (audit L7): components/kit/data-table's own rows (<tr> at wide widths, <li> in card
+   mode) — same "this is the current one" convention as .data-row above, generic across every
+   DataTable caller (first use: PlatformRuntimePage's 镜像清单 table, replacing a separate
+   "活动镜像" card that duplicated the active row's own fields). */
+table tbody tr[aria-current="true"],
+li[aria-current="true"] {
+  background: var(--accent-soft);
+}
+
 .data-row:focus-visible {
   outline-offset: -2px;
   border-radius: 0;

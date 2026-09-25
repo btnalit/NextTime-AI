@@ -16,6 +16,13 @@
  *                                  -> 200 {containerId, ip, status, created, restarts}
  *                                     | 403 (image not allowlisted)
  *   POST /resident/stop           {principalId} -> 204                           [guarded]
+ *   POST /resident/reclaim        {principalId} -> 204                           [guarded]
+ *                                  (S8 W5 leftover 77 — force-removes the container and deletes
+ *                                  its workspaces/<principalId> data directory; unlike
+ *                                  /resident/stop, never reuse-able afterwards. Called by the
+ *                                  kernel only after a Workspace purge actually ran, once per
+ *                                  purged Principal id — see application/gateway/platform-
+ *                                  handlers.ts's reclaimEntryContainers on the kernel side.)
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404                    [guarded]
  *   POST /resident/:principalId/touch -> 204 | 404                               [guarded]
  *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [guarded]
@@ -163,6 +170,23 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return null;
     } catch (err) {
       request.log?.error?.(err, 'resident/stop failed');
+      reply.code(500);
+      return { error: { code: 'internal_error', message: String(err) } };
+    }
+  });
+
+  app.post('/resident/reclaim', requireInternal, async (request, reply) => {
+    const parsed = StopRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: { code: 'invalid_body', message: parsed.error.message } };
+    }
+    try {
+      await residentService.reclaim(parsed.data.principalId);
+      reply.code(204);
+      return null;
+    } catch (err) {
+      request.log?.error?.(err, 'resident/reclaim failed');
       reply.code(500);
       return { error: { code: 'internal_error', message: String(err) } };
     }

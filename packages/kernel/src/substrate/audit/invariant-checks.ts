@@ -78,7 +78,9 @@ import type { PoolClient } from 'pg';
  *   leaves no row anywhere), so the honest DB-side signal is the *silence* that follows: the
  *   collector that spent a week 401-ing against a disabled acceptance workspace would have read
  *   here as one silent production Source. Ephemeral and disabled workspaces are excluded —
- *   their Sources are expected to go quiet.
+ *   their Sources are expected to go quiet. leftover 62: a Source whose owner Principal holds no
+ *   active Handle is also excluded — an old/retired/superseded Source can never observe again
+ *   regardless of how long it stays silent (see `checkCollectorSilent`'s own doc comment).
  */
 
 export interface InvariantCheckResult {
@@ -543,6 +545,20 @@ export const DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
  * `observations` row and whose newest one is older than `thresholdMs`. A Source registered but
  * never observed is not counted — it never established a cadence to fall silent from (an
  * external runtime that registered a Source for a one-off import stays quiet legitimately).
+ *
+ * leftover 62: a Source whose owner Principal currently holds **no active Handle** is also
+ * excluded — a retired/superseded collector Source (2026-09-23: a pre-idempotent-naming
+ * `host-inventory` Source in the production workspace, orphaned when the collector's Handle was
+ * re-minted onto a fresh registration — `sources.name` only became unique per (workspace, kind)
+ * in migration core 0028, so an older duplicate kept its own row rather than merging) can never
+ * observe again no matter how long it stays silent, and reads as a permanent false positive
+ * otherwise. `sources` carries no lifecycle/retirement field of its own (unlike `workspaces.
+ * disabled_at` or `principals.disabled_at` — and `disable_principal` refuses a non-human target
+ * outright, so it is not that field either, see `members-handlers.ts` `assertHumanTarget`); Handle
+ * validity is the only signal a service Principal's own liveness has, the same predicate `purge-
+ * workspace.ts`'s `service_handle_in_use` warning already uses. A currently-credentialed collector
+ * that has genuinely gone silent (the bug this invariant exists to catch) still has an active
+ * Handle and is unaffected.
  */
 async function checkCollectorSilent(
   client: PoolClient,
@@ -568,6 +584,11 @@ async function checkCollectorSilent(
         and w.status = 'active' and w.purpose = 'standard'
         and o.last_observed_at is not null
         and o.last_observed_at < $1::timestamptz
+        and exists (
+          select 1 from capability_handles h
+           where h.workspace_id = p.workspace_id and h.on_behalf_of = p.id
+             and h.revoked_at is null and h.expires_at > now()
+        )
       order by o.last_observed_at`,
     [cutoff],
   );
