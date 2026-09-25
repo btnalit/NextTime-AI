@@ -107,6 +107,12 @@ export interface HostOptions {
   /** Injectable clock for `refreshTouch`'s throttle window (module doc comment, leftover 46) —
    *  defaults to `Date.now`. Tests supply a fake clock instead of real timers. */
   readonly now?: () => number;
+  /** Injectable touch-throttle cache (leftover 66, docs/STATUS.md §4) — defaults to a fresh, empty
+   *  `Map`. A test can supply its own instance and inspect it after driving the host through a
+   *  scenario, to assert entries are pruned when a principal's container closes (`handleContainerClosed`)
+   *  rather than only never growing during whatever that one test happens to exercise. Production
+   *  callers never set this. */
+  readonly lastTouchAtMap?: Map<string, number>;
 }
 
 export interface Host {
@@ -173,8 +179,10 @@ export function createHost(options: HostOptions): Host {
   const activeTurns = new Map<string, ActiveTurn>();
   /** Leftover 46 (module doc comment): last time `refreshTouch` (or the Turn-start touch in
    *  `ensureAttachment`) actually called `supervisorClient.touch` for this principal — the
-   *  throttle window's own clock, distinct from worker-supervisor's `lastTouchedAt` registry. */
-  const lastTouchAt = new Map<string, number>();
+   *  throttle window's own clock, distinct from worker-supervisor's `lastTouchedAt` registry.
+   *  Pruned in `handleContainerClosed` (leftover 66) — see `HostOptions.lastTouchAtMap`'s own doc
+   *  comment for why this is injectable. */
+  const lastTouchAt = options.lastTouchAtMap ?? new Map<string, number>();
 
   /** Best-effort `supervisorClient.touch` — failures are logged, never thrown, since a missed
    *  touch only risks a future idle sweep, not this Turn's own correctness. */
@@ -210,7 +218,18 @@ export function createHost(options: HostOptions): Host {
   ): void {
     // Only the attachment that actually closed is dropped — by the time a *replaced* container's
     // stream ends, `ensureAttachment` may already have cached the new one under this principal.
-    if (attachments.get(principalId)?.containerId === containerId) attachments.delete(principalId);
+    if (attachments.get(principalId)?.containerId === containerId) {
+      attachments.delete(principalId);
+      // Leftover 66 (docs/STATUS.md §4): prune the touch-throttle entry alongside the attachment
+      // it was tracking for — without this, `lastTouchAt` keeps one entry per principal ever seen
+      // for this process's entire lifetime, even long after its container (and any reason to keep
+      // touching it) is gone (idle-timeout stop, `roll_entry_containers`, a crash never followed
+      // by a new Turn). Safe to drop unconditionally here: this is purely a local throttle-window
+      // cache (module doc comment on `lastTouchAt`, distinct from worker-supervisor's own
+      // `lastTouchedAt` registry) — `ensureAttachment`/`refreshTouch` repopulate it from scratch
+      // on this principal's next Turn, same as `attachments` itself.
+      lastTouchAt.delete(principalId);
+    }
     const turn = activeTurns.get(principalId);
     if (!turn) {
       // Not mid-turn (e.g. idle-timeout stop, or a stop this process itself requested) —
