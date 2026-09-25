@@ -109,11 +109,9 @@ test.describe('Journey ⑤: 清理验收残留', () => {
     const cleanupDrawer = page.getByTestId('workspace-drawer');
     await expect(cleanupDrawer.getByTestId('workspace-detail')).toBeVisible({ timeout: 15_000 });
     await cleanupDrawer.getByTestId('workspace-status-toggle').click();
-    await expect(residueRow.getByTestId('workspace-status')).toHaveAttribute(
-      'data-status',
-      'active',
-      { timeout: 15_000 },
-    );
+    // Back to `active`, it is no longer residue — so the residue-only view drops its row (unlike
+    // workspaces.spec.ts's default view, where the row stays on screen with its new status).
+    await expect(residueRow).toHaveCount(0, { timeout: 15_000 });
     await page.keyboard.press('Escape');
     await expect(cleanupDrawer).toBeHidden();
 
