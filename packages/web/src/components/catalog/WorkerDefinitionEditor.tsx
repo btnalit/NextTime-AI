@@ -153,9 +153,10 @@ function CheckboxListField({
  * definitions are not a console-reachable action; an existing entry family's next version still
  * is, same as today). Submit validates with `workerDefinitionContentSchemaFor(kind)` and calls
  * `propose_worker_definition{definitionId?, kind, definition}`; the success state offers
- * `publish_worker_definition{definitionId, version}` with an explicit "不发布就找不回" consequence
- * (R6 — `list_worker_definitions` never returns drafts, so this editor's own success screen is the
- * only place a fresh draft's id is ever shown) and starts with keyboard focus on "发布".
+ * `publish_worker_definition{definitionId, version}` with a "在「我的草稿」等你发布" reminder (R6 —
+ * `CatalogPage.tsx`'s Workers tab now lists the caller's own drafts under "我的草稿", but this
+ * editor's own success screen is still the fastest path to publish, so it keeps the focus-on-
+ * "发布" nudge) and starts with keyboard focus on "发布".
  */
 export function WorkerDefinitionEditor({
   http,
@@ -240,8 +241,9 @@ export function WorkerDefinitionEditor({
         }
         onDone={onDone}
         unpublishedConsequence={t(
-          'Worker 目录只显示已发布版本，这份草稿不会出现在任何列表里——不发布的话，之后只能凭上面的 id 续写。确认无误就现在点击「发布」。',
-          'The Workers tab lists published versions only, so this draft will not appear in any list — unpublished, it can only be resumed later from the id above. Publish now if it is ready.',
+          '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它——确认无误就现在点击「发布」。',
+          'Left unpublished, this draft only sits under “My drafts” on the Workers tab — no one ' +
+            'else in the workspace can see or delegate to it. Publish now if it is ready.',
         )}
       />
     );
