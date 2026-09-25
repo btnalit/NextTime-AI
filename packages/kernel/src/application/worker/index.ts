@@ -64,3 +64,16 @@ export type {
   ProceduresPage,
   ProposeProcedureInput,
 } from './procedures.js';
+
+export {
+  DEFAULT_DRAFT_EXPIRY_DAYS,
+  DraftNotDiscardableError,
+  discardDraft,
+  expireDraftsOnce,
+} from './draft-lifecycle.js';
+export type {
+  DiscardedDraft,
+  DraftRef,
+  ExpireDraftsOnceOptions,
+  ExpireDraftsOnceResult,
+} from './draft-lifecycle.js';

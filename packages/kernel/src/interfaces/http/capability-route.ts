@@ -85,6 +85,7 @@ import {
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
+  DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   SkillNotFoundError,
@@ -470,6 +471,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof WorkerDefinitionNotPublishedError) {
     return { status: 409, code: 'not_published', message: err.message };
+  }
+  // S8 W3 K2 (leftover 82) `discard_draft`: the row exists and is the caller's own, but is not
+  // currently `draft` — same 409 "well-formed request, the row's state forbids it" family as
+  // WorkerDefinitionNotPublishedError just above.
+  if (err instanceof DraftNotDiscardableError) {
+    return { status: 409, code: 'not_a_draft', message: err.message };
   }
   if (err instanceof ProcedureStepReferenceError) {
     return { status: 400, code: 'invalid_step_reference', message: err.message };
