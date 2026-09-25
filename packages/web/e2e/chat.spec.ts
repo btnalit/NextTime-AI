@@ -52,7 +52,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.getByRole('button', { name: 'Send' }).click();
 
     // --- the product shell is up: sidebar connection indicator reads Connected ---
-    await expect(page.getByTestId('ws-status')).toHaveText('Connected');
+    await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected');
 
     // --- see the streamed reply settle (fake runtime: "echo: <prompt as the runtime received
     //     it>" — see this file's own doc comment for the turn_id marker prefix) ---

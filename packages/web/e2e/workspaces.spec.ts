@@ -276,7 +276,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
       await page.locator('#cp-confirm-password').fill(newPassword);
       await page.getByRole('button', { name: /更改密码/ }).click();
     }
-    await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
+    await expect(wsStatus).toHaveAttribute('data-status', 'connected', { timeout: 15_000 });
 
     // This user is a `member` of the platform default workspace *and* the owner of W2, so the
     // Sidebar renders its switcher and the session may have opened on either one. 管理 is hidden

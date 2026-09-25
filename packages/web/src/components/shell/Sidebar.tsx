@@ -15,11 +15,18 @@ import { Select } from '../ui/Field.js';
 import { Icon, type IconName } from '../ui/Icon.js';
 import { StatusChip } from '../ui/StatusChip.js';
 
-const STATUS_LABEL: Readonly<Record<WsConnectionStatus, string>> = {
-  connecting: 'Connecting',
-  connected: 'Connected',
-  reconnecting: 'Reconnecting',
-  closed: 'Disconnected',
+/** S8 W3 F1 (leftover 85): bilingual now — the connection dot's own text used to be English-only
+ *  regardless of language, one of leftover 85's mixed-language screenshots. The `data-status`
+ *  attribute on the rendered `<span>` (its value is always the raw `WsConnectionStatus`, e.g.
+ *  `"connected"`) keeps the value machine-readable for tests/e2e now that the visible text is
+ *  bilingual and no longer a stable selector. */
+const STATUS_LABEL: Readonly<
+  Record<WsConnectionStatus, { readonly zh: string; readonly en: string }>
+> = {
+  connecting: { zh: '连接中', en: 'Connecting' },
+  connected: { zh: '已连接', en: 'Connected' },
+  reconnecting: { zh: '重连中', en: 'Reconnecting' },
+  closed: { zh: '已断开', en: 'Disconnected' },
 };
 
 const ROLE_BADGE_CLASS: Readonly<Record<InferredRole, string>> = {
@@ -36,8 +43,9 @@ export interface SidebarProps {
   readonly workspaceName: string;
   readonly role: WorkspaceRole;
   /** S4.1: which credential this session is signed in with — governs the footer's sign-out
-   *  button label (e2e depends on the exact text: "Forget key" for `apiKey`, "登出 Sign out" for
-   *  `cookie`) and whether the workspace switcher below can ever render. */
+   *  button label ("清除密钥 Forget key" for `apiKey`, "登出 Sign out" for `cookie`, both `t()`;
+   *  S8 W3 F1 routed both through i18n — e2e now selects by the zh-CN default text) and whether
+   *  the workspace switcher below can ever render. */
   readonly authMode: 'apiKey' | 'cookie';
   readonly onLogout: () => void;
   /** Cookie-mode only: every active membership the signed-in user holds. The switcher (a `<select>`
@@ -144,7 +152,7 @@ export function SidebarContent({
           <span className="sidebar-workspace-row">
             {showSwitcher ? (
               <Select
-                aria-label="Switch workspace"
+                aria-label={t('切换工作区', 'Switch workspace')}
                 data-testid="workspace-switcher"
                 value={selectedWorkspaceId ?? ''}
                 disabled={switchingWorkspace === true}
@@ -198,13 +206,14 @@ export function SidebarContent({
       </nav>
 
       <div className="sidebar-footer">
-        <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus]}`}>
+        <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus].en}`}>
           <span className={`conn-dot conn-dot-${wsStatus}`} aria-hidden />
           <span
             className="conn-status-label"
+            data-status={wsStatus}
             data-testid={wsStatusTestId ? 'ws-status' : undefined}
           >
-            {STATUS_LABEL[wsStatus]}
+            {t(STATUS_LABEL[wsStatus].zh, STATUS_LABEL[wsStatus].en)}
           </span>
           {kernelVersion ? (
             <span
@@ -231,12 +240,24 @@ export function SidebarContent({
           </div>
         ) : null}
         {authMode === 'cookie' ? (
-          <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Sign out">
+          <Button
+            variant="ghost"
+            size="s"
+            icon="logout"
+            onClick={onLogout}
+            title={t('登出', 'Sign out')}
+          >
             {t('登出', 'Sign out')}
           </Button>
         ) : (
-          <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Forget key">
-            Forget key
+          <Button
+            variant="ghost"
+            size="s"
+            icon="logout"
+            onClick={onLogout}
+            title={t('清除密钥', 'Forget key')}
+          >
+            {t('清除密钥', 'Forget key')}
           </Button>
         )}
         <LangSwitch />
@@ -305,10 +326,10 @@ export function MobileTopBar({
           NextTime AI · {workspaceName} · {roleText(role, t)}
         </span>
       </div>
-      <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus]}`}>
+      <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus].en}`}>
         <span className={`conn-dot conn-dot-${wsStatus}`} aria-hidden />
-        <span className="conn-status-label" data-testid="ws-status">
-          {STATUS_LABEL[wsStatus]}
+        <span className="conn-status-label" data-status={wsStatus} data-testid="ws-status">
+          {t(STATUS_LABEL[wsStatus].zh, STATUS_LABEL[wsStatus].en)}
         </span>
       </div>
     </header>

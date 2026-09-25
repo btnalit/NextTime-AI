@@ -155,8 +155,9 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
     >
       {servicePrincipals.length === 0 ? (
         <Notice testId="issue-service-handle-no-principal">
-          还没有 service Principal — 先在<a href={hrefs.members()}>成员与授权</a>
-          {t('创建一个。 No service Principal yet — create one on 成员与授权', 'Members first.')}
+          {t('还没有 service Principal — 先在', 'No service Principal yet — first create one on ')}
+          <a href={hrefs.members()}>{t('成员与授权', 'Members')}</a>
+          {t('创建一个。', ' page.')}
         </Notice>
       ) : null}
 
