@@ -454,10 +454,15 @@ describe('failTaskRow — status-guarded UPDATE (leftover 67, docs/STATUS.md §4
  *  only `revokeWorkerRunAndDescendants` ever issues. */
 function createTerminateRaceFakeClient(options: {
   readonly initialStatus: WorkerRunStatus;
-  readonly updateRowCount: number;
-  /** What the lost-race re-read finds — only consulted when `updateRowCount` is 0. */
+  /** rowCount of each successive guarded UPDATE (the last value repeats). */
+  readonly updateRowCount: number | readonly number[];
+  /** What the lost-race re-read finds — only consulted when an UPDATE returns 0. */
   readonly rereadStatus?: WorkerRunStatus;
 }) {
+  const updateRowCounts =
+    typeof options.updateRowCount === 'number' ? [options.updateRowCount] : options.updateRowCount;
+  let updateCount = 0;
+  const updateStatusParams: unknown[] = [];
   const workspaceId = 'ws-1';
   const taskId = 'task-1';
   const workerRunId = 'wr-1';
@@ -493,7 +498,7 @@ function createTerminateRaceFakeClient(options: {
   });
 
   const client = {
-    query: async (text: string) => {
+    query: async (text: string, params?: readonly unknown[]) => {
       queries.push(text);
       const sql = text.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -512,7 +517,10 @@ function createTerminateRaceFakeClient(options: {
         return { rows: [{ ...baseWorkerRunRow, status }], rowCount: 1 };
       }
       if (sql.startsWith('update worker_runs')) {
-        return { rows: [], rowCount: options.updateRowCount };
+        updateStatusParams.push(params?.[2]);
+        const rowCount = updateRowCounts[Math.min(updateCount, updateRowCounts.length - 1)] ?? 0;
+        updateCount += 1;
+        return { rows: [], rowCount };
       }
       if (sql.startsWith('insert into audit_records')) {
         return { rows: [auditRowFor()], rowCount: 1 };
@@ -526,7 +534,15 @@ function createTerminateRaceFakeClient(options: {
     },
   } as unknown as PoolClient;
 
-  return { client, queries, workspaceId, taskId, workerRunId, actorPrincipalId };
+  return {
+    client,
+    queries,
+    updateStatusParams,
+    workspaceId,
+    taskId,
+    workerRunId,
+    actorPrincipalId,
+  };
 }
 
 describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STATUS.md §4)', () => {
@@ -544,23 +560,25 @@ describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STA
     ).toBe(true);
   });
 
-  it('is a silent no-op — never records a second transition or reverts a legitimately-alive run — when the guarded UPDATE loses the race and the row is not actually terminated', async () => {
-    const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
+  it('still terminates — retrying against the new status — when the guarded UPDATE loses the race to a spawn moving the run provisioning -> running', async () => {
+    const { client, queries, updateStatusParams, workspaceId, workerRunId, actorPrincipalId } =
       createTerminateRaceFakeClient({
-        initialStatus: 'running',
-        updateRowCount: 0,
-        rereadStatus: 'running', // e.g. `spawn.ts`'s own `provisioning -> running` write won instead
+        initialStatus: 'provisioning',
+        updateRowCount: [0, 1],
+        rereadStatus: 'running', // `spawn.ts`'s own `provisioning -> running` write landed first
       });
 
     await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
 
-    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(false);
-    // Never revoked — the run is legitimately still alive.
+    // First attempt guarded on the status first read, the retry on the re-read one.
+    expect(updateStatusParams).toEqual(['provisioning', 'running']);
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(true);
+    // A cancel racing a spawn never leaves a live Handle under the cancelled Task.
     expect(
       queries.some((q) =>
         q.toLowerCase().includes('where workspace_id = $1 and parent_worker_run_id = $2'),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('still revokes the Handle tree (idempotent) when the re-read finds the row already terminated by a concurrent terminateWorkerRunRow call, without recording a second transition', async () => {

@@ -359,7 +359,7 @@
 | 87 | 可观测：只有内核有 `/internal/metrics`；agent-host / worker-supervisor / llm-proxy / egress-proxy / 门没有指标，跨服务没有关联 ID，一次委派无法凭同一个 ID 在各服务日志里串起来 | P2 | S8 W7 | 开放 |
 | 88 | 内部服务主体（`__gatekeeper_service__`、`__draft_reaper__`）与普通服务主体混在一起：访问页"签发服务凭证"的主体下拉会列出它们（可以给内部主体签 Handle），名称也是原始内部名 | P3 | — | 关闭（2026-09-25 #292：内部主体标 `internal`，成员页与签发下拉过滤） |
 | 89 | 人不能给 Fact 附证据：`attach_evidence` 只在 Worker 结果契约里执行，控制台的"验证"（`verify_fact`，#291）对没有证据的 Fact 会被拒（确认框已说明）；是否给人开附证据的写能力，待维护者决定 | P3 | 待维护者决定 | 开放 |
-| 90 | `application/task/spawn.ts` 里 WorkerRun 的两处状态更新（`terminated` / `running`）仍是无条件 UPDATE，与遗留 67 同类的并发覆盖风险（#293 只收了 Task 表） | P3 | S8 W5 | 关闭（2026-09-25 #300：`spawn.ts` 两处 UPDATE 与 `lifecycle.ts` 的 `terminateWorkerRunRow` 均按 `status = 'provisioning'` / 读到的状态条件更新 + rowCount 校验；running 写丢竞态时经既有 `supervisorClient.terminate` 尽力停孤儿容器，不抛错） |
+| 90 | `application/task/spawn.ts` 里 WorkerRun 的两处状态更新（`terminated` / `running`）仍是无条件 UPDATE，与遗留 67 同类的并发覆盖风险（#293 只收了 Task 表） | P3 | S8 W5 | 关闭（2026-09-25 #300：`spawn.ts` 两处 UPDATE 与 `lifecycle.ts` 的 `terminateWorkerRunRow` 均按 `status = 'provisioning'` / 读到的状态条件更新 + rowCount 校验；running 写丢竞态时经既有 `supervisorClient.terminate` 尽力停孤儿容器，不抛错；终止与启动竞态时终止优先——`terminateWorkerRunRow` 重读后按新状态重试，被取消的 Task 下不会留一个 running 且 Handle 未吊销的运行） |
 
 ## 5. 更新规则
 
