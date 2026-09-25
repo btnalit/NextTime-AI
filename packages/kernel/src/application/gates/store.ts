@@ -638,6 +638,31 @@ export async function findGateLinkByGate(
   return result.rows[0] ? mapLink(result.rows[0]) : null;
 }
 
+/** The reverse of `findGateLinkByGate` — from a workspace Gatekeeper Object id back to the
+ *  platform gate instance it was enabled from, `null` for a Gatekeeper registered outside the
+ *  platform catalog (the legacy `register-gatekeeper` CLI path, `create_connection`) or one this
+ *  workspace never linked. S8 W3-K1 (leftover 79): `refresh_operation_governance`'s own
+ *  `no_announced_manifest` refusal is exactly this `null` case — there is no `gate_instances.
+ *  operations` manifest to refresh from. `workspace_gate_links` has no unique index on
+ *  `gatekeeper_object_id` alone, but `insertGateLink`'s only two callers (`enableGateInstanceHandler`'s
+ *  create and link branches) each write at most one row per `(workspaceId, gatekeeperObjectId)` — a
+ *  fresh registration mints a new Gatekeeper id, and the link branch's own `resolveGateLinkTarget`
+ *  only ever finds one existing Gatekeeper per endpoint before writing this row for it — so `limit 1`
+ *  is a defensive bound, not evidence multiple rows are an expected shape. */
+export async function findGateLinkByGatekeeper(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperObjectId: string,
+): Promise<GateLinkRow | null> {
+  const result = await client.query<GateLinkDbRow>(
+    `select workspace_id, gate_id, gatekeeper_object_id, enabled_by, enabled_at
+       from workspace_gate_links where workspace_id = $1 and gatekeeper_object_id = $2
+       limit 1`,
+    [workspaceId, gatekeeperObjectId],
+  );
+  return result.rows[0] ? mapLink(result.rows[0]) : null;
+}
+
 /** The link plus the two facts the per-call rules need — the connector's deny list and the
  *  instance's trust — for a workspace Gatekeeper object; `null` for a gate the workspace connected
  *  itself (no link: no deny list applies, trust is `byo`). */

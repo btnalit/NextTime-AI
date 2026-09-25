@@ -18,6 +18,7 @@ export {
   createHostedGateInstance,
   deleteHostedGateInstance,
   findGateLinkByGate,
+  findGateLinkByGatekeeper,
   hostedDefinitionOf,
   getConnector,
   getGateInstance,

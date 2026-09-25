@@ -48,6 +48,8 @@ export {
   projectWorkerDefinitionObject,
   registerGatekeeperObject,
   registerOperationDraftObject,
+  setOperationDescriptionObject,
+  setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from './meta-objects.js';
 export type {

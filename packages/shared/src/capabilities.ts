@@ -807,6 +807,25 @@ const connectionCapabilities: readonly Capability[] = [
       'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
   },
   {
+    // S8 W3-K1 (leftover 79, audit CO2): the write half of preview_gate_instance_enable's own
+    // `differs` flag — owner-only (a governance-field change, unlike publish_operation/
+    // deprecate_operation, which §9.3 names no role for) and `gatekeeperId`-scoped like
+    // get_gatekeeper/list_operations right below, not gateId-scoped like the two capabilities
+    // right above (this one targets an already-registered workspace Gatekeeper, not a platform
+    // catalog entry).
+    name: 'refresh_operation_governance',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({ gatekeeperId: id, operationNames: z.array(z.string().min(1)).optional() })
+      .strict(),
+    resultSchema: wire.RefreshOperationGovernanceResultWireSchema,
+    description:
+      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance. One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification.',
+  },
+  {
     name: 'issue_gate_credential_token',
     group: 'connection',
     mode: 'write',
@@ -941,6 +960,26 @@ const metaCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
     resultSchema: wire.OperationDeprecateResultWireSchema,
     description: 'Deprecate a published Operation.',
+  },
+  {
+    // S8 W3-K1 (leftover 81): same minRole as publish_operation/deprecate_operation right above —
+    // §9.3 names no role for this family, so none is invented here either. `mode:'write'` (not
+    // `execute`, unlike publish/deprecate): an immediate, audited in-platform change with no
+    // approval gate — editing documentation is not a lifecycle transition.
+    name: 'update_operation_description',
+    group: 'meta',
+    mode: 'write',
+    channel: 'human',
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        name: z.string().min(1),
+        description: z.string().min(1).max(2000),
+      })
+      .strict(),
+    resultSchema: wire.UpdateOperationDescriptionResultWireSchema,
+    description:
+      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). description must be non-blank after trimming, at most 2000 characters. AuditRecord with before/after.',
   },
   {
     name: 'propose_skill',
@@ -3182,6 +3221,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'deprecate_procedure',
   'publish_operation',
   'deprecate_operation',
+  'update_operation_description',
   'approve',
   'reject',
   'list_pending',
@@ -3259,6 +3299,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'list_available_gate_instances',
     'enable_gate_instance',
     'preview_gate_instance_enable',
+    'refresh_operation_governance',
     'issue_service_handle',
     'create_gate_instance',
     'delete_gate_instance',

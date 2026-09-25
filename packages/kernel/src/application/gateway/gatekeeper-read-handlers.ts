@@ -152,6 +152,12 @@ function toWireOperationSummary(record: OperationRecord) {
     // for the sibling `manifestVersion?` decision at the Gatekeeper level, which is unaffected.
     version: record.version,
     status: record.status,
+    // S8 W3-K1 (leftover 81, audit CO1): the catalog page needs the current description both to
+    // render "未填写描述" for a blank one and to prefill the edit dialog — absent (never an empty
+    // string) mirrors `OperationSchema.description`'s own optionality.
+    ...(record.operation.description !== undefined
+      ? { description: record.operation.description }
+      : {}),
   };
 }
 
