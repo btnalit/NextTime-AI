@@ -87,7 +87,7 @@ export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const WEB_SRC_DIR = 'packages/web/src';
 export const BASELINE_FILE = fileURLToPath(new URL('./i18n-pairs-baseline.json', import.meta.url));
 
-const LATIN_TAIL_CHAR = "[A-Za-z0-9\\s,./()'’\"%:_+\\-;!?&]";
+const LATIN_TAIL_CHAR = '[A-Za-z0-9\\s,./()\'’"%:_+\\-;!?&]';
 
 /** Full-width / CJK punctuation that can directly abut an English tail with *no* space in
  *  between (e.g. "继承（不覆盖）Inherit workspace default" — the codemod's own split heuristic and
@@ -105,9 +105,7 @@ function isUnsplitPair(text) {
   const tailRe = new RegExp(LATIN_TAIL_CHAR);
   while (i > 0 && tailRe.test(text[i - 1]) && !cjkRe.test(text[i - 1])) i--;
   const zh = text.slice(0, i).replace(/\s+$/, '');
-  const en = text
-    .slice(i)
-    .replace(/^\s+/, '');
+  const en = text.slice(i).replace(/^\s+/, '');
   if (zh.length === 0 || en.length === 0) return false;
   if (!/^[A-Za-z]/.test(en)) return false;
   if (!cjkRe.test(zh)) return false;
@@ -154,7 +152,15 @@ const JSX_TEXT_EN_RE = />([^<>{};]{1,200})</g;
 
 /** (c)'s attribute half — a user-facing JSX prop whose value is a plain quoted string literal (an
  *  `attr={t(...)}` expression container never matches this — no quote directly after `=`). */
-const ATTR_NAMES = ['title', 'aria-label', 'placeholder', 'label', 'description', 'hint', 'subtitle'];
+const ATTR_NAMES = [
+  'title',
+  'aria-label',
+  'placeholder',
+  'label',
+  'description',
+  'hint',
+  'subtitle',
+];
 const ATTR_RE = new RegExp(`\\b(?:${ATTR_NAMES.join('|')})=(["'])((?:(?!\\1)[^\\n])*)\\1`, 'g');
 
 function wordCount(text) {
@@ -501,7 +507,7 @@ function main() {
     console.error(
       '  Wrap in t(zh, en) (packages/web/src/lib/i18n.ts). If this is a pre-existing pair a ' +
         'non-component helper cannot split yet, add its exact text to ' +
-        'scripts/guards/i18n-pairs-baseline.json under the file (see that guard\'s own header).',
+        "scripts/guards/i18n-pairs-baseline.json under the file (see that guard's own header).",
     );
     process.exit(1);
   }
