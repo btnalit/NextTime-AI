@@ -64,6 +64,17 @@ export {
 export { ensureWorkerAgentPrincipal } from './agent-principal.js';
 
 export {
+  MAX_GATE_OBSERVATIONS_PER_WORKER_RUN,
+  type RecordWorkerGateObservationInput,
+  recordWorkerGateObservation,
+} from './gate-observation.js';
+
+export {
+  type GetOrCreateWorkerRunSourceInput,
+  getOrCreateWorkerRunSource,
+} from './worker-run-source.js';
+
+export {
   type ComputeChildHandleScopeInput,
   type ParentAuthority,
   type ParentHandleLineage,

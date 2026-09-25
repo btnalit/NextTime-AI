@@ -132,18 +132,26 @@ export async function registerSource(
 
 /** Links a Source to the Activity that used it (`observations.activity_id`) — the row `explain`
  *  already walks (`substrate/epistemic/explain.ts`'s `fetchObservationRefs`). `content` carries no
- *  PROV-O payload of its own here (S2.9's use is purely "this Activity used this Source"); left
- *  as an empty object rather than `null` to match the column's `not null default '{}'` shape. */
+ *  PROV-O payload of its own for most callers here (S2.9's use is purely "this Activity used this
+ *  Source"), so it defaults to an empty object rather than `null`, matching the column's
+ *  `not null default '{}'` shape. S8 W5-A (leftover 75, `application/task/gate-observation.ts`'s
+ *  `recordWorkerGateObservation`) is the first caller that fills it: a bounded/truncated gate
+ *  operation payload, so the Observation itself carries what was actually observed rather than
+ *  being a bare "this happened" marker. */
 export async function recordSourceObservation(
   client: PoolClient,
   workspaceId: string,
-  input: { readonly sourceId: string; readonly activityId: string },
+  input: {
+    readonly sourceId: string;
+    readonly activityId: string;
+    readonly content?: Record<string, unknown>;
+  },
 ): Promise<{ readonly id: string }> {
   const result = await client.query<{ id: string }>(
     `insert into observations (workspace_id, source_id, activity_id, content)
-     values ($1, $2, $3, '{}'::jsonb)
+     values ($1, $2, $3, $4::jsonb)
      returning id`,
-    [workspaceId, input.sourceId, input.activityId],
+    [workspaceId, input.sourceId, input.activityId, JSON.stringify(input.content ?? {})],
   );
   const row = result.rows[0];
   if (row === undefined) {
