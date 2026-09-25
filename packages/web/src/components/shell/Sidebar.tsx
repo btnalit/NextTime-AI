@@ -334,7 +334,16 @@ export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProp
   const t = useT();
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="nav-drawer">
+      {/* Any nav link click closes the drawer — including the current page's own link, which
+       *  changes no route (so `AppShell`'s close-on-`active`-change never fires) and would otherwise
+       *  leave the drawer covering the page it just "navigated" to. */}
+      <SheetContent
+        side="left"
+        className="nav-drawer"
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('a.nav-item')) onOpenChange(false);
+        }}
+      >
         <SheetTitle className="visually-hidden">{t('导航', 'Navigation')}</SheetTitle>
         {/* wsStatusTestId={false}: MobileTopBar (always mounted at this width, unlike this
          *  drawer) already carries the DOM's one `ws-status` testid — see its own doc comment. */}
