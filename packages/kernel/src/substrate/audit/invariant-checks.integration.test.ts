@@ -292,7 +292,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
-    it('ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, and one in an ephemeral workspace are not (S6, leftover 41)', async () => {
+    it('ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)', async () => {
       const serviceId = randomUUID();
       const silentSourceId = randomUUID();
       const freshSourceId = randomUUID();
@@ -305,6 +305,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       const ephemeralSourceId = randomUUID();
       const ephemeralActivityId = randomUUID();
 
+      // leftover 62: a second service Principal with the same silent shape but no active Handle
+      // (its own was let expire, or the collector was re-pointed elsewhere) — a retired/orphaned
+      // Source, never flagged regardless of how long it stays silent.
+      const retiredServiceId = randomUUID();
+      const retiredSourceId = randomUUID();
+      const retiredHandleJti = randomUUID();
+      const retiredActivityId = randomUUID();
+
       await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
@@ -313,6 +321,25 @@ describe.runIf(DATABASE_URL !== undefined)(
             `insert into principals (workspace_id, id, kind, role, display_name)
              values ($1, $2, 'service', 'member', 'collector')`,
             [workspaceId, serviceId],
+          );
+          // A currently-credentialed collector (leftover 62's own "not excluded" control) — an
+          // active session + Handle, same shape `purge-workspace.ts`'s `service_handle_in_use`
+          // warning already uses.
+          const session = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'service', $2, 'active') returning id`,
+            [workspaceId, serviceId],
+          );
+          await client.query(
+            `insert into capability_handles (workspace_id, jti, session_id, on_behalf_of, scope, expires_at)
+             values ($1, $2, $3, $4, $5, now() + interval '1 hour')`,
+            [
+              workspaceId,
+              randomUUID(),
+              session.rows[0]?.id,
+              serviceId,
+              JSON.stringify({ capabilities: ['register_source'], resources: {} }),
+            ],
           );
           for (const sourceId of [silentSourceId, freshSourceId, neverObservedSourceId]) {
             await client.query(
@@ -331,6 +358,49 @@ describe.runIf(DATABASE_URL !== undefined)(
              values ($1, $2, $3, $4), ($1, $2, $3, $4 - interval '1 hour'), ($1, $5, $3, now())`,
             [workspaceId, silentSourceId, activityId, threeHoursAgo, freshSourceId],
           );
+
+          // The retired service Principal: no capability_handles row at all — its Source's own
+          // silence must not count.
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', 'member', 'collector-retired')`,
+            [workspaceId, retiredServiceId],
+          );
+          await client.query(
+            `insert into sources (workspace_id, id, kind, name, owner_principal_id, visibility)
+             values ($1, $2, 'collector-test', 'retired', $3, 'workspace')`,
+            [workspaceId, retiredSourceId, retiredServiceId],
+          );
+          await client.query(
+            `insert into activities (workspace_id, id, kind, status, started_by)
+             values ($1, $2, 'collector_run', 'completed', $3)`,
+            [workspaceId, retiredActivityId, retiredServiceId],
+          );
+          await client.query(
+            `insert into observations (workspace_id, source_id, activity_id, created_at)
+             values ($1, $2, $3, $4)`,
+            [workspaceId, retiredSourceId, retiredActivityId, threeHoursAgo],
+          );
+          // A revoked Handle (present, but not active) exercises the `revoked_at is null` half of
+          // the exclusion, not just "no row at all".
+          const retiredSession = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'service', $2, 'revoked') returning id`,
+            [workspaceId, retiredServiceId],
+          );
+          await client.query(
+            `insert into capability_handles
+               (workspace_id, jti, session_id, on_behalf_of, scope, expires_at, revoked_at)
+             values ($1, $2, $3, $4, $5, now() + interval '1 hour', now())`,
+            [
+              workspaceId,
+              retiredHandleJti,
+              retiredSession.rows[0]?.id,
+              retiredServiceId,
+              JSON.stringify({ capabilities: ['register_source'], resources: {} }),
+            ],
+          );
+
           // The same silent shape in an ephemeral workspace — expected to go quiet, never flagged.
           await client.query(
             `insert into workspaces (id, name, purpose, expires_at)
@@ -368,6 +438,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(flagged).toContain(`${workspaceId}:${silentSourceId}`);
       expect(flagged).not.toContain(`${workspaceId}:${freshSourceId}`);
       expect(flagged).not.toContain(`${workspaceId}:${neverObservedSourceId}`);
+      expect(flagged).not.toContain(`${workspaceId}:${retiredSourceId}`);
       expect(flagged).not.toContain(`${ephemeralWorkspaceId}:${ephemeralSourceId}`);
       expect(
         silent?.sample.find((entry) => entry.startsWith(`${workspaceId}:${silentSourceId}`)),
