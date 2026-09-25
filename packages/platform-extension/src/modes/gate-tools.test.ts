@@ -4,6 +4,7 @@ import {
   gateToolDescription,
   gateToolName,
   sanitizeToolName,
+  truncateToolResult,
 } from './gate-tools.js';
 
 /**
@@ -78,5 +79,36 @@ describe('gate-tools module surface', () => {
   it('still exports gateToolName and sanitizeToolName', () => {
     expect(typeof gateToolName).toBe('function');
     expect(typeof sanitizeToolName).toBe('function');
+  });
+});
+
+/**
+ * truncateToolResult (S8 W3-K1, leftover 75 first half, docs/STATUS.md §4 row 75): the shared cap
+ * on a gate tool's rendered result text — `modes/worker.ts`'s `buildGateTool` and `modes/entry.ts`'s
+ * `buildGateObserveTool` both call it (their own tests exercise one call path each; this file owns
+ * the helper's own boundary behavior).
+ */
+describe('truncateToolResult', () => {
+  it('returns text at or under the limit byte-for-byte unchanged (no marker appended)', () => {
+    const text = 'x'.repeat(100);
+    expect(truncateToolResult(text, 100)).toBe(text);
+    expect(truncateToolResult('short', 100)).toBe('short');
+  });
+
+  it('truncates text over the limit to exactly maxChars of head content, plus a marker line naming the omitted count', () => {
+    const text = 'a'.repeat(150);
+    const result = truncateToolResult(text, 100);
+    expect(result.startsWith('a'.repeat(100))).toBe(true);
+    expect(result).not.toContain('a'.repeat(101));
+    expect(result).toContain('50 more characters omitted');
+    expect(result).toContain('the full result is not shown');
+  });
+
+  it('uses the default cap (16000) when maxChars is omitted', () => {
+    const text = 'b'.repeat(20_000);
+    const result = truncateToolResult(text);
+    expect(result.length).toBeGreaterThan(16_000);
+    expect(result.length).toBeLessThan(20_000);
+    expect(result).toContain('4000 more characters omitted');
   });
 });

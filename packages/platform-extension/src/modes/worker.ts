@@ -7,7 +7,12 @@ import { WorkerResultContractSchema } from '@nexttime/shared';
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import {
+  type AllowedOperationWire,
+  gateToolDescription,
+  gateToolName,
+  truncateToolResult,
+} from './gate-tools.js';
 
 /**
  * `worker` mode (design doc §7.3, §7.4, S2.9 scope): the pi extension registered inside a
@@ -25,6 +30,10 @@ import { type AllowedOperationWire, gateToolDescription, gateToolName } from './
  * reached for, or a synthesized fallback when the model never called the tool) and exits the
  * process — a Worker container runs exactly one Task and then is done, there is no second prompt
  * to wait for.
+ *
+ * S8 W3-K1 (leftover 75 first half, docs/STATUS.md §4 row 75): every gate tool result this mode
+ * returns to the model goes through `gate-tools.ts`'s `truncateToolResult` — a real inventory-scan
+ * Worker's own raw output alone burned ~120k token (59% of one Task's budget) with no cap.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -78,10 +87,11 @@ function buildGateTool(
         // executed while the approval landed seconds later. A Worker Handle has no tool to read an
         // ActionRequest's later status (`get_action` is human-only, operator role), so the only
         // truthful summary cites the id and defers to the ActionRequest.
-        const simulateText =
+        const simulateText = truncateToolResult(
           result.simulate !== undefined
             ? JSON.stringify(result.simulate, null, 2)
-            : '(no simulated effect reported)';
+            : '(no simulated effect reported)',
+        );
         const actionRequestId = typeof result.id === 'string' ? result.id : 'unknown';
         return {
           content: [
@@ -95,7 +105,7 @@ function buildGateTool(
       }
 
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: truncateToolResult(JSON.stringify(result, null, 2)) }],
         details: result,
       };
     },
