@@ -30,6 +30,12 @@ export interface PrincipalRow {
   /** Whether this principal currently holds an API key — never the key itself (S3.11: "API key
    *  只显示一次" — shown once, at `create_principal`/`rotate_api_key` time, never again). */
   readonly hasApiKey: boolean;
+  /** S8 W4 (leftover 88): true for the platform's own internal service Principals
+   *  (`__gatekeeper_service__`, `__draft_reaper__`) — kernel-derived (`isInternalPrincipalDisplayName`),
+   *  never guessed client-side. Consumers filter these out of ordinary member/service-principal
+   *  pickers. Optional (like `disabledAt`/`workerDefinitionId` above) so existing test fixtures
+   *  that predate this field keep type-checking; `undefined` reads as "not internal". */
+  readonly internal?: boolean;
 }
 
 export interface CreatePrincipalResult {

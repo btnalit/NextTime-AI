@@ -84,8 +84,21 @@ interface PrincipalDetailDbRow {
   disabled_at: Date | null;
 }
 
+// S8 W4 (audit S15 "同一个人三个名字"): a human Principal's own `display_name` column is only the
+// snapshot `add_member` copied from `users.display_name` at membership time (members-handlers.ts's
+// own `addMemberHandler`) — a later `PATCH /api/auth/me` rename updates `users` only, so every
+// workspace membership created before the rename keeps showing the stale copy while the Sidebar
+// (which reads the live `users.display_name` via the console-session channel, `resolve-caller.ts`'s
+// `resolveConsoleUser`) already shows the new one. `left join users` + `coalesce` makes this read
+// agree with that live value for every linked (human) Principal, falling back to the stored column
+// only for a Principal with no `user_id` (service/agent kind, or a legacy row never linked) — the
+// exact join migration 0021's own `users_workspace_members` RLS policy comment anticipated
+// ("A workspace transaction may read the users who are members of *its* workspace — the members
+// page shows login / display name").
 const PRINCIPAL_DETAIL_COLUMNS =
-  'id, kind, role, display_name, created_at, worker_definition_id, (api_key_hash is not null) as has_api_key, disabled_at';
+  'p.id, p.kind, p.role, coalesce(u.display_name, p.display_name) as display_name, p.created_at, p.worker_definition_id, (p.api_key_hash is not null) as has_api_key, p.disabled_at';
+
+const PRINCIPAL_DETAIL_FROM = 'principals p left join users u on u.id = p.user_id';
 
 function mapPrincipalDetailRow(row: PrincipalDetailDbRow): PrincipalDetailRow {
   return {
@@ -169,14 +182,14 @@ async function listPrincipalsDetailed(
   // without a second query (same convention `governance/approval/reads.ts`'s
   // `listActionRequestsForApprover` uses).
   const result = await client.query<PrincipalDetailDbRow>(
-    `select ${PRINCIPAL_DETAIL_COLUMNS} from principals
-     where workspace_id = $1
-       and ($2::text is null or display_name ilike '%' || $2 || '%')
+    `select ${PRINCIPAL_DETAIL_COLUMNS} from ${PRINCIPAL_DETAIL_FROM}
+     where p.workspace_id = $1
+       and ($2::text is null or coalesce(u.display_name, p.display_name) ilike '%' || $2 || '%')
        and (
          $3::timestamptz is null
-         or (date_trunc('milliseconds', created_at), id) > ($3::timestamptz, $4::uuid)
+         or (date_trunc('milliseconds', p.created_at), p.id) > ($3::timestamptz, $4::uuid)
        )
-     order by date_trunc('milliseconds', created_at) asc, id asc
+     order by date_trunc('milliseconds', p.created_at) asc, p.id asc
      limit $5`,
     [workspaceId, filter.q ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
   );
@@ -201,7 +214,7 @@ async function getPrincipalDetailed(
   principalId: string,
 ): Promise<PrincipalDetailRow | null> {
   const result = await client.query<PrincipalDetailDbRow>(
-    `select ${PRINCIPAL_DETAIL_COLUMNS} from principals where workspace_id = $1 and id = $2`,
+    `select ${PRINCIPAL_DETAIL_COLUMNS} from ${PRINCIPAL_DETAIL_FROM} where p.workspace_id = $1 and p.id = $2`,
     [workspaceId, principalId],
   );
   const row = result.rows[0];
@@ -260,6 +273,20 @@ function assertHumanTarget(target: PrincipalDetailRow, capability: string): void
 // `api_key_hash` itself, only the derived `hasApiKey` boolean.
 // -------------------------------------------------------------------------------------------
 
+// S8 W4 (leftover 88 "内部服务主体与普通服务主体混在一起"): every internal service Principal this
+// platform creates for itself uses a `display_name` wrapped in double underscores
+// (`__gatekeeper_service__`, `governance/gatekeepers/service-principal.ts`; `__draft_reaper__`,
+// `application/worker/draft-lifecycle.ts`) — never a name `create_principal` (always human-
+// authored) or `add_member` would produce. Derived once, here, in the wire projection every reader
+// shares (`list_principals`/`create_principal`/`set_principal_role`/`rotate_api_key`/
+// `disable_principal`) rather than each web consumer re-deriving its own guess from a hardcoded
+// name list — the kernel is the single source of truth for "is this principal internal".
+const INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN = /^__.+__$/;
+
+export function isInternalPrincipalDisplayName(displayName: string | null): boolean {
+  return displayName !== null && INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN.test(displayName);
+}
+
 function toWirePrincipal(row: PrincipalDetailRow) {
   return {
     id: row.id,
@@ -270,6 +297,7 @@ function toWirePrincipal(row: PrincipalDetailRow) {
     ...(row.workerDefinitionId !== null ? { workerDefinitionId: row.workerDefinitionId } : {}),
     hasApiKey: row.hasApiKey,
     disabledAt: row.disabledAt ? row.disabledAt.toISOString() : null,
+    internal: isInternalPrincipalDisplayName(row.displayName),
   };
 }
 

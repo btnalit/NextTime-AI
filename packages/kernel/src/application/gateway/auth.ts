@@ -235,10 +235,16 @@ export async function lookupMembershipPrincipal(
   ref: { readonly userId: string; readonly workspaceId: string },
 ): Promise<PrincipalRow | null> {
   return withAdminClient(pool, async (client) => {
+    // S8 W4 (audit S15 "同一个人三个名字"): `coalesce(u.display_name, p.display_name)` — same fix
+    // as `members-handlers.ts`'s `PRINCIPAL_DETAIL_COLUMNS` (that file's own doc comment), applied
+    // here too since this is what feeds `caller.principal.displayName` (dispatch.ts) for every
+    // cookie-session call, including `get_workspace`'s `caller` field the Sidebar/`useWorkspaceIdentity`
+    // read — without it, the two would disagree whenever a user renamed themselves after joining.
     const result = await client.query<PrincipalDbRow>(
-      `select p.workspace_id, p.id, p.kind, p.role, p.display_name
+      `select p.workspace_id, p.id, p.kind, p.role, coalesce(u.display_name, p.display_name) as display_name
          from principals p
          join workspaces w on w.id = p.workspace_id
+         left join users u on u.id = p.user_id
         where p.workspace_id = $1
           and p.user_id = $2
           and p.kind = 'human'
