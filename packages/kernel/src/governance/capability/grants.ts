@@ -112,7 +112,6 @@ export interface GrantCapabilityInput {
   readonly principalId: string;
   readonly resourceType: string;
   readonly resourceId?: string;
-  readonly scope?: CapabilityGrantScope;
   readonly grantedBy: string;
   readonly expiresAt?: Date;
 }
@@ -131,7 +130,9 @@ export async function grantCapability(
       input.principalId,
       input.resourceType,
       input.resourceId ?? null,
-      JSON.stringify(input.scope ?? {}),
+      // New grants never carry a `scope` (leftover 80, 2026-09-25): nothing reads it, the column
+      // stays only for historical rows.
+      '{}',
       input.grantedBy,
       input.expiresAt ?? null,
     ],

@@ -7,7 +7,6 @@ import {
   endActivity,
   recordSourceObservation,
   registerPrivateSource,
-  registerSource,
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import type { Fact, OntologyViolationDetails } from '../../substrate/graph/index.js';
@@ -15,6 +14,7 @@ import { OntologyViolationError, SqlGraphStore } from '../../substrate/graph/ind
 import { proposeSkill } from '../worker/index.js';
 import { completeTaskWithResult } from './lifecycle.js';
 import type { TaskRow } from './types.js';
+import { getOrCreateWorkerRunSource } from './worker-run-source.js';
 
 /**
  * application/task/result: the S2.9 result-contract write path (design doc §7.3 "Worker 结束时
@@ -242,18 +242,19 @@ export async function postWorkerResult(
     // `factsToAssert` are workspace knowledge — "所有 agent 共享同一份图" — whether or not a
     // transcript exists. Before this, a run with a transcript had its Facts hidden from everyone
     // but the on_behalf_of human purely because the transcript Source sat on the same Activity.
-    const runSource = await registerSource(client, workspaceId, {
-      kind: 'worker_run',
+    // S8 W5-A: shared with `gate-observation.ts`'s `recordWorkerGateObservation` — whichever of the
+    // two (a gate call during the run, or this result post at its end) happens first for this
+    // WorkerRun creates the Source, the other reuses it (see `worker-run-source.ts`'s own doc
+    // comment, including the first-writer-wins metadata note this `transcriptSourceId` addition is
+    // subject to).
+    const runSourceId = await getOrCreateWorkerRunSource(client, workspaceId, {
+      workerRunId: input.workerRunId,
+      taskId: input.taskId,
       ownerPrincipalId: actorPrincipalId,
-      visibility: 'workspace',
-      metadata: {
-        taskId: input.taskId,
-        workerRunId: input.workerRunId,
-        ...(transcriptSource ? { transcriptSourceId: transcriptSource.id } : {}),
-      },
+      metadata: transcriptSource ? { transcriptSourceId: transcriptSource.id } : undefined,
     });
     const runObservation = await recordSourceObservation(client, workspaceId, {
-      sourceId: runSource.id,
+      sourceId: runSourceId,
       activityId: activity.id,
     });
 

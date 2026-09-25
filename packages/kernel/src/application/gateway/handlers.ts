@@ -1107,18 +1107,16 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
 };
 
 const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { principalId, resourceType, resourceId, scope } = params as {
+  const { principalId, resourceType, resourceId } = params as {
     principalId: string;
     resourceType: string;
     resourceId?: string;
-    scope?: Record<string, unknown>;
   };
   const grantedBy = await currentPrincipalId(client);
   const result = await grantCapability(client, workspaceId, {
     principalId,
     resourceType,
     resourceId,
-    scope,
     grantedBy,
   });
   return { result: toWireGrant(result), resourceType: 'capability_grant', resourceId: result.id };
