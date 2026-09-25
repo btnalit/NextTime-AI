@@ -3,7 +3,7 @@ import { IllegalTransition } from '@nexttime/shared';
 import type { TaskStatus, WorkerRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
-import { completeTaskWithResult } from './lifecycle.js';
+import { completeTaskWithResult, failTaskRow } from './lifecycle.js';
 
 /**
  * application/task/lifecycle.test: pure/no-real-DB unit tests for `completeTaskWithResult`'s
@@ -332,5 +332,112 @@ describe('completeTaskWithResult — waiting_approval (leftover 47)', () => {
     );
 
     expect(result.status).toBe('completed');
+  });
+});
+
+/** Fake `PoolClient` for `failTaskRow` (leftover 67, docs/STATUS.md §4) — same "unit with fakes"
+ *  convention `reaper.test.ts` establishes for `moveTaskToWaitingApproval`/
+ *  `resumeTaskFromWaitingApproval`'s identical guarded-UPDATE shape: `updateRowCount` scripts the
+ *  guarded `update tasks ... and status = $4` outcome directly rather than modeling a real race. */
+function createFailFakeClient(options: { taskStatus: TaskStatus; updateRowCount: number }) {
+  const workspaceId = 'ws-1';
+  const taskId = 'task-1';
+  const actorPrincipalId = 'principal-1';
+  const queries: string[] = [];
+
+  const taskDbRow = {
+    workspace_id: workspaceId,
+    id: taskId,
+    status: options.taskStatus,
+    on_behalf_of: actorPrincipalId,
+    created_by_activity_id: null,
+    worker_definition_id: 'def-1',
+    worker_definition_version: 1,
+    input: {},
+    result: null,
+    token_budget: null,
+    duration_limit_sec: null,
+    tokens_used: 0,
+    budget_warned_at: null,
+    failure_reason: null,
+    retry_count: 0,
+    created_at: new Date(),
+    updated_at: new Date(),
+    completed_at: null,
+    failed_at: null,
+    cancelled_at: null,
+  };
+
+  const auditRowFor = () => ({
+    workspace_id: workspaceId,
+    id: randomUUID(),
+    actor_principal_id: actorPrincipalId,
+    actor_user_id: null,
+    action: 'x',
+    resource_type: null,
+    resource_id: null,
+    payload: {},
+    created_at: new Date(),
+  });
+
+  const client = {
+    query: async (text: string) => {
+      queries.push(text);
+      const sql = text.replace(/\s+/g, ' ').trim().toLowerCase();
+      if (sql.startsWith('select') && sql.includes('from tasks')) {
+        return { rows: [taskDbRow], rowCount: 1 };
+      }
+      if (sql.startsWith('update tasks')) {
+        return { rows: [], rowCount: options.updateRowCount };
+      }
+      if (sql.startsWith('insert into audit_records')) {
+        return { rows: [auditRowFor()], rowCount: 1 };
+      }
+      if (sql.startsWith('insert into outbox')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(
+        `fake PoolClient: unhandled query in lifecycle.test.ts (failTaskRow): ${text}`,
+      );
+    },
+  } as unknown as PoolClient;
+
+  return { client, queries, workspaceId, taskId, actorPrincipalId };
+}
+
+describe('failTaskRow — status-guarded UPDATE (leftover 67, docs/STATUS.md §4)', () => {
+  it('writes the failed transition + audit when the guarded UPDATE matches (rowCount 1)', async () => {
+    const { client, queries, workspaceId, taskId, actorPrincipalId } = createFailFakeClient({
+      taskStatus: 'running',
+      updateRowCount: 1,
+    });
+
+    await failTaskRow(client, workspaceId, actorPrincipalId, taskId, 'worker_failed');
+
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(true);
+  });
+
+  it('is a silent no-op — never overwrites a status a concurrent writer already produced — when the guarded UPDATE loses the race (rowCount 0)', async () => {
+    const { client, queries, workspaceId, taskId, actorPrincipalId } = createFailFakeClient({
+      taskStatus: 'running',
+      updateRowCount: 0,
+    });
+
+    await expect(
+      failTaskRow(client, workspaceId, actorPrincipalId, taskId, 'worker_failed'),
+    ).resolves.toBeUndefined();
+
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(false);
+  });
+
+  it('is a no-op for a Task already in a terminal status — never re-fails an already-terminal row', async () => {
+    const { client, queries, workspaceId, taskId, actorPrincipalId } = createFailFakeClient({
+      taskStatus: 'completed',
+      updateRowCount: 1, // would match if the guard clause below were somehow skipped
+    });
+
+    await failTaskRow(client, workspaceId, actorPrincipalId, taskId, 'worker_failed');
+
+    expect(queries.some((q) => q.toLowerCase().startsWith('update tasks'))).toBe(false);
   });
 });
