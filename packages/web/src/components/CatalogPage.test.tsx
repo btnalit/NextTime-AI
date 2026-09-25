@@ -715,7 +715,7 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await waitFor(() => expect(screen.queryByTestId('skill-editor-drawer')).toBeNull());
   });
 
-  it('Skills: "Edit as new draft" pre-fills the row (body excluded) and says the result is a new Skill', async () => {
+  it('Skills: "Edit as new draft" pre-fills the row and the current version’s body (get_skill), and says the result is a new Skill', async () => {
     const http = scriptedHttp({
       list_skills: () => ({
         items: [
@@ -729,6 +729,22 @@ describe('CatalogPage editors (S6-A A2)', () => {
           },
         ],
       }),
+      get_skill: (params) => {
+        expect(params).toEqual({ skillId: 'sk-1' });
+        return {
+          id: 'sk-1',
+          version: 3,
+          status: 'published',
+          name: 'restart-web',
+          description: 'Restart web',
+          applicable: { gateKinds: ['http'] },
+          markdown: '# Steps\n\n1. restart',
+          proposedBy: 'p-1',
+          publishedBy: 'p-1',
+          createdAt: '2026-01-01T00:00:00Z',
+          publishedAt: '2026-01-01T00:00:00Z',
+        };
+      },
     });
     renderPage(http, 'skills');
     const row = await screen.findByTestId('catalog-row');
@@ -737,7 +753,11 @@ describe('CatalogPage editors (S6-A A2)', () => {
     expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
     expect((within(drawer).getByLabelText(/适用的门类型/) as HTMLInputElement).value).toBe('http');
-    expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe('');
+    await waitFor(() =>
+      expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
+        '# Steps\n\n1. restart',
+      ),
+    );
   });
 
   it('Workers: "Edit as new draft version" proposes under the same definitionId with the kind locked', async () => {
