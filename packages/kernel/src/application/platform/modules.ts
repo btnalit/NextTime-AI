@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
+import type { PoolLike } from '../../adapters/db/pool.js';
 import {
   type OntologyDefinition,
   type OntologyVersionDbRow,
@@ -15,6 +16,8 @@ import {
   publishOntologyDomainPack,
   resolveOntologyDir,
 } from '../../substrate/ontology/index.js';
+import { withAdminClient } from '../gateway/auth.js';
+import { readPlatformSettings } from './settings.js';
 
 /**
  * application/platform/modules: the P-B2b "模块" domain — module registry (§6.4;
@@ -532,4 +535,64 @@ export function assertKnownModuleNames(
   names: readonly string[],
 ): void {
   for (const name of names) requireModule(registry, name);
+}
+
+// -------------------------------------------------------------------------------------------
+// startup guard (S8 W5 leftover 65) — see checkDefaultModules's own doc comment
+// -------------------------------------------------------------------------------------------
+
+export interface CheckDefaultModulesOptions {
+  readonly log?: (line: string) => void;
+  readonly ontologyDir?: string;
+}
+
+/**
+ * S8 W5 (leftover 65): startup-time guard for `platform_settings.defaultModules` drifting stale
+ * against this deployment's own `ontology/modules.yaml` — a module family renamed or removed from
+ * the image after an administrator set it as a default (`set_default_modules` validates names only
+ * at write time, `assertKnownModuleNames` above) previously failed *silently* from then on:
+ * `create_workspace`'s own defaultModules skip (`application/workspace/create.ts`'s
+ * `skippedDefaultModules`, the P2 hotfix that same file's doc comment already flagged "a deploy-
+ * time guard ... is deferred to S8") only logs one `console.warn` line per affected workspace
+ * *creation* — invisible on a host that rarely creates new workspaces, for however many releases
+ * the drift persists.
+ *
+ * Called once at kernel startup (`index.ts`, right after `ensureDefaultWorkspace` — same "own try,
+ * never fatal, log and continue" shape that step already uses): reads the current
+ * `platform_settings.defaultModules`, loads this deployment's live module registry, and warns
+ * loudly — every missing name, once, at startup, not buried per-workspace — for any that no longer
+ * resolve. Never mutates `platform_settings` itself (an administrator decides whether to clear the
+ * drifted names via `set_default_modules` or the platform modules page) and never throws (a broken
+ * `ontology/modules.yaml` read must not take the kernel down over what is, worst case, a slightly
+ * stale default-modules list — same tolerance `ensureDefaultWorkspace`'s own caller in `index.ts`
+ * already gives that step).
+ *
+ * Returns the missing names (`[]` when everything resolves or no default is configured) so a
+ * caller other than `index.ts` (a test, the platform status page in a future wave) can act on the
+ * result directly instead of re-parsing the log line.
+ */
+export async function checkDefaultModules(
+  pool: PoolLike,
+  options: CheckDefaultModulesOptions = {},
+): Promise<readonly string[]> {
+  const log = options.log ?? (() => {});
+  const settings = await withAdminClient(pool, (client) => readPlatformSettings(client));
+  const defaultModules = settings.settings.defaultModules;
+  if (defaultModules.length === 0) return [];
+
+  const registry = await loadModuleRegistry(options.ontologyDir);
+  const missing = defaultModules.filter((name) => !registry.has(name));
+  if (missing.length > 0) {
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg:
+          'platform_settings.defaultModules names module(s) no longer in this deployment’s ' +
+          'module index — every new workspace silently skips them (application/workspace/' +
+          'create.ts); fix with set_default_modules or the platform modules page',
+        names: missing,
+      }),
+    );
+  }
+  return missing;
 }
