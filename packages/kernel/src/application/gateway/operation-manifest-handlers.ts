@@ -189,7 +189,11 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
     actorPrincipalId: principalId,
     action: 'operation.description_updated',
     resourceType: 'operation',
-    resourceId: `${record.gatekeeperId}:${record.name}`,
+    // `audit_records.resource_id` is `uuid` — `record.id` (`OperationRecord.id`) is the Operation
+    // Object's own id, a real uuid; the `{gatekeeperId, name}` identity pair (not a uuid) goes in
+    // the payload instead, same fix `refreshOperationGovernanceHandler` (gate-instance-handlers.ts)
+    // applies to its own per-Operation AuditRecord.
+    resourceId: record.id,
     payload: {
       gatekeeperId: record.gatekeeperId,
       name: record.name,

@@ -1000,6 +1000,12 @@ export interface RefreshOperationGovernanceInput {
 }
 
 export interface RefreshedOperationGovernance {
+  /** The Operation Object's own id (`OperationRecord.id`) — a real uuid, unlike the
+   *  `{gatekeeperId, name}` identity pair. The handler (`refreshOperationGovernanceHandler`,
+   *  gate-instance-handlers.ts) uses this as its per-Operation AuditRecord's `resource_id`
+   *  (`audit_records.resource_id` is `uuid`) and strips it back out of the wire result, which has
+   *  no `id` field — this is kernel-internal, not part of the capability's public result shape. */
+  readonly id: string;
   readonly name: string;
   readonly before: OperationGovernanceFields;
   readonly after: OperationGovernanceFields;
@@ -1074,6 +1080,7 @@ export async function refreshOperationGovernance(
       after,
     );
     refreshed.push({
+      id: existingRecord.id,
       name: operation.name,
       before,
       after,

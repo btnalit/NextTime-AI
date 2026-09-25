@@ -506,7 +506,11 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
       actorPrincipalId: ctx.principal.id,
       action: 'operation.governance_refreshed',
       resourceType: 'operation',
-      resourceId: `${gatekeeperId}:${entry.name}`,
+      // `audit_records.resource_id` is `uuid` — the Operation's own Object id (a real uuid,
+      // unlike the `{gatekeeperId, name}` identity pair), same convention `publish_operation`/
+      // `deprecate_operation` would use if they had one in scope. The composite reference still
+      // goes in the payload, where any string is fine.
+      resourceId: entry.id,
       payload: {
         gatekeeperId,
         name: entry.name,
@@ -520,7 +524,9 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   return {
     result: {
       gatekeeperId,
-      refreshed: outcome.refreshed,
+      // `entry.id` is kernel-internal bookkeeping for the AuditRecord above, not part of this
+      // capability's wire result shape (`RefreshOperationGovernanceResultWireSchema` has no `id`).
+      refreshed: outcome.refreshed.map(({ id: _id, ...rest }) => rest),
       unchanged: outcome.unchanged,
     },
     resourceType: 'gatekeeper',
