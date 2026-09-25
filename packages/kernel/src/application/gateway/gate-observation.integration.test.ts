@@ -63,6 +63,9 @@ class RecordingTransport implements Transport {
     if (operation.name === 'observe.inventory') {
       return { data: { hosts: ['h1', 'h2'] } };
     }
+    if (operation.name === 'observe.inventory.mapped') {
+      return { data: { hosts: [{ name: 'h1' }, { name: 'h2' }] } };
+    }
     return { data: { ok: true, operation: operation.name, params } };
   }
 }
@@ -78,6 +81,32 @@ const OBSERVE_OP: Operation = {
   await_decision: false,
   reads: [],
   writes: [],
+};
+
+/** Same shape as `OBSERVE_OP` but *with* a `result_mapping` — `writeObservedFacts`
+ *  (`observed-facts.ts`) only ever records an Observation on the `gatekeeper_observe` Activity
+ *  when an Operation declares one ("Empty candidates is a no-op … does not even … record an
+ *  Observation", that module's own doc comment); `OBSERVE_OP` above deliberately has none, so its
+ *  own Activity legitimately carries zero Observations regardless of this PR's change. This
+ *  fixture exists solely to cover the isolation property the write-back path must preserve: a gate
+ *  call that *does* produce a gatekeeper-Source Observation must keep exactly that one, untouched
+ *  by the new WorkerRun-Source Observation the write-back path adds on its own separate Activity. */
+const OBSERVE_MAPPED_OP: Operation = {
+  name: 'observe.inventory.mapped',
+  binding: { kind: 'http', method: 'GET', path: '/inventory-mapped' },
+  params_schema: {},
+  mode: 'observe',
+  blast_radius: 'low',
+  reversibility: false,
+  auto_approvable: true,
+  await_decision: false,
+  reads: [],
+  writes: [],
+  result_mapping: {
+    jmes_path: 'hosts[]',
+    object_type: 'test.Host',
+    identity_keys: ['name'],
+  },
 };
 
 const AUTO_OP: Operation = {
@@ -270,7 +299,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ownerId = await adminInsertPrincipal('owner', 'owner');
 
       const gate = new GatekeeperBase({
-        manifest: [OBSERVE_OP, AUTO_OP],
+        manifest: [OBSERVE_OP, OBSERVE_MAPPED_OP, AUTO_OP],
         transport: new RecordingTransport(),
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
@@ -297,11 +326,12 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         await importManifest(client, workspaceId, {
           gatekeeperId,
-          operations: [OBSERVE_OP, AUTO_OP],
+          operations: [OBSERVE_OP, OBSERVE_MAPPED_OP, AUTO_OP],
           proposedBy: { id: ownerId, kind: 'human' },
           activityId: activity.id,
         });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_OP.name });
+        await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_MAPPED_OP.name });
         await publishOperation(client, workspaceId, { gatekeeperId, name: AUTO_OP.name });
       });
 
@@ -381,10 +411,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         truncated: false,
       });
 
-      // The gate's own `gatekeeper_observe` Activity still carries exactly its own Observation
-      // (from the Gatekeeper's own Source) — the new bookkeeping Activity above is fully separate,
-      // never a second Observation appended to this one (see `gate-observation.ts`'s own doc
-      // comment on why that would break `resolveFactOrigin`).
+      // `OBSERVE_OP` declares no `result_mapping`, so `writeObservedFacts` (observed-facts.ts) is
+      // a no-op for this call — "Empty candidates is a no-op (does not even resolve the service
+      // Principal or record an Observation)" (that module's own doc comment) — the gate's own
+      // `gatekeeper_observe` Activity legitimately carries zero Observations here, independent of
+      // this PR's change (pre-existing behaviour). The isolation property that actually matters —
+      // a gate call that *does* produce a gatekeeper-Source Observation keeps exactly that one,
+      // untouched by the new WorkerRun-Source write-back — is covered by the next test, whose
+      // fixture (`OBSERVE_MAPPED_OP`) has a `result_mapping`.
       const observeActivity = await inTx(ownerId, async (client) => {
         const rows = await client.query<{ id: string }>(
           `select id from activities
@@ -392,6 +426,43 @@ describe.runIf(DATABASE_URL !== undefined)(
              and metadata ->> 'operation' = $2
            order by created_at desc limit 1`,
           [workspaceId, OBSERVE_OP.name],
+        );
+        return rows.rows[0];
+      });
+      if (!observeActivity) throw new Error('expected a gatekeeper_observe Activity');
+      const observeActivityObservations = await observationForActivity(observeActivity.id);
+      expect(observeActivityObservations).toHaveLength(0);
+    });
+
+    it('an observe-class call with a result_mapping keeps its own gatekeeper-source Observation, isolated from the WorkerRun write-back', async () => {
+      const { workerRunId, claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: OBSERVE_MAPPED_OP.name,
+        params: {},
+      })) as { status: string; observedFactCount: number };
+      expect(result.status).toBe('ok');
+      expect(result.observedFactCount).toBe(2); // {name:'h1'}, {name:'h2'} via the jmes_path mapping
+
+      // The write-back Activity: one Observation on the WorkerRun's own Source.
+      const gateCalls = await gateCallActivities(workerRunId);
+      expect(gateCalls).toHaveLength(1);
+      const writeBackObservations = await observationForActivity(gateCalls[0]?.id ?? '');
+      expect(writeBackObservations).toHaveLength(1);
+      expect(writeBackObservations[0]?.source_kind).toBe('worker_run');
+
+      // The gate's own `gatekeeper_observe` Activity: exactly its own Observation, from the
+      // Gatekeeper's own Source — never a second Source on this Activity (would break
+      // `resolveFactOrigin`'s single-origin assumption for the Facts `writeObservedFacts` wrote).
+      const observeActivity = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          `select id from activities
+           where workspace_id = $1 and kind = 'gatekeeper_observe'
+             and metadata ->> 'operation' = $2
+           order by created_at desc limit 1`,
+          [workspaceId, OBSERVE_MAPPED_OP.name],
         );
         return rows.rows[0];
       });
