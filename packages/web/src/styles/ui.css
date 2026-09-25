@@ -875,6 +875,12 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface-1);
+  /* S8 W4-A fix (CI #288/#290, journey ④ 768px): as a flex-column item (e.g. ProvenanceChain's
+     .prov-segment-body), a <details> defaults to min-width:auto — the min-content width of its
+     own content, which for an expanded "原始证据" .code-block (white-space: pre, unwrapped) is
+     its longest line. That forced the whole segment, grid column and .prov-chain wider than the
+     viewport at 768px instead of letting .code-block's own overflow-x:auto scroll internally. */
+  min-width: 0;
 }
 
 .disclosure > summary {

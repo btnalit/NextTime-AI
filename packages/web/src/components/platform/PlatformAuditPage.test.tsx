@@ -181,6 +181,23 @@ describe('PlatformAuditPage', () => {
     );
   });
 
+  it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals it', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      platform_audit_query: () => ({ items: [row({ id: 'audit-read', action: 'list_users' })] }),
+    });
+    renderPage(http);
+
+    const empty = await screen.findByTestId('platform-audit-empty');
+    expect(empty.textContent).toContain('1');
+    expect(screen.queryByTestId('platform-audit-list')).toBeNull();
+    expect(screen.queryByTestId('platform-audit-row')).toBeNull();
+
+    fireEvent.click(within(empty).getByRole('button', { name: /显示读操作|Show reads/ }));
+    await waitFor(() => expect(screen.getAllByTestId('platform-audit-row')).toHaveLength(1));
+    expect(screen.queryByTestId('platform-audit-empty')).toBeNull();
+  });
+
   it('renders an unattributed-actor row (遗留 54: an operator-CLI purge with no resolvable administrator) with a clear label, never blank or "null"', async () => {
     const http = scriptedHttp({
       platform_audit_query: () => ({

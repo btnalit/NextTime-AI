@@ -176,6 +176,10 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
           testId="platform-audit-empty"
         />
       ) : visibleRows.length === 0 ? (
+        // S8 W4-A fix (CI #288/#290 — same audit.spec.ts-shaped assertion applies here too): the
+        // *same* `platform-audit-empty` testid every other "nothing to show" state already uses,
+        // never neither `platform-audit-list` nor `platform-audit-empty` — rows exist, they are
+        // filtered, not absent, so the empty state says that instead of the generic title.
         <EmptyState
           icon="search"
           title={t('已加载的记录全部是读操作', 'Every loaded row is a read')}
@@ -188,7 +192,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
               {t('显示读操作', 'Show reads')}
             </Button>
           }
-          testId="platform-audit-empty-reads-hidden"
+          testId="platform-audit-empty"
         />
       ) : (
         <>

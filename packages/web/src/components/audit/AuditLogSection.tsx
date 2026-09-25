@@ -251,83 +251,92 @@ export function AuditLogSection({
           title={t('没有匹配的审计记录', 'No matching audit rows')}
           testId="audit-empty"
         />
-      ) : visibleRows.length === 0 ? (
-        <EmptyState
-          icon="search"
-          title={t('已加载的记录全部是读操作', 'Every loaded row is a read')}
-          body={t(
-            `已隐藏 ${hiddenReadCount} 条——勾选上方“显示读操作”查看。`,
-            `${hiddenReadCount} hidden — check “Show reads” above to see them.`,
-          )}
-          action={
-            <Button variant="secondary" size="s" onClick={() => setShowReads(true)}>
-              {t('显示读操作', 'Show reads')}
-            </Button>
-          }
-          testId="audit-empty-reads-hidden"
-        />
       ) : (
         <>
           {audit.state.refreshError ? (
             <ErrorBanner error={audit.state.refreshError} onRetry={() => void audit.reload()} />
           ) : null}
-          {hiddenReadCount > 0 ? (
-            <p className="text-3 text-small" data-testid="audit-hidden-reads-note">
-              {t(
-                `已隐藏 ${hiddenReadCount} 条读操作`,
-                `${hiddenReadCount} read ${hiddenReadCount === 1 ? 'row' : 'rows'} hidden`,
+          {visibleRows.length === 0 ? (
+            // S8 W4-A fix (CI #288/#290 audit.spec.ts:28/59 — a page whose loaded rows are all
+            // reads must never render neither `audit-list` nor `audit-empty`): the *same*
+            // `audit-empty` testid every other "nothing to show" state already uses, just with
+            // the hidden-reads count and a one-click way to reveal them instead of the generic
+            // "no matching rows" title (there genuinely are rows — they're filtered, not absent).
+            <EmptyState
+              icon="search"
+              title={t('已加载的记录全部是读操作', 'Every loaded row is a read')}
+              body={t(
+                `已隐藏 ${hiddenReadCount} 条——勾选"显示读操作"查看。`,
+                `${hiddenReadCount} hidden — check "Show reads" to see them.`,
               )}
-            </p>
-          ) : null}
-          <ul className="data-list" aria-label="Audit log" data-testid="audit-list">
-            {visibleRows.map((row) => (
-              <li className="data-row" key={row.id} data-testid="audit-row">
-                <div className="data-row-main">
-                  <div className="data-row-title">
-                    <span className="mono">{row.action}</span>
-                    <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
-                      {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
-                    </time>
-                  </div>
-                  <div className="data-row-meta">
-                    <RefChip
-                      kind="principal"
-                      id={row.actorPrincipalId}
-                      name={nameOf(principalNames, row.actorPrincipalId)}
-                      size="s"
-                    />
-                    {row.resourceId ? (
-                      <>
-                        <span className="meta-sep" />
+              action={
+                <Button variant="secondary" size="s" onClick={() => setShowReads(true)}>
+                  {t('显示读操作', 'Show reads')}
+                </Button>
+              }
+              testId="audit-empty"
+            />
+          ) : (
+            <>
+              {hiddenReadCount > 0 ? (
+                <p className="text-3 text-small" data-testid="audit-hidden-reads-note">
+                  {t(
+                    `已隐藏 ${hiddenReadCount} 条读操作`,
+                    `${hiddenReadCount} read ${hiddenReadCount === 1 ? 'row' : 'rows'} hidden`,
+                  )}
+                </p>
+              ) : null}
+              <ul className="data-list" aria-label="Audit log" data-testid="audit-list">
+                {visibleRows.map((row) => (
+                  <li className="data-row" key={row.id} data-testid="audit-row">
+                    <div className="data-row-main">
+                      <div className="data-row-title">
+                        <span className="mono">{row.action}</span>
+                        <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
+                          {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
+                        </time>
+                      </div>
+                      <div className="data-row-meta">
                         <RefChip
-                          kind="object"
-                          id={row.resourceId}
-                          name={
-                            row.resourceType
-                              ? auditResourceTypeLabel(row.resourceType, t)
-                              : undefined
-                          }
-                          href={resourceHref(row.resourceType, row.resourceId)}
+                          kind="principal"
+                          id={row.actorPrincipalId}
+                          name={nameOf(principalNames, row.actorPrincipalId)}
                           size="s"
                         />
-                      </>
-                    ) : row.resourceType ? (
-                      <>
-                        <span className="meta-sep" />
-                        <span>{auditResourceTypeLabel(row.resourceType, t)}</span>
-                      </>
-                    ) : null}
-                  </div>
-                  <details className="platform-audit-payload">
-                    <summary>{t('负载', 'Payload')}</summary>
-                    <pre className="code-block pre-wrap">
-                      {prettyJson(redactSensitive(row.payload))}
-                    </pre>
-                  </details>
-                </div>
-              </li>
-            ))}
-          </ul>
+                        {row.resourceId ? (
+                          <>
+                            <span className="meta-sep" />
+                            <RefChip
+                              kind="object"
+                              id={row.resourceId}
+                              name={
+                                row.resourceType
+                                  ? auditResourceTypeLabel(row.resourceType, t)
+                                  : undefined
+                              }
+                              href={resourceHref(row.resourceType, row.resourceId)}
+                              size="s"
+                            />
+                          </>
+                        ) : row.resourceType ? (
+                          <>
+                            <span className="meta-sep" />
+                            <span>{auditResourceTypeLabel(row.resourceType, t)}</span>
+                          </>
+                        ) : null}
+                      </div>
+                      <details className="platform-audit-payload">
+                        <summary>{t('负载', 'Payload')}</summary>
+                        <pre className="code-block pre-wrap">
+                          {prettyJson(redactSensitive(row.payload))}
+                        </pre>
+                      </details>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           {nextCursor !== undefined ? (
             <div className="row" style={{ justifyContent: 'center' }}>
               <Button
