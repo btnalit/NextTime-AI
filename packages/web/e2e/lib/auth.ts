@@ -54,7 +54,7 @@ export async function loginAsAdmin(
 
   if (await badCredentials.isVisible().catch(() => false)) {
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await page.getByRole('button', { name: '登录' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 

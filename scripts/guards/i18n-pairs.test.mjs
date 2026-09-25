@@ -205,3 +205,62 @@ test('findViolations — (d) a CJK sentence glued to its own English translation
     assert.deepEqual(findViolations(src, { isTestFile: true }), []);
   });
 });
+
+// S8 W4 item 5 (leftover 85 "i18n 守卫不查插值模板里的中英对"): (e) runs (b)'s short-pair check and
+// (d)'s glued-sentence check against a template literal's *flattened* static text (every
+// `${...}` replaced with a single space). Exercised through the public `findViolations` the same
+// way (a)-(d) are above.
+test('findViolations — (e) a glued zh/en pair inside a template literal', async (t) => {
+  await t.test('flags the short-pair shape with a `${}` interpolation in the middle, the task’s ' +
+    'own example ("弃用 ${x} Deprecate ${x}")', () => {
+    const src = 'const a = `弃用 ${name} Deprecate ${name}`;';
+    assert.deepEqual(findViolations(src), [{ line: 1, text: '弃用 Deprecate' }]);
+  });
+
+  await t.test('flags a glued-sentence tail (4+ words) split across static segments by an ' +
+    'interpolation', () => {
+    const src =
+      'const a = `已导出 ${rows.length} 条审计记录 Exported ${rows.length} audit rows`;';
+    assert.deepEqual(findViolations(src), [
+      { line: 1, text: '已导出 条审计记录 Exported audit rows' },
+    ]);
+  });
+
+  await t.test('does not flag a template literal whose only English is inside the ' +
+    'interpolation expressions themselves (member access, function calls) — the static text ' +
+    'carries no Latin tail', () => {
+    const src =
+      'const a = `${usage.calls} 调用 · ${usage.approved} 批准 · ${formatRelative(usage.at)}`;';
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag the zh half of a real t(zh, en) call built from template ' +
+    'literals, even with a shared interpolation', () => {
+    const src =
+      "const a = t(`已发布 ${n} 个 Operation`, `Published ${n} operations`);";
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('correctly tracks a nested template literal inside an interpolation expression ' +
+    '(a ternary choosing between two backtick strings) without corrupting the outer scan — a ' +
+    'pure-CJK outer static text plus an English plural suffix nested inside is not a violation', () => {
+    const src =
+      'const a = `${n} workspace${n === 1 ? `` : `s`} 已启用（各自的连接见系统接入页）。`;';
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not corrupt outer-template tracking when a nested template literal’s own ' +
+    'static text, once flattened, does glue a pair — the nested one is scanned as its own ' +
+    'independent span, and both are found', () => {
+    const src = 'const a = `${flag ? `已弃用 Deprecated` : `活跃 Active`}`;';
+    assert.deepEqual(findViolations(src), [
+      { line: 1, text: '已弃用 Deprecated' },
+      { line: 1, text: '活跃 Active' },
+    ]);
+  });
+
+  await t.test('skips *.test.ts(x) files entirely', () => {
+    const src = 'const a = `弃用 ${name} Deprecate ${name}`;';
+    assert.deepEqual(findViolations(src, { isTestFile: true }), []);
+  });
+});

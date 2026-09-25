@@ -58,7 +58,7 @@ export const SURFACES: readonly Surface[] = [
     role: 'none',
     // Special-cased in `goToSurface` below (needs `reachLoginForm`'s own retry-poll, not a plain
     // `toBeVisible`) — this locator is never actually awaited for the login surface.
-    ready: (page) => page.getByRole('button', { name: 'Log in' }),
+    ready: (page) => page.getByRole('button', { name: '登录' }),
   },
 
   // --- 使用 Use (WORK_NAV, Sidebar.tsx) ----------------------------------------------------------

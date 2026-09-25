@@ -129,7 +129,7 @@ export function LoginPage({
             loading={submitting}
             disabled={!login.trim() || !password}
           >
-            Log in
+            {t('登录', 'Log in')}
           </Button>
 
           <p className="login-footer">

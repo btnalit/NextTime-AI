@@ -51,7 +51,7 @@ describe('LoginPage: password login', () => {
 
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'owner' } });
     fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'password123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
 
     await waitFor(() => expect(onLoggedIn).toHaveBeenCalledTimes(1));
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -83,7 +83,7 @@ describe('LoginPage: password login', () => {
 
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'y' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
 
     expect(await screen.findByText(expectedText)).toBeTruthy();
   });
@@ -107,7 +107,7 @@ describe('LoginPage: password login', () => {
 
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'y' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
 
     expect(await screen.findByText(/控制台会话尚未配置签名密钥/)).toBeTruthy();
   });
