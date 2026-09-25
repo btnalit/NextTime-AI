@@ -517,18 +517,37 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
       });
       continue;
     }
-    const inFlight = await hasInFlightTurn(client, resident.workspaceId, principalId);
-    if (inFlight) {
-      outcomes.push({
-        principalId,
-        workspaceId: resident.workspaceId,
-        action: 'skipped_in_flight',
-      });
-      continue;
+    // leftover 64 (docs/STATUS.md §4): closes the window between the Turn check below and
+    // `stopResident` settling — during which a *new* Turn could start and be routed to the
+    // resident this call is about to stop (agent-host then reports it `interrupted`; an existing,
+    // already-graceful degradation path, but one worth actually closing rather than only
+    // narrowing). `application/chat/service.ts`'s `sendChatMessage` takes the transaction-scoped
+    // form of this *same* advisory lock, keyed identically, before starting a new Turn for this
+    // principal — so a concurrent `sendChatMessage` call blocks here until this lock releases,
+    // landing its own Turn-start strictly after this handler has already decided (and, if
+    // `stopped`, already told worker-supervisor) what to do with this principal's resident. The
+    // session-scoped form is used here (not `_xact`) because this handler's whole loop runs inside
+    // one long-lived transaction (`client`) — an `_xact` lock would not release until the entire
+    // `roll_entry_containers` call finishes, holding every earlier principal's lock long after this
+    // handler has moved on to the next one. Explicitly unlocked in `finally` instead.
+    const rollingLockKey = `roll_entry_containers:${principalId}`;
+    await client.query('select pg_advisory_lock(hashtext($1::text))', [rollingLockKey]);
+    try {
+      const inFlight = await hasInFlightTurn(client, resident.workspaceId, principalId);
+      if (inFlight) {
+        outcomes.push({
+          principalId,
+          workspaceId: resident.workspaceId,
+          action: 'skipped_in_flight',
+        });
+        continue;
+      }
+      await supervisor.stopResident(principalId);
+      outcomes.push({ principalId, workspaceId: resident.workspaceId, action: 'stopped' });
+      stoppedCount += 1;
+    } finally {
+      await client.query('select pg_advisory_unlock(hashtext($1::text))', [rollingLockKey]);
     }
-    await supervisor.stopResident(principalId);
-    outcomes.push({ principalId, workspaceId: resident.workspaceId, action: 'stopped' });
-    stoppedCount += 1;
   }
 
   const result: RollEntryContainersResultWire = { outcomes, stoppedCount };

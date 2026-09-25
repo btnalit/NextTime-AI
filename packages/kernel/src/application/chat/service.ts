@@ -444,6 +444,22 @@ export async function sendChatMessage(
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
   if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
 
+  // leftover 64 (docs/STATUS.md §4): `roll_entry_containers` (`application/platform/runtime.ts`)
+  // takes the *same* session-scoped advisory lock, keyed identically
+  // (`roll_entry_containers:<principalId>`), around its own "no in-flight Turn? then stop the
+  // resident" check for this principal — held for the duration of that check plus the
+  // `stopResident` call. Taking the transaction-scoped form of the same lock here, before starting
+  // a new Turn, means a Turn that would otherwise be dispatched to a container
+  // `roll_entry_containers` is mid-stopping instead waits (briefly — the other side's own check +
+  // one HTTP call) for that to finish, closing the race rather than merely narrowing it. A no-op
+  // in the overwhelmingly common case (no roll in progress): Postgres resolves an uncontended
+  // advisory lock without blocking. The key string is duplicated (not imported) in
+  // `application/platform/runtime.ts` — see this comment there for why: two call sites, no shared
+  // type, cheaper than a new cross-module import for one string literal.
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `roll_entry_containers:${principalId}`,
+  ]);
+
   let turnId: string;
   try {
     const turn = await startActivity(client, workspaceId, {
