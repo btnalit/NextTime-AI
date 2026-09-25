@@ -14,11 +14,7 @@
   "login": {},
   "members": {},
   "models": {},
-  "platform-audit": {
-    "uuid": {
-      "count": 2
-    }
-  },
+  "platform-audit": {},
   "platform-integrations": {},
   "platform-models": {},
   "platform-modules": {},
