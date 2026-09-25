@@ -268,3 +268,22 @@ describe('invoke_worker paramsSchema timeout clamp', () => {
     expect(result?.success).toBe(true);
   });
 });
+
+describe('grant_capability params (leftover 80, 2026-09-25)', () => {
+  const schema = () => getCapability('grant_capability')?.paramsSchema;
+  const principalId = '00000000-0000-4000-8000-000000000001';
+
+  it('accepts a gate grant without scope', () => {
+    const result = schema()?.safeParse({ principalId, resourceType: 'gatekeeper' });
+    expect(result?.success).toBe(true);
+  });
+
+  it('rejects a scope param: the stored scope was never enforced, so the param is gone', () => {
+    const result = schema()?.safeParse({
+      principalId,
+      resourceType: 'gatekeeper',
+      scope: { operationNames: ['container.restart'] },
+    });
+    expect(result?.success).toBe(false);
+  });
+});
