@@ -198,6 +198,13 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await ownerSelect.selectOption(ownerUserId as string);
   await wsDrawer.getByRole('button', { name: /创建/ }).click();
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
+  // `PlatformWorkspacesPage`'s `handleCreated` swaps the same drawer over to the new workspace's
+  // own detail panel, so an overlay stays up and intercepts every click outside it (the sidebar's
+  // 登出 included) — close it so the caller starts from a page with no drawer open.
+  const overlay = page.getByTestId('drawer-overlay');
+  await expect(overlay).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press('Escape');
+  await expect(overlay).toHaveCount(0);
 
   return { workspaceName, ownerLogin, ownerTemporaryPassword };
 }
