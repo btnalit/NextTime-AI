@@ -81,7 +81,15 @@ export interface ResultContractView {
   readonly findings: readonly string[];
   readonly factsToAssert: readonly Record<string, unknown>[];
   readonly evidence: readonly Record<string, unknown>[];
-  readonly artifacts: readonly { readonly path: string; readonly description?: string }[];
+  readonly artifacts: readonly {
+    readonly path: string;
+    readonly description?: string;
+    /** S8 W5-A (leftover 74): the artifact's own inlined text, when the Worker submitted one —
+     *  `path` alone stops resolving to anything once the WorkerRun's container exits (see
+     *  `packages/shared/src/worker-result.ts`'s own doc comment). `undefined` means "not
+     *  retrievable", never "empty file". */
+    readonly content?: string;
+  }[];
   readonly proposedOperations: readonly Record<string, unknown>[];
   readonly proposedSkill: unknown;
 }
@@ -101,9 +109,16 @@ export function asResultContract(result: unknown): ResultContractView | undefine
       : [],
     factsToAssert: arr(record.factsToAssert),
     evidence: arr(record.evidence),
-    artifacts: arr(record.artifacts).filter(
-      (item): item is { path: string; description?: string } => typeof item.path === 'string',
-    ),
+    artifacts: arr(record.artifacts)
+      .filter(
+        (item): item is { path: string; description?: string; content?: string } =>
+          typeof item.path === 'string',
+      )
+      .map((item) => ({
+        path: item.path,
+        description: typeof item.description === 'string' ? item.description : undefined,
+        content: typeof item.content === 'string' ? item.content : undefined,
+      })),
     proposedOperations: arr(record.proposedOperations),
     proposedSkill: record.proposedSkill,
   };

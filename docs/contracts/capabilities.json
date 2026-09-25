@@ -13694,6 +13694,10 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "content": {
+                "maxLength": 32000,
+                "type": "string"
+              },
               "description": {
                 "type": "string"
               },
@@ -13707,6 +13711,7 @@
             ],
             "type": "object"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "evidence": {

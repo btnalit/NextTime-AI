@@ -8,7 +8,11 @@ import type {
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { findWorkerRunBySessionId } from '../../application/task/index.js';
+import {
+  findWorkerRunBySessionId,
+  recordWorkerGateObservation,
+} from '../../application/task/index.js';
+import type { WorkerRunRow } from '../../application/task/index.js';
 import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
@@ -226,6 +230,51 @@ function sleep(ms: number): Promise<void> {
 // observe path — phase 1 only (see module doc comment: no durable-record risk in a read).
 // -------------------------------------------------------------------------------------------
 
+/** Best-effort, on a SAVEPOINT — a failure here must never surface as the calling gate operation's
+ *  own error, and (unlike a bare try/catch) must not leave `client`'s transaction aborted for every
+ *  query after it (a real SQL error inside a Postgres transaction poisons it until the failing
+ *  statement is rolled back to a savepoint — the same reason `application/task/result.ts`'s own
+ *  per-Fact `savepoint result_fact` exists). Only ever called for a genuine WorkerRun caller
+ *  (`workerRun` is `undefined` for a human/entry caller — `observe_operation`, S2.12, structurally
+ *  never has one, and this is the only other `runObserve` call site). */
+async function recordWorkerGateObservationSafely(
+  client: PoolClient,
+  workspaceId: string,
+  workerRun: WorkerRunRow | undefined,
+  onBehalfOf: string,
+  gatekeeper: GatekeeperRecord,
+  operationName: string,
+  mode: 'observe' | 'execute',
+  status: string,
+  payload: unknown,
+): Promise<void> {
+  if (!workerRun?.agentPrincipalId) return;
+  await client.query('savepoint gate_observation');
+  try {
+    await recordWorkerGateObservation(client, workspaceId, {
+      taskId: workerRun.taskId,
+      workerRunId: workerRun.id,
+      agentPrincipalId: workerRun.agentPrincipalId,
+      ownerPrincipalId: onBehalfOf,
+      gatekeeperId: gatekeeper.gatekeeperId,
+      gateName: gatekeeper.name,
+      operation: operationName,
+      mode,
+      status,
+      payload,
+    });
+    await client.query('release savepoint gate_observation');
+  } catch (err) {
+    await client.query('rollback to savepoint gate_observation');
+    await client.query('release savepoint gate_observation');
+    console.error(
+      `[kernel] recordWorkerGateObservation failed (workerRunId=${workerRun.id}, ` +
+        `gatekeeperId=${gatekeeper.gatekeeperId}, operation=${operationName}): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 async function runObserve(
   client: PoolClient,
   workspaceId: string,
@@ -233,6 +282,7 @@ async function runObserve(
   operationName: string,
   operationParams: unknown,
   onBehalfOf: string,
+  workerRun?: WorkerRunRow,
 ): Promise<CapabilityHandlerResult> {
   const activity = await startActivity(client, workspaceId, {
     kind: 'gatekeeper_observe',
@@ -253,6 +303,20 @@ async function runObserve(
       activity.id,
     );
     await endActivity(client, workspaceId, activity.id, 'completed');
+    // S8 W5-A (leftover 75): recorded on this WorkerRun's own Source/Activity, never on `activity`
+    // above — see `gate-observation.ts`'s module doc comment for why (a second Source on the same
+    // Activity would break `resolveFactOrigin` for whatever `writeObservedFacts` just wrote).
+    await recordWorkerGateObservationSafely(
+      client,
+      workspaceId,
+      workerRun,
+      onBehalfOf,
+      gatekeeper,
+      operationName,
+      'observe',
+      'ok',
+      observeResult.data,
+    );
     return {
       result: { status: 'ok', data: observeResult.data, observedFactCount: written.length },
       resourceType: 'gatekeeper',
@@ -530,9 +594,56 @@ interface RunGovernedRequestArgs {
    *  `application/task/reaper.ts`'s ActionRequestPending/Updated routing can move the right Task
    *  to/from `waiting_approval`. `undefined` for a human caller (no WorkerRun to attribute to). */
   readonly parentWorkerRunId?: string;
+  /** S8 W5-A (leftover 75): the same row `parentWorkerRunId` above is derived from — threaded
+   *  through so the `afterCommit` branches below can record a `recordWorkerGateObservation` once
+   *  the execute outcome is known (`agentPrincipalId` in particular, which `parentWorkerRunId`
+   *  alone does not carry). `undefined` for a human caller, same condition as `parentWorkerRunId`. */
+  readonly workerRun?: WorkerRunRow;
   /** S3.13: `onBehalfOf`'s own resolved `effective.autoApproveLow` — threaded straight through to
    *  `requestAction`/`evaluate()`'s field of the same name (see that module's own doc comment). */
   readonly principalAutoApproveLowEnabled: boolean;
+}
+
+/** Best-effort — see `gate-observation.ts`'s own doc comment. Unlike the observe path
+ *  (`recordWorkerGateObservationSafely`, phase 1, one shared transaction that needs a SAVEPOINT to
+ *  stay best-effort), every phase-2 branch below already opens its own short-lived admin
+ *  transaction (`withTransaction`) — a failure here is simply caught in JS, leaving whatever
+ *  `outcome` phase 2 already resolved untouched. Only records `executed`/`failed` — an approval-
+ *  workflow status with no operation result yet (`pending_approval`/`approved`/`auto_approved` past
+ *  budget) is already fully audited via the ActionRequest's own record and is out of this
+ *  function's scope. */
+async function recordGateExecuteObservationSafely(
+  withTransaction: WithTransactionFn,
+  workspaceId: string,
+  systemActorId: string,
+  args: RunGovernedRequestArgs,
+  outcome: { readonly status: string; readonly data?: unknown; readonly reason?: string },
+): Promise<void> {
+  const workerRun = args.workerRun;
+  if (!workerRun?.agentPrincipalId) return;
+  if (outcome.status !== 'executed' && outcome.status !== 'failed') return;
+  try {
+    await withTransaction(workspaceId, systemActorId, (client) =>
+      recordWorkerGateObservation(client, workspaceId, {
+        taskId: workerRun.taskId,
+        workerRunId: workerRun.id,
+        agentPrincipalId: workerRun.agentPrincipalId as string,
+        ownerPrincipalId: args.onBehalfOf,
+        gatekeeperId: args.gatekeeper.gatekeeperId,
+        gateName: args.gatekeeper.name,
+        operation: args.operationName,
+        mode: 'execute',
+        status: outcome.status,
+        payload: outcome.status === 'executed' ? outcome.data : { reason: outcome.reason },
+      }),
+    );
+  } catch (err) {
+    console.error(
+      `[kernel] recordWorkerGateObservation (execute) failed (workerRunId=${workerRun.id}, ` +
+        `gatekeeperId=${args.gatekeeper.gatekeeperId}, operation=${args.operationName}): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /** The phase-1 `{result, resourceType, resourceId}` shape every branch of `runGovernedRequest`'s
@@ -630,6 +741,13 @@ async function runGovernedRequest(
             args.gatekeeper.gatekeeperId,
             actionRequest.id,
           );
+          await recordGateExecuteObservationSafely(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            args,
+            outcome,
+          );
           return { ...outcome, id: actionRequest.id };
         },
       };
@@ -647,6 +765,13 @@ async function runGovernedRequest(
             workspaceId,
             systemActorId,
             actionRequest.id,
+          );
+          await recordGateExecuteObservationSafely(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            args,
+            outcome,
           );
           return { ...outcome, id: actionRequest.id };
         },
@@ -668,8 +793,20 @@ async function runGovernedRequest(
             systemActorId,
             actionRequest.id,
           );
+          const status: ExecutionOutcome['status'] =
+            actionRequest.status === 'failed' ? 'failed' : 'executed';
+          await recordGateExecuteObservationSafely(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            args,
+            {
+              status,
+              ...outcome,
+            },
+          );
           return {
-            status: actionRequest.status === 'failed' ? 'failed' : 'executed',
+            status,
             ...outcome,
             id: actionRequest.id,
           };
@@ -717,6 +854,13 @@ async function runGovernedRequest(
             args.gatekeeper.gatekeeperId,
             actionRequest.id,
             awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS,
+          );
+          await recordGateExecuteObservationSafely(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            args,
+            outcome,
           );
           return { ...outcome, id: actionRequest.id };
         },
@@ -974,9 +1118,10 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   // whose session is not a WorkerRun (e.g. an entry session) — `request_action` structurally
   // cannot be called from an entry Handle anyway (governance/capability/handles.ts's
   // `ENTRY_CEILING_CAPABILITIES` never contains it), so this only ever resolves for a real Worker.
-  const parentWorkerRunId = sid
-    ? (await findWorkerRunBySessionId(client, workspaceId, sid))?.id
-    : undefined;
+  // S8 W5-A (leftover 75): the same resolved row also drives `recordWorkerGateObservation` — the
+  // whole `WorkerRunRow`, not just its id, since that write needs `agentPrincipalId` too.
+  const workerRun = sid ? await findWorkerRunBySessionId(client, workspaceId, sid) : null;
+  const parentWorkerRunId = workerRun?.id;
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
@@ -989,7 +1134,15 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
 
   if (published && published.operation.mode === 'observe') {
-    return runObserve(client, workspaceId, gatekeeper, operationName, resolvedParams, onBehalfOf);
+    return runObserve(
+      client,
+      workspaceId,
+      gatekeeper,
+      operationName,
+      resolvedParams,
+      onBehalfOf,
+      workerRun ?? undefined,
+    );
   }
 
   // S3.13: `onBehalfOf`'s own *raw* AgentProfile.autoApproveLow — not the resolved
@@ -1027,6 +1180,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       awaitDecision: true,
       idempotencyKey,
       parentWorkerRunId,
+      workerRun: workerRun ?? undefined,
       principalAutoApproveLowEnabled,
     });
   }
@@ -1056,6 +1210,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     awaitDecision: operation.await_decision,
     idempotencyKey,
     parentWorkerRunId,
+    workerRun: workerRun ?? undefined,
   });
 };
 
