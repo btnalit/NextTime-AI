@@ -3143,6 +3143,16 @@ W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审
 
 **W2 基线重拍流程**（本波实践，后续车道照做）：车道分支若在别的改界面 PR 合入前分出，合入前必须先把 main 合进来再重拍——两边都改了同一批截图，GitHub 的 update-branch 解不了二进制冲突；本地合并时冲突的截图保留本分支版本即可（随后整批重拍覆盖），不要用 `checkout --theirs` 覆盖工作区文件。推送后先 `git ls-remote` 核对远端 head，再单独开 auto-merge（`--match-head-commit`）。
 
+**W3 实现说明**（2026-09-25，按 `convergence-plan-2026-09-25.md` §4 / §6）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W3-K2 | #280 | 遗留 82：新能力 `discard_draft{kind, id, version}`，WorkerDefinition / Skill / Procedure 三类草稿共用；**只有提议者本人**能丢弃（I16：别人连草稿都看不见，不给 owner 越权），对非本人一律按"不存在"回应；只能删 `draft`，已发布 / 已弃用返回 409；硬删除 + 同事务审计。到期清理：内核周期任务（`DRAFT_EXPIRY_DAYS` 默认 30、`0` 关闭，`DRAFT_EXPIRY_INTERVAL_MS` 默认 6 小时，防重入），按 `created_at`（草稿行创建后不再原地修改），每删一条写审计，归属每个工作区惰性创建的 `__draft_reaper__` 服务主体。迁移 `worker/0003`：给应用角色 `DELETE` 授权 + 三张表的 `BEFORE DELETE` 触发器只放行草稿。遗留 84：从模板创建时按 `list_capability_names` 的 mode 选中"全部非执行类 + `request_action`"（等价于默认集合加执行申请，不写死清单），能力目录加载完之前按钮不可用；编辑器写明执行类仍需审批 | 合入前 CI 抓到触发器挡住了工作区清除（清除级联以连接登录角色运行、要删已发布定义）→ 主会话把触发器限定为 `current_user = 'nexttime_app'`。控制台"30 天"是写死的文案，未读内核配置。`__draft_reaper__` 会出现在"签发服务凭证"的主体下拉里（遗留 88） |
+| W3-F1 | #281 | `kit/notice / field / error-banner / status-chip / select`（沿用旧 CSS 类，截图零差异；`kit/select` 的类型强制要有可访问名称），4 个本地复刻文件改用 kit；PI1 平台集成页 5 个下拉补名称（axe 基线该页清零）；遗留 85 的侧栏连接状态 / 清除密钥 / 登出、平台概览默认工作区说明、系统接入空态、访问页服务主体提示改走 `t()`，连接状态加 `data-status` 供测试读取，8 个 e2e 文件随之更新；字体只打包 `.woff2`（Vite 插件在构建开始时由各 @fontsource 包生成 `fonts.css`、保留 `unicode-range`），`dist` 14 MB → 6.8 MB | `legacy-ui-importers.json` 仍 106（复刻文件本来就不在名单上）；登录页 "Log in"、对话 "Send" 仍是英文且被 e2e 按文字选取 |
+| W3-K1 | #282 | 遗留 79：新能力 `refresh_operation_governance{gatekeeperId, operationNames?}`（owner），与 `preview_gate_instance_enable` 共用同一个差异判定函数；原地更新（与发布 / 弃用同级的直接治理写入，不走草稿再发布），每个 Operation 一条审计（before / after / 放松·收紧·混合）；没有关联平台实例公告的门返回 `no_announced_manifest` 且不写入。控制台：门卡片"按公告刷新治理字段"，列出有差异的 Operation，只收紧用 medium 确认，含放松用不可逆档（重输门名）。遗留 81：`update_operation_description`（与 `publish_operation` 同级角色，去空白后非空、≤ 2000 字），原地更新 + 审计；`list_operations` / `get_gatekeeper` 带回描述；目录 Operation 行显示"未填写描述"并可编辑。遗留 75 前半：门工具结果回给模型时截断（默认 16 000 字符，`NEXTTIME_GATE_TOOL_RESULT_MAX_CHARS` 可调），worker 与 entry 两条门结果路径都用 | 合并 main 时主会话顺带修了 5 处 i18n 守卫漏检的"插值模板里的中英对"（弃用 / 丢弃确认标题、模块升级按钮、服务凭证有效期提示、清理用户结果副标题）；守卫本身待补（遗留 85） |
+
+W3 合入顺序：#280 → #281 → #282；只有 #281、#282 改截图，#282 先合 main 再重拍。子代理开的 PR 标题两次不符合 Conventional Commits（`lint-pr-title` 失败），此后派发时写明标题格式。
+
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
 三档截图基线经独立设计评审认可（2026-09-24 维护者决定，不逐个交维护者）。
 
