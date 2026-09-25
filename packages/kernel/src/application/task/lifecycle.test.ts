@@ -3,7 +3,7 @@ import { IllegalTransition } from '@nexttime/shared';
 import type { TaskStatus, WorkerRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
-import { completeTaskWithResult, failTaskRow } from './lifecycle.js';
+import { completeTaskWithResult, failTaskRow, terminateWorkerRunRow } from './lifecycle.js';
 
 /**
  * application/task/lifecycle.test: pure/no-real-DB unit tests for `completeTaskWithResult`'s
@@ -439,5 +439,148 @@ describe('failTaskRow — status-guarded UPDATE (leftover 67, docs/STATUS.md §4
     await failTaskRow(client, workspaceId, actorPrincipalId, taskId, 'worker_failed');
 
     expect(queries.some((q) => q.toLowerCase().startsWith('update tasks'))).toBe(false);
+  });
+});
+
+/** Fake `PoolClient` for `terminateWorkerRunRow` (leftover 90, docs/STATUS.md §4): scripts the
+ *  exact sequence of return values for `readWorkerRunRow`'s SELECT (called both by
+ *  `terminateWorkerRunRow` itself and, on the lost-race path, once more as its own re-read) and
+ *  the guarded `update worker_runs ... where ... and status = $3` UPDATE — same "no real race
+ *  needed, script the outcome directly" convention `createRaceFakeClient` above already
+ *  establishes for `completeTaskWithResult`. `session_id` is deliberately `null` (same
+ *  simplification `createFakeClient` above uses) so `revokeWorkerRunAndDescendants` never calls
+ *  into `governance/capability`'s `revokeSession` — whether it *ran* is instead observed through
+ *  the children-lookup query (`... where workspace_id = $1 and parent_worker_run_id = $2`), which
+ *  only `revokeWorkerRunAndDescendants` ever issues. */
+function createTerminateRaceFakeClient(options: {
+  readonly initialStatus: WorkerRunStatus;
+  readonly updateRowCount: number;
+  /** What the lost-race re-read finds — only consulted when `updateRowCount` is 0. */
+  readonly rereadStatus?: WorkerRunStatus;
+}) {
+  const workspaceId = 'ws-1';
+  const taskId = 'task-1';
+  const workerRunId = 'wr-1';
+  const actorPrincipalId = 'principal-1';
+  const queries: string[] = [];
+  let workerRunReadCount = 0;
+
+  const baseWorkerRunRow = {
+    workspace_id: workspaceId,
+    id: workerRunId,
+    task_id: taskId,
+    parent_worker_run_id: null,
+    session_id: null,
+    container_id: null,
+    depth: 0,
+    activity_id: null,
+    attempt: 1,
+    agent_principal_id: 'agent-1',
+    started_at: new Date(),
+    terminated_at: null,
+  };
+
+  const auditRowFor = () => ({
+    workspace_id: workspaceId,
+    id: randomUUID(),
+    actor_principal_id: actorPrincipalId,
+    actor_user_id: null,
+    action: 'x',
+    resource_type: null,
+    resource_id: null,
+    payload: {},
+    created_at: new Date(),
+  });
+
+  const client = {
+    query: async (text: string) => {
+      queries.push(text);
+      const sql = text.replace(/\s+/g, ' ').trim().toLowerCase();
+
+      // `revokeWorkerRunAndDescendants`'s children lookup — checked before the generic
+      // `readWorkerRunRow` match below, same ordering `createFakeClient` above already uses.
+      if (
+        sql.startsWith('select') &&
+        sql.includes('where workspace_id = $1 and parent_worker_run_id = $2')
+      ) {
+        return { rows: [], rowCount: 0 }; // no children
+      }
+      if (sql.startsWith('select') && sql.includes('from worker_runs')) {
+        workerRunReadCount += 1;
+        const status =
+          workerRunReadCount === 1 ? options.initialStatus : (options.rereadStatus ?? 'terminated');
+        return { rows: [{ ...baseWorkerRunRow, status }], rowCount: 1 };
+      }
+      if (sql.startsWith('update worker_runs')) {
+        return { rows: [], rowCount: options.updateRowCount };
+      }
+      if (sql.startsWith('insert into audit_records')) {
+        return { rows: [auditRowFor()], rowCount: 1 };
+      }
+      if (sql.startsWith('insert into outbox')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(
+        `fake PoolClient: unhandled query in lifecycle.test.ts (terminateWorkerRunRow race): ${text}`,
+      );
+    },
+  } as unknown as PoolClient;
+
+  return { client, queries, workspaceId, taskId, workerRunId, actorPrincipalId };
+}
+
+describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STATUS.md §4)', () => {
+  it('writes the transition + revokes the Handle tree when the guarded UPDATE matches (rowCount 1, the ordinary path)', async () => {
+    const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
+      createTerminateRaceFakeClient({ initialStatus: 'suspended', updateRowCount: 1 });
+
+    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(true);
+    expect(
+      queries.some((q) =>
+        q.toLowerCase().includes('where workspace_id = $1 and parent_worker_run_id = $2'),
+      ),
+    ).toBe(true);
+  });
+
+  it('is a silent no-op — never records a second transition or reverts a legitimately-alive run — when the guarded UPDATE loses the race and the row is not actually terminated', async () => {
+    const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
+      createTerminateRaceFakeClient({
+        initialStatus: 'running',
+        updateRowCount: 0,
+        rereadStatus: 'running', // e.g. `spawn.ts`'s own `provisioning -> running` write won instead
+      });
+
+    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(false);
+    // Never revoked — the run is legitimately still alive.
+    expect(
+      queries.some((q) =>
+        q.toLowerCase().includes('where workspace_id = $1 and parent_worker_run_id = $2'),
+      ),
+    ).toBe(false);
+  });
+
+  it('still revokes the Handle tree (idempotent) when the re-read finds the row already terminated by a concurrent terminateWorkerRunRow call, without recording a second transition', async () => {
+    const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
+      createTerminateRaceFakeClient({
+        initialStatus: 'running',
+        updateRowCount: 0,
+        rereadStatus: 'terminated',
+      });
+
+    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+
+    // No second `worker_run.terminate` audit row — the concurrent call that actually won the race
+    // already wrote its own.
+    expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(false);
+    // But the Handle tree is still revoked here too.
+    expect(
+      queries.some((q) =>
+        q.toLowerCase().includes('where workspace_id = $1 and parent_worker_run_id = $2'),
+      ),
+    ).toBe(true);
   });
 });

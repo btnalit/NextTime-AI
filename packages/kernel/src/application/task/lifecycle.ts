@@ -110,11 +110,34 @@ export async function terminateWorkerRunRow(
   }
 
   transition(WORKER_RUN_TRANSITIONS, row.status, 'terminate');
-  await client.query(
+  // Status-guarded UPDATE + rowCount (leftover 90, docs/STATUS.md §4 — same race class leftover 67
+  // guarded for `tasks`, #293): `readWorkerRunRow` above is a plain SELECT, not `for update` — it
+  // takes no row lock, so under READ COMMITTED another writer sharing this same `workerRunId`
+  // (`spawn.ts`'s own `provisioning -> running` write, or a second concurrent
+  // `terminateWorkerRunRow` call) can still move `row.status` before this UPDATE executes. Condition
+  // on the exact status just read and validated above, never an unconditional overwrite.
+  const updateResult = await client.query(
     `update worker_runs set status = 'terminated', terminated_at = now()
-     where workspace_id = $1 and id = $2`,
-    [workspaceId, workerRunId],
+     where workspace_id = $1 and id = $2 and status = $3`,
+    [workspaceId, workerRunId, row.status],
   );
+  if ((updateResult.rowCount ?? 0) === 0) {
+    // Lost the race — re-read once, same "no real race needed, script the outcome" shape
+    // `completeTaskWithResult`'s own retry above uses. Two outcomes:
+    //  - already `terminated` (a concurrent `terminateWorkerRunRow` call won first): that call's own
+    //    success branch already recorded the transition; still revoke here too — idempotent, see
+    //    `revokeWorkerRunAndDescendants`'s own doc comment — so this caller's revoke never silently
+    //    depends on the other call having reached its own revoke first.
+    //  - anything else (e.g. `spawn.ts`'s own `provisioning -> running` write landing after the read
+    //    above): the run is legitimately still alive — skip the transition record and the revoke
+    //    entirely; never treat a lost race as "terminated" when the row says otherwise.
+    const reread = await readWorkerRunRow(client, workspaceId, workerRunId);
+    if (reread?.status === 'terminated') {
+      await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
+    }
+    return;
+  }
+
   await recordWorkerRunTransition(client, workspaceId, {
     actorPrincipalId,
     action: 'worker_run.terminate',
