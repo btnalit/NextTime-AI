@@ -81,7 +81,7 @@ S8 W0–W2 已完成：统一授权、启用预览、Worker 编辑器与模板�
 - **CapabilityMode**（observe / write / propose / execute）与 **OperationMode**（observe / execute）是两套类型，共用两个字面量，
   保持分离，在文档里写清。
 - **草稿生命周期（新，遗留 82）**：WorkerDefinition / Skill / Procedure 的草稿都是"提议者私有"（I16），目前只有
-  `draft → published` 一条出路。新增 `draft → discarded`（提议者或 owner 手动）与 `draft → expired`（定期清理），三类共用一套规则。
+  `draft → published` 一条出路。新增 `draft → discarded`（仅提议者本人手动——I16 下别人看不见草稿，2026-09-25 实现时收紧）与 `draft → expired`（定期清理），三类共用一套规则。
   不引入新实体，只是给已有状态机补终态；每次丢弃 / 过期写审计。
 - **治理字段刷新（新，遗留 79）**：门的公告 manifest 是"门自己声明的"，部署在工作区里的 Operation 治理字段是"工作区当前生效的"。
   刷新是一次显式的 owner 治理动作：预览差异（复用 `preview_gate_instance_enable` 的 `differs`）→ 选择 → 应用，before / after 写审计；
@@ -95,7 +95,7 @@ S8 W0–W2 已完成：统一授权、启用预览、Worker 编辑器与模板�
 | 79 | 按公告刷新部署的治理字段 | 新写能力 `refresh_operation_governance{gatekeeperId, operationNames?}`（owner）；只读预览沿用 `preview_gate_instance_enable`；按 Operation 应用、审计 before / after 与"放松 / 收紧"标记；web 在门卡片与启用确认里给"按公告刷新"入口 | `gate-instance-handlers.ts` + `governance/gatekeepers/manifest.ts` | M |
 | 80 | 不做按 Operation 收窄授权，不过度约束 | 关闭为"不做"。界面已如实（#269）。可选小清理：`grant_capability` 不再接受新的 `scope`，历史行继续显示为"范围备注"——去掉一个会让人误解的入参，不增加约束 | `governance/capability/grants.ts` | S（可选） |
 | 81 | 控制台补写 Operation 描述 | 新写能力 `update_operation_description{gatekeeperId, name, description}`，与 `publish_operation` 同级角色；描述是文档不是治理字段，原地更新当前版本、审计 before / after；`find_*` 分词匹配立即受益 | 与 `publish_operation` 同处（先随 §6 W6 拆分落到新文件） | S |
-| 82 | 草稿到期删除 + 手动删除 | `discard_draft{kind: worker_definition \| skill \| procedure, id, version}`（提议者或 owner）；定期清理 `updated_at` 超过 N 天（建议 30，平台设置可调）的草稿，与 `reaper` 同类的周期任务；"我的草稿"区给"丢弃"，并显示"N 天后自动清理" | `application/worker/definitions.ts`、skill / procedure 同层 + 周期任务 | M |
+| 82 | 草稿到期删除 + 手动删除 | `discard_draft{kind: worker_definition \| skill \| procedure, id, version}`（仅提议者本人）；定期清理 `updated_at` 超过 N 天（建议 30，平台设置可调）的草稿，与 `reaper` 同类的周期任务；"我的草稿"区给"丢弃"，并显示"N 天后自动清理" | `application/worker/definitions.ts`、skill / procedure 同层 + 周期任务 | M |
 | 84 | 按主会话推荐 | **推荐默认带 `request_action`**：模板自己的 systemPrompt 就在讲"经审批提出动作"，而执行类动作仍受策略 / 人工审批约束（设计底线不变）。实现不写死能力清单：web 从模板创建时，用 `list_capability_names` 的 mode 选中"全部非执行类 + `request_action`"，等价于"默认集合 + 执行申请"；编辑器里写明"执行类动作仍需审批"。YAML 模板加注释说明 | `lib/catalog.ts` `opsRunnerTemplateForm`、`ontology/ops-runner.yaml` 注释 | S |
 
 ## 5. 问题清单（按层，P0–P3）
