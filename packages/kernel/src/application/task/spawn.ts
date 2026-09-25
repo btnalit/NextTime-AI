@@ -189,11 +189,25 @@ export async function spawnWorkerRun(
       deps.pool,
       { workspaceId, principalId: input.onBehalfOf },
       async (client) => {
-        await client.query(
+        // Status-guarded UPDATE + rowCount (leftover 90, docs/STATUS.md §4 — same race class
+        // leftover 67 guarded for `tasks`, #293): `created.workerRun` is only ever `provisioning`
+        // here — this catch only fires when `deps.supervisorClient.spawn()` above threw, before
+        // this function ever had a chance to move the row to `running` itself, and
+        // `WORKER_RUN_TRANSITIONS` (packages/shared/src/transitions.ts) has no edge back into
+        // `provisioning` from anywhere, so nothing else could have moved it there either. A
+        // concurrent `terminate` (a parent Task cancel racing this in-flight supervisor call, or
+        // `lifecycle.ts`'s own `terminateWorkerRunRow` — itself now guarded the same way, see that
+        // function) can already have moved the row to `terminated`; condition on `status =
+        // 'provisioning'` so a losing race is a silent no-op — never a second write over whatever
+        // terminal state the row already reached — and skip the transition record too. The
+        // original spawn error is rethrown either way: a failed-and-already-terminated run still
+        // means this call never produced a usable WorkerRun.
+        const updateResult = await client.query(
           `update worker_runs set status = 'terminated', terminated_at = now()
-         where workspace_id = $1 and id = $2`,
+         where workspace_id = $1 and id = $2 and status = 'provisioning'`,
           [workspaceId, created.workerRun.id],
         );
+        if ((updateResult.rowCount ?? 0) === 0) return;
         await recordWorkerRunTransition(client, workspaceId, {
           actorPrincipalId: input.onBehalfOf,
           action: 'worker_run.spawn_failed',
@@ -214,11 +228,51 @@ export async function spawnWorkerRun(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
     async (client) => {
-      await client.query(
+      // Status-guarded UPDATE + rowCount (leftover 90, docs/STATUS.md §4 — same race class
+      // leftover 67 guarded for `tasks`, #293): condition on `status = 'provisioning'`, the only
+      // status this freshly created row can legitimately still be in here — `WORKER_RUN_TRANSITIONS`
+      // `start` edge (packages/shared/src/transitions.ts) is only legal from `provisioning`. A
+      // concurrent `terminate` (a parent Task cancel, or `lifecycle.ts`'s own
+      // `terminateWorkerRunRow` — itself now guarded the same way, see that function) racing this
+      // very `deps.supervisorClient.spawn()` call above can already have moved the row to
+      // `terminated`.
+      const updateResult = await client.query(
         `update worker_runs set status = 'running', container_id = $3
-       where workspace_id = $1 and id = $2`,
+       where workspace_id = $1 and id = $2 and status = 'provisioning'`,
         [workspaceId, created.workerRun.id, spawnOutcome.containerId],
       );
+      if ((updateResult.rowCount ?? 0) === 0) {
+        // Lost the race: the run was already terminated by the time the supervisor confirmed the
+        // spawn, so the container it just started is orphaned — nothing under this now-terminal
+        // WorkerRun will ever poll or reap it on its own. Best-effort stop it through the same
+        // supervisor client that spawned it, same `.terminate(workerRunId).catch(...)`-style
+        // "never let cleanup itself fail the caller" convention `reaper.ts`/`service.ts` already use
+        // for every other supervisor-side terminate.
+        try {
+          const stopped = await deps.supervisorClient.terminate(created.workerRun.id);
+          if (!stopped) {
+            console.warn(
+              `spawnWorkerRun: lost the running-write race for WorkerRun ${created.workerRun.id} (container ${spawnOutcome.containerId}) and the supervisor did not confirm the stop — it may be orphaned until the reaper duration-limit sweep or a manual check reclaims it`,
+            );
+          }
+        } catch {
+          console.warn(
+            `spawnWorkerRun: lost the running-write race for WorkerRun ${created.workerRun.id} (container ${spawnOutcome.containerId}) and the best-effort supervisorClient.terminate call itself failed — it may be orphaned until the reaper duration-limit sweep or a manual check reclaims it`,
+          );
+        }
+        // Never throw here — the run reached its terminal status through a legitimate concurrent
+        // actor (a cancel/terminate), not because this spawn failed. The callers
+        // (`invoke.ts`'s own guarded `queued -> running` UPDATE, `lifecycle.ts`'s requeue path) are
+        // themselves conditioned on the Task's prior status and will no-op the same way when it has
+        // moved on — throwing here instead would make an intentionally-cancelled Task look exactly
+        // like a spawn failure.
+        const reread = await client.query(
+          `select ${WORKER_RUN_ROW_COLUMNS} from worker_runs where workspace_id = $1 and id = $2`,
+          [workspaceId, created.workerRun.id],
+        );
+        const row = reread.rows[0];
+        return row ? mapWorkerRunRow(row) : { ...created.workerRun, status: 'terminated' as const };
+      }
       await recordWorkerRunTransition(client, workspaceId, {
         actorPrincipalId: input.onBehalfOf,
         action: 'worker_run.start',

@@ -109,21 +109,50 @@ export async function terminateWorkerRunRow(
     return;
   }
 
-  transition(WORKER_RUN_TRANSITIONS, row.status, 'terminate');
-  await client.query(
-    `update worker_runs set status = 'terminated', terminated_at = now()
-     where workspace_id = $1 and id = $2`,
-    [workspaceId, workerRunId],
-  );
-  await recordWorkerRunTransition(client, workspaceId, {
-    actorPrincipalId,
-    action: 'worker_run.terminate',
-    workerRunId,
-    taskId: row.taskId,
-    resultingStatus: 'terminated',
-    extraAuditPayload: { reason },
-  });
-  await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
+  // Status-guarded UPDATE + rowCount (leftover 90, docs/STATUS.md §4 — same race class leftover 67
+  // guarded for `tasks`, #293): `readWorkerRunRow` above is a plain SELECT, not `for update` — it
+  // takes no row lock, so under READ COMMITTED another writer sharing this same `workerRunId`
+  // (`spawn.ts`'s own `provisioning -> running` write, or a second concurrent
+  // `terminateWorkerRunRow` call) can still move the status before the UPDATE executes. Condition on
+  // the status just read and validated, never an unconditional overwrite. On a lost race re-read:
+  //  - already `terminated` (a concurrent `terminateWorkerRunRow` won): that call recorded the
+  //    transition; still revoke here too — idempotent — so this caller's revoke never depends on the
+  //    other call having reached its own.
+  //  - still alive (e.g. `spawn.ts` moved `provisioning -> running` in between): terminate still
+  //    wins — retry against the new status. A cancel racing a spawn must not leave the run
+  //    `running` with a live Handle under a cancelled Task; callers such as `cancelTask` have
+  //    already asked the supervisor to stop it, so the DB row and the Handle are what is left.
+  // Bounded: a handful of live statuses, so three attempts settle unless something keeps flapping
+  // the row — then throw and let the caller's transaction roll back rather than loop.
+  let current = row;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    transition(WORKER_RUN_TRANSITIONS, current.status, 'terminate');
+    const updateResult = await client.query(
+      `update worker_runs set status = 'terminated', terminated_at = now()
+       where workspace_id = $1 and id = $2 and status = $3`,
+      [workspaceId, workerRunId, current.status],
+    );
+    if ((updateResult.rowCount ?? 0) > 0) {
+      await recordWorkerRunTransition(client, workspaceId, {
+        actorPrincipalId,
+        action: 'worker_run.terminate',
+        workerRunId,
+        taskId: current.taskId,
+        resultingStatus: 'terminated',
+        extraAuditPayload: { reason },
+      });
+      await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
+      return;
+    }
+    const reread = await readWorkerRunRow(client, workspaceId, workerRunId);
+    if (!reread) return;
+    if (reread.status === 'terminated') {
+      await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
+      return;
+    }
+    current = reread;
+  }
+  throw new Error(`terminateWorkerRunRow: WorkerRun ${workerRunId} kept changing status`);
 }
 
 /** The real, if momentary, hop sequence from `status` to `running` — Task's own transition table
