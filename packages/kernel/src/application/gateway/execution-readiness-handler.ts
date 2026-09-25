@@ -212,6 +212,17 @@ export const executionReadinessHandler: CapabilityHandler = async (
   });
 
   if (gates.length === 0) addMissing({ code: 'no_enabled_gate' });
+  // Gates exist but this principal holds a grant for none of them: a workspace-wide gap of its own.
+  // The per-Worker loop above only reports `no_grant` for gates some published Worker declares, so
+  // with no Worker (or none that declares a gate) "nothing is granted" would otherwise go unsaid
+  // while `gates[].granted` is false everywhere. Skipped when a `no_grant` item is already present.
+  if (
+    gates.length > 0 &&
+    !gates.some((gate) => gate.granted) &&
+    ![...missingByKey.values()].some((item) => item.code === 'no_grant')
+  ) {
+    addMissing({ code: 'no_grant' });
+  }
   if (definitions.length === 0) addMissing({ code: 'no_published_worker' });
 
   const ready = workers.some((worker) => worker.delegable);

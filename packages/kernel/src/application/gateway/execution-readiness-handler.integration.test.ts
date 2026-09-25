@@ -109,22 +109,30 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    async function adminRegisterGatekeeper(name: string): Promise<string> {
-      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
-        const activity = await startActivity(client, workspaceId, {
-          kind: 'test.register_gatekeeper',
-          principalId: ownerId,
-        });
-        const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
-          name,
-          transportKind: 'http',
-          target: `execution-readiness-test-system-${name}`,
-          endpoint: `https://gate.execution-readiness-test.invalid/${name}`,
-          activityId: activity.id,
-          registeredBy: { id: ownerId, kind: 'human' },
-        });
-        return gatekeeperId;
-      });
+    async function adminRegisterGatekeeper(
+      name: string,
+      inWorkspaceId: string = workspaceId,
+      actorId: string = ownerId,
+    ): Promise<string> {
+      return withWorkspace(
+        pool,
+        { workspaceId: inWorkspaceId, principalId: actorId },
+        async (client) => {
+          const activity = await startActivity(client, inWorkspaceId, {
+            kind: 'test.register_gatekeeper',
+            principalId: actorId,
+          });
+          const { gatekeeperId } = await registerGatekeeper(client, inWorkspaceId, {
+            name,
+            transportKind: 'http',
+            target: `execution-readiness-test-system-${name}`,
+            endpoint: `https://gate.execution-readiness-test.invalid/${name}`,
+            activityId: activity.id,
+            registeredBy: { id: actorId, kind: 'human' },
+          });
+          return gatekeeperId;
+        },
+      );
     }
 
     /** Publishes a `kind=worker` WorkerDefinition declaring `request_action` (execute-class) and
@@ -222,6 +230,42 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.missing).toEqual(
         expect.arrayContaining([{ code: 'no_enabled_gate' }, { code: 'no_published_worker' }]),
       );
+    });
+
+    it('gate registered, nothing granted, no worker: reports the workspace-wide no_grant gap too', async () => {
+      const freshWorkspaceId = await adminInsertWorkspace(
+        'execution-readiness-ungranted-workspace',
+      );
+      const freshOwnerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: freshWorkspaceId, principalId: freshOwnerId },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'owner')`,
+            [freshWorkspaceId, freshOwnerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      await adminRegisterGatekeeper('gate-nobody-granted', freshWorkspaceId, freshOwnerId);
+      const owner = humanCaller(freshWorkspaceId, freshOwnerId, 'owner');
+
+      const result = (await dispatchCapability(
+        { pool },
+        owner,
+        'execution_readiness',
+        {},
+      )) as ExecutionReadinessResult;
+
+      expect(result.ready).toBe(false);
+      expect(result.gates).toHaveLength(1);
+      expect(result.gates[0]?.granted).toBe(false);
+      expect(result.missing).toEqual(
+        expect.arrayContaining([{ code: 'no_grant' }, { code: 'no_published_worker' }]),
+      );
+      expect(result.missing.some((m) => m.code === 'no_enabled_gate')).toBe(false);
     });
 
     it('published worker + registered gate, no grant: ready:false, no_grant, agrees with findWorkers refusing', async () => {
