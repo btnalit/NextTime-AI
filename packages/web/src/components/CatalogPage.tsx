@@ -86,10 +86,13 @@ const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en:
  * said "noParams … stay single-page, B5 does not apply" until S8 W1-A4); the three browsable tabs
  * below now offer "加载更多" via `useCapabilityList`'s `loadMore`/`nextCursor`/`truncated`.
  *
- * `list_worker_definitions` only ever returns *published* rows (its own kernel-side doc comment,
- * `lib/tasks.ts`), so unlike Skills/Procedures (which also show the caller's own drafts) the
- * Workers tab has nothing to Publish — Deprecate only; a freshly proposed Worker draft is
- * published from the editor's success state instead.
+ * `list_worker_definitions` returns *published* rows by default, same as before; the Workers tab
+ * also makes one dedicated `list_worker_definitions{includeOwnDrafts: true}` call (S8 W2-U2b,
+ * audit R6 "保存草稿后找不回它") and renders its `status === 'draft'` rows as a "我的草稿" section,
+ * shown only when non-empty, with the same one-click Publish Skills/Procedures rows already have —
+ * a draft is otherwise reachable only from the id the editor's own success screen showed at
+ * propose time. The Entry/Worker sections below still filter the *published*-only list, so a
+ * draft never appears mixed into either of them.
  *
  * Operations rows also carry a usage summary (调用/批准/拒绝/最近, S3.12 catalog-usage follow-up)
  * fed by its own `get_operation_stats` capability call, joined client-side by `{gatekeeperId,
@@ -896,17 +899,123 @@ function EntrySection({
   );
 }
 
+/** S8 W2-U2b (audit R6 "保存草稿后找不回它"): the caller's own draft Worker definitions — shown
+ *  only when non-empty (unlike `EntrySection` above, which always renders with an empty-state
+ *  line; an empty "我的草稿" would just be clutter for the common case of no outstanding drafts).
+ *  Publish is the one action offered, a plain button with no confirm (same tier Skills/Procedures
+ *  rows already use for `publish_skill`/`publish_procedure` — publish only ever *adds* visibility,
+ *  it does not remove or overwrite anything, so this tab's own `DeprecateConfirm` convention does
+ *  not apply here). No "继续编辑"/edit action: the only mechanism that exists
+ *  (`propose_worker_definition{definitionId}`) always inserts the *next* version rather than
+ *  updating this draft row in place (`application/worker/definitions.ts`'s own doc comment — I16:
+ *  "propose 总是插入新行"), and a still-draft version has no way to be cleared afterwards
+ *  (`deprecate_worker_definition` only transitions out of `published`) — offering it here would
+ *  leave an orphaned stale draft behind with no route to clean it up, so it is left out; publish
+ *  (or resume the family from an already-published row's own "编辑（新版本草稿）", once this one is
+ *  published) covers every path this lane's F6 read-only kernel scope allows. */
+function MyDraftsSection({
+  rows,
+  busy,
+  canPublish,
+  onPublish,
+}: {
+  readonly rows: readonly WorkerDefinitionSummary[];
+  readonly busy: string | null;
+  readonly canPublish: boolean;
+  readonly onPublish: (row: WorkerDefinitionSummary) => void;
+}) {
+  const t = useT();
+  if (rows.length === 0) return null;
+  return (
+    <div className="stack-s" data-testid="workers-my-drafts-section">
+      <span className="section-title">{t('我的草稿', 'My drafts')}</span>
+      <DataList ariaLabel="My drafts" testId="workers-my-drafts-list">
+        {rows.map((row) => (
+          <DataRow
+            key={`${row.id}@${row.version}`}
+            testId="workers-my-draft-row"
+            leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+            title={
+              <>
+                <RefChip
+                  kind="workerDefinition"
+                  id={row.id}
+                  name={definitionName([row], row.id, row.version)}
+                  size="s"
+                />
+                <span className="text-3 text-small">v{row.version}</span>
+                <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+              </>
+            }
+            meta={
+              typeof row.definition.description === 'string' ? (
+                <span className="truncate">{row.definition.description}</span>
+              ) : undefined
+            }
+            trailing={
+              canPublish ? (
+                <Button
+                  variant="primary"
+                  size="s"
+                  loading={busy === row.id}
+                  onClick={() => onPublish(row)}
+                  data-testid="worker-draft-publish"
+                >
+                  {t('发布', 'Publish')}
+                </Button>
+              ) : undefined
+            }
+          />
+        ))}
+      </DataList>
+    </div>
+  );
+}
+
 function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
+  // S8 W2-U2b (audit R6): a dedicated own-drafts read — `includeOwnDrafts` is additive (published
+  // rows come back too, same as `workers` above), so this is filtered to `status === 'draft'`
+  // below rather than treated as the tab's real list; `autoLoadAll` so a caller with drafts past
+  // the first page still sees every one of them under "我的草稿" (own-drafts counts are small in
+  // practice, same reasoning `WorkerEditorHost`'s own `list_skills` picker call below uses).
+  const myDrafts = useCapabilityList<WorkerDefinitionSummary>(
+    http,
+    'list_worker_definitions',
+    { includeOwnDrafts: true },
+    { autoLoadAll: true },
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_worker_definitions');
     void workers.reload();
+    void myDrafts.reload();
+  }
+
+  async function publishDraft(row: WorkerDefinitionSummary): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('publish_worker_definition', { definitionId: row.id, version: row.version });
+      toast.push({
+        tone: 'ok',
+        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已发布', 'published')}`,
+      });
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('publish_worker_definition');
+      toast.push({
+        tone: 'danger',
+        title: t('无法发布该草稿', 'Could not publish this draft'),
+        description: describeError(err).message,
+      });
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function deprecate(row: WorkerDefinitionSummary): Promise<void> {
@@ -934,6 +1043,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   }
 
   const canPropose = !permissions.isDenied('propose_worker_definition');
+  const canPublish = !permissions.isDenied('publish_worker_definition');
 
   const editorDrawer = (
     <Drawer
@@ -956,7 +1066,10 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           http={http}
           newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
           initialForm={editor.kind === 'template' ? opsRunnerTemplateForm() : undefined}
-          onProposed={() => void workers.reload()}
+          onProposed={() => {
+            void workers.reload();
+            void myDrafts.reload();
+          }}
           onDone={() => {
             setEditor(null);
             refresh();
@@ -982,6 +1095,12 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   const rows = workers.state.data.items;
   const entryRows = rows.filter((row) => row.kind === 'entry');
   const workerRows = rows.filter((row) => row.kind !== 'entry');
+  // R6: additive on top of `workers` above (published rows come back from this call too, S8
+  // W2-U2b) — only the caller's own draft rows are this section's concern.
+  const myDraftRows =
+    myDrafts.state.status === 'ready'
+      ? myDrafts.state.data.items.filter((row) => row.status === 'draft')
+      : [];
   return (
     <>
       <DraftToolbar
@@ -1001,6 +1120,13 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
             </Button>
           ) : null
         }
+      />
+
+      <MyDraftsSection
+        rows={myDraftRows}
+        busy={busy}
+        canPublish={canPublish}
+        onPublish={(row) => void publishDraft(row)}
       />
 
       <EntrySection
