@@ -226,8 +226,9 @@ describe('Sidebar', () => {
     );
     expect(screen.queryByTestId('kernel-version')).toBeNull();
     expect(screen.queryByTestId('current-user')).toBeNull();
-    // `ws-status` keeps its exact text — e2e keys on it.
-    expect(screen.getByTestId('ws-status').textContent).toBe('Connected');
+    // `ws-status` keeps its exact `data-status` (S8 W3 F1: the visible text is now bilingual via
+    // `t()`, no longer a stable selector) — e2e keys on the attribute instead.
+    expect(screen.getByTestId('ws-status').getAttribute('data-status')).toBe('connected');
 
     rerender(
       <Sidebar
@@ -297,7 +298,7 @@ describe('Sidebar', () => {
       { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
     ];
 
-    it('labels the sign-out button "Forget key" in apiKey mode and "登出', () => {
+    it('labels the sign-out button "清除密钥" in apiKey mode and "登出" in cookie mode', () => {
       const onLogout = vi.fn();
       const { rerender } = render(
         <Sidebar
@@ -310,7 +311,7 @@ describe('Sidebar', () => {
           onLogout={onLogout}
         />,
       );
-      expect(screen.getByRole('button', { name: 'Forget key' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: '清除密钥' })).toBeTruthy();
 
       rerender(
         <Sidebar
@@ -432,7 +433,7 @@ describe('MobileTopBar', () => {
         onOpenMenu={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('ws-status').textContent).toBe('Connected');
+    expect(screen.getByTestId('ws-status').getAttribute('data-status')).toBe('connected');
 
     rerender(
       <MobileTopBar
@@ -443,7 +444,7 @@ describe('MobileTopBar', () => {
         onOpenMenu={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('ws-status').textContent).toBe('Reconnecting');
+    expect(screen.getByTestId('ws-status').getAttribute('data-status')).toBe('reconnecting');
   });
 });
 
@@ -531,6 +532,8 @@ describe('NavDrawer', () => {
     // drops only the attribute), so this also proves it didn't just vanish.
     expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
     const dialog = screen.getByRole('dialog');
-    expect(dialog.querySelector('.conn-status-label')?.textContent).toBe('Connected');
+    expect(dialog.querySelector('.conn-status-label')?.getAttribute('data-status')).toBe(
+      'connected',
+    );
   });
 });

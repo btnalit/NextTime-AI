@@ -120,8 +120,8 @@ export function AvailableGateInstancesSection({
           icon="grid"
           title={t('平台目录里还没有可启用的实例', 'Nothing to enable yet')}
           body={t(
-            'An administrator sets a connector to 平台预置',
-            'platform-preset for its instances to show up here.',
+            '需要管理员先把某个接入包设为「平台预置」，其实例才会出现在这里。',
+            'An administrator needs to set a connector to platform-preset for its instances to show up here.',
           )}
           testId="available-gates-empty"
         />

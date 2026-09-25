@@ -38,6 +38,10 @@ data/
 sessions/
 *.log
 
+# Web: generated at `vite build`/`vite dev` start from fonts.src.css (S8 W3 F1, leftover 49) —
+# see packages/web/vite-plugins/woff2-only-fonts.ts
+packages/web/src/styles/fonts.css
+
 # 编辑器 / OS
 .vscode/
 .idea/

@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
-import type { PlatformOverviewWire, PlatformStatusWire } from '@nexttime/shared';
+import type {
+  PlatformOverviewWire,
+  PlatformStatusWire,
+  PlatformWorkspaceWire,
+} from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -94,19 +98,46 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
   };
 }
 
+/** S8 W3 F1 (leftover 85): `defaultWorkspace`'s checklist meta line is now recomputed client-side
+ *  from the `isDefault` row of `list_workspaces` (bilingual) rather than echoing the kernel's raw
+ *  `detail` string — see `checklistDetail`'s own doc comment in the page. Matches `overview()`'s
+ *  default `defaultWorkspace: { detail: 'Acme' }` fixture below. */
+function defaultWorkspaceRow(
+  overrides: Partial<PlatformWorkspaceWire> = {},
+): PlatformWorkspaceWire {
+  return {
+    id: 'ws-1',
+    name: 'Acme',
+    status: 'active',
+    entryModel: null,
+    allowedModels: [],
+    ontologyEnforcement: 'reject',
+    purpose: 'standard',
+    expiresAt: null,
+    disabledAt: null,
+    purgeable: false,
+    isDefault: true,
+    memberCount: 3,
+    owners: [{ userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' }],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('PlatformOverviewPage', () => {
   it('renders version, the checklist with links, count tiles, health chips, and recent audit', async () => {
     const http = scriptedHttp({
       platform_overview: () => overview(),
-      list_workspaces: () => ({ items: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
     });
     renderPage(http);
 
     const checklist = await screen.findByTestId('platform-checklist');
     // S8 W1-A10 (audit S14): the checklist's meta line is computed client-side from `counts` now
     // (never the kernel's own English `detail` prose, which carried "(s)" plurals and, for
-    // `runtime`, an internal design-doc section number) — only `defaultWorkspace` still reads
-    // `detail` (it alone carries the workspace's name).
+    // `runtime`, an internal design-doc section number). S8 W3 F1: `defaultWorkspace` now also
+    // reads client-side, from `list_workspaces`'s `isDefault` row (`defaultWorkspaceRow` above)
+    // instead of the kernel's own `detail` — see `checklistDetail`'s doc comment.
     expect(checklist.textContent).toContain('5 个可用模型');
     expect(checklist.textContent).toContain('Acme');
     expect(checklist.textContent).toContain('当前经主机配置');

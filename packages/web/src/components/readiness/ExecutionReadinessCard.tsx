@@ -1,9 +1,8 @@
 import type { ExecutionReadinessWire } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
-import { Button } from '../kit/button.js';
+import { ErrorBanner } from '../kit/error-banner.js';
 import { DashboardCard } from '../kit/section.js';
 import {
   missingCauseText,
@@ -39,14 +38,6 @@ export interface ExecutionReadinessCardProps {
  * up may read their own (`execution_readiness`'s `minRole:'member'`); only an operator/owner may
  * pass another principal's id, which this card does not do (the optional member picker the task
  * brief allows is left for a follow-up — see the PR report's assumptions).
- *
- * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
- * error-banner rendering is a small local replica of `ui/ErrorBanner` over the same CSS classes —
- * not a new dependency, just no component-wrapper import (same technique `components/access/
- * GrantGateForm.tsx` / `components/connect/EnableGateConfirm.tsx` use). No Tailwind utility class
- * appears here that `components/kit/*` does not already use — this file is outside Tailwind's
- * `@source` scope (`styles/tailwind.css`), so an arbitrary utility class here would silently not
- * exist in the built CSS.
  */
 export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
   const t = useT();
@@ -59,10 +50,11 @@ export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
           {t('正在检查执行就绪…', 'Checking execution readiness…')}
         </p>
       ) : readiness.state.status === 'error' ? (
-        <LocalErrorBanner
+        <ErrorBanner
           error={readiness.state.error}
           title={t('无法加载执行就绪状态', 'Could not load execution readiness')}
           onRetry={() => void readiness.reload()}
+          retryLabel={t('重试', 'Retry')}
           testId="execution-readiness-error"
         />
       ) : (
@@ -116,48 +108,6 @@ function ExecutionReadinessBody({ data }: { readonly data: ExecutionReadinessWir
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-/** A small local `ui/ErrorBanner` replica (with retry, over `components/kit/button`) — this file
- *  may not import `components/ui/*`. */
-function LocalErrorBanner({
-  error,
-  title,
-  onRetry,
-  testId,
-}: {
-  readonly error: unknown;
-  readonly title?: string;
-  readonly onRetry?: () => void;
-  readonly testId?: string;
-}) {
-  const t = useT();
-  const described = describeError(error);
-  return (
-    <div
-      className="error-banner"
-      role="alert"
-      data-testid={testId}
-      data-error-code={described.code}
-    >
-      <div className="error-banner-body">
-        <div className="error-banner-title">
-          <span>{title ?? described.title}</span>
-          <code className="error-banner-code">{described.code}</code>
-        </div>
-        {described.message && described.message !== described.title ? (
-          <p className="error-banner-message">{described.message}</p>
-        ) : null}
-      </div>
-      {onRetry ? (
-        <div className="error-banner-actions">
-          <Button variant="secondary" size="s" onClick={onRetry}>
-            {t('重试', 'Retry')}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

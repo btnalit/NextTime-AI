@@ -117,7 +117,9 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     await page.goto('/');
     await reachLoginForm(page);
     await loginWithPassword(page, ownerLogin, ownerPassword);
-    await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
+    await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected', {
+      timeout: 15_000,
+    });
     await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
 
     await page.getByRole('button', { name: /登出/ }).click();
@@ -164,7 +166,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
       await page.locator('#cp-current-password').fill(oldPassword);
       await page.getByRole('button', { name: /更改密码/ }).click();
     }
-    await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
+    await expect(wsStatus).toHaveAttribute('data-status', 'connected', { timeout: 15_000 });
 
     await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
@@ -172,7 +174,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     // Sign in again with the NEW password.
     await reachLoginForm(page);
     await loginWithPassword(page, tempLogin, newPassword);
-    await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
+    await expect(wsStatus).toHaveAttribute('data-status', 'connected', { timeout: 15_000 });
   });
 
   test('5 wrong passwords lock the admin account; a 6th, correct attempt still shows the lock message', async ({

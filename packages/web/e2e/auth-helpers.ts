@@ -14,7 +14,7 @@ import { type Page, expect } from '@playwright/test';
  * password for an already-existing user.
  */
 export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
-  const forgetKey = page.getByRole('button', { name: 'Forget key' });
+  const forgetKey = page.getByRole('button', { name: '清除密钥' });
   const apiKeySummary = page.getByText('用 API key 登录');
   const passwordLoginButton = page.getByRole('button', { name: 'Log in' });
 
@@ -48,7 +48,9 @@ export async function loginWithApiKey(page: Page, apiKey: string): Promise<void>
   }
   await page.getByPlaceholder('sk-...').fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
+  await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected', {
+    timeout: 15_000,
+  });
 }
 
 /** Fills/submits `LoginPage`'s primary password form. Assumes `reachLoginForm` has already

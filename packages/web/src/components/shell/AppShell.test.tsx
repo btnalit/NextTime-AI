@@ -125,13 +125,13 @@ describe('AppShell', () => {
     expect(screen.getByTestId('nav-section-use')).toBeTruthy();
   });
 
-  it('apiKey session: the footer falls back to the caller principal name and offers Forget key', async () => {
+  it('apiKey session: the footer falls back to the caller principal name and offers 清除密钥', async () => {
     const http = scriptedHttp(baseHandlers());
     renderShell(http, { authMode: 'apiKey', selectedWorkspaceId: undefined });
     const user = await screen.findByTestId('current-user');
     expect(user.textContent).toContain('Alice (principal)');
     expect(user.getAttribute('title')).toBe('Alice (principal)');
-    expect(screen.getByRole('button', { name: /Forget key/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /清除密钥/ })).toBeTruthy();
     // apiKey always has a workspace in scope: 治理 shows for an owner.
     expect(screen.getByTestId('nav-section-govern')).toBeTruthy();
   });
@@ -189,8 +189,9 @@ describe('AppShell', () => {
       expect(screen.getByText('对话')).toBeTruthy(); // pageTitle for active="chats"
       // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status must stay visible
       // at this width even though the sidebar that used to carry it is gone — SILENT_PUSH_SOURCE
-      // (this test's PushSource) reports 'closed', i.e. "Disconnected".
-      expect(screen.getByTestId('ws-status').textContent).toBe('Disconnected');
+      // (this test's PushSource) reports 'closed', i.e. `data-status="closed"` (S8 W3 F1: the
+      // visible text is now bilingual via `t()`, so the attribute is the stable selector).
+      expect(screen.getByTestId('ws-status').getAttribute('data-status')).toBe('closed');
 
       expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.click(opener);
