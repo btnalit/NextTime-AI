@@ -30,6 +30,11 @@
 --
 -- Runner ordering / advisory lock: same module (`worker`), same key as 0001/0002 — locks are
 -- per-module, not per-file (0002's own header comment documents the identical precedent).
+-- Scope of the trigger: only the application role. `grant delete` below is new for
+-- `nexttime_app`, so that is the role the "only a draft row" rule must bind. The workspace purge
+-- cascade (`application/platform/purge-workspace.ts`, also behind the `delete-workspace` CLI)
+-- runs with `skipRoleSwitch` on the connection's own login role and must still remove every row
+-- of a purged workspace, published definitions included — gating it here broke purge in CI.
 select pg_advisory_xact_lock(7241000501);
 
 grant delete on worker_definitions to nexttime_app;
@@ -39,7 +44,7 @@ grant delete on procedures to nexttime_app;
 create or replace function worker_definitions_block_non_draft_delete() returns trigger
 language plpgsql as $$
 begin
-  if old.status <> 'draft' then
+  if current_user = 'nexttime_app' and old.status <> 'draft' then
     raise exception
       'worker_definitions: only a draft row may be deleted, not % (I16/I12)', old.status;
   end if;
@@ -54,7 +59,7 @@ create or replace trigger worker_definitions_only_draft_delete
 create or replace function skills_block_non_draft_delete() returns trigger
 language plpgsql as $$
 begin
-  if old.status <> 'draft' then
+  if current_user = 'nexttime_app' and old.status <> 'draft' then
     raise exception 'skills: only a draft row may be deleted, not % (I16/I12)', old.status;
   end if;
   return old;
@@ -68,7 +73,7 @@ create or replace trigger skills_only_draft_delete
 create or replace function procedures_block_non_draft_delete() returns trigger
 language plpgsql as $$
 begin
-  if old.status <> 'draft' then
+  if current_user = 'nexttime_app' and old.status <> 'draft' then
     raise exception 'procedures: only a draft row may be deleted, not % (I16/I12)', old.status;
   end if;
   return old;
