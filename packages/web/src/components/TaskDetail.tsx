@@ -228,6 +228,37 @@ export function TaskDetail({
               </div>
             </details>
           ) : null}
+          {contract.artifacts.length > 0 ? (
+            <details className="disclosure" data-testid="task-artifacts">
+              <summary>{t('产物', 'Artifacts')}</summary>
+              <div className="disclosure-body stack-s">
+                {contract.artifacts.map((artifact, index) => (
+                  <div
+                    key={`${artifact.path}-${index}`}
+                    className="stack-s"
+                    data-testid="task-artifact-row"
+                  >
+                    <div className="row-wrap text-small">
+                      <span className="mono">{artifact.path}</span>
+                      {artifact.description ? (
+                        <span className="text-3">— {artifact.description}</span>
+                      ) : null}
+                    </div>
+                    {artifact.content !== undefined ? (
+                      <pre className="code-block">{artifact.content}</pre>
+                    ) : (
+                      <p className="text-3 text-small">
+                        {t(
+                          '未随结果提交内容，容器已退出，无法再读取。',
+                          'No content was submitted with the result, and the container it ran in is gone — not retrievable.',
+                        )}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
         </div>
       ) : task.result !== null && task.result !== undefined ? (
         <div className="stack-s">

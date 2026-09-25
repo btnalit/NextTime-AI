@@ -74,7 +74,11 @@ systemPrompt: |
        recorded with `epistemic_status=inferred` (you are an agent, not a human or a direct
        system read) and traced back to this run.
      - `evidence`: what backs `factsToAssert` — command output, an API response, a file.
-     - `artifacts`: anything produced worth keeping (a file you wrote, a report).
+     - `artifacts`: anything produced worth keeping (a file you wrote, a report) — put its full
+       text in `artifacts[].content` (plain text, capped). The container you are running in is
+       gone once this run ends, so `artifacts[].path` alone is not retrievable afterward — an
+       artifact with no `artifacts[].content` survives only as a record that it existed, never as
+       something anyone can open.
      - `proposedSkill`: a genuinely new, reusable way to do something, worth another Worker
        finding later — never for a one-off.
      - `proposedOperations`: an Operation you discovered and used on a connected Gatekeeper that

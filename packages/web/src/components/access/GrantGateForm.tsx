@@ -42,10 +42,9 @@ export interface GrantGateFormProps {
  * 必须显式选择并走确认"); nothing here fires `grant_capability` until the caller presses 授予.
  *
  * One `grant_capability` call per selected gate (the capability takes one `resourceId` at a time);
- * `resourceId` omitted entirely for the "全部门" case. `scope` is never sent: nothing in the kernel
- * enforces `capability_grants.scope` today (it is stored and echoed back, never read by any
- * authorization check), so a per-Operation checklist would be a control that narrows nothing. A
- * grant covers the whole gate, and the Operations list says so instead of offering a choice.
+ * `resourceId` omitted entirely for the "全部门" case. There is no `scope`: the kernel never
+ * enforced `capability_grants.scope`, and since 2026-09-25 `grant_capability` no longer accepts it
+ * (leftover 80). A grant covers the whole gate, and the Operations list says so.
  */
 export function GrantGateForm({
   http,

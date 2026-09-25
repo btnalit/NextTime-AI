@@ -1527,8 +1527,11 @@ const governanceCapabilities: readonly Capability[] = [
     // future resource types (`worker_definition`, `skill`) follow the same shape. `resourceId` is
     // optional — a workspace-wide grant (e.g. an approval-queue `action_kind` grant, which has no
     // single resource instance) omits it, matching the DB's own nullable `resource_id` column
-    // (migrations/governance/00NN_capability_grants_resource_type.sql). `scope` keeps only genuine
-    // additional qualifiers now that the id has its own first-class field.
+    // (migrations/governance/00NN_capability_grants_resource_type.sql). No `scope` param: the
+    // stored `capability_grants.scope` was never read by any authorization check, so accepting it
+    // offered a narrowing that did not exist (leftover 80 — maintainer 2026-09-25: no per-Operation
+    // narrowing; stop accepting the param). Historical rows still echo their stored `scope` back
+    // in `CapabilityGrantWire`, shown as a note.
     name: 'grant_capability',
     group: 'governance',
     mode: 'execute',
@@ -1539,7 +1542,6 @@ const governanceCapabilities: readonly Capability[] = [
         principalId: id,
         resourceType: z.string(),
         resourceId: id.optional(),
-        scope: jsonRecord.optional(),
       })
       .strict(),
     resultSchema: wire.CapabilityGrantWireSchema,

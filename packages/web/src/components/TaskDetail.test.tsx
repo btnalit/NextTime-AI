@@ -129,6 +129,29 @@ describe('TaskDetail', () => {
     expect(document.querySelector('.code-block')?.textContent).toContain('"raw": true');
   });
 
+  it('renders artifacts: inlined content when present, an explicit "not retrievable" message otherwise (S8 W5-A, leftover 74)', () => {
+    renderDetail({
+      status: 'completed',
+      result: {
+        summary: 'ok',
+        findings: [],
+        factsToAssert: [],
+        evidence: [],
+        artifacts: [
+          { path: '/workspace/report.md', description: 'inventory', content: '# Report\nok' },
+          { path: '/workspace/legacy.txt' },
+        ],
+      },
+    });
+    const rows = screen.getAllByTestId('task-artifact-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain('/workspace/report.md');
+    expect(rows[0]?.textContent).toContain('inventory');
+    expect(rows[0]?.textContent).toContain('# Report');
+    expect(rows[1]?.textContent).toContain('/workspace/legacy.txt');
+    expect(rows[1]?.textContent).toMatch(/not retrievable|无法再读取/);
+  });
+
   it('lists linked approvals from list_action_requests{taskId}, opening one via onOpenApproval; shows the failure reason', async () => {
     const http = scriptedHttp({
       list_action_requests: (params) => {
