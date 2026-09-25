@@ -272,7 +272,7 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
     const prompt = `委派给 ${WORKER_TEMPLATE_NAME} 重启测试容器 ${Date.now().toString(36)}`;
     await page.getByPlaceholder('输入消息…').fill(prompt);
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: '发送' }).click();
     await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected');
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,

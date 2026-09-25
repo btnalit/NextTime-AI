@@ -256,7 +256,7 @@ async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
   // Only `send()` puts the reducer into `running` (a `chat.stream` for an unknown turnId is
   // ignored), so the stream is started the way the page starts it.
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
   await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
   // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '回复中'.
   await screen.findByText('回复中');

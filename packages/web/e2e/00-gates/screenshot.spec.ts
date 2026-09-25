@@ -59,7 +59,7 @@ test.describe('S8 W1-B screenshot gate', () => {
     await page.locator('header').getByRole('button', { name: '新对话' }).click();
     await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
     await page.getByPlaceholder('输入消息…').fill(CHAT_FIXTURE_PROMPT);
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: '发送' }).click();
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,
     });

@@ -27,6 +27,7 @@ import { ToolCallRowView } from './ToolCallRowView.js';
 import { ChatHeader } from './chat/ChatHeader.js';
 import { useRestoreChat } from './chat/ChatLifecycleActions.js';
 import { MessageBody } from './chat/MessageBody.js';
+import { MessageReferences } from './chat/MessageReferences.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { FollowPill } from './ui/FollowPill.js';
@@ -473,6 +474,9 @@ export function ChatPage({
         data-role={message.role}
       >
         <MessageBody messageRole={message.role} text={message.text} />
+        {message.role === 'assistant' ? (
+          <MessageReferences http={http} text={message.text} />
+        ) : null}
         <div className="message-meta">
           <span>{message.role}</span>
           <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
@@ -586,7 +590,7 @@ export function ChatPage({
               size="s"
               icon="send"
               iconOnly
-              aria-label="Send"
+              aria-label={t('发送', 'Send')}
               disabled={composerDisabled || composerText.trim().length === 0}
               loading={busy && turn.status !== 'running'}
             />
