@@ -27,16 +27,19 @@ import {
  * 状态覆盖:
  *   - 空: 用 `createFreshWorkspace` 建一个全新工作区（不是每个 spec 共用、会不断累积状态的
  *     `ci-e2e`），第 1 步之前断言 系统接入（`gatekeepers-empty`，`available-gate-ci-fixture-mcp`
- *     还没有"已启用"链接）、能力目录 · Worker（`catalog-empty`）、访问（`grants-empty`）都还是空的。
- *   - 错: 产品今天没有"委派在提交前被挡住"这个机制（doc comment 原文设想的行为——W1-C 的
- *     `execution_readiness` 目前只是一个读模型，尚未接到对话的发送按钮上，development-tasks.md
- *     §5e）；断言这一点不成立，会断言一个不存在的产品行为。退而求其次、但仍然真实的一件事：本旅程
- *     的步骤顺序天然会经过"门已授权、Worker 还未发布"这个中间状态（第 1、2 步之后，第 3 步之
- *     前）——在那一刻重新检查一次 能力目录 · Worker 仍是 `catalog-empty`，验证的是"这个缺口目前是
- *     被看见的（没有伪造已就绪），不是被拦下的"，这是产品今天真正能验证的部分。PR #273
- *     （`feat/s8-w2u3-overview-readiness`，把 `execution_readiness` 接上页面）在本 PR 推送前若已
- *     合并，见下方对应位置补充的 `execution-readiness-missing`/`-ready` 断言；未合并则按约定不加，
- *     并在 PR 描述里说明。
+ *     还没有"已启用"链接，`execution-prerequisite-bar` 可见）、能力目录 · Worker（`catalog-empty`）、
+ *     访问（`grants-empty`）都还是空的，以及 对话 上的 `ExecutionReadinessCard`
+ *     （`execution-readiness-missing`）恰好列出两项缺口——"还没有可以作用的系统"
+ *     （`no_enabled_gate`）和"没有可委派的 Worker"（`no_published_worker`），按可见的缘由文案断言，
+ *     不断言内部 `code`（`packages/web/src/components/readiness/readiness-copy.ts`）。
+ *   - 错: 产品今天没有"委派在提交前被挡住"这个机制（W1-C 的 `execution_readiness` 是读模型，没有接
+ *     到对话的发送按钮上）；断言这一点不成立，会断言一个不存在的产品行为。退而求其次、但仍然真实的
+ *     一件事：本旅程的步骤顺序天然会经过"门已授权、Worker 还未发布"这个中间状态（第 1、2 步之后，
+ *     第 3 步之前）——在那一刻 能力目录 · Worker 仍是 `catalog-empty`，`execution-prerequisite-bar`
+ *     和对话页的 readiness card 都只剩"没有可委派的 Worker"这一项缺口（门已启用/已授权那两条缺口
+ *     消失了）——PR #273（`feat/s8-w2u3-overview-readiness`，已合并 `62a09a5`）把
+ *     `execution_readiness` 接上页面后，这个"缺口收窄"的过程本身就是产品今天能验证的、最接近"错"
+ *     状态原文设想的东西：不是拦下提交，是如实反映还差什么。
  *   - 无权限: 跳过——需要平台管理员再建一个 member 角色的第三个主体、登入、切工作区，是这条旅程
  *     已有的"建号 → 登入 → 强制改密 → 选工作区"链路（第 0 步）的又一整套重复，不 cheap；
  *     `governance.spec.ts`/`06-add-member.spec.ts` 已经从别的角度覆盖了"member 看不到治理分组"。
@@ -47,7 +50,25 @@ import {
  *   - 从一个全新工作区、不碰 SQL/CLI，一个人凭页面上的信息能把"系统接入 → 授权 → 发布 Worker"
  *     走完，并在 对话 里发出一条消息、看到入口 agent 的回复。
  *   - 这条旅程测的不是"委派真的执行了"（见下），而是"委派的三个前置条件——门已启用、已授权给
- *     会说话的这个 owner、Worker 已发布——全部可以只凭 UI 完成"，加上"对话本身是通的"。
+ *     会说话的这个 owner、Worker 已发布——全部可以只凭 UI 完成"，加上"对话本身是通的"；发布 Worker
+ *     后 `execution_readiness` 自己也认为"已就绪"（`execution-readiness-ready`，`对话` 页）、三页的
+ *     `execution-prerequisite-bar` 也随之消失——见下方"执行就绪为什么在这里会变 ready"关于
+ *     `computeChildHandleScope` 的说明。
+ *
+ * 执行就绪为什么在这里会变 ready（读 `packages/kernel/src/application/gateway/
+ * execution-readiness-handler.ts` + `application/task/handle-mint.ts` 后的结论）：
+ *   `ready = workers.some(w => w.delegable)`；`delegable` 是 `computeChildHandleScope` 对这个
+ *   WorkerDefinition 做的一次真实 dry run 不抛 `InvokeWorkerAttenuationError`。ops-runner 模板不显式
+ *   声明 `capabilities`，落到 `defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES)`——"ceiling 去掉
+ *   每一个 execute-class 名字"（`handle-mint.ts` 自己的注释），`request_action` 正是那个唯一的
+ *   execute-class 名字（`EXECUTE_CLASS_CAPABILITY_NAMES`）。`computeChildHandleScope` 只在"声明了一个
+ *   execute-class 能力、调用方没有"或"请求执行访问的门不在调用方范围内（且请求了 execute）"两种情况下
+ *   才抛错——ops-runner 默认两者都不触发（`wantsExecute` 恒为 false），所以它勾选的门即使没被授权，
+ *   `declaredGates` 里那个门也只是被静默丢弃（"observe-only 的门可以不经凭证"，同一份源码的注释），
+ *   不会让整个调用失败。也就是说，只要发布了这个未改过 `capabilities` 的 ops-runner Worker，`ready`
+ *   就会变真——门授权与否本身不是它变 ready 的必要条件，只是本旅程的步骤顺序里授权发生在发布之前，
+ *   所以观察不到"发布了但没授权仍然 ready"这一半。这是从源码读出的真实结论，不是猜测——旅程的断言
+ *   顺序（先授权、后发布）不会因此产生假阳性。
  *
  * 今天为什么走不到"委派"（比"Worker 容器起不来"更早一层的原因，读代码后的结论，不是猜测）：
  *   `.github/workflows/e2e.yml` 给这个 job 的是 `AGENT_RUNTIME=fake`（`deploy/ci/env.ci.
@@ -75,6 +96,14 @@ const GATE_DISPLAY_NAME = 'CI fixture MCP';
 const OBSERVE_OP = 'list_things';
 const EXECUTE_OP = 'restart_thing';
 const WORKER_TEMPLATE_NAME = 'ops-runner';
+
+// The exact zh cause text `readiness-copy.ts`'s `missingCauseText` renders for each code — asserted
+// on directly (never the raw `code`, per this lane's own dispatch instruction and the component's
+// own doc comment "ui-audit S14 内部术语外泄").
+const READINESS_NO_ENABLED_GATE_TEXT =
+  '入口 agent 还没有任何可以作用的系统，先在系统接入启用一个门。';
+const READINESS_NO_PUBLISHED_WORKER_TEXT =
+  '入口 agent 委派任务时找不到可用的 Worker，先发布一个 Worker 定义（可从 ops-runner 模板开始）。';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -109,6 +138,7 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.getByTestId('gatekeepers-empty')).toBeVisible();
     await expect(availableRow).toBeVisible();
     await expect(enableButton).toBeVisible();
+    await expect(page.getByTestId('execution-prerequisite-bar')).toBeVisible({ timeout: 15_000 });
 
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
@@ -116,6 +146,20 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
 
     await goToByLabel(page, '访问');
     await expect(page.getByTestId('grants-empty')).toBeVisible();
+
+    // 对话页的 ExecutionReadinessCard: 全新工作区里两项都缺——没有已启用的门、没有已发布的 Worker
+    // （门授权的缺口只会在有至少一个已发布 Worker 声明这个门时才单独列出——见
+    // execution-readiness-handler.ts 的 `no_grant` 分支——这里还没有任何 Worker，所以不会出现）。
+    await goToByLabel(page, '对话');
+    const readinessBody = page.getByTestId('execution-readiness-body');
+    await expect(readinessBody).toBeVisible({ timeout: 15_000 });
+    const readinessMissing = readinessBody.getByTestId('execution-readiness-missing');
+    await expect(readinessMissing).toBeVisible();
+    await expect(readinessMissing.getByTestId('execution-readiness-missing-item')).toHaveCount(2, {
+      timeout: 15_000,
+    });
+    await expect(readinessMissing).toContainText(READINESS_NO_ENABLED_GATE_TEXT);
+    await expect(readinessMissing).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
 
     // --- 1. 系统接入: 启用 ci-fixture-mcp 到本工作区 ------------------------------------------
     await goToByLabel(page, '系统接入');
@@ -171,6 +215,28 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(page.getByTestId('catalog-empty')).toBeVisible();
+    // 门已启用/已授权那两项缺口消失了，只剩"没有已发布 Worker"——同一次页面加载上顺带断言
+    // ExecutionPrerequisiteBar（不用额外导航）。
+    const catalogPrereqBar = page.getByTestId('execution-prerequisite-bar');
+    await expect(catalogPrereqBar).toBeVisible({ timeout: 15_000 });
+    await expect(catalogPrereqBar).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
+    await expect(catalogPrereqBar).not.toContainText(READINESS_NO_ENABLED_GATE_TEXT);
+
+    await goToByLabel(page, '对话');
+    const readinessBodyMid = page.getByTestId('execution-readiness-body');
+    await expect(readinessBodyMid).toBeVisible({ timeout: 15_000 });
+    const readinessMissingMid = readinessBodyMid.getByTestId('execution-readiness-missing');
+    await expect(readinessMissingMid).toBeVisible();
+    await expect(readinessMissingMid.getByTestId('execution-readiness-missing-item')).toHaveCount(
+      1,
+      { timeout: 15_000 },
+    );
+    await expect(readinessMissingMid).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
+    await expect(readinessMissingMid).not.toContainText(READINESS_NO_ENABLED_GATE_TEXT);
+
+    // 回到 能力目录 · Worker 继续第 3 步——上面为了读 readiness card 离开过一次页面。
+    await goToByLabel(page, '能力目录');
+    await page.getByRole('tab', { name: 'Worker', exact: true }).click();
 
     // --- 3. 能力目录 · Worker: 从模板创建（ops-runner），勾选这个门，保存草稿、发布 -------------
     await page.getByTestId('workers-template-button').click();
@@ -219,8 +285,19 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.locator('.message-assistant .message-text')).toHaveText(expectedReply);
 
     // --- 最强的诚实收尾: 委派的三个前置条件——启用/授权/已发布 Worker——全部可凭 UI 确认 ---------
+    // 回到对话列表（离开当前这个具体对话的详情页）重新挂载一次，读一次新鲜的 execution_readiness——
+    // 见本文件顶部"执行就绪为什么在这里会变 ready"：已发布的 ops-runner Worker 现在应该是 delegable
+    // 的，`ready` 应该是 true。
+    await goToByLabel(page, '对话');
+    await expect(page.getByTestId('execution-readiness-body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('execution-readiness-ready')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('execution-readiness-missing')).toHaveCount(0);
+
     await goToByLabel(page, '系统接入');
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible();
+    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
+      timeout: 15_000,
+    });
     await goToByLabel(page, '访问');
     await expect(
       page
@@ -228,11 +305,17 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
         .getByTestId('grant-row')
         .filter({ hasText: GATE_DISPLAY_NAME }),
     ).toHaveCount(1);
+    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
+      timeout: 15_000,
+    });
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(
       page.getByTestId('catalog-list').getByText(WORKER_TEMPLATE_NAME, { exact: true }),
     ).toBeVisible();
+    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
+      timeout: 15_000,
+    });
 
     // --- 窄屏 (768px): Worker 的"新建草稿"（空白表单）在窄屏下也能走完 ------------------------
     await page.setViewportSize({ width: 768, height: 900 });
