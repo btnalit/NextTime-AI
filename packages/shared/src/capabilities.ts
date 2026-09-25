@@ -1672,9 +1672,11 @@ const governanceCapabilities: readonly Capability[] = [
       'Whether principalId’s (default: the caller’s own) entry agent can currently delegate ' +
       'execution work — every enabled Gatekeeper in this workspace with whether this principal ' +
       'holds a grant for it and how many published Operations it exposes; every published ' +
-      '`kind=worker` WorkerDefinition with whether it is delegable by this principal right now ' +
-      'and what blocks it when not; `ready` and a `missing[]` rollup of machine codes ' +
-      '(no_enabled_gate / no_grant / no_published_worker) with the ids involved. An operator+ ' +
+      '`kind=worker` WorkerDefinition with whether it is delegable by this principal right now, ' +
+      'how many gates the delegated Worker would actually reach, and what blocks it when not; ' +
+      '`ready` (some Worker is delegable and reaches at least one gate) and a `missing[]` rollup ' +
+      'of machine codes (no_enabled_gate / no_grant / no_published_worker / no_worker_gate) with ' +
+      'the ids involved. An operator+ ' +
       'may pass another member’s principalId (same visibility floor as list_grants); any other ' +
       'caller may only check their own.',
   },

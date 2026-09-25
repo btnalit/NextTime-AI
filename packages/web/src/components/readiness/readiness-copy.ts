@@ -49,6 +49,11 @@ export function missingCauseText(
         '入口 agent 委派任务时找不到可用的 Worker，先发布一个 Worker 定义（可从 ops-runner 模板开始）。',
         'Your entry agent finds no Worker to delegate to — publish a Worker definition first (the ops-runner template is a quick start).',
       );
+    case 'no_worker_gate':
+      return t(
+        '委派出去的 Worker 碰不到任何系统：在 Worker 定义里勾选已授权的门，再发布新版本。',
+        'A delegated Worker reaches no system: tick a granted gate in the Worker definition, then publish a new version.',
+      );
   }
 }
 
@@ -60,6 +65,7 @@ export function missingLinkHref(item: ExecutionReadinessMissingWire): string {
     case 'no_grant':
       return hrefs.access();
     case 'no_published_worker':
+    case 'no_worker_gate':
       return hrefs.catalog(CATALOG_WORKERS_TAB);
   }
 }
@@ -72,6 +78,7 @@ export function missingLinkLabel(item: ExecutionReadinessMissingWire, t: Transla
     case 'no_grant':
       return t('去访问', 'Go to Access');
     case 'no_published_worker':
+    case 'no_worker_gate':
       return t('去能力目录', 'Go to Catalog');
   }
 }

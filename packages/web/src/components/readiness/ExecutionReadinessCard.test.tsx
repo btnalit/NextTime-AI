@@ -63,6 +63,7 @@ describe('ExecutionReadinessCard', () => {
               version: 1,
               name: 'Ops runner',
               delegable: true,
+              reachableGateCount: 1,
               blockedBy: [],
             },
           ],
@@ -114,6 +115,18 @@ describe('ExecutionReadinessCard', () => {
     render(<ExecutionReadinessCard http={http} />);
     const item = await screen.findByTestId('execution-readiness-missing-item');
     expect(item.textContent).toContain('委派任务时找不到可用的');
+    const link = item.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('#/govern/catalog/workers');
+  });
+
+  it('no_worker_gate: says the delegated Worker reaches no system, links to 能力目录 · Workers', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ ready: false, missing: [{ code: 'no_worker_gate' }] }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const item = await screen.findByTestId('execution-readiness-missing-item');
+    expect(item.textContent).not.toContain('no_worker_gate');
+    expect(item.textContent).toContain('碰不到任何系统');
     const link = item.querySelector('a');
     expect(link?.getAttribute('href')).toBe('#/govern/catalog/workers');
   });

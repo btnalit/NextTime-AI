@@ -3114,7 +3114,8 @@
                 "enum": [
                   "no_enabled_gate",
                   "no_grant",
-                  "no_published_worker"
+                  "no_published_worker",
+                  "no_worker_gate"
                 ],
                 "type": "string"
               },
@@ -3150,7 +3151,8 @@
                       "enum": [
                         "no_enabled_gate",
                         "no_grant",
-                        "no_published_worker"
+                        "no_published_worker",
+                        "no_worker_gate"
                       ],
                       "type": "string"
                     },
@@ -3177,6 +3179,10 @@
               "name": {
                 "type": "string"
               },
+              "reachableGateCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "version": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
@@ -3186,6 +3192,7 @@
               "definitionId",
               "version",
               "delegable",
+              "reachableGateCount",
               "blockedBy"
             ],
             "type": "object"
