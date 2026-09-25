@@ -19,11 +19,7 @@
   "members": {},
   "models": {},
   "platform-audit": {},
-  "platform-integrations": {
-    "select-name": {
-      "count": 5
-    }
-  },
+  "platform-integrations": {},
   "platform-models": {},
   "platform-modules": {},
   "platform-overview": {},
