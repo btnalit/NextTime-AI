@@ -164,6 +164,9 @@ export interface OperationCatalogRow {
   /** Always `1` today — no per-Operation revision counter exists yet (`toWireOperationSummary`'s
    *  own doc comment). Kept on the wire type so a future real version renders without a UI change. */
   readonly version?: number;
+  /** S8 W3-K1 (leftover 81) — absent or blank means "未填写描述", never coerced to `''` here so the
+   *  page can tell "no description" from "kernel omitted the field" the same way either way. */
+  readonly description?: string;
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see

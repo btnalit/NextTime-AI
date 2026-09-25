@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { type WorkerDefinitionForm, opsRunnerTemplateForm } from '../lib/catalog.js';
@@ -28,6 +28,15 @@ import { ProcedureEditor } from './catalog/ProcedureEditor.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
 import { Confirm } from './kit/confirm.js';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './kit/dialog.js';
 import { PageHeader } from './kit/page-header.js';
 import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
@@ -35,6 +44,7 @@ import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
+import { Field, Textarea, describedBy } from './ui/Field.js';
 import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -254,6 +264,11 @@ function DeprecateConfirm({
   );
 }
 
+/** S8 W3-K1 (leftover 81): the bound `update_operation_description`'s own `paramsSchema` enforces
+ *  (`packages/shared/src/capabilities.ts`) — mirrored here only so the textarea can stop the owner
+ *  before a doomed round trip, not as the source of truth. */
+const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
+
 function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const permissions = usePermissions();
@@ -265,6 +280,14 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
   const gatekeeperNames = useGatekeeperNames(http);
   const [busy, setBusy] = useState<string | null>(null);
+  // S8 W3-K1 (leftover 81): the "编辑描述" dialog — one instance shared across rows, controlled by
+  // which row (if any) is being edited, same "single shared surface, not one-per-row" convention
+  // `GrantGateDrawer`/`Confirm` already use elsewhere in this codebase.
+  const [editingRow, setEditingRow] = useState<OperationCatalogRow | null>(null);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descriptionError, setDescriptionError] = useState<unknown | null>(null);
+  const descriptionFieldId = useId();
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
@@ -300,6 +323,42 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
       });
     } finally {
       setBusy(null);
+    }
+  }
+
+  function openDescriptionEditor(row: OperationCatalogRow): void {
+    setEditingRow(row);
+    setDescriptionDraft(row.description ?? '');
+    setDescriptionError(null);
+  }
+
+  function closeDescriptionEditor(): void {
+    setEditingRow(null);
+    setDescriptionError(null);
+  }
+
+  async function saveDescription(): Promise<void> {
+    if (!editingRow) return;
+    setSavingDescription(true);
+    setDescriptionError(null);
+    try {
+      await http.call('update_operation_description', {
+        gatekeeperId: editingRow.gatekeeperId,
+        name: editingRow.name,
+        description: descriptionDraft,
+      });
+      toast.push({
+        tone: 'ok',
+        title: t('描述已更新', 'Description updated'),
+        description: editingRow.name,
+      });
+      setEditingRow(null);
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('update_operation_description');
+      setDescriptionError(err);
+    } finally {
+      setSavingDescription(false);
     }
   }
 
@@ -340,14 +399,32 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
               leading={<StatusChip machine="publishable" status={row.status} size="s" />}
               title={
                 <>
-                  <span className="mono truncate">{row.name}</span>
-                  {row.mode ? (
-                    <StatusChip machine="operationMode" status={row.mode} size="s" />
-                  ) : null}
-                  {/* S8 W1-A11 (audit L3): through the shared StatusChip machine, not a bare tag. */}
-                  {row.autoApprovable ? (
-                    <StatusChip machine="autoApprovable" status="true" size="s" />
-                  ) : null}
+                  <div className="row-wrap">
+                    <span className="mono truncate">{row.name}</span>
+                    {row.mode ? (
+                      <StatusChip machine="operationMode" status={row.mode} size="s" />
+                    ) : null}
+                    {/* S8 W1-A11 (audit L3): through the shared StatusChip machine, not a bare tag. */}
+                    {row.autoApprovable ? (
+                      <StatusChip machine="autoApprovable" status="true" size="s" />
+                    ) : null}
+                  </div>
+                  {/* S8 W3-K1 (leftover 81, audit CO1): a blank description reads "未填写描述", not
+                   *  the generic "—" every other missing-value field in this codebase uses — this
+                   *  is a call to action (编辑描述 below), not just an absent fact. */}
+                  <div
+                    className="text-3 text-small truncate"
+                    title={
+                      row.description && row.description.trim().length > 0
+                        ? row.description
+                        : undefined
+                    }
+                    data-testid={`catalog-row-description-${key}`}
+                  >
+                    {row.description && row.description.trim().length > 0
+                      ? row.description
+                      : t('未填写描述', 'No description yet')}
+                  </div>
                 </>
               }
               meta={
@@ -381,36 +458,101 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                 </>
               }
               trailing={
-                !permissions.isDenied('publish_operation') && row.status === 'draft' ? (
-                  <Button
-                    variant="primary"
-                    size="s"
-                    loading={busy === key}
-                    onClick={() => void act(row, 'publish_operation')}
-                  >
-                    {t('发布', 'Publish')}
-                  </Button>
-                ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
-                  <DeprecateConfirm
-                    busy={busy === key}
-                    target={row.name}
-                    impact={
-                      usage
-                        ? [
-                            `${usage.calls} 次调用 calls in the trailing window`,
-                            `${usage.approved} 次批准 approved`,
-                          ]
-                        : undefined
-                    }
-                    onConfirm={() => act(row, 'deprecate_operation')}
-                    testId={`operation-deprecate-confirm-${key}`}
-                  />
-                ) : undefined
+                <div className="row-wrap">
+                  {!permissions.isDenied('publish_operation') && row.status === 'draft' ? (
+                    <Button
+                      variant="primary"
+                      size="s"
+                      loading={busy === key}
+                      onClick={() => void act(row, 'publish_operation')}
+                    >
+                      {t('发布', 'Publish')}
+                    </Button>
+                  ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
+                    <DeprecateConfirm
+                      busy={busy === key}
+                      target={row.name}
+                      impact={
+                        usage
+                          ? [
+                              `${usage.calls} 次调用 calls in the trailing window`,
+                              `${usage.approved} 次批准 approved`,
+                            ]
+                          : undefined
+                      }
+                      onConfirm={() => act(row, 'deprecate_operation')}
+                      testId={`operation-deprecate-confirm-${key}`}
+                    />
+                  ) : null}
+                  {/* S8 W3-K1 (leftover 81): documentation-only, so it is not gated by the
+                   *  publish/deprecate lifecycle above — a draft, published, or deprecated
+                   *  Operation's description can all be edited. */}
+                  {!permissions.isDenied('update_operation_description') ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => openDescriptionEditor(row)}
+                      data-testid={`operation-edit-description-${key}`}
+                    >
+                      {t('编辑描述', 'Edit description')}
+                    </Button>
+                  ) : null}
+                </div>
               }
             />
           );
         })}
       </DataList>
+      <Dialog
+        open={editingRow !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDescriptionEditor();
+        }}
+      >
+        <DialogContent data-testid="operation-description-dialog">
+          <DialogHeader>
+            <DialogTitle>{t('编辑描述', 'Edit description')}</DialogTitle>
+            <DialogDescription className="mono">{editingRow?.name}</DialogDescription>
+          </DialogHeader>
+          <Field
+            id={descriptionFieldId}
+            label={t('描述', 'Description')}
+            hint={t(
+              '说明这个 Operation 做什么——会用于自然语言检索与在目录 / 审批卡片里展示。',
+              "What this Operation does — used for natural-language search and shown wherever it's listed.",
+            )}
+            error={descriptionError !== null ? describeError(descriptionError).message : undefined}
+          >
+            <Textarea
+              id={descriptionFieldId}
+              value={descriptionDraft}
+              onChange={(event) => setDescriptionDraft(event.target.value)}
+              rows={4}
+              maxLength={OPERATION_DESCRIPTION_MAX_LENGTH}
+              invalid={descriptionError !== null}
+              aria-describedby={describedBy(descriptionFieldId, true, descriptionError !== null)}
+              data-testid="operation-description-textarea"
+            />
+          </Field>
+          <DialogFooter>
+            <Button
+              variant="primary"
+              size="s"
+              loading={savingDescription}
+              disabled={descriptionDraft.trim().length === 0}
+              onClick={() => void saveDescription()}
+              data-testid="operation-description-save"
+            >
+              {t('保存', 'Save')}
+            </Button>
+            <DialogClose asChild>
+              <Button variant="ghost" size="s" disabled={savingDescription}>
+                {t('取消', 'Cancel')}
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

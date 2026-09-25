@@ -221,6 +221,111 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('Operations: a blank description shows "未填写描述"; a non-blank one is shown verbatim', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.stop',
+            status: 'published',
+            description: 'Stops a container.',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    expect(rows).toHaveLength(2);
+    expect(screen.getByTestId('catalog-row-description-gk-1::docker.restart').textContent).toBe(
+      '未填写描述',
+    );
+    expect(screen.getByTestId('catalog-row-description-gk-1::docker.stop').textContent).toBe(
+      'Stops a container.',
+    );
+  });
+
+  it('Operations: 编辑描述 opens a dialog prefilled with the current description; saving calls update_operation_description and refreshes the row', async () => {
+    let callCount = 0;
+    const http = scriptedHttp({
+      list_operations: () => {
+        callCount += 1;
+        return {
+          items: [
+            {
+              gatekeeperId: 'gk-1',
+              name: 'docker.restart',
+              status: 'published',
+              description: callCount === 1 ? 'old description' : 'new description',
+            },
+          ],
+        };
+      },
+      get_operation_stats: () => ({ items: [] }),
+      update_operation_description: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          name: 'docker.restart',
+          description: 'new description',
+        });
+        return { gatekeeperId: 'gk-1', name: 'docker.restart', description: 'new description' };
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByTestId('operation-edit-description-gk-1::docker.restart'));
+
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    const textarea = within(dialog).getByTestId(
+      'operation-description-textarea',
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe('old description');
+
+    fireEvent.change(textarea, { target: { value: 'new description' } });
+    fireEvent.click(within(dialog).getByTestId('operation-description-save'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'update_operation_description')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-row-description-gk-1::docker.restart').textContent).toBe(
+        'new description',
+      ),
+    );
+  });
+
+  it('Operations: the Save button is disabled while the draft is blank', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    const saveButton = within(dialog).getByTestId(
+      'operation-description-save',
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(within(dialog).getByTestId('operation-description-textarea'), {
+      target: { value: '   ' },
+    });
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(within(dialog).getByTestId('operation-description-textarea'), {
+      target: { value: 'a real description' },
+    });
+    expect(saveButton.disabled).toBe(false);
+  });
+
   it('Workers tab: Deprecate opens a medium confirm listing the definition name; deprecate_worker_definition fires only on confirm', async () => {
     const http = scriptedHttp({
       list_worker_definitions: () => ({

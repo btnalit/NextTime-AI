@@ -60,6 +60,7 @@ function renderCard(
       operations={[DRAFT_OPERATION]}
       canPublish
       canGrant
+      canRefreshGovernance
       onChanged={vi.fn()}
       onForbidden={onForbidden}
       {...overrides}
@@ -243,5 +244,249 @@ describe('GatekeeperCard grant drawer (J6)', () => {
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
     await waitFor(() => expect(onGrantsChanged).toHaveBeenCalled());
+  });
+});
+
+/** S8 W3-K1 (leftover 79, audit CO2): "按公告刷新治理字段" — preview, per-Operation selection
+ *  (default: every differing one), and a Confirm whose tier depends on whether any selected
+ *  change loosens governance. */
+describe('GatekeeperCard refresh governance fields (leftover 79)', () => {
+  const PLATFORM_INSTANCE = {
+    gateId: 'gate-1',
+    connector: 'docker',
+    displayName: 'Docker prod',
+    transportKind: 'mcp' as const,
+    target: 'docker://prod',
+    status: 'enabled' as const,
+    trust: 'byo' as const,
+    health: 'ok' as const,
+    operationCount: 1,
+    gatekeeperId: 'gk-1',
+  };
+
+  function previewResult(
+    operationsAlreadyPresent: readonly {
+      name: string;
+      existing: { mode: string; blastRadius: string; autoApprovable: boolean; status: string };
+      announced: { mode: string; blastRadius: string; autoApprovable: boolean };
+      differs: boolean;
+    }[],
+  ) {
+    return {
+      gateId: 'gate-1',
+      wouldLink: null,
+      ambiguousCandidates: [],
+      operationsToImport: [],
+      operationsAlreadyPresent,
+    };
+  }
+
+  it('the action is hidden without a platformInstance, and hidden when denied', () => {
+    const http = scriptedHttp();
+    renderCard(http, vi.fn(), { platformInstance: null });
+    expect(screen.queryByTestId('gatekeeper-refresh-governance-button')).toBeNull();
+
+    cleanup();
+    renderCard(http, vi.fn(), {
+      platformInstance: PLATFORM_INSTANCE,
+      canRefreshGovernance: false,
+    });
+    expect(screen.queryByTestId('gatekeeper-refresh-governance-button')).toBeNull();
+  });
+
+  it('loads the preview, defaults the selection to every differing Operation, and a non-loosening refresh uses the medium tier', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: (params) => {
+        expect(params).toEqual({ gateId: 'gate-1' });
+        return previewResult([
+          {
+            name: 'container.restart',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+            differs: true,
+          },
+          {
+            name: 'container.list',
+            existing: {
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            differs: false,
+          },
+        ]);
+      },
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['container.restart'],
+        });
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [
+            {
+              name: 'container.restart',
+              before: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              direction: 'tightened',
+            },
+          ],
+          unchanged: [],
+        };
+      },
+    });
+    const onChanged = vi.fn();
+    renderCard(http, vi.fn(), { platformInstance: PLATFORM_INSTANCE, onChanged });
+
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-button'));
+    const drawer = await screen.findByTestId('gatekeeper-refresh-governance-drawer');
+    // Only the differing Operation is listed — the matching one is not "already present to refresh".
+    const row = await within(drawer).findByTestId(
+      'gatekeeper-refresh-governance-row-container.restart',
+    );
+    expect(
+      within(drawer).queryByTestId('gatekeeper-refresh-governance-row-container.list'),
+    ).toBeNull();
+    // Selected by default.
+    expect((within(row).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(within(drawer).getByTestId('gatekeeper-refresh-governance-apply'));
+    const confirm = await screen.findByTestId('gatekeeper-refresh-governance-confirm');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'refresh_operation_governance')).toBe(true),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('a loosening change uses the irreversible tier, retyping the gate name to confirm', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        previewResult([
+          {
+            name: 'compose.up',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: true },
+            differs: true,
+          },
+        ]),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1', operationNames: ['compose.up'] });
+        return { gatekeeperId: 'gk-1', refreshed: [], unchanged: [] };
+      },
+    });
+    renderCard(http, vi.fn(), { platformInstance: PLATFORM_INSTANCE });
+
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-button'));
+    await screen.findByTestId('gatekeeper-refresh-governance-row-compose.up');
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-apply'));
+    const confirm = await screen.findByTestId('gatekeeper-refresh-governance-confirm');
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+
+    // The irreversible tier's confirm button stays disabled until the gate name is retyped and
+    // the acknowledgement is checked (components/kit/confirm.tsx's own contract).
+    const confirmButton = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: GATEKEEPER.name },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    expect(confirmButton.disabled).toBe(false);
+
+    fireEvent.click(confirmButton);
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'refresh_operation_governance')).toBe(true),
+    );
+  });
+
+  it('deselecting an Operation excludes it from operationNames; no differing Operations shows a "nothing to refresh" message with no confirm trigger', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        previewResult([
+          {
+            name: 'op.a',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'high', autoApprovable: false },
+            differs: true,
+          },
+          {
+            name: 'op.b',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'high', autoApprovable: false },
+            differs: true,
+          },
+        ]),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1', operationNames: ['op.b'] });
+        return { gatekeeperId: 'gk-1', refreshed: [], unchanged: [] };
+      },
+    });
+    renderCard(http, vi.fn(), { platformInstance: PLATFORM_INSTANCE });
+
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-button'));
+    const rowA = await screen.findByTestId('gatekeeper-refresh-governance-row-op.a');
+    fireEvent.click(within(rowA).getByRole('checkbox'));
+
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-apply'));
+    const confirm = await screen.findByTestId('gatekeeper-refresh-governance-confirm');
+    // Both are loosening (execute -> observe) — still irreversible even with only op.b selected.
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: GATEKEEPER.name },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'refresh_operation_governance')).toBe(true),
+    );
+  });
+
+  it('nothing differs: shows a message, no per-row list, and no refresh trigger', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        previewResult([
+          {
+            name: 'op.matching',
+            existing: {
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            differs: false,
+          },
+        ]),
+    });
+    renderCard(http, vi.fn(), { platformInstance: PLATFORM_INSTANCE });
+
+    fireEvent.click(screen.getByTestId('gatekeeper-refresh-governance-button'));
+    const drawer = await screen.findByTestId('gatekeeper-refresh-governance-drawer');
+    await waitFor(() => expect(drawer.textContent).toContain('没有可刷新的差异'));
+    expect(within(drawer).queryByTestId('gatekeeper-refresh-governance-apply')).toBeNull();
   });
 });

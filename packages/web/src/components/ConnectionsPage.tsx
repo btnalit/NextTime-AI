@@ -495,6 +495,7 @@ export function ConnectionsPage({
                 }
                 canPublish={!permissions.isDenied('publish_manifest')}
                 canGrant={!permissions.isDenied('connect_gatekeeper')}
+                canRefreshGovernance={!permissions.isDenied('refresh_operation_governance')}
                 onChanged={reloadRegistry}
                 onForbidden={permissions.markDenied}
                 onOpenDetail={onSelectGatekeeper}
