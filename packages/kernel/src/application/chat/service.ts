@@ -296,6 +296,39 @@ export async function requireChatAccess(
   return mapChatRow(row);
 }
 
+/**
+ * Finds the Chat that already holds the current principal's own `system.action_pending` message
+ * for `actionRequestId` — leftover 78 (docs/STATUS.md §4): `application/linkage`'s
+ * `action-request-consumer.ts` pins every later `system.action_update` message for the same
+ * ActionRequest to this Chat, instead of independently re-resolving "the most recently created
+ * Chat" (`chat-targets.ts`'s `resolveDefaultChat`) per outbox event — the latter can drift to a
+ * *different* Chat if the principal creates a new one between the `ActionRequestPending` and
+ * `ActionRequestUpdated` events, landing the update somewhere the pending card never was.
+ *
+ * RLS (`chat_messages_visibility`, mirroring `chats_visibility`) already confines this to Chats
+ * visible to whichever principal the caller's transaction is scoped to
+ * (`withWorkspace(pool, {workspaceId, principalId}, ...)`); a `content ->> 'kind'` match is exact
+ * (`buildActionPendingContent` always sets it, `content.ts`), so no other message kind can match.
+ * Returns `null` when no such message exists (e.g. a pre-fix ActionRequest, or the pending write
+ * somehow never landed) — the caller falls back to its own default-chat rule.
+ */
+export async function findChatIdForActionPending(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+): Promise<string | null> {
+  const result = await client.query<{ chat_id: string }>(
+    `select chat_id from chat_messages
+     where workspace_id = $1
+       and content ->> 'kind' = 'system.action_pending'
+       and content ->> 'actionRequestId' = $2
+     order by created_at desc
+     limit 1`,
+    [workspaceId, actionRequestId],
+  );
+  return result.rows[0]?.chat_id ?? null;
+}
+
 // -------------------------------------------------------------------------------------------
 // insertChatMessage — the one write path for chat_messages (used by sendChatMessage below for the
 // user's own message, and by application/chat's AgentRuntimeEventSink for assistant/tool

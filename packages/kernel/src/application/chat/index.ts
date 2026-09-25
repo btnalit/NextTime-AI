@@ -36,6 +36,7 @@ export {
   chatMessageKind,
   chatMessageText,
   currentPrincipalId,
+  findChatIdForActionPending,
   findRunningTurn,
   getChatHistory,
   insertChatMessage,

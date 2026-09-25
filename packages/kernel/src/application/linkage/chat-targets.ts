@@ -1,6 +1,11 @@
 import type { PoolClient } from 'pg';
 import type { ChatRow } from '../chat/index.js';
-import { listChats, newChat, requireChatAccess } from '../chat/index.js';
+import {
+  findChatIdForActionPending,
+  listChats,
+  newChat,
+  requireChatAccess,
+} from '../chat/index.js';
 
 /**
  * application/linkage/chat-targets: "which Chat does this system message go into" — the two rules
@@ -26,6 +31,26 @@ export async function resolveDefaultChat(
   const mostRecent = chats[0];
   if (mostRecent) return mostRecent;
   return newChat(client, workspaceId, principalId, {});
+}
+
+/**
+ * The Chat an ActionRequest's `system.action_update` messages belong to (leftover 78,
+ * docs/STATUS.md §4): pinned to whichever Chat already holds `principalId`'s own
+ * `system.action_pending` message for `actionRequestId` (`findChatIdForActionPending`) — never
+ * re-derived per event the way `resolveDefaultChat`'s "most recently created Chat" rule is, which
+ * can drift to a different Chat if `principalId` creates a new one between the `pending` and
+ * `updated` events. Falls back to `resolveDefaultChat` only when no pending message is found
+ * (e.g. a pre-fix ActionRequest that has no `system.action_pending` row to pin to).
+ */
+export async function resolveActionRequestChat(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  actionRequestId: string,
+): Promise<ChatRow> {
+  const pinnedChatId = await findChatIdForActionPending(client, workspaceId, actionRequestId);
+  if (pinnedChatId) return requireChatAccess(client, workspaceId, pinnedChatId);
+  return resolveDefaultChat(client, workspaceId, principalId);
 }
 
 /**
