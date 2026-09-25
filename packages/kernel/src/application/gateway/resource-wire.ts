@@ -91,6 +91,9 @@ export function toWireChat(row: ChatRow) {
     createdAt: row.createdAt.toISOString(),
     // S6-A chat lifecycle (wire/chat.ts `ChatWireSchema.archivedAt`): null = active.
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
+    // S8 W4 (audit C1, wire/chat.ts `ChatWireSchema.lastActivityAt`/`hasRunningTurn`).
+    lastActivityAt: row.lastActivityAt.toISOString(),
+    hasRunningTurn: row.hasRunningTurn,
   };
 }
 
