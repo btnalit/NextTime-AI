@@ -343,7 +343,7 @@ describe('CatalogPage', () => {
       const section = await screen.findByTestId('workers-my-drafts-section');
       const rows = within(section).getAllByTestId('workers-my-draft-row');
       expect(rows).toHaveLength(1);
-      expect(within(rows[0]).getByText('Patcher')).toBeTruthy();
+      expect(within(rows[0] as HTMLElement).getByText('Patcher')).toBeTruthy();
       expect(within(section).queryByText('Fixer')).toBeNull();
     });
 
