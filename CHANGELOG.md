@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.20.0](https://github.com/btnalit/NextTime-AI/compare/v0.19.0...v0.20.0) (2026-09-25)
+
+
+### Features
+
+* **kernel:** discard and expire drafts; ops-runner template requests actions (S8 W3 K2, leftovers 82/84) ([#280](https://github.com/btnalit/NextTime-AI/issues/280)) ([8fab6a2](https://github.com/btnalit/NextTime-AI/commit/8fab6a2f2287b2728934434acd90cee941ccfecf))
+* **kernel:** refresh Operation governance from the gate manifest, edit descriptions, truncate gate output (S8 W3 K1, leftovers 79/81/75) ([#282](https://github.com/btnalit/NextTime-AI/issues/282)) ([32f8f84](https://github.com/btnalit/NextTime-AI/commit/32f8f849aa2a289a790b50d4c4e97c2b5e944611))
+* **web:** S8 W3 F1 — 组件地基收尾、PI1、遗留 85 文案、仅打包 woff2 ([#281](https://github.com/btnalit/NextTime-AI/issues/281)) ([8cc181a](https://github.com/btnalit/NextTime-AI/commit/8cc181a33045b208335013ce5bbc12fbb1d3aae1))
+
 ## [0.19.0](https://github.com/btnalit/NextTime-AI/compare/v0.18.0...v0.19.0) (2026-09-25)
 
 
