@@ -25,6 +25,7 @@ import type {
 } from '../../adapters/supervisor-client/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { newChat, sendChatMessage } from '../chat/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
@@ -692,6 +693,67 @@ describe.runIf(DATABASE_URL !== undefined)(
           () => callAsAdmin('roll_entry_containers'),
           'runtime_unreachable',
         );
+      });
+
+      // leftover 64 (docs/STATUS.md §4): the check-then-stop race — a new Turn starting for the
+      // same principal exactly between `hasInFlightTurn`'s read and `stopResident` settling. The
+      // fix closes it with a per-principal advisory lock shared with `sendChatMessage`
+      // (application/chat/service.ts) — this test proves the *ordering* it produces: a
+      // `sendChatMessage` call for the same principal, started concurrently from inside the fake
+      // supervisor's own `stopResident` (the exact moment the real race would land), only resolves
+      // *after* `roll_entry_containers`'s own check+stop critical section has fully finished, never
+      // interleaved with it.
+      it('a concurrent sendChatMessage for the same principal waits for the check+stop critical section to finish (advisory lock, leftover 64)', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+
+        const racingPrincipalId = await insertHumanPrincipal(workspaceId, 'Racing Principal');
+        const stale = residentEntry({
+          workspaceId,
+          principalId: racingPrincipalId,
+          imageId: IMAGE_V1.id,
+        });
+        supervisor.residents = [stale];
+
+        const chat = await withWorkspace(
+          pool,
+          { workspaceId, principalId: racingPrincipalId },
+          (client) => newChat(client, workspaceId, racingPrincipalId, {}),
+        );
+
+        const events: string[] = [];
+        let racingSendPromise: Promise<unknown> | undefined;
+
+        supervisor.stopResident = async (principalId: string) => {
+          events.push('stopResident:start');
+          // Simulates a user sending a message for `racingPrincipalId` exactly while
+          // `roll_entry_containers` is mid-stop — its own connection (a fresh `withWorkspace` call),
+          // same as a real concurrent request would use.
+          racingSendPromise = withWorkspace(pool, { workspaceId, principalId }, (client) =>
+            sendChatMessage(client, workspaceId, principalId, {
+              chatId: chat.id,
+              text: 'hello during the roll',
+            }),
+          ).then((result) => {
+            events.push('sendChatMessage:resolved');
+            return result;
+          });
+          // Give the concurrent call a moment to actually reach (and block on) the advisory lock
+          // before this method returns — without this, the assertion below could pass by accident
+          // if `sendChatMessage` simply had not gotten far enough yet, not because it was blocked.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          events.push('stopResident:end');
+          return true;
+        };
+
+        await callAsAdmin('roll_entry_containers');
+        await racingSendPromise;
+
+        expect(events).toEqual([
+          'stopResident:start',
+          'stopResident:end',
+          'sendChatMessage:resolved',
+        ]);
       });
     });
 

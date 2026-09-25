@@ -8,6 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { approveActionRequest, requestAction } from '../../governance/approval/index.js';
 import { grantCapability } from '../../governance/capability/index.js';
+import { newChat } from '../chat/index.js';
 import {
   type ActionRequestEventSource,
   registerActionRequestConsumers,
@@ -339,6 +340,144 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(ownerDrain.pendingApprovals).toHaveLength(1);
       expect(ownerDrain.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
+    });
+
+    // Leftover 78 (docs/STATUS.md §4): `resolveDefaultChat`'s "most recently created Chat" rule is
+    // resolved independently per outbox event — a `system.action_update` for an ActionRequest whose
+    // `system.action_pending` card landed in an older Chat must still land there too, even if the
+    // principal created a newer Chat in between. A fresh principal is used so this test's own two
+    // Chats are the only ones that exist for it (no interference from the earlier tests in this
+    // shared workspace, which already wrote into ownerId's/holderId's/requesterId's default Chats).
+    it('system.action_update stays pinned to the Chat that received system.action_pending, even after a newer Chat is created (leftover 78)', async () => {
+      const pinnedPrincipalId = await adminInsertPrincipal('member', 'pinned-chat-requester');
+
+      const olderChat = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) => newChat(client, workspaceId, pinnedPrincipalId, {}),
+      );
+
+      const row = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: 'linkage.test.action',
+            blastRadius: 'medium',
+            operationAutoApprovable: true,
+            awaitDecision: false,
+            onBehalfOf: pinnedPrincipalId,
+            actorRuntime: 'pi',
+            requesterScope: scopeCovering(gatekeeperId),
+          }),
+      );
+      expect(row.status).toBe('pending_approval');
+
+      const pendingOutboxRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        async (client) => {
+          const result = await client.query<{ id: string; payload: Record<string, unknown> }>(
+            `select id, payload from outbox
+             where workspace_id = $1 and event_type = 'ActionRequestPending'
+               and payload->>'actionRequestId' = $2
+             order by id desc limit 1`,
+            [workspaceId, row.id],
+          );
+          const found = result.rows[0];
+          if (!found) throw new Error('expected an ActionRequestPending outbox row');
+          return found;
+        },
+      );
+
+      const dispatcher = createFakeDispatcher();
+      registerActionRequestConsumers(dispatcher, { pool });
+      await dispatcher.emit(
+        'ActionRequestPending',
+        pendingOutboxRow.id,
+        pendingOutboxRow.payload as never,
+      );
+
+      // The pending card landed in the older Chat — the only one that existed at the time.
+      const pendingInOlderChat = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) =>
+          client.query<{ content: Record<string, unknown> }>(
+            'select content from chat_messages where workspace_id = $1 and chat_id = $2',
+            [workspaceId, olderChat.id],
+          ),
+      );
+      expect(pendingInOlderChat.rows).toHaveLength(1);
+      expect(pendingInOlderChat.rows[0]?.content).toMatchObject({ kind: 'system.action_pending' });
+
+      // A newer Chat is created afterwards — `resolveDefaultChat`'s own "most recently created"
+      // rule would otherwise pick this one for the update message.
+      const newerChat = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) => newChat(client, workspaceId, pinnedPrincipalId, {}),
+      );
+
+      const approved = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId: row.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      expect(approved.status).toBe('approved');
+
+      const updatedOutboxRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string; payload: Record<string, unknown> }>(
+            `select id, payload from outbox
+             where workspace_id = $1 and event_type = 'ActionRequestUpdated'
+               and payload->>'actionRequestId' = $2 and payload->>'status' = 'approved'
+             order by id desc limit 1`,
+            [workspaceId, row.id],
+          );
+          const found = result.rows[0];
+          if (!found) throw new Error('expected an ActionRequestUpdated{approved} outbox row');
+          return found;
+        },
+      );
+      await dispatcher.emit(
+        'ActionRequestUpdated',
+        updatedOutboxRow.id,
+        updatedOutboxRow.payload as never,
+      );
+
+      // The update is pinned to the OLDER Chat, not the newer one `resolveDefaultChat` would have
+      // picked.
+      const olderChatMessagesAfter = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) =>
+          client.query<{ content: Record<string, unknown> }>(
+            'select content from chat_messages where workspace_id = $1 and chat_id = $2 order by sequence asc',
+            [workspaceId, olderChat.id],
+          ),
+      );
+      expect(olderChatMessagesAfter.rows).toHaveLength(2);
+      expect(olderChatMessagesAfter.rows[1]?.content).toMatchObject({
+        kind: 'system.action_update',
+        status: 'approved',
+      });
+
+      const newerChatMessages = await withWorkspace(
+        pool,
+        { workspaceId, principalId: pinnedPrincipalId },
+        (client) =>
+          client.query(
+            'select content from chat_messages where workspace_id = $1 and chat_id = $2',
+            [workspaceId, newerChat.id],
+          ),
+      );
+      expect(newerChatMessages.rows).toHaveLength(0);
     });
   },
 );

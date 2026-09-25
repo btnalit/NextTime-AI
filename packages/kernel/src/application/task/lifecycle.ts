@@ -203,11 +203,21 @@ export async function failTaskRow(
   }
   transition(TASK_TRANSITIONS, cursor, 'fail');
 
-  await client.query(
+  // Status-guarded UPDATE + rowCount (leftover 67, docs/STATUS.md §4 — same race class
+  // `completeTaskWithResult`/`moveTaskToWaitingApproval`/`resumeTaskFromWaitingApproval` already
+  // guard against, post-v0.16.0 review "task status race"): condition on `row.status` — the exact
+  // status just read and validated above — not a bare UPDATE. A concurrent writer (another
+  // `failTaskRow` caller, `completeTaskWithResult`, `cancelTask`, or the `waiting_approval` router)
+  // may already have moved the row off `row.status` between the read above and this UPDATE;
+  // `rowCount === 0` means it did — a safe, silent no-op, never an overwrite of whatever terminal
+  // or in-flight status the row has already moved to.
+  const updateResult = await client.query(
     `update tasks set status = 'failed', failed_at = now(), failure_reason = $3
-     where workspace_id = $1 and id = $2`,
-    [workspaceId, taskId, reason],
+     where workspace_id = $1 and id = $2 and status = $4`,
+    [workspaceId, taskId, reason, row.status],
   );
+  if ((updateResult.rowCount ?? 0) === 0) return;
+
   await recordTaskTransition(client, workspaceId, {
     actorPrincipalId,
     action: 'task.fail',
