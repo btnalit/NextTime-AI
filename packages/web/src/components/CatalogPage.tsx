@@ -254,6 +254,76 @@ function DeprecateConfirm({
   );
 }
 
+/** S8 W3 K2 (leftover 82): the caller's own private draft's "丢弃" action — a `kit/confirm`
+ *  `medium` popover, same tier as `DeprecateConfirm` above (the dispatch's own wording: "kit/confirm
+ *  tier medium, consequence '草稿将被删除，无法恢复'"). Unlike Deprecate, this is destructive and
+ *  irreversible for the row itself (a hard delete, not a status change) — `danger` styling, but
+ *  still `medium` (not `irreversible`/retyped-name) per the dispatch's own call, since a draft is
+ *  private to the caller alone and easy to recreate. */
+function DiscardDraftConfirm({
+  busy,
+  target,
+  onConfirm,
+  testId,
+}: {
+  readonly busy: boolean;
+  readonly target: string;
+  readonly onConfirm: () => Promise<void>;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={setOpen}
+      anchor={
+        <Button
+          variant="ghost"
+          size="s"
+          disabled={busy}
+          onClick={() => setOpen(true)}
+          data-testid={`${testId}-trigger`}
+        >
+          {t('丢弃', 'Discard')}
+        </Button>
+      }
+      title={`丢弃 ${target} Discard ${target}`}
+      description={t(
+        '草稿将被删除，无法恢复。',
+        'This draft will be permanently deleted and cannot be recovered.',
+      )}
+      target={target}
+      confirmLabel={t('丢弃', 'Discard')}
+      danger
+      onConfirm={onConfirm}
+      testId={testId}
+    />
+  );
+}
+
+/** S8 W3 K2 (leftover 82): the periodic kernel sweep's own staleness threshold, in days — the
+ *  console has no read of it today (out of this lane's own read-model scope, see the PR report),
+ *  so this mirrors the kernel's compiled-in default (`DEFAULT_DRAFT_EXPIRY_DAYS`,
+ *  `application/worker/draft-lifecycle.ts`) rather than guessing; a platform-configurable
+ *  `DRAFT_EXPIRY_DAYS` env override on the kernel is not reflected here. */
+const DRAFT_EXPIRY_DAYS = 30;
+
+/** The one-line auto-cleanup note shared by the Workers tab's "我的草稿" section and the Skills /
+ *  Procedures tabs' toolbars (S8 W3 K2, leftover 82). */
+function DraftExpiryNote({ testId }: { readonly testId: string }) {
+  const t = useT();
+  return (
+    <p className="text-3 text-small" data-testid={testId}>
+      {t(
+        `草稿 ${DRAFT_EXPIRY_DAYS} 天未更新会自动清理。`,
+        `A draft is automatically cleaned up after ${DRAFT_EXPIRY_DAYS} days with no update.`,
+      )}
+    </p>
+  );
+}
+
 function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const permissions = usePermissions();
@@ -455,6 +525,26 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  // S8 W3 K2 (leftover 82): `discard_draft{kind, id, version}` — a different params shape from
+  // `act` above (`{skillId}` alone), so it is its own function rather than a third `action` value.
+  async function discardSkillDraft(row: SkillRow): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('discard_draft', { kind: 'skill', id: row.id, version: row.version });
+      toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('discard_draft');
+      toast.push({
+        tone: 'danger',
+        title: t('无法丢弃该草稿', 'Could not discard this draft'),
+        description: describeError(err).message,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const editorDrawer = (
     <Drawer
       open={editor !== null}
@@ -511,6 +601,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
         refreshing={skills.state.refreshing}
         testId="skills-new-draft"
       />
+      <DraftExpiryNote testId="skills-draft-expiry-note" />
       {rows.length === 0 ? (
         <EmptyState
           icon="grid"
@@ -536,7 +627,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
               }
               meta={<span className="truncate">{row.description}</span>}
               trailing={
-                <span className="row">
+                <span className="row-wrap">
                   {!permissions.isDenied('propose_skill') ? (
                     <Button
                       variant="ghost"
@@ -562,6 +653,14 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
                       target={row.name}
                       onConfirm={() => act(row, 'deprecate_skill')}
                       testId={`skill-deprecate-confirm-${row.id}`}
+                    />
+                  ) : null}
+                  {!permissions.isDenied('discard_draft') && row.status === 'draft' ? (
+                    <DiscardDraftConfirm
+                      busy={busy === row.id}
+                      target={row.name}
+                      onConfirm={() => discardSkillDraft(row)}
+                      testId={`skill-discard-confirm-${row.id}`}
                     />
                   ) : null}
                 </span>
@@ -636,6 +735,26 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  // S8 W3 K2 (leftover 82): `discard_draft{kind, id, version}` — a different params shape from
+  // `act` above (`{procedureId}` alone), so it is its own function rather than a third `action`.
+  async function discardProcedureDraft(row: ProcedureRow): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('discard_draft', { kind: 'procedure', id: row.id, version: row.version });
+      toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('discard_draft');
+      toast.push({
+        tone: 'danger',
+        title: t('无法丢弃该草稿', 'Could not discard this draft'),
+        description: describeError(err).message,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const editorDrawer = (
     <Drawer
       open={editor !== null}
@@ -687,6 +806,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
         refreshing={procedures.state.refreshing}
         testId="procedures-new-draft"
       />
+      <DraftExpiryNote testId="procedures-draft-expiry-note" />
       {rows.length === 0 ? (
         <EmptyState
           icon="grid"
@@ -717,7 +837,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
               }
               meta={<span className="truncate">{row.description}</span>}
               trailing={
-                <span className="row">
+                <span className="row-wrap">
                   {!permissions.isDenied('propose_procedure') ? (
                     <Button
                       variant="ghost"
@@ -743,6 +863,14 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
                       target={row.name}
                       onConfirm={() => act(row, 'deprecate_procedure')}
                       testId={`procedure-deprecate-confirm-${row.id}`}
+                    />
+                  ) : null}
+                  {!permissions.isDenied('discard_draft') && row.status === 'draft' ? (
+                    <DiscardDraftConfirm
+                      busy={busy === row.id}
+                      target={row.name}
+                      onConfirm={() => discardProcedureDraft(row)}
+                      testId={`procedure-discard-confirm-${row.id}`}
                     />
                   ) : null}
                 </span>
@@ -902,33 +1030,38 @@ function EntrySection({
 /** S8 W2-U2b (audit R6 "保存草稿后找不回它"): the caller's own draft Worker definitions — shown
  *  only when non-empty (unlike `EntrySection` above, which always renders with an empty-state
  *  line; an empty "我的草稿" would just be clutter for the common case of no outstanding drafts).
- *  Publish is the one action offered, a plain button with no confirm (same tier Skills/Procedures
- *  rows already use for `publish_skill`/`publish_procedure` — publish only ever *adds* visibility,
- *  it does not remove or overwrite anything, so this tab's own `DeprecateConfirm` convention does
- *  not apply here). No "继续编辑"/edit action: the only mechanism that exists
- *  (`propose_worker_definition{definitionId}`) always inserts the *next* version rather than
- *  updating this draft row in place (`application/worker/definitions.ts`'s own doc comment — I16:
- *  "propose 总是插入新行"), and a still-draft version has no way to be cleared afterwards
- *  (`deprecate_worker_definition` only transitions out of `published`) — offering it here would
- *  leave an orphaned stale draft behind with no route to clean it up, so it is left out; publish
- *  (or resume the family from an already-published row's own "编辑（新版本草稿）", once this one is
- *  published) covers every path this lane's F6 read-only kernel scope allows. */
+ *  Publish is a plain button with no confirm (same tier Skills/Procedures rows already use for
+ *  `publish_skill`/`publish_procedure` — publish only ever *adds* visibility, it does not remove or
+ *  overwrite anything, so this tab's own `DeprecateConfirm` convention does not apply here). No
+ *  "继续编辑"/edit action: the only mechanism that exists (`propose_worker_definition{definitionId}`)
+ *  always inserts the *next* version rather than updating this draft row in place
+ *  (`application/worker/definitions.ts`'s own doc comment — I16: "propose 总是插入新行").
+ *
+ *  S8 W3 K2 (leftover 82): a still-draft version used to have no way to be cleared afterwards
+ *  (`deprecate_worker_definition` only transitions out of `published`) — `discard_draft` now closes
+ *  that gap, so "丢弃" (a `DiscardDraftConfirm`, tier `medium`) sits next to "发布"; the one-line
+ *  `DraftExpiryNote` covers the drafts a caller simply forgets about. */
 function MyDraftsSection({
   rows,
   busy,
   canPublish,
+  canDiscard,
   onPublish,
+  onDiscard,
 }: {
   readonly rows: readonly WorkerDefinitionSummary[];
   readonly busy: string | null;
   readonly canPublish: boolean;
+  readonly canDiscard: boolean;
   readonly onPublish: (row: WorkerDefinitionSummary) => void;
+  readonly onDiscard: (row: WorkerDefinitionSummary) => Promise<void>;
 }) {
   const t = useT();
   if (rows.length === 0) return null;
   return (
     <div className="stack-s" data-testid="workers-my-drafts-section">
       <span className="section-title">{t('我的草稿', 'My drafts')}</span>
+      <DraftExpiryNote testId="workers-my-drafts-expiry-note" />
       <DataList ariaLabel="My drafts" testId="workers-my-drafts-list">
         {rows.map((row) => (
           <DataRow
@@ -953,17 +1086,27 @@ function MyDraftsSection({
               ) : undefined
             }
             trailing={
-              canPublish ? (
-                <Button
-                  variant="primary"
-                  size="s"
-                  loading={busy === row.id}
-                  onClick={() => onPublish(row)}
-                  data-testid="worker-draft-publish"
-                >
-                  {t('发布', 'Publish')}
-                </Button>
-              ) : undefined
+              <span className="row-wrap">
+                {canPublish ? (
+                  <Button
+                    variant="primary"
+                    size="s"
+                    loading={busy === row.id}
+                    onClick={() => onPublish(row)}
+                    data-testid="worker-draft-publish"
+                  >
+                    {t('发布', 'Publish')}
+                  </Button>
+                ) : null}
+                {canDiscard ? (
+                  <DiscardDraftConfirm
+                    busy={busy === row.id}
+                    target={definitionName([row], row.id, row.version) ?? row.id}
+                    onConfirm={() => onDiscard(row)}
+                    testId={`worker-draft-discard-${row.id}@${row.version}`}
+                  />
+                ) : null}
+              </span>
             }
           />
         ))}
@@ -988,6 +1131,11 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     { includeOwnDrafts: true },
     { autoLoadAll: true },
   );
+  // S8 W3 K2 (leftover 84): lifted up from `WorkerEditorHost` below — the "从模板创建（ops-runner）"
+  // button needs this loaded *before* the editor drawer even opens (it must stay disabled until
+  // then, so an incomplete list is never submitted as the template's `capabilities`); passed down
+  // into `WorkerEditorHost` as a prop instead of that component loading its own second copy.
+  const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
 
@@ -1042,8 +1190,37 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  // S8 W3 K2 (leftover 82): discards one of the caller's own draft WorkerDefinition versions —
+  // same catch-and-toast convention every other write in this tab already uses (never re-throws
+  // into `Confirm`'s own inline error state, matching `deprecate`/`publishDraft` above).
+  async function discardWorkerDraft(row: WorkerDefinitionSummary): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('discard_draft', {
+        kind: 'worker_definition',
+        id: row.id,
+        version: row.version,
+      });
+      toast.push({
+        tone: 'ok',
+        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已丢弃', 'discarded')}`,
+      });
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('discard_draft');
+      toast.push({
+        tone: 'danger',
+        title: t('无法丢弃该草稿', 'Could not discard this draft'),
+        description: describeError(err).message,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const canPropose = !permissions.isDenied('propose_worker_definition');
   const canPublish = !permissions.isDenied('publish_worker_definition');
+  const canDiscard = !permissions.isDenied('discard_draft');
 
   const editorDrawer = (
     <Drawer
@@ -1065,7 +1242,14 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
           http={http}
           newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
-          initialForm={editor.kind === 'template' ? opsRunnerTemplateForm() : undefined}
+          initialForm={
+            editor.kind === 'template' && capabilityNames.state.status === 'ready'
+              ? opsRunnerTemplateForm(capabilityNames.state.data.items)
+              : undefined
+          }
+          capabilityNames={
+            capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
+          }
           onProposed={() => {
             void workers.reload();
             void myDrafts.reload();
@@ -1114,6 +1298,12 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
             <Button
               variant="secondary"
               onClick={() => setEditor({ kind: 'template' })}
+              disabled={capabilityNames.state.status !== 'ready'}
+              title={
+                capabilityNames.state.status !== 'ready'
+                  ? t('能力清单加载中，请稍候', 'Loading the capability list, please wait')
+                  : undefined
+              }
               data-testid="workers-template-button"
             >
               {t('从模板创建（ops-runner）', 'Create from template (ops-runner)')}
@@ -1126,7 +1316,9 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
         rows={myDraftRows}
         busy={busy}
         canPublish={canPublish}
+        canDiscard={canDiscard}
         onPublish={(row) => void publishDraft(row)}
+        onDiscard={discardWorkerDraft}
       />
 
       <EntrySection
@@ -1233,27 +1425,31 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
-/** Loads the picker directories (`list_models`, `list_capability_names`, `list_gatekeepers`,
- *  `list_skills`) only while the Worker editor is open — member-level reads, cached per session by
- *  `useCapabilityList`; the editor degrades to raw ids/names without them (same convention
- *  `ProcedureEditorHost` above already established). `list_skills` uses `autoLoadAll` (it is
- *  keyset-paginated, S8 W1-C) so the skills picker never silently hides a published Skill past the
- *  first page — same reasoning as `ProcedureEditorHost`'s own `list_worker_definitions` load. */
+/** Loads the picker directories (`list_models`, `list_gatekeepers`, `list_skills`) only while the
+ *  Worker editor is open — member-level reads, cached per session by `useCapabilityList`; the
+ *  editor degrades to raw ids/names without them (same convention `ProcedureEditorHost` above
+ *  already established). `list_skills` uses `autoLoadAll` (it is keyset-paginated, S8 W1-C) so the
+ *  skills picker never silently hides a published Skill past the first page — same reasoning as
+ *  `ProcedureEditorHost`'s own `list_worker_definitions` load. `capabilityNames` (S8 W3 K2, leftover
+ *  84) is a prop, not a hook call here — `WorkersTab` above already loads it (the "从模板创建" button
+ *  needs it loaded *before* this host ever mounts), so this component reuses that same load rather
+ *  than opening a second one. */
 function WorkerEditorHost({
   http,
   newVersionOf,
   initialForm,
+  capabilityNames,
   onProposed,
   onDone,
 }: {
   readonly http: CapabilityCaller;
   readonly newVersionOf?: WorkerDefinitionSummary;
   readonly initialForm?: WorkerDefinitionForm;
+  readonly capabilityNames?: readonly CapabilityNameRow[];
   readonly onProposed: () => void;
   readonly onDone: () => void;
 }) {
   const models = useCapabilityList<ModelRow>(http, 'list_models');
-  const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   return (
@@ -1262,9 +1458,7 @@ function WorkerEditorHost({
       newVersionOf={newVersionOf}
       initialForm={initialForm}
       models={models.state.status === 'ready' ? models.state.data.items : undefined}
-      capabilityNames={
-        capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
-      }
+      capabilityNames={capabilityNames}
       gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined}
       skills={skills.state.status === 'ready' ? skills.state.data.items : undefined}
       onProposed={onProposed}

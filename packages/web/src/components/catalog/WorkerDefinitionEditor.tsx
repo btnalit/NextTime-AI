@@ -241,9 +241,11 @@ export function WorkerDefinitionEditor({
         }
         onDone={onDone}
         unpublishedConsequence={t(
-          '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它——确认无误就现在点击「发布」。',
+          '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它，且 30 天未更新会被自动清理（也可以随时手动丢弃）——确认无误就现在点击「发布」。',
           'Left unpublished, this draft only sits under “My drafts” on the Workers tab — no one ' +
-            'else in the workspace can see or delegate to it. Publish now if it is ready.',
+            'else in the workspace can see or delegate to it, and it is automatically cleaned up ' +
+            'after 30 days with no update (or discarded manually at any time). Publish now if it ' +
+            'is ready.',
         )}
       />
     );
@@ -419,8 +421,10 @@ export function WorkerDefinitionEditor({
               hint={
                 isWorker
                   ? t(
-                      '未勾选 = 平台 Worker 上限去掉执行类能力。',
-                      'None checked = the worker ceiling minus execute-class capabilities.',
+                      '未勾选 = 平台 Worker 上限去掉执行类能力。执行类动作仍需审批（按策略自动批准或人工审批）。',
+                      'None checked = the worker ceiling minus execute-class capabilities. ' +
+                        'Execute-class actions still require approval either way (auto-approved ' +
+                        'by policy, or by a person).',
                     )
                   : t(
                       '必须在 entry 上限之内（内核校验）。',

@@ -8,6 +8,7 @@ import {
   type WorkerDefinitionKind,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
+import type { CapabilityNameRow } from './governance.js';
 import type { Translate } from './i18n.js';
 import { OPS_RUNNER_WORKER_TEMPLATE } from './templates/ops-runner.js';
 
@@ -305,12 +306,40 @@ export function workerDefinitionFormFromWire(
  *  the template constant itself — the raw template carries no `name` field (F1: this button only
  *  exposes the existing template through the existing propose/publish path, it does not invent
  *  new template content), so the editor's own "从模板创建" affordance is what chooses the name a
- *  reader sees pre-filled, same as it would if they typed it by hand. */
-export function opsRunnerTemplateForm(): WorkerDefinitionForm {
+ *  reader sees pre-filled, same as it would if they typed it by hand.
+ *
+ * S8 W3 K2 (leftover 84): the template's own YAML carries no `capabilities` either — omitted
+ * meant "kernel default" (`defaultWorkerCapabilities`, `packages/kernel/src/application/task/
+ * handle-mint.ts`: the worker ceiling minus every execute-class capability), which silently
+ * dropped `request_action` — a Worker spawned from this template could observe everything but
+ * never propose an execute-class action through the approval flow. `capabilities`, once present,
+ * *replaces* that default rather than adding to it, so this must submit the full non-execute set
+ * plus `request_action`, never `['request_action']` alone (that would drop every observe
+ * capability instead).
+ *
+ * No hardcoded capability list: `capabilityNames` is `list_capability_names`'s own rows
+ * (`{name, mode}` — the same `CapabilityMode` union `packages/shared/src/capabilities.ts`
+ * defines), already filtered to the worker ceiling minus the two gate-projection placeholder
+ * patterns by the kernel handler itself. Within that returned set, the *only* execute-mode name is
+ * `request_action` (every other execute-mode capability in the registry belongs to a group
+ * `list_capability_names` never includes — chat/ontology/connection/meta-publish/governance/
+ * worker-publish, none of which are `graph`-group, `propose_*`, or in `WORKER_CEILING_EXTRA_
+ * CAPABILITY_NAMES`); filtering out `mode === 'execute'` and then explicitly re-adding
+ * `request_action` is therefore exactly `defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES) ∪
+ * {'request_action'}` — computed here from the loaded directory, not a name this function invents
+ * or hardcodes. */
+export function opsRunnerTemplateForm(
+  capabilityNames: readonly Pick<CapabilityNameRow, 'name' | 'mode'>[],
+): WorkerDefinitionForm {
   const { kind, ...definition } = OPS_RUNNER_WORKER_TEMPLATE;
+  const capabilities = capabilityNames
+    .filter((capability) => capability.mode !== 'execute')
+    .map((capability) => capability.name);
+  if (!capabilities.includes('request_action')) capabilities.push('request_action');
   return {
     ...workerDefinitionFormFromWire(kind, definition),
     name: 'ops-runner',
+    capabilities: joinList(capabilities),
   };
 }
 

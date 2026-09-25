@@ -56,6 +56,7 @@ import {
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
+  DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   SkillNotFoundError,
@@ -391,6 +392,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (err instanceof WorkerDefinitionNotPublishedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S8 W3 K2 (leftover 82) `discard_draft` — same mapping as interfaces/http/capability-route.ts's
+  // DraftNotDiscardableError branch (409/ILLEGAL_TRANSITION: well-formed request, the row's
+  // current state forbids it).
+  if (err instanceof DraftNotDiscardableError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (

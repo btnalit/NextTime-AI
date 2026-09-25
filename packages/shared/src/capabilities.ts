@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
+  DraftKindSchema,
   RoleSchema,
   WorkerDefinitionKindSchema,
 } from './enums.js';
@@ -1939,6 +1940,26 @@ const workerCapabilities: readonly Capability[] = [
     description: 'Deprecate a published WorkerDefinition version.',
   },
   {
+    // S8 W3 K2 (leftover 82): drafts of WorkerDefinition/Skill/Procedure had `draft -> published`
+    // as their only exit (I16 "提议者私有" — nobody else can even see it, so no owner-override
+    // exists either). Human-channel-only, same as publish_*/deprecate_* right above/below — no
+    // `minRole`, I16's channel split is the actual gate. Deletes the row outright (never a fourth
+    // `PublishableStatus`); a published/deprecated version is never reachable through this
+    // (`application/worker/draft-lifecycle.ts`'s own `DraftNotDiscardableError`). The kernel also
+    // runs a periodic sweep that discards drafts past a staleness threshold, attributed to a
+    // platform service Principal — not a capability a caller invokes.
+    name: 'discard_draft',
+    group: 'worker',
+    mode: 'execute',
+    channel: 'human',
+    paramsSchema: z
+      .object({ kind: DraftKindSchema, id: id, version: z.number().int().positive() })
+      .strict(),
+    resultSchema: wire.DiscardDraftResultWireSchema,
+    description:
+      'Discard one of your own private draft WorkerDefinition/Skill/Procedure versions (I16). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
+  },
+  {
     name: 'list_worker_definitions',
     group: 'worker',
     mode: 'observe',
@@ -3196,6 +3217,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'issue_handle',
   'publish_worker_definition',
   'deprecate_worker_definition',
+  'discard_draft',
   'audit_query',
   'reconstruct',
   'export_prov',
