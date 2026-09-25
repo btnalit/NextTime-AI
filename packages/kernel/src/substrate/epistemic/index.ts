@@ -36,8 +36,13 @@ export {
   registerPrivateSource,
   registerSource,
   recordSourceObservation,
+  listSourceFreshness,
 } from './sources.js';
-export type { RegisterPrivateSourceInput, SourceRow } from './sources.js';
+export type {
+  RegisterPrivateSourceInput,
+  SourceRow,
+  SourceFreshnessRow,
+} from './sources.js';
 
 // S3.2 冲突检测 (docs/development-tasks.md S3.2) — see conflicts.ts's own module doc comment for
 // the write-path seam (`SqlGraphStore.assertFact` calls `resolveFactOrigin`/`sameFactOrigin`/

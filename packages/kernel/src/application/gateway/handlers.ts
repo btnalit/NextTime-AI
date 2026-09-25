@@ -140,6 +140,9 @@ import {
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
+// S8 W4-A (ui-audit G1, STATUS leftover 70/62) — same one-capability-per-file convention as
+// execution-readiness-handler.ts/resolve-refs-handler.ts just above.
+import { graphFreshnessHandler } from './graph-freshness-handler.js';
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
 import { issueLlmAdminTokenHandler } from './llm-admin-handlers.js';
@@ -1548,6 +1551,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S8 W1-C (F6) — the selector/capability-picker and execution-readiness read models.
   ['list_capability_names', listCapabilityNamesHandler],
   ['execution_readiness', executionReadinessHandler],
+  // S8 W4-A (ui-audit G1, STATUS leftover 70/62) — per-workspace collector-silence read model.
+  ['graph_freshness', graphFreshnessHandler],
   ['request_action', requestActionHandler],
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],

@@ -834,6 +834,60 @@ describe('createHost — container stdio closing', () => {
   });
 });
 
+describe('createHost — touch-throttle cache pruning (leftover 66)', () => {
+  it('prunes the lastTouchAt entry once the container that earned it closes (idle stop) — otherwise it never shrinks for the life of this process', async () => {
+    const lastTouchAtMap = new Map<string, number>();
+    const { host, containerIo } = setUp({ lastTouchAtMap });
+    const cmd = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, cmd);
+    attachment?.emitLine({ type: 'agent_settled' }); // turn ends normally first
+
+    expect(lastTouchAtMap.has(cmd.principalId)).toBe(true); // set by ensureAttachment's own touch
+
+    attachment?.emitClose(undefined); // idle-timeout stop, well after the turn ended
+
+    expect(lastTouchAtMap.has(cmd.principalId)).toBe(false);
+  });
+
+  it('does not prune the entry when the closing stream belonged to a container already replaced by a fresh attachment', async () => {
+    const lastTouchAtMap = new Map<string, number>();
+    const { host, containerIo, supervisor } = setUp({ lastTouchAtMap });
+    const cmd = startTurnCommand();
+    await host.handleStartTurn(cmd);
+    const firstAttachment = containerIo.attachmentsByContainerId.get('c1');
+    emitSwitchOk(firstAttachment, cmd.turnId);
+    firstAttachment?.emitLine({
+      type: 'response',
+      command: 'prompt',
+      id: cmd.turnId,
+      success: true,
+    });
+    firstAttachment?.emitLine({ type: 'agent_settled' });
+
+    supervisor.setSpawnResult({
+      containerId: 'c2',
+      ip: '100.64.0.3',
+      status: 'running',
+      created: true,
+      restarts: 1,
+    });
+    const nextTurn = startTurnCommand({
+      principalId: cmd.principalId,
+      workspaceId: cmd.workspaceId,
+      chatId: cmd.chatId,
+    });
+    await host.handleStartTurn(nextTurn); // caches c2's attachment in place of c1's
+
+    expect(lastTouchAtMap.has(cmd.principalId)).toBe(true); // refreshed by nextTurn's own touch
+
+    // c1's own close event arrives late (its container actually finishing its stop) — must not
+    // prune the entry the still-current c2 attachment (and this still-live principal) needs.
+    firstAttachment?.emitClose(undefined);
+
+    expect(lastTouchAtMap.has(cmd.principalId)).toBe(true);
+  });
+});
+
 describe('createHost — resident container recreated inside a Turn’s own spawn (leftover 44)', () => {
   /** A completed first Turn on `c1`, so the principal has a cached attachment worker-supervisor
    *  can retire, and a second `startTurn` for the same chat whose spawn comes back with `c2`. */

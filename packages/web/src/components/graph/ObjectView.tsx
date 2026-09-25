@@ -290,6 +290,8 @@ export function ObjectView({
                   conflicts={conflicts}
                   onExpand={onFocus}
                   onProvenance={onProvenance}
+                  http={http}
+                  onVerified={() => void state.reload()}
                 />
               </>
             )}

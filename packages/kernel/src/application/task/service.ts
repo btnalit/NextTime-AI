@@ -304,14 +304,26 @@ export async function terminateTask(
       }
       transition(TASK_TRANSITIONS, cursor, 'cancel');
 
+      // Status-guarded UPDATE + rowCount (leftover 67, docs/STATUS.md §4 — same race class
+      // `lifecycle.ts`'s `completeTaskWithResult`/`failTaskRow` guard against): condition on
+      // `current.status` — the exact status just read and validated above — not a bare UPDATE. A
+      // concurrent writer (e.g. the WorkerRun completing/failing between the read above and this
+      // UPDATE) may already have moved the row off `current.status`.
       const result = await client.query(
         `update tasks set status = 'cancelled', cancelled_at = now()
-       where workspace_id = $1 and id = $2
+       where workspace_id = $1 and id = $2 and status = $3
        returning ${TASK_ROW_COLUMNS}`,
-        [workspaceId, taskId],
+        [workspaceId, taskId, current.status],
       );
       const row = result.rows[0];
-      if (!row) throw new TaskNotFoundError(workspaceId, taskId);
+      if (!row) {
+        // Lost the race — re-read and return whatever the row became instead of either throwing a
+        // spurious `TaskNotFoundError` (the Task plainly still exists) or overwriting a status some
+        // other writer just produced (e.g. it just completed).
+        const reread = await readTaskRow(client, workspaceId, taskId);
+        if (!reread) throw new TaskNotFoundError(workspaceId, taskId);
+        return reread;
+      }
       const mapped = mapTaskRow(row);
       await recordTaskTransition(client, workspaceId, {
         actorPrincipalId,

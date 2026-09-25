@@ -468,11 +468,18 @@ export async function invokeWorkerCreate(
       deps.pool,
       { workspaceId, principalId: caller.principalId },
       async (client) => {
-        await client.query(
+        // Status-guarded UPDATE + rowCount (leftover 67, docs/STATUS.md §4 — same race class
+        // `lifecycle.ts`'s `completeTaskWithResult`/`failTaskRow` guard against): the Task this
+        // function just inserted is `queued` at this point — `spawnWorkerRun` above never got the
+        // chance to flip it to `running` before throwing — but a concurrent `cancelTask` call could
+        // have moved it off `queued` in the meantime; guard on that exact status rather than an
+        // unconditional overwrite, and skip the audit row when the guard loses (nothing changed).
+        const updateResult = await client.query(
           `update tasks set status = 'failed', failed_at = now(), failure_reason = $3
-         where workspace_id = $1 and id = $2`,
+         where workspace_id = $1 and id = $2 and status = 'queued'`,
           [workspaceId, task.id, 'spawn_failed'],
         );
+        if ((updateResult.rowCount ?? 0) === 0) return;
         await recordTaskTransition(client, workspaceId, {
           actorPrincipalId: caller.principalId,
           action: 'task.fail',
@@ -489,10 +496,18 @@ export async function invokeWorkerCreate(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => {
-      await client.query(
-        "update tasks set status = 'running' where workspace_id = $1 and id = $2",
+      // Status-guarded UPDATE + rowCount (leftover 67): guard on `queued` — the only status this
+      // freshly created Task can legitimately be in here — rather than an unconditional overwrite.
+      // If a concurrent `cancelTask` already moved it off `queued` while `spawnWorkerRun` was in
+      // flight, skip the transition + audit; the WorkerRun that was just spawned becomes an orphan
+      // under the now-cancelled Task until `runTaskReaper`'s duration-limit scan reaps it — the
+      // same bounded, self-healing cleanup every other duration-limited WorkerRun already relies on
+      // (see `reaper.ts`'s own doc comment), not a new failure mode this guard introduces.
+      const updateResult = await client.query(
+        "update tasks set status = 'running' where workspace_id = $1 and id = $2 and status = 'queued'",
         [workspaceId, task.id],
       );
+      if ((updateResult.rowCount ?? 0) === 0) return;
       await recordTaskTransition(client, workspaceId, {
         actorPrincipalId: caller.principalId,
         action: 'task.start',

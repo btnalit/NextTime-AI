@@ -188,6 +188,12 @@ button:disabled {
   color: var(--text-2);
   overflow-x: auto;
   white-space: pre;
+  /* S8 W4-A fix (CI #288/#290, journey ④ 768px): as a flex-column item (.disclosure-body,
+     .tool-call-detail, …), a block element with unwrapped (white-space: pre) content otherwise
+     refuses to shrink below its own min-content width — see .disclosure's own comment for the
+     full chain this closes off. min-width:0 lets overflow-x:auto actually take effect instead of
+     the containing flex column (and everything above it) growing to fit the longest line. */
+  min-width: 0;
   font-size: var(--fs-12);
   line-height: var(--lh-body);
 }

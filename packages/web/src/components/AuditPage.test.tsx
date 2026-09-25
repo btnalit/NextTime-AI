@@ -272,6 +272,26 @@ describe('AuditPage entry points', () => {
     await screen.findByTestId('audit-row');
   });
 
+  it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals them', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [auditRow({ id: 'audit-read', action: 'list_grants' })] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    // Neither a bare "no rows at all" empty state nor the list — `audit-empty` is reused for
+    // "rows exist, all filtered" too, so the page is never blank.
+    const empty = await screen.findByTestId('audit-empty');
+    expect(empty.textContent).toContain('1');
+    expect(screen.queryByTestId('audit-list')).toBeNull();
+    expect(screen.queryByTestId('audit-row')).toBeNull();
+
+    fireEvent.click(within(empty).getByRole('button', { name: /显示读操作|Show reads/ }));
+    await waitFor(() => expect(screen.getAllByTestId('audit-row')).toHaveLength(1));
+    expect(screen.queryByTestId('audit-empty')).toBeNull();
+  });
+
   it('reads the entry from the hash when the route table does not pass one', async () => {
     window.location.hash = '#/govern/audit?nodeId=fact-1';
     const http = scriptedHttp({
