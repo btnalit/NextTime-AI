@@ -16,6 +16,7 @@ import { useGatekeeperNames, usePrincipalDirectory } from './approvals/useDirect
 import { ApprovalContext } from './audit/ApprovalContext.js';
 import { AuditLogSection } from './audit/AuditLogSection.js';
 import { ExplainSection } from './audit/ExplainSection.js';
+import { ProvenanceToolsSection } from './audit/ProvenanceToolsSection.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -93,6 +94,7 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
         requestedNodeId={requestedNodeId}
         principalNames={principals.names}
       />
+      <ProvenanceToolsSection http={http} />
       <ReconstructCard http={http} />
       <AuditLogSection
         http={http}

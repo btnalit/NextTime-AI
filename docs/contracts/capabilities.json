@@ -6276,6 +6276,78 @@
     }
   },
   {
+    "channel": "handle",
+    "group": "graph",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "graph_freshness",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "silent": {
+                "type": "boolean"
+              },
+              "sourceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sourceId",
+              "kind",
+              "name",
+              "lastObservedAt",
+              "silent"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "staleThresholdMs": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workspaceLastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "staleThresholdMs",
+        "workspaceLastObservedAt",
+        "sources"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "human",
     "group": "modules",
     "minRole": "owner",

@@ -47,10 +47,18 @@ describe('format', () => {
     expect(humanizeKind('docker.container_restart')).toBe('docker container restart');
   });
 
-  it('formatAuditActor prefers login, falls back to the raw id, then to an unattributed label (遗留 54)', () => {
+  it('formatAuditActor prefers login, falls back to the (truncated) id, then to an unattributed label (遗留 54, AU1)', () => {
     const zhT: Translate = (zh) => zh;
     expect(formatAuditActor({ actorLogin: 'alice', actorUserId: 'u-1' }, zhT)).toBe('alice');
     expect(formatAuditActor({ actorLogin: null, actorUserId: 'u-1' }, zhT)).toBe('u-1');
+    // S8 W4-A (ui-audit AU1): a full-length id falls back through `shortId`, never the literal
+    // full id — a platform user id has no `resolve_refs` kind to resolve a RefChip through.
+    expect(
+      formatAuditActor(
+        { actorLogin: null, actorUserId: '12345678-abcd-4321-8888-000000000000' },
+        zhT,
+      ),
+    ).toBe('12345678');
     // A CLI purge with no resolvable administrator (`platform.workspace_purged`,
     // `payload.attributedActor: false`) writes actor_user_id null — never render that as blank or
     // the literal string "null".

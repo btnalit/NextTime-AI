@@ -49,7 +49,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
     const prompt = `e2e-${Date.now()}`;
     await page.getByPlaceholder('输入消息…').fill(prompt);
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: '发送' }).click();
 
     // --- the product shell is up: sidebar connection indicator reads Connected ---
     await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected');
@@ -93,7 +93,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
 
     const marker = `md-${Date.now()}`;
     await page.getByPlaceholder('输入消息…').fill(`## 标题 ${marker}\n\n**粗体 ${marker}**`);
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: '发送' }).click();
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,
     });
@@ -129,7 +129,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByTestId('chat-title')).toHaveText('新对话');
     const prompt = `e2e-title-${Date.now()}`;
     await page.getByPlaceholder('输入消息…').fill(prompt);
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: '发送' }).click();
     // … then the `chat.metadata {title}` push (the first 40 code points of the message) names it.
     await expect(page.getByTestId('chat-title')).toHaveText(prompt, { timeout: 15_000 });
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
@@ -146,7 +146,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByTestId('chat-title')).toHaveText(renamed);
 
     // The 模式 · 模型 · 来源 line is up and the switcher is enabled between Turns.
-    await expect(page.getByTestId('chat-model-line')).toContainText('模式 Mode');
+    await expect(page.getByTestId('chat-model-line')).toContainText('模式：入口 agent');
     await expect(page.getByTestId('chat-model-select')).toBeEnabled();
 
     // Back to the list: the row carries the new title; archive it from the row (tier low → toast

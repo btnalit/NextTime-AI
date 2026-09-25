@@ -875,6 +875,12 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface-1);
+  /* S8 W4-A fix (CI #288/#290, journey ④ 768px): as a flex-column item (e.g. ProvenanceChain's
+     .prov-segment-body), a <details> defaults to min-width:auto — the min-content width of its
+     own content, which for an expanded "原始证据" .code-block (white-space: pre, unwrapped) is
+     its longest line. That forced the whole segment, grid column and .prov-chain wider than the
+     viewport at 768px instead of letting .code-block's own overflow-x:auto scroll internally. */
+  min-width: 0;
 }
 
 .disclosure > summary {
@@ -1120,9 +1126,14 @@ a.ref-chip-name {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  /* Long unbreakable tokens (ids, timestamps) must wrap inside the segment instead of spilling
+     past its grid column — a descendant overflow still counts toward the chain's scrollWidth. */
+  overflow-wrap: anywhere;
 }
 
-@media (max-width: 720px) {
+/* One column from the shell's own narrow breakpoint (960px): three columns at ~768px leave each
+   segment under 200px, too narrow for a chip row or an id (journey ④'s 768px check). */
+@media (max-width: 960px) {
   .prov-segments {
     grid-template-columns: minmax(0, 1fr);
   }

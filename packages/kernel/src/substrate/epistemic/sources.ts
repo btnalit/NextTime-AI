@@ -130,6 +130,57 @@ export async function registerSource(
   return mapSourceRow(row);
 }
 
+export interface SourceFreshnessRow {
+  readonly sourceId: string;
+  readonly kind: string;
+  readonly name: string | null;
+  readonly lastObservedAt: Date | null;
+  readonly silent: boolean;
+}
+
+/**
+ * S8 W4-A (ui-audit G1; STATUS leftover 70/62): every Source owned by a `kind:'service'`
+ * Principal in this workspace (a collector, an external runtime — the same population `substrate/
+ * audit/invariant-checks.ts`'s `ops.collector_silent` sweeps, restated here workspace-scoped under
+ * ordinary RLS rather than that module's cross-workspace admin-mode connection), with its newest
+ * observation and whether that observation is older than `staleThresholdMs`. A Source with no
+ * observation at all (`lastObservedAt: null`) is never `silent` — it never established a cadence
+ * to fall silent from, exactly `checkCollectorSilent`'s own rule.
+ */
+export async function listSourceFreshness(
+  client: PoolClient,
+  workspaceId: string,
+  staleThresholdMs: number,
+): Promise<readonly SourceFreshnessRow[]> {
+  const cutoff = new Date(Date.now() - staleThresholdMs).toISOString();
+  const result = await client.query<{
+    id: string;
+    kind: string;
+    name: string | null;
+    last_observed_at: Date | null;
+  }>(
+    `select s.id, s.kind, s.name, o.last_observed_at
+       from sources s
+       join principals p on p.workspace_id = s.workspace_id and p.id = s.owner_principal_id
+       left join lateral (
+         select max(created_at) as last_observed_at
+           from observations ob
+          where ob.workspace_id = s.workspace_id and ob.source_id = s.id
+       ) o on true
+      where s.workspace_id = $1
+        and p.kind = 'service'
+      order by o.last_observed_at asc nulls last`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => ({
+    sourceId: row.id,
+    kind: row.kind,
+    name: row.name,
+    lastObservedAt: row.last_observed_at,
+    silent: row.last_observed_at !== null && row.last_observed_at.toISOString() < cutoff,
+  }));
+}
+
 /** Links a Source to the Activity that used it (`observations.activity_id`) — the row `explain`
  *  already walks (`substrate/epistemic/explain.ts`'s `fetchObservationRefs`). `content` carries no
  *  PROV-O payload of its own for most callers here (S2.9's use is purely "this Activity used this

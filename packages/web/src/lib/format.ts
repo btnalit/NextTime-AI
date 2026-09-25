@@ -147,12 +147,16 @@ export function humanizeKind(kind: string): string {
   return kind.replace(/[._-]+/g, ' ').trim() || kind;
 }
 
-/** A platform audit row's actor, for display: the login when known, else the raw id, else — 遗留
- *  54 (`packages/kernel/src/application/platform/purge-workspace.ts`) — an operator-CLI purge with
- *  no resolvable administrator writes `actorUserId: null` rather than skipping the row. Never
- *  render that as a blank chip or `"null"` (a template literal would otherwise stringify it
- *  verbatim). Structurally typed (not `PlatformAuditRecordWire`) to keep this module
- *  dependency-free, same as every other helper here. */
+/** A platform audit row's actor, for display: the login when known, else the id (S8 W4-A ui-audit
+ *  AU1/S10: truncated via `shortId` rather than shown in full — a raw platform user id has no
+ *  `resolve_refs` kind to resolve through, unlike every workspace-scope reference this console
+ *  already routes through `RefChip`, so the least this helper can do is stop being a literal full
+ *  UUID in rendered text), else — 遗留 54 (`packages/kernel/src/application/platform/
+ *  purge-workspace.ts`) — an operator-CLI purge with no resolvable administrator writes
+ *  `actorUserId: null` rather than skipping the row. Never render that as a blank chip or `"null"`
+ *  (a template literal would otherwise stringify it verbatim). Structurally typed (not
+ *  `PlatformAuditRecordWire`) to keep this module dependency-free, same as every other helper
+ *  here. */
 export function formatAuditActor(
   row: {
     readonly actorLogin: string | null;
@@ -160,9 +164,9 @@ export function formatAuditActor(
   },
   t: Translate,
 ): string {
-  return (
-    row.actorLogin ?? row.actorUserId ?? t('主机操作员（未署名）', 'Host operator (unattributed)')
-  );
+  if (row.actorLogin) return row.actorLogin;
+  if (row.actorUserId) return shortId(row.actorUserId);
+  return t('主机操作员（未署名）', 'Host operator (unattributed)');
 }
 
 /** Pretty JSON, or the raw string when the value is not serializable. */
