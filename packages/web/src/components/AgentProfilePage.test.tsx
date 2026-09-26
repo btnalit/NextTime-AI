@@ -149,6 +149,51 @@ describe('AgentProfilePage', () => {
     );
   });
 
+  it('bugfix (PR #324 review): 模型 row says "继承工作区默认 · <model>" when the profile has no override', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          model: null,
+          effective: {
+            model: 'anthropic/claude',
+            enabledSkills: [],
+            enabledGatekeepers: [],
+            enabledWorkerDefinitions: [],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+    });
+    renderPage(http);
+    const effective = await screen.findByTestId('agent-profile-effective');
+    expect(within(effective).getByText(/继承工作区默认/)).toBeTruthy();
+    expect(within(effective).getByText(/anthropic\/claude/)).toBeTruthy();
+  });
+
+  it('bugfix (PR #324 review): 模型 row never renders blank, even when the workspace has no resolved default model', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          model: null,
+          effective: {
+            model: '',
+            enabledSkills: [],
+            enabledGatekeepers: [],
+            enabledWorkerDefinitions: [],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+    });
+    renderPage(http);
+    const effective = await screen.findByTestId('agent-profile-effective');
+    expect(
+      within(effective)
+        .getByText(/继承工作区默认/)
+        .textContent?.trim(),
+    ).not.toBe('');
+  });
+
   it('renders a get_agent_profile not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       get_agent_profile: () =>

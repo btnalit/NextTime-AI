@@ -5,7 +5,7 @@ import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
@@ -278,6 +278,21 @@ function EffectiveRefs({
   );
 }
 
+/** Console redesign P3-3 bugfix (main-session review of PR #324): the 模型 row rendered empty
+ *  whenever `effective.model` came back falsy (an unset workspace default) — it must always show
+ *  *something*, and say whether it is inherited. `profile.model === null` means this principal has
+ *  no override (`AgentProfile`'s own doc comment: "缺省 = 继承 AgentPolicy 默认"). */
+function effectiveModelText(profile: AgentProfile, t: Translate): string {
+  const { model: override, effective } = profile;
+  if (override !== null) return effective.model || override;
+  return effective.model
+    ? t(`继承工作区默认 · ${effective.model}`, `Inherits workspace default · ${effective.model}`)
+    : t(
+        '继承工作区默认（工作区未设置默认模型）',
+        'Inherits workspace default (no workspace default model set)',
+      );
+}
+
 function EffectivePanel({
   profile,
   skillNames,
@@ -301,7 +316,7 @@ function EffectivePanel({
           {
             key: 'model',
             label: t('模型', 'Model'),
-            value: <span className="mono">{effective.model}</span>,
+            value: <span className="mono">{effectiveModelText(profile, t)}</span>,
           },
           {
             key: 'skills',

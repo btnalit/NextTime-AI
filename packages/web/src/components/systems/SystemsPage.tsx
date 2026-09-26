@@ -38,6 +38,7 @@ import { Notice } from '../kit/notice.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { Tabs } from '../kit/tabs.js';
 import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
 import { SystemAccessCard, type SystemAccessGranteeRow } from './SystemAccessCard.js';
 import { useMemberReachability } from './useMemberReachability.js';
@@ -411,23 +412,22 @@ export function SystemsPage({
             {requestedCount > 0 ? <span className="nav-badge">{requestedCount}</span> : null}
           </h2>
           {!requestsForbidden ? (
-            <fieldset className="row-wrap" style={{ border: 0, padding: 0, margin: 0 }}>
-              <legend className="visually-hidden">
-                {t('筛选连接申请', 'Filter connection requests')}
-              </legend>
-              {REQUEST_FILTERS.map((value) => (
-                <Button
-                  key={value}
-                  variant={filter === value ? 'primary' : 'secondary'}
-                  size="s"
-                  onClick={() => setFilter(value)}
-                >
-                  {value === 'all'
+            // Bugfix (PR #324 review): this was a `<fieldset>` of individual `kit/button`
+            // `primary`/`secondary` pairs — a proper segmented control (`kit/tabs`) instead, same
+            // component the rest of the redesign already uses for this exact pattern (e.g.
+            // 能力目录's Skill/Worker tabs).
+            <Tabs
+              ariaLabel={t('筛选连接申请', 'Filter connection requests')}
+              value={filter}
+              onChange={setFilter}
+              options={REQUEST_FILTERS.map((value) => ({
+                value,
+                label:
+                  value === 'all'
                     ? t('全部', 'All')
-                    : labelText(statusChipStyle('connectionRequest', value), t)}
-                </Button>
-              ))}
-            </fieldset>
+                    : labelText(statusChipStyle('connectionRequest', value), t),
+              }))}
+            />
           ) : null}
         </div>
 

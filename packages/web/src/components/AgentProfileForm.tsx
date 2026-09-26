@@ -14,6 +14,7 @@ import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { definitionName } from '../lib/tasks.js';
 import { Button } from './kit/button.js';
+import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
 import { Notice } from './kit/notice.js';
@@ -222,6 +223,11 @@ export function AgentProfileForm({
           )}
         </p>
 
+        {/* Bugfix (PR #324 review): the three sub-groups ran into each other with no separation —
+         *  adjacent `.checklist-group`s get a 16px gap via a sibling rule (`styles/pages.css`),
+         *  kept as direct `DashboardCard` children (no extra wrapper) rather than nested one level
+         *  deeper, which would push these `t(zh, en)` calls past the line width the i18n-pairs
+         *  guard's `t(` lookback tolerates. */}
         <ChecklistField
           title="Skills"
           subtitle={t('已发布的 Skill', 'Published Skills')}
@@ -390,13 +396,11 @@ function ChecklistField({
   readonly empty: ReactNode;
 }) {
   return (
-    <div className="field" data-testid={testId}>
-      <span className="field-label">{title}</span>
-      <p className="field-hint">{subtitle}</p>
+    <div className="checklist-group" data-testid={testId}>
+      <span className="checklist-group-title">{title}</span>
+      <p className="checklist-group-hint">{subtitle}</p>
       {options.length === 0 ? (
-        <p className="field-hint" data-testid={`${testId}-empty`}>
-          {empty}
-        </p>
+        <EmptyState variant="inline" title={title} body={empty} testId={`${testId}-empty`} />
       ) : (
         <fieldset
           className="stack-s"

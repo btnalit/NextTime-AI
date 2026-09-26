@@ -11,9 +11,13 @@ import { isForbiddenError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
+// Bugfix (PR #324 review): "待启用的平台实例" was still the legacy dashed-border EmptyState —
+// `kit/empty-state` (block variant, no dashed border) instead, matching V9. The rest of this
+// file's `components/ui/*` imports are unchanged (this file stays on
+// `scripts/guards/legacy-ui-importers.json`; out of this lane's scope to migrate fully).
+import { EmptyState } from './kit/empty-state.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import { Button } from './ui/Button.js';
-import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
@@ -117,7 +121,6 @@ export function AvailableGateInstancesSection({
         />
       ) : rows.length === 0 ? (
         <EmptyState
-          icon="grid"
           title={t('平台目录里还没有可启用的实例', 'Nothing to enable yet')}
           body={t(
             '需要管理员先把某个接入包设为「平台预置」，其实例才会出现在这里。',

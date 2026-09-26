@@ -159,19 +159,25 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
               `Your agent can use ${usableCount}/${data.gates.length} system(s)`,
             )}
           </strong>
-          {data.gates.map((gate) => (
-            <span
-              key={gate.gateId}
-              className={`chip chip-s ${GATE_CHIP_TONE[gate.status]}`}
-              data-testid="execution-readiness-gate-chip"
-              data-gate-id={gate.gateId}
-              data-status={gate.status}
-            >
-              {displayNames.get(gate.gateId) ?? gate.name}
-              {'：'}
-              {gateChipLabel(gate.status, t)}
-            </span>
-          ))}
+          {/* Bugfix (PR #324 review): an inline chip per unusable gate turned "0/5 usable" into a
+           *  wall of amber. Usable systems still get their own chip; every unusable one folds into
+           *  the single "N 个用不了 · 查看原因" disclosure below instead of repeating itself once
+           *  per gate. */}
+          {data.gates
+            .filter((gate) => gate.status !== 'unreachable')
+            .map((gate) => (
+              <span
+                key={gate.gateId}
+                className={`chip chip-s ${GATE_CHIP_TONE[gate.status]}`}
+                data-testid="execution-readiness-gate-chip"
+                data-gate-id={gate.gateId}
+                data-status={gate.status}
+              >
+                {displayNames.get(gate.gateId) ?? gate.name}
+                {'：'}
+                {gateChipLabel(gate.status, t)}
+              </span>
+            ))}
           {unusable.length > 0 ? (
             <Button
               variant="ghost"

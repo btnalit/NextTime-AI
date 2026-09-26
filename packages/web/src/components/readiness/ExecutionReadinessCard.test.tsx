@@ -153,8 +153,12 @@ describe('ExecutionReadinessCard', () => {
     // Console redesign P3-3 (V2): amber lives on the unusable chip alone, never on the container.
     await screen.findByTestId('execution-readiness-body');
     expect(screen.getByTestId('execution-readiness-body').className).not.toContain('notice-warn');
+    // Bugfix (PR #324 review): unusable gates no longer get their own inline chip — they fold into
+    // the single "N 个用不了" toggle below, so only the usable gate (CRM) shows a chip here.
     const chips = await screen.findAllByTestId('execution-readiness-gate-chip');
-    expect(chips[1]?.className).toContain('chip-warn');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.getAttribute('data-status')).toBe('direct');
+    expect(chips.some((chip) => chip.className.includes('chip-warn'))).toBe(false);
 
     const toggle = screen.getByTestId('execution-readiness-toggle');
     expect(toggle.textContent).toContain('1');
@@ -170,6 +174,29 @@ describe('ExecutionReadinessCard', () => {
     expect(rowLink?.getAttribute('href')).toBe('#/me/agent');
     expect(rowLink?.className).toContain('link-inline');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('bugfix (PR #324 review): 0/5 usable shows no inline chips at all, just the summary and the toggle', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          ready: false,
+          gates: Array.from({ length: 5 }, (_, i) =>
+            gate({
+              gateId: `g-${i}`,
+              name: `System ${i}`,
+              status: 'unreachable',
+              reason: 'not_granted',
+            }),
+          ),
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const summary = await screen.findByTestId('execution-readiness-summary');
+    expect(summary.textContent).toContain('0/5');
+    expect(screen.queryAllByTestId('execution-readiness-gate-chip')).toHaveLength(0);
+    const toggle = screen.getByTestId('execution-readiness-toggle');
+    expect(toggle.textContent).toContain('5');
   });
 
   it('console redesign P3-3 (V2): two gates sharing a display name get a short-id suffix', async () => {

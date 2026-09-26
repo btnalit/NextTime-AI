@@ -118,27 +118,62 @@ function gateStatusLabel(status: ExecutionReadinessGateWire['status'], t: Transl
   }
 }
 
+/** Bugfix (PR #324 review, "remove the reason link that points to the page you are already
+ *  on"): `no_published_operation`'s and `not_granted`'s fix-it links both resolve to 系统与授权
+ *  itself (`hrefs.systems()`/`hrefs.access()`) — and their actual fix is already a control on this
+ *  very row ("发布清单" in the overflow menu, "授权" as the primary action), so the link is a
+ *  same-page no-op. The other reasons (`excluded_by_policy`/`excluded_by_profile`/`no_worker`)
+ *  send the reader to a genuinely different page and keep their link. */
+const SELF_PAGE_HREFS: ReadonlySet<string> = new Set([hrefs.systems(), hrefs.access()]);
+
+function isSelfPageHref(href: string | undefined): boolean {
+  return href !== undefined && SELF_PAGE_HREFS.has(href);
+}
+
 /** "Reachability for me" (V5): the viewing principal's own status is already on `gate` itself
  *  (`execution_readiness`'s baseline, self read) — no extra lookup, unlike a grantee row's, which
- *  needs a per-principal `execution_readiness` read (`readinessByPrincipal`, see `GranteeRow`). */
+ *  needs a per-principal `execution_readiness` read (`readinessByPrincipal`, see `GranteeRow`).
+ *
+ * Bugfix (PR #324 review, "system rows are too busy"): the row itself now renders only the chip
+ * — the full reason sentence is the chip's own `title` tooltip, and the fully-spelled-out
+ * version (+ fix-it link) moved into the "谁能用" detail sheet (`SystemAccessCard`'s own "你的
+ * 可达性" section) so it is available on demand without crowding the row. */
 function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
   const t = useT();
+  const reason = gate.status === 'unreachable' ? gateReasonText(gate.reason, t) : undefined;
   return (
-    <span className="row-wrap" data-testid="gatekeeper-reachability" data-status={gate.status}>
+    <span
+      className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}
+      data-testid="gatekeeper-reachability"
+      data-status={gate.status}
+      title={reason}
+    >
+      {gateStatusLabel(gate.status, t)}
+    </span>
+  );
+}
+
+/** The drawer's own, fuller rendering of the same reachability — full sentence + a fix-it link
+ *  when it points somewhere actually useful (see `isSelfPageHref`). */
+function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+  const t = useT();
+  const href = gate.reason !== undefined ? gateReasonHref(gate.reason) : undefined;
+  return (
+    <div className="row-wrap" data-testid="system-access-my-reachability">
       <span className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}>
         {gateStatusLabel(gate.status, t)}
       </span>
       {gate.status === 'unreachable' ? (
         <>
           <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
-          {gate.reason !== undefined && gateReasonHref(gate.reason) !== undefined ? (
-            <a href={gateReasonHref(gate.reason)} className="link-inline">
+          {gate.reason !== undefined && href !== undefined && !isSelfPageHref(href) ? (
+            <a href={href} className="link-inline">
               {gateReasonLink(gate.reason, t)}
             </a>
           ) : null}
         </>
       ) : null}
-    </span>
+    </div>
   );
 }
 
@@ -312,6 +347,11 @@ export function SystemAccessCard({
           </SheetHeader>
 
           <div className="stack">
+            <div className="stack-s">
+              <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
+              <MyReachabilityDetail gate={gate} />
+            </div>
+
             <div className="stack-s" data-testid="system-access-list">
               <span className="field-label">{t('谁能用', 'Who can use it')}</span>
               {rows.length === 0 ? (
@@ -419,7 +459,9 @@ function GranteeRow({
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
-          {gateStatus.reason !== undefined && gateReasonHref(gateStatus.reason) !== undefined ? (
+          {gateStatus.reason !== undefined &&
+          gateReasonHref(gateStatus.reason) !== undefined &&
+          !isSelfPageHref(gateReasonHref(gateStatus.reason)) ? (
             <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
               {gateReasonLink(gateStatus.reason, t)}
             </a>

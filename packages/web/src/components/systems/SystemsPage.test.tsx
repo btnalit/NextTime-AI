@@ -131,6 +131,17 @@ describe('SystemsPage', () => {
     expect(within(drawer).getByTestId('connect-system-launcher')).toBeTruthy();
   });
 
+  it('bugfix (PR #324 review): the selected 连接申请 filter tab renders its visible label (kit/tabs, not an invisible primary-button pill)', async () => {
+    const http = scriptedHttp({});
+    renderPage(http);
+    const tab = await screen.findByRole('tab', { name: '已申请' });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    expect(tab.textContent?.trim()).not.toBe('');
+    expect(tab.textContent).toContain('已申请');
+    const allTab = screen.getByRole('tab', { name: '全部' });
+    expect(allTab.getAttribute('aria-selected')).toBe('false');
+  });
+
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
     const http = scriptedHttp({
       execution_readiness: (params) => {
@@ -265,5 +276,41 @@ describe('SystemsPage', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: /接入向导/ }));
     const drawer = await screen.findByTestId('onboarding-wizard-drawer');
     expect(within(drawer).getByTestId('wizard-step-kind')).toBeTruthy();
+  });
+
+  it('bugfix (PR #324 review): an unreachable row keeps the reason as a chip tooltip, not inline text, drops the same-page fix-it link, and the drawer still spells it out with a real (different-page) link', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              status: 'unreachable',
+              reason: 'not_granted',
+              excludedByProfile: false,
+            }),
+          ],
+        }),
+    });
+    renderPage(http);
+
+    const card = (await screen.findAllByTestId('gatekeeper-card')).find((el) =>
+      el.textContent?.includes('Docker prod'),
+    ) as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    // The row stays terse: the chip itself carries the reason as a tooltip (`title`), not as
+    // visible inline text or a link — `not_granted`'s fix-it link would point back at this exact
+    // page anyway (系统与授权 already has the fix — the "授权" button right on this row).
+    expect(chip.textContent).toBe('用不了');
+    expect(chip.getAttribute('title')).toContain('还没有授权给你');
+    expect(within(card).queryByRole('link', { name: /系统与授权/ })).toBeNull();
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const detail = within(drawer).getByTestId('system-access-my-reachability');
+    expect(detail.textContent).toContain('还没有授权给你');
+    // Still no self-page link inside the drawer either — `not_granted`'s only listed fix-it
+    // destination is this same page.
+    expect(within(detail).queryByRole('link')).toBeNull();
   });
 });
