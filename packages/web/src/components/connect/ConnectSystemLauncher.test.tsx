@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import type { AvailableGateInstanceWire, ConnectorWire, GateInstanceWire } from '@nexttime/shared';
+import type {
+  AvailableGateInstanceWire,
+  ConnectorWire,
+  ExecutionReadinessWire,
+  GateInstanceWire,
+} from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -33,6 +38,16 @@ function scriptedHttp(
     list_gatekeepers: () => ({ items: [] }),
     list_operations: () => ({ items: [] }),
     search: () => ({ items: [] }),
+    // console redesign P2-b: step 4 (握手验证) now also reads this for "我的智能体现在能用它吗？"
+    // on the workspace path — a harmless empty default so tests that don't care about that section
+    // don't need to script it themselves; `readiness()` below builds a realistic one to override.
+    execution_readiness: () => ({
+      principalId: 'p-1',
+      ready: false,
+      missing: [],
+      gates: [],
+      workers: [],
+    }),
     ...handlers,
   };
   return {
@@ -136,6 +151,27 @@ function availableRow(
     gatekeeperId: null,
     ...overrides,
   };
+}
+
+type GateWire = ExecutionReadinessWire['gates'][number];
+
+function readinessGate(overrides: Partial<GateWire> & Pick<GateWire, 'gateId' | 'name'>): GateWire {
+  return {
+    granted: true,
+    publishedOperationCount: 1,
+    observeOperationCount: 1,
+    executeOperationCount: 0,
+    excludedByPolicy: false,
+    excludedByProfile: false,
+    inEntryScope: true,
+    workerDefinitionIds: [],
+    status: 'direct',
+    ...overrides,
+  };
+}
+
+function readiness(overrides: Partial<ExecutionReadinessWire> = {}): ExecutionReadinessWire {
+  return { principalId: 'p-1', ready: false, missing: [], gates: [], workers: [], ...overrides };
 }
 
 function renderLauncher(props: Partial<ConnectSystemLauncherProps> & { http: CapabilityCaller }) {
@@ -551,5 +587,192 @@ describe('ConnectSystemLauncher — packaged path (ssh / cli)', () => {
     const empty = await screen.findByTestId('launcher-gates-empty');
     expect(empty.textContent).toContain('由管理员启用、设为平台预置');
     expect(http.calls.some((call) => call.name === 'list_available_gate_instances')).toBe(true);
+  });
+});
+
+describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (console redesign P2-b)', () => {
+  /** Drives the workspace hosted path (kind → pick an available instance → enable + grant) to
+   *  step 4 (握手验证) — the same sequence the "points at the platform 集成" test above already
+   *  proved works end to end; this only exists to reach the new step's own section repeatably for
+   *  each `execution_readiness` state below. */
+  async function reachHandshake(
+    executionReadiness: () => ExecutionReadinessWire,
+  ): Promise<
+    CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] }
+  > {
+    const http = scriptedHttp({
+      list_available_gate_instances: () => ({ items: [availableRow()] }),
+      preview_gate_instance_enable: () => ({
+        gateId: 'docker-prod',
+        wouldLink: null,
+        ambiguousCandidates: [],
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+      }),
+      enable_gate_instance: () => ({
+        gateId: 'docker-prod',
+        gatekeeperId: 'gk-9',
+        publishedOperationNames: ['container_list', 'container_restart'],
+        skippedOperationNames: [],
+        linkedExisting: false,
+      }),
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-alice',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Alice',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: true,
+          },
+        ],
+      }),
+      grant_capability: () => ({
+        id: 'grant-1',
+        principalId: 'p-alice',
+        resourceType: 'gatekeeper',
+        resourceId: 'gk-9',
+        status: 'active',
+      }),
+      execution_readiness: executionReadiness,
+    });
+    renderLauncher({
+      http,
+      origin: 'workspace',
+      platformAdmin: false,
+      canEnable: true,
+      available: [availableRow()],
+    });
+    fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
+    next();
+    fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+    next();
+    const workspaceSide = screen.getByTestId('launcher-workspace-enable');
+    await screen.findByTestId('launcher-workspace-checklist');
+    fireEvent.click(within(workspaceSide).getByTestId('launcher-workspace-enable-button'));
+    const confirm = await screen.findByTestId('launcher-workspace-enable-button-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await within(workspaceSide).findByTestId('launcher-workspace-linked');
+    const grant = screen.getByTestId('launcher-grant');
+    const select = within(grant).getByTestId('ggf-member-select');
+    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
+    fireEvent.change(select, { target: { value: 'p-alice' } });
+    fireEvent.click(within(grant).getByTestId('ggf-submit'));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(false),
+    );
+    next();
+    return http;
+  }
+
+  it('direct: says the agent can already call its read operations itself, then offers 去对话里试一句', async () => {
+    await reachHandshake(() =>
+      readiness({
+        ready: true,
+        gates: [
+          readinessGate({
+            gateId: 'gk-9',
+            name: 'Docker prod',
+            observeOperationCount: 2,
+            publishedOperationCount: 2,
+          }),
+        ],
+      }),
+    );
+    const direct = await screen.findByTestId('launcher-agent-usability-direct');
+    expect(direct.textContent).toContain('2 个只读操作');
+    expect(screen.getByTestId('launcher-try-in-chat-button').getAttribute('href')).toBe(
+      '#/work/chats',
+    );
+    expect(screen.getByTestId('launcher-try-in-chat-suggestion').textContent).toContain(
+      'Docker prod',
+    );
+  });
+
+  it('via_worker: names the Worker(s) that cover it', async () => {
+    await reachHandshake(() =>
+      readiness({
+        ready: true,
+        gates: [
+          readinessGate({
+            gateId: 'gk-9',
+            name: 'Docker prod',
+            observeOperationCount: 0,
+            executeOperationCount: 2,
+            publishedOperationCount: 2,
+            inEntryScope: false,
+            workerDefinitionIds: ['w-1'],
+            status: 'via_worker',
+          }),
+        ],
+        workers: [
+          {
+            definitionId: 'w-1',
+            version: 1,
+            name: 'Ops runner',
+            delegable: true,
+            reachableGateCount: 1,
+            blockedBy: [],
+          },
+        ],
+      }),
+    );
+    const viaWorker = await screen.findByTestId('launcher-agent-usability-via-worker');
+    expect(viaWorker.textContent).toContain('Ops runner');
+    expect(screen.getByTestId('launcher-try-in-chat-button')).toBeTruthy();
+  });
+
+  it('unreachable · no_worker: offers to create a Worker from the catalog template instead of the generic reason', async () => {
+    await reachHandshake(() =>
+      readiness({
+        ready: false,
+        gates: [
+          readinessGate({
+            gateId: 'gk-9',
+            name: 'Docker prod',
+            observeOperationCount: 0,
+            executeOperationCount: 1,
+            publishedOperationCount: 1,
+            inEntryScope: false,
+            status: 'unreachable',
+            reason: 'no_worker',
+          }),
+        ],
+      }),
+    );
+    const noWorker = await screen.findByTestId('launcher-agent-usability-no-worker');
+    expect(noWorker.textContent).toContain('Docker prod');
+    const link = screen.getByTestId('launcher-agent-usability-create-worker');
+    expect(link.getAttribute('href')).toBe('#/govern/catalog/workers');
+    // "去对话里试一句" still closes the step even when blocked (M4: trying it just has the agent
+    // explain the same gap this step already named — never a false promise of success).
+    expect(screen.getByTestId('launcher-try-in-chat-button')).toBeTruthy();
+  });
+
+  it('unreachable · any other reason: the shared readiness-copy reason text + fix link, never a raw code', async () => {
+    await reachHandshake(() =>
+      readiness({
+        ready: false,
+        gates: [
+          readinessGate({
+            gateId: 'gk-9',
+            name: 'Docker prod',
+            granted: false,
+            inEntryScope: false,
+            status: 'unreachable',
+            reason: 'not_granted',
+          }),
+        ],
+      }),
+    );
+    const blocked = await screen.findByTestId('launcher-agent-usability-blocked');
+    expect(blocked.textContent).not.toContain('not_granted');
+    expect(blocked.textContent).toContain('还没有授权给你');
+    expect(blocked.querySelector('a')?.getAttribute('href')).toBe('#/govern/access');
+    expect(screen.getByTestId('launcher-try-in-chat-button')).toBeTruthy();
   });
 });

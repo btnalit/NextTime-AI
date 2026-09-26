@@ -2,10 +2,11 @@ import type {
   AvailableGateInstanceWire,
   ConnectorWire,
   EnableGateInstanceResultWire,
+  ExecutionReadinessWire,
   GateHostTokenWire,
   GateInstanceWire,
 } from '@nexttime/shared';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -18,13 +19,15 @@ import {
 import type { GrantRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
-import { hrefs } from '../../lib/router.js';
+import { type CatalogTab, hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
 import { GrantGateForm } from '../access/GrantGateForm.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
 import { PlatformError } from '../platform/PlatformError.js';
+import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input } from '../ui/Field.js';
@@ -36,6 +39,8 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
+
+const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
 
 export interface ConnectSystemLauncherResult {
   readonly gateId: string | null;
@@ -1250,6 +1255,246 @@ function HandshakeStep({
           )}
         </Notice>
       ) : null}
+
+      {/* console redesign P2-b: the gate being healthy (above) answers "is the system up" — this
+       *  answers the question the wizard exists for, "can MY agent use it now" (only meaningful in
+       *  a workspace: `execution_readiness` is per-member). */}
+      {onWorkspace ? (
+        <AgentUsabilitySection http={http} gate={gate} linkedGatekeeperId={linkedGatekeeperId} />
+      ) : null}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// 握手验证 (continued): "我的智能体现在能用它吗？"
+// -------------------------------------------------------------------------------------------
+
+/**
+ * components/connect/ConnectSystemLauncher · AgentUsabilitySection (console redesign P2-b,
+ * docs/console-redesign-plan-2026-09-25.md §4 "接入一个系统"向导补"去对话里试一句"): the wizard's
+ * last step used to stop at "门实例可用" — a system-health fact, not an answer to the question the
+ * whole wizard exists for. This re-reads `execution_readiness` (fresh on mount, i.e. *after* the
+ * enable + grant this same launcher run just did — step 3 requires both before step 4 is even
+ * reachable, `workspaceReady`) and answers for *this* gate specifically:
+ *
+ *   - `direct`      → the entry agent can already call its N read operations itself.
+ *   - `via_worker`  → which Worker(s) it has to delegate to.
+ *   - `unreachable` + `no_worker` (an execute-only system with no covering Worker) → the specific
+ *     next action (create one from the ops-runner template) rather than the generic reason text.
+ *   - any other `unreachable` reason → `readiness-copy.ts`'s own reason text + fix link (the same
+ *     copy the chat status strip and `find_operations` use — one vocabulary, not a second one for
+ *     this surface).
+ *
+ * Reuses the catalog's existing Worker editor/template entry point by linking to it (§ task scope:
+ * "do not build a new editor") rather than mounting `WorkerDefinitionEditor` here.
+ */
+function AgentUsabilitySection({
+  http,
+  gate,
+  linkedGatekeeperId,
+}: {
+  readonly http: CapabilityCaller;
+  readonly gate: TrackedGate;
+  readonly linkedGatekeeperId: string | null;
+}) {
+  const t = useT();
+  const readiness = useExecutionReadiness(http);
+
+  // Not enabled in this workspace (shouldn't happen by step 4 on the workspace path — `canNext`
+  // already required it — but a direct render of this step in a test, or a future relaxation of
+  // that gate, must not crash on a null id).
+  if (linkedGatekeeperId === null) return null;
+
+  return (
+    <div className="stack-s" data-testid="launcher-agent-usability">
+      <span className="section-title">
+        {t('我的智能体现在能用它吗？', 'Can my agent use it now?')}
+      </span>
+      {readiness.state.status === 'loading' ? (
+        <p className="text-3 text-small" data-testid="launcher-agent-usability-loading">
+          {t('正在确认…', 'Checking…')}
+        </p>
+      ) : readiness.state.status === 'error' ? (
+        <ErrorBanner
+          error={readiness.state.error}
+          title={t('无法确认智能体的可达性', 'Could not check agent reachability')}
+          onRetry={() => void readiness.reload()}
+          retryLabel={t('重试', 'Retry')}
+          testId="launcher-agent-usability-error"
+        />
+      ) : (
+        <AgentUsabilityResult
+          data={readiness.state.data}
+          gate={gate}
+          linkedGatekeeperId={linkedGatekeeperId}
+        />
+      )}
+    </div>
+  );
+}
+
+function AgentUsabilityResult({
+  data,
+  gate,
+  linkedGatekeeperId,
+}: {
+  readonly data: ExecutionReadinessWire;
+  readonly gate: TrackedGate;
+  readonly linkedGatekeeperId: string;
+}) {
+  const t = useT();
+  const gateRow = data.gates.find((row) => row.gateId === linkedGatekeeperId);
+  const workerNames = new Map(
+    data.workers.map((worker) => [worker.definitionId, worker.name ?? worker.definitionId]),
+  );
+  const suggestion = t(`列出 ${gate.displayName} 里有哪些…`, `List what's in ${gate.displayName}…`);
+
+  if (!gateRow) {
+    // `execution_readiness`'s `gates[]` lists every registered Gatekeeper — this one was just
+    // registered by `enable_gate_instance` in step 3; absence here means the read landed on a
+    // stale cache, not a real gap. Rare enough (and self-correcting on retry) not to warrant its
+    // own copy — the error path above already covers "could not read this".
+    return (
+      <Notice tone="warn" testId="launcher-agent-usability-unknown">
+        {t(
+          '还没有读到这个系统的最新状态——重新打开这一步再看一次。',
+          "Haven't read this system's latest status yet — reopen this step to check again.",
+        )}
+      </Notice>
+    );
+  }
+
+  // The branch-specific outcome; `TryInChatAction` below is the step's one closing action
+  // regardless of which outcome came out — including a blocked one: M4's own prompt contract
+  // (docs/console-redesign-plan-2026-09-25.md §3) means trying it in chat when unreachable just
+  // has the agent explain the same gap this step already named, never guess or silently delegate
+  // to a Worker that cannot reach it — a true "does this actually work now" check, not a false
+  // promise.
+  let outcome: ReactNode;
+  if (gateRow.status === 'direct') {
+    outcome = (
+      <Notice testId="launcher-agent-usability-direct">
+        <span className="row-wrap">
+          <span className="chip chip-ok chip-s">{t('可直接调用', 'Direct')}</span>
+          <span>
+            {t(
+              `你的智能体已经可以直接调用 ${gate.displayName} 的 ${gateRow.observeOperationCount} 个只读操作。`,
+              `Your agent can already call ${gate.displayName}'s ${gateRow.observeOperationCount} read operation(s) directly.`,
+            )}
+          </span>
+        </span>
+      </Notice>
+    );
+  } else if (gateRow.status === 'via_worker') {
+    const workers = gateRow.workerDefinitionIds.map((id) => workerNames.get(id) ?? id).join('、');
+    outcome = (
+      <Notice testId="launcher-agent-usability-via-worker">
+        <span className="row-wrap">
+          <span className="chip chip-info chip-s">{t('需委派', 'Via a Worker')}</span>
+          <span>
+            {t(
+              `你的智能体要委派给 ${workers} 才能用 ${gate.displayName}。`,
+              `Your agent has to delegate to ${workers} to use ${gate.displayName}.`,
+            )}
+          </span>
+        </span>
+      </Notice>
+    );
+  } else if (gateRow.reason === 'no_worker') {
+    // `no_worker` gets its own actionable next step (an execute-only system with nothing declaring
+    // it); every other reason below reuses the shared readiness copy so this surface never drifts
+    // from the chat status strip / `find_operations` on the same gate.
+    outcome = (
+      <Notice tone="warn" testId="launcher-agent-usability-no-worker">
+        <div className="stack-s">
+          <span>
+            {t(
+              `${gate.displayName} 只声明了执行类操作，需要一个挂了它的 Worker 才能用——可以在能力目录用 ops-runner 模板直接创建一个。`,
+              `${gate.displayName} only declares execute-class operations — it needs a Worker that covers it. Create one from the ops-runner template in Catalog.`,
+            )}
+          </span>
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <a
+              href={hrefs.catalog(CATALOG_WORKERS_TAB)}
+              className="btn btn-secondary btn-s"
+              data-testid="launcher-agent-usability-create-worker"
+            >
+              <span className="btn-label">
+                {t('去能力目录创建 Worker', 'Create a Worker in Catalog')}
+              </span>
+            </a>
+          </div>
+        </div>
+      </Notice>
+    );
+  } else {
+    outcome = (
+      <Notice tone="warn" testId="launcher-agent-usability-blocked">
+        <div className="stack-s">
+          <span>{gateReasonText(gateRow.reason, t)}</span>
+          {gateRow.reason !== undefined ? (
+            <a href={gateReasonHref(gateRow.reason)}>{gateReasonLink(gateRow.reason, t)}</a>
+          ) : null}
+        </div>
+      </Notice>
+    );
+  }
+
+  return (
+    <div className="stack-s">
+      {outcome}
+      <TryInChatAction suggestion={suggestion} />
+    </div>
+  );
+}
+
+/** The wizard's closing hand-off: 对话 has no prefilled-draft mechanism today (confirmed against
+ *  `ChatPage`/`ChatListPage` — no query param, no shared storage key), so this navigates to 对话
+ *  and hands the suggestion over as copyable text instead of inventing a new cross-page protocol
+ *  (out of this lane's scope — `ChatPage*` is another lane's). */
+function TryInChatAction({ suggestion }: { readonly suggestion: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+
+  async function copy(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(suggestion);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="stack-s" data-testid="launcher-try-in-chat">
+      <div className="row-wrap">
+        <a
+          href={hrefs.chats()}
+          className="btn btn-primary"
+          data-testid="launcher-try-in-chat-button"
+        >
+          <span className="btn-label">{t('去对话里试一句', 'Try it in chat')}</span>
+        </a>
+        <span className="mono text-3" data-testid="launcher-try-in-chat-suggestion">
+          {suggestion}
+        </span>
+        <Button
+          variant="secondary"
+          size="s"
+          onClick={() => void copy()}
+          data-testid="launcher-try-in-chat-copy"
+        >
+          {copied ? t('已复制', 'Copied') : t('复制', 'Copy')}
+        </Button>
+      </div>
+      <p className="text-3 text-small">
+        {t(
+          '对话输入框暂不支持从链接预填草稿——复制后粘贴进去即可。',
+          "The chat composer doesn't support a prefilled draft from a link yet — paste this once you're there.",
+        )}
+      </p>
     </div>
   );
 }
