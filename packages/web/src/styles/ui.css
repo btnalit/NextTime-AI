@@ -125,7 +125,7 @@
 }
 
 .btn-primary.btn-loading::after {
-  border-color: var(--text-on-accent) transparent var(--text-on-accent) var(--text-on-accent);
+  border-color: var(--text-on-primary) transparent var(--text-on-primary) var(--text-on-primary);
 }
 
 @keyframes spin {
