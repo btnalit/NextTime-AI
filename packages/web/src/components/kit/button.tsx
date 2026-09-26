@@ -4,15 +4,16 @@ import { type ButtonHTMLAttributes, forwardRef } from 'react';
 import { cn } from '../../lib/cn.js';
 
 /** Mirrors `components/ui/Button`'s four weights and two sizes (docs/console-completion-plan.md
- *  §5.9: primary is ink `--text`, never the accent colour — that's reserved for "can be clicked").
- *  `s` stays at the 28px floor §5.9 principle 6 allows for in-row/toast placement; `m` is the
- *  default 36px minimum click height. */
+ *  §5.9; design system v2: primary is the brand `--primary` with hover and press steps, one per
+ *  page). `s` stays at the 28px floor §5.9 principle 6 allows for in-row/toast placement; `m` is
+ *  the default 36px minimum click height. */
 export const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-m text-13 font-medium transition-colors disabled:pointer-events-none disabled:opacity-55',
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-m text-13 font-medium transition-[color,background-color,border-color,box-shadow] duration-150 ease-out disabled:pointer-events-none disabled:opacity-55',
   {
     variants: {
       variant: {
-        primary: 'bg-text text-text-on-accent hover:bg-text-2',
+        primary:
+          'bg-primary text-text-on-primary shadow-card hover:bg-primary-hover active:bg-primary-press',
         secondary: 'border border-border-strong bg-surface-2 text-text hover:bg-surface-3',
         ghost: 'bg-transparent text-text-2 hover:bg-surface-2 hover:text-text',
         danger: 'bg-danger-soft text-danger hover:bg-danger hover:text-text-on-accent',

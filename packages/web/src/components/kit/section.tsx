@@ -32,7 +32,10 @@ export function DashboardCard({
 }: DashboardCardProps) {
   const hasHeader = title !== undefined || actions !== undefined;
   return (
-    <section className={cn('rounded-l border border-border bg-surface-1', className)} {...rest}>
+    <section
+      className={cn('rounded-l border border-border bg-surface-1 shadow-card', className)}
+      {...rest}
+    >
       {hasHeader ? (
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           {title !== undefined ? (
@@ -56,7 +59,7 @@ export function FormCard({ className, children, ...rest }: FormCardProps) {
   return (
     <div
       className={cn(
-        'flex flex-col divide-y divide-border rounded-l border border-border bg-surface-1',
+        'flex flex-col divide-y divide-border rounded-l border border-border bg-surface-1 shadow-card',
         className,
       )}
       {...rest}

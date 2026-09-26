@@ -202,6 +202,16 @@ describe.each([
     },
   );
 
+  // Design system v2: the brand primary button's label on each of its three states.
+  it.each(['--primary', '--primary-hover', '--primary-press'])(
+    '--text-on-primary meets 4.5:1 on %s',
+    (bgToken) => {
+      const fg = resolveOpaqueRgb('--text-on-primary', tokens, mountSurface);
+      const bg = resolveOpaqueRgb(bgToken, tokens, mountSurface);
+      expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(WCAG_AA_NORMAL_TEXT_MIN);
+    },
+  );
+
   describe.each(SEMANTIC_TEXT_TOKENS)(
     '%s on its own -soft and the neutral page surfaces',
     (semanticToken) => {

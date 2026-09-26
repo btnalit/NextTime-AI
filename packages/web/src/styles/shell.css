@@ -37,8 +37,9 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-m);
-  background: var(--text);
-  color: var(--text-on-accent);
+  /* Design system v2: the product mark carries the brand colour. */
+  background: var(--primary);
+  color: var(--text-on-primary);
   display: grid;
   place-items: center;
   font-weight: 700;

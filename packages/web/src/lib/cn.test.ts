@@ -4,8 +4,8 @@ import { cn } from './cn.js';
 
 describe('cn', () => {
   it('keeps a text colour next to a type-scale size (the scale is a font-size group)', () => {
-    expect(cn('text-13 text-text-on-accent', 'text-12').split(' ')).toEqual([
-      'text-text-on-accent',
+    expect(cn('text-13 text-text-on-primary', 'text-12').split(' ')).toEqual([
+      'text-text-on-primary',
       'text-12',
     ]);
   });
@@ -15,10 +15,10 @@ describe('cn', () => {
     expect(cn('text-13', 'text-12')).toBe('text-12');
   });
 
-  it('a small primary kit Button keeps a label colour (the invisible-label bug)', () => {
+  it('a small primary kit Button keeps its label colour (P3-2 / P3-3 invisible-label bug)', () => {
     // kit/button.tsx merges its own variant classes through cn(), exactly like this.
     const classes = cn(buttonVariants({ variant: 'primary', size: 's' })).split(' ');
-    expect(classes.some((c) => c.startsWith('text-text-on-'))).toBe(true);
+    expect(classes).toContain('text-text-on-primary');
     expect(classes).toContain('text-12');
     expect(classes).not.toContain('text-13');
   });

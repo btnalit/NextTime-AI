@@ -14,15 +14,15 @@ const OPTIONS = [
 ];
 
 describe('kit/Tabs', () => {
-  it('renders a tablist with the selected tab aria-selected and ink-filled', () => {
+  it('renders a tablist with the selected tab aria-selected and raised (surface chip)', () => {
     render(<Tabs ariaLabel="对话过滤" value="pending" options={OPTIONS} onChange={vi.fn()} />);
     expect(screen.getByRole('tablist', { name: '对话过滤' })).toBeTruthy();
     const pending = screen.getByTestId('tab-pending');
     const all = screen.getByTestId('tab-all');
     expect(pending.getAttribute('aria-selected')).toBe('true');
-    expect(pending.className).toContain('bg-text');
+    expect(pending.className).toContain('bg-surface-1');
     expect(all.getAttribute('aria-selected')).toBe('false');
-    expect(all.className).not.toContain('bg-text');
+    expect(all.className).not.toContain('bg-surface-1');
   });
 
   it('shows the optional count', () => {

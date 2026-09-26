@@ -50,10 +50,16 @@
   --color-text-3: var(--text-3);
   --color-text-on-accent: var(--text-on-accent);
 
-  /* Accent — links/selection/focus; the ink primary button uses --color-text, not this. */
+  /* Accent — links/selection/focus. */
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
+
+  /* Primary action (design system v2) — the page's one main button. */
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-press: var(--primary-press);
+  --color-text-on-primary: var(--text-on-primary);
 
   /* Overlay backdrop (dialog/sheet/drawer) — Tailwind's own `black`/`white` keywords are gone
    * once --color-* is reset above, so overlays use this token rather than `bg-black/35`. */
@@ -92,6 +98,8 @@
   --radius-m: var(--radius-m);
   --radius-l: var(--radius-l);
 
-  /* Shadow — floating overlays only (drawer/sheet/tooltip/toast), never for hierarchy. */
+  /* Shadow — design system v2's three levels: card, raised (hover lift), floating overlay. */
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
   --shadow-1: var(--shadow-1);
 }

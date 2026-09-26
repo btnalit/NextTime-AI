@@ -36,7 +36,7 @@
   line-height: 1;
   white-space: nowrap;
   transition: background var(--transition), border-color var(--transition), color var(--transition),
-    opacity var(--transition);
+    opacity var(--transition), box-shadow var(--transition);
 }
 
 /* The compact size is for in-row / in-chip / toast placement; it is the one control allowed under
@@ -57,15 +57,20 @@
   width: 28px;
 }
 
-/* Ink, not accent (§5.9 principle 1): the page's single main action is the darkest thing on it;
- * blue is reserved for "clickable" affordances (links, selection, focus). */
+/* Design system v2: the page's single main action is brand (`--primary`), with hover and press
+ * steps; still one per page (§5.9 principle 1). */
 .btn-primary {
-  background: var(--text);
-  color: var(--text-on-accent);
+  background: var(--primary);
+  color: var(--text-on-primary);
+  box-shadow: var(--shadow-card);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--text-2);
+  background: var(--primary-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--primary-press);
 }
 
 .btn-secondary {
@@ -120,7 +125,7 @@
 }
 
 .btn-primary.btn-loading::after {
-  border-color: var(--text-on-accent) transparent var(--text-on-accent) var(--text-on-accent);
+  border-color: var(--text-on-primary) transparent var(--text-on-primary) var(--text-on-primary);
 }
 
 @keyframes spin {
@@ -227,6 +232,7 @@
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-l);
+  box-shadow: var(--shadow-card);
 }
 
 .card-padded {
@@ -259,7 +265,9 @@
   text-align: center;
   gap: var(--space-2);
   padding: var(--space-6) var(--space-4);
-  border: 1px dashed var(--border-strong);
+  /* Design system v2: a quiet filled surface, not a dashed box. */
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-l);
   color: var(--text-2);
 }
@@ -729,6 +737,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-l);
   background: var(--surface-1);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
