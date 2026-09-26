@@ -195,7 +195,15 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(grantForm.getByTestId('ggf-granted-summary')).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press('Escape');
     await expect(grantDrawer).toBeHidden();
-    await expect(gateCard.getByTestId('system-access-row')).toHaveCount(1, { timeout: 15_000 });
+    // Console redesign P3-3 (V5): "谁能用" no longer sits inline on the card — its summary button
+    // opens a `kit/sheet` detail drawer with the full roster.
+    await gateCard.getByTestId('system-access-summary').click();
+    const accessDrawer = page.getByTestId('system-access-drawer');
+    await expect(accessDrawer.getByTestId('system-access-row')).toHaveCount(1, {
+      timeout: 15_000,
+    });
+    await page.keyboard.press('Escape');
+    await expect(accessDrawer).toBeHidden();
 
     // --- 错（部分覆盖，见本文件顶部说明）: 门已授权、Worker 还未发布 ---------------------------
     await goToByLabel(page, '能力目录');
@@ -279,18 +287,20 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.getByTestId('execution-readiness-ready')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('execution-readiness-missing')).toHaveCount(0);
 
-    // 系统与授权: the card's own "谁能用" row is the strongest honest signal here now — it went
-    // from "用不了"（not_granted, before step 2）to "可直接调用" once granted and published,
-    // console redesign P2's own acceptance criterion (docs/console-redesign-plan-2026-09-25.md
-    // §6 P2: "授权后能力视图从「不可用」变「可直接调用」").
+    // 系统与授权: the card's own "reachability for me" chip is the strongest honest signal here
+    // now — it went from "用不了"（not_granted, before step 2）to "可直接调用" once granted and
+    // published, console redesign P2's own acceptance criterion (docs/console-redesign-plan-
+    // 2026-09-25.md §6 P2: "授权后能力视图从「不可用」变「可直接调用」"). Console redesign P3-3
+    // (V5) moved this chip onto the row itself (`gatekeeper-reachability`, driven straight by the
+    // baseline `execution_readiness` gate's own `status`) — no drawer needed to see it.
     await goToByLabel(page, '系统与授权');
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible();
     const readyGateCard = page
       .getByTestId('gatekeeper-card')
       .filter({ hasText: GATE_DISPLAY_NAME });
-    await expect(
-      readyGateCard.getByTestId('system-access-row').filter({ hasText: '可直接调用' }),
-    ).toHaveCount(1, { timeout: 15_000 });
+    await expect(readyGateCard.getByTestId('gatekeeper-reachability')).toContainText('可直接调用', {
+      timeout: 15_000,
+    });
 
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();

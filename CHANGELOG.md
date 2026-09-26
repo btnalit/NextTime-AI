@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.25.0](https://github.com/btnalit/NextTime-AI/compare/v0.24.0...v0.25.0) (2026-09-26)
+
+
+### Features
+
+* **web:** shell and kit match the approved design (console redesign P3-1) ([#320](https://github.com/btnalit/NextTime-AI/issues/320)) ([b9f4453](https://github.com/btnalit/NextTime-AI/commit/b9f4453f5b75c9853affc9fdd5f5cedceb077f30))
+
+
+### Bug Fixes
+
+* **kernel:** connector deny list counts in reachability; deny-list edits refresh agents; honest allow-list UI ([#321](https://github.com/btnalit/NextTime-AI/issues/321)) ([d51c464](https://github.com/btnalit/NextTime-AI/commit/d51c464778388af3fcd2626f5f91b1b37de89f2d))
+* **kernel:** observing through a gate needs the gate in the Handle's scope (D4) ([#322](https://github.com/btnalit/NextTime-AI/issues/322)) ([0710465](https://github.com/btnalit/NextTime-AI/commit/0710465c77203bb2020195081577940f25ba8ee8))
+* **web:** confirm before rebuilding entry containers; one language per runtime string ([#316](https://github.com/btnalit/NextTime-AI/issues/316)) ([70253b5](https://github.com/btnalit/NextTime-AI/commit/70253b5399d0ccdc63d4996d8817208c19dbc6c7))
+
 ## [0.24.0](https://github.com/btnalit/NextTime-AI/compare/v0.23.0...v0.24.0) (2026-09-26)
 
 

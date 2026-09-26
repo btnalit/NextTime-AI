@@ -1,16 +1,40 @@
 import type { ExecutionReadinessGateWire, ExecutionReadinessWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { useT } from '../../lib/i18n.js';
+import { shortId } from '../../lib/format.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../kit/dropdown-menu.js';
+import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
-import { DashboardCard } from '../kit/section.js';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+
+/** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
+ *  trigger only needs `kit/button`'s bare label slot, not `components/ui/Icon` (which would add a
+ *  fresh `components/ui/*` import this already-migrated page has no other reason to carry — see
+ *  `scripts/guards/legacy-ui-importers.json`). Hand-rolled the same way `kit/ref-chip`/`kit/toast`
+ *  draw their own icons rather than importing the legacy set. */
+function MoreIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
 
 export interface SystemAccessGranteeRow {
   readonly grantId: string;
@@ -25,6 +49,9 @@ export interface SystemAccessHealth {
    *  registered directly (`create_connection`/`直接注册门`), which carries no health signal. */
   readonly linked: boolean;
   readonly health?: string;
+  /** `AvailableGateInstanceWire.transportKind` (`ssh`/`http`/`mcp`/`cli`) — `undefined` for a
+   *  legacy (`!linked`) registration, which carries no transport signal either. */
+  readonly transportKind?: string;
 }
 
 export interface SystemAccessCardProps {
@@ -56,19 +83,117 @@ export interface SystemAccessCardProps {
   readonly selfPrincipalId: string | null;
 }
 
+/** Console redesign P3-3 (V5): one line per grantee, up to two names — the full roster (with
+ *  revoke) lives in the detail sheet this text opens. */
+function whoCanUseSummary(
+  rows: readonly SystemAccessGranteeRow[],
+  directory: boolean,
+  t: Translate,
+): string {
+  if (!directory) return t('你', 'You');
+  if (rows.length === 0) return t('还没有人可用', 'No one yet');
+  const names = rows.map((row) => row.principalName).filter((name): name is string => !!name);
+  const preview = names.slice(0, 2);
+  const rest = rows.length - preview.length;
+  if (preview.length === 0) return t(`${rows.length} 人可用`, `${rows.length} people`);
+  return rest > 0
+    ? t(`${preview.join('、')} 等 ${rows.length} 人`, `${preview.join(', ')} +${rest} more`)
+    : preview.join('、');
+}
+
+const GATE_STATUS_TONE: Readonly<Record<ExecutionReadinessGateWire['status'], string>> = {
+  direct: 'chip-ok',
+  via_worker: 'chip-info',
+  unreachable: 'chip-warn',
+};
+
+function gateStatusLabel(status: ExecutionReadinessGateWire['status'], t: Translate): string {
+  switch (status) {
+    case 'direct':
+      return t('可直接调用', 'Direct');
+    case 'via_worker':
+      return t('需委派', 'Via a Worker');
+    case 'unreachable':
+      return t('用不了', 'Unusable');
+  }
+}
+
+/** Bugfix (PR #324 review, "remove the reason link that points to the page you are already
+ *  on"): `no_published_operation`'s and `not_granted`'s fix-it links both resolve to 系统与授权
+ *  itself (`hrefs.systems()`/`hrefs.access()`) — and their actual fix is already a control on this
+ *  very row ("发布清单" in the overflow menu, "授权" as the primary action), so the link is a
+ *  same-page no-op. The other reasons (`excluded_by_policy`/`excluded_by_profile`/`no_worker`)
+ *  send the reader to a genuinely different page and keep their link. */
+const SELF_PAGE_HREFS: ReadonlySet<string> = new Set([hrefs.systems(), hrefs.access()]);
+
+function isSelfPageHref(href: string | undefined): boolean {
+  return href !== undefined && SELF_PAGE_HREFS.has(href);
+}
+
+/** "Reachability for me" (V5): the viewing principal's own status is already on `gate` itself
+ *  (`execution_readiness`'s baseline, self read) — no extra lookup, unlike a grantee row's, which
+ *  needs a per-principal `execution_readiness` read (`readinessByPrincipal`, see `GranteeRow`).
+ *
+ * Bugfix (PR #324 review, "system rows are too busy"): the row itself now renders only the chip
+ * — the full reason sentence is the chip's own `title` tooltip, and the fully-spelled-out
+ * version (+ fix-it link) moved into the "谁能用" detail sheet (`SystemAccessCard`'s own "你的
+ * 可达性" section) so it is available on demand without crowding the row. */
+function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+  const t = useT();
+  const reason = gate.status === 'unreachable' ? gateReasonText(gate.reason, t) : undefined;
+  return (
+    <span
+      className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}
+      data-testid="gatekeeper-reachability"
+      data-status={gate.status}
+      title={reason}
+    >
+      {gateStatusLabel(gate.status, t)}
+    </span>
+  );
+}
+
+/** The drawer's own, fuller rendering of the same reachability — full sentence + a fix-it link
+ *  when it points somewhere actually useful (see `isSelfPageHref`). */
+function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+  const t = useT();
+  const href = gate.reason !== undefined ? gateReasonHref(gate.reason) : undefined;
+  return (
+    <div className="row-wrap" data-testid="system-access-my-reachability">
+      <span className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}>
+        {gateStatusLabel(gate.status, t)}
+      </span>
+      {gate.status === 'unreachable' ? (
+        <>
+          <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
+          {gate.reason !== undefined && href !== undefined && !isSelfPageHref(href) ? (
+            <a href={href} className="link-inline">
+              {gateReasonLink(gate.reason, t)}
+            </a>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * components/systems/SystemAccessCard (console redesign P2, docs/console-redesign-plan-
- * 2026-09-25.md §4): one system, one card — replaces `RegisteredSystemsSection.tsx`'s
- * `GatekeeperCard` (removed; its per-Operation listing and plain-RefChip grantee list are both
- * superseded here by a one-line ops summary and a per-member *reachability* row, which did not
- * exist before P0's `execution_readiness` per-gate read model). Kept from that component:
- * `data-testid="gatekeeper-card"` / `gatekeeper-grant-button` (every e2e journey that asserts a
- * system got registered, or opens its grant drawer, keeps working unchanged) and the legacy /
- * publish-manifest affordances — no functionality dropped, see the PR report.
+ * 2026-09-25.md §4; P3-3 V5 redesign): one row per system in the artboard's list
+ * (`Integrations.dc.html`) — name + kind/legacy chip, a one-line capability + health summary,
+ * "谁能用" (count/short names, click to open the full roster) and "reachability for me" inline,
+ * row actions primary "授权" + an overflow menu ("健康与操作", "发布清单"). The always-expanded
+ * "谁能用" list (with revoke), "哪些 Worker 覆盖" and per-member reachability rows that the old
+ * per-system card carried inline now live in a `kit/sheet` detail drawer instead — kept behind the
+ * "谁能用" summary text as the fewest new controls this needed.
  *
- * Reachability per grantee reuses `readiness-copy.ts`'s exact chip wording and reason copy
- * (`ExecutionReadinessCard`'s own `GateRow`, imported not duplicated) — the same three states,
- * same fix links, so this card and the 对话 readiness card never say it two different ways.
+ * Kept unchanged from the pre-redesign card: `data-testid="gatekeeper-card"` /
+ * `gatekeeper-grant-button` (every e2e journey that asserts a system got registered, or opens its
+ * grant drawer, keeps working unchanged) and the legacy / publish-manifest affordances.
+ *
+ * Reachability per grantee reuses `readiness-copy.ts`'s exact chip wording and reason copy (the
+ * same three states, same fix links `ExecutionReadinessCard` uses) — this card and the 对话
+ * readiness strip never say it two different ways.
  */
 export function SystemAccessCard({
   http,
@@ -90,6 +215,7 @@ export function SystemAccessCard({
 }: SystemAccessCardProps) {
   const t = useT();
   const [grantOpen, setGrantOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
 
@@ -109,13 +235,14 @@ export function SystemAccessCard({
   const workers = gate.workerDefinitionIds;
 
   return (
-    <DashboardCard
-      title={
-        <span className="row-wrap">
+    <li className="data-row" data-testid="gatekeeper-card" data-gatekeeper-id={gate.gateId}>
+      <div className="data-row-main">
+        <div className="data-row-title">
           <strong>{gate.name}</strong>
-          {healthInfo.linked && healthInfo.health !== undefined ? (
-            <StatusChip machine="gateHealth" status={healthInfo.health} size="s" />
-          ) : !healthInfo.linked ? (
+          {healthInfo.transportKind !== undefined ? (
+            <span className="tag">{transportKindLabel(healthInfo.transportKind, t)}</span>
+          ) : null}
+          {!healthInfo.linked ? (
             <span
               className="tag"
               title={t(
@@ -126,111 +253,78 @@ export function SystemAccessCard({
               {t('旧注册', 'Legacy')}
             </span>
           ) : null}
-        </span>
-      }
-      actions={
-        <span className="row-wrap">
-          <Button variant="ghost" size="s" onClick={() => onOpenDetail(gate.gateId)}>
-            {t('健康与操作', 'Health & operations')}
-          </Button>
-          {canPublish ? (
-            <Button
-              variant={draftCount > 0 ? 'primary' : 'secondary'}
-              size="s"
-              onClick={() => void publish()}
-              disabled={publishing || draftCount === 0}
-              title={
-                draftCount === 0
-                  ? t('没有草稿 Operation 可发布', 'No draft operations to publish')
-                  : undefined
-              }
-              data-testid="gatekeeper-publish-manifest"
-            >
-              {t('发布清单', 'Publish manifest')}
-              {draftCount > 0 ? ` (${draftCount})` : ''}
-            </Button>
+        </div>
+        <div className="data-row-meta" data-testid="gatekeeper-ops-summary">
+          <span>
+            {t(
+              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
+              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
+            )}
+          </span>
+          {healthInfo.linked && healthInfo.health !== undefined ? (
+            <StatusChip machine="gateHealth" status={healthInfo.health} size="s" />
           ) : null}
-          {canManage ? (
-            <Button
-              variant="secondary"
-              size="s"
-              onClick={() => setGrantOpen(true)}
-              data-testid="gatekeeper-grant-button"
-            >
-              {t('授权', 'Grant')}
-            </Button>
-          ) : null}
-        </span>
-      }
-      data-testid="gatekeeper-card"
-      data-gatekeeper-id={gate.gateId}
-    >
-      <div className="stack">
-        <p className="text-3 text-small" data-testid="gatekeeper-ops-summary">
-          {t(
-            `${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
-            `${gate.observeOperationCount} read operation(s) · ${gate.executeOperationCount} write operation(s)`,
-          )}
-          {' — '}
           <a href={hrefs.catalog('operations')} className="link-inline">
             {t('去能力目录看 Operation', 'See in Catalog')}
           </a>
-        </p>
-
-        {publishError !== null ? (
-          <ErrorBanner
-            error={publishError}
-            title={t('无法发布清单', 'Could not publish the manifest')}
-          />
-        ) : null}
-
-        <div className="stack-s" data-testid="system-access-list">
-          <span className="field-label">{t('谁能用', 'Who can use it')}</span>
-          {rows.length === 0 ? (
-            <p className="text-3 text-small">{t('还没有成员被授权。', 'No one is granted yet.')}</p>
-          ) : (
-            rows.map((row) => (
-              <GranteeRow
-                key={row.grantId || row.principalId}
-                http={http}
-                row={row}
-                readiness={readinessByPrincipal.get(row.principalId)}
-                readinessPending={readinessLoading && !readinessByPrincipal.has(row.principalId)}
-                gateId={gate.gateId}
-                isSelf={row.principalId === selfPrincipalId}
-                canRevoke={canManage && directory}
-                onRevoke={onRevoke}
-              />
-            ))
-          )}
-        </div>
-
-        <div className="stack-s" data-testid="system-worker-coverage">
-          <span className="field-label">{t('哪些 Worker 覆盖', 'Covered by Workers')}</span>
-          {workers.length === 0 ? (
-            <p className="text-3 text-small">
-              {t(
-                '还没有 Worker 声明覆盖这个系统。',
-                'No Worker declares coverage of this system yet.',
-              )}
-            </p>
-          ) : (
-            <div className="row-wrap">
-              {workers.map((id) => (
-                <RefChip
-                  key={id}
-                  kind="workerDefinition"
-                  id={id}
-                  name={workerNames.get(id)}
-                  href={hrefs.catalog('workers')}
-                  http={http}
-                  size="s"
-                />
-              ))}
-            </div>
-          )}
         </div>
       </div>
+
+      <div className="data-row-trailing">
+        <Button
+          variant="ghost"
+          size="s"
+          onClick={() => setDetailOpen(true)}
+          data-testid="system-access-summary"
+        >
+          {whoCanUseSummary(rows, directory, t)}
+        </Button>
+        <MyReachability gate={gate} />
+        {canManage ? (
+          <Button
+            variant="primary"
+            size="s"
+            onClick={() => setGrantOpen(true)}
+            data-testid="gatekeeper-grant-button"
+          >
+            {t('授权', 'Grant')}
+          </Button>
+        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="s"
+              aria-label={t('更多操作', 'More actions')}
+              data-testid="gatekeeper-more"
+            >
+              <MoreIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => onOpenDetail(gate.gateId)}>
+              {t('健康与操作', 'Health & operations')}
+            </DropdownMenuItem>
+            {canPublish ? (
+              <DropdownMenuItem
+                disabled={publishing || draftCount === 0}
+                onSelect={() => void publish()}
+                data-testid="gatekeeper-publish-manifest"
+              >
+                {t('发布清单', 'Publish manifest')}
+                {draftCount > 0 ? ` (${draftCount})` : ''}
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {publishError !== null ? (
+        <ErrorBanner
+          error={publishError}
+          title={t('无法发布清单', 'Could not publish the manifest')}
+        />
+      ) : null}
 
       <GrantGateDrawer
         http={http}
@@ -239,7 +333,80 @@ export function SystemAccessCard({
         lockedGatekeeper={{ id: gate.gateId, name: gate.name }}
         onGranted={onGranted}
       />
-    </DashboardCard>
+
+      <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
+        <SheetContent data-testid="system-access-drawer">
+          <SheetHeader>
+            <SheetTitle>{gate.name}</SheetTitle>
+            <SheetDescription>
+              {t(
+                '谁能用它、用不了差哪一步，哪些 Worker 覆盖它。',
+                'Who can use it, what is missing when they cannot, and which Workers cover it.',
+              )}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="stack">
+            <div className="stack-s">
+              <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
+              <MyReachabilityDetail gate={gate} />
+            </div>
+
+            <div className="stack-s" data-testid="system-access-list">
+              <span className="field-label">{t('谁能用', 'Who can use it')}</span>
+              {rows.length === 0 ? (
+                <EmptyState
+                  variant="inline"
+                  title={t('还没有成员被授权', 'No one is granted yet')}
+                  testId="system-access-empty"
+                />
+              ) : (
+                rows.map((row) => (
+                  <GranteeRow
+                    key={row.grantId || row.principalId}
+                    http={http}
+                    row={row}
+                    readiness={readinessByPrincipal.get(row.principalId)}
+                    readinessPending={
+                      readinessLoading && !readinessByPrincipal.has(row.principalId)
+                    }
+                    gateId={gate.gateId}
+                    isSelf={row.principalId === selfPrincipalId}
+                    canRevoke={canManage && directory}
+                    onRevoke={onRevoke}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="stack-s" data-testid="system-worker-coverage">
+              <span className="field-label">{t('哪些 Worker 覆盖', 'Covered by Workers')}</span>
+              {workers.length === 0 ? (
+                <EmptyState
+                  variant="inline"
+                  title={t('还没有 Worker 覆盖这个系统', 'No Worker covers this system yet')}
+                  testId="system-worker-empty"
+                />
+              ) : (
+                <div className="row-wrap">
+                  {workers.map((id) => (
+                    <RefChip
+                      key={id}
+                      kind="workerDefinition"
+                      id={id}
+                      name={workerNames.get(id)}
+                      href={hrefs.catalog('workers')}
+                      http={http}
+                      size="s"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+    </li>
   );
 }
 
@@ -292,7 +459,9 @@ function GranteeRow({
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
-          {gateStatus.reason !== undefined && gateReasonHref(gateStatus.reason) !== undefined ? (
+          {gateStatus.reason !== undefined &&
+          gateReasonHref(gateStatus.reason) !== undefined &&
+          !isSelfPageHref(gateReasonHref(gateStatus.reason)) ? (
             <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
               {gateReasonLink(gateStatus.reason, t)}
             </a>
