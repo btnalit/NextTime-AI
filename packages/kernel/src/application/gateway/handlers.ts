@@ -100,6 +100,7 @@ import {
 } from './agent-profile-handlers.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 import {
   cancelConnectionRequestHandler,
   connectGatekeeperHandler,
@@ -1397,7 +1398,30 @@ const findOperationsHandler: CapabilityHandler = async (client, workspaceId, par
     claims: ctx?.claims,
   });
   const result = await findOperations(client, workspaceId, { parentAuthority }, need);
-  return { result: { items: result.map(toWireObject) } };
+  // Console redesign M3: for the entry agent (a root Handle — no `par`), each candidate says how
+  // that agent can actually reach it, so "I can see kb.list but have no tool for it" becomes an
+  // explicit `unreachable` + reason instead of a guess. A Worker's own child Handle is what counts
+  // for a Worker caller, so it gets no annotation.
+  const principalId = ctx?.principalId;
+  if (!principalId || !ctx?.claims || ctx.claims.par !== undefined) {
+    return { result: { items: result.map(toWireObject) } };
+  }
+  const reach = await computeCapabilityReachability(client, workspaceId, principalId);
+  return {
+    result: {
+      items: result.map((candidate) => {
+        const gatekeeperId = candidate.identityKey?.gatekeeperId;
+        const mode = typeof candidate.properties.mode === 'string' ? candidate.properties.mode : '';
+        return {
+          ...toWireObject(candidate),
+          reachability:
+            typeof gatekeeperId === 'string'
+              ? operationReachability(reach, gatekeeperId, mode)
+              : { status: 'unreachable' as const, reason: 'not_granted' as const },
+        };
+      }),
+    },
+  };
 };
 
 const findProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {

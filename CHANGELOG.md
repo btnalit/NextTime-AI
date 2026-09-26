@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.23.0](https://github.com/btnalit/NextTime-AI/compare/v0.22.0...v0.23.0) (2026-09-26)
+
+
+### Features
+
+* **kernel:** AgentProfile lists become exclusion lists; frozen allow-lists reset (console redesign D1/D2) ([#306](https://github.com/btnalit/NextTime-AI/issues/306)) ([6101f0a](https://github.com/btnalit/NextTime-AI/commit/6101f0a59e63eb1049a9131724c9f54b6bc7bdd2))
+* **kernel:** per-system reachability for the entry agent — readiness, find_operations, prompt (console redesign M2–M4) ([#307](https://github.com/btnalit/NextTime-AI/issues/307)) ([e35762b](https://github.com/btnalit/NextTime-AI/commit/e35762b19eb45a45a430c78baad115519897ea3e))
+* **web:** move Handle issuance to My Account and Members (console redesign D3) ([#305](https://github.com/btnalit/NextTime-AI/issues/305)) ([9b586cc](https://github.com/btnalit/NextTime-AI/commit/9b586cc9fc7b82c0affb99e8dd952b010ab7f4ab))
+
+
+### Bug Fixes
+
+* **ops:** backup retention and drills only count their own timestamped dumps ([#301](https://github.com/btnalit/NextTime-AI/issues/301)) ([ad0c88d](https://github.com/btnalit/NextTime-AI/commit/ad0c88dd2b119aa223b51c9ac353e33b7f6d30c1))
+
 ## [0.22.0](https://github.com/btnalit/NextTime-AI/compare/v0.21.0...v0.22.0) (2026-09-25)
 
 

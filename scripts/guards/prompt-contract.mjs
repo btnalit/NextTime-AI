@@ -184,6 +184,15 @@ export const ALLOWED_NON_TOOL_WORDS = {
   'ontology/entry-agent.yaml': new Set([
     'timeout', // invoke_worker's own `timeout` param, named for context — not a tool.
     'taskId', // a field of invoke_worker's own {taskId, status} result, not a tool.
+    'reachability', // a field of each find_operations result item (console redesign M3).
+    'direct', // reachability.status values, named so the agent can act on each —
+    'via_worker', //   not tools.
+    'unreachable',
+    'not_granted', // reachability.reason values: the first missing condition the agent must
+    'excluded_by_profile', //   name to the user — not tools.
+    'excluded_by_policy',
+    'no_worker',
+    'no_published_operation',
   ]),
   'ontology/ops-runner.yaml': new Set([
     'context', // the pi `context` event/injection mechanism, not a capability of this name.

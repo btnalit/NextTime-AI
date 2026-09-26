@@ -85,6 +85,8 @@ export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
     zh: '已发布的 Worker 都没有可作用的门',
     en: 'No published Worker reaches a gate',
   },
+  excluded_by_profile: { zh: '在我的智能体里被取消', en: 'Unticked on My Agent' },
+  excluded_by_policy: { zh: '工作区策略未包含', en: 'Left out by workspace policy' },
 };
 
 export function executionReadinessMissingCodeLabel(
