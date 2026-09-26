@@ -430,11 +430,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       )) as ExecutionReadinessResult;
 
       const gate = result.gates.find((g) => g.gateId === gatekeeperId);
-      expect(gate).toEqual({
+      expect(gate).toMatchObject({
         gateId: gatekeeperId,
         name: 'gate-ungranted',
         granted: false,
         publishedOperationCount: 0,
+        // Console redesign M2: nothing published is the first gap, before "not granted".
+        status: 'unreachable',
+        reason: 'no_published_operation',
+        inEntryScope: false,
       });
 
       const worker = result.workers.find((w) => w.definitionId === definitionId);
