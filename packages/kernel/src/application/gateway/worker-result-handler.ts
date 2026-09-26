@@ -11,6 +11,7 @@ import {
   listPublishedOperationsForGatekeepers,
 } from '../../governance/gatekeepers/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { operationPlatformStatus, readGateLinkPoliciesForWorkspace } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -223,7 +224,14 @@ function toWireOperation(
  *  Gatekeeper in the calling Handle's own `resources.gatekeeper` scope — a pure description of an
  *  already-granted scope, never a grant of its own (see `packages/shared/src/capabilities.ts`'s
  *  registry entry doc comment). Human callers (no Handle, `ctx?.scope` undefined) get an empty
- *  list — there is no `resources.gatekeeper` to describe outside a Handle's own scope. */
+ *  list — there is no `resources.gatekeeper` to describe outside a Handle's own scope.
+ *
+ * Production incident 2026-09-26: this is the tool list the pi extension projects at session
+ * start, so an Operation the platform's connector deny list would refuse on the very next call must
+ * not appear here either — it used to, offering a tool whose every call failed with
+ * `operation_disabled`. Filtered through `operationPlatformStatus` (application/gates/store.ts), the
+ * same shared predicate `assertOperationEnabled` and `computeCapabilityReachability` consult, one
+ * batched workspace-wide read rather than one deny-list query per Operation. */
 export const listAllowedOperationsHandler: CapabilityHandler = async (
   client,
   workspaceId,
@@ -232,10 +240,14 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
 ) => {
   const gatekeeperIds = ctx?.scope?.resources.gatekeeper ?? [];
   const records = await listPublishedOperationsForGatekeepers(client, workspaceId, gatekeeperIds);
+  const gateLinks = await readGateLinkPoliciesForWorkspace(client, workspaceId);
 
   const gateNames = new Map<string, string>();
   const operations = [];
   for (const record of records) {
+    if (operationPlatformStatus(gateLinks.get(record.gatekeeperId), record.name).disabled) {
+      continue;
+    }
     let gateName = gateNames.get(record.gatekeeperId);
     if (gateName === undefined) {
       const gatekeeper = await getGatekeeper(client, workspaceId, record.gatekeeperId);

@@ -9,6 +9,7 @@ export type {
   GateTransportKind,
   GateTrust,
   HostedGateDefinition,
+  OperationPlatformStatus,
 } from './store.js';
 export {
   AnnounceBodySchema,
@@ -29,10 +30,13 @@ export {
   listGateInstances,
   listHostedGateDefinitions,
   markLostGateInstances,
+  operationPlatformStatus,
   operationsOf,
   readDisabledOperations,
   readGateLinkPolicy,
+  readGateLinkPoliciesForWorkspace,
   recordGateInstanceCheck,
+  revokeEntryHandlesForConnector,
   revokeExternalRuntime,
   updateConnector,
   updateGateInstance,

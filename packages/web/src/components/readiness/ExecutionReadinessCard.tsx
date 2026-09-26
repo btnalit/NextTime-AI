@@ -102,7 +102,9 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
           {first ? (
             <li className="row-wrap" data-testid="execution-readiness-missing-item">
               <span>{missingCauseText(first, gateNames, t)}</span>
-              <a href={missingLinkHref(first)}>{missingLinkLabel(first, t)}</a>
+              {missingLinkHref(first) !== undefined ? (
+                <a href={missingLinkHref(first)}>{missingLinkLabel(first, t)}</a>
+              ) : null}
             </li>
           ) : null}
         </ul>
@@ -192,7 +194,9 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
                   {executionReadinessMissingCodeLabel(item.code, t)}
                 </span>
                 <span>{missingCauseText(item, gateNames, t)}</span>
-                <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+                {missingLinkHref(item) !== undefined ? (
+                  <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -247,7 +251,7 @@ function GateRow({
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span>{gateReasonText(gate.reason, t)}</span>
-          {gate.reason !== undefined ? (
+          {gate.reason !== undefined && gateReasonHref(gate.reason) !== undefined ? (
             <a href={gateReasonHref(gate.reason)} style={{ textDecoration: 'underline' }}>
               {gateReasonLink(gate.reason, t)}
             </a>

@@ -87,6 +87,7 @@ export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
   },
   excluded_by_profile: { zh: '在我的智能体里被取消', en: 'Unticked on My Agent' },
   excluded_by_policy: { zh: '工作区策略未包含', en: 'Left out by workspace policy' },
+  disabled_by_platform: { zh: '被平台停用', en: 'Disabled by the platform' },
 };
 
 export function executionReadinessMissingCodeLabel(

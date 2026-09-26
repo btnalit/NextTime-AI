@@ -1,6 +1,7 @@
 import type { GateHostedDefinitionWire, GateInstanceWire } from '@nexttime/shared';
 import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   createHostedGateInstance,
   deleteHostedGateInstance,
@@ -11,6 +12,7 @@ import {
   listGateInstances,
   operationsOf,
   recordGateInstanceCheck,
+  revokeEntryHandlesForConnector,
   revokeExternalRuntime,
   updateConnector,
   updateGateInstance,
@@ -44,7 +46,12 @@ export const listConnectorsHandler: CapabilityHandler = async (client) => {
   return { result: { items: await listConnectors(client) } };
 };
 
-export const setConnectorModeHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+export const setConnectorModeHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+) => {
   const input = params as {
     name: string;
     mode?: 'disabled' | 'self_serve' | 'platform_preset';
@@ -61,13 +68,50 @@ export const setConnectorModeHandler: CapabilityHandler = async (client, _worksp
       `the generic connector "${input.name}" cannot be platform-preset (no gate host for this kind)`,
     );
   }
+  const nextDisabledOperations = input.disabledOperations
+    ? [...new Set(input.disabledOperations)].sort()
+    : undefined;
   await updateConnector(client, input.name, {
     mode: input.mode,
-    disabledOperations: input.disabledOperations
-      ? [...new Set(input.disabledOperations)].sort()
-      : undefined,
+    disabledOperations: nextDisabledOperations,
   });
   const after = await getConnector(client, input.name);
+
+  // P-B1 propagation fix (production incident 2026-09-26): a deny-list or mode edit that actually
+  // changes what this connector's already-linked workspaces may call must reach every already-
+  // issued entry-agent Handle right away, not on whatever unrelated Grant/AgentProfile change next
+  // happens to touch the same workspace — `assertOperationEnabled` refuses the call regardless of
+  // what a stale Handle still advertises as a tool (`revokeEntryHandlesForConnector`, application/
+  // gates/store.ts, has the full reasoning). Compared against the sorted `before` snapshot so a
+  // no-op save (the same list re-submitted) never revokes anything it does not have to.
+  const denyListChanged =
+    nextDisabledOperations !== undefined &&
+    JSON.stringify(nextDisabledOperations) !==
+      JSON.stringify([...before.disabledOperations].sort());
+  const modeChanged = input.mode !== undefined && input.mode !== before.mode;
+  if (denyListChanged || modeChanged) {
+    const { linkedWorkspaceCount, revokedWorkspaceCount } = await revokeEntryHandlesForConnector(
+      client,
+      input.name,
+    );
+    if (revokedWorkspaceCount > 0) {
+      await writeAudit(client, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        actorUserId: ctx?.platformUser?.id,
+        action: 'connector.entry_handles_revoked',
+        resourceType: 'connector',
+        resourceId: input.name,
+        payload: {
+          linkedWorkspaceCount,
+          revokedWorkspaceCount,
+          disabledOperations: after?.disabledOperations ?? [],
+          mode: after?.mode,
+        },
+      });
+    }
+  }
+
   return { result: after, resourceType: 'connector', resourceId: input.name };
 };
 

@@ -1411,12 +1411,13 @@ const findOperationsHandler: CapabilityHandler = async (client, workspaceId, par
     result: {
       items: result.map((candidate) => {
         const gatekeeperId = candidate.identityKey?.gatekeeperId;
+        const operationName = candidate.identityKey?.name;
         const mode = typeof candidate.properties.mode === 'string' ? candidate.properties.mode : '';
         return {
           ...toWireObject(candidate),
           reachability:
-            typeof gatekeeperId === 'string'
-              ? operationReachability(reach, gatekeeperId, mode)
+            typeof gatekeeperId === 'string' && typeof operationName === 'string'
+              ? operationReachability(reach, gatekeeperId, mode, operationName)
               : { status: 'unreachable' as const, reason: 'not_granted' as const },
         };
       }),
