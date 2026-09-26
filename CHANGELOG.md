@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.26.0](https://github.com/btnalit/NextTime-AI/compare/v0.25.0...v0.26.0) (2026-09-26)
+
+
+### Features
+
+* **web:** chat as three panes with the approved conversation design (console redesign P3-2) ([#325](https://github.com/btnalit/NextTime-AI/issues/325)) ([74dfddf](https://github.com/btnalit/NextTime-AI/commit/74dfddfd8a605496ce86400bf0d3c4c062b965da))
+* **web:** design system v2 — brand scale, tinted neutrals, card depth, motion, separate dark theme ([#326](https://github.com/btnalit/NextTime-AI/issues/326)) ([45d51e3](https://github.com/btnalit/NextTime-AI/commit/45d51e39fe539c925f7320ca827aff22493a4706))
+* **web:** my agent, systems and readiness match the approved design (console redesign P3-3) ([#324](https://github.com/btnalit/NextTime-AI/issues/324)) ([cc292df](https://github.com/btnalit/NextTime-AI/commit/cc292df1de5e0889f5343dd5ed671b63d945a827))
+
 ## [0.25.0](https://github.com/btnalit/NextTime-AI/compare/v0.24.0...v0.25.0) (2026-09-26)
 
 
