@@ -315,10 +315,12 @@ describe('PlatformRuntimePage', () => {
 
     fireEvent.click(await screen.findByTestId('runtime-rollback'));
     const confirm = await screen.findByTestId('runtime-rollback-confirm');
-    // RT2: the copy renders the emphasis, not a literal `*different*`.
+    // RT2: the copy renders the emphasis, not a literal `*different*` — and only in the current
+    // language (it used to render the Chinese sentence with the English one appended).
     expect(confirm.textContent).not.toContain('*different*');
+    expect(confirm.textContent).not.toContain('Switches to');
     const emphasised = Array.from(confirm.querySelectorAll('em')).map((el) => el.textContent);
-    expect(emphasised).toContain('different');
+    expect(emphasised).toContain('不同');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
@@ -381,6 +383,12 @@ describe('PlatformRuntimePage', () => {
 
     const button = await screen.findByTestId('runtime-roll-entry-containers');
     fireEvent.click(button);
+
+    // Coverage-map G6: the platform-wide rebuild asks first, naming its reach.
+    const confirm = await screen.findByTestId('runtime-roll-confirm');
+    expect(confirm.textContent).toContain('全平台 1 个');
+    expect(http.calls.some((c) => c.name === 'roll_entry_containers')).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.calls.some((c) => c.name === 'roll_entry_containers')).toBe(true),
