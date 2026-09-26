@@ -40,6 +40,7 @@ function gate(overrides: Partial<ExecutionReadinessWire['gates'][number]> = {}) 
     publishedOperationCount: 3,
     observeOperationCount: 2,
     executeOperationCount: 1,
+    disabledOperations: [],
     excludedByPolicy: false,
     excludedByProfile: false,
     inEntryScope: true,

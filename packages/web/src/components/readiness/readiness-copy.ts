@@ -78,11 +78,26 @@ export function missingCauseText(
             'The workspace policy’s gate limit leaves a granted system out.',
           );
     }
+    case 'disabled_by_platform': {
+      const name = item.gateId ? gateNames.get(item.gateId) : undefined;
+      return name
+        ? t(
+            `门「${name}」的操作被平台管理员在「平台 · 集成」停用了，这不是工作区能修复的。`,
+            `Operations on the “${name}” gate were disabled by a platform administrator under Platform · Integrations — a workspace cannot fix this.`,
+          )
+        : t(
+            '一个系统的操作被平台管理员停用了，这不是工作区能修复的。',
+            'A system’s operations were disabled by a platform administrator — a workspace cannot fix this.',
+          );
+    }
   }
 }
 
-/** Where "去修复" sends the reader for this missing item. */
-export function missingLinkHref(item: ExecutionReadinessMissingWire): string {
+/** Where "去修复" sends the reader for this missing item — `undefined` when there is nowhere a
+ *  member or workspace owner can usefully go (`disabled_by_platform`: the only page that acts on it,
+ *  平台 · 集成, refuses anyone who is not a platform admin outright — `routes.tsx`'s own
+ *  `requireAdmin` — so this is text-only rather than a link most readers cannot open). */
+export function missingLinkHref(item: ExecutionReadinessMissingWire): string | undefined {
   switch (item.code) {
     case 'no_enabled_gate':
       return hrefs.systems();
@@ -95,11 +110,17 @@ export function missingLinkHref(item: ExecutionReadinessMissingWire): string {
       return hrefs.agent();
     case 'excluded_by_policy':
       return hrefs.models();
+    case 'disabled_by_platform':
+      return undefined;
   }
 }
 
-/** The link's own label — names the destination page, never the internal code. */
-export function missingLinkLabel(item: ExecutionReadinessMissingWire, t: Translate): string {
+/** The link's own label — names the destination page, never the internal code. `undefined` exactly
+ *  when `missingLinkHref` is (`disabled_by_platform` — see that function's own doc comment). */
+export function missingLinkLabel(
+  item: ExecutionReadinessMissingWire,
+  t: Translate,
+): string | undefined {
   switch (item.code) {
     case 'no_enabled_gate':
       return t('去系统与授权', 'Go to Systems & access');
@@ -112,6 +133,8 @@ export function missingLinkLabel(item: ExecutionReadinessMissingWire, t: Transla
       return t('去我的智能体', 'Go to My Agent');
     case 'excluded_by_policy':
       return t('去模型与配额', 'Go to Models & Quotas');
+    case 'disabled_by_platform':
+      return undefined;
   }
 }
 
@@ -141,12 +164,20 @@ export function gateReasonText(reason: GateUnreachableReason | undefined, t: Tra
         '没有能调用它的 Worker——需要发布一个挂了这个系统的 Worker。',
         'No Worker can call it — publish a Worker that includes this system.',
       );
+    case 'disabled_by_platform':
+      return t(
+        '平台管理员在「平台 · 集成」停用了这个系统的操作，这不是工作区能修复的。',
+        'A platform administrator disabled operations on this system under Platform · Integrations — a workspace cannot fix this.',
+      );
     case undefined:
       return t('暂时用不了。', 'Not usable right now.');
   }
 }
 
-export function gateReasonHref(reason: GateUnreachableReason): string {
+/** `undefined` for `disabled_by_platform` — see `missingLinkHref`'s own doc comment: 平台 · 集成
+ *  refuses anyone who is not a platform admin, so a member or workspace owner reading this has
+ *  nowhere useful to click through to. */
+export function gateReasonHref(reason: GateUnreachableReason): string | undefined {
   switch (reason) {
     case 'no_published_operation':
       return hrefs.systems();
@@ -158,10 +189,12 @@ export function gateReasonHref(reason: GateUnreachableReason): string {
       return hrefs.agent();
     case 'no_worker':
       return hrefs.catalog(CATALOG_WORKERS_TAB);
+    case 'disabled_by_platform':
+      return undefined;
   }
 }
 
-export function gateReasonLink(reason: GateUnreachableReason, t: Translate): string {
+export function gateReasonLink(reason: GateUnreachableReason, t: Translate): string | undefined {
   switch (reason) {
     case 'no_published_operation':
       return t('去系统与授权', 'Go to Systems & access');
@@ -173,6 +206,8 @@ export function gateReasonLink(reason: GateUnreachableReason, t: Translate): str
       return t('去我的智能体', 'Go to My Agent');
     case 'no_worker':
       return t('去能力目录', 'Go to Catalog');
+    case 'disabled_by_platform':
+      return undefined;
   }
 }
 

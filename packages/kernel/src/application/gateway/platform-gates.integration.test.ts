@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  GatekeeperBase,
+  InMemoryIdempotencyStore,
+  createGatekeeperServer,
+} from '@nexttime/gatekeeper-base';
+import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type {
   AvailableGateInstanceWire,
   ConnectorWire,
@@ -13,14 +20,24 @@ import type {
   Role,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
+import type { FastifyInstance } from 'fastify';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
+import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { HANDLE_SIGNING_ALG, grantCapability } from '../../governance/capability/index.js';
+import { ApprovalDrainer } from '../../governance/approval/index.js';
+import {
+  type CapabilityScope,
+  HANDLE_SIGNING_ALG,
+  grantCapability,
+  issueHandle,
+  revokeCapabilityGrant,
+} from '../../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
@@ -29,13 +46,16 @@ import {
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import { upsertAnnouncement } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
+import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
+import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 import {
   ConnectionEndpointIsPlatformGateError,
   setConnectionHandlerDeps,
@@ -44,6 +64,7 @@ import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
+import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -502,6 +523,68 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId,
         });
         expect(restored.items.map((o) => o.name).sort()).toEqual(['list_things', 'restart_thing']);
+      });
+
+      // P-B1 propagation fix (production incident 2026-09-26): a deny-list edit must reach an
+      // already-issued entry-agent Handle right away, not wait for the next unrelated Grant/
+      // AgentProfile change in the same workspace. Simulates an already-minted entry Handle the same
+      // way `governance/capability/handles.test.ts` does (a raw `kind='entry'` session row +
+      // `issueHandle`, no full agent-host Turn needed) rather than asserting on
+      // `revokeEntryHandlesForConnector`'s internals directly.
+      it('set_connector_mode revokes every already-issued entry-agent Handle in every linked workspace when the deny list actually changes', async () => {
+        const entrySessionId = randomUUID();
+        await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, (client) =>
+          client.query(
+            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, $3, 'entry', $3, 'ready')`,
+            [workspaceId, entrySessionId, ownerPrincipalId],
+          ),
+        );
+        const scope: CapabilityScope = {
+          capabilities: ['observe_operation'],
+          resources: { gatekeeper: [gatekeeperId] },
+        };
+        const issued = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) =>
+            issueHandle(client, { sessionId: entrySessionId, scope, ttlSeconds: 3600, privateKey }),
+        );
+
+        // A no-op save (the same, already-current deny list) must not revoke anything.
+        await callAsAdmin('set_connector_mode', { name: 'fixture-mcp', disabledOperations: [] });
+        const untouched = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const result = await client.query<{ revoked_at: Date | null }>(
+              'select revoked_at from capability_handles where workspace_id = $1 and jti = $2',
+              [workspaceId, issued.jti],
+            );
+            return result.rows[0];
+          },
+        );
+        expect(untouched?.revoked_at).toBeNull();
+
+        // An actual deny-list change revokes it.
+        await callAsAdmin('set_connector_mode', {
+          name: 'fixture-mcp',
+          disabledOperations: ['restart_thing'],
+        });
+        const revoked = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const result = await client.query<{ revoked_at: Date | null }>(
+              'select revoked_at from capability_handles where workspace_id = $1 and jti = $2',
+              [workspaceId, issued.jti],
+            );
+            return result.rows[0];
+          },
+        );
+        expect(revoked?.revoked_at).not.toBeNull();
+
+        await callAsAdmin('set_connector_mode', { name: 'fixture-mcp', disabledOperations: [] });
       });
     });
 
@@ -1060,6 +1143,369 @@ describe.runIf(DATABASE_URL !== undefined)(
           endpoint: 'http://127.0.0.1:2',
         });
         expect(back.json().result.status).toBe('enabled');
+      });
+    });
+
+    // -----------------------------------------------------------------------------------------
+    // Production incident 2026-09-26 consistency check: capability-reachability.ts's own
+    // `computeCapabilityReachability`/`operationReachability` must never disagree with real
+    // enforcement about whether this member's entry agent can call a given Operation — the root
+    // cause of the incident was exactly this file's reachability read model never consulting the
+    // connector deny list at all. One platform-linked gate with two published observe Operations
+    // (`consistency.op_a`/`consistency.op_b`), a member with a grant on it, and a real fake gate
+    // server behind it (so the "nothing blocks it" case gets a genuine successful call, not a
+    // network-layer guess) — every blocking layer in turn, then restored before the next.
+    // -----------------------------------------------------------------------------------------
+    describe('capability-reachability / enforcement consistency across every blocking layer', () => {
+      const CONSISTENCY_CONNECTOR = 'consistency-fixture';
+      const CONSISTENCY_GATE_ID = 'consistency-fixture-gate';
+      const CONSISTENCY_TOKEN = 'consistency-fixture-gate-token-0123456789abcdef';
+      const OP_A: Operation = {
+        name: 'consistency.op_a',
+        binding: { kind: 'http', method: 'GET', path: '/op-a' },
+        params_schema: {},
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+      const OP_B: Operation = {
+        name: 'consistency.op_b',
+        binding: { kind: 'http', method: 'GET', path: '/op-b' },
+        params_schema: {},
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+
+      class ConsistencyTransport implements Transport {
+        readonly kind = 'http' as const;
+        async invoke(operation: Operation): Promise<TransportInvokeResult> {
+          return { data: { ok: true, operation: operation.name } };
+        }
+      }
+
+      let fakeGateApp: FastifyInstance;
+      let cWorkspaceId: string;
+      let cOwnerId: string;
+      let cMemberId: string;
+      let cGatekeeperId: string;
+      let cGrantId: string;
+
+      function humanCallerFor(
+        inWorkspaceId: string,
+        principalId: string,
+        role: Role,
+      ): ResolvedCaller {
+        return {
+          channel: 'human',
+          principal: {
+            workspaceId: inWorkspaceId,
+            id: principalId,
+            kind: 'human',
+            role,
+            displayName: null,
+          },
+          session: {
+            workspaceId: inWorkspaceId,
+            id: randomUUID(),
+            principalId,
+            kind: 'web',
+            onBehalfOf: principalId,
+            status: 'active',
+            createdAt: new Date(),
+            expiresAt: null,
+          },
+        };
+      }
+
+      async function reachForMember() {
+        return withWorkspace(
+          pool,
+          { workspaceId: cWorkspaceId, principalId: cMemberId },
+          (client) => computeCapabilityReachability(client, cWorkspaceId, cMemberId),
+        );
+      }
+
+      function observeAsMember(operationName: string): Promise<unknown> {
+        return dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+          'observe_operation',
+          {
+            gatekeeperId: cGatekeeperId,
+            operation: operationName,
+            params: {},
+          },
+        );
+      }
+
+      beforeAll(async () => {
+        const gate = new GatekeeperBase({
+          manifest: [OP_A, OP_B],
+          transport: new ConsistencyTransport(),
+          credentialResolver: { resolve: async () => ({}) },
+          idempotencyStore: new InMemoryIdempotencyStore(),
+        });
+        fakeGateApp = createGatekeeperServer({ gate, token: CONSISTENCY_TOKEN });
+        await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
+        const address = fakeGateApp.server.address() as AddressInfo;
+        const endpoint = `http://127.0.0.1:${address.port}`;
+
+        // Announce + enable directly through `application/gates/store.ts` — same effect as a real
+        // gate-host heartbeat plus an administrator's `update_gate_instance`, without needing the
+        // `/internal/gates/announce` HTTP route this file's own `announce()` helper exercises
+        // elsewhere (already covered by the `announce` describe block above).
+        await withPlatform(pool, { userId: admin.id }, (client) =>
+          upsertAnnouncement(client, {
+            gateId: CONSISTENCY_GATE_ID,
+            connector: CONSISTENCY_CONNECTOR,
+            transportKind: 'http',
+            endpoint,
+            operations: [OP_A, OP_B],
+          }),
+        );
+        await callAsAdmin('update_gate_instance', {
+          gateId: CONSISTENCY_GATE_ID,
+          status: 'enabled',
+        });
+
+        const created = await createWorkspaceWithOwner(pool, {
+          name: 'consistency-fixture-workspace',
+          owner: { userId: admin.id, displayName: 'Consistency Owner' },
+          ontologyDir: ONTOLOGY_DIR,
+        });
+        cWorkspaceId = created.workspaceId;
+        cOwnerId = created.ownerPrincipalId;
+        cMemberId = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId: cWorkspaceId, principalId: cMemberId },
+          async (client) => {
+            await client.query(
+              `insert into principals (workspace_id, id, kind, role, display_name)
+               values ($1, $2, 'human', 'member', 'consistency-member')`,
+              [cWorkspaceId, cMemberId],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+
+        const enabled = (await dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+          'enable_gate_instance',
+          { gateId: CONSISTENCY_GATE_ID },
+        )) as EnableGateInstanceResultWire;
+        cGatekeeperId = enabled.gatekeeperId;
+
+        const grant = await withWorkspace(
+          pool,
+          { workspaceId: cWorkspaceId, principalId: cOwnerId },
+          (client) =>
+            grantCapability(client, cWorkspaceId, {
+              principalId: cMemberId,
+              resourceType: 'gatekeeper',
+              resourceId: cGatekeeperId,
+              grantedBy: cOwnerId,
+            }),
+        );
+        cGrantId = grant.id;
+
+        // Module-level singleton (`request-action-handler.ts`) — harmless for every earlier test in
+        // this file: each of them is refused by `assertOperationEnabled` (the connector deny-list
+        // check) before ever reaching `requireDeps()`, so none of them depend on it being unwired.
+        const gatekeeperClient = new HttpGatekeeperClient({ token: CONSISTENCY_TOKEN });
+        const adminWithTransaction = createAdminWithTransaction(pool);
+        setRequestActionDeps({
+          gatekeeperClient,
+          drainer: new ApprovalDrainer({
+            executor: createGatekeeperActionExecutor({
+              gatekeeperClient,
+              withTransaction: adminWithTransaction,
+            }),
+            withTransaction: adminWithTransaction,
+          }),
+        });
+      }, 60_000);
+
+      afterAll(async () => {
+        await fakeGateApp?.close();
+      });
+
+      it('no blocking layer: reachability says direct for both Operations, and a real call to each succeeds', async () => {
+        const reach = await reachForMember();
+        expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
+          status: 'direct',
+        });
+        expect(operationReachability(reach, cGatekeeperId, 'observe', OP_B.name)).toEqual({
+          status: 'direct',
+        });
+
+        await expect(observeAsMember(OP_A.name)).resolves.toBeDefined();
+        await expect(observeAsMember(OP_B.name)).resolves.toBeDefined();
+      });
+
+      it('connector deny list disables one Operation: reachability flags exactly that one as disabled_by_platform (the gate itself stays direct); enforcement refuses only that one', async () => {
+        await callAsAdmin('set_connector_mode', {
+          name: CONSISTENCY_CONNECTOR,
+          disabledOperations: [OP_B.name],
+        });
+        try {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.status).toBe('direct');
+          expect(gate?.disabledOperations).toEqual([OP_B.name]);
+          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
+            status: 'direct',
+          });
+          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_B.name)).toEqual({
+            status: 'unreachable',
+            reason: 'disabled_by_platform',
+          });
+
+          await expect(observeAsMember(OP_A.name)).resolves.toBeDefined();
+          await expect(observeAsMember(OP_B.name)).rejects.toMatchObject({
+            message: expect.stringContaining('operation_disabled'),
+          });
+        } finally {
+          await callAsAdmin('set_connector_mode', {
+            name: CONSISTENCY_CONNECTOR,
+            disabledOperations: [],
+          });
+        }
+      });
+
+      it('connector deny list disables every published Operation: the gate itself is disabled_by_platform; enforcement refuses both', async () => {
+        await callAsAdmin('set_connector_mode', {
+          name: CONSISTENCY_CONNECTOR,
+          disabledOperations: [OP_A.name, OP_B.name],
+        });
+        try {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('disabled_by_platform');
+          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
+            status: 'unreachable',
+            reason: 'disabled_by_platform',
+          });
+          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_B.name)).toEqual({
+            status: 'unreachable',
+            reason: 'disabled_by_platform',
+          });
+
+          await expect(observeAsMember(OP_A.name)).rejects.toMatchObject({
+            message: expect.stringContaining('operation_disabled'),
+          });
+          await expect(observeAsMember(OP_B.name)).rejects.toMatchObject({
+            message: expect.stringContaining('operation_disabled'),
+          });
+        } finally {
+          await callAsAdmin('set_connector_mode', {
+            name: CONSISTENCY_CONNECTOR,
+            disabledOperations: [],
+          });
+        }
+      });
+
+      it('grant revoked: reachability says not_granted; enforcement refuses via the human-channel gatekeeper-access check', async () => {
+        await withWorkspace(pool, { workspaceId: cWorkspaceId, principalId: cOwnerId }, (client) =>
+          revokeCapabilityGrant(client, cWorkspaceId, cGrantId),
+        );
+        try {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(false);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('not_granted');
+          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
+            status: 'unreachable',
+            reason: 'not_granted',
+          });
+
+          await expect(observeAsMember(OP_A.name)).rejects.toBeInstanceOf(ForbiddenError);
+        } finally {
+          const restored = await withWorkspace(
+            pool,
+            { workspaceId: cWorkspaceId, principalId: cOwnerId },
+            (client) =>
+              grantCapability(client, cWorkspaceId, {
+                principalId: cMemberId,
+                resourceType: 'gatekeeper',
+                resourceId: cGatekeeperId,
+                grantedBy: cOwnerId,
+              }),
+          );
+          cGrantId = restored.id;
+        }
+      });
+
+      // AgentPolicy's gate cap is enforced when the entry Handle is *minted* (`resolveEffectiveAgentProfile`
+      // narrows the scope `ensureEntryHandle` issues), not per call inside `observe_operation`'s own
+      // handler — `assertHumanGatekeeperAccess` only checks the Grant (request-action-handler.ts).
+      // There is therefore no second `observe_operation` refusal to assert here; the entry-scope
+      // computation itself (`reach.entryGatekeeperIds`, the same computation `ensureEntryHandle`
+      // reproduces) *is* what "enforcement" reduces to for this layer, matching this task's own
+      // dispatch note for exactly this case.
+      it('AgentPolicy cap excludes the gate: reachability says excluded_by_policy, and the entry scope this member’s next Handle would carry drops it', async () => {
+        await dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+          'set_agent_policy',
+          { allowedGatekeepers: [randomUUID()] },
+        );
+        try {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(true);
+          expect(gate?.excludedByPolicy).toBe(true);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('excluded_by_policy');
+          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
+        } finally {
+          await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+            'set_agent_policy',
+            { allowedGatekeepers: [] },
+          );
+        }
+      });
+
+      // Same Handle-issuance-time enforcement as the AgentPolicy cap above (`resolveEffectiveAgentProfile`
+      // also folds in the member's own AgentProfile exclusions) — no separate `observe_operation`
+      // refusal to assert for this layer either.
+      it('AgentProfile exclusion: reachability says excluded_by_profile, and the entry scope drops it', async () => {
+        await dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+          'set_agent_profile',
+          { excludedGatekeepers: [cGatekeeperId] },
+        );
+        try {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(true);
+          expect(gate?.excludedByProfile).toBe(true);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('excluded_by_profile');
+          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
+        } finally {
+          await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+            'set_agent_profile',
+            { excludedGatekeepers: [] },
+          );
+        }
       });
     });
   },

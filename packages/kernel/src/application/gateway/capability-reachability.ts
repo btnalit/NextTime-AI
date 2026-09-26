@@ -16,6 +16,7 @@ import {
   listGatekeepers,
   listPublishedOperationsForGatekeepers,
 } from '../../governance/gatekeepers/index.js';
+import { operationPlatformStatus, readGateLinkPoliciesForWorkspace } from '../gates/index.js';
 import { listWorkerDefinitions } from '../worker/index.js';
 import { resolveAvailableResources } from './agent-profile-handlers.js';
 
@@ -37,14 +38,25 @@ import { resolveAvailableResources } from './agent-profile-handlers.js';
  * Operation, one that declares `request_action`).
  *
  * The reason code names the *first* unmet condition in the order a person fixes them: nothing
- * published → not granted → excluded by the workspace AgentPolicy cap → excluded by the member's
- * own AgentProfile → no Worker covers it. Read-only; decides nothing itself.
+ * published → disabled by the platform's connector deny list → not granted → excluded by the
+ * workspace AgentPolicy cap → excluded by the member's own AgentProfile → no Worker covers it.
+ * Read-only; decides nothing itself.
+ *
+ * Production incident 2026-09-26 (console redesign follow-up): a platform admin can deny individual
+ * Operations of a connector (`connectors.disabled_operations`, platform integrations page) —
+ * enforcement (`assertOperationEnabled`, request-action-handler.ts) refuses a disabled Operation on
+ * every call regardless of Grant/AgentProfile/AgentPolicy, but this file never consulted that deny
+ * list before this fix: a gate could read `direct` here while every one of its Operations was
+ * refused in practice. `disabled_by_platform` below and each gate's own `disabledOperations` close
+ * that gap, both computed through the same shared predicate enforcement uses
+ * (`operationPlatformStatus`, application/gates/store.ts) rather than a second approximation of it.
  */
 
 export type ReachabilityStatus = 'direct' | 'via_worker' | 'unreachable';
 
 export type UnreachableReason =
   | 'no_published_operation'
+  | 'disabled_by_platform'
   | 'not_granted'
   | 'excluded_by_policy'
   | 'excluded_by_profile'
@@ -59,8 +71,18 @@ export interface GateReachability {
   readonly excludedByProfile: boolean;
   /** In the entry Handle's `resources.gatekeeper` — its observe Operations are callable directly. */
   readonly inEntryScope: boolean;
+  /** Total published Operations on this gate, whatever the platform's connector deny list says —
+   *  `disabledOperations` below names the platform-disabled subset; a consumer that wants a
+   *  "callable" count subtracts it. Kept as the plain published total (not narrowed) so
+   *  `no_published_operation` keeps meaning exactly that, ranked ahead of `disabled_by_platform` in
+   *  `firstGap` below. */
   readonly observeOperationCount: number;
   readonly executeOperationCount: number;
+  /** Published Operation names on this gate the platform's connector deny list currently refuses
+   *  (`operationPlatformStatus`) — always a subset of the gate's own published Operations. Non-empty
+   *  even when the gate's own `status` is not `disabled_by_platform` (some, not all, published
+   *  Operations disabled) — `operationReachability` below flags exactly those by name. */
+  readonly disabledOperations: readonly string[];
   /** Delegable, not-excluded Workers whose child scope carries this gate. */
   readonly workerDefinitionIds: readonly string[];
   /** The subset of `workerDefinitionIds` that declares `request_action` (can propose actions). */
@@ -182,18 +204,25 @@ export async function computeCapabilityReachability(
   );
 
   // Gates: every registered Gatekeeper in this workspace, with its published Operations split by
-  // mode (one batched query).
+  // mode (one batched query), and the platform's connector deny list (also one batched query —
+  // `readGateLinkPoliciesForWorkspace`, joining workspace_gate_links → gate_instances → connectors
+  // once for the whole workspace rather than once per gate).
   const gateEntries = await listGatekeepers(client, workspaceId);
   const publishedOps = await listPublishedOperationsForGatekeepers(
     client,
     workspaceId,
     gateEntries.map((entry) => entry.gatekeeperId),
   );
+  const gateLinkPolicies = await readGateLinkPoliciesForWorkspace(client, workspaceId);
   const observeCount = new Map<string, number>();
   const executeCount = new Map<string, number>();
+  const publishedNames = new Map<string, string[]>();
   for (const op of publishedOps) {
     const counts = op.operation.mode === 'execute' ? executeCount : observeCount;
     counts.set(op.gatekeeperId, (counts.get(op.gatekeeperId) ?? 0) + 1);
+    const names = publishedNames.get(op.gatekeeperId);
+    if (names) names.push(op.name);
+    else publishedNames.set(op.gatekeeperId, [op.name]);
   }
 
   const granted = new Set(available.grantedGatekeeperIds);
@@ -207,6 +236,10 @@ export async function computeCapabilityReachability(
     const excludedByProfile = isGranted && !excludedByPolicy && !inEntry.has(gateId);
     const observe = observeCount.get(gateId) ?? 0;
     const execute = executeCount.get(gateId) ?? 0;
+    const gateLink = gateLinkPolicies.get(gateId);
+    const disabledOperations = (publishedNames.get(gateId) ?? []).filter(
+      (name) => operationPlatformStatus(gateLink, name).disabled,
+    );
     const workerDefinitionIds = workers
       .filter((worker) => worker.childGateIds.includes(gateId))
       .map((worker) => worker.definitionId);
@@ -222,6 +255,7 @@ export async function computeCapabilityReachability(
       inEntryScope: inEntry.has(gateId),
       observeOperationCount: observe,
       executeOperationCount: execute,
+      disabledOperations,
       workerDefinitionIds,
       executeWorkerDefinitionIds,
     };
@@ -250,10 +284,14 @@ function firstGap(gate: {
   readonly excludedByProfile: boolean;
   readonly observeOperationCount: number;
   readonly executeOperationCount: number;
+  readonly disabledOperations: readonly string[];
 }): UnreachableReason | undefined {
-  if (gate.observeOperationCount + gate.executeOperationCount === 0) {
-    return 'no_published_operation';
-  }
+  const publishedCount = gate.observeOperationCount + gate.executeOperationCount;
+  if (publishedCount === 0) return 'no_published_operation';
+  // Every published Operation this gate has is platform-disabled — `disabledOperations` is always a
+  // subset of the gate's own published names (see `computeCapabilityReachability`'s own construction
+  // of it), so equality with the total published count means none of them survive.
+  if (gate.disabledOperations.length === publishedCount) return 'disabled_by_platform';
   if (!gate.granted) return 'not_granted';
   if (gate.excludedByPolicy) return 'excluded_by_policy';
   if (gate.excludedByProfile) return 'excluded_by_profile';
@@ -265,14 +303,25 @@ function firstGap(gate: {
  * Operation on a gate in the entry scope is `direct`; otherwise a covering delegable Worker makes
  * it `via_worker` (for an execute-class Operation, only a Worker that declares `request_action`);
  * otherwise `unreachable` with the gate's own first gap, or `no_worker`.
+ *
+ * `operationName` is checked against the gate's own `disabledOperations` *before* the gate-level
+ * `firstGap` — a platform-disabled Operation is `unreachable`/`disabled_by_platform` even when the
+ * gate itself still reads `direct`/`via_worker` overall because one of its *other* Operations is
+ * still enabled (console redesign M2/M3 production incident 2026-09-26: `find_operations` must flag
+ * exactly the Operation a real `request_action`/`observe_operation` call would refuse, not just the
+ * gate it lives on).
  */
 export function operationReachability(
   reachability: CapabilityReachability,
   gatekeeperId: string,
   mode: string,
+  operationName: string,
 ): { readonly status: ReachabilityStatus; readonly reason?: UnreachableReason } {
   const gate = reachability.gates.find((entry) => entry.gateId === gatekeeperId);
   if (!gate) return { status: 'unreachable', reason: 'not_granted' };
+  if (gate.disabledOperations.includes(operationName)) {
+    return { status: 'unreachable', reason: 'disabled_by_platform' };
+  }
   const gap = firstGap(gate);
   if (gap !== undefined && gap !== 'no_published_operation') {
     return { status: 'unreachable', reason: gap };

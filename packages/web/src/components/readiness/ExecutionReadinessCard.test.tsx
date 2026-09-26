@@ -39,6 +39,7 @@ function gate(overrides: Partial<GateWire> & Pick<GateWire, 'gateId' | 'name'>):
     publishedOperationCount: 1,
     observeOperationCount: 1,
     executeOperationCount: 0,
+    disabledOperations: [],
     excludedByPolicy: false,
     excludedByProfile: false,
     inEntryScope: true,
