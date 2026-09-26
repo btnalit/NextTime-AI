@@ -183,7 +183,7 @@ export function SystemAccessCard({
         ) : null}
 
         <div className="stack-s" data-testid="system-access-list">
-          <span className="section-title">{t('谁能用', 'Who can use it')}</span>
+          <span className="field-label">{t('谁能用', 'Who can use it')}</span>
           {rows.length === 0 ? (
             <p className="text-3 text-small">{t('还没有成员被授权。', 'No one is granted yet.')}</p>
           ) : (
@@ -204,7 +204,7 @@ export function SystemAccessCard({
         </div>
 
         <div className="stack-s" data-testid="system-worker-coverage">
-          <span className="section-title">{t('哪些 Worker 覆盖', 'Covered by Workers')}</span>
+          <span className="field-label">{t('哪些 Worker 覆盖', 'Covered by Workers')}</span>
           {workers.length === 0 ? (
             <p className="text-3 text-small">
               {t(
