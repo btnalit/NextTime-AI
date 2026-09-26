@@ -237,11 +237,11 @@ export function AgentProfileForm({
           disabled={disabled}
           error={fieldErrors.excludedSkills}
           testId="agent-profile-skills"
+          emptyTitle={t('还没有已发布的 Skill', 'No published Skills yet')}
           empty={
-            <>
-              {t('还没有已发布的 Skill。', 'No published Skills yet.')}{' '}
-              <a href={hrefs.catalog('skills')}>{t('去能力目录', 'Open the catalog')}</a>
-            </>
+            <a href={hrefs.catalog('skills')} className="link-inline">
+              {t('去能力目录', 'Open the catalog')}
+            </a>
           }
         />
 
@@ -256,13 +256,16 @@ export function AgentProfileForm({
           disabled={disabled}
           error={fieldErrors.excludedGatekeepers}
           testId="agent-profile-gatekeepers"
+          emptyTitle={t('还没有系统授权给你', 'No system is granted to you yet')}
           empty={
             <>
               {t(
-                '还没有系统授权给你——需要工作区所有者授权后，你的智能体才能调用它。',
-                'No system is granted to you yet — a workspace owner has to grant one before your agent can call it.',
+                '工作区所有者授权后，你的智能体才能调用它。',
+                'A workspace owner has to grant one before your agent can call it.',
               )}{' '}
-              <a href={hrefs.access()}>{t('查看授权', 'View grants')}</a>
+              <a href={hrefs.access()} className="link-inline">
+                {t('查看授权', 'View grants')}
+              </a>
             </>
           }
         />
@@ -279,11 +282,11 @@ export function AgentProfileForm({
           disabled={disabled}
           error={fieldErrors.excludedWorkerDefinitions}
           testId="agent-profile-worker-definitions"
+          emptyTitle={t('还没有已发布的 Worker', 'No published Workers yet')}
           empty={
-            <>
-              {t('还没有已发布的 Worker。', 'No published Workers yet.')}{' '}
-              <a href={hrefs.catalog('workers')}>{t('去能力目录', 'Open the catalog')}</a>
-            </>
+            <a href={hrefs.catalog('workers')} className="link-inline">
+              {t('去能力目录', 'Open the catalog')}
+            </a>
           }
         />
       </DashboardCard>
@@ -373,7 +376,8 @@ export function AgentProfileForm({
 }
 
 /** A checklist of what is on offer: ticked = in use, unticked = excluded (`excluded` holds the
- *  unticked ids). `empty` explains why nothing is listed and where to fix it. */
+ *  unticked ids). With nothing on offer, `emptyTitle` names what is missing and `empty` says where
+ *  to fix it (the group title above is not repeated inside the empty state). */
 function ChecklistField({
   title,
   subtitle,
@@ -383,6 +387,7 @@ function ChecklistField({
   disabled,
   error,
   testId,
+  emptyTitle,
   empty,
 }: {
   readonly title: string;
@@ -393,6 +398,7 @@ function ChecklistField({
   readonly disabled: boolean;
   readonly error?: string;
   readonly testId: string;
+  readonly emptyTitle: string;
   readonly empty: ReactNode;
 }) {
   return (
@@ -400,7 +406,7 @@ function ChecklistField({
       <span className="checklist-group-title">{title}</span>
       <p className="checklist-group-hint">{subtitle}</p>
       {options.length === 0 ? (
-        <EmptyState variant="inline" title={title} body={empty} testId={`${testId}-empty`} />
+        <EmptyState variant="inline" title={emptyTitle} body={empty} testId={`${testId}-empty`} />
       ) : (
         <fieldset
           className="stack-s"
