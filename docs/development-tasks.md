@@ -26,7 +26,7 @@
 - 迁移：`packages/kernel/migrations/NNNN_name.sql` + 幂等 runner（`schema_migrations` 表）。
 - 状态机一律转移表驱动，非法转移抛 `IllegalTransition`。
 - 所有受治理写入与 `audit_records` 同事务（I11）。
-- pi 锁 `@earendil-works/pi-coding-agent@0.84.4`；平台扩展只依赖文档化事件。
+- pi 锁 `@earendil-works/pi-coding-agent@0.87.1`（版本源是根目录 `pi.version`，升级按 `docs/runbooks/pi-upgrade.md`；2026-09-26 由 0.84.4 升级）；平台扩展只依赖文档化事件。
 - 共享类型在 `packages/shared`：capability 注册表、事件、`ActionDescription`、Zod schema；HTTP 路由、MCP 工具、WS 方法都由注册表生成或校验。
 - HTTP capability 投影约定：`POST /api/cap/<capability_name>`，`Authorization: Bearer <handle>`（S1.6 落地此约定）。
 - 不写任何真实地址、密钥、知识库 ID；测试用 `example` 值。每任务一分支一 PR。
@@ -3304,7 +3304,7 @@ flowchart LR
 | agent 经公网外带数据 | 出网代理记录域名；WorkerDefinition 拒绝清单；有意接受的剩余风险 |
 | S2 范围扩大（四种门 + 连接流程 + Skill） | 这是「能干活」的最小集合，不再拆到 P5；S2 验收脚本七步全过才算完成 |
 | Semantica skills | 不复用实现，只借 UX；工具名别名在 S3.6 |
-| pi ABI 变化 | 锁 0.84.4；S1.6 / S2.9 契约测试 |
+| pi ABI 变化 | 锁精确版本（当前 0.87.1，`pi.version`）；S1.6 / S2.9 契约测试 |
 | 每用户一个 pi 进程的内存 | S1.5 空闲超时停进程 |
 | E7 备份暂缓 | S3 后重评 |
 | 各厂商 OpenAI 兼容差异 | pi-ai `compat`；内核不做协议 |

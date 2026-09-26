@@ -67,7 +67,7 @@
 |------|------|--------|---------|
 | **cloudflare-os**（Apache-2.0，TS，基于 pi-agent-core） | 产品形态与治理蓝本 | 一个 WebSocket 会话 + 每工作区一个 RPC 对象的聊天面；`AiChatSubscriber` 式的流事件与「先订阅再翻页」；`ActionDescription{title, description, awaitDecision, autoApprovable, actionKind, implementsRevert}` 与聊天内审批卡片；两种动作模式（模拟不阻塞 / `awaitDecision` 挂起）；`AutoApprovalDrainer` 双信号严格顺序算法；Observation 与 Action 分离；单一鉴权收口；凭证只在 Gatekeeper；`build/use` 粗角色；认证配置留在环境变量层 | Durable Object、Cap'n Web stub、Facets、Dynamic Workers、`spawnCallable` 的 stub（以任务队列替代）、11k 行的 Overseer |
 | **Semantica 0.6.7**（MIT，Python） | 图基底概念、Explorer、MCP 契约 | Decision / Conflict / ProvenanceEntry(PROV-O) / BiTemporalFact 一等；facade + adapter 存储抽象；`state_at`；**Explorer 整体复用**（纯前端，只依赖 `/api/*` 契约与 `X-API-Key`）；17 个 MCP 工具的名字与必填参数作为契约；`Decision` 与 `ProvenanceEntry` 字段名对齐 | 作为内核（43 个强制依赖含 torch，ContextGraph 是内存 / 文件结构，无租户）；**skills 不能复用**（它们直接 `import semantica.context`，不走 MCP，只借其子命令与输出格式作 UX 规范）；Ontology 工作区（3540 行路由，不承诺） |
-| **pi 0.84.4**（MIT，TS） | 入口 agent 与 Worker 的运行底层 | `pi --mode rpc` 子进程：JSONL 命令 / 事件、`--session-dir`、`PI_CODING_AGENT_DIR`、`--system-prompt`、`-e 扩展`、`--tools` 白名单、`extension_ui_request` 子协议；扩展的 `context` / `tool_call` / `session_*` 事件；JSONL 父指针会话树；subagent 示例的子进程派生；pi-ai 的多 provider 与逐消息 usage / cost | `packages/server` / `client` / `protocol`（实验性，无连接身份，租约只在客户端）；进程内 SDK 托管多用户（只有逻辑隔离，且 `ResourceLoader` 会沿 cwd 自动加载扩展） |
+| **pi 0.87.1**（MIT，TS；版本源 `pi.version`） | 入口 agent 与 Worker 的运行底层 | `pi --mode rpc` 子进程：JSONL 命令 / 事件、`--session-dir`、`PI_CODING_AGENT_DIR`、`--system-prompt`、`-e 扩展`、`--tools` 白名单、`extension_ui_request` 子协议；扩展的 `context` / `tool_call` / `session_*` 事件；JSONL 父指针会话树；subagent 示例的子进程派生；pi-ai 的多 provider 与逐消息 usage / cost | `packages/server` / `client` / `protocol`（实验性，无连接身份，租约只在客户端）；进程内 SDK 托管多用户（只有逻辑隔离，且 `ResourceLoader` 会沿 cwd 自动加载扩展） |
 
 ### 3.3 约束
 
@@ -350,7 +350,7 @@ flowchart TB
 
 ### 7.3 agent 运行时（入口与 Worker 同一镜像）
 
-- **镜像**：`node:24-bookworm-slim` + pi 0.84.4 + 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
+- **镜像**：`node:24-bookworm-slim` + pi 0.87.1 + 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
 - **真实工作环境（默认全开、只记录）**：读写自己的工作目录；跑 bash / python / node；装包（pip / npm / apt 经代理）；抓公网（HTTP / HTTPS、公开仓库 clone）；调模型（经 `llm-proxy`）；观察图。**只有经门去动有凭证的系统才受策略与审批。**
 - **出网**：容器没有直接路由；`HTTP_PROXY` / `HTTPS_PROXY` 指向出网代理（§7.9）。
 - **启动**：Worker 由 supervisor 一次性运行 `pi --mode rpc`（或 pi subagent 示例同款的 `--mode json -p`）；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE / HTTP(S)_PROXY`；**不继承宿主 env**。Task 工作目录 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` 挂载，Task 结束后保留为 artifact，按保留策略清理。
@@ -772,7 +772,7 @@ NextTime-AI/
 │   └── shared/               # domain 层：枚举、转移表、capability 注册表、事件与 Zod schema
 ├── gatekeepers/              # 接入包：<system>/{manifest.yaml, policy.yaml, mappings/, skills/}
 │   ├── docker/  ragflow/     # 预置两个
-├── worker-runtime/           # Dockerfile：pi 0.84.4 + platform-extension + 工具链（入口与 Worker 共用）
+├── worker-runtime/           # Dockerfile：pi（pi.version）+ platform-extension + 工具链（入口与 Worker 共用）
 ├── collectors/host-inventory # TS
 ├── explorer/                 # Semantica Explorer 静态构建的挂载说明与构建脚本（S3）
 ├── ontology/                 # platform-meta.yaml、entry-agent.yaml、ops-runner.yaml（S2.6，平面文件——
@@ -1033,7 +1033,7 @@ Trigger 与事件驱动；`db` / `browser` 门；ConnectedAccount 的 OAuth；OI
 | Explorer 契约成本失控 | 只做 §9.5 的 9 个端点，其余工作区隐藏 |
 | Semantica skills 误以为可直接复用 | 已纠正：只借 UX 规范 |
 | 每用户一个 pi 进程的内存 | 空闲超时停进程，按需拉起 |
-| pi 升级破坏扩展 ABI | 锁 0.84.4；契约测试 |
+| pi 升级破坏扩展 ABI | 锁精确版本（当前 0.87.1）；契约测试 + `docs/runbooks/pi-upgrade.md` |
 | 授权依赖 agent 可写数据 | 不用图边做授权；元本体只 human 通道写（I16） |
 | 公开仓库泄露环境 | `docs/private/`；CI 扫描 |
 

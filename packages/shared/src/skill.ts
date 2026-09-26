@@ -10,7 +10,9 @@ import { z } from 'zod';
  * **`markdown` stores only the skill's instructional body, never a literal `---\n...\n---`
  * frontmatter block.** pi 0.84.4's on-disk `SKILL.md` format is frontmatter (`name`/`description`)
  * plus a body (`docs/skills.md` in the pinned `@earendil-works/pi-coding-agent` package, verified
- * against its `core/skills.ts` `loadSkillFromFile`/`parseFrontmatter`) — but hand-rolling that
+ * against its `core/skills.ts` `loadSkillFromFile`/`parseFrontmatter`; the name/description rules
+ * — `validateName`/`validateDescription`, 64/1024 limits — are byte-identical in 0.87.1's
+ * `dist/core/skills.js`, which only changed the prompt-listing wording) — but hand-rolling that
  * frontmatter as a stored string invites a whole class of bugs this schema sidesteps entirely:
  * `name`/`description` could drift from whatever a hand-written frontmatter block says, YAML
  * special characters in `description` could corrupt the block, and publish-time validation would

@@ -407,7 +407,9 @@ function toolStatsFields(stats) {
  * session JSONL (`sessionJsonlPath` on the `report_task_result` contract; on the host
  * `${NEXTTIME_DATA}/workspaces/tasks/<taskId>/.pi/sessions/*.jsonl`, mounted read-only into this
  * container by the caller). Format (pi-coding-agent 0.84.x, pinned by
- * scripts/check-pi-version-consistency.sh): one JSON entry per line; `type: "message"` entries
+ * scripts/check-pi-version-consistency.sh; re-checked on 0.87.1 — same output for the same run on
+ * both versions, 0.87.1 only adds a `role: "system"` message entry, which this skips; see
+ * docs/runbooks/pi-upgrade.md §2.1): one JSON entry per line; `type: "message"` entries
  * carry `message.role` = `assistant` (with `content[]` blocks, `type: "toolCall"` = one call,
  * `name`) or `toolResult` (`toolName`, `isError: boolean`). Counts every toolCall block as a call
  * and every toolResult as an ended call, `isError` known for each of them. Prints the same
