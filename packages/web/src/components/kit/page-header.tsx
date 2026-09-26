@@ -20,7 +20,11 @@ export interface PageHeaderProps {
   /** The page's single primary action (§5.9 principle 1: one ink button per page), rendered
    *  first, before `actions`. */
   readonly primaryAction?: ReactNode;
-  /** Further right-aligned actions (secondary / ghost), after `primaryAction`. */
+  /** Further right-aligned actions (secondary / ghost), after `primaryAction`. Console redesign
+   *  P3-1 (V7 "页头动作"): once a page has more than `primaryAction` plus one secondary action,
+   *  collect the rest behind a `kit/dropdown-menu` overflow trigger rendered as (or inside) this
+   *  prop instead of adding more equal-weight buttons — `MembersPage`'s header is the reference
+   *  usage (one ink "添加成员" primary, "服务凭证"/"签发外部运行时凭证" behind a "更多操作" trigger). */
   readonly actions?: ReactNode;
 }
 
