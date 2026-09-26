@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WireMembership, WireUser } from '../lib/auth-api.js';
+import type { CapabilityCaller } from '../lib/clients.js';
 import { AccountPage } from './AccountPage.js';
 
 afterEach(cleanup);
@@ -11,6 +12,41 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function workspace(role: string) {
+  return {
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 2,
+    gatekeeperCount: 1,
+    caller: { id: 'p-owner', role, displayName: 'Owner', kind: 'human' },
+  };
+}
+
+/** D3 (docs/console-redesign-plan-2026-09-25.md §7): a scripted `CapabilityCaller` for the
+ *  "接 Claude Code / MCP" card (`HandleCard` in `AccountPage.tsx`) — same shape as `AccessPage.
+ *  test.tsx`/`MembersPage.test.tsx`'s own `scriptedHttp`. `get_workspace` answers as an owner
+ *  unless a test overrides it. */
+function scriptedHttp(
+  handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
+): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
+  const calls: { name: string; params: unknown }[] = [];
+  const base: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
+    get_workspace: () => workspace('owner'),
+    list_gatekeepers: () => ({ items: [] }),
+    ...handlers,
+  };
+  return {
+    calls,
+    call: vi.fn(async (name: string, params?: unknown) => {
+      calls.push({ name, params });
+      const handler = base[name];
+      if (!handler) throw new Error(`unscripted capability ${name}`);
+      return handler(params);
+    }) as CapabilityCaller['call'],
+  };
 }
 
 const USER: WireUser = {
@@ -230,5 +266,33 @@ describe('AccountPage: cookie mode', () => {
     expect(primaries[0]).toBe(screen.getByRole('button', { name: '保存' }));
     expect(screen.getByRole('button', { name: /更改密码/ }).className).not.toContain('btn-primary');
     expect(screen.getByRole('button', { name: '绑定' }).className).not.toContain('btn-primary');
+  });
+});
+
+// D3 (docs/console-redesign-plan-2026-09-25.md §7): "接 Claude Code / MCP" moved here from 访问
+// Access — `AccountPage`'s own `HandleCard`, gated exactly like the old inline card on Access.
+describe('AccountPage: D3 Handle-issuance card', () => {
+  it('renders for an owner once `http` is provided', async () => {
+    const http = scriptedHttp({});
+    render(
+      <AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} http={http} />,
+    );
+    await screen.findByTestId('issue-own-handle-section');
+    expect(screen.getByText('接 Claude Code / MCP')).toBeTruthy();
+  });
+
+  it('is absent for a non-owner (authoritative get_workspace.caller.role)', async () => {
+    const http = scriptedHttp({ get_workspace: () => workspace('member') });
+    render(
+      <AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} http={http} />,
+    );
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(screen.queryByTestId('issue-own-handle-section')).toBeNull();
+  });
+
+  it('is absent when no `http` is passed (no workspace in scope — platform-only admin, or the pre-session noWorkspace state)', () => {
+    render(<AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} />);
+    expect(screen.queryByTestId('issue-own-handle-section')).toBeNull();
+    expect(screen.queryByText('接 Claude Code / MCP')).toBeNull();
   });
 });

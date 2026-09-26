@@ -5,10 +5,6 @@ import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { AccessPage } from './AccessPage.js';
-import {
-  handleScopeCapabilities,
-  serviceHandleMaxTtlSeconds,
-} from './IssueServiceHandleSection.js';
 
 afterEach(cleanup);
 
@@ -87,7 +83,7 @@ describe('AccessPage', () => {
     await screen.findByTestId('grants-error');
   });
 
-  it('C9: an operator session (authoritative get_workspace.caller.role) sees no Grant / Revoke / issue-Handle affordances', async () => {
+  it('C9: an operator session (authoritative get_workspace.caller.role) sees no Grant / Revoke affordances, nor the Handle-issuance pointer', async () => {
     const http = scriptedHttp({
       get_workspace: () => workspace('operator'),
       // Both operator-readable, so the 403 inference alone would never have hidden the buttons.
@@ -99,7 +95,23 @@ describe('AccessPage', () => {
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() => expect(screen.queryByRole('button', { name: '授予能力' })).toBeNull());
     expect(within(row).queryByRole('button', { name: '撤销' })).toBeNull();
-    expect(screen.queryByTestId('issue-service-handle-form')).toBeNull();
+    // D3: Handle issuance moved to 我的账户/成员 — the pointer notice is owner-only, same as the
+    // sections it replaced.
+    expect(screen.queryByTestId('access-handle-issuance-moved')).toBeNull();
+  });
+
+  it('D3: an owner session sees the Handle-issuance pointer, linking to My Account and Members', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [] }),
+      list_grants: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const notice = await screen.findByTestId('access-handle-issuance-moved');
+    const links = within(notice).getAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '#/me/account',
+      '#/govern/members',
+    ]);
   });
 
   it('lists grants with a status chip, and revoking calls revoke_capability then updates the row', async () => {
@@ -269,92 +281,6 @@ describe('AccessPage', () => {
     expect(grantsCalls()).toHaveLength(3);
     fireEvent.blur(filter);
     await waitFor(() => expect(grantsCalls().at(-1)?.params).toEqual({ principalId: 'p-other' }));
-  });
-
-  it('B7: issuing a service Handle — capabilities from the registry checklist / paste box, TTL default 30 days — shows the token once', async () => {
-    const http = scriptedHttp({
-      list_principals: () => ({
-        items: [
-          {
-            id: 'p-svc',
-            kind: 'service',
-            role: 'member',
-            displayName: 'CI runner',
-            createdAt: '2026-09-01T00:00:00.000Z',
-            hasApiKey: true,
-          },
-        ],
-      }),
-      list_grants: () => ({ items: [] }),
-      issue_service_handle: (params) => {
-        expect(params).toEqual({
-          principalId: 'p-svc',
-          scope: ['search', 'get_task'],
-          ttlSeconds: 30 * 86400,
-        });
-        return {
-          handle: 'svc_handle_abc123',
-          principalId: 'p-svc',
-          sessionId: 'sess-1',
-          expiresAt: '2026-10-11T00:00:00.000Z',
-          scope: ['search', 'get_task'],
-        };
-      },
-    });
-    renderPage(http);
-
-    const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/服务主体/), {
-      target: { value: 'p-svc' },
-    });
-    expect((within(form).getByLabelText(/有效期（天）/) as HTMLInputElement).value).toBe('30');
-
-    // Only handle-channel names are offered: a member-management capability is not a checkbox
-    // here, and pasting it is refused with the reason before any call.
-    const checklist = within(form).getByTestId('ish-scope-checklist');
-    expect(checklist.querySelector('input[data-capability="search"]')).toBeTruthy();
-    expect(checklist.querySelector('input[data-capability="list_gatekeepers"]')).toBeNull();
-    expect(checklist.querySelector('input[data-capability="list_users"]')).toBeNull();
-    fireEvent.click(checklist.querySelector('input[data-capability="search"]') as HTMLElement);
-
-    const paste = within(form).getByLabelText(/粘贴能力名/);
-    fireEvent.change(paste, { target: { value: 'get_task list_gatekeepers' } });
-    expect(within(form).getByText(/不是可签发的能力名/).textContent).toContain('list_gatekeepers');
-    expect(within(form).getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(true);
-    fireEvent.change(paste, { target: { value: 'get_task' } });
-    expect(within(form).getByTestId('ish-scope-summary').textContent).toContain('2');
-
-    fireEvent.click(within(form).getByRole('button', { name: '签发' }));
-    await waitFor(() =>
-      expect(http.calls.some((call) => call.name === 'issue_service_handle')).toBe(true),
-    );
-    const dialog = await screen.findByTestId('issued-handle-dialog');
-    expect(within(dialog).getByTestId('issued-handle-token').textContent).toBe('svc_handle_abc123');
-  });
-
-  it('B7: the TTL cap is read from the registry (one year) and enforced client-side', async () => {
-    expect(serviceHandleMaxTtlSeconds()).toBe(365 * 86400);
-    expect(handleScopeCapabilities().every((c) => c.channel === 'handle')).toBe(true);
-    expect(handleScopeCapabilities().some((c) => c.name.includes('<'))).toBe(false);
-    const http = scriptedHttp({
-      list_principals: () => ({
-        items: [
-          {
-            id: 'p-svc',
-            kind: 'service',
-            role: 'member',
-            displayName: 'CI runner',
-            createdAt: '2026-09-01T00:00:00.000Z',
-            hasApiKey: true,
-          },
-        ],
-      }),
-      list_grants: () => ({ items: [] }),
-    });
-    renderPage(http);
-    const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/有效期（天）/), { target: { value: '366' } });
-    expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
   });
 
   it('B3: grant rows name their principal, grantor and gatekeeper through RefChips, bare when unknown', async () => {

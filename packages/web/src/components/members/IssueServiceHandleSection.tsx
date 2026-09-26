@@ -1,16 +1,13 @@
 import { type Capability, getCapability, listByChannel } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
-import type { CapabilityCaller } from '../lib/clients.js';
-import type { PrincipalRow } from '../lib/governance.js';
-import { useT } from '../lib/i18n.js';
-import { hrefs } from '../lib/router.js';
-import { DashboardCard } from './kit/section.js';
-import { PlatformError } from './platform/PlatformError.js';
-import { Button } from './ui/Button.js';
-import { CopyId } from './ui/CopyId.js';
-import { Drawer } from './ui/Drawer.js';
-import { Field, Input, Select } from './ui/Field.js';
-import { Notice } from './ui/Notice.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
+import type { PrincipalRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
+import { PlatformError } from '../platform/PlatformError.js';
+import { Button } from '../ui/Button.js';
+import { CopyId } from '../ui/CopyId.js';
+import { Field, Input, Select } from '../ui/Field.js';
+import { Notice } from '../ui/Notice.js';
 
 const SECONDS_PER_DAY = 86400;
 /** The registry's own ceiling (`issue_service_handle.ttlSeconds` `.max(...)`, one year) read
@@ -57,9 +54,12 @@ interface IssueServiceHandleResult {
 
 export interface IssueServiceHandleSectionProps {
   readonly http: CapabilityCaller;
-  /** Every principal this workspace has (`AccessPage`'s own `list_principals` read) — filtered
+  /** Every principal this workspace has (`MembersPage`'s own `list_principals` read) — filtered
    *  here to active `kind: 'service'` ones, the only Principal `issue_service_handle` accepts. */
   readonly principals: readonly PrincipalRow[];
+  /** Fires once the reader has acknowledged the one-time Handle (`CreatePrincipalForm`'s own
+   *  `onDone` precedent) — `MembersPage` closes the drawer this renders inside. */
+  readonly onDone: () => void;
 }
 
 function parseNames(raw: string): readonly string[] {
@@ -67,20 +67,27 @@ function parseNames(raw: string): readonly string[] {
 }
 
 /**
- * components/IssueServiceHandleSection: "签发外部运行时凭证 Issue a service Handle" (`AccessPage`,
- * P-B1, design §6.3 "外部运行时") — `issue_service_handle{principalId, scope, ttlSeconds?}`, the
- * console-side alternative to the `issue-service-handle` CLI. Inline on the page (not a `Drawer`)
- * because `AccessPage` already opens one for "Grant capability" — two open focus traps would fight
- * each other, the same reasoning `TemporaryPasswordDialog`'s own doc comment gives for never
- * showing two one-time-secret dialogs at once. Only the resulting Handle — shown exactly once,
- * like `TemporaryPasswordDialog`'s password — opens in a `Drawer`.
+ * components/members/IssueServiceHandleSection: "签发外部运行时凭证 Issue a service Handle"
+ * (`MembersPage`, P-B1, design §6.3 "外部运行时") — `issue_service_handle{principalId, scope,
+ * ttlSeconds?}`, the console-side alternative to the `issue-service-handle` CLI. Screenshot review
+ * of #305 (D3) moved this behind a header button + `Drawer` — the full form (principal picker, TTL,
+ * the whole capability tree) was too heavy to render inline under the member list. `MembersPage`
+ * owns the one `Drawer`; this component renders only its body and swaps between the form and the
+ * issued-result view itself (the `CreatePrincipalForm`/`created` precedent, right below it in
+ * `MembersPage`'s own drawer stack) rather than opening a second, nested `Drawer` for the result —
+ * two open focus traps would fight each other, the same reasoning `TemporaryPasswordDialog`'s own
+ * doc comment gives for never showing two one-time-secret dialogs at once.
  *
  * B7 (§2 B7, §5.6): the TTL defaults to 30 days under the registry's one-year cap, and the scope is
  * picked from the registry's handle-channel names (`handleScopeCapabilities`) — a checklist plus
  * a paste box for names copied from a runbook, validated against the same set, so a human-only
  * capability (or a typo) is refused here with the reason instead of by the kernel's 400.
  */
-export function IssueServiceHandleSection({ http, principals }: IssueServiceHandleSectionProps) {
+export function IssueServiceHandleSection({
+  http,
+  principals,
+  onDone,
+}: IssueServiceHandleSectionProps) {
   const t = useT();
   // S8 W4 (leftover 88 "内部服务主体...会列出它们，可以给内部主体签 Handle"): the platform's own
   // internal service principals (`__gatekeeper_service__`, `__draft_reaper__`) never authenticate
@@ -145,22 +152,46 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
     }
   }
 
-  function closeIssued(): void {
-    setIssued(null);
-    setPicked(new Set());
-    setPastedText('');
+  // The result view replaces the form entirely (the `CreatePrincipalForm`/`created` precedent) —
+  // no second, nested `Drawer`: `MembersPage`'s one `Drawer` around this component is the only one.
+  if (issued) {
+    return (
+      <div className="stack" data-testid="issued-handle-dialog">
+        <p className="text-3 text-small">
+          {t('会话', 'Session')}{' '}
+          <span className="mono" data-testid="issued-handle-session-id">
+            {issued.sessionId}
+          </span>
+        </p>
+        <Notice tone="warn">
+          {t(
+            '只显示这一次，控制台不会保存它；复制后交给要用它的运行时。 Shown once —',
+            'the console never stores it; copy it now and hand it to the runtime that will use it.',
+          )}
+        </Notice>
+        <div className="code-block row" style={{ justifyContent: 'space-between' }}>
+          <span className="mono" data-testid="issued-handle-token">
+            {issued.handle}
+          </span>
+          <CopyId id={issued.handle} label="Handle" full />
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="primary" onClick={onDone}>
+            {t('我已保存', 'I have saved it')}
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <DashboardCard
-      title={t('签发外部运行时凭证', 'Issue a service Handle')}
-      data-testid="issue-service-handle-section"
-    >
+    <div className="stack" data-testid="issue-service-handle-section">
       {servicePrincipals.length === 0 ? (
         <Notice testId="issue-service-handle-no-principal">
-          {t('还没有 service Principal — 先在', 'No service Principal yet — first create one on ')}
-          <a href={hrefs.members()}>{t('成员与授权', 'Members')}</a>
-          {t('创建一个。', ' page.')}
+          {t(
+            '还没有 service Principal — 先点上面的「服务凭证」按钮创建一个。',
+            'No service Principal yet — use the "Service credential" button above to create one first.',
+          )}
         </Notice>
       ) : null}
 
@@ -302,36 +333,6 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           </Button>
         </div>
       </form>
-
-      {issued ? (
-        <Drawer
-          open
-          onClose={closeIssued}
-          title={t('外部运行时凭证', 'Service Handle')}
-          subtitle={<span className="mono">{issued.sessionId}</span>}
-          testId="issued-handle-dialog"
-        >
-          <div className="stack">
-            <Notice tone="warn">
-              {t(
-                '只显示这一次，控制台不会保存它；复制后交给要用它的运行时。 Shown once —',
-                'the console never stores it; copy it now and hand it to the runtime that will use it.',
-              )}
-            </Notice>
-            <div className="code-block row" style={{ justifyContent: 'space-between' }}>
-              <span className="mono" data-testid="issued-handle-token">
-                {issued.handle}
-              </span>
-              <CopyId id={issued.handle} label="Handle" full />
-            </div>
-            <div className="row" style={{ justifyContent: 'flex-end' }}>
-              <Button variant="primary" onClick={closeIssued}>
-                {t('我已保存', 'I have saved it')}
-              </Button>
-            </div>
-          </div>
-        </Drawer>
-      ) : null}
-    </DashboardCard>
+    </div>
   );
 }

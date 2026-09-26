@@ -29,7 +29,7 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * pre-created platform administrator `workspaces.spec.ts` uses (see that file's own doc comment).
  * The admin is assumed to be the owner of the platform default workspace (true on a fresh stack:
  * `ensureDefaultWorkspace` creates it with the earliest administrator as owner) — every 管理 page
- * this file visits (系统接入/成员与授权/访问/能力目录) needs a workspace in scope, and this file
+ * this file visits (系统接入/成员与授权/能力目录) needs a workspace in scope, and this file
  * creates no workspace of its own the way `workspaces.spec.ts` does.
  */
 
@@ -356,23 +356,35 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await signInAsAdmin(page);
     await ensureOwnedWorkspaceSelected(page);
 
-    await page.getByTestId('nav-access').click();
-    const handleSection = page.getByTestId('issue-service-handle-section');
-    await expect(handleSection).toBeVisible({ timeout: 15_000 });
+    // D3 (docs/console-redesign-plan-2026-09-25.md §7): the service-Handle section moved from 访问
+    // Access to 成员与授权 Members, alongside `create_principal` — both owner-only writes for a
+    // service Principal now live on the one page. Screenshot review of #305: the full form was too
+    // heavy to render inline under the member list, so it now opens from a header button into its
+    // own `Drawer` (same one `MembersPage` uses for 添加成员/服务凭证/成员详情).
+    await page.getByTestId('nav-members').click();
+    await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.getByTestId('issue-service-handle-trigger').click();
+    const handleDrawer = page.getByTestId('issue-service-handle-drawer');
+    await expect(handleDrawer).toBeVisible({ timeout: 15_000 });
 
-    // No service Principal yet ⇒ create one on 成员与授权 first (`CreatePrincipalForm` — always
-    // `kind: 'service'`, docs/platform-admin-design.md §6.3's "外部运行时" flow).
+    // No service Principal yet ⇒ create one right here first (`CreatePrincipalForm` — always
+    // `kind: 'service'`, docs/platform-admin-design.md §6.3's "外部运行时" flow). `MembersPage` owns
+    // one drawer at a time, but `handleDrawer`'s own full-viewport overlay still covers the header
+    // buttons while it is open — close it explicitly (Esc) and wait for it to be hidden before
+    // clicking 服务凭证, or Playwright can never hit-test through the overlay to the real button
+    // and retries until its own timeout. Reopen 签发外部运行时凭证 once the principal exists.
     if (
-      await page
+      await handleDrawer
         .getByTestId('issue-service-handle-no-principal')
         .isVisible()
         .catch(() => false)
     ) {
       const suffix = Date.now().toString(36);
-      await page.getByTestId('nav-members').click();
-      await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
-        timeout: 15_000,
-      });
+      await page.keyboard.press('Escape');
+      await expect(handleDrawer).toBeHidden();
+
       await page.getByRole('button', { name: /服务凭证/ }).click();
       const createDrawer = page.getByTestId('create-principal-drawer');
       await expect(createDrawer.getByTestId('create-principal-form')).toBeVisible({
@@ -386,11 +398,11 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       await createDrawer.getByRole('button', { name: /我已复制/ }).click();
       await expect(createDrawer).toBeHidden();
 
-      await page.getByTestId('nav-access').click();
-      await expect(handleSection).toBeVisible({ timeout: 15_000 });
+      await page.getByTestId('issue-service-handle-trigger').click();
+      await expect(handleDrawer).toBeVisible({ timeout: 15_000 });
     }
 
-    const form = page.getByTestId('issue-service-handle-form');
+    const form = handleDrawer.getByTestId('issue-service-handle-form');
     await expect(form).toBeVisible();
     const principalSelect = form.locator('#ish-principal');
     const firstPrincipalOption = principalSelect.locator('option:not([value=""])').first();
@@ -401,18 +413,22 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await form.locator('#ish-scope').fill('get_task');
     await form.getByRole('button', { name: /签发/ }).click();
 
-    const issuedDrawer = page.getByTestId('issued-handle-dialog');
-    await expect(issuedDrawer).toBeVisible({ timeout: 15_000 });
-    const token = issuedDrawer.getByTestId('issued-handle-token');
+    // The issued result swaps into this same drawer (no second, nested `Drawer`) — still
+    // `handleDrawer`, just its content moved from the form to the one-time reveal.
+    const issuedPanel = handleDrawer.getByTestId('issued-handle-dialog');
+    await expect(issuedPanel).toBeVisible({ timeout: 15_000 });
+    const token = issuedPanel.getByTestId('issued-handle-token');
     await expect(token).toBeVisible();
     expect(((await token.textContent()) ?? '').trim().length).toBeGreaterThan(0);
-    // The drawer's subtitle is the newly issued session id — read it here (rather than filtering
-    // the runtimes table by principal, which a leftover session from a failed earlier attempt
-    // could make ambiguous) so the row/revoke lookup below is unambiguous.
-    const sessionId = ((await issuedDrawer.locator('.drawer-subtitle').textContent()) ?? '').trim();
+    // Read the session id here (rather than filtering the runtimes table by principal, which a
+    // leftover session from a failed earlier attempt could make ambiguous) so the row/revoke
+    // lookup below is unambiguous.
+    const sessionId = (
+      (await issuedPanel.getByTestId('issued-handle-session-id').textContent()) ?? ''
+    ).trim();
     expect(sessionId.length).toBeGreaterThan(0);
-    await issuedDrawer.getByRole('button', { name: /我已保存/ }).click();
-    await expect(issuedDrawer).toBeHidden();
+    await issuedPanel.getByRole('button', { name: /我已保存/ }).click();
+    await expect(handleDrawer).toBeHidden();
 
     // --- 集成 → 外部运行时: the new session shows up, then gets revoked -------------------------
     await page.getByTestId('nav-platformIntegrations').click();

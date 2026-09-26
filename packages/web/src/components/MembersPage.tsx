@@ -13,6 +13,7 @@ import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
 import { PageHeader } from './kit/page-header.js';
+import { IssueServiceHandleSection } from './members/IssueServiceHandleSection.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -32,6 +33,7 @@ type DrawerState =
   | { readonly kind: 'closed' }
   | { readonly kind: 'addMember' }
   | { readonly kind: 'create' }
+  | { readonly kind: 'issueHandle' }
   | { readonly kind: 'detail'; readonly principal: PrincipalRow };
 
 /**
@@ -54,6 +56,19 @@ type DrawerState =
  * — a `kind: 'service'` Principal and its one-time API key, for scripts and acceptance harnesses).
  * `canManage` still keys off `create_principal`: both writes are owner-only and the kernel denies
  * them together.
+ *
+ * 控制台产品化重构方案 D3 (docs/console-redesign-plan-2026-09-25.md §7): `IssueServiceHandleSection`
+ * ("签发外部运行时凭证", moved off 访问 Access) renders here too, behind the same `canManage` —
+ * `issue_service_handle` is owner-only same as everything else this page gates. It reads from this
+ * page's own `principals` (unfiltered `items`, not `rows` — the same shape `AccessPage` used to
+ * pass it), so a service Principal beyond the first loaded page needs "加载更多" clicked once before
+ * it appears in the picker; `AccessPage` fed it a dedicated `autoLoadAll` list, but duplicating that
+ * second `list_principals` call here would double the reads this page's own tests already count.
+ *
+ * Screenshot review of #305: the full form (principal picker, TTL, the whole capability tree) was
+ * too heavy to render inline under the member list, so it moved behind a header button
+ * ("签发外部运行时凭证", next to 添加成员/服务凭证) opening in its own `Drawer` — the fourth and last
+ * one this page owns, same `{drawer.kind === '…' ? <Child .../> : null}` shape as the other three.
  */
 export function MembersPage({ http }: MembersPageProps) {
   const t = useT();
@@ -86,6 +101,9 @@ export function MembersPage({ http }: MembersPageProps) {
     principals.state.status === 'ready'
       ? principals.state.data.items.filter((row) => !row.internal)
       : [];
+  // D3: unfiltered — `IssueServiceHandleSection` does its own `kind === 'service'` (+ internal /
+  // disabled) filtering, same as it did fed from `AccessPage`'s own `principals`.
+  const allPrincipals = principals.state.status === 'ready' ? principals.state.data.items : [];
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
 
   return (
@@ -109,6 +127,14 @@ export function MembersPage({ http }: MembersPageProps) {
               </Button>
               <Button variant="secondary" icon="key" onClick={() => setDrawer({ kind: 'create' })}>
                 {t('服务凭证', 'Service credential (API key)')}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="link"
+                onClick={() => setDrawer({ kind: 'issueHandle' })}
+                data-testid="issue-service-handle-trigger"
+              >
+                {t('签发外部运行时凭证', 'Issue a service Handle')}
               </Button>
             </>
           ) : undefined
@@ -279,6 +305,23 @@ export function MembersPage({ http }: MembersPageProps) {
               });
               refreshList();
             }}
+          />
+        ) : null}
+      </Drawer>
+
+      {/* D3 (moved off 访问 Access) / screenshot review of #305 (too heavy inline): owner-only,
+       *  same as every other drawer on this page. */}
+      <Drawer
+        open={drawer.kind === 'issueHandle'}
+        onClose={() => setDrawer({ kind: 'closed' })}
+        title={t('签发外部运行时凭证', 'Issue a service Handle')}
+        testId="issue-service-handle-drawer"
+      >
+        {drawer.kind === 'issueHandle' ? (
+          <IssueServiceHandleSection
+            http={http}
+            principals={allPrincipals}
+            onDone={() => setDrawer({ kind: 'closed' })}
           />
         ) : null}
       </Drawer>
