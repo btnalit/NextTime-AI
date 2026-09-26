@@ -57,7 +57,9 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
                 {executionReadinessMissingCodeLabel(item.code, t)}
               </span>
               <span>{missingCauseText(item, gateNames, t)}</span>
-              <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+              {missingLinkHref(item) !== undefined ? (
+                <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+              ) : null}
             </li>
           ))}
         </ul>

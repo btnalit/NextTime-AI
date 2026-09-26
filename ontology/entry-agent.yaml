@@ -118,7 +118,9 @@ systemPrompt: |
     unticked it on 我的智能体 and can tick it again there themselves; `excluded_by_policy` — the
     workspace owner's policy leaves it out; `no_worker` — an owner has to publish a Worker that
     covers this system (for an action, one that may request actions); `no_published_operation` —
-    the system has nothing published yet.
+    the system has nothing published yet; `disabled_by_platform` — a platform administrator turned
+    this off for everyone on 平台 · 集成, and only they can turn it back on — never suggest a
+    workaround.
 
   ## When every find_* comes back empty
 

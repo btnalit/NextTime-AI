@@ -331,9 +331,17 @@ function ConnectorRow({
   );
 }
 
-/** The per-Operation deny checklist for one connector — mounted only while its row is expanded
+/** The per-Operation allow checklist for one connector — mounted only while its row is expanded
  *  (the `UserPicker` lazy-read shape), since `list_gate_instances{connector}` is otherwise a read
- *  no page needs until an administrator actually opens this row. */
+ *  no page needs until an administrator actually opens this row.
+ *
+ *  Production incident 2026-09-26: checked now means "the agent may call it" (default all checked)
+ *  — the old checklist rendered checked = disabled, which reads backwards next to every other
+ *  checklist in this console and invites exactly the mistake that caused the incident. The wire
+ *  payload is unchanged (`set_connector_mode`'s `disabledOperations` still names what is refused);
+ *  only this component's own rendering inverts (`useConnectorDenyList`'s own doc comment has the
+ *  full reasoning). Unchecking something a linked workspace could already call needs a confirm
+ *  naming exactly what would newly stop working — re-checking something back on needs none. */
 function ConnectorDenyList({
   http,
   connector,
@@ -353,10 +361,11 @@ function ConnectorDenyList({
       data-testid={`connector-disabled-ops-${connector.name}`}
       style={{ padding: '8px 0' }}
     >
+      <strong>{t('允许调用的操作', 'Operations agents may call')}</strong>
       <Notice>
         {t(
-          '禁用后下一次调用即被拒绝；这个改动不影响已经启用它的工作区。',
-          'Disabled from the next call on — it never affects a workspace that already enabled this instance.',
+          '取消勾选会在下一次调用即被拒绝，对每一个启用了这个接入包实例的工作区都生效；已经在运行的入口 agent 会被立即刷新，而不是等到它自己重新签发凭证。',
+          'Unchecking takes effect on the very next call, in every workspace that enabled an instance of this connector — running entry agents are refreshed immediately rather than waiting for their own credentials to reissue.',
         )}
       </Notice>
       {instances.state.status === 'loading' ? (
@@ -368,13 +377,13 @@ function ConnectorDenyList({
           onRetry={() => void instances.reload()}
         />
       ) : denyList.names.length === 0 ? (
-        <p className="text-3">{t('还没有已知的', 'Operation No known Operations yet')}</p>
+        <p className="text-3">{t('还没有已知的 Operation', 'No known Operations yet')}</p>
       ) : (
         denyList.names.map((name) => (
           <label className="checkbox" key={name}>
             <input
               type="checkbox"
-              checked={denyList.disabled.includes(name)}
+              checked={!denyList.disabled.includes(name)}
               onChange={() => denyList.toggle(name)}
               disabled={denyList.saving}
             />
@@ -382,19 +391,42 @@ function ConnectorDenyList({
           </label>
         ))
       )}
-      <PlatformError
-        error={denyList.error}
-        title={t('无法保存禁用列表', 'Could not save the deny list')}
-      />
+      <PlatformError error={denyList.error} title={t('无法保存', 'Could not save')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="secondary"
-          onClick={() => void denyList.save()}
-          loading={denyList.saving}
-          disabled={!denyList.dirty}
-        >
-          {t('保存', 'Save')}
-        </Button>
+        <Confirm
+          tier="medium"
+          open={denyList.confirmOpen}
+          onOpenChange={denyList.onConfirmOpenChange}
+          anchor={
+            <Button
+              variant="secondary"
+              onClick={() => denyList.requestSave()}
+              loading={denyList.saving}
+              disabled={!denyList.dirty}
+            >
+              {t('保存', 'Save')}
+            </Button>
+          }
+          title={t('停用这些操作？', 'Disable these operations?')}
+          description={t(
+            '取消勾选的操作会在下一次调用即被拒绝，对每一个启用了这个接入包实例的工作区都生效；已经在运行的入口 agent 会被刷新。',
+            'Unchecked operations refuse the very next call, in every workspace that enabled an instance of this connector — running entry agents are refreshed.',
+          )}
+          impact={[
+            t(
+              `${denyList.newlyDisabled.length} 个操作：${denyList.newlyDisabled.join('、')}`,
+              `${denyList.newlyDisabled.length} operation(s): ${denyList.newlyDisabled.join(', ')}`,
+            ),
+            t(
+              `${denyList.enabledWorkspaceCount} 个已启用的工作区`,
+              `${denyList.enabledWorkspaceCount} enabled workspace(s)`,
+            ),
+          ]}
+          confirmLabel={t('停用', 'Disable')}
+          danger
+          onConfirm={() => denyList.confirmSave()}
+          testId={`connector-deny-list-confirm-${connector.name}`}
+        />
       </div>
     </div>
   );

@@ -1435,7 +1435,7 @@ function AgentUsabilityResult({
       <Notice tone="warn" testId="launcher-agent-usability-blocked">
         <div className="stack-s">
           <span>{gateReasonText(gateRow.reason, t)}</span>
-          {gateRow.reason !== undefined ? (
+          {gateRow.reason !== undefined && gateReasonHref(gateRow.reason) !== undefined ? (
             <a href={gateReasonHref(gateRow.reason)}>{gateReasonLink(gateRow.reason, t)}</a>
           ) : null}
         </div>

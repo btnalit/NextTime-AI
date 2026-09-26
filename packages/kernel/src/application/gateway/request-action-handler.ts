@@ -31,7 +31,6 @@ import {
   getGatekeeper,
   getOrCreateGatekeeperServicePrincipal,
   getPublishedOperation,
-  isOperationDisabled,
   mcpAutoApproveAllowed,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
@@ -39,7 +38,7 @@ import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js'
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { GateLinkPolicyView } from '../gates/index.js';
-import { readGateLinkPolicy } from '../gates/index.js';
+import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import type { WithTransactionFn } from './action-executor.js';
 import {
   createAdminWithTransaction,
@@ -1215,15 +1214,21 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
 };
 
 /** P-B1: the per-call half of "按 Operation 开关" — `null` link = a gate this workspace connected
- *  itself, no platform deny list applies. */
+ *  itself, no platform deny list applies. Routes through `operationPlatformStatus`
+ *  (application/gates/store.ts), the one shared predicate `disabledOperationsFor`
+ *  (gatekeeper-read-handlers.ts) and `computeCapabilityReachability` (capability-reachability.ts)
+ *  also consult now — the production incident this fixes was exactly the console's own reachability
+ *  read model re-deriving this decision on its own and getting it wrong (never consulting the deny
+ *  list at all). */
 function assertOperationEnabled(
   gateLink: GateLinkPolicyView | null,
   gatekeeperId: string,
   operationName: string,
 ): void {
-  if (gateLink && isOperationDisabled(gateLink.disabledOperations, operationName)) {
+  const status = operationPlatformStatus(gateLink, operationName);
+  if (status.disabled) {
     throw new ForbiddenError(
-      `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${gateLink.connector}"`,
+      `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${status.connector}"`,
     );
   }
 }

@@ -11,9 +11,9 @@ import {
   markActionRequestExecuted,
   markActionRequestFailed,
 } from '../../governance/approval/index.js';
-import { getGatekeeper, isOperationDisabled } from '../../governance/gatekeepers/index.js';
+import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import { readGateLinkPolicy } from '../gates/index.js';
+import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import { writeObservedFacts } from './observed-facts.js';
 
 /**
@@ -149,9 +149,7 @@ export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDep
             : null;
           return {
             gatekeeper: record,
-            disabled:
-              link !== null &&
-              isOperationDisabled(link.disabledOperations, actionRequest.actionKind),
+            disabled: operationPlatformStatus(link, actionRequest.actionKind).disabled,
           };
         },
       );

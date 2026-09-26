@@ -15,8 +15,8 @@ import {
   listGatekeepers,
   listOperations,
 } from '../../governance/gatekeepers/index.js';
-import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
-import { readGateLinkPolicy } from '../gates/index.js';
+import type { GateLinkPolicyView } from '../gates/index.js';
+import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
 /**
@@ -85,16 +85,16 @@ export async function describeGateOperations(endpoint: string) {
   return resolveClient().describeOperations(endpoint);
 }
 
-/** P-B1 (design §6.3 "按 Operation 开关"): the connector deny list that applies to a workspace
- *  Gatekeeper — empty for a gate the workspace connected itself (no platform link). Read
- *  projections hide these; `request_action` / `observe_operation` refuse them per call. */
-async function disabledOperationsFor(
+/** P-B1 (design §6.3 "按 Operation 开关"): the connector deny-list link for a workspace Gatekeeper
+ *  — `null` for a gate the workspace connected itself (no platform link). Read projections hide a
+ *  disabled Operation via `operationPlatformStatus` (application/gates/index.ts) below, the same
+ *  shared predicate `request_action` / `observe_operation` refuse it with per call. */
+async function gateLinkPolicyFor(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,
-): Promise<ReadonlySet<string>> {
-  const link = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
-  return new Set(link?.disabledOperations ?? []);
+): Promise<GateLinkPolicyView | null> {
+  return readGateLinkPolicy(client, workspaceId, gatekeeperId);
 }
 
 export async function probeGatekeeperHealth(endpoint: string): Promise<GatekeeperHealth> {
@@ -199,9 +199,11 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   // client and run one after the other (S5.5 leftover 34).
   const healthProbe = probeGatekeeperHealth(record.endpoint);
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
-  const disabled = await disabledOperationsFor(client, workspaceId, gatekeeperId);
+  const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;
-  const operations = allOperations.filter((op) => !isOperationDisabled([...disabled], op.name));
+  const operations = allOperations.filter(
+    (op) => !operationPlatformStatus(gateLink, op.name).disabled,
+  );
 
   const summary = toWireGatekeeperSummary(
     {
@@ -229,16 +231,16 @@ export const listOperationsHandler: CapabilityHandler = async (client, workspace
   const { gatekeeperId, q } = params as { gatekeeperId?: string; q?: string };
   const records = await listOperations(client, workspaceId, { gatekeeperId });
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
-  const disabledByGatekeeper = new Map<string, ReadonlySet<string>>();
+  const linksByGatekeeper = new Map<string, GateLinkPolicyView | null>();
   const visible = [];
   for (const record of records) {
     if (!matchesQuery(record.name, q)) continue;
-    let disabled = disabledByGatekeeper.get(record.gatekeeperId);
-    if (!disabled) {
-      disabled = await disabledOperationsFor(client, workspaceId, record.gatekeeperId);
-      disabledByGatekeeper.set(record.gatekeeperId, disabled);
+    let link = linksByGatekeeper.get(record.gatekeeperId);
+    if (link === undefined) {
+      link = await gateLinkPolicyFor(client, workspaceId, record.gatekeeperId);
+      linksByGatekeeper.set(record.gatekeeperId, link);
     }
-    if (!isOperationDisabled([...disabled], record.name)) visible.push(record);
+    if (!operationPlatformStatus(link, record.name).disabled) visible.push(record);
   }
   return { result: { items: visible.map(toWireOperationSummary) } };
 };

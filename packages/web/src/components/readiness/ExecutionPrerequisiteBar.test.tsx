@@ -77,6 +77,7 @@ describe('ExecutionPrerequisiteBar', () => {
               publishedOperationCount: 0,
               observeOperationCount: 0,
               executeOperationCount: 0,
+              disabledOperations: [],
               excludedByPolicy: false,
               excludedByProfile: false,
               inEntryScope: false,

@@ -309,7 +309,7 @@ describe('PlatformIntegrationsPage', () => {
     expect(confirm.getAttribute('data-tier')).toBe('medium');
   });
 
-  it('expanding a connector row and saving the deny-list posts disabledOperations only', async () => {
+  it('expanding a connector row, unchecking an operation (allow-list UX) and confirming posts disabledOperations only', async () => {
     const c = connector({ disabledOperations: ['old_op'] });
     const updated = connector({ disabledOperations: ['old_op', 'container_restart'] });
     const http = scriptedHttp({
@@ -336,13 +336,55 @@ describe('PlatformIntegrationsPage', () => {
     // The union includes the live instance's own Operation plus the already-disabled name that no
     // live instance currently announces.
     expect(within(denyList).getByText('old_op')).toBeTruthy();
-    const liveCheckbox = within(denyList).getByLabelText('container_restart');
+    const liveCheckbox = within(denyList).getByLabelText('container_restart') as HTMLInputElement;
+    // Console redesign UX inversion (production incident 2026-09-26): checked = the agent may call
+    // it, default checked — the opposite of the old "checked = disabled" checklist.
+    expect(liveCheckbox.checked).toBe(true);
     fireEvent.click(liveCheckbox);
+    expect(liveCheckbox.checked).toBe(false);
+    fireEvent.click(within(denyList).getByRole('button', { name: '保存' }));
+
+    // Newly disabling something (unchecking a previously-allowed Operation) needs a confirm naming
+    // what would newly stop working — `set_connector_mode` has not fired yet.
+    const confirm = await screen.findByTestId('connector-deny-list-confirm-docker');
+    expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(false);
+    fireEvent.click(within(confirm).getByRole('button', { name: '停用' }));
+
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
+    );
+  });
+
+  it('re-checking an already-disabled operation (re-enabling it) saves directly, no confirm needed', async () => {
+    const c = connector({ disabledOperations: ['container_restart'] });
+    const updated = connector({ disabledOperations: [] });
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [c] }),
+      list_gate_instances: (params) => {
+        expect(params).toEqual({ connector: 'docker' });
+        return { items: [gateInstance()] };
+      },
+      set_connector_mode: (params) => {
+        expect(params).toEqual({ name: 'docker', disabledOperations: [] });
+        return updated;
+      },
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    const row = within(table).getByTestId('connector-row-docker');
+    fireEvent.click(within(row).getByRole('button', { name: /展开/ }));
+
+    const denyList = await screen.findByTestId('connector-disabled-ops-docker');
+    const checkbox = within(denyList).getByLabelText('container_restart') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false); // already disabled
+    fireEvent.click(checkbox); // re-enabling it — never a new restriction
     fireEvent.click(within(denyList).getByRole('button', { name: '保存' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
     );
+    expect(screen.queryByTestId('connector-deny-list-confirm-docker')).toBeNull();
   });
 
   it('gate instance detail: status and trust toggles post update_gate_instance', async () => {
