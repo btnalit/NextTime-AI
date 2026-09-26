@@ -27,6 +27,10 @@ import { Tabs } from '../ui/Tabs.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
+import { useConnectorDenyList } from './integrations/useConnectorDenyList.js';
+import { useConnectorMode } from './integrations/useConnectorMode.js';
+import { useGateInstancesPanel } from './integrations/useGateInstancesPanel.js';
+import { useRevokeRuntime } from './integrations/useRevokeRuntime.js';
 
 const CONNECTOR_MODE_VALUES: readonly ConnectorModeWire[] = [
   'disabled',
@@ -60,6 +64,12 @@ export interface PlatformIntegrationsPageProps {
  * Connect a system" — the same `ConnectSystemLauncher` the workspace 系统接入 page opens, mounted
  * here with `origin: 'platform'` (the workspace steps link to 系统接入). The 门实例 tab keeps its
  * own 新建门宿主实例 button as the quick path.
+ *
+ * Each tab's own state/business logic (console redesign P1) moved to `platform/integrations/use*`
+ * hooks — none of them render anything or need `components/ui/*`. The tabs' JSX itself stays here:
+ * it renders `Button`/`Drawer`/`EmptyState`/`ErrorBanner`/`Select`/`Notice`/`SkeletonRows`/
+ * `StatusChip`, none of which have an identical-rendering `components/kit/*` replacement yet
+ * (`scripts/guards/legacy-ui-importers.json`).
  */
 export function PlatformIntegrationsPage({
   http,
@@ -238,44 +248,7 @@ function ConnectorRow({
 }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
-  const [savingMode, setSavingMode] = useState(false);
-  const [modeError, setModeError] = useState<unknown | null>(null);
-  // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it stashes the attempted
-  // value and opens a confirm next to itself; cancelling (Escape, Cancel, outside click) leaves
-  // `pendingMode` null, so the select's own `value` falls back to `connector.mode` and visually
-  // reverts. `set_connector_mode` fires only from the confirm's own `onConfirm`.
-  const [pendingMode, setPendingMode] = useState<ConnectorModeWire | null>(null);
-  const [modeConfirmOpen, setModeConfirmOpen] = useState(false);
-
-  async function changeMode(mode: ConnectorModeWire): Promise<void> {
-    if (savingMode) return;
-    setSavingMode(true);
-    setModeError(null);
-    try {
-      onChanged(
-        await http.call<ConnectorWire>('set_connector_mode', { name: connector.name, mode }),
-      );
-      setPendingMode(null);
-    } catch (err) {
-      setModeError(err);
-      throw err;
-    } finally {
-      setSavingMode(false);
-    }
-  }
-
-  function requestModeChange(mode: ConnectorModeWire): void {
-    if (mode === connector.mode) return;
-    setPendingMode(mode);
-    setModeConfirmOpen(true);
-  }
-
-  // The rule (stated in the confirm's own description, not just chosen silently): switching a
-  // connector *to* `disabled` while it has live gate instances cuts every one of them off
-  // platform-wide at once (audit S13's own wording) — that is the one case worth the extra
-  // retype-to-confirm friction. Every other mode change (including disabling a connector with no
-  // instances yet) is reversible in effect — flip it back — so a medium popover is enough.
-  const disablingInUse = pendingMode === 'disabled' && connector.instanceCount > 0;
+  const mode = useConnectorMode(http, connector, onChanged);
 
   return (
     <>
@@ -285,12 +258,9 @@ function ConnectorRow({
         <td>{connector.packaged ? t('预置', 'Packaged') : t('通用', 'Generic')}</td>
         <td>
           <Confirm
-            tier={disablingInUse ? 'irreversible' : 'medium'}
-            open={modeConfirmOpen}
-            onOpenChange={(open) => {
-              setModeConfirmOpen(open);
-              if (!open) setPendingMode(null);
-            }}
+            tier={mode.disablingInUse ? 'irreversible' : 'medium'}
+            open={mode.modeConfirmOpen}
+            onOpenChange={mode.onModeConfirmOpenChange}
             anchor={
               <Select
                 data-testid={`connector-mode-${connector.name}`}
@@ -299,38 +269,40 @@ function ConnectorRow({
                   `接入包「${connector.name}」的模式`,
                   `Mode for connector "${connector.name}"`,
                 )}
-                value={pendingMode ?? connector.mode}
-                onChange={(event) => requestModeChange(event.target.value as ConnectorModeWire)}
-                disabled={savingMode}
+                value={mode.pendingMode ?? connector.mode}
+                onChange={(event) =>
+                  mode.requestModeChange(event.target.value as ConnectorModeWire)
+                }
+                disabled={mode.savingMode}
               >
-                {CONNECTOR_MODE_VALUES.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {connectorModeLabel(mode, t)}
+                {CONNECTOR_MODE_VALUES.map((value) => (
+                  <option key={value} value={value}>
+                    {connectorModeLabel(value, t)}
                   </option>
                 ))}
               </Select>
             }
-            title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(pendingMode ?? connector.mode, t)}`}
+            title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(mode.pendingMode ?? connector.mode, t)}`}
             description={
-              disablingInUse
+              mode.disablingInUse
                 ? t(
                     'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。',
                     'disabled immediately cuts off every workspace that enabled this connector, platform-wide.',
                   )
                 : `新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。 The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.`
             }
-            target={disablingInUse ? connector.name : undefined}
+            target={mode.disablingInUse ? connector.name : undefined}
             impact={[
               `${connector.instanceCount} 个门实例 gate instances`,
               `${connector.operationCount} 个 Operation`,
             ]}
             confirmLabel={t('切换', 'Switch')}
-            danger={pendingMode === 'disabled'}
-            onConfirm={() => (pendingMode ? changeMode(pendingMode) : undefined)}
+            danger={mode.pendingMode === 'disabled'}
+            onConfirm={() => (mode.pendingMode ? mode.changeMode(mode.pendingMode) : undefined)}
             testId={`connector-mode-confirm-${connector.name}`}
           />
           <PlatformError
-            error={modeError}
+            error={mode.modeError}
             title={t('无法设置模式', 'Could not set the mode')}
             testId={`connector-mode-error-${connector.name}`}
           />
@@ -361,10 +333,7 @@ function ConnectorRow({
 
 /** The per-Operation deny checklist for one connector — mounted only while its row is expanded
  *  (the `UserPicker` lazy-read shape), since `list_gate_instances{connector}` is otherwise a read
- *  no page needs until an administrator actually opens this row. The checklist's name universe is
- *  the union of every live instance's announced Operations *and* the connector's already-disabled
- *  names, so a name no instance announces right now (one that went `lost`, or was renamed) stays
- *  visible and can still be un-disabled. */
+ *  no page needs until an administrator actually opens this row. */
 function ConnectorDenyList({
   http,
   connector,
@@ -375,47 +344,8 @@ function ConnectorDenyList({
   readonly onChanged: (connector: ConnectorWire) => void;
 }) {
   const t = useT();
-  const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {
-    connector: connector.name,
-  });
-  const [disabled, setDisabled] = useState<readonly string[]>(connector.disabledOperations);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<unknown | null>(null);
-
-  const liveNames =
-    instances.state.status === 'ready'
-      ? instances.state.data.items.flatMap((instance) =>
-          instance.operations.map((operation) => operation.name),
-        )
-      : [];
-  const names = Array.from(new Set([...liveNames, ...connector.disabledOperations])).sort();
-  const dirty =
-    disabled.length !== connector.disabledOperations.length ||
-    disabled.some((name) => !connector.disabledOperations.includes(name));
-
-  function toggle(name: string): void {
-    setDisabled((prev) =>
-      prev.includes(name) ? prev.filter((existing) => existing !== name) : [...prev, name],
-    );
-  }
-
-  async function save(): Promise<void> {
-    if (!dirty || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      onChanged(
-        await http.call<ConnectorWire>('set_connector_mode', {
-          name: connector.name,
-          disabledOperations: [...disabled],
-        }),
-      );
-    } catch (err) {
-      setError(err);
-    } finally {
-      setSaving(false);
-    }
-  }
+  const denyList = useConnectorDenyList(http, connector, onChanged);
+  const { instances } = denyList;
 
   return (
     <div
@@ -437,24 +367,32 @@ function ConnectorDenyList({
           title={t('无法读取实例', "Could not load this connector's instances")}
           onRetry={() => void instances.reload()}
         />
-      ) : names.length === 0 ? (
+      ) : denyList.names.length === 0 ? (
         <p className="text-3">{t('还没有已知的', 'Operation No known Operations yet')}</p>
       ) : (
-        names.map((name) => (
+        denyList.names.map((name) => (
           <label className="checkbox" key={name}>
             <input
               type="checkbox"
-              checked={disabled.includes(name)}
-              onChange={() => toggle(name)}
-              disabled={saving}
+              checked={denyList.disabled.includes(name)}
+              onChange={() => denyList.toggle(name)}
+              disabled={denyList.saving}
             />
             <span className="mono">{name}</span>
           </label>
         ))
       )}
-      <PlatformError error={error} title={t('无法保存禁用列表', 'Could not save the deny list')} />
+      <PlatformError
+        error={denyList.error}
+        title={t('无法保存禁用列表', 'Could not save the deny list')}
+      />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="secondary" onClick={() => void save()} loading={saving} disabled={!dirty}>
+        <Button
+          variant="secondary"
+          onClick={() => void denyList.save()}
+          loading={denyList.saving}
+          disabled={!denyList.dirty}
+        >
           {t('保存', 'Save')}
         </Button>
       </div>
@@ -466,11 +404,6 @@ function ConnectorDenyList({
 // 门实例 Gate instances
 // -------------------------------------------------------------------------------------------
 
-type InstancesPanel =
-  | { readonly kind: 'closed' }
-  | { readonly kind: 'create' }
-  | { readonly kind: 'gate'; readonly gateId: string };
-
 function GateInstancesTab({
   http,
   selectedGateId,
@@ -481,45 +414,8 @@ function GateInstancesTab({
   readonly onSelectGate?: (gateId: string | null) => void;
 }) {
   const t = useT();
-  const [panel, setPanelState] = useState<InstancesPanel>(() =>
-    selectedGateId !== undefined ? { kind: 'gate', gateId: selectedGateId } : { kind: 'closed' },
-  );
-  // The route is the source of truth for which drawer is open when the page is deep-linked; a
-  // local open/close also updates the hash through `onSelectGate` when the caller wires it.
-  useEffect(() => {
-    if (selectedGateId !== undefined) setPanelState({ kind: 'gate', gateId: selectedGateId });
-  }, [selectedGateId]);
-  function setPanel(next: InstancesPanel): void {
-    setPanelState(next);
-    if (next.kind === 'gate') onSelectGate?.(next.gateId);
-    else if (panel.kind === 'gate') onSelectGate?.(null);
-  }
-  const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {});
-  const rows = instances.state.status === 'ready' ? instances.state.data.items : [];
-  const open = panel.kind === 'gate' ? rows.find((row) => row.gateId === panel.gateId) : undefined;
-
-  function replace(updated: GateInstanceWire): void {
-    instances.mutate((data) => ({
-      ...data,
-      items: data.items.map((row) => (row.gateId === updated.gateId ? updated : row)),
-    }));
-  }
-
-  /** `create_gate_instance` already answers with the full, current row — no reload needed before
-   *  opening its detail drawer (the `PlatformWorkspacesPage`'s own `handleCreated` shape, minus
-   *  the reload it does for a reason specific to that page). */
-  function handleCreated(created: GateInstanceWire): void {
-    instances.mutate((data) => ({ ...data, items: [created, ...data.items] }));
-    setPanel({ kind: 'gate', gateId: created.gateId });
-  }
-
-  function handleDeleted(gateId: string): void {
-    instances.mutate((data) => ({
-      ...data,
-      items: data.items.filter((row) => row.gateId !== gateId),
-    }));
-    setPanel({ kind: 'closed' });
-  }
+  const panel = useGateInstancesPanel(http, selectedGateId, onSelectGate);
+  const { instances, rows, open, setPanel } = panel;
 
   return (
     <div className="stack" data-testid="integrations-instances">
@@ -662,7 +558,7 @@ function GateInstancesTab({
       )}
 
       <Drawer
-        open={panel.kind === 'create'}
+        open={panel.panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
         title={t('新建门宿主实例', 'Create hosted instance')}
         subtitle={t(
@@ -671,10 +567,10 @@ function GateInstancesTab({
         )}
         testId="create-gate-instance-drawer"
       >
-        {panel.kind === 'create' ? (
+        {panel.panel.kind === 'create' ? (
           <CreateGateInstanceForm
             http={http}
-            onCreated={handleCreated}
+            onCreated={panel.handleCreated}
             onCancel={() => setPanel({ kind: 'closed' })}
           />
         ) : null}
@@ -692,8 +588,8 @@ function GateInstancesTab({
             key={open.gateId}
             http={http}
             instance={open}
-            onChanged={replace}
-            onDeleted={handleDeleted}
+            onChanged={panel.replace}
+            onDeleted={panel.handleDeleted}
           />
         ) : null}
       </Drawer>
@@ -794,26 +690,7 @@ function ExternalRuntimeRow({
   readonly onRevoked: () => void;
 }) {
   const t = useT();
-  const [confirming, setConfirming] = useState(false);
-  const [revoking, setRevoking] = useState(false);
-  const [error, setError] = useState<unknown | null>(null);
-
-  async function revoke(): Promise<void> {
-    if (revoking) return;
-    setRevoking(true);
-    setError(null);
-    try {
-      await http.call('revoke_external_runtime', {
-        workspaceId: runtime.workspaceId,
-        sessionId: runtime.sessionId,
-      });
-      onRevoked();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setRevoking(false);
-    }
-  }
+  const revoke = useRevokeRuntime(http, runtime, onRevoked);
 
   return (
     <tr data-testid={`external-runtime-row-${runtime.sessionId}`}>
@@ -831,13 +708,21 @@ function ExternalRuntimeRow({
         )}
       </td>
       <td>
-        <PlatformError error={error} title={t('无法吊销', 'Could not revoke this runtime')} />
-        {confirming ? (
+        <PlatformError
+          error={revoke.error}
+          title={t('无法吊销', 'Could not revoke this runtime')}
+        />
+        {revoke.confirming ? (
           <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
-            <Button variant="ghost" size="s" onClick={() => setConfirming(false)}>
+            <Button variant="ghost" size="s" onClick={() => revoke.setConfirming(false)}>
               {t('取消', 'Cancel')}
             </Button>
-            <Button variant="danger" size="s" onClick={() => void revoke()} loading={revoking}>
+            <Button
+              variant="danger"
+              size="s"
+              onClick={() => void revoke.revoke()}
+              loading={revoke.revoking}
+            >
               {t('确认吊销', 'Confirm revoke')}
             </Button>
           </div>
@@ -845,7 +730,7 @@ function ExternalRuntimeRow({
           <Button
             variant="danger"
             size="s"
-            onClick={() => setConfirming(true)}
+            onClick={() => revoke.setConfirming(true)}
             data-testid={`external-runtime-revoke-${runtime.sessionId}`}
           >
             {t('吊销', 'Revoke')}
