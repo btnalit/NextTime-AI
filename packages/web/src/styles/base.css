@@ -102,8 +102,17 @@ textarea {
   color: inherit;
 }
 
+/* Design system v2: no button may fall back to the user-agent look (2px outset border, grey
+ * fill). The kit's Tailwind build has no preflight, so a kit `border` utility sets only the width
+ * and the UA `outset` style leaked through as a heavy dark ring on every kit Button / tab. Legacy
+ * `.btn-*` classes still set their own border and background (a class beats this element rule);
+ * kit utilities sit in a later layer and win too. */
 button {
   cursor: pointer;
+  border-width: 0;
+  border-style: solid;
+  border-color: var(--border);
+  background-color: transparent;
 }
 
 button:disabled {
