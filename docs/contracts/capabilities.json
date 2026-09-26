@@ -3163,6 +3163,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "disabledOperations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "excludedByPolicy": {
                 "type": "boolean"
               },
@@ -3196,6 +3202,7 @@
               "reason": {
                 "enum": [
                   "no_published_operation",
+                  "disabled_by_platform",
                   "not_granted",
                   "excluded_by_policy",
                   "excluded_by_profile",
@@ -3225,6 +3232,7 @@
               "publishedOperationCount",
               "observeOperationCount",
               "executeOperationCount",
+              "disabledOperations",
               "excludedByPolicy",
               "excludedByProfile",
               "inEntryScope",
@@ -3246,7 +3254,8 @@
                   "no_published_worker",
                   "no_worker_gate",
                   "excluded_by_profile",
-                  "excluded_by_policy"
+                  "excluded_by_policy",
+                  "disabled_by_platform"
                 ],
                 "type": "string"
               },
@@ -3285,7 +3294,8 @@
                         "no_published_worker",
                         "no_worker_gate",
                         "excluded_by_profile",
-                        "excluded_by_policy"
+                        "excluded_by_policy",
+                        "disabled_by_platform"
                       ],
                       "type": "string"
                     },
@@ -4151,6 +4161,7 @@
                   "reason": {
                     "enum": [
                       "no_published_operation",
+                      "disabled_by_platform",
                       "not_granted",
                       "excluded_by_policy",
                       "excluded_by_profile",

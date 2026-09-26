@@ -10,7 +10,8 @@ import { GateHostedDefinitionWireSchema, OperationSchema } from '@nexttime/share
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import { revokeEntrySessionHandles, revokeSession } from '../../governance/capability/index.js';
+import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
 
 /**
  * application/gates/store: the P-B1 integration catalog — `connectors`, `gate_instances`,
@@ -704,6 +705,73 @@ export async function readGateLinkPolicy(
   };
 }
 
+/** `readGateLinkPolicy`, batched across every workspace Gatekeeper this workspace has ever linked
+ *  in one query — for a caller that must check the whole workspace at once
+ *  (`computeCapabilityReachability`, `list_allowed_operations`) rather than one Gatekeeper at a
+ *  time. Keyed by `gatekeeper_object_id`; a Gatekeeper this workspace connected itself has no row
+ *  in the returned map — the same "no link, no deny list" meaning `readGateLinkPolicy`'s own `null`
+ *  return carries, just via `Map.get` returning `undefined` instead. */
+export async function readGateLinkPoliciesForWorkspace(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, GateLinkPolicyView>> {
+  const result = await client.query<{
+    gatekeeper_object_id: string;
+    gate_id: string;
+    connector: string;
+    trust: GateTrust;
+    status: GateInstanceStatus;
+    disabled_operations: unknown;
+  }>(
+    `select l.gatekeeper_object_id, l.gate_id, g.connector, g.trust, g.status, c.disabled_operations
+       from workspace_gate_links l
+       join gate_instances g on g.gate_id = l.gate_id
+       join connectors c on c.name = g.connector
+      where l.workspace_id = $1`,
+    [workspaceId],
+  );
+  const byGatekeeperId = new Map<string, GateLinkPolicyView>();
+  for (const row of result.rows) {
+    byGatekeeperId.set(row.gatekeeper_object_id, {
+      gateId: row.gate_id,
+      connector: row.connector,
+      trust: row.trust,
+      instanceStatus: row.status,
+      disabledOperations: stringList(row.disabled_operations),
+    });
+  }
+  return byGatekeeperId;
+}
+
+/** The one place that decides "is Operation `operationName` disabled by the platform for this
+ *  workspace Gatekeeper, and if so which connector disabled it" — production incident 2026-09-26:
+ *  before this function existed, `assertOperationEnabled` (enforcement, request-action-handler.ts),
+ *  `disabledOperationsFor` (the read projections, gatekeeper-read-handlers.ts) and
+ *  `computeCapabilityReachability` (the console's own reachability read model,
+ *  application/gateway/capability-reachability.ts) each re-derived this decision — the third one
+ *  never consulted the deny list at all, so the console told a member a gate was usable while every
+ *  call to it was refused. All three (plus `list_allowed_operations`'s own tool-list projection and
+ *  `action-executor.ts`'s execution-time re-check) now call this function; `null`/`undefined` for
+ *  `gateLink` (a gate the workspace connected itself, or a workspace Gatekeeper absent from a
+ *  `readGateLinkPoliciesForWorkspace` batch) always means "no platform deny list applies" —
+ *  `isOperationDisabled`'s own exact-name-match semantics (governance/gatekeepers/trust.ts) are
+ *  unchanged, just no longer inlined at each call site. */
+export interface OperationPlatformStatus {
+  readonly disabled: boolean;
+  /** Present only when `disabled` is `true` — the connector whose deny list named this Operation. */
+  readonly connector?: string;
+}
+
+export function operationPlatformStatus(
+  gateLink: GateLinkPolicyView | null | undefined,
+  operationName: string,
+): OperationPlatformStatus {
+  if (!gateLink || !isOperationDisabled(gateLink.disabledOperations, operationName)) {
+    return { disabled: false };
+  }
+  return { disabled: true, connector: gateLink.connector };
+}
+
 /** Workspace side: enabled platform instances of `platform_preset` connectors, plus this
  *  workspace's link when it has one. */
 export async function listAvailableGateInstances(
@@ -811,3 +879,60 @@ export async function revokeExternalRuntime(
 }
 
 const PLATFORM_PLACEHOLDER_PRINCIPAL = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * P-B1 propagation fix (production incident 2026-09-26): a connector deny-list edit that newly
+ * disables an Operation must reach every already-issued entry-agent Handle, not just wait for the
+ * next unrelated Grant/AgentProfile change in the same workspace to happen to revoke it —
+ * `assertOperationEnabled` already refuses the call regardless of what the Handle carries, but a
+ * stale Handle otherwise keeps advertising the (now-refused) Operation as a projected tool for as
+ * long as that entry session lives (S2.13's own ~21.6h ceiling, `revokeEntrySessionHandles`'s own
+ * doc comment). `setConnectorModeHandler` calls this whenever the deny list (or mode) actually
+ * changed — every workspace with a `workspace_gate_links` row for an instance of `connector` has
+ * every principal's own `kind='entry'` session Handles revoked, forcing a fresh Handle (and a fresh
+ * `find_operations`/tool projection) on that principal's very next Turn.
+ *
+ * `workspace_gate_links` and `gate_instances` both carry an `app_platform()` policy (core/0023), so
+ * the affected-workspace query and the entry-session lookup run directly in the caller's own
+ * platform transaction with no workspace switch needed; `capability_handles` has only the
+ * workspace-isolation policy (governance/0001), so the actual revocation (`revokeEntrySessionHandles`,
+ * which updates that table) switches `app.workspace_id` first, one workspace at a time — the same
+ * `setWorkspaceContext` technique `revokeExternalRuntime` above already uses for exactly this
+ * reason, reset to empty afterward so it never leaks into whatever the caller's transaction does
+ * next. `linkedWorkspaceCount` is every workspace this connector reaches at all;
+ * `revokedWorkspaceCount` is the subset that actually had a live `kind='entry'` session to revoke —
+ * a workspace with none yet needs no revocation, but is still linked (and will pick up the deny
+ * list the first time it ever mints an entry Handle, same as always).
+ */
+export async function revokeEntryHandlesForConnector(
+  client: PoolClient,
+  connector: string,
+): Promise<{ readonly linkedWorkspaceCount: number; readonly revokedWorkspaceCount: number }> {
+  const linked = await client.query<{ workspace_id: string }>(
+    `select distinct l.workspace_id
+       from workspace_gate_links l
+       join gate_instances g on g.gate_id = l.gate_id
+      where g.connector = $1`,
+    [connector],
+  );
+  let revokedWorkspaceCount = 0;
+  for (const row of linked.rows) {
+    const entryPrincipals = await client.query<{ principal_id: string }>(
+      `select distinct principal_id from sessions
+        where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+      [row.workspace_id],
+    );
+    if (entryPrincipals.rows.length === 0) continue;
+    await setWorkspaceContext(client, row.workspace_id, PLATFORM_PLACEHOLDER_PRINCIPAL);
+    try {
+      for (const principal of entryPrincipals.rows) {
+        await revokeEntrySessionHandles(client, row.workspace_id, principal.principal_id);
+      }
+    } finally {
+      await client.query("select set_config('app.workspace_id', '', true)");
+      await client.query("select set_config('app.principal_id', '', true)");
+    }
+    revokedWorkspaceCount += 1;
+  }
+  return { linkedWorkspaceCount: linked.rows.length, revokedWorkspaceCount };
+}

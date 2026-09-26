@@ -26,6 +26,10 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
   'excluded_by_profile',
   /** A granted gate the workspace AgentPolicy's gate cap leaves out — fixed by an owner on 模型与配额. */
   'excluded_by_policy',
+  /** Production incident 2026-09-26: every published Operation on this gate is disabled by the
+   *  platform's connector deny list (平台 · 集成) — fixed by a platform admin, not by an owner or the
+   *  member. */
+  'disabled_by_platform',
 ]);
 export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMissingCodeSchema>;
 
@@ -36,6 +40,10 @@ export type GateReachabilityStatus = z.infer<typeof GateReachabilityStatusSchema
 /** The first unmet condition, in the order a person fixes them. */
 export const GateUnreachableReasonSchema = z.enum([
   'no_published_operation',
+  /** Production incident 2026-09-26: every published Operation on this gate is disabled by the
+   *  platform's connector deny list (平台 · 集成) — see `ExecutionReadinessMissingCodeSchema`'s own
+   *  identical value above. */
+  'disabled_by_platform',
   'not_granted',
   'excluded_by_policy',
   'excluded_by_profile',
@@ -82,6 +90,10 @@ export const ExecutionReadinessGateWireSchema = z
     // computation `find_operations` annotates its results with.
     observeOperationCount: z.number().int().nonnegative(),
     executeOperationCount: z.number().int().nonnegative(),
+    /** Published Operation names on this gate the platform's connector deny list currently refuses
+     *  (production incident 2026-09-26) — a subset of the counts above; non-empty even when `status`
+     *  is not `disabled_by_platform` (some, not all, published Operations disabled). */
+    disabledOperations: z.array(z.string()),
     /** Granted, but the workspace AgentPolicy's gate cap leaves it out. */
     excludedByPolicy: z.boolean(),
     /** Granted, but the member's own AgentProfile excludes it. */

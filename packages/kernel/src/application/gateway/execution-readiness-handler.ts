@@ -55,7 +55,11 @@ interface ExecutionReadinessMissing {
     | 'no_published_worker'
     | 'no_worker_gate'
     | 'excluded_by_policy'
-    | 'excluded_by_profile';
+    | 'excluded_by_profile'
+    /** Production incident 2026-09-26: every published Operation on this gate is disabled by the
+     *  platform's connector deny list — fixed on 平台 · 集成 by a platform admin, not by an owner or
+     *  the member. See `capability-reachability.ts`'s own `UnreachableReason` doc comment. */
+    | 'disabled_by_platform';
   readonly gateId?: string;
   readonly workerDefinitionId?: string;
 }
@@ -99,6 +103,7 @@ export const executionReadinessHandler: CapabilityHandler = async (
     publishedOperationCount: gate.observeOperationCount + gate.executeOperationCount,
     observeOperationCount: gate.observeOperationCount,
     executeOperationCount: gate.executeOperationCount,
+    disabledOperations: [...gate.disabledOperations],
     excludedByPolicy: gate.excludedByPolicy,
     excludedByProfile: gate.excludedByProfile,
     inEntryScope: gate.inEntryScope,
@@ -108,6 +113,9 @@ export const executionReadinessHandler: CapabilityHandler = async (
   }));
   for (const gate of reach.gates) {
     if (gate.excludedByProfile) addMissing({ code: 'excluded_by_profile', gateId: gate.gateId });
+    if (gate.reason === 'disabled_by_platform') {
+      addMissing({ code: 'disabled_by_platform', gateId: gate.gateId });
+    }
   }
 
   const entryGateSet = new Set(reach.entryGatekeeperIds);

@@ -193,6 +193,7 @@ export const ALLOWED_NON_TOOL_WORDS = {
     'excluded_by_policy',
     'no_worker',
     'no_published_operation',
+    'disabled_by_platform', // reachability.reason value (production incident 2026-09-26) — not a tool.
   ]),
   'ontology/ops-runner.yaml': new Set([
     'context', // the pi `context` event/injection mechanism, not a capability of this name.
@@ -255,12 +256,7 @@ const REPLY_LANGUAGE_REQUIRED_PHRASES = [
 /** Checks one required-phrase list against `systemPrompt`, returning a violation naming every
  *  missing phrase (or `[]` when all are present). `ruleName` labels the violation so a failure
  *  names *which* of the three rules regressed, not just that "something" did. */
-function checkRequiredPhrases(
-  relativePath,
-  ruleName,
-  systemPrompt,
-  requiredPhrases,
-) {
+function checkRequiredPhrases(relativePath, ruleName, systemPrompt, requiredPhrases) {
   const missing = requiredPhrases.filter((phrase) => !systemPrompt.includes(phrase));
   if (missing.length === 0) return [];
   return [

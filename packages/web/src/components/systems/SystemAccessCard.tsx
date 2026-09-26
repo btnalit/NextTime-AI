@@ -292,7 +292,7 @@ function GranteeRow({
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
-          {gateStatus.reason !== undefined ? (
+          {gateStatus.reason !== undefined && gateReasonHref(gateStatus.reason) !== undefined ? (
             <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
               {gateReasonLink(gateStatus.reason, t)}
             </a>

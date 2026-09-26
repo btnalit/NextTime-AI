@@ -85,15 +85,17 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
 先跑 §3 里的 `test-db.sh` + 导出 `DATABASE_URL` 再跑 `make ci`，否则②层的 DB 套件全部被跳过（见
 §5，跳过不是失败，`make ci` 仍会显示绿）。
 
-## 4. ⑤ 端到端：三个验收脚本与 Playwright
+## 4. ⑤ 端到端：四个验收脚本与 Playwright
 
-- `scripts/accept_s1.sh`、`scripts/accept_s2.sh`、`scripts/accept_s3.sh`：见
+- `scripts/accept_s1.sh`、`scripts/accept_s2.sh`、`scripts/accept_s3.sh`、`scripts/accept_s4.sh`：见
   `docs/runbooks/accept-s1.md`、`docs/runbooks/host-accept-s2.md`、
-  `docs/runbooks/host-accept-s3.md`——本文档不重复，只记录它们在测试分层里的位置：这三个脚本是
-  §7.10 五层里唯一验证"真实 Docker 容器 + 真实 pi 进程 + 真实门服务"这条链路端到端可用的一层，
-  其余四层都用假桩/内存态/DB 集成测试替代了真实容器。
+  `docs/runbooks/host-accept-s3.md`、`docs/runbooks/host-accept-s4.md`——本文档不重复，只记录它们在
+  测试分层里的位置：这四个脚本是 §7.10 五层里唯一验证"真实 Docker 容器 + 真实 pi 进程 + 真实门服务"
+  这条链路端到端可用的一层，其余四层都用假桩/内存态/DB 集成测试替代了真实容器。`accept_s4.sh` 是唯一
+  从不发聊天 Turn、不需要 LLM 的一个——它验证的是"每个已接入系统，走真实内核路径"这条独立于聊天的
+  能力面。
 - `scripts/drill-restore.sh`、`scripts/drill-add-gatekeeper.sh`：development-tasks.md § S3.10
-  的交付物——不是"验证平台整体能跑"的验收脚本（那是上面三个 `accept_s*.sh` 的职责），而是把
+  的交付物——不是"验证平台整体能跑"的验收脚本（那是上面四个 `accept_s*.sh` 的职责），而是把
   `docs/runbooks/backup-restore.md`/`docs/runbooks/add-gatekeeper.md` 两份**运维手册**本身的关键
   步骤自动化成可重复执行、PASS/FAIL 分明的脚本——S3.10 自己的验收句（"按「从备份恢复」手册在临时
   环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功"）落地成这两个脚本，而不是留在

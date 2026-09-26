@@ -113,9 +113,14 @@ async function ensureOwnedWorkspaceSelected(page: Page): Promise<void> {
   await expect(switcher).toBeEnabled();
 }
 
-/** Ticks/unticks one Operation name in a connector's deny-list checklist (`ConnectorDenyList`) and
+/** Ticks/unticks one Operation name in a connector's allow-list checklist (`ConnectorDenyList`) and
  *  saves, but only when it is not already in the requested state — the idempotency this whole file
- *  aims for, applied to a single checkbox. Assumes the connector's row is already expanded. */
+ *  aims for, applied to a single checkbox. Checked means "the agent may call it" (console redesign
+ *  UX inversion, production incident 2026-09-26 — the wire payload underneath is still the deny
+ *  list; only the checkbox's rendered sense flipped), the opposite of this helper's own `disabled`
+ *  parameter. Newly disabling an Operation (checked → unchecked) opens a confirm naming what would
+ *  newly stop working (`useConnectorDenyList`'s own `newlyDisabled` gate) — re-checking one back on
+ *  needs none. Assumes the connector's row is already expanded. */
 async function setOperationDisabled(
   page: Page,
   connectorName: string,
@@ -126,11 +131,16 @@ async function setOperationDisabled(
   await expect(list).toBeVisible({ timeout: 15_000 });
   const checkbox = list.getByLabel(operationName, { exact: true });
   await expect(checkbox).toBeVisible({ timeout: 15_000 });
-  const alreadyThere = await checkbox.isChecked();
-  if (alreadyThere === disabled) return;
+  const alreadyAllowed = await checkbox.isChecked();
+  if (alreadyAllowed === !disabled) return;
   await checkbox.click();
   await list.getByRole('button', { name: /保存/ }).click();
-  await expect(checkbox).toBeChecked({ checked: disabled, timeout: 15_000 });
+  if (disabled) {
+    const confirm = page.getByTestId(`connector-deny-list-confirm-${connectorName}`);
+    await expect(confirm).toBeVisible({ timeout: 15_000 });
+    await confirm.getByRole('button', { name: /停用/ }).click();
+  }
+  await expect(checkbox).toBeChecked({ checked: !disabled, timeout: 15_000 });
 }
 
 test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
