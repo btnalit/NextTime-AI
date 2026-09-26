@@ -1,14 +1,12 @@
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
-import { type WorkerDefinitionForm, opsRunnerTemplateForm } from '../lib/catalog.js';
+import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative } from '../lib/format.js';
 import {
   type CapabilityNameRow,
-  type GatekeeperListRow,
-  type ModelRow,
   type OperationCatalogRow,
   type OperationStatsRow,
   type ProcedureRow,
@@ -23,10 +21,11 @@ import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
+import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ModulesTab } from './catalog/ModulesTab.js';
-import { ProcedureEditor } from './catalog/ProcedureEditor.js';
+import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
-import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
+import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { Confirm } from './kit/confirm.js';
 import {
   Dialog,
@@ -320,27 +319,6 @@ function DiscardDraftConfirm({
   );
 }
 
-/** S8 W3 K2 (leftover 82): the periodic kernel sweep's own staleness threshold, in days — the
- *  console has no read of it today (out of this lane's own read-model scope, see the PR report),
- *  so this mirrors the kernel's compiled-in default (`DEFAULT_DRAFT_EXPIRY_DAYS`,
- *  `application/worker/draft-lifecycle.ts`) rather than guessing; a platform-configurable
- *  `DRAFT_EXPIRY_DAYS` env override on the kernel is not reflected here. */
-const DRAFT_EXPIRY_DAYS = 30;
-
-/** The one-line auto-cleanup note shared by the Workers tab's "我的草稿" section and the Skills /
- *  Procedures tabs' toolbars (S8 W3 K2, leftover 82). */
-function DraftExpiryNote({ testId }: { readonly testId: string }) {
-  const t = useT();
-  return (
-    <p className="text-3 text-small" data-testid={testId}>
-      {t(
-        `草稿 ${DRAFT_EXPIRY_DAYS} 天未更新会自动清理。`,
-        `A draft is automatically cleaned up after ${DRAFT_EXPIRY_DAYS} days with no update.`,
-      )}
-    </p>
-  );
-}
-
 function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const permissions = usePermissions();
@@ -631,11 +609,6 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     </>
   );
 }
-
-type EditorState<Row> =
-  | { readonly kind: 'new' }
-  | { readonly kind: 'copy'; readonly row: Row }
-  | null;
 
 function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
@@ -1054,42 +1027,6 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       ) : null}
       {editorDrawer}
     </>
-  );
-}
-
-/** Loads the pickers' directories only while the Procedure editor is open (member-level reads,
- *  cached per session by `useCapabilityList`); the editor degrades to typed ids without them. */
-function ProcedureEditorHost({
-  http,
-  copyOf,
-  onProposed,
-  onDone,
-}: {
-  readonly http: CapabilityCaller;
-  readonly copyOf?: ProcedureRow;
-  readonly onProposed: () => void;
-  readonly onDone: () => void;
-}) {
-  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
-  // A step picker, not a browsable list — autoLoadAll so a workspace with > 100 published Worker
-  // definitions still offers every one of them, not just the first page (S8 W1-A4).
-  const definitions = useCapabilityList<WorkerDefinitionSummary>(
-    http,
-    'list_worker_definitions',
-    {},
-    { autoLoadAll: true },
-  );
-  return (
-    <ProcedureEditor
-      http={http}
-      copyOf={copyOf}
-      gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined}
-      workerDefinitions={
-        definitions.state.status === 'ready' ? definitions.state.data.items : undefined
-      }
-      onProposed={onProposed}
-      onDone={onDone}
-    />
   );
 }
 
@@ -1587,47 +1524,5 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       ) : null}
       {editorDrawer}
     </>
-  );
-}
-
-/** Loads the picker directories (`list_models`, `list_gatekeepers`, `list_skills`) only while the
- *  Worker editor is open — member-level reads, cached per session by `useCapabilityList`; the
- *  editor degrades to raw ids/names without them (same convention `ProcedureEditorHost` above
- *  already established). `list_skills` uses `autoLoadAll` (it is keyset-paginated, S8 W1-C) so the
- *  skills picker never silently hides a published Skill past the first page — same reasoning as
- *  `ProcedureEditorHost`'s own `list_worker_definitions` load. `capabilityNames` (S8 W3 K2, leftover
- *  84) is a prop, not a hook call here — `WorkersTab` above already loads it (the "从模板创建" button
- *  needs it loaded *before* this host ever mounts), so this component reuses that same load rather
- *  than opening a second one. */
-function WorkerEditorHost({
-  http,
-  newVersionOf,
-  initialForm,
-  capabilityNames,
-  onProposed,
-  onDone,
-}: {
-  readonly http: CapabilityCaller;
-  readonly newVersionOf?: WorkerDefinitionSummary;
-  readonly initialForm?: WorkerDefinitionForm;
-  readonly capabilityNames?: readonly CapabilityNameRow[];
-  readonly onProposed: () => void;
-  readonly onDone: () => void;
-}) {
-  const models = useCapabilityList<ModelRow>(http, 'list_models');
-  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
-  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
-  return (
-    <WorkerDefinitionEditor
-      http={http}
-      newVersionOf={newVersionOf}
-      initialForm={initialForm}
-      models={models.state.status === 'ready' ? models.state.data.items : undefined}
-      capabilityNames={capabilityNames}
-      gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined}
-      skills={skills.state.status === 'ready' ? skills.state.data.items : undefined}
-      onProposed={onProposed}
-      onDone={onDone}
-    />
   );
 }
