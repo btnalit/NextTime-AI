@@ -80,8 +80,11 @@ describe('ExecutionReadinessCard', () => {
     const missing = await screen.findByTestId('execution-readiness-missing');
     expect(missing.textContent).toContain('还没有任何可以作用的系统');
     expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/systems');
+    expect(missing.querySelector('a')?.className).toContain('link-inline');
     expect(screen.queryAllByTestId('execution-readiness-gate-chip')).toHaveLength(0);
     expect(screen.queryByTestId('execution-readiness-toggle')).toBeNull();
+    // Console redesign P3-3 (V2): a fresh workspace's day-1 state is calm, never an alarm.
+    expect(screen.getByTestId('execution-readiness-body').className).not.toContain('notice-warn');
   });
 
   it('all systems direct: one chip per system, ready sentence, no toggle', async () => {
@@ -114,6 +117,8 @@ describe('ExecutionReadinessCard', () => {
     expect(screen.queryByTestId('execution-readiness-gates')).toBeNull();
     expect(await screen.findByTestId('execution-readiness-ready')).toBeTruthy();
     expect(screen.queryByTestId('execution-readiness-missing')).toBeNull();
+    // Console redesign P3-3 (V2): a neutral "n/m 个系统" summary line, not a bare "现在能用：".
+    expect(screen.getByTestId('execution-readiness-summary').textContent).toContain('2/2');
   });
 
   it('one system unusable: strip counts it, 查看原因 expands the per-gate reason + fix link', async () => {
@@ -145,7 +150,13 @@ describe('ExecutionReadinessCard', () => {
         }),
     });
     render(<ExecutionReadinessCard http={http} />);
-    const toggle = await screen.findByTestId('execution-readiness-toggle');
+    // Console redesign P3-3 (V2): amber lives on the unusable chip alone, never on the container.
+    await screen.findByTestId('execution-readiness-body');
+    expect(screen.getByTestId('execution-readiness-body').className).not.toContain('notice-warn');
+    const chips = await screen.findAllByTestId('execution-readiness-gate-chip');
+    expect(chips[1]?.className).toContain('chip-warn');
+
+    const toggle = screen.getByTestId('execution-readiness-toggle');
     expect(toggle.textContent).toContain('1');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByTestId('execution-readiness-gates')).toBeNull();
@@ -155,8 +166,29 @@ describe('ExecutionReadinessCard', () => {
     expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['direct', 'unreachable']);
     // The incident this strip exists for: granted but unticked on My Agent — says so, links there.
     expect(rows[1]?.textContent).toContain('取消了勾选');
-    expect(rows[1]?.querySelector('a')?.getAttribute('href')).toBe('#/me/agent');
+    const rowLink = rows[1]?.querySelector('a');
+    expect(rowLink?.getAttribute('href')).toBe('#/me/agent');
+    expect(rowLink?.className).toContain('link-inline');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('console redesign P3-3 (V2): two gates sharing a display name get a short-id suffix', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          ready: true,
+          gates: [
+            gate({ gateId: 'gate-aaaaaaaa-1', name: 'RAGFlow' }),
+            gate({ gateId: 'gate-bbbbbbbb-2', name: 'RAGFlow' }),
+          ],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const chips = await screen.findAllByTestId('execution-readiness-gate-chip');
+    const labels = chips.map((chip) => chip.textContent);
+    expect(labels[0]).not.toEqual(labels[1]);
+    expect(labels[0]).toContain('RAGFlow');
+    expect(labels[1]).toContain('RAGFlow');
   });
 
   it('workspace-wide gap (no gateId) still shown; per-gate gaps are not duplicated', async () => {

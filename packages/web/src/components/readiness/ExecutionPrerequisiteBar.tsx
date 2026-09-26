@@ -27,6 +27,10 @@ export interface ExecutionPrerequisiteBarProps {
  * `ready`. Only the not-ready case renders, one line per `missing[]` item — cause text plus a link
  * to the page that fixes it (`readiness-copy.ts`), gate ids resolved to names from this same
  * response's own `gates[]` (never a raw id, never the bare `code` — ui-audit S14).
+ *
+ * Console redesign P3-3 (V2 "就绪提示条"): stays a calm, neutral `Notice` (no `tone="warn"`) —
+ * this is proactive setup guidance, not a report of something this member just tried and got
+ * blocked on, so it never reads as an alarm even on a brand-new workspace's first prerequisite.
  */
 export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps) {
   const t = useT();
@@ -37,7 +41,7 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
 
   return (
-    <Notice tone="warn" testId="execution-prerequisite-bar">
+    <Notice testId="execution-prerequisite-bar">
       <div className="stack-s">
         <strong>{t('执行前提尚未满足', 'Execution prerequisites not met yet')}</strong>
         <span data-testid="execution-prerequisite-rule">
@@ -58,7 +62,9 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
               </span>
               <span>{missingCauseText(item, gateNames, t)}</span>
               {missingLinkHref(item) !== undefined ? (
-                <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+                <a href={missingLinkHref(item)} className="link-inline">
+                  {missingLinkLabel(item, t)}
+                </a>
               ) : null}
             </li>
           ))}

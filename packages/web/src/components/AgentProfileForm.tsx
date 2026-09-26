@@ -13,10 +13,13 @@ import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { definitionName } from '../lib/tasks.js';
-import { Button } from './ui/Button.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Select, Textarea, describedBy } from './ui/Field.js';
-import { Notice } from './ui/Notice.js';
+import { Button } from './kit/button.js';
+import { ErrorBanner } from './kit/error-banner.js';
+import { Field, describedBy } from './kit/field.js';
+import { Notice } from './kit/notice.js';
+import { DashboardCard } from './kit/section.js';
+import { Select } from './kit/select.js';
+import { Textarea } from './kit/textarea.js';
 
 const INHERIT_MODEL = '__inherit__';
 
@@ -176,12 +179,10 @@ export function AgentProfileForm({
         </Notice>
       ) : null}
 
-      {/* S8 W4 (audit M2 "长单列表单无分节"): 模型 / 能力 / 提示词 / 自动批准 四节，与
-       *  `EffectivePanel`（同一页只读摘要）共用 `.section`/`.section-header` 外观。 */}
-      <section className="section" aria-labelledby="ap-section-model-title">
-        <div className="section-header">
-          <h2 id="ap-section-model-title">{t('模型', 'Model')}</h2>
-        </div>
+      {/* S8 W4 (audit M2 "长单列表单无分节") + console redesign P3-3 (V4): 模型 / 能力 / 提示词 /
+       *  自动批准 四节，各自一张 `DashboardCard`（与 `EffectivePanel` 同一页右侧摘要卡呼应），左栏
+       *  在 ≥1280px 与右侧摘要并排、更窄视口下退回单列（见 `AgentProfilePage.tsx`）。 */}
+      <DashboardCard title={t('模型', 'Model')}>
         <Field
           id="ap-model"
           label={t('模型', 'Model')}
@@ -193,6 +194,8 @@ export function AgentProfileForm({
         >
           <Select
             id="ap-model"
+            aria-label={t('模型', 'Model')}
+            className="ap-model-select"
             value={state.model}
             onChange={(event) => update('model', event.target.value)}
             disabled={disabled}
@@ -209,12 +212,9 @@ export function AgentProfileForm({
             ))}
           </Select>
         </Field>
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="ap-section-capabilities-title">
-        <div className="section-header">
-          <h2 id="ap-section-capabilities-title">{t('能力', 'Capabilities')}</h2>
-        </div>
+      <DashboardCard title={t('能力', 'Capabilities')}>
         <p className="field-hint">
           {t(
             '勾选的都会给你的智能体用；以后新授权的系统、新发布的 Skill 和 Worker 会自动加入。取消勾选即不让它用。',
@@ -280,12 +280,9 @@ export function AgentProfileForm({
             </>
           }
         />
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="ap-section-prompt-title">
-        <div className="section-header">
-          <h2 id="ap-section-prompt-title">{t('提示词', 'Prompt')}</h2>
-        </div>
+      <DashboardCard title={t('提示词', 'Prompt')}>
         <Field
           id="ap-prompt"
           label={t('提示词附加', 'Prompt addendum')}
@@ -302,9 +299,10 @@ export function AgentProfileForm({
         >
           <Textarea
             id="ap-prompt"
+            aria-label={t('提示词附加', 'Prompt addendum')}
             value={state.promptAddendum}
             onChange={(event) => update('promptAddendum', event.target.value)}
-            rows={4}
+            minRows={4}
             disabled={disabled}
             invalid={!!fieldErrors.promptAddendum || overLimit}
             aria-describedby={describedBy(
@@ -314,12 +312,9 @@ export function AgentProfileForm({
             )}
           />
         </Field>
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="ap-section-auto-approve-title">
-        <div className="section-header">
-          <h2 id="ap-section-auto-approve-title">{t('自动批准', 'Auto-approve')}</h2>
-        </div>
+      <DashboardCard title={t('自动批准', 'Auto-approve')}>
         <label className="checkbox" data-testid="agent-profile-auto-approve-low">
           <input
             type="checkbox"
@@ -346,7 +341,7 @@ export function AgentProfileForm({
             {fieldErrors.autoApproveLow}
           </p>
         ) : null}
-      </section>
+      </DashboardCard>
 
       {submitError !== null ? (
         <ErrorBanner
@@ -363,7 +358,7 @@ export function AgentProfileForm({
       </Notice>
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button type="submit" variant="primary" loading={submitting} disabled={disabled}>
+        <Button type="submit" variant="primary" disabled={disabled}>
           {t('保存', 'Save')}
         </Button>
       </div>

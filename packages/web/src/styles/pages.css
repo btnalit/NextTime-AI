@@ -671,3 +671,44 @@
   max-height: 220px;
   overflow-y: auto;
 }
+
+/* ---- My Agent (console redesign P3-3, V4): form left, sticky "当前生效" summary right at
+ * ≥1280px; one column below that and at 768px. -------------------------------------------- */
+.agent-profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.agent-profile-summary {
+  position: sticky;
+  top: var(--space-4);
+}
+
+@media (max-width: 1279px) {
+  .agent-profile-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-profile-summary {
+    position: static;
+  }
+}
+
+/* V4: the model select sizes to its content instead of filling the card (§5.9 principle 6). */
+.ap-model-select {
+  max-width: 360px;
+}
+
+/* ---- Systems & access (console redesign P3-3, V5): one row per system — the artboard's list
+ * has more per-row content (kind chip, ops summary, who-can-use, reachability, two actions) than
+ * `.data-row`'s other sitewide consumers, so this list wraps rather than truncating at 768px. */
+.systems-list .data-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.systems-list .data-row-trailing {
+  flex-wrap: wrap;
+}

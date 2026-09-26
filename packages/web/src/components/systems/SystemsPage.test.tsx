@@ -192,21 +192,25 @@ describe('SystemsPage', () => {
     );
     expect(within(card).getByTestId('gatekeeper-ops-summary').textContent).toContain('1 个写操作');
 
+    // Reachability for me (the owner, self) renders inline on the row — no drawer needed.
+    expect(within(card).getByTestId('gatekeeper-reachability').textContent).toContain('可直接调用');
+
+    // 谁能用 / 哪些 Worker 覆盖 (console redesign P3-3 V5): behind the row's own summary button,
+    // opened as a `kit/sheet` drawer instead of always expanded on the card.
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+
     // 谁能用: Bob's row shows the unreachable chip and the excluded-by-profile reason text.
-    const list = within(card).getByTestId('system-access-list');
+    const list = within(drawer).getByTestId('system-access-list');
     await waitFor(() => expect(within(list).getByText('Bob')).toBeTruthy());
     const row = within(list).getByTestId('system-access-row');
     expect(row.textContent).toContain('用不了');
     expect(row.textContent).toContain('取消了勾选');
 
     // 哪些 Worker 覆盖.
-    expect(within(card).getByTestId('system-worker-coverage').textContent).toContain('ops-runner');
-
-    // Grant: opens the shared drawer locked to this gate.
-    fireEvent.click(within(card).getByTestId('gatekeeper-grant-button'));
-    const grantDrawer = await screen.findByTestId('grant-gate-drawer');
-    const form = within(grantDrawer).getByTestId('grant-gate-form');
-    expect(within(form).getByTestId('ggf-locked-gate-chip').textContent).toContain('Docker prod');
+    expect(within(drawer).getByTestId('system-worker-coverage').textContent).toContain(
+      'ops-runner',
+    );
 
     // Revoke: Bob's existing grant.
     fireEvent.click(within(row).getByTestId('gatekeeper-revoke-grant-1'));
@@ -215,6 +219,12 @@ describe('SystemsPage', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'revoke_capability')).toBe(true),
     );
+
+    // Grant: opens the shared drawer locked to this gate.
+    fireEvent.click(within(card).getByTestId('gatekeeper-grant-button'));
+    const grantDrawer = await screen.findByTestId('grant-gate-drawer');
+    const form = within(grantDrawer).getByTestId('grant-gate-form');
+    expect(within(form).getByTestId('ggf-locked-gate-chip').textContent).toContain('Docker prod');
   });
 
   it('member view: a 403 on list_grants/list_principals degrades to the caller’s own row, no grant/revoke actions', async () => {
@@ -232,14 +242,19 @@ describe('SystemsPage', () => {
     const card = (await screen.findAllByTestId('gatekeeper-card')).find((el) =>
       el.textContent?.includes('Docker prod'),
     ) as HTMLElement;
-    const list = within(card).getByTestId('system-access-list');
+    // Reachability for me renders inline on the row without opening the drawer.
+    expect(within(card).getByTestId('gatekeeper-reachability').textContent).toContain('可直接调用');
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const list = within(drawer).getByTestId('system-access-list');
     const rows = within(list).getAllByTestId('system-access-row');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain('你');
     expect(rows[0]?.textContent).toContain('可直接调用');
 
     expect(within(card).queryByTestId('gatekeeper-grant-button')).toBeNull();
-    expect(within(card).queryByTestId(/^gatekeeper-revoke-/)).toBeNull();
+    expect(within(drawer).queryByTestId(/^gatekeeper-revoke-/)).toBeNull();
   });
 
   it('接入向导 opens from the overflow menu (S8 W2-U1 SY3 kept)', async () => {

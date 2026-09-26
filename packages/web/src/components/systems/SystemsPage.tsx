@@ -32,6 +32,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../kit/dropdown-menu.js';
+import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Notice } from '../kit/notice.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -131,9 +132,18 @@ export function SystemsPage({
   );
 
   const healthByGate = useMemo(() => {
-    const map = new Map<string, { readonly linked: boolean; readonly health?: string }>();
+    const map = new Map<
+      string,
+      { readonly linked: boolean; readonly health?: string; readonly transportKind?: string }
+    >();
     for (const row of availableRows) {
-      if (row.gatekeeperId) map.set(row.gatekeeperId, { linked: true, health: row.health });
+      if (row.gatekeeperId) {
+        map.set(row.gatekeeperId, {
+          linked: true,
+          health: row.health,
+          transportKind: row.transportKind,
+        });
+      }
     }
     return map;
   }, [availableRows]);
@@ -338,22 +348,21 @@ export function SystemsPage({
           testId="systems-error"
         />
       ) : gates.length === 0 ? (
-        <div className="empty-state" data-testid="systems-empty">
-          <p className="empty-state-title">{t('还没有接入任何系统', 'No system connected yet')}</p>
-          <p className="empty-state-body">
-            {t(
-              '点击"接入一个系统"，把第一个系统接到门后面——之后就能在这里授权成员使用它。',
-              'Click "Connect a system" to bring the first one in behind a gate — you can then grant members access to it here.',
-            )}
-          </p>
-          <div className="empty-state-action">
+        <EmptyState
+          title={t('还没有接入任何系统', 'No system connected yet')}
+          body={t(
+            '点击"接入一个系统"，把第一个系统接到门后面——之后就能在这里授权成员使用它。',
+            'Click "Connect a system" to bring the first one in behind a gate — you can then grant members access to it here.',
+          )}
+          action={
             <Button variant="primary" onClick={() => setDrawer({ kind: 'launcher' })}>
               {t('接入一个系统', 'Connect a system')}
             </Button>
-          </div>
-        </div>
+          }
+          testId="systems-empty"
+        />
       ) : (
-        <div className="stack">
+        <ul className="data-list systems-list" aria-label={t('已接入的系统', 'Connected systems')}>
           {gates.map((gate) => {
             const rows: readonly SystemAccessGranteeRow[] = directory
               ? (grantsByGate.get(gate.gateId) ?? []).map((row) => ({
@@ -391,7 +400,7 @@ export function SystemsPage({
               />
             );
           })}
-        </div>
+        </ul>
       )}
 
       {/* --- 连接申请 Connection requests (owner queue; ported unchanged from ConnectionsPage) --- */}
@@ -449,24 +458,23 @@ export function SystemsPage({
             />
           )
         ) : requestRows.length === 0 ? (
-          <div className="empty-state" data-testid="requests-empty">
-            <p className="empty-state-title">
-              {filter === 'requested'
+          <EmptyState
+            title={
+              filter === 'requested'
                 ? t('没有待处理的连接申请', 'No open connection requests')
-                : t('没有连接申请', 'No connection requests')}
-            </p>
-            <p className="empty-state-body">
-              {t(
-                'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
-                'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
-              )}
-            </p>
-            <div className="empty-state-action">
+                : t('没有连接申请', 'No connection requests')
+            }
+            body={t(
+              'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
+              'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
+            )}
+            action={
               <Button variant="secondary" onClick={() => setDrawer({ kind: 'request' })}>
                 {t('申请连接', 'Request connection')}
               </Button>
-            </div>
-          </div>
+            }
+            testId="requests-empty"
+          />
         ) : (
           <div className="stack-s" data-testid="requests-list">
             {requestRows.map((row) => (
