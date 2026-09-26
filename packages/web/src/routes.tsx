@@ -266,6 +266,10 @@ export function Routed({
           apiKey={session.apiKey}
           onClaimed={onClaimed}
           onBound={onKeyBound}
+          // D3: only when a real workspace is in scope — the same condition `platformOnly` above
+          // reads, so a platform-only admin (`selectedWorkspaceId` undefined) never gets a `http`
+          // whose `issue_handle` call would target no workspace at all.
+          http={session.selectedWorkspaceId !== undefined ? session.http : undefined}
         />
       );
       break;

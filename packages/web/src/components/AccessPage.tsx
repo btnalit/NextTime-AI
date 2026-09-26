@@ -9,9 +9,8 @@ import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../lib/governanc
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
-import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { GrantGateDrawer } from './access/GrantGateDrawer.js';
-import { IssueOwnHandleSection } from './access/IssueOwnHandleSection.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { DashboardCard } from './kit/section.js';
 import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
@@ -33,19 +32,24 @@ export interface AccessPageProps {
  * components/AccessPage: 访问 Access (`/govern/access`, S3.11) — the CapabilityGrant matrix.
  * `list_grants{principalId?}` / `grant_capability` (existing) / `revoke_capability` (existing).
  * All owner-only per the design doc's minRole table ("成员/授权/策略 = owner") — this page's write
- * affordances (Grant / Revoke / issue a service Handle) hide behind the same `canManage` rule
- * `MembersPage` uses: the authoritative `get_workspace.caller.role` (owner only) once it is
- * known, the `grant_capability` 403 inference only as fallback (C9 — `list_grants` is
- * operator-readable, so an operator never learned that denial and saw owner-only buttons).
+ * affordances (Grant / Revoke) hide behind the same `canManage` rule `MembersPage` uses: the
+ * authoritative `get_workspace.caller.role` (owner only) once it is known, the `grant_capability`
+ * 403 inference only as fallback (C9 — `list_grants` is operator-readable, so an operator never
+ * learned that denial and saw owner-only buttons).
+ *
+ * 控制台产品化重构方案 §7 D3 (docs/console-redesign-plan-2026-09-25.md): Handle issuance moved off
+ * this page — a member's own interactive Handle ("接 Claude Code / MCP") now lives on 我的账户
+ * (`components/account/IssueOwnHandleSection.tsx`), a service Handle for a service Principal now
+ * lives on 成员 (`components/members/IssueServiceHandleSection.tsx`). This page points at both with
+ * a short `Notice` instead of rendering either inline.
  *
  * B3 (§5.8 "id → 名称"): the grant's principal, its grantor and a `gatekeeper` resource render as
- * `RefChip`s named from `list_principals` (already read for the filter / form) and
- * `list_gatekeepers` (member-readable, read here for the names alone); a missing name degrades to
- * the grey bare-id chip. S8 W1-C (#243) made `list_grants` and `list_principals` keyset-paginated
- * (B5 no longer holds — this comment said "both stay single-page" until S8 W1-A4). `grants` offers
- * "加载更多" below the list; `principalsList` feeds the filter's `<datalist>` and
- * `IssueServiceHandleSection`'s picker, so it auto-loads every page instead (a missing suggestion
- * past page one is a correctness bug, not a paging UX choice).
+ * `RefChip`s named from `list_principals` (already read for the filter) and `list_gatekeepers`
+ * (member-readable, read here for the names alone); a missing name degrades to the grey bare-id
+ * chip. S8 W1-C (#243) made `list_grants` and `list_principals` keyset-paginated (B5 no longer
+ * holds — this comment said "both stay single-page" until S8 W1-A4). `grants` offers "加载更多"
+ * below the list; `principalsList` feeds the filter's `<datalist>`, so it auto-loads every page
+ * instead (a missing suggestion past page one is a correctness bug, not a paging UX choice).
  */
 export function AccessPage({ http }: AccessPageProps) {
   const t = useT();
@@ -350,13 +354,16 @@ export function AccessPage({ http }: AccessPageProps) {
         ) : null}
       </DashboardCard>
 
+      {/* 控制台产品化重构方案 D3: Handle 签发挪出本页 — 自己的 Handle 去 我的账户，服务 Handle 去 成员。 */}
       {canManage ? (
-        <DashboardCard title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>
-          <IssueOwnHandleSection http={http} />
-        </DashboardCard>
+        <Notice testId="access-handle-issuance-moved">
+          {t('为自己签发 Handle 已经挪到 ', 'Issuing your own Handle has moved to ')}
+          <a href={hrefs.account()}>{t('我的账户', 'My Account')}</a>
+          {t('；为服务主体签发 Handle 已经挪到 ', '; issuing a service Handle has moved to ')}
+          <a href={hrefs.members()}>{t('成员', 'Members')}</a>
+          {t('。', '.')}
+        </Notice>
       ) : null}
-
-      {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 
       <GrantGateDrawer
         http={http}

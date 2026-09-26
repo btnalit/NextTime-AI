@@ -1,16 +1,16 @@
 import { type Capability, getCapability, listByChannel } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
-import type { CapabilityCaller } from '../lib/clients.js';
-import type { PrincipalRow } from '../lib/governance.js';
-import { useT } from '../lib/i18n.js';
-import { hrefs } from '../lib/router.js';
-import { DashboardCard } from './kit/section.js';
-import { PlatformError } from './platform/PlatformError.js';
-import { Button } from './ui/Button.js';
-import { CopyId } from './ui/CopyId.js';
-import { Drawer } from './ui/Drawer.js';
-import { Field, Input, Select } from './ui/Field.js';
-import { Notice } from './ui/Notice.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
+import type { PrincipalRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
+import { DashboardCard } from '../kit/section.js';
+import { PlatformError } from '../platform/PlatformError.js';
+import { Button } from '../ui/Button.js';
+import { CopyId } from '../ui/CopyId.js';
+import { Drawer } from '../ui/Drawer.js';
+import { Field, Input, Select } from '../ui/Field.js';
+import { Notice } from '../ui/Notice.js';
 
 const SECONDS_PER_DAY = 86400;
 /** The registry's own ceiling (`issue_service_handle.ttlSeconds` `.max(...)`, one year) read

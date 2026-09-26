@@ -29,7 +29,7 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * pre-created platform administrator `workspaces.spec.ts` uses (see that file's own doc comment).
  * The admin is assumed to be the owner of the platform default workspace (true on a fresh stack:
  * `ensureDefaultWorkspace` creates it with the earliest administrator as owner) — every 管理 page
- * this file visits (系统接入/成员与授权/访问/能力目录) needs a workspace in scope, and this file
+ * this file visits (系统接入/成员与授权/能力目录) needs a workspace in scope, and this file
  * creates no workspace of its own the way `workspaces.spec.ts` does.
  */
 
@@ -356,11 +356,17 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await signInAsAdmin(page);
     await ensureOwnedWorkspaceSelected(page);
 
-    await page.getByTestId('nav-access').click();
+    // D3 (docs/console-redesign-plan-2026-09-25.md §7): the service-Handle section moved from 访问
+    // Access to 成员与授权 Members, alongside `create_principal` — both owner-only writes for a
+    // service Principal now live on the one page.
+    await page.getByTestId('nav-members').click();
+    await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
     const handleSection = page.getByTestId('issue-service-handle-section');
     await expect(handleSection).toBeVisible({ timeout: 15_000 });
 
-    // No service Principal yet ⇒ create one on 成员与授权 first (`CreatePrincipalForm` — always
+    // No service Principal yet ⇒ create one right here first (`CreatePrincipalForm` — always
     // `kind: 'service'`, docs/platform-admin-design.md §6.3's "外部运行时" flow).
     if (
       await page
@@ -369,10 +375,6 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
         .catch(() => false)
     ) {
       const suffix = Date.now().toString(36);
-      await page.getByTestId('nav-members').click();
-      await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
-        timeout: 15_000,
-      });
       await page.getByRole('button', { name: /服务凭证/ }).click();
       const createDrawer = page.getByTestId('create-principal-drawer');
       await expect(createDrawer.getByTestId('create-principal-form')).toBeVisible({
@@ -385,8 +387,6 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       });
       await createDrawer.getByRole('button', { name: /我已复制/ }).click();
       await expect(createDrawer).toBeHidden();
-
-      await page.getByTestId('nav-access').click();
       await expect(handleSection).toBeVisible({ timeout: 15_000 });
     }
 
