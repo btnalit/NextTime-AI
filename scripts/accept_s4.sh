@@ -353,8 +353,10 @@ setup_step() {
 # when `ctx.claims.par === undefined`), and the same governed path a real member's own entry agent
 # calls `observe_operation` through (`<gate>.<op>` tool projection -> `observe_operation`,
 # governance/capability/handles.ts's `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`).
+# ttlSeconds 900: the run needs minutes, and there is no capability to revoke an issued Handle early —
+# a short lifetime is the bound (the default is 24h). The token itself only ever lives in a shell var.
 issue_handle_step() {
-  out=$(cap "$OWNER_KEY" issue_handle '{"sessionKind":"interactive"}' "d.result.handle")
+  out=$(cap "$OWNER_KEY" issue_handle '{"sessionKind":"interactive","ttlSeconds":900}' "d.result.handle")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "issue-handle" "issue_handle HTTP $status: $(parse_kv "$out" BODY)"
   MCP_HANDLE=$(parse_kv "$out" EXTRACTED)
