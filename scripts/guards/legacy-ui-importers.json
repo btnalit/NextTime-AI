@@ -5,7 +5,6 @@
   "packages/web/src/components/ActionRequestDetail.tsx",
   "packages/web/src/components/AddMemberForm.tsx",
   "packages/web/src/components/AgentPolicyForm.tsx",
-  "packages/web/src/components/AgentProfileForm.tsx",
   "packages/web/src/components/AgentProfilePage.tsx",
   "packages/web/src/components/ApiKeyLoginDetails.tsx",
   "packages/web/src/components/ApprovalQueuePage.tsx",

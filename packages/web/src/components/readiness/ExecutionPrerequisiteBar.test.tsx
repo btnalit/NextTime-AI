@@ -98,5 +98,8 @@ describe('ExecutionPrerequisiteBar', () => {
     expect(links).toHaveLength(2);
     expect(links[0]?.getAttribute('href')).toBe('#/govern/systems');
     expect(links[1]?.getAttribute('href')).toBe('#/govern/access');
+    expect(links[0]?.className).toContain('link-inline');
+    // Console redesign P3-3 (V2): proactive setup guidance stays calm, never an alarm banner.
+    expect(bar.className).not.toContain('notice-warn');
   });
 });
