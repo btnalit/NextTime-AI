@@ -59,4 +59,25 @@ describe('MessageReferences', () => {
     const link = chip?.querySelector('a');
     expect(link?.getAttribute('href')).toBe(`#/govern/audit?nodeId=${FACT_ID}`);
   });
+
+  // Console redesign P3-2 (V3 "对话"): an Activity-only result used to name the chip with the raw
+  // wire `activity.kind` ("agent_turn") plus a "(activity)" type suffix — a human label replaces
+  // both instead of exposing that internal enum value.
+  it('gives an Activity-only reference a human label, never the raw kind or type suffix', async () => {
+    const ACTIVITY_ID = 'abcdef12-3456-7890-abcd-ef1234567890';
+    const http = scriptedHttp({
+      explain: () => ({
+        nodeType: 'activity',
+        activity: { id: ACTIVITY_ID, kind: 'agent_turn', status: 'completed' },
+      }),
+    });
+    render(<MessageReferences http={http} text={`见 ${ACTIVITY_ID}`} />);
+
+    const refs = await screen.findByTestId('message-references');
+    const chip = refs.querySelector(`[data-ref-id="${ACTIVITY_ID}"]`);
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain('本轮记录');
+    expect(chip?.textContent).not.toContain('agent_turn');
+    expect(chip?.textContent).not.toContain('activity');
+  });
 });

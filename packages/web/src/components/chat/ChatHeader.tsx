@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { type ChatSummary, chatTitle, isArchived } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
@@ -20,7 +21,9 @@ import { ModelSwitcher } from './ModelSwitcher.js';
 export interface ChatHeaderProps {
   /** The WS client — the `chat` group (rename / archive / unarchive). */
   readonly client: CapabilityCaller;
-  /** The HTTP client — the agent-profile group behind `ModelSwitcher`. */
+  /** The HTTP client — the agent-profile group behind `ModelSwitcher`, and `get_workspace` for the
+   *  status line's workspace name (`useWorkspaceIdentity`, already cached by `AppShell`'s own read
+   *  of the same key). */
   readonly http: CapabilityCaller;
   /** `null` while the chat row is still being looked up, or when it could not be (a chat the
    *  caller does not own is not in `list_chats`) — then no lifecycle actions are offered. */
@@ -33,17 +36,24 @@ export interface ChatHeaderProps {
   readonly onStop: () => void;
   /** The kernel's updated row after rename / archive / restore / undo — the page keeps it. */
   readonly onChatChanged: (chat: ChatSummary) => void;
+  /** The current/last Turn's tool-call count (`turn.toolCalls.length`) — omitted (or 0) hides the
+   *  "本轮 N 次工具调用" segment; console redesign P3-2 V3, "if available" (a fresh page load has
+   *  none until a Turn actually streams one, `lib/streaming-reducer.ts`'s own scope note). */
+  readonly toolCallCount?: number;
 }
 
 /**
- * components/chat/ChatHeader (S6-A, console-completion-plan §5.1, §5.9 "页面对照原型 — 对话";
- * S8 W1-A3 audit C3 "对话顶栏 折到第二行 / 重叠"): two fixed rows instead of one wrapping one —
- * row 1 is back, title (or the inline rename editor; truncated with a tooltip for the full text
- * — `kit/tooltip`), the 已归档 chip, the Turn status, an overflow menu (`kit/dropdown-menu`)
- * holding 改名 / 归档 / 恢复, and Stop; row 2 is `ModelSwitcher`'s own 模式 · 模型 · 来源 line,
- * alone on its own row so it never has to fight row 1 for width and never wraps mid-sentence with
- * an orphan "·" (the audit's 1280px finding). Archive stays the page-level `ChatArchiveConfirm`
- * (tier low + undo) — only *opening* it moved into the overflow menu.
+ * components/chat/ChatHeader (console redesign P3-2, V3 "对话" — replaces the S8 W1-A3 two-row
+ * layout): one row, split left/right like the artboard (`Chat.dc.html`) — left is the back
+ * affordance + title + a single status line ("● 入口 agent · 常驻 · 工作区 <name>" plus the tool-call
+ * count when this session has one and the Turn badge); right is `ModelSwitcher`'s compact model
+ * pill, the overflow menu (改名/归档/恢复, `kit/dropdown-menu`) and Stop. The back button
+ * (`onBack` → `#/work/chats`) stays visible at every width — unlike the artboard, which omits it
+ * because its own list pane is always on screen — because `e2e/chat.spec.ts` (opt-in, exercised by
+ * `.github/workflows/e2e.yml`) asserts it directly: `getByRole('button', {name:'返回对话列表'})
+ * .toBeVisible()`. On ≤960px, where `chat/ChatListPane` is hidden (`styles/pages.css`'s
+ * `.chat-workspace[data-active-pane]` rule), this same button is the single-pane "back" affordance
+ * the redesign spec calls for.
  */
 export function ChatHeader({
   client,
@@ -55,26 +65,29 @@ export function ChatHeader({
   onBack,
   onStop,
   onChatChanged,
+  toolCallCount,
 }: ChatHeaderProps) {
   const t = useT();
   const [renaming, setRenaming] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
   const { restore, restoringId } = useRestoreChat(client, onChatChanged);
+  const { workspaceName } = useWorkspaceIdentity(http);
   const archived = chat !== null && isArchived(chat);
   const title = chat ? chatTitle(chat, t) : lookupFailed ? t('对话', 'Chat') : ' ';
 
   return (
     <TooltipProvider>
       <header className="chat-header">
-        <div className="chat-header-row1">
-          <Button
-            variant="ghost"
-            size="s"
-            icon="arrow-left"
-            iconOnly
-            aria-label={t('返回对话列表', 'Back to chats')}
-            onClick={onBack}
-          />
+        <Button
+          variant="ghost"
+          size="s"
+          icon="arrow-left"
+          iconOnly
+          aria-label={t('返回对话列表', 'Back to chats')}
+          onClick={onBack}
+          className="chat-header-back"
+        />
+        <div className="chat-header-main">
           {renaming && chat ? (
             <ChatRenameForm
               client={client}
@@ -89,7 +102,7 @@ export function ChatHeader({
             <Tooltip>
               <TooltipTrigger asChild>
                 <h1
-                  className={`chat-header-title grow${chat && chat.title === null ? ' text-3' : ''}`}
+                  className={`chat-header-title${chat && chat.title === null ? ' text-3' : ''}`}
                   data-testid="chat-title"
                 >
                   {title}
@@ -98,12 +111,34 @@ export function ChatHeader({
               <TooltipContent>{title}</TooltipContent>
             </Tooltip>
           )}
-          {archived ? (
-            <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
-              {t('已归档', 'Archived')}
+          <div className="chat-header-status" data-testid="chat-header-status">
+            {archived ? (
+              <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
+                {t('已归档', 'Archived')}
+              </span>
+            ) : (
+              <span className="chat-header-status-dot" aria-hidden />
+            )}
+            <span>{t('入口 agent', 'Entry agent')}</span>
+            <span aria-hidden>·</span>
+            <span>{t('常驻', 'Resident')}</span>
+            <span aria-hidden>·</span>
+            <span>
+              {t('工作区', 'Workspace')} {workspaceName}
             </span>
-          ) : null}
-          <TurnStatusBadge status={turnStatus} />
+            {toolCallCount !== undefined && toolCallCount > 0 ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>
+                  {t(`本轮 ${toolCallCount} 次工具调用`, `${toolCallCount} tool call(s) this turn`)}
+                </span>
+              </>
+            ) : null}
+            <TurnStatusBadge status={turnStatus} />
+          </div>
+        </div>
+        <div className="chat-header-side">
+          <ModelSwitcher http={http} turnRunning={turnStatus === 'running'} />
           {chat ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -148,15 +183,11 @@ export function ChatHeader({
             variant={turnStatus === 'running' ? 'danger' : 'ghost'}
             size="s"
             icon="stop"
+            iconOnly
+            aria-label={t('停止当前轮', 'Stop the running turn')}
             onClick={onStop}
             disabled={stopBusy}
-            title={t('停止当前轮', 'Stop the running turn')}
-          >
-            {t('停止', 'Stop')}
-          </Button>
-        </div>
-        <div className="chat-header-row2">
-          <ModelSwitcher http={http} turnRunning={turnStatus === 'running'} />
+          />
         </div>
         <ChatArchiveConfirm
           client={client}

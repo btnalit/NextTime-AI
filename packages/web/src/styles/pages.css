@@ -65,12 +65,11 @@
   margin-top: var(--space-3);
 }
 
-/* ---- Chat list ----------------------------------------------------------------------- */
-.chat-list-item .data-row-title {
-  font-weight: 500;
-}
-
-/* ---- Chat page ----------------------------------------------------------------------- */
+/* ---- Chat page (console redesign P3-2, V3 "对话"): three panes — the global Sidebar
+ * (shell.css, untouched here), `chat/ChatListPane` (~300px) and the conversation — sharing one
+ * `.chat-page` full-height wrapper between the chat-list route (`ChatListPage`) and an open-chat
+ * route (`ChatPage`); `data-active-pane` on `.chat-workspace` (set by whichever page renders it)
+ * drives the ≤960px single-pane switch below. ------------------------------------------------ */
 .chat-page {
   display: flex;
   flex-direction: column;
@@ -86,12 +85,195 @@
   }
 }
 
-/* S8 W1-A3 (audit C3 "对话顶栏"): two fixed rows — row 1 title + actions, row 2 the model line
- * alone — instead of one wrapping row, so neither wraps into the other at 1440/1280/768. */
-.chat-header {
+.chat-workspace-banner {
+  padding: var(--space-3) var(--gutter) 0;
+}
+
+.chat-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ≤960px: single pane (list OR conversation) — `ChatHeader`'s always-visible back button
+ * (`.chat-header-back`) is the affordance back to the list. */
+@media (max-width: 960px) {
+  .chat-workspace[data-active-pane="list"] .chat-conversation-pane {
+    display: none;
+  }
+
+  .chat-workspace[data-active-pane="conversation"] .chat-list-pane {
+    display: none;
+  }
+}
+
+.chat-list-pane {
+  width: 300px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+}
+
+.chat-list-pane-header {
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-list-pane-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
+}
+
+.chat-list-pane-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+.chat-list-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.chat-list-search-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.chat-list-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-13);
+  outline: none;
+}
+
+.chat-list-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.chat-list-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+}
+
+.chat-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-row-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-m);
+  cursor: pointer;
+}
+
+.chat-row-item:hover {
+  background: var(--surface-2);
+}
+
+.chat-row-item-selected,
+.chat-row-item-selected:hover {
+  background: var(--accent-soft);
+}
+
+.chat-row-line1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.chat-row-title-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.chat-row-item-selected .chat-row-title-text {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chat-row-time {
+  flex-shrink: 0;
+  font-size: var(--fs-12);
+}
+
+.chat-row-line2 {
+  min-height: 16px;
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-row-actions {
+  margin-top: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-row-item:hover .chat-row-actions,
+.chat-row-item:focus-within .chat-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-conversation-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+}
+
+.chat-conversation-pane-empty {
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+
+/* console redesign P3-2 (V3 "对话"): one row, split left (back + title + status line) / right
+ * (model pill + overflow menu + Stop) — replaces the S8 W1-A3 two-fixed-row layout now that the
+ * list pane is always on screen beside it (`chat/ChatListPane`), so the model line no longer needs
+ * a full width of its own to avoid wrapping. */
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-3) var(--gutter);
   border-bottom: 1px solid var(--border);
   background: var(--surface-1);
@@ -100,26 +282,50 @@
   z-index: 3;
 }
 
-.chat-header-row1 {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
+.chat-header-back {
+  flex-shrink: 0;
 }
 
-.chat-header-row2 {
+.chat-header-main {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
+  flex: 1;
 }
 
 .chat-header-title {
-  font-size: var(--fs-14);
+  margin: 0;
+  font-size: var(--fs-16);
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-header-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+.chat-header-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ok);
+  flex-shrink: 0;
+}
+
+.chat-header-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
 }
 
 .chat-scroll {
@@ -154,17 +360,51 @@
   z-index: 2;
 }
 
-/* W2 (S6-A): the header's 模式 · 模型 · 来源 line and its compact model select. */
-.chat-header-meta {
+/* console redesign P3-2 (V3 "对话"): the header's compact model pill (`chat/ModelSwitcher`) — a
+ * bordered box, not a bare inline line, so it reads as one control beside the overflow menu. */
+.chat-model-pill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 5px var(--space-2) 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
   font-size: var(--fs-13);
-  color: var(--text-3);
 }
 
-.chat-header-meta .select {
+.chat-model-pill-label {
+  flex-shrink: 0;
+}
+
+/* Overrides the shared `.select` box look (styles/ui.css) so the control reads as bare text
+ * inside the pill instead of a nested control-in-a-control. */
+.chat-model-pill .select {
   width: auto;
-  min-height: 28px;
-  padding: 2px var(--space-2);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.chat-model-pill .select:hover,
+.chat-model-pill .select:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chat-model-pill .select:disabled {
+  background: transparent;
+}
+
+.chat-model-source {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .message {
@@ -194,10 +434,13 @@
   line-height: var(--lh-body);
 }
 
+/* console redesign P3-2 (V3 "对话"): ink bubble, white text — replaces the neutral `--surface-3`
+ * bubble so a user message reads distinctly from the assistant's (`Chat.dc.html`). */
 .message-user .message-bubble {
-  background: var(--surface-3);
-  border-color: var(--border);
-  border-bottom-right-radius: var(--radius-s);
+  background: var(--text);
+  color: var(--text-on-accent);
+  border-color: var(--text);
+  border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
 }
 
 .message-assistant .message-bubble {
@@ -215,6 +458,26 @@
   font-size: var(--fs-12);
   color: var(--text-3);
   padding: 0 4px;
+}
+
+/* The assistant's own avatar + "入口 agent · time" row leads the body instead of trailing it
+ * (console redesign P3-2, V3) — every other role keeps the trailing meta line below. */
+.message-meta-lead {
+  margin-bottom: 2px;
+  padding: 0;
+}
+
+.message-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-s);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-12);
+  font-weight: 700;
 }
 
 .message-tool .message-bubble {
@@ -369,12 +632,19 @@
 
 .composer-hint {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-2) var(--space-4);
   font-size: var(--fs-12);
   color: var(--text-3);
   padding: 0 4px;
+}
+
+/* "停止本轮" (console redesign P3-2, V3 "对话") — pinned to the row's far end regardless of how
+ * many hint segments wrap before it, same as the mono chat-id it displaces from that spot only
+ * while a Turn is running. */
+.composer-stop {
+  margin-left: auto;
 }
 
 .turn-badge {

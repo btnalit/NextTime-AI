@@ -78,15 +78,15 @@ function renderHeader(props: Partial<Parameters<typeof ChatHeader>[0]> = {}) {
 }
 
 describe('ChatHeader', () => {
-  it('renders two fixed rows — row 1 title/actions, row 2 the model line — and truncates the title', () => {
+  it('renders one row split left (title + status) / right (model pill + menu), and truncates the title', () => {
     renderHeader();
-    const row1 = document.querySelector('.chat-header-row1');
-    const row2 = document.querySelector('.chat-header-row2');
-    expect(row1).toBeTruthy();
-    expect(row2).toBeTruthy();
-    expect(row1?.contains(screen.getByTestId('chat-title'))).toBe(true);
-    expect(row1?.contains(screen.getByTestId('chat-header-menu'))).toBe(true);
-    expect(row2?.contains(screen.getByTestId('chat-model-line'))).toBe(true);
+    const main = document.querySelector('.chat-header-main');
+    const side = document.querySelector('.chat-header-side');
+    expect(main).toBeTruthy();
+    expect(side).toBeTruthy();
+    expect(main?.contains(screen.getByTestId('chat-title'))).toBe(true);
+    expect(side?.contains(screen.getByTestId('chat-header-menu'))).toBe(true);
+    expect(side?.contains(screen.getByTestId('chat-model-line'))).toBe(true);
     // The truncation classes live on the title itself (pages.css `.chat-header-title`).
     expect(screen.getByTestId('chat-title').className).toContain('chat-header-title');
   });

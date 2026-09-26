@@ -17,7 +17,6 @@
   "packages/web/src/components/CatalogPage.tsx",
   "packages/web/src/components/ChangePasswordPage.tsx",
   "packages/web/src/components/ChatListPage.test.tsx",
-  "packages/web/src/components/ChatListPage.tsx",
   "packages/web/src/components/ChatPage.test.tsx",
   "packages/web/src/components/ChatPage.tsx",
   "packages/web/src/components/CompleteConnectionForm.tsx",

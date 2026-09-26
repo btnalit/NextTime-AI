@@ -72,8 +72,14 @@ function fakeClient(
   };
 }
 
-/** The header's `ModelSwitcher` reads these on mount; decision assertions look past them. */
-const HEADER_READS = new Set(['get_agent_profile', 'get_agent_policy', 'list_models']);
+/** The header's `ModelSwitcher` (profile/policy/catalog) and `useWorkspaceIdentity` (workspace
+ *  name, console redesign P3-2) read these on mount; decision assertions look past them. */
+const HEADER_READS = new Set([
+  'get_agent_profile',
+  'get_agent_policy',
+  'list_models',
+  'get_workspace',
+]);
 
 interface ScriptedHttp extends CapabilityCaller {
   readonly calls: { readonly name: string; readonly params: unknown }[];
@@ -106,6 +112,7 @@ function renderChat(client: WsClient, http: CapabilityCaller) {
           http={http}
           chatId="chat-1"
           onBack={vi.fn()}
+          onSelectChat={vi.fn()}
           onOpenApproval={vi.fn()}
           onOpenTask={vi.fn()}
         />
@@ -554,7 +561,11 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     renderChat(fake.client, http);
     const line = await screen.findByTestId('chat-model-line');
     await waitFor(() => expect(within(line).getByTestId('chat-model-select')).toBeTruthy());
-    expect(line.textContent).toContain('模式：入口');
+    // Console redesign P3-2: "模式：入口 agent" moved out of the model pill into the header's own
+    // status line (`chat-header-status`) — the pill itself is now purely about the model.
+    const status = screen.getByTestId('chat-header-status');
+    expect(status.textContent).toContain('入口');
+    expect(status.textContent).toContain('agent');
     expect(screen.getByTestId('chat-model-source').textContent).toContain('工作区默认');
     const select = screen.getByTestId('chat-model-select') as HTMLSelectElement;
     expect(select.disabled).toBe(false);

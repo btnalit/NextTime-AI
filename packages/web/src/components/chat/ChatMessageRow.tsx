@@ -87,12 +87,26 @@ export function ChatMessageRow({
       className={`message message-${message.role}`}
       data-role={message.role}
     >
+      {message.role === 'assistant' ? (
+        // Console redesign P3-2 (V3): the assistant's own avatar + "入口 agent · time" row leads
+        // the body (the artboard's `Chat.dc.html`), instead of trailing it — every other role
+        // keeps the trailing meta line below.
+        <div className="message-meta message-meta-lead">
+          <span className="message-avatar" aria-hidden="true">
+            A
+          </span>
+          <span>{messageRoleLabel(message.role, t)}</span>
+          <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
+        </div>
+      ) : null}
       <MessageBody messageRole={message.role} text={message.text} />
       {message.role === 'assistant' ? <MessageReferences http={http} text={message.text} /> : null}
-      <div className="message-meta">
-        <span>{messageRoleLabel(message.role, t)}</span>
-        <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
-      </div>
+      {message.role !== 'assistant' ? (
+        <div className="message-meta">
+          <span>{messageRoleLabel(message.role, t)}</span>
+          <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
+        </div>
+      ) : null}
     </div>
   );
 }

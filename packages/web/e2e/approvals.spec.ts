@@ -116,7 +116,7 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     //     `action.updated` push updating it in place, ChatPage.tsx `actionStatusOverrides`) and a
     //     new compact system.action_update status line ---
     await page.goto('/#/work/chats');
-    await page.locator('.chat-list-item').first().click();
+    await page.locator('.chat-row-item').first().click();
     const chatCard = cardByMarker(page, E2E_APPROVE_SCOPE);
     await expect(chatCard).toBeVisible({ timeout: 15_000 });
     // The status chip carries the raw kernel state in `data-status` (components/ui/StatusChip.tsx)
@@ -210,7 +210,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     //     (not A) made — the original card A saw transitions to decided in place ---
     await login(page, apiKeyA);
     await page.goto('/#/work/chats');
-    await page.locator('.chat-list-item').first().click();
+    await page.locator('.chat-row-item').first().click();
     const chatCardForA = cardByMarker(page, E2E_ISOLATION_SCOPE);
     await expect(chatCardForA).toBeVisible({ timeout: 15_000 });
     // Same post-decision reasoning as the first scenario: the seeded Gatekeeper cannot execute.

@@ -1,24 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useChatChangeListener } from '../hooks/useChatUpdates.js';
-import { useResource } from '../hooks/useResource.js';
-import { type ChatSummary, chatTitle, isArchived, spliceChat } from '../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { formatDateTime, formatRelative } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
-import { breadcrumbFor } from '../lib/nav.js';
-import { ChatArchiveConfirm } from './chat/ChatArchiveConfirm.js';
-import { ChatLifecycleActions, useRestoreChat } from './chat/ChatLifecycleActions.js';
-import { ChatRenameForm } from './chat/ChatRenameForm.js';
-import { PageHeader } from './kit/page-header.js';
+import { ChatListPane } from './chat/ChatListPane.js';
+import { EmptyState } from './kit/empty-state.js';
 import { ExecutionReadinessCard } from './readiness/ExecutionReadinessCard.js';
-import { Button } from './ui/Button.js';
-import { DataList, DataRow } from './ui/DataList.js';
-import { EmptyState } from './ui/EmptyState.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Icon } from './ui/Icon.js';
-import { Notice } from './ui/Notice.js';
-import { SkeletonRows } from './ui/Skeleton.js';
-import { Tabs } from './ui/Tabs.js';
 
 export type { ChatSummary } from '../lib/chat-lifecycle.js';
 
@@ -35,255 +19,35 @@ export interface ChatListPageProps {
   readonly onSelectChat: (chatId: string) => void;
 }
 
-type Filter = 'active' | 'archived';
-
 /**
- * components/ChatListPage: `list_chats` / `new_chat` (design doc §7.6; S1.8 deliverable 1) plus
- * the S6-A lifecycle (console-completion-plan §5.1 "归档与改名", W1): one load with
- * `includeArchived: true`, split client-side by `archivedAt` into the 活跃 / 已归档 tabs, so an
- * archive, restore or rename only splices the kernel's returned row into the cache
- * (`spliceChat`) and the row moves between tabs without a refetch. `chat.metadata` pushes never
- * reach this page (per-chat subscription only) — the splice is the one source of freshness here
- * besides a reload. A chat with no title yet reads as "新对话 New chat": the kernel writes the
- * auto-title when the first user message lands.
+ * components/ChatListPage (console redesign P3-2, V3 "对话"): the chat-list route. The three-pane
+ * layout (`Chat.dc.html`) is shared with `ChatPage` through `chat/ChatListPane` — this page renders
+ * that pane plus a conversation area that has nothing open yet, instead of the pre-redesign
+ * standalone list page (breadcrumb/page-header + a full-width row list, S6-A). `ExecutionReadinessCard`
+ * stays exactly where it rendered before (`ChatListPane`'s own doc comment does not own it — a
+ * parallel slice, P3-3, redesigns it): a slim strip above the two-pane row, only on this route (an
+ * open chat, `ChatPage`, never showed it either).
  */
 export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) {
   const t = useT();
-  const load = useCallback(
-    () =>
-      client
-        .call<{ items: readonly ChatSummary[] }>('list_chats', { includeArchived: true })
-        .then((page) => page.items),
-    [client],
-  );
-  const chats = useResource(load);
-  const [filter, setFilter] = useState<Filter>('active');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<unknown | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
-
-  const all = chats.state.status === 'ready' ? chats.state.data : undefined;
-  const split = useMemo(() => {
-    const active: ChatSummary[] = [];
-    const archived: ChatSummary[] = [];
-    for (const chat of all ?? []) (isArchived(chat) ? archived : active).push(chat);
-    return { active, archived };
-  }, [all]);
-  const visible = filter === 'active' ? split.active : split.archived;
-
-  async function handleNewChat(): Promise<void> {
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const chat = await client.call<ChatSummary>('new_chat', {});
-      onSelectChat(chat.id);
-    } catch (err) {
-      setCreateError(err);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  const onChanged = useCallback(
-    (chat: ChatSummary): void => {
-      chats.mutate((list) => spliceChat(list, chat));
-      setRenamingId((current) => (current === chat.id ? null : current));
-    },
-    [chats.mutate],
-  );
-  // 遗留 57: an archive Undo toast fired from a different, now-unmounted page (or from this page
-  // after it remounted for an unrelated reason) reaches every currently-mounted listener via
-  // `hooks/useChatUpdates.tsx`'s broadcast, not only the `ChatArchiveConfirm` instance below —
-  // `onChanged` already knows how to splice a changed row into this page's own cache.
-  useChatChangeListener(onChanged);
-  const { restore, restoringId } = useRestoreChat(client, onChanged);
-
-  const newChatButton = (
-    <Button variant="primary" icon="plus" onClick={() => void handleNewChat()} loading={creating}>
-      {t('新对话', 'New chat')}
-    </Button>
-  );
-
   return (
-    <div className="page">
-      <PageHeader
-        breadcrumb={breadcrumbFor('chats')}
-        title={t('对话', 'Chats')}
-        description={t(
-          '与工作区入口 agent 的对话。',
-          'Your conversations with the workspace entry agent.',
-        )}
-        primaryAction={newChatButton}
-      />
-
-      <ExecutionReadinessCard http={http} />
-
-      <div className="page-toolbar">
-        <Tabs<Filter>
-          ariaLabel="Filter chats"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            {
-              value: 'active',
-              label: t('活跃', 'Active'),
-              count: all === undefined ? undefined : split.active.length,
-              testId: 'chats-tab-active',
-            },
-            {
-              value: 'archived',
-              label: t('已归档', 'Archived'),
-              count: all === undefined ? undefined : split.archived.length,
-              testId: 'chats-tab-archived',
-            },
-          ]}
-        />
+    <div className="chat-page" data-testid="chats-page">
+      <div className="chat-workspace-banner">
+        <ExecutionReadinessCard http={http} />
       </div>
-
-      {createError !== null ? (
-        <ErrorBanner error={createError} title={t('无法创建对话', 'Could not create a chat')} />
-      ) : null}
-
-      {chats.state.status === 'loading' ? (
-        <SkeletonRows count={5} label="Loading chats" testId="chats-loading" />
-      ) : chats.state.status === 'error' ? (
-        <ErrorBanner
-          error={chats.state.error}
-          title={t('无法加载对话', 'Could not load chats')}
-          onRetry={() => void chats.reload()}
-          testId="chats-error"
-        />
-      ) : visible.length === 0 ? (
-        filter === 'active' ? (
+      <div className="chat-workspace" data-active-pane="list">
+        <ChatListPane client={client} onSelectChat={onSelectChat} />
+        <div className="chat-conversation-pane chat-conversation-pane-empty">
           <EmptyState
-            icon="chat"
-            title={t('还没有对话', 'No chats yet')}
+            title={t('选一个对话，或开始新对话', 'Pick a chat, or start a new one')}
             body={t(
-              '开始一段对话——入口 agent 可以观察系统、提出动作并代表你派发 Worker。',
-              'Start a conversation — the entry agent can observe systems, propose actions and spawn Workers on your behalf.',
+              '入口 agent 可以观察系统、提出动作并代表你派发 Worker。',
+              'The entry agent can observe systems, propose actions and spawn Workers on your behalf.',
             )}
-            action={newChatButton}
-            testId="chats-empty"
+            testId="chat-conversation-empty"
           />
-        ) : (
-          <EmptyState
-            icon="inbox"
-            title={t('没有已归档的对话', 'No archived chats')}
-            body={t(
-              '归档只影响列表可见性；对话的 Turn、决定与溯源链保持可查。',
-              'Archiving only hides a chat from the list; its Turns, decisions and provenance stay resolvable.',
-            )}
-            testId="chats-archived-empty"
-          />
-        )
-      ) : (
-        <>
-          {chats.state.refreshError ? (
-            <ErrorBanner error={chats.state.refreshError} onRetry={() => void chats.reload()} />
-          ) : null}
-          <DataList ariaLabel="Chats" testId="chats-list">
-            {visible.map((chat) => (
-              <DataRow
-                key={chat.id}
-                className="chat-list-item"
-                leading={<Icon name="chat" className="text-3" />}
-                title={
-                  renamingId === chat.id ? (
-                    <ChatRenameForm
-                      client={client}
-                      chat={chat}
-                      onSaved={onChanged}
-                      onCancel={() => setRenamingId(null)}
-                    />
-                  ) : (
-                    <span className={chat.title === null ? 'text-3' : undefined}>
-                      {chatTitle(chat, t)}
-                    </span>
-                  )
-                }
-                meta={
-                  isArchived(chat) ? (
-                    <span className="row-wrap">
-                      <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
-                        {t('已归档', 'Archived')}
-                      </span>
-                      <time title={formatDateTime(chat.archivedAt)} data-testid="chat-archived-at">
-                        {formatRelative(chat.archivedAt)}
-                      </time>
-                      <span className="text-3">
-                        {t('· 创建于', 'created')}{' '}
-                        <time title={formatDateTime(chat.createdAt)}>
-                          {formatRelative(chat.createdAt)}
-                        </time>
-                      </span>
-                    </span>
-                  ) : (
-                    // S8 W4 (audit C1): `lastActivityAt` — the newest of the Chat's own
-                    // `createdAt` and its newest message — not `createdAt` alone, which used to
-                    // read as "4d ago" for a Chat with a Turn today. `hasRunningTurn` is the row's
-                    // "状态副标题" — the one status worth a chip here (idle carries no chip, same
-                    // convention as every other status vocabulary in this console: only the
-                    // notable state gets a chip).
-                    <span className="row-wrap">
-                      {chat.hasRunningTurn ? (
-                        // Same tone/live pairing `lib/status-tone.ts` uses for every other
-                        // machine's own `running` state (`chip-info chip-live`) — one status
-                        // vocabulary, not a page-local color choice.
-                        <span
-                          className="chip chip-s chip-info chip-live"
-                          data-testid="chat-running-chip"
-                        >
-                          {t('运行中', 'Running')}
-                        </span>
-                      ) : null}
-                      <time
-                        title={formatDateTime(chat.lastActivityAt)}
-                        data-testid="chat-last-activity-at"
-                      >
-                        {formatRelative(chat.lastActivityAt)}
-                      </time>
-                    </span>
-                  )
-                }
-                trailing={
-                  <span className="row">
-                    <ChatLifecycleActions
-                      chat={chat}
-                      onRename={() => setRenamingId(chat.id)}
-                      onArchive={() => setArchiveTarget(chat)}
-                      onRestore={() => void restore(chat)}
-                      restoring={restoringId === chat.id}
-                      testIdPrefix="chat-row"
-                    />
-                    <Icon name="chevron-right" />
-                  </span>
-                }
-                onSelect={() => onSelectChat(chat.id)}
-                testId="chat-row"
-              />
-            ))}
-          </DataList>
-          {filter === 'active' && visible.length <= 2 ? (
-            // S8 W4 (audit L11 "对话...只有 1-2 行时，下方 70-90% 是空背景，看起来像没做完"): a
-            // short list points back at its own primary action instead of leaving bare canvas
-            // below it.
-            <Notice testId="chats-short-list-hint">
-              {t(
-                '随时可以开一段新对话——每个对话都是与入口 agent 的独立线程。',
-                'Start another conversation anytime — each Chat is its own thread with the entry agent.',
-              )}
-            </Notice>
-          ) : null}
-        </>
-      )}
-
-      <ChatArchiveConfirm
-        client={client}
-        chat={archiveTarget}
-        onChanged={onChanged}
-        onClose={() => setArchiveTarget(null)}
-      />
+        </div>
+      </div>
     </div>
   );
 }

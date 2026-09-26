@@ -2,7 +2,7 @@ import type { ExplainResultWire } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { extractIdCandidates } from '../../lib/message-references.js';
 import { RefChip } from '../kit/ref-chip.js';
 
@@ -15,15 +15,36 @@ interface ResolvedReference {
   readonly id: string;
   readonly nodeType: ExplainResultWire['nodeType'];
   readonly name: string | null;
+  /** `undefined` suppresses `kit/ref-chip`'s own `(typeName)` suffix — used for an Activity, whose
+   *  `name` is already a human label standing in for both (see `labelFor`'s own doc comment). */
+  readonly typeName: string | undefined;
 }
 
 /** A short label for the chip — the same fields `ProvenanceChain`/`ExplainSection` already use to
- *  name a Fact/Decision/Activity, so a reference chip here and the same node's own segment on the
- *  audit page read consistently. */
-function labelFor(result: ExplainResultWire): string | null {
-  if (result.fact) return result.fact.linkType;
-  if (result.decision) return result.decision.summary;
-  return result.activity?.kind ?? null;
+ *  name a Fact/Decision, so a reference chip here and the same node's own segment on the audit page
+ *  read consistently. An Activity has no such field to fall back on — before console redesign P3-2
+ *  this rendered the raw wire `activity.kind` (e.g. "agent_turn") as the chip's name, plus
+ *  `nodeType` ("activity") as its type suffix, together reading as an internal implementation
+ *  detail ("agent_turn (activity)", the V3 finding) rather than something a reader recognizes; a
+ *  translated human label replaces both parts (`typeName: undefined` suppresses the suffix `kit/
+ *  ref-chip` would otherwise add), falling back to a generic "活动记录" for any kind other than the
+ *  one this app currently produces on a chat's own timeline. */
+function labelFor(
+  result: ExplainResultWire,
+  t: Translate,
+): { readonly name: string | null; readonly typeName: string | undefined } {
+  if (result.fact) return { name: result.fact.linkType, typeName: result.nodeType };
+  if (result.decision) return { name: result.decision.summary, typeName: result.nodeType };
+  if (result.activity) {
+    return {
+      name:
+        result.activity.kind === 'agent_turn'
+          ? t('本轮记录', 'This turn')
+          : t('活动记录', 'Activity record'),
+      typeName: undefined,
+    };
+  }
+  return { name: null, typeName: result.nodeType };
 }
 
 /**
@@ -47,6 +68,9 @@ export function MessageReferences({ http, text }: MessageReferencesProps) {
   const idsKey = extractIdCandidates(text).join(',');
   const [resolved, setResolved] = useState<readonly ResolvedReference[]>([]);
 
+  // `t` is read at resolve time only (a language switch mid-flight is not worth a re-resolve);
+  // `idsKey`/`http` are the real triggers, same as before this file computed labels at all.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useEffect(() => {
     const ids = idsKey === '' ? [] : idsKey.split(',');
     if (ids.length === 0) {
@@ -62,10 +86,12 @@ export function MessageReferences({ http, text }: MessageReferencesProps) {
       const next: ResolvedReference[] = [];
       settled.forEach((outcome, index) => {
         if (outcome.status !== 'fulfilled') return;
+        const label = labelFor(outcome.value, t);
         next.push({
           id: ids[index] as string,
           nodeType: outcome.value.nodeType,
-          name: labelFor(outcome.value),
+          name: label.name,
+          typeName: label.typeName,
         });
       });
       setResolved(next);
@@ -86,7 +112,7 @@ export function MessageReferences({ http, text }: MessageReferencesProps) {
           kind="object"
           id={ref.id}
           name={ref.name ?? ref.nodeType}
-          typeName={ref.nodeType}
+          typeName={ref.typeName}
           href={auditHrefForNode(ref.id)}
           size="s"
           testId={`message-reference-${ref.id}`}
