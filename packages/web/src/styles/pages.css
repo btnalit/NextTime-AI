@@ -239,16 +239,14 @@
   white-space: nowrap;
 }
 
+/* Always visible/clickable, not hover-revealed: `pointer-events: none` on a child while the
+ * parent `<li>` is the click target it sits above makes the parent intercept every pointer event
+ * meant for the child (confirmed against a live kernel, `e2e/00-gates/screenshot.spec.ts` "state:
+ * chat with a reply" — Playwright's own actionability check reported the row `<li>` itself
+ * intercepting the click); it also has no keyboard or touch equivalent of ":hover", so a
+ * hover-only reveal makes these actions unreachable outside a mouse. */
 .chat-row-actions {
   margin-top: 2px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.chat-row-item:hover .chat-row-actions,
-.chat-row-item:focus-within .chat-row-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .chat-conversation-pane {
