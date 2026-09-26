@@ -454,10 +454,8 @@ docker compose ps docker-socket-proxy-images worker-supervisor   # 都应为 hea
 **构建镜像仍在主机 / CI**（已否决在页面里构建，design §11）：
 
 ```bash
-export PI_VERSION="$(cat pi.version)"
-export PLATFORM_EXTENSION_VERSION="$(node -p "require('./packages/platform-extension/package.json').version")"
-export BUILT_FROM="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
-docker compose build worker-runtime   # 打 ai.nexttime.pi-version / platform-extension-version / built-from 三个 label
+sh scripts/build-images.sh worker-runtime   # 导出 PI_VERSION / PLATFORM_EXTENSION_VERSION / BUILT_FROM，
+                                            # 打 ai.nexttime.* 三个 label，并另打 :pi-<版本> tag
 ```
 
 **镜像 allowlist（P1-a 修复，2026-09）——想日后能回滚到某个 build，先给它打一个不会被覆盖的 tag**：
@@ -527,11 +525,12 @@ cap roll_entry_containers                                   # 全部待重建且
 cap roll_entry_containers '{"principalIds":["<uuid>"]}'     # 只处理这些
 ```
 
-**`pi_drift`（决定 E3）**：比较 `pi.version`（仓库锁定值）与活动镜像自带的 pi 版本 label；`pinnedPiVersion`
-读一个 CI 产出的静态 JSON（**不出网**，见 `application/platform/runtime.ts` 顶部注释）——本仓库当前的
-`.github/workflows/pi-drift.yml`（nightly，检查 pi@latest 是否破坏测试）**还没有**产出这个文件，所以
-`status` 现在总是 `"unknown"`。落地路径（未来工作，不在本车道）：`PI_DRIFT_FILE` env（缺省
-`/data/config/pi-drift.json`，走已有的 `config:ro` 挂载），内容 `{"pinnedPiVersion":"0.84.4","checkedAt":"<ISO>"}`。
+**`pi_drift`（决定 E3；2026-09-26 起是运行层页「pi 运行时」卡片的数据源）**：比较本版期望的 pi（内核镜像
+内置的 `pi.version`，`packages/kernel/Dockerfile` 拷到 `/app/pi.version`、`PI_VERSION_FILE` 指向它——**不出网**，
+也不再需要人工拷贝 CI 产物）与活动镜像自带的 `ai.nexttime.pi-version` label。`consistent` = 活动镜像就是本版的
+pi，卡片再按 `runtime_inventory` 的 `needsRebuild` 给出「一键升级 N 个常驻智能体」（即
+`roll_entry_containers` 全量，空闲的立即停、下一轮重建，忙碌的在下一轮开始时收敛）；`drifted` / label 为
+`dev`（没用 `scripts/build-images.sh` 构建）= 卡片直接给出要在主机执行的构建命令。
 
 **`platform_status`（决定 E4）**：内核直接探测（2 秒超时）`llm-proxy` / `worker-supervisor` 的 `/healthz`；
 `egress-proxy` 的 healthz 按设计是 loopback-only（隔离边界，`packages/egress-proxy/src/index.ts`），**不探测**，

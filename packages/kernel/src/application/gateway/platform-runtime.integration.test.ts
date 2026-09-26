@@ -757,8 +757,65 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    // The expected pi version is the build's own pi.version (baked into the kernel image and read
+    // through PI_VERSION_FILE) — no CI artifact to copy onto the host any more.
     describe('pi_drift', () => {
-      it('reports status "unknown" when no CI-produced drift file exists in this environment', async () => {
+      let versionDir: string;
+
+      beforeEach(async () => {
+        versionDir = await mkdtemp(path.join(tmpdir(), 'pi-version-'));
+        // Earlier tests in this file set an active image; these cases resolve the active image
+        // through worker-supervisor's own default instead.
+        await pool.query(
+          `update platform_settings set settings = settings - 'activeRuntimeImage' where singleton`,
+        );
+      });
+
+      afterEach(async () => {
+        Reflect.deleteProperty(process.env, 'PI_VERSION_FILE');
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime';
+        await rm(versionDir, { recursive: true, force: true });
+      });
+
+      async function pinPiVersion(version: string): Promise<void> {
+        const file = path.join(versionDir, 'pi.version');
+        await writeFile(file, `${version}\n`);
+        process.env.PI_VERSION_FILE = file;
+      }
+
+      it('is consistent when the active image was built with the expected pi', async () => {
+        await pinPiVersion('0.84.4');
+        supervisor.images = [IMAGE_V1];
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
+        const result = await callAsAdmin<PiDriftWire>('pi_drift');
+        expect(result).toMatchObject({
+          status: 'consistent',
+          pinnedPiVersion: '0.84.4',
+          activeImagePiVersion: '0.84.4',
+          checkedAt: null,
+        });
+      });
+
+      it('is drifted when the active image carries a different pi, and says how to rebuild', async () => {
+        await pinPiVersion('0.87.1');
+        supervisor.images = [IMAGE_V1];
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
+        const result = await callAsAdmin<PiDriftWire>('pi_drift');
+        expect(result.status).toBe('drifted');
+        expect(result.detail).toContain('scripts/build-images.sh');
+      });
+
+      it('is unknown when the image was built without real labels ("dev")', async () => {
+        await pinPiVersion('0.84.4');
+        supervisor.images = [{ ...IMAGE_V1, labels: { 'ai.nexttime.pi-version': 'dev' } }];
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
+        const result = await callAsAdmin<PiDriftWire>('pi_drift');
+        expect(result.status).toBe('unknown');
+        expect(result.detail).toContain('scripts/build-images.sh');
+      });
+
+      it('is unknown when this build carries no pi.version', async () => {
+        process.env.PI_VERSION_FILE = path.join(versionDir, 'missing');
         supervisor.images = [IMAGE_V1];
         const result = await callAsAdmin<PiDriftWire>('pi_drift');
         expect(result.status).toBe('unknown');

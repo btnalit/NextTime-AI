@@ -122,10 +122,12 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
     await refreshAll();
   }
 
-  async function rollEntryContainers(): Promise<void> {
+  async function rollEntryContainers(all = false): Promise<void> {
     setRolling(true);
     try {
-      const params = selected.size > 0 ? { principalIds: [...selected] } : {};
+      // `all` = the "pi 运行时" card's one-click upgrade: every idle resident container that is
+      // not on the active image, whatever rows happen to be ticked in the table below.
+      const params = !all && selected.size > 0 ? { principalIds: [...selected] } : {};
       const result = await http.call<RollEntryContainersResultWire>(
         'roll_entry_containers',
         params,
@@ -136,8 +138,8 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
         tone: 'ok',
         title: t(`已重建 ${result.stoppedCount} 个`, `Rebuilt ${result.stoppedCount}`),
         description: t(
-          `跳过：忙碌 ${busy} 个，已是最新 ${upToDate} 个。`,
-          `Skipped: ${busy} busy, ${upToDate} up to date.`,
+          `跳过：忙碌 ${busy} 个（在各自下一轮对话开始时自动换用新镜像），已是最新 ${upToDate} 个。`,
+          `Skipped: ${busy} busy (each switches to the new image at the start of its next turn), ${upToDate} up to date.`,
         ),
       });
       setSelected(new Set());
@@ -175,6 +177,36 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
         }
       />
 
+      <Card title={t('pi 运行时', 'pi runtime')}>
+        {drift.state.status === 'loading' ? (
+          <SkeletonRows
+            count={1}
+            label={t('正在加载 pi 运行时…', 'Loading the pi runtime')}
+            testId="pi-drift-loading"
+          />
+        ) : drift.state.status === 'error' ? (
+          <ErrorBanner
+            error={drift.state.error}
+            title={t('无法加载 pi 运行时', 'Could not load the pi runtime')}
+            onRetry={() => void drift.reload()}
+            testId="pi-drift-error"
+          />
+        ) : (
+          <PiRuntimeBody
+            drift={drift.state.data}
+            residents={
+              inventory.state.status === 'ready' ? inventory.state.data.residentContainers : null
+            }
+            runtimeUnreachable={
+              inventory.state.status === 'ready' &&
+              inventory.state.data.activeImageSource === 'unknown'
+            }
+            upgrading={rolling}
+            onUpgrade={() => rollEntryContainers(true)}
+          />
+        )}
+      </Card>
+
       {inventory.state.status === 'loading' ? (
         <SkeletonRows
           count={4}
@@ -200,25 +232,6 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
           rolling={rolling}
         />
       )}
-
-      <Card title={t('pi 版本漂移', 'pi drift')}>
-        {drift.state.status === 'loading' ? (
-          <SkeletonRows
-            count={1}
-            label={t('正在加载 pi 漂移…', 'Loading pi drift')}
-            testId="pi-drift-loading"
-          />
-        ) : drift.state.status === 'error' ? (
-          <ErrorBanner
-            error={drift.state.error}
-            title={t('无法加载 pi 漂移', 'Could not load pi drift')}
-            onRetry={() => void drift.reload()}
-            testId="pi-drift-error"
-          />
-        ) : (
-          <PiDriftBody data={drift.state.data} />
-        )}
-      </Card>
     </div>
   );
 }
@@ -555,8 +568,8 @@ function RuntimeBody({
             icon="cpu"
             title={t('还没有带平台 label 的镜像', 'No labelled images yet')}
             body={t(
-              '在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。',
-              'Build worker-runtime on the host/CI with the three ai.nexttime.* labels.',
+              '在主机的项目目录运行 sh scripts/build-images.sh worker-runtime，镜像会带上真实的版本标签。',
+              'Run sh scripts/build-images.sh worker-runtime in the project directory on the host; the image gets real version labels.',
             )}
             testId="runtime-images-empty"
           />
@@ -655,54 +668,168 @@ function RuntimeBody({
   );
 }
 
-function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
+/**
+ * The "pi 运行时" card (2026-09-26, replaces the old "pi 版本漂移" card that only ever said
+ * "unknown"): which pi this release expects (the kernel build's own `pi.version`), which pi the
+ * active runtime image carries, and how many resident entry agents still run an older image — with
+ * the one action that closes the gap. A pi version ships inside a release (it has to pass the
+ * compatibility checks of docs/runbooks/pi-upgrade.md), so the console never fetches "the newest
+ * pi" itself: its one click rolls the resident agents onto the image this release built. When that
+ * image is not on the host yet, the card says exactly which command builds it.
+ */
+function PiRuntimeBody({
+  drift,
+  residents,
+  runtimeUnreachable,
+  upgrading,
+  onUpgrade,
+}: {
+  readonly drift: PiDriftWire;
+  readonly residents: readonly ResidentContainerWire[] | null;
+  /** worker-supervisor could not report its images at all — then "build the image" would be the
+   *  wrong advice; the card says it cannot read the runtime instead. */
+  readonly runtimeUnreachable: boolean;
+  readonly upgrading: boolean;
+  readonly onUpgrade: () => Promise<void>;
+}) {
   const t = useT();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const expected = drift.pinnedPiVersion;
+  const activePi = drift.activeImagePiVersion;
+  const stale = (residents ?? []).filter((resident) => resident.needsRebuild);
+  const total = residents?.length ?? 0;
+  const imageReady = drift.status === 'consistent';
+
   return (
-    <dl className="definition-list" data-testid="pi-drift-body">
-      <dt>{t('状态', 'Status')}</dt>
-      <dd>
-        <StatusChip machine="piDrift" status={data.status} size="s" testId="pi-drift-status" />
-      </dd>
-      <dt>{t('锁定的 pi 版本', 'Pinned pi version')}</dt>
-      <dd className="mono">{data.pinnedPiVersion ?? t('未知', 'unknown')}</dd>
-      <dt>{t('活动镜像自带的 pi 版本', "Active image's pi version")}</dt>
-      <dd className="mono">{data.activeImagePiVersion ?? '—'}</dd>
-      <dt>platform-extension 版本</dt>
-      <dd className="mono">{data.platformExtensionVersion ?? '—'}</dd>
-      <dt>{t('详情', 'Detail')}</dt>
-      <dd>
-        {data.status === 'unknown' && data.pinnedPiVersion === null ? (
-          // S8 leftover 59: no host in this deployment pulls the nightly pi-drift.yml artifact
-          // automatically (docs/runbooks/pi-upgrade.md §6 has the manual `gh run download` steps)
-          // — say that plainly instead of leaving "未知" as the only visible signal, with the
-          // kernel's own technical detail (PI_DRIFT_FILE path) still one click away for an
-          // operator who wants it.
-          <>
-            <p data-testid="pi-drift-unknown-honest">
-              {t(
-                '由 CI 夜间检测（pi-drift 工作流），本次部署尚未接收比对结果——见运行手册 pi-upgrade.md §6。',
-                'Checked nightly by CI (the pi-drift workflow) — this deployment has not received the comparison result yet; see the pi-upgrade runbook §6.',
+    <div className="stack-m" data-testid="pi-drift-body">
+      <dl className="definition-list">
+        <dt>{t('状态', 'Status')}</dt>
+        <dd>
+          <StatusChip machine="piDrift" status={drift.status} size="s" testId="pi-drift-status" />
+        </dd>
+        <dt>{t('本版期望的 pi', 'pi this release expects')}</dt>
+        <dd className="mono">{expected ?? t('未知', 'unknown')}</dd>
+        <dt>{t('活动镜像里的 pi', 'pi in the active image')}</dt>
+        <dd className="mono">
+          {activePi === null || activePi === 'dev'
+            ? t('没有版本标签', 'no version label')
+            : activePi}
+        </dd>
+        <dt>platform-extension</dt>
+        <dd className="mono">{drift.platformExtensionVersion ?? '—'}</dd>
+        <dt>{t('常驻智能体', 'Resident agents')}</dt>
+        <dd data-testid="pi-runtime-residents">
+          {residents === null
+            ? '—'
+            : t(
+                `${total} 个，其中 ${stale.length} 个还在旧镜像上`,
+                `${total}, of which ${stale.length} still run an older image`,
               )}
-            </p>
-            <details className="disclosure">
-              <summary>{t('技术细节', 'Technical details')}</summary>
-              <p className="text-3 text-small">{data.detail}</p>
-            </details>
-          </>
-        ) : data.status === 'unknown' ? (
-          // S8 W1-A10 (audit S14): the kernel's `unknown` detail can name PI_DRIFT_FILE and "see
-          // docs/runbooks" (application/platform/runtime.ts) — never shown inline; behind a
-          // disclosure for an operator who needs it.
-          <details className="disclosure">
-            <summary>{t('技术细节', 'Technical details')}</summary>
-            <p className="text-3 text-small">{data.detail}</p>
-          </details>
-        ) : (
-          data.detail
-        )}
-      </dd>
-      <dt>{t('检查时间', 'Checked at')}</dt>
-      <dd>{data.checkedAt ? formatDateTime(data.checkedAt) : '—'}</dd>
-    </dl>
+        </dd>
+      </dl>
+
+      {expected === null ? (
+        <Notice>
+          {t(
+            '这次内核构建没有带 pi 版本号——用 scripts/build-images.sh 重新构建后这里会显示本版期望的 pi。',
+            'This kernel build carries no pi version — rebuild with scripts/build-images.sh and this card shows the pi this release expects.',
+          )}
+        </Notice>
+      ) : runtimeUnreachable ? (
+        <Notice tone="warn" testId="pi-runtime-unreachable">
+          {t(
+            '读不到 worker-supervisor 的镜像信息，暂时无法判断常驻智能体跑的是哪个 pi——先看「运行状态」页里 worker-supervisor 的健康。',
+            'Could not read the images from worker-supervisor, so which pi the resident agents run is unknown for now — check worker-supervisor on the Status page first.',
+          )}
+        </Notice>
+      ) : !imageReady ? (
+        <Notice tone="warn" testId="pi-runtime-build-needed">
+          <div className="stack-s">
+            <strong>
+              {t(
+                `主机上的智能体运行时镜像还不是 pi ${expected} 版本`,
+                `The agent runtime image on the host is not pi ${expected} yet`,
+              )}
+            </strong>
+            <span>
+              {t(
+                '在主机的项目目录执行下面这条命令构建本版的运行时镜像（发版应用脚本已包含这一步），构建完成后回到这里刷新，再一键升级常驻智能体：',
+                "Run this in the project directory on the host to build this release's runtime image (the release apply script already does), then refresh here and upgrade the resident agents in one click:",
+              )}
+            </span>
+            <code className="mono" data-testid="pi-runtime-build-command">
+              sh scripts/build-images.sh worker-runtime
+            </code>
+          </div>
+        </Notice>
+      ) : stale.length === 0 ? (
+        <p className="text-2" data-testid="pi-runtime-up-to-date">
+          {total === 0
+            ? t(
+                `运行时镜像已是 pi ${expected}；还没有常驻智能体。`,
+                `The runtime image is pi ${expected}; no resident agents yet.`,
+              )
+            : t(
+                `全部 ${total} 个常驻智能体都已在 pi ${expected} 上。`,
+                `All ${total} resident agents run pi ${expected}.`,
+              )}
+        </p>
+      ) : (
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="text-2">
+            {t(
+              `pi ${expected} 的镜像已就绪，${stale.length} 个常驻智能体还在旧镜像上。`,
+              `The pi ${expected} image is ready; ${stale.length} resident agents still run an older image.`,
+            )}
+          </span>
+          <Confirm
+            tier="medium"
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            anchor={
+              <Button
+                variant="primary"
+                onClick={() => setConfirmOpen(true)}
+                loading={upgrading}
+                data-testid="pi-runtime-upgrade"
+              >
+                {t(
+                  `一键升级 ${stale.length} 个常驻智能体`,
+                  `Upgrade ${stale.length} resident agents`,
+                )}
+              </Button>
+            }
+            title={t(
+              `把 ${stale.length} 个常驻智能体升级到 pi ${expected} 版本`,
+              `Upgrade ${stale.length} resident agents to pi ${expected}`,
+            )}
+            impact={[
+              t(
+                '空闲的立即停止，下一轮对话时用新镜像重建（会慢几秒）；对话历史与工作目录保留。',
+                'Idle ones stop now and are recreated on the new image at their next turn (a few seconds slower); chat history and working directories are kept.',
+              ),
+              t(
+                '正在跑一轮对话的不打断，在它下一轮开始时自动换新镜像。',
+                'One in the middle of a turn is not interrupted; it switches at the start of its next turn.',
+              ),
+              t(
+                '回退：在下方镜像清单把上一个镜像设为活动，再点一次这里。',
+                'To go back: make the previous image active in the list below, then click here again.',
+              ),
+            ]}
+            confirmLabel={t('升级', 'Upgrade')}
+            onConfirm={onUpgrade}
+            testId="pi-runtime-upgrade-confirm"
+          />
+        </div>
+      )}
+
+      {drift.status === 'unknown' || drift.status === 'drifted' ? (
+        <details className="disclosure">
+          <summary>{t('技术细节', 'Technical details')}</summary>
+          <p className="text-3 text-small">{drift.detail}</p>
+        </details>
+      ) : null}
+    </div>
   );
 }

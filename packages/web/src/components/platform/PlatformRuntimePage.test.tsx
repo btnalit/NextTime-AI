@@ -206,19 +206,102 @@ describe('PlatformRuntimePage', () => {
     expect(within(exitedRow).queryByTestId('runtime-resident-running')).toBeNull();
   });
 
-  it('pi drift: no CI-produced file reads honestly instead of a bare "unknown" (leftover 59)', async () => {
+  // "pi 运行时" card (replaces the drift card that only ever said "unknown").
+  it('pi runtime: the image is not this release’s pi yet — names the exact build command', async () => {
     const http = scriptedHttp({
       runtime_inventory: () => inventory(),
-      pi_drift: () => piDrift(), // default fixture: status 'unknown', pinnedPiVersion null
+      pi_drift: () =>
+        piDrift({ status: 'drifted', pinnedPiVersion: '0.87.1', activeImagePiVersion: '0.84.4' }),
       list_workspaces: () => ({ items: [] }),
     });
     renderPage(http);
 
-    const honest = await screen.findByTestId('pi-drift-unknown-honest');
-    expect(honest.textContent).toContain('pi-drift');
-    // The kernel's own technical detail is still reachable, just not the primary message.
-    const drift = screen.getByTestId('pi-drift-body');
-    expect(drift.textContent).toContain('技术细节');
+    const buildNeeded = await screen.findByTestId('pi-runtime-build-needed');
+    expect(buildNeeded.textContent).toContain('0.87.1');
+    expect(screen.getByTestId('pi-runtime-build-command').textContent).toContain(
+      'scripts/build-images.sh worker-runtime',
+    );
+    expect(screen.queryByTestId('pi-runtime-upgrade')).toBeNull();
+    // The kernel's own detail stays one disclosure away.
+    expect(screen.getByTestId('pi-drift-body').textContent).toContain('技术细节');
+  });
+
+  it('pi runtime: one click upgrades every stale resident agent, whatever rows are ticked', async () => {
+    const result: RollEntryContainersResultWire = {
+      stoppedCount: 2,
+      outcomes: [
+        { principalId: 'p-1', workspaceId: 'ws-1', action: 'stopped' },
+        { principalId: 'p-2', workspaceId: 'ws-1', action: 'stopped' },
+      ],
+    };
+    const http = scriptedHttp({
+      runtime_inventory: () =>
+        inventory({
+          residentContainers: [
+            resident({ principalId: 'p-1', needsRebuild: true }),
+            resident({ principalId: 'p-2', needsRebuild: true }),
+            resident({ principalId: 'p-3', needsRebuild: false }),
+          ],
+        }),
+      pi_drift: () =>
+        piDrift({
+          status: 'consistent',
+          pinnedPiVersion: '0.87.1',
+          activeImagePiVersion: '0.87.1',
+        }),
+      list_workspaces: () => ({ items: [] }),
+      roll_entry_containers: (params) => {
+        expect(params).toEqual({});
+        return result;
+      },
+    });
+    renderPage(http);
+
+    expect((await screen.findByTestId('pi-runtime-residents')).textContent).toContain(
+      '3 个，其中 2 个',
+    );
+    fireEvent.click(screen.getByTestId('pi-runtime-upgrade'));
+    const confirm = await screen.findByTestId('pi-runtime-upgrade-confirm');
+    expect(confirm.textContent).toContain('pi 0.87.1');
+    expect(http.calls.some((c) => c.name === 'roll_entry_containers')).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'roll_entry_containers')).toBe(true),
+    );
+    expect(await screen.findByText(/已重建 2 个/)).toBeTruthy();
+  });
+
+  it('pi runtime: says it cannot read the runtime (not "build the image") when worker-supervisor is unreachable', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ activeImage: null, activeImageSource: 'unknown' }),
+      pi_drift: () => piDrift({ status: 'unknown', pinnedPiVersion: '0.87.1' }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    expect(await screen.findByTestId('pi-runtime-unreachable')).toBeTruthy();
+    expect(screen.queryByTestId('pi-runtime-build-needed')).toBeNull();
+  });
+
+  it('pi runtime: nothing to do when every resident agent already runs the expected pi', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () =>
+        inventory({ residentContainers: [resident({ needsRebuild: false })] }),
+      pi_drift: () =>
+        piDrift({
+          status: 'consistent',
+          pinnedPiVersion: '0.87.1',
+          activeImagePiVersion: '0.87.1',
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    expect((await screen.findByTestId('pi-runtime-up-to-date')).textContent).toContain(
+      '全部 1 个常驻智能体都已在 pi 0.87.1 上',
+    );
+    expect(screen.queryByTestId('pi-runtime-upgrade')).toBeNull();
   });
 
   it('设为活动', async () => {

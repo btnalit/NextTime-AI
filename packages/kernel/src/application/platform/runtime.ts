@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import type {
   GateHealthWire,
   PiDriftStatusWire,
@@ -558,32 +559,30 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
 // pi_drift (E3)
 // -------------------------------------------------------------------------------------------
 
-/** The path to the CI-produced static JSON — never a live npm/GitHub lookup (E3 "不出网"). S8
- *  leftover 59: `.github/workflows/pi-drift.yml` now writes and uploads this exact shape
- *  (`{ "pinnedPiVersion": "0.84.4", "checkedAt": "<ISO>" }`, extra fields tolerated) as a workflow
- *  artifact on every nightly run — but no host in this deployment pulls GitHub Actions artifacts
- *  automatically (no new outbound-from-host infra for this), so `pinnedPiVersion` still reads
- *  `null` — and `status` stays `'unknown'` — on any host where an operator has not manually copied
- *  that artifact to this path (`docs/runbooks/pi-upgrade.md` §6 has the exact `gh run download`
- *  steps). The `'unknown'` detail text below says this honestly instead of implying a bug. */
-const PI_DRIFT_FILE_ENV = 'PI_DRIFT_FILE';
-const DEFAULT_PI_DRIFT_FILE = '/data/config/pi-drift.json';
+/** The pi version this release expects: the repo's own `pi.version`, baked into the kernel image
+ *  (the kernel image build copies it to `/app/pi.version` and sets `PI_VERSION_FILE`) — the same
+ *  file the worker-runtime image build installs pi from, so kernel and runtime image come from one
+ *  source per release. Never a live npm/GitHub lookup (E3 "不出网"). Until 2026-09-26 this
+ *  read a CI artifact (`pi-drift.json`) an operator had to copy onto the host by hand; nobody ever
+ *  did, so the console's drift card only ever said "unknown". Outside the image (local dev,
+ *  tests) the repo-root file is the fallback. */
+const PI_VERSION_FILE_ENV = 'PI_VERSION_FILE';
+const PI_VERSION_FILE_CANDIDATES = [
+  '/app/pi.version',
+  fileURLToPath(new URL('../../../../../pi.version', import.meta.url)),
+];
 
-async function readPinnedPiVersion(): Promise<{
-  pinnedPiVersion: string | null;
-  checkedAt: string | null;
-}> {
-  const filePath = process.env[PI_DRIFT_FILE_ENV] || DEFAULT_PI_DRIFT_FILE;
-  try {
-    const raw = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as { pinnedPiVersion?: unknown; checkedAt?: unknown };
-    return {
-      pinnedPiVersion: typeof parsed.pinnedPiVersion === 'string' ? parsed.pinnedPiVersion : null,
-      checkedAt: typeof parsed.checkedAt === 'string' ? parsed.checkedAt : null,
-    };
-  } catch {
-    return { pinnedPiVersion: null, checkedAt: null };
+async function readPinnedPiVersion(): Promise<string | null> {
+  const fromEnv = process.env[PI_VERSION_FILE_ENV];
+  for (const filePath of fromEnv ? [fromEnv] : PI_VERSION_FILE_CANDIDATES) {
+    try {
+      const version = (await readFile(filePath, 'utf8')).trim();
+      if (version !== '') return version;
+    } catch {
+      // try the next candidate
+    }
   }
+  return null;
 }
 
 export const piDriftHandler: CapabilityHandler = async (client) => {
@@ -597,25 +596,25 @@ export const piDriftHandler: CapabilityHandler = async (client) => {
   const activeImagePiVersion = activeImageInfo?.labels[IMAGE_PI_VERSION_LABEL] ?? null;
   const platformExtensionVersion =
     activeImageInfo?.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null;
-  const { pinnedPiVersion, checkedAt } = await readPinnedPiVersion();
+  const pinnedPiVersion = await readPinnedPiVersion();
 
   let status: PiDriftStatusWire;
   let detail: string;
   if (pinnedPiVersion === null) {
     status = 'unknown';
-    detail =
-      'no pi-drift.json found at PI_DRIFT_FILE (default /data/config/pi-drift.json) — ' +
-      'checked nightly by CI (.github/workflows/pi-drift.yml), which uploads it as a workflow ' +
-      'artifact; an operator copies it here manually (docs/runbooks/pi-upgrade.md §6)';
-  } else if (activeImagePiVersion === null) {
+    detail = 'this kernel build carries no pi.version (PI_VERSION_FILE, default /app/pi.version)';
+  } else if (activeImagePiVersion === null || activeImagePiVersion === 'dev') {
+    // `dev` = built without scripts/build-images.sh, so the image does not say which pi it has.
     status = 'unknown';
-    detail = 'the active runtime image was not found, or carries no ai.nexttime.pi-version label';
+    detail =
+      'the active runtime image was not found or has no real ai.nexttime.pi-version label — ' +
+      'rebuild it on the host with scripts/build-images.sh worker-runtime';
   } else if (pinnedPiVersion === activeImagePiVersion) {
     status = 'consistent';
-    detail = `pi.version and the active runtime image agree (${pinnedPiVersion})`;
+    detail = `this release expects pi ${pinnedPiVersion} and the active runtime image has it`;
   } else {
     status = 'drifted';
-    detail = `pi.version=${pinnedPiVersion} but the active runtime image was built with pi ${activeImagePiVersion}`;
+    detail = `this release expects pi ${pinnedPiVersion} but the active runtime image has pi ${activeImagePiVersion} — rebuild it on the host with scripts/build-images.sh worker-runtime`;
   }
 
   const result: PiDriftWire = {
@@ -624,7 +623,8 @@ export const piDriftHandler: CapabilityHandler = async (client) => {
     activeImagePiVersion,
     platformExtensionVersion,
     detail,
-    checkedAt,
+    // No separate "last checked" moment any more: the expected version is part of this build.
+    checkedAt: null,
   };
   return { result };
 };
