@@ -8,10 +8,12 @@ import { ExecutionReadinessCard } from './ExecutionReadinessCard.js';
 afterEach(cleanup);
 
 /**
- * ExecutionReadinessCard.test.tsx (S8 W2 U3a, ui-audit-2026-09-23 J1): the counts row, the ready
- * vs. not-ready body, each `missing[]` code's cause text and link target (never a raw code or raw
- * id), and that the call never asks for another principal's readiness (this lane ships no member
- * picker — see the component's own doc comment).
+ * ExecutionReadinessCard.test.tsx (console redesign P2-b, docs/console-redesign-plan-2026-09-25.md
+ * §4/§6 P2 "对话状态条"): the compact "我的智能体现在能用：" strip that replaced the old "执行就绪"
+ * card — zero systems collapses to one line, one chip per system otherwise, the per-gate detail
+ * (reason + fix link) stays behind "查看原因" until a system is actually unusable, and the
+ * workspace-wide `missing[]` items a per-gate chip cannot say on their own (no `gateId`) still show,
+ * never duplicating a sentence a gate chip/row already said.
  */
 
 function scriptedHttp(
@@ -59,24 +61,67 @@ function readiness(overrides: Partial<ExecutionReadinessWire> = {}): ExecutionRe
 
 describe('ExecutionReadinessCard', () => {
   it('calls execution_readiness with no principalId — own readiness only', async () => {
-    const http = scriptedHttp({ execution_readiness: () => readiness() });
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ ready: true, gates: [gate({ gateId: 'g-1', name: 'CRM' })] }),
+    });
     render(<ExecutionReadinessCard http={http} />);
-    await screen.findByTestId('execution-readiness-ready');
+    await screen.findByTestId('execution-readiness-body');
     expect(http.calls).toEqual([{ name: 'execution_readiness', params: {} }]);
   });
 
-  it('console redesign M2: one row per system — delegation being ready never hides a system the agent cannot use', async () => {
+  it('no systems at all: one line pointing at 系统接入, no chips, no toggle', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ ready: false, gates: [], missing: [{ code: 'no_enabled_gate' }] }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const missing = await screen.findByTestId('execution-readiness-missing');
+    expect(missing.textContent).toContain('还没有任何可以作用的系统');
+    expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/systems');
+    expect(screen.queryAllByTestId('execution-readiness-gate-chip')).toHaveLength(0);
+    expect(screen.queryByTestId('execution-readiness-toggle')).toBeNull();
+  });
+
+  it('all systems direct: one chip per system, ready sentence, no toggle', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({
           ready: true,
           gates: [
-            gate({
-              gateId: 'g-1',
-              name: 'CRM',
-              observeOperationCount: 3,
-              workerDefinitionIds: ['w-1'],
-            }),
+            gate({ gateId: 'g-1', name: 'CRM', workerDefinitionIds: ['w-1'] }),
+            gate({ gateId: 'g-2', name: 'Docs' }),
+          ],
+          workers: [
+            {
+              definitionId: 'w-1',
+              version: 1,
+              name: 'Ops runner',
+              delegable: true,
+              reachableGateCount: 1,
+              blockedBy: [],
+            },
+          ],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    const chips = await screen.findAllByTestId('execution-readiness-gate-chip');
+    expect(chips.map((chip) => chip.getAttribute('data-status'))).toEqual(['direct', 'direct']);
+    expect(chips[0]?.textContent).toContain('CRM');
+    expect(chips[0]?.textContent).toContain('可直接调用');
+    expect(screen.queryByTestId('execution-readiness-toggle')).toBeNull();
+    expect(screen.queryByTestId('execution-readiness-gates')).toBeNull();
+    expect(await screen.findByTestId('execution-readiness-ready')).toBeTruthy();
+    expect(screen.queryByTestId('execution-readiness-missing')).toBeNull();
+  });
+
+  it('one system unusable: strip counts it, 查看原因 expands the per-gate reason + fix link', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          ready: true,
+          gates: [
+            gate({ gateId: 'g-1', name: 'CRM', workerDefinitionIds: ['w-1'] }),
             gate({
               gateId: 'g-2',
               name: 'Knowledge base',
@@ -84,14 +129,6 @@ describe('ExecutionReadinessCard', () => {
               inEntryScope: false,
               status: 'unreachable',
               reason: 'excluded_by_profile',
-            }),
-            gate({
-              gateId: 'g-3',
-              name: 'Billing',
-              granted: false,
-              inEntryScope: false,
-              status: 'unreachable',
-              reason: 'not_granted',
             }),
           ],
           workers: [
@@ -107,83 +144,37 @@ describe('ExecutionReadinessCard', () => {
         }),
     });
     render(<ExecutionReadinessCard http={http} />);
+    const toggle = await screen.findByTestId('execution-readiness-toggle');
+    expect(toggle.textContent).toContain('1');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('execution-readiness-gates')).toBeNull();
+
+    toggle.click();
     const rows = await screen.findAllByTestId('execution-readiness-gate');
-    expect(rows.map((row) => row.getAttribute('data-status'))).toEqual([
-      'direct',
-      'unreachable',
-      'unreachable',
-    ]);
-    expect(rows[0]?.textContent).toContain('3 个只读操作');
-    expect(rows[0]?.textContent).toContain('Ops runner');
-    // The incident: granted but unticked on My Agent — says so, and links there.
+    expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['direct', 'unreachable']);
+    // The incident this strip exists for: granted but unticked on My Agent — says so, links there.
     expect(rows[1]?.textContent).toContain('取消了勾选');
     expect(rows[1]?.querySelector('a')?.getAttribute('href')).toBe('#/me/agent');
-    expect(rows[2]?.querySelector('a')?.getAttribute('href')).toBe('#/govern/access');
-    // Delegation readiness is still shown, but no longer as a blanket "ready".
-    expect(screen.getByTestId('execution-readiness-ready').textContent).toContain('委派');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('no_enabled_gate: cause text and a link to 系统接入, never the raw code', async () => {
-    const http = scriptedHttp({
-      execution_readiness: () =>
-        readiness({ ready: false, missing: [{ code: 'no_enabled_gate' }] }),
-    });
-    render(<ExecutionReadinessCard http={http} />);
-    const item = await screen.findByTestId('execution-readiness-missing-item');
-    expect(item.textContent).not.toContain('no_enabled_gate');
-    expect(item.textContent).toContain('还没有任何可以作用的系统');
-    const link = item.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('#/govern/systems');
-  });
-
-  it('no_grant with a gateId: resolves the gate name from this same response, links to 访问', async () => {
+  it('workspace-wide gap (no gateId) still shown; per-gate gaps are not duplicated', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({
           ready: false,
-          missing: [{ code: 'no_grant', gateId: 'g-9' }],
-          gates: [
-            gate({
-              gateId: 'g-9',
-              name: 'Payments',
-              granted: false,
-              inEntryScope: false,
-              status: 'unreachable',
-              reason: 'not_granted',
-            }),
-          ],
+          gates: [gate({ gateId: 'g-1', name: 'CRM' })],
+          // `no_grant` here carries a gateId — already said by the gate's own chip/row (its
+          // `reason`), so the strip must not also print `missingCauseText` for it.
+          missing: [{ code: 'no_published_worker' }, { code: 'no_grant', gateId: 'g-1' }],
         }),
     });
     render(<ExecutionReadinessCard http={http} />);
-    const item = await screen.findByTestId('execution-readiness-missing-item');
-    expect(item.textContent).toContain('Payments');
-    expect(item.textContent).not.toContain('g-9');
-    const link = item.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('#/govern/access');
-  });
-
-  it('no_published_worker: cause text and a link to 能力目录 · Workers', async () => {
-    const http = scriptedHttp({
-      execution_readiness: () =>
-        readiness({ ready: false, missing: [{ code: 'no_published_worker' }] }),
-    });
-    render(<ExecutionReadinessCard http={http} />);
-    const item = await screen.findByTestId('execution-readiness-missing-item');
-    expect(item.textContent).toContain('委派任务时找不到可用的');
-    const link = item.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('#/govern/catalog/workers');
-  });
-
-  it('no_worker_gate: says the delegated Worker reaches no system, links to 能力目录 · Workers', async () => {
-    const http = scriptedHttp({
-      execution_readiness: () => readiness({ ready: false, missing: [{ code: 'no_worker_gate' }] }),
-    });
-    render(<ExecutionReadinessCard http={http} />);
-    const item = await screen.findByTestId('execution-readiness-missing-item');
-    expect(item.textContent).not.toContain('no_worker_gate');
-    expect(item.textContent).toContain('碰不到任何系统');
-    const link = item.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('#/govern/catalog/workers');
+    const missing = await screen.findByTestId('execution-readiness-missing');
+    const items = await screen.findAllByTestId('execution-readiness-missing-item');
+    expect(items).toHaveLength(1);
+    expect(missing.textContent).toContain('委派任务时找不到可用的');
+    expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/catalog/workers');
   });
 
   it('surfaces a load error with retry', async () => {
@@ -192,12 +183,12 @@ describe('ExecutionReadinessCard', () => {
       execution_readiness: () => {
         attempt += 1;
         if (attempt === 1) throw new Error('boom');
-        return readiness();
+        return readiness({ gates: [gate({ gateId: 'g-1', name: 'CRM' })] });
       },
     });
     render(<ExecutionReadinessCard http={http} />);
     await screen.findByTestId('execution-readiness-error');
     screen.getByRole('button', { name: /retry|重试/i }).click();
-    await waitFor(() => expect(screen.getByTestId('execution-readiness-ready')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('execution-readiness-body')).toBeTruthy());
   });
 });

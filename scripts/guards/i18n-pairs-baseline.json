@@ -2,7 +2,9 @@
   "packages/web/src/components/AccessPage.tsx": [
     "grant_capability{principalId, resourceType, resourceId?, scope?}"
   ],
-  "packages/web/src/components/ApprovalQueuePage.tsx": ["今后自动批准 Auto-approved from now on ·"],
+  "packages/web/src/components/approvals/useApprovalQueue.ts": [
+    "今后自动批准 Auto-approved from now on ·"
+  ],
   "packages/web/src/components/AvailableGateInstancesSection.tsx": ["已发布 个 Operation"],
   "packages/web/src/components/RegisteredSystemsSection.tsx": ["已发布 个 Operation"],
   "packages/web/src/components/audit/AuditLogSection.tsx": [

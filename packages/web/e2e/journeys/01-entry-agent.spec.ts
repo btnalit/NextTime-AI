@@ -27,13 +27,14 @@ import {
  * 状态覆盖:
  *   - 空: 用 `createFreshWorkspace` 建一个全新工作区（不是每个 spec 共用、会不断累积状态的
  *     `ci-e2e`），第 1 步之前断言 系统与授权（`systems-empty`，`available-gate-ci-fixture-mcp`
- *     还没有"已启用"链接）、能力目录 · Worker（`catalog-empty`）都还是空的，以及 对话 上的
- *     `ExecutionReadinessCard`（`execution-readiness-missing`）恰好列出两项缺口——"还没有可以作用
- *     的系统"（`no_enabled_gate`）和"没有可委派的 Worker"（`no_published_worker`），按可见的缘由
- *     文案断言，不断言内部 `code`（`packages/web/src/components/readiness/readiness-copy.ts`）。
- *     控制台重构 P2 把 访问 的授权半边并入 系统与授权（`components/systems/SystemsPage.tsx`），
- *     这一页不再重复渲染 `execution-prerequisite-bar`（能力目录 / 对话页各自还有一份）——本旅程
- *     相应地不再在这一页断言它，也不再把 访问 当成独立于 系统接入 的第三处空态。
+ *     还没有"已启用"链接）、能力目录 · Worker（`catalog-empty`）都还是空的，以及 对话 上的状态条
+ *     （console redesign P2-b，`execution-readiness-missing`）零系统时收成一行——"还没有可以作用
+ *     的系统"（`no_enabled_gate`）——按可见的缘由文案断言，不断言内部 `code`（`packages/web/src/
+ *     components/readiness/readiness-copy.ts`）。"没有可委派的 Worker"（`no_published_worker`）
+ *     在这一刻没有意义（连一个系统都还没有），状态条不重复它——见下方第 1 步之后的中间状态，那时它
+ *     才会出现。控制台重构 P2 把 访问 的授权半边并入 系统与授权（`components/systems/
+ *     SystemsPage.tsx`），这一页不再重复渲染 `execution-prerequisite-bar`（能力目录 / 对话页各自
+ *     还有一份）——本旅程相应地不再在这一页断言它，也不再把 访问 当成独立于 系统接入 的第三处空态。
  *   - 错: 产品今天没有"委派在提交前被挡住"这个机制（W1-C 的 `execution_readiness` 是读模型，没有接
  *     到对话的发送按钮上）；断言这一点不成立，会断言一个不存在的产品行为。退而求其次、但仍然真实的
  *     一件事：本旅程的步骤顺序天然会经过"门已授权、Worker 还未发布"这个中间状态（第 1、2 步之后，
@@ -145,19 +146,18 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(page.getByTestId('catalog-empty')).toBeVisible();
 
-    // 对话页的 ExecutionReadinessCard: 全新工作区里两项都缺——没有已启用的门、没有已发布的 Worker
-    // （门授权的缺口只会在有至少一个已发布 Worker 声明这个门时才单独列出——见
-    // execution-readiness-handler.ts 的 `no_grant` 分支——这里还没有任何 Worker，所以不会出现）。
+    // 对话页状态条（console redesign P2-b）：零系统时收成一行，只指向第一步——"还没有已发布的
+    // Worker"在这一刻没有意义（连一个系统都还没有，delegation 无从谈起），状态条不再重复它。访问
+    // 的空态已随控制台重构 P2 并入 系统与授权（上面已经断言过 `systems-empty`），不再单独断言。
     await goToByLabel(page, '对话');
     const readinessBody = page.getByTestId('execution-readiness-body');
     await expect(readinessBody).toBeVisible({ timeout: 15_000 });
     const readinessMissing = readinessBody.getByTestId('execution-readiness-missing');
     await expect(readinessMissing).toBeVisible();
-    await expect(readinessMissing.getByTestId('execution-readiness-missing-item')).toHaveCount(2, {
+    await expect(readinessMissing.getByTestId('execution-readiness-missing-item')).toHaveCount(1, {
       timeout: 15_000,
     });
     await expect(readinessMissing).toContainText(READINESS_NO_ENABLED_GATE_TEXT);
-    await expect(readinessMissing).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
 
     // --- 1. 系统与授权: 启用 ci-fixture-mcp 到本工作区 ----------------------------------------
     await goToByLabel(page, '系统与授权');
