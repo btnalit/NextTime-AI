@@ -1,4 +1,6 @@
 import { type FormEvent, useState } from 'react';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import {
   type MeResult,
   type SessionResult,
@@ -8,12 +10,14 @@ import {
   claimIdentity,
   patchMe,
 } from '../lib/auth-api.js';
+import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { LangSwitch } from './LangSwitch.js';
+import { IssueOwnHandleSection } from './account/IssueOwnHandleSection.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -39,6 +43,15 @@ export interface AccountPageProps {
   readonly onBound?: (result: MeResult) => void;
   /** Injectable `fetch` for tests — see `lib/auth-api.ts`'s own module doc comment. */
   readonly fetchImpl?: typeof fetch;
+  /** 控制台产品化重构方案 D3 (docs/console-redesign-plan-2026-09-25.md §7): a workspace-scoped
+   *  `CapabilityCaller`, needed only for the "接 Claude Code / MCP" card (`issue_handle`) below —
+   *  optional and omitted by every call site that has no workspace in scope (`App.tsx`'s
+   *  `noWorkspace` pre-session state has no session/http at all; `routes.tsx` also withholds it for
+   *  a platform-only admin session, `selectedWorkspaceId === undefined`, the same case `Routed`
+   *  redirects away from every *other* workspace-scoped route). This keeps this page's own
+   *  long-standing invariant — reachable with no capability call at all — true for both of those,
+   *  and the card simply does not render without `http`. */
+  readonly http?: CapabilityCaller;
 }
 
 /**
@@ -52,6 +65,12 @@ export interface AccountPageProps {
  * API-key mode (`user === null`) shows a *claim* form instead (`POST /api/auth/claim`) — sets a
  * login/password on the key's own passwordless identity and hands the caller a cookie session, so
  * the key holder never has to re-type anything to land in the console proper.
+ *
+ * 控制台产品化重构方案 D3: `IssueOwnHandleSection` ("接 Claude Code / MCP", moved off 访问 Access)
+ * renders here, in cookie mode only, gated the same way it always was — `issue_handle` is
+ * `minRole:'owner'` (`howto-connect-claude-code.md`), so this is still owner-only, not "any member"
+ * — behind `HandleCard`'s own `canManage` (`useWorkspaceIdentity` + the `usePermissions` 403
+ * fallback, the same formula `AccessPage`/`MembersPage` use).
  */
 export function AccountPage({
   user,
@@ -61,6 +80,7 @@ export function AccountPage({
   onClaimed,
   onBound,
   fetchImpl,
+  http,
 }: AccountPageProps) {
   const t = useT();
   if (!user) {
@@ -84,8 +104,29 @@ export function AccountPage({
       <PasswordCard fetchImpl={fetchImpl} />
       <LanguageCard />
       <MembershipsCard memberships={memberships} />
+      {http ? <HandleCard http={http} /> : null}
       {onBound ? <BindApiKeyForm onBound={onBound} fetchImpl={fetchImpl} /> : null}
     </div>
+  );
+}
+
+/** D3: gated exactly like `AccessPage`'s old inline card — `useWorkspaceIdentity`'s authoritative
+ *  `get_workspace.caller.role` once known, the `issue_handle` 403 inference (same `minRole:'owner'`
+ *  denial closure `hooks/usePermissions.tsx` derives) only while it is not. A separate component
+ *  (rather than calling these hooks straight from `AccountPage`) so they only ever mount, and only
+ *  ever call `get_workspace`, when `http` exists — `AccountPage` itself stays capability-call-free
+ *  in every mode that has no workspace in scope. */
+function HandleCard({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
+  const permissions = usePermissions();
+  const { role } = useWorkspaceIdentity(http);
+  const canManage =
+    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('issue_handle');
+  if (!canManage) return null;
+  return (
+    <Card title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>
+      <IssueOwnHandleSection http={http} />
+    </Card>
   );
 }
 
