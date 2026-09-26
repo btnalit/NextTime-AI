@@ -277,8 +277,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(supervisorClient.auditVisibleOnFirstPoll).toBe(true);
     });
 
-    describe('S3.13 runtime consumer — AgentProfile.enabledWorkerDefinitions', () => {
-      it('a profile with enabledWorkerDefinitions=[A] narrows find_workers to A and refuses invoke_worker(B) with 403', async () => {
+    describe('S3.13 runtime consumer — AgentProfile.excludedWorkerDefinitions', () => {
+      it('a profile excluding B narrows find_workers to A and refuses invoke_worker(B) with 403', async () => {
         configureTaskRuntime({
           pool,
           privateKey,
@@ -296,7 +296,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Owners are not exempt (a Profile is a preference the principal set for themselves) —
         // deliberately an `owner`-role principal here, not a `member`.
         await dispatchCapability({ pool }, humanCaller(principalId, 'owner'), 'set_agent_profile', {
-          enabledWorkerDefinitions: [definitionA],
+          excludedWorkerDefinitions: [definitionB],
         });
 
         const caller = await entryHandleCallerFor(principalId);

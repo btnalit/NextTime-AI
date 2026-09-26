@@ -2411,7 +2411,7 @@ const agentProfileCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ principalId: id.optional() }).strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Read one Principal’s AgentProfile — raw fields (null = inherit) plus the resolved `effective` values after applying the workspace AgentPolicy and the principal’s Grants. Omit principalId for the caller’s own; naming another principal requires owner.',
+      'Read one Principal’s AgentProfile — raw fields (scalars: null = inherit; lists: what the member excluded) plus the resolved `effective` values: everything currently granted / published minus the exclusions, capped by the workspace AgentPolicy. Omit principalId for the caller’s own; naming another principal requires owner.',
   },
   {
     name: 'set_agent_profile',
@@ -2423,20 +2423,22 @@ const agentProfileCapabilities: readonly Capability[] = [
       .object({
         principalId: id.optional(),
         // Every field is independently optional (a partial update — an omitted field is left
-        // unchanged) and, where present, `nullable` (an explicit `null` resets that field to
-        // "inherit the workspace AgentPolicy default") — distinguishable because zod leaves an
-        // omitted key as `undefined` while a present-but-null key parses to `null`.
+        // unchanged). The scalars are `nullable` (an explicit `null` resets that field to "inherit
+        // the workspace AgentPolicy default") — distinguishable because zod leaves an omitted key
+        // as `undefined` while a present-but-null key parses to `null`. The three lists are
+        // exclusion lists (console redesign D1): `[]` excludes nothing, so later grants / publishes
+        // flow in automatically.
         model: z.string().min(1).nullable().optional(),
-        enabledSkills: z.array(z.string().min(1)).nullable().optional(),
-        enabledGatekeepers: z.array(id).nullable().optional(),
-        enabledWorkerDefinitions: z.array(id).nullable().optional(),
+        excludedSkills: z.array(z.string().min(1)).optional(),
+        excludedGatekeepers: z.array(id).optional(),
+        excludedWorkerDefinitions: z.array(id).optional(),
         promptAddendum: z.string().nullable().optional(),
         autoApproveLow: z.boolean().nullable().optional(),
       })
       .strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — 400 invalid_params on a model outside the whitelist, a Skill that is not published, a Gatekeeper the principal holds no Grant for, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
+      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — the Skill / Gatekeeper / Worker lists are exclusion lists and can only narrow; 400 invalid_params on a model outside the whitelist, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
   },
   {
     name: 'get_agent_policy',

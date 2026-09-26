@@ -376,10 +376,7 @@ export async function invokeWorkerCreate(
   // Task row exists" placement the quota checks below and the attenuation pre-check just after this
   // both already use) — an owner is not exempt (a Profile is a preference the principal set for
   // themselves, not a privilege boundary).
-  if (
-    agentProfile?.enabledWorkerDefinitions &&
-    !agentProfile.enabledWorkerDefinitions.includes(input.definitionId)
-  ) {
+  if (agentProfile?.excludedWorkerDefinitions.includes(input.definitionId)) {
     throw new InvokeWorkerDefinitionNotEnabledError(input.definitionId);
   }
 

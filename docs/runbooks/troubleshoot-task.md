@@ -60,7 +60,7 @@ docker compose exec -T postgres psql -U nexttime -d nexttime -c \
 |---|---|---|
 | `invoke_worker` 直接报错，从不见 Task | `429 depth_exceeded` / `429 concurrency_exceeded` / `429 daily_cost_exceeded` | I18 配额检查——`application/task/invoke.ts` 在创建 Task 行之前就拒绝；owner 可调配额（`set_quota`） |
 | 同上 | `403 attenuation_denied` | 入口 Handle 的能力天花板不含 `request_action`，或目标 WorkerDefinition 需要的门/Operation 超出了发起人当前的 Grant（`docs/runbooks/host-worker-runtime.md` §12.3 是这个错误的真实主机验收例子） |
-| 同上 | `403 worker_definition_not_enabled` | 该 WorkerDefinition 不在发起人 AgentProfile 的 `enabledWorkerDefinitions` 里（S3.13——「我的智能体」页收窄了可用的 Worker 定义） |
+| 同上 | `403 worker_definition_not_enabled` | 该 WorkerDefinition 被发起人 AgentProfile 排除了（`excludedWorkerDefinitions`；「我的智能体」页里取消了勾选） |
 | 同上 | `400 invalid_params` | 调用参数本身不满足 `InvokeWorkerRequestSchema`（比如 `definitionId` 不是已发布版本） |
 
 ### 3.2 卡在审批（`status = waiting_approval`）

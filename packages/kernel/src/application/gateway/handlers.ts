@@ -1382,7 +1382,7 @@ const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params
     workspaceId,
     {
       parentAuthority,
-      enabledWorkerDefinitionIds: agentProfile?.enabledWorkerDefinitions ?? null,
+      excludedWorkerDefinitionIds: agentProfile?.excludedWorkerDefinitions ?? [],
     },
     need,
   );
