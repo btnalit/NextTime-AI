@@ -122,32 +122,24 @@ list --label pi-drift` 查是否已有未关闭的，有就编辑标题/正文+�
 关闭该 issue。这个 workflow **没有** `pull_request`/`push` 触发器，永远不会出现在任何 PR 的
 required checks 里，`ci.yml` 完全不受影响。
 
-**与控制台"运行层"页的 pi 漂移卡片是两回事（S8 leftover 59）**。本节上面说的"漂移"是"pinned
-`pi.version` vs npm 上的 `@latest`"（升级值不值得做）；控制台运行层页的"pi 版本漂移"卡片问的是另一
-件事——"主机当前跑的 worker-runtime 镜像，是不是拿最新的 `pi.version` 构建的"（有没有忘记在改
-`pi.version` 之后重新构建/切换镜像），由内核 `pi_drift` 能力读取 `PI_DRIFT_FILE`（缺省
-`/data/config/pi-drift.json`，形状 `{"pinnedPiVersion": "...", "checkedAt": "<ISO>"}`）与已部署镜像
-自带的 `ai.nexttime.pi-version` label 比较得出。
+**与控制台运行层页的「pi 运行时」卡片是两回事**。本节上面说的"漂移"是"pinned `pi.version` vs npm 上的
+`@latest`"（升级值不值得做，由 nightly workflow 的 issue 提醒——一个 pi 版本要进生产，必须走第 4 节
+的升级 PR，随发版一起交付）；控制台卡片问的是另一件事——"主机上的常驻智能体，是不是已经跑在**本版**
+期望的 pi 上"，并给出把它们升上去的一步操作：
 
-`pi-drift.yml` 现在额外把这份 JSON（内容就是触发这次 run 的那个提交上 `pi.version` 的值，与
-上面 pi@latest 测试是否通过无关）写成一个工作流 artifact（`pi-drift`，保留 14 天）——但**没有任何
-主机自动去拉取它**（本仓库不给主机引入新的、从 GitHub 主动出网取产物的基础设施，见
-`docs/runbooks/backup-restore.md` 同类"不为了单个 P3 需求加新基础设施"的取舍）。想让控制台的这张
-卡片显示真实状态而不是"由 CI 夜间检测，见仓库 pi-drift 相关内容，见本节"，运维手动做一次：
+- **本版期望的 pi**：内核镜像内置的 `pi.version`（`packages/kernel/Dockerfile` 拷到 `/app/pi.version`，
+  `PI_VERSION_FILE` 指向它）——与 `deploy/worker-runtime/Dockerfile` 安装 pi 用的是同一个文件，同一次发版
+  构建出来，**不出网、不需要人工拷贝任何 CI 产物**（2026-09-26 之前读的是需要人工拷贝的
+  `pi-drift.json`，从未有人拷过，卡片因此永远显示"未知"——已删除）。
+- **活动镜像里的 pi**：活动运行时镜像自带的 `ai.nexttime.pi-version` label。它只有经
+  `scripts/build-images.sh` 构建才是真实版本（否则是 `dev`，卡片会直接给出构建命令）。
+- **一键升级**：两者一致时，卡片按 `runtime_inventory` 的 `needsRebuild` 显示"一键升级 N 个常驻智能体"
+  （中影响确认 → `roll_entry_containers` 全量：空闲的立即停止、下一轮对话时用新镜像重建，会话历史与工作
+  目录保留；正在跑一轮的不打断，在它下一轮开始时收敛）。
+- **镜像还不是本版的 pi**：卡片给出 `sh scripts/build-images.sh worker-runtime`（发版应用脚本已包含）。
 
-```bash
-# 在能访问 GitHub 的机器上（不必是目标主机本身）：
-gh run list --repo <owner>/<repo> --workflow pi-drift.yml --limit 1
-gh run download <run-id> --repo <owner>/<repo> --name pi-drift -D /tmp/pi-drift
-
-# 把产物放到目标主机的 ${NEXTTIME_DATA}/config/pi-drift.json（scp / 手动拷贝均可）：
-scp /tmp/pi-drift/pi-drift.json <目标主机>:${NEXTTIME_DATA}/config/pi-drift.json
-```
-
-不是发版流程的强制步骤——运行层页在没有这份文件时如实显示"由 CI 夜间检测，见仓库 pi-drift 相关
-内容，见本手册 §6"而不是裸的"未知"，链接回本节；放了这份文件之后，`pi_drift` 才会给出
-`consistent`/`drifted` 的真实判断（而不是永远 `unknown`）。文件不会被自动清理，下次想刷新按上面
-两条命令重新放一份（`checkedAt` 一起更新）即可，主机侧没有过期机制。
+所以一次 pi 升级在主机上的完整路径是：升级 PR 合入 → 发版 → 主机按 `release.md` 应用（`build-images.sh`
+构建带真实标签的运行时镜像）→ 运行层页「pi 运行时」一键升级常驻智能体 → S1–S4 验收。
 
 **依赖更新**：pi（`@earendil-works/*`，`packages/platform-extension` 下那两个包）不接受任何 bot 版本更新——
 2026-09-25 起仓库不再用 Renovate，也没有 Dependabot 版本更新配置（见 `docs/runbooks/automation.md`

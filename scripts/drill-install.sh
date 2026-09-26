@@ -330,7 +330,7 @@ step_start "build"
 BUILD_T0=$(date +%s)
 remote "export KERNEL_VERSION=\"\$(git describe --tags --abbrev=0) (\$(git rev-parse --short HEAD))\" && docker compose --profile test build"
 BUILD_RC1=$?
-remote "docker compose build worker-runtime"
+remote "if [ -f scripts/build-images.sh ]; then sh scripts/build-images.sh worker-runtime; else docker compose build worker-runtime; fi"
 BUILD_RC2=$?
 BUILD_T1=$(date +%s)
 SOURCE_BUILD_SECONDS=$((BUILD_T1 - BUILD_T0))

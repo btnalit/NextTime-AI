@@ -36,7 +36,9 @@ docker compose build worker-runtime worker-supervisor
 
 `worker-runtime` 服务带 `profiles: ["build-only"]`：`docker compose up` 不会拉起它，只有
 显式 `docker compose build worker-runtime`（或 `--profile build-only up`，本 runbook不需要）
-才会构建 `nexttime-ai-worker-runtime` 镜像。构建成功后：
+才会构建 `nexttime-ai-worker-runtime` 镜像。**日常发版用 `sh scripts/build-images.sh worker-runtime`**
+（2026-09-26 起）：它导出真实的 `PI_VERSION` / `PLATFORM_EXTENSION_VERSION` / `BUILT_FROM`，镜像
+label 不再是 `dev`，控制台运行层页「pi 运行时」卡片才看得出主机跑的是哪个 pi。构建成功后：
 
 ```bash
 docker image inspect nexttime-ai-worker-runtime --format '{{.Id}}'

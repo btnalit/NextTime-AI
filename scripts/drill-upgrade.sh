@@ -205,7 +205,7 @@ fail() {
     printf '  sh scripts/restore.sh --db %s --target-db nexttime --i-know\n' "$DUMP_PATH" >&2
     printf '  git checkout %s\n' "${FROM_REF:-$FROM_COMMIT}" >&2
     printf '  export KERNEL_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo dev) ($(git rev-parse --short HEAD))"\n' >&2
-    printf '  docker compose --profile test build && docker compose build worker-runtime\n' >&2
+    printf '  docker compose --profile test build && sh scripts/build-images.sh worker-runtime   # (bare "docker compose build worker-runtime" on a checkout without that script)\n' >&2
     printf '  docker compose --profile test up -d\n' >&2
     printf '(restore.sh restarts kernel/agent-host/worker-supervisor/backup itself — the checkout/build/up above must land BEFORE it for that restart to come up on %s code, not %s)\n' "${FROM_REF:-$FROM_COMMIT}" "${TO_TAG:-<target>}" >&2
   fi
@@ -397,8 +397,15 @@ build_step() {
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     fail "build-$label" "docker compose --profile test build failed: $(tail -30 "$DRILL_LOG")"
   fi
-  if ! docker compose build worker-runtime >"$DRILL_LOG" 2>&1; then
-    fail "build-$label" "docker compose build worker-runtime failed: $(tail -30 "$DRILL_LOG")"
+  # scripts/build-images.sh stamps real ai.nexttime.* labels (the console's "pi 运行时" card reads
+  # them); a drill starting from a tag that predates the script falls back to the bare build.
+  if [ -f scripts/build-images.sh ]; then
+    runtime_build="sh scripts/build-images.sh worker-runtime"
+  else
+    runtime_build="docker compose build worker-runtime"
+  fi
+  if ! $runtime_build >"$DRILL_LOG" 2>&1; then
+    fail "build-$label" "$runtime_build failed: $(tail -30 "$DRILL_LOG")"
   fi
   pass "build-$label" "images built"
 }

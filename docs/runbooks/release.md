@@ -67,8 +67,13 @@ git checkout vX.Y.Z          # detached HEAD，明确落在这个 release
 git rev-parse HEAD            # 确认 commit 对得上 GitHub Release 页面
 ```
 
-接下来照常走 `docs/runbooks/operations.md` 的重启顺序（`docker compose build <改动的服务> &&
-docker compose up -d <该服务>`）。下次要跟回 `main` 的最新提交，重新跑一次
+接下来构建镜像：**`sh scripts/build-images.sh`**（2026-09-26 起的唯一构建入口）——它构建全部默认服务
+**外加** `worker-runtime`（`build-only` profile，裸 `docker compose build` 从不重建它，所有入口 agent /
+Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检出本身导出 `KERNEL_VERSION` /
+`PI_VERSION` / `PLATFORM_EXTENSION_VERSION` / `BUILT_FROM`，镜像标签因此是真实版本而不是 `dev`；
+运行时镜像另打 `nexttime-ai-worker-runtime:pi-<版本>` 供回滚。之后照常走 `docs/runbooks/operations.md`
+的重启顺序（`docker compose up -d`）；运行层页的「pi 运行时」卡片随后显示还有几个常驻智能体在旧镜像上，
+一键升级即可。下次要跟回 `main` 的最新提交，重新跑一次
 `scripts/host-checkout.sh`（它会把 detached HEAD 状态覆盖掉，重新 fetch + reset 到
 `origin/main`）即可，无需额外清理。
 

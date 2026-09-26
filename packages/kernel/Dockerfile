@@ -35,10 +35,15 @@ COPY --from=build --chown=nexttime:nexttime /out/kernel .
 # find it — see that file's own doc comment for why its relative-path fallback (correct in local
 # dev) cannot resolve inside this flattened image.
 COPY --from=build --chown=nexttime:nexttime /workspace/ontology ./ontology
+# The pi version this release expects (the same repo-root file deploy/worker-runtime/Dockerfile
+# installs pi from) — the console's "pi 运行时" card compares it with the active runtime image's
+# own ai.nexttime.pi-version label (application/platform/runtime.ts `pi_drift`).
+COPY --from=build --chown=nexttime:nexttime /workspace/pi.version ./pi.version
 
 USER nexttime
 ENV NODE_ENV=production
 ENV ONTOLOGY_DIR=/app/ontology
+ENV PI_VERSION_FILE=/app/pi.version
 # Declared in this (runtime) stage, not at the top of the file: an ARG only lives in the stage
 # that declares it, and placing it after every COPY keeps a version bump from invalidating any
 # cached layer above — only this metadata-only ENV layer changes between two builds of the same

@@ -82,7 +82,7 @@
 
 | 组件 | 现状 | 目标 | 价值 / 风险 |
 |---|---|---|---|
-| pi（`@earendil-works/pi-*`） | 0.84.4 | 0.87.1 | 0.86 起扩展可在会话中途更新工具与提示（`before_agent_start`，随恢复保留）→ 授权变更不必再靠吊销 Handle + 重建容器才生效；0.87 `context` 处理器不再看到 system 消息（我们的 `context` 钩子需核对）、`TurnEndEvent` 形状变化、移除 `shouldStopAfterTurn`（未使用）；0.86 自定义 provider 流接口改为 `TranscriptContext`（需核对 llm-proxy 接入方式） |
+| pi（`@earendil-works/pi-*`） | 0.84.4 | 0.87.1 | 0.86 起扩展可在会话中途更新工具与提示（`before_agent_start`，随恢复保留）。**更正（2026-09-26）**：这只在"授权范围不变、可调用操作清单变了"时省掉重建——授权 / Profile / 连接器变更会轮换 Handle，而 Handle 在容器启动时经环境变量交付，仍需重建容器，除非把 Handle 改为可热更新的挂载文件（另立项）。兼容性已逐条核对（`pi-upgrade.md` §2.1）：我们依赖的面都无需改代码；运维侧另见"pi 运行时"卡片与 `scripts/build-images.sh` |
 | vitest / vite | vitest 2.1.9、vite 5/6 | vitest 5、vite 8 | 关闭遗留 91 的 9 条告警（开发链） |
 | 关联 ID | 只有内核有指标 | 跨服务 correlation id | 遗留 87 |
 | 镜像构建缓存 | 每次全量下载依赖 | 依赖层缓存 | 遗留 93（主机出网被掐断） |
