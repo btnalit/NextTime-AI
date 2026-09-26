@@ -358,9 +358,13 @@ export function AccessPage({ http }: AccessPageProps) {
       {canManage ? (
         <Notice testId="access-handle-issuance-moved">
           {t('为自己签发 Handle 已经挪到 ', 'Issuing your own Handle has moved to ')}
-          <a href={hrefs.account()}>{t('我的账户', 'My Account')}</a>
+          <a href={hrefs.account()} style={{ textDecoration: 'underline' }}>
+            {t('我的账户', 'My Account')}
+          </a>
           {t('；为服务主体签发 Handle 已经挪到 ', '; issuing a service Handle has moved to ')}
-          <a href={hrefs.members()}>{t('成员', 'Members')}</a>
+          <a href={hrefs.members()} style={{ textDecoration: 'underline' }}>
+            {t('成员', 'Members')}
+          </a>
           {t('。', '.')}
         </Notice>
       ) : null}
