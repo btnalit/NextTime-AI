@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
@@ -141,6 +141,20 @@ export function SidebarContent({
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
+  const navRef = useRef<HTMLElement>(null);
+  // Design review follow-up (platform-overview-1440.png): with an owner who is also platform
+  // admin, ~21 nav items cannot all fit inside a 900px-tall sidebar even at the tightened row
+  // pitch — `.sidebar-nav`'s own `overflow-y: auto` keeps every item reachable, but the *active*
+  // one can still render below the fold on mount or after a route change. Scroll it into view
+  // whenever `active` changes; `scrollIntoView` is unimplemented in some jsdom versions (an
+  // outright missing method, not a no-op), so this is guarded rather than called unconditionally.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: active is the deliberate re-run key even though the effect reads the DOM, not the prop, directly
+  useEffect(() => {
+    const activeLink = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (activeLink && typeof activeLink.scrollIntoView === 'function') {
+      activeLink.scrollIntoView({ block: 'nearest' });
+    }
+  }, [active]);
   return (
     <>
       <div className="sidebar-brand">
@@ -195,7 +209,7 @@ export function SidebarContent({
         </span>
       </div>
 
-      <nav className="sidebar-nav" aria-label="Sections">
+      <nav className="sidebar-nav" aria-label="Sections" ref={navRef}>
         <NavSectionGroup titleZh="使用" titleEn="Use" testId="nav-section-use">
           {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
         </NavSectionGroup>
@@ -476,26 +490,27 @@ function NavSectionGroup({
 }: {
   readonly titleZh: string;
   readonly titleEn: string;
-  /** S8 W4 (audit U1): a one-line "who this group is for" under the title — 使用 needs none (its
-   *  scope is self-evident, every role sees the same thing); 治理/平台 pass both. Bilingual and
-   *  always both halves shown (never `t()`-picked), same convention `titleZh`/`titleEn` already
-   *  use here. */
+  /** S8 W4 (audit U1): a "who this group is for" note next to the title — 使用 needs none (its
+   *  scope is self-evident, every role sees the same thing); 治理/平台 pass both. Design review
+   *  follow-up (P3-1): current-locale only (`t(scopeZh, scopeEn)`, like the title), one row with
+   *  the title, truncating rather than wrapping if the two together don't fit. */
   readonly scopeZh?: string;
   readonly scopeEn?: string;
   readonly testId: string;
   readonly children: ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="nav-section" data-testid={testId}>
       <div className="nav-section-title">
-        <span>{titleZh}</span>
-        <span className="nav-section-title-sub">{titleEn}</span>
-        {/* P3-1 (V1): folded onto the title row (was its own full-height line below the title) —
-         *  same testid/text, kept for the 治理/平台 scope distinction (see the caller's own doc
-         *  comment on `scopeZh`), just no longer costing a whole extra row per group. */}
+        <span className="nav-section-title-label">{t(titleZh, titleEn)}</span>
+        {/* Design review follow-up (P3-1): folded onto the title row, current-locale only — was
+         *  its own bilingual "· 本工作区 This workspace" line below the title. Same testid/text
+         *  (minus the bilingual half and leading "·"), kept for the 治理/平台 scope distinction
+         *  the caller's own doc comment on `scopeZh` explains. */}
         {scopeZh !== undefined ? (
-          <span className="nav-section-scope" data-testid={`${testId}-scope`}>
-            · {scopeZh} <span className="nav-section-title-sub">{scopeEn}</span>
+          <span className="nav-section-scope truncate" data-testid={`${testId}-scope`}>
+            {t(scopeZh, scopeEn)}
           </span>
         ) : null}
       </div>

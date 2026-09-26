@@ -153,18 +153,26 @@
   gap: 2px;
 }
 
+/* Design review follow-up (P3-1): a single, non-wrapping row — the title never shrinks
+ * (`.nav-section-title-label`'s `flex-shrink: 0`), the scope note truncates instead
+ * (`.nav-section-scope`'s `flex: 1; min-width: 0` + the shared `.truncate` utility) when the two
+ * together do not fit the sidebar's width. */
 .nav-section-title {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
-  row-gap: 2px;
-  column-gap: 6px;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
   padding: 4px 8px;
   font-size: var(--fs-12);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-3);
+}
+
+.nav-section-title-label {
+  flex-shrink: 0;
 }
 
 .nav-section-title-sub {
@@ -181,6 +189,8 @@
  * folds this onto the group-title row itself (`components/shell/Sidebar.tsx`'s `NavSectionGroup`)
  * instead of its own full-height line below the title — same testid/text, one less row per group. */
 .nav-section-scope {
+  flex: 1;
+  min-width: 0;
   font-size: var(--fs-12);
   font-weight: 500;
   letter-spacing: 0;
@@ -195,19 +205,26 @@
   color: var(--text-3);
 }
 
-/* P3-1 (V1): single-line rows (~32px) — was 8px/10px padding with a two-line label (Chinese +
- * English sub-label) that ran ~62px tall and pushed the 平台 group below the fold at 900px height.
- * The label is now current-locale only (`t()`, Sidebar.tsx `renderNavItem`); `.sidebar-nav` still
- * scrolls independently (`overflow-y: auto`, below) if the combined groups ever overflow. */
+/* P3-1 (V1) + design review follow-up: single-line, ~32-34px-pitch rows — was 8px/10px padding
+ * with a two-line label (Chinese + English sub-label) that ran ~62px tall, then (first pass)
+ * 7px/8px padding with the inherited 1.6 body line-height that still measured ~37px tall (~39px
+ * pitch with the section's own 2px row gap) on the CI screenshots. `line-height` is now the
+ * tighter `--lh-tight` token and `min-height` pins the floor explicitly rather than leaving it to
+ * font-metric arithmetic, so the pitch stays 32-34px regardless of the exact glyph metrics. The
+ * label is current-locale only (`t()`, Sidebar.tsx `renderNavItem`); `.sidebar-nav` still scrolls
+ * independently (`overflow-y: auto`, below) if the combined groups overflow, and the active item
+ * scrolls into view on mount / route change (`Sidebar.tsx`'s own effect). */
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 8px;
+  min-height: 30px;
+  padding: 6px 8px;
   border-radius: 7px;
   color: var(--text-2);
   font-weight: 500;
   font-size: var(--fs-13);
+  line-height: var(--lh-tight);
   border: 1px solid transparent;
   transition: background var(--transition), color var(--transition);
 }

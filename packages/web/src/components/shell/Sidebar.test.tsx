@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { WorkspaceRole } from '../../lib/role.js';
 import { MobileTopBar, NavDrawer, Sidebar } from './Sidebar.js';
@@ -151,6 +151,11 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('nav-platformAudit')).toBeTruthy();
     // S8 W4 (audit U1 "两组的作用范围从未说明"): 平台 carries a "全平台" scope note.
     expect(screen.getByTestId('nav-section-platform-scope').textContent).toContain('全平台');
+    // Design review follow-up (P3-1): the group title and its scope note are current-locale only
+    // now (zh-CN default) — no glued-on bilingual half ("Platform"/"Platform-wide") anywhere in
+    // the title row.
+    expect(platform.querySelector('.nav-section-title')?.textContent).toBe('平台全平台');
+    expect(platform.querySelector('.nav-section-title')?.textContent).not.toContain('Platform');
   });
 
   it('shows no platform-admin items for a non-admin platformRole, or an apiKey session (no platform user)', () => {
@@ -269,6 +274,57 @@ describe('Sidebar', () => {
     );
     expect(screen.getByTestId('nav-catalog').getAttribute('aria-current')).toBe('page');
     expect(screen.getByTestId('nav-chats').getAttribute('aria-current')).toBeNull();
+  });
+
+  /** Design review follow-up (platform-overview-1440.png): ~21 nav items cannot all fit inside a
+   *  900px sidebar for an owner who is also platform admin, so the active item scrolls into view
+   *  on mount / when `active` changes — jsdom does not implement `Element.scrollIntoView` at all
+   *  (an outright missing method, not a no-op), so it is stubbed here the same way this suite
+   *  already stubs `window.matchMedia` (`AppShell.test.tsx`) for the same gap. */
+  describe('scrolls the active nav item into view (design review follow-up)', () => {
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      scrollIntoView = vi.fn();
+      HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it('on mount, and again after `active` changes', () => {
+      const { rerender } = render(
+        <Sidebar
+          active="catalog"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+      // Called on the currently-active link, not just any nav item (`this` at call time).
+      expect(scrollIntoView.mock.instances[0]).toBe(screen.getByTestId('nav-catalog'));
+
+      rerender(
+        <Sidebar
+          active="audit"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(scrollIntoView.mock.instances[1]).toBe(screen.getByTestId('nav-audit'));
+    });
   });
 
   it('shows the pending-approvals badge only on the Approvals item, and only when > 0', () => {
