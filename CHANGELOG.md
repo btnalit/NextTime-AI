@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/btnalit/NextTime-AI/compare/v0.23.0...v0.24.0) (2026-09-26)
+
+
+### Features
+
+* **web:** chat status strip and "can my agent use it now" connect step (console redesign P2) ([#310](https://github.com/btnalit/NextTime-AI/issues/310)) ([02c7c0a](https://github.com/btnalit/NextTime-AI/commit/02c7c0a3e2e59ec7c0a5d2a73e1d58aa7d3df0fd))
+* **web:** 系统与授权 — one page for systems, who can use them and why not (console redesign P2) ([#312](https://github.com/btnalit/NextTime-AI/issues/312)) ([86bb336](https://github.com/btnalit/NextTime-AI/commit/86bb336c6e10316a1ce38d0c0907c04e4fdd1751))
+
 ## [0.23.0](https://github.com/btnalit/NextTime-AI/compare/v0.22.0...v0.23.0) (2026-09-26)
 
 
