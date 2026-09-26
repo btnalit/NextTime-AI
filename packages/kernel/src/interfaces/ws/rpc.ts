@@ -183,8 +183,8 @@ export const WS_ERROR_CODES = {
    *  `configureTaskRuntime` — the kernel process itself, not this request, is not ready yet. */
   SERVICE_UNAVAILABLE: -32015,
   /** S3.13 runtime consumer (this task) — mirrors HTTP 403 `worker_definition_not_enabled`: the
-   *  target WorkerDefinition is outside the calling principal's own
-   *  `AgentProfile.enabledWorkerDefinitions`. A distinct code from `ATTENUATION_DENIED` — the two
+   *  target WorkerDefinition is excluded by the calling principal's own
+   *  `AgentProfile.excludedWorkerDefinitions`. A distinct code from `ATTENUATION_DENIED` — the two
    *  403 reasons are unrelated and an entry agent relaying this verbatim should not conflate them. */
   WORKER_DEFINITION_NOT_ENABLED: -32016,
 } as const;

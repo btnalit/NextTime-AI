@@ -17,16 +17,10 @@ import {
 } from '../../governance/agent-profile/index.js';
 import {
   GATEKEEPER_GRANT_CAPABILITY,
-  isWorkspaceOwner,
   listActiveGrantResourceScopes,
   revokeEntrySessionHandles,
 } from '../../governance/capability/index.js';
-import { listGatekeepers } from '../../governance/gatekeepers/index.js';
-import {
-  listPublishedSkillIds,
-  listWorkerDefinitions,
-  resolvePublishedSkills,
-} from '../worker/index.js';
+import { listPublishedSkillIds, listWorkerDefinitions } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { PrincipalNotFoundError } from './members-handlers.js';
@@ -52,10 +46,11 @@ import { readModelCatalog } from './models-catalog-handler.js';
  *     owner to name a *different* `principalId`, and (`set_agent_profile` only) requires the
  *     workspace's own `AgentPolicy.memberCanEditProfile` to be true for a non-owner editing their
  *     own profile.
- *   - `set_agent_profile`'s validation never widens past the principal's own Grants or the
- *     workspace's AgentPolicy caps (S3.13's own core invariant: "Profile 是 Grant 的子集投影，永不扩
- *     权") — every field below is checked against the *actual current* set (published Skills,
- *     active Grants, the llm-proxy model whitelist), not merely schema-shape-valid.
+ *   - A profile never widens past the principal's own Grants or the workspace's AgentPolicy caps
+ *     (S3.13's own core invariant: "Profile 是 Grant 的子集投影，永不扩权"). Since governance 0012 the
+ *     three lists are exclusion lists (docs/console-redesign-plan-2026-09-25.md D1), so they hold by
+ *     construction and need no write-time check; the model is still checked against the llm-proxy
+ *     whitelist and the policy, the addendum against its length cap.
  *   - `set_agent_policy`'s registry `minRole` is `'owner'` outright — no non-owner path exists, so
  *     no additional handler-level role check is needed (the same shape `set_policy`/`set_quota`
  *     already use).
@@ -93,14 +88,13 @@ export async function assertPrincipalExists(
 }
 
 /**
- * The "inherit" ceiling `resolveEffectiveAgentProfile` resolves a `null` list field against —
+ * The "on offer" set `resolveEffectiveAgentProfile` subtracts a profile's exclusion lists from —
  * every currently-published Skill (workspace-wide), every Gatekeeper `targetPrincipalId`
  * currently holds an active `'gatekeeper'`-resource-type Grant for (the same query
  * `agent-host-runtime.ts`'s `ensureEntryHandle` uses for the entry Handle's own gate scope, so
  * `effective.enabledGatekeepers` always matches what that principal's entry agent can actually
- * reach — including for an owner, who gets no automatic full-Grant-list here: I14's owner
- * override is a *validation-time* allowance to explicitly select any registered Gatekeeper, not a
- * standing grant, so it plays no role in this "what's available to inherit" ceiling), and every
+ * reach — including for an owner, who gets no automatic full-Grant-list here: I14's owner override
+ * is not a standing grant, so it plays no role in this "what's on offer" set), and every
  * currently-published `kind: 'worker'` WorkerDefinition — S8 W4 (audit M1 "把入口定义当 Worker
  * 展示"): the workspace's own `kind: 'entry'` definition is excluded, `kind`-filtered at the
  * query itself rather than passing every published definition unfiltered as this function did
@@ -156,58 +150,6 @@ async function assertModelAllowed(model: string, policy: AgentPolicyRow): Promis
   }
 }
 
-/** `refs` may name a published Skill by `id` or by `name` (the same "id-or-name" convention a
- *  WorkerDefinition's own `skills[]` field already uses, `application/worker/skills.ts`'s
- *  `resolvePublishedSkills` doc comment) — every ref not resolving to a currently-published Skill
- *  is reported by name in one error, not just "something didn't resolve". */
-async function assertSkillsPublished(
-  client: PoolClient,
-  workspaceId: string,
-  refs: readonly string[],
-): Promise<void> {
-  if (refs.length === 0) return;
-  const resolved = await resolvePublishedSkills(client, workspaceId, refs);
-  const known = new Set<string>();
-  for (const skill of resolved) {
-    known.add(skill.id);
-    known.add(skill.name);
-  }
-  const unresolved = refs.filter((ref) => !known.has(ref));
-  if (unresolved.length > 0) {
-    throw new AgentProfileValidationError(
-      `set_agent_profile: enabledSkills references Skill(s) that are not published: ${unresolved.join(', ')}`,
-    );
-  }
-}
-
-/** I14 owner override reused verbatim (`governance/capability/grants.ts`'s own `isWorkspaceOwner` —
- *  "the workspace owner counts as holding every scope"): when `targetPrincipalId` is an owner, any
- *  currently-registered Gatekeeper in the workspace is an allowed id; otherwise only Gatekeepers
- *  `targetPrincipalId` holds an active `'gatekeeper'`-resource-type Grant for. */
-async function assertGatekeepersAccessible(
-  client: PoolClient,
-  workspaceId: string,
-  targetPrincipalId: string,
-  ids: readonly string[],
-): Promise<void> {
-  if (ids.length === 0) return;
-  const targetIsOwner = await isWorkspaceOwner(client, workspaceId, targetPrincipalId);
-  const allowed = targetIsOwner
-    ? new Set((await listGatekeepers(client, workspaceId)).map((entry) => entry.gatekeeperId))
-    : new Set(
-        await listActiveGrantResourceScopes(client, workspaceId, {
-          principalId: targetPrincipalId,
-          resourceType: GATEKEEPER_GRANT_CAPABILITY,
-        }),
-      );
-  const missing = ids.filter((id) => !allowed.has(id));
-  if (missing.length > 0) {
-    throw new AgentProfileValidationError(
-      `set_agent_profile: enabledGatekeepers references Gatekeeper(s) the principal holds no active Grant for: ${missing.join(', ')}`,
-    );
-  }
-}
-
 // -------------------------------------------------------------------------------------------
 // Wire projection (docs/wire-contract-conventions.md §2 — one projection function, application
 // layer). AgentProfile's own identity field is `principalId` (not `id`) — its natural key is the
@@ -224,9 +166,9 @@ function toWireAgentProfile(
   return {
     principalId,
     model: profile?.model ?? null,
-    enabledSkills: profile?.enabledSkills ?? null,
-    enabledGatekeepers: profile?.enabledGatekeepers ?? null,
-    enabledWorkerDefinitions: profile?.enabledWorkerDefinitions ?? null,
+    excludedSkills: profile?.excludedSkills ?? [],
+    excludedGatekeepers: profile?.excludedGatekeepers ?? [],
+    excludedWorkerDefinitions: profile?.excludedWorkerDefinitions ?? [],
     promptAddendum: profile?.promptAddendum ?? null,
     autoApproveLow: profile?.autoApproveLow ?? null,
     updatedAt: profile?.updatedAt ? profile.updatedAt.toISOString() : null,
@@ -300,9 +242,9 @@ const SetAgentProfileParams = (params: unknown) =>
   params as {
     principalId?: string;
     model?: string | null;
-    enabledSkills?: readonly string[] | null;
-    enabledGatekeepers?: readonly string[] | null;
-    enabledWorkerDefinitions?: readonly string[] | null;
+    excludedSkills?: readonly string[];
+    excludedGatekeepers?: readonly string[];
+    excludedWorkerDefinitions?: readonly string[];
     promptAddendum?: string | null;
     autoApproveLow?: boolean | null;
   };
@@ -340,12 +282,8 @@ export const setAgentProfileHandler: CapabilityHandler = async (
   if (params.model !== undefined && params.model !== null) {
     await assertModelAllowed(params.model, policy);
   }
-  if (params.enabledSkills !== undefined && params.enabledSkills !== null) {
-    await assertSkillsPublished(client, workspaceId, params.enabledSkills);
-  }
-  if (params.enabledGatekeepers !== undefined && params.enabledGatekeepers !== null) {
-    await assertGatekeepersAccessible(client, workspaceId, target, params.enabledGatekeepers);
-  }
+  // The three exclusion lists need no validation: excluding can only narrow, and an id that is not
+  // (or no longer) on offer is simply ignored by `resolveEffectiveAgentProfile`.
   if (params.promptAddendum !== undefined && params.promptAddendum !== null) {
     if (params.promptAddendum.length > policy.maxPromptAddendumChars) {
       throw new AgentProfileValidationError(
@@ -361,9 +299,9 @@ export const setAgentProfileHandler: CapabilityHandler = async (
 
   const fields: SetAgentProfileFields = {
     model: params.model,
-    enabledSkills: params.enabledSkills,
-    enabledGatekeepers: params.enabledGatekeepers,
-    enabledWorkerDefinitions: params.enabledWorkerDefinitions,
+    excludedSkills: params.excludedSkills,
+    excludedGatekeepers: params.excludedGatekeepers,
+    excludedWorkerDefinitions: params.excludedWorkerDefinitions,
     promptAddendum: params.promptAddendum,
     autoApproveLow: params.autoApproveLow,
   };

@@ -42,14 +42,14 @@ export interface AgentProfileFormProps {
   readonly onSaved: (profile: AgentProfile) => void;
 }
 
+/** The three lists hold what the member *excluded* (console redesign D1): everything granted /
+ *  published is in use unless unticked here, and anything granted or published later is picked
+ *  up automatically — no "inherit" toggle, nothing to go stale. */
 interface FormState {
   readonly model: string;
-  readonly skillsInherit: boolean;
-  readonly skills: readonly string[];
-  readonly gatekeepersInherit: boolean;
-  readonly gatekeepers: readonly string[];
-  readonly workerDefsInherit: boolean;
-  readonly workerDefs: readonly string[];
+  readonly excludedSkills: readonly string[];
+  readonly excludedGatekeepers: readonly string[];
+  readonly excludedWorkerDefs: readonly string[];
   readonly promptAddendum: string;
   readonly autoApproveLow: boolean;
 }
@@ -57,12 +57,9 @@ interface FormState {
 function initialState(profile: AgentProfile): FormState {
   return {
     model: profile.model ?? INHERIT_MODEL,
-    skillsInherit: profile.enabledSkills === null,
-    skills: profile.enabledSkills ?? [],
-    gatekeepersInherit: profile.enabledGatekeepers === null,
-    gatekeepers: profile.enabledGatekeepers ?? [],
-    workerDefsInherit: profile.enabledWorkerDefinitions === null,
-    workerDefs: profile.enabledWorkerDefinitions ?? [],
+    excludedSkills: profile.excludedSkills,
+    excludedGatekeepers: profile.excludedGatekeepers,
+    excludedWorkerDefs: profile.excludedWorkerDefinitions,
     promptAddendum: profile.promptAddendum ?? '',
     autoApproveLow: profile.autoApproveLow ?? profile.effective.autoApproveLow,
   };
@@ -74,12 +71,10 @@ function toggleItem(list: readonly string[], id: string): readonly string[] {
 
 /**
  * components/AgentProfileForm: the editable half of 我的智能体 My Agent (`/me/agent`, S3.13) —
- * model select, Skills/systems/Worker-definition checklists (each with its own "inherit workspace
- * default" toggle — `AgentProfile`'s `null` fields, `lib/agent-profile.ts`'s own doc comment: an
- * inherited empty checklist and an explicitly-empty one are different effective states, "give me
- * everything currently available" vs. "give me nothing"), prompt addendum with a live char count,
- * and the autoApproveLow toggle. Always sends the full six-field state on `set_agent_profile`
- * (never a partial diff) so a field the reader clears is unambiguously cleared.
+ * model select, Skills/systems/Worker-definition checklists (ticked = in use; unticking excludes —
+ * see `FormState`), prompt addendum with a live char count, and the autoApproveLow toggle. Always
+ * sends the full six-field state on `set_agent_profile` (never a partial diff) so a field the
+ * reader clears is unambiguously cleared.
  */
 export function AgentProfileForm({
   http,
@@ -106,11 +101,18 @@ export function AgentProfileForm({
     policy?.allowedSkills,
     (s) => s.id,
   );
+  // Only the systems actually granted to this member are on offer (in use or excluded) — a
+  // workspace system nobody granted them would show as "in use" without the agent being able to
+  // reach it.
+  const grantedGateIds = new Set([
+    ...profile.effective.enabledGatekeepers,
+    ...profile.excludedGatekeepers,
+  ]);
   const allowedGatekeepers = narrowByPolicyAllowList(
     gatekeepers,
     policy?.allowedGatekeepers,
     (g) => g.id,
-  );
+  ).filter((g) => grantedGateIds.has(g.id));
 
   const maxChars = policy?.maxPromptAddendumChars;
   const overLimit = maxChars !== undefined && state.promptAddendum.length > maxChars;
@@ -129,9 +131,9 @@ export function AgentProfileForm({
     const params: SetAgentProfileParams = {
       principalId,
       model: state.model === INHERIT_MODEL ? null : state.model,
-      enabledSkills: state.skillsInherit ? null : state.skills,
-      enabledGatekeepers: state.gatekeepersInherit ? null : state.gatekeepers,
-      enabledWorkerDefinitions: state.workerDefsInherit ? null : state.workerDefs,
+      excludedSkills: state.excludedSkills,
+      excludedGatekeepers: state.excludedGatekeepers,
+      excludedWorkerDefinitions: state.excludedWorkerDefs,
       promptAddendum: state.promptAddendum.trim().length > 0 ? state.promptAddendum : null,
       autoApproveLow: state.autoApproveLow,
     };
@@ -213,70 +215,70 @@ export function AgentProfileForm({
         <div className="section-header">
           <h2 id="ap-section-capabilities-title">{t('能力', 'Capabilities')}</h2>
         </div>
+        <p className="field-hint">
+          {t(
+            '勾选的都会给你的智能体用；以后新授权的系统、新发布的 Skill 和 Worker 会自动加入。取消勾选即不让它用。',
+            'Everything ticked is available to your agent; systems granted and Skills / Workers published later are added automatically. Untick to keep one out.',
+          )}
+        </p>
+
         <ChecklistField
           title="Skills"
-          subtitle={t(
-            '已发布的 Skill，工作区策略可收窄',
-            'Published Skills, narrowed by workspace policy',
-          )}
-          inherit={state.skillsInherit}
-          onInheritChange={(value) => update('skillsInherit', value)}
+          subtitle={t('已发布的 Skill', 'Published Skills')}
           options={allowedSkills.map((s) => ({ id: s.id, label: s.name }))}
-          selected={state.skills}
-          onToggle={(id) => update('skills', toggleItem(state.skills, id))}
+          excluded={state.excludedSkills}
+          onToggle={(id) => update('excludedSkills', toggleItem(state.excludedSkills, id))}
           disabled={disabled}
-          error={fieldErrors.enabledSkills}
+          error={fieldErrors.excludedSkills}
           testId="agent-profile-skills"
-          effectiveSummary={effectiveNote(
-            t,
-            profile.effective.enabledSkills,
-            (id) => skills.find((s) => s.id === id)?.name ?? id,
-            hrefs.models(),
-          )}
+          empty={
+            <>
+              {t('还没有已发布的 Skill。', 'No published Skills yet.')}{' '}
+              <a href={hrefs.catalog('skills')}>{t('去能力目录', 'Open the catalog')}</a>
+            </>
+          }
         />
 
         <ChecklistField
           title={t('系统接入', 'Connected systems')}
-          subtitle={t(
-            '调用方可见的门，工作区策略可收窄',
-            'Gatekeepers you can see, narrowed by workspace policy',
-          )}
-          inherit={state.gatekeepersInherit}
-          onInheritChange={(value) => update('gatekeepersInherit', value)}
+          subtitle={t('已授权给你的系统', 'Systems granted to you')}
           options={allowedGatekeepers.map((g) => ({ id: g.id, label: g.name }))}
-          selected={state.gatekeepers}
-          onToggle={(id) => update('gatekeepers', toggleItem(state.gatekeepers, id))}
+          excluded={state.excludedGatekeepers}
+          onToggle={(id) =>
+            update('excludedGatekeepers', toggleItem(state.excludedGatekeepers, id))
+          }
           disabled={disabled}
-          error={fieldErrors.enabledGatekeepers}
+          error={fieldErrors.excludedGatekeepers}
           testId="agent-profile-gatekeepers"
-          effectiveSummary={effectiveNote(
-            t,
-            profile.effective.enabledGatekeepers,
-            (id) => gatekeepers.find((g) => g.id === id)?.name ?? id,
-            hrefs.models(),
-          )}
+          empty={
+            <>
+              {t(
+                '还没有系统授权给你——需要工作区所有者授权后，你的智能体才能调用它。',
+                'No system is granted to you yet — a workspace owner has to grant one before your agent can call it.',
+              )}{' '}
+              <a href={hrefs.access()}>{t('查看授权', 'View grants')}</a>
+            </>
+          }
         />
 
         <ChecklistField
           title={t('Worker 定义', 'Worker definitions')}
-          subtitle={t('可选', 'Optional')}
-          inherit={state.workerDefsInherit}
-          onInheritChange={(value) => update('workerDefsInherit', value)}
+          subtitle={t('已发布、可被委派的 Worker', 'Published Workers your agent can delegate to')}
           options={workerDefinitions.map((w) => ({
             id: w.id,
             label: definitionName([w], w.id, w.version) ?? w.id,
           }))}
-          selected={state.workerDefs}
-          onToggle={(id) => update('workerDefs', toggleItem(state.workerDefs, id))}
+          excluded={state.excludedWorkerDefs}
+          onToggle={(id) => update('excludedWorkerDefs', toggleItem(state.excludedWorkerDefs, id))}
           disabled={disabled}
-          error={fieldErrors.enabledWorkerDefinitions}
+          error={fieldErrors.excludedWorkerDefinitions}
           testId="agent-profile-worker-definitions"
-          effectiveSummary={effectiveNote(
-            t,
-            profile.effective.enabledWorkerDefinitions,
-            (id) => definitionName(workerDefinitions, id, 0) ?? id,
-            hrefs.catalog('workers'),
-          )}
+          empty={
+            <>
+              {t('还没有已发布的 Worker。', 'No published Workers yet.')}{' '}
+              <a href={hrefs.catalog('workers')}>{t('去能力目录', 'Open the catalog')}</a>
+            </>
+          }
         />
       </section>
 
@@ -369,89 +371,56 @@ export function AgentProfileForm({
   );
 }
 
-/** S8 W4 (audit U4 "「继承（不覆盖）」都看不到工作区默认值是什么，也没有链接过去"): the summary
- *  line shown under the inherit checkbox while it is checked — the names `profile.effective`
- *  already resolved (Grants ∩ AgentPolicy) for this exact field, so "inherit" stops being an
- *  opaque toggle, plus a link to the page that actually sets that default. */
-function effectiveNote(
-  t: Translate,
-  effectiveIds: readonly string[],
-  nameOf: (id: string) => string,
-  governanceHref: string,
-): ReactNode {
-  return (
-    <p className="field-hint" data-testid="agent-profile-effective-note">
-      {t('当前默认值：', 'Current default: ')}
-      {effectiveIds.length > 0 ? effectiveIds.map(nameOf).join('、') : t('（无）', '(none)')}
-      {' — '}
-      <a href={governanceHref}>{t('查看治理设置', 'View governance settings')}</a>
-    </p>
-  );
-}
-
+/** A checklist of what is on offer: ticked = in use, unticked = excluded (`excluded` holds the
+ *  unticked ids). `empty` explains why nothing is listed and where to fix it. */
 function ChecklistField({
   title,
   subtitle,
-  inherit,
-  onInheritChange,
   options,
-  selected,
+  excluded,
   onToggle,
   disabled,
   error,
   testId,
-  effectiveSummary,
+  empty,
 }: {
   readonly title: string;
   readonly subtitle: string;
-  readonly inherit: boolean;
-  readonly onInheritChange: (value: boolean) => void;
   readonly options: readonly { readonly id: string; readonly label: string }[];
-  readonly selected: readonly string[];
+  readonly excluded: readonly string[];
   readonly onToggle: (id: string) => void;
   readonly disabled: boolean;
   readonly error?: string;
   readonly testId: string;
-  readonly effectiveSummary?: ReactNode;
+  readonly empty: ReactNode;
 }) {
-  const t = useT();
   return (
     <div className="field" data-testid={testId}>
       <span className="field-label">{title}</span>
       <p className="field-hint">{subtitle}</p>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={inherit}
-          onChange={(event) => onInheritChange(event.target.checked)}
-          disabled={disabled}
-        />
-        <span>{t('继承（不覆盖）', 'Inherit workspace default')}</span>
-      </label>
-      {inherit ? effectiveSummary : null}
-      {!inherit ? (
-        options.length === 0 ? (
-          <p className="text-3 text-small">{t('没有可选项。', 'Nothing available.')}</p>
-        ) : (
-          <fieldset
-            className="stack-s"
-            aria-label={title}
-            style={{ border: 0, padding: 0, margin: 0 }}
-          >
-            {options.map((option) => (
-              <label className="checkbox" key={option.id}>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(option.id)}
-                  onChange={() => onToggle(option.id)}
-                  disabled={disabled}
-                />
-                <span>{option.label}</span>
-              </label>
-            ))}
-          </fieldset>
-        )
-      ) : null}
+      {options.length === 0 ? (
+        <p className="text-3 text-small" data-testid={`${testId}-empty`}>
+          {empty}
+        </p>
+      ) : (
+        <fieldset
+          className="stack-s"
+          aria-label={title}
+          style={{ border: 0, padding: 0, margin: 0 }}
+        >
+          {options.map((option) => (
+            <label className="checkbox" key={option.id}>
+              <input
+                type="checkbox"
+                checked={!excluded.includes(option.id)}
+                onChange={() => onToggle(option.id)}
+                disabled={disabled}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       {error ? (
         <p className="field-error" role="alert">
           {error}

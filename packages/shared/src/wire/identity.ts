@@ -79,9 +79,11 @@ export const AgentProfileWireSchema = z
   .object({
     principalId: z.string(),
     model: z.string().nullable(),
-    enabledSkills: z.array(z.string()).nullable(),
-    enabledGatekeepers: z.array(z.string()).nullable(),
-    enabledWorkerDefinitions: z.array(z.string()).nullable(),
+    // Exclusion lists (console redesign D1): `effective.enabled*` = what is on offer minus these;
+    // `[]` = exclude nothing, so a later grant / publish is picked up automatically.
+    excludedSkills: z.array(z.string()),
+    excludedGatekeepers: z.array(z.string()),
+    excludedWorkerDefinitions: z.array(z.string()),
     promptAddendum: z.string().nullable(),
     autoApproveLow: z.boolean().nullable(),
     updatedAt: z.string().nullable(),

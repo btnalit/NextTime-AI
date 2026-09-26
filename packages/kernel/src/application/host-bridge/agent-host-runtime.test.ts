@@ -35,13 +35,14 @@ interface FakeEntryDefinitionRow {
 }
 
 /** S3.13: `governance/agent-profile/store.ts`'s `readAgentProfile` row, keyed by `principalId`
- *  (tests here only ever use one workspace at a time). `undefined`/absent fields default to the
- *  "inherit" `null` sentinel, matching a real row with those columns unset. */
+ *  (tests here only ever use one workspace at a time). `undefined`/absent scalar fields default to
+ *  the "inherit" `null` sentinel and absent exclusion lists to `[]` (governance 0012), matching a
+ *  real row with those columns unset. */
 interface FakeAgentProfileRow {
   readonly model?: string | null;
-  readonly enabledSkills?: readonly string[] | null;
-  readonly enabledGatekeepers?: readonly string[] | null;
-  readonly enabledWorkerDefinitions?: readonly string[] | null;
+  readonly excludedSkills?: readonly string[];
+  readonly excludedGatekeepers?: readonly string[];
+  readonly excludedWorkerDefinitions?: readonly string[];
   readonly promptAddendum?: string | null;
   readonly autoApproveLow?: boolean | null;
   readonly updatedAt?: Date;
@@ -189,7 +190,7 @@ function createFakePool(
     }
 
     // S3.13: governance/agent-profile/store.ts's readAgentProfile.
-    if (sql.startsWith('select workspace_id, principal_id, model, enabled_skills')) {
+    if (sql.startsWith('select workspace_id, principal_id, model, excluded_skills')) {
       const [workspaceId, principalId] = params as [string, string];
       const seed = agentProfilesByPrincipal.get(principalId);
       if (!seed) return { rows: [], rowCount: 0 };
@@ -199,9 +200,9 @@ function createFakePool(
             workspace_id: workspaceId,
             principal_id: principalId,
             model: seed.model ?? null,
-            enabled_skills: seed.enabledSkills ?? null,
-            enabled_gatekeepers: seed.enabledGatekeepers ?? null,
-            enabled_worker_definitions: seed.enabledWorkerDefinitions ?? null,
+            excluded_skills: seed.excludedSkills ?? [],
+            excluded_gatekeepers: seed.excludedGatekeepers ?? [],
+            excluded_worker_definitions: seed.excludedWorkerDefinitions ?? [],
             prompt_addendum: seed.promptAddendum ?? null,
             auto_approve_low: seed.autoApproveLow ?? null,
             updated_by: null,
@@ -1470,7 +1471,7 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     const { pool } = createFakePool(
       new Map(),
       new Map([[principalId, ['gk-1', 'gk-2', 'gk-3']]]), // 3 active Grants
-      new Map([[principalId, { enabledGatekeepers: ['gk-2'] }]]), // Profile narrows to just one
+      new Map([[principalId, { excludedGatekeepers: ['gk-1', 'gk-3'] }]]), // Profile narrows to just one
     );
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -1498,12 +1499,12 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     await startPromise;
   });
 
-  it('a null effective.enabledGatekeepers imposes no restriction beyond the Grant-derived ceiling', async () => {
+  it('a profile with no gate exclusions imposes no restriction beyond the Grant-derived ceiling', async () => {
     const principalId = randomUUID();
     const { pool } = createFakePool(
       new Map(),
       new Map([[principalId, ['gk-1', 'gk-2']]]),
-      new Map([[principalId, { promptAddendum: 'no gate restriction set' }]]), // enabledGatekeepers omitted -> null
+      new Map([[principalId, { promptAddendum: 'no gate restriction set' }]]), // excludedGatekeepers omitted -> []
     );
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -1531,14 +1532,17 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     await startPromise;
   });
 
-  it('mounts effective.enabledSkills as skillsInline content, and mounts nothing when the profile is null', async () => {
+  it('mounts effective.enabledSkills as skillsInline content — an excluded Skill is not mounted', async () => {
     const principalId = randomUUID();
     const { pool } = createFakePool(
       new Map(),
       new Map(),
-      new Map([[principalId, { enabledSkills: ['writing-tips'] }]]),
+      new Map([[principalId, { excludedSkills: ['skill-2'] }]]),
       undefined,
-      [{ id: 'skill-1', name: 'writing-tips' }],
+      [
+        { id: 'skill-1', name: 'writing-tips' },
+        { id: 'skill-2', name: 'code-review' },
+      ],
     );
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -1564,7 +1568,7 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     await startPromise;
   });
 
-  it('mounts every currently-published Skill when the profile’s enabledSkills is null (inherit) — matches the already-shipped web console’s "everything available" reading', async () => {
+  it('mounts every currently-published Skill when the profile excludes none — a newly published Skill flows in', async () => {
     const principalId = randomUUID();
     const { pool } = createFakePool(new Map(), new Map(), new Map(), undefined, [
       { id: 'skill-1', name: 'writing-tips' },

@@ -220,7 +220,7 @@ export class InvokeWorkerDefinitionNotEnabledError extends Error {
 
   constructor(definitionId: string) {
     super(
-      `invoke_worker: WorkerDefinition "${definitionId}" is outside the calling principal's AgentProfile.enabledWorkerDefinitions`,
+      `invoke_worker: WorkerDefinition "${definitionId}" is excluded by the calling principal's AgentProfile (excludedWorkerDefinitions)`,
     );
     this.name = 'InvokeWorkerDefinitionNotEnabledError';
     this.definitionId = definitionId;

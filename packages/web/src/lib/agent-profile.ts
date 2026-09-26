@@ -7,20 +7,22 @@
  * 默认").
  */
 
-/** One (workspace, principal) row — every field `null` means "inherit". */
+/** One (workspace, principal) row — a `null` scalar means "inherit"; the three lists are
+ *  *exclusion* lists (console redesign D1, governance 0012): `[]` excludes nothing, so a system
+ *  granted or a Skill / Worker published later is picked up automatically. */
 export interface AgentProfile {
   readonly principalId: string;
   readonly model: string | null;
-  readonly enabledSkills: readonly string[] | null;
-  readonly enabledGatekeepers: readonly string[] | null;
-  readonly enabledWorkerDefinitions: readonly string[] | null;
+  readonly excludedSkills: readonly string[];
+  readonly excludedGatekeepers: readonly string[];
+  readonly excludedWorkerDefinitions: readonly string[];
   readonly promptAddendum: string | null;
   readonly autoApproveLow: boolean | null;
   readonly updatedAt: string;
   readonly updatedBy: string;
-  /** The same six fields, resolved against `AgentPolicy` — never `null`: an unset field falls
-   *  back to the policy's own default (`defaultModel`, an empty allow-list read as "every
-   *  published Skill/Gatekeeper", `promptAddendum: ''`, `autoApproveLow: false`). */
+  /** Resolved — never `null`: the model / addendum / auto-approve fall back to the policy's
+   *  defaults, and each list is everything currently granted / published minus the exclusions,
+   *  capped by the policy. */
   readonly effective: EffectiveAgentProfile;
 }
 
@@ -35,14 +37,14 @@ export interface EffectiveAgentProfile {
 
 /** `set_agent_profile` params — every field optional, but this console's own editor
  *  (`components/AgentProfilePage.tsx`) always sends the full six-field state on save (`null` for
- *  "reset to inherit") rather than a partial diff, so a cleared field is unambiguously cleared
- *  rather than silently left at its previous override by omission. */
+ *  "reset to inherit", `[]` for "exclude nothing") rather than a partial diff, so a cleared field
+ *  is unambiguously cleared rather than silently left at its previous override by omission. */
 export interface SetAgentProfileParams {
   readonly principalId?: string;
   readonly model?: string | null;
-  readonly enabledSkills?: readonly string[] | null;
-  readonly enabledGatekeepers?: readonly string[] | null;
-  readonly enabledWorkerDefinitions?: readonly string[] | null;
+  readonly excludedSkills?: readonly string[];
+  readonly excludedGatekeepers?: readonly string[];
+  readonly excludedWorkerDefinitions?: readonly string[];
   readonly promptAddendum?: string | null;
   readonly autoApproveLow?: boolean | null;
 }
@@ -96,9 +98,9 @@ export function fieldForAgentProfileError(message: string): string | undefined {
   if (lower.includes('autoapprovelow') || lower.includes('auto_approve_low')) {
     return 'autoApproveLow';
   }
-  if (lower.includes('workerdefinition')) return 'enabledWorkerDefinitions';
-  if (lower.includes('gatekeeper')) return 'enabledGatekeepers';
-  if (lower.includes('skill')) return 'enabledSkills';
+  if (lower.includes('workerdefinition')) return 'excludedWorkerDefinitions';
+  if (lower.includes('gatekeeper')) return 'excludedGatekeepers';
+  if (lower.includes('skill')) return 'excludedSkills';
   if (lower.includes('model')) return 'model';
   return undefined;
 }

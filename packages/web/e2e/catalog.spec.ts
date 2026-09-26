@@ -51,11 +51,9 @@ test.describe('catalog editors', () => {
     await page.goto('/#/me/agent');
     const skillsField = page.getByTestId('agent-profile-skills');
     await expect(skillsField).toBeVisible({ timeout: 15_000 });
-    // The checklist only lists the published, policy-allowed Skills once "继承 Inherit" is
-    // unchecked (S3.13: an inheriting profile has nothing to pick); a fresh publication is
-    // *available* there, not auto-enabled.
-    await skillsField.getByRole('checkbox', { name: /继承（不覆盖）/ }).uncheck();
-    await expect(skillsField.getByText(name)).toBeVisible();
+    // Console redesign D1: the checklist lists every published, policy-allowed Skill, ticked — a
+    // fresh publication is in use by default (untick to exclude), never silently left out.
+    await expect(skillsField.getByRole('checkbox', { name })).toBeChecked();
   });
 
   test('procedures / workers: the editors open with their form and JSON views', async ({
