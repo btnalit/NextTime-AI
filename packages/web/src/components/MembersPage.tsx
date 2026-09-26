@@ -33,6 +33,7 @@ type DrawerState =
   | { readonly kind: 'closed' }
   | { readonly kind: 'addMember' }
   | { readonly kind: 'create' }
+  | { readonly kind: 'issueHandle' }
   | { readonly kind: 'detail'; readonly principal: PrincipalRow };
 
 /**
@@ -63,6 +64,11 @@ type DrawerState =
  * pass it), so a service Principal beyond the first loaded page needs "加载更多" clicked once before
  * it appears in the picker; `AccessPage` fed it a dedicated `autoLoadAll` list, but duplicating that
  * second `list_principals` call here would double the reads this page's own tests already count.
+ *
+ * Screenshot review of #305: the full form (principal picker, TTL, the whole capability tree) was
+ * too heavy to render inline under the member list, so it moved behind a header button
+ * ("签发外部运行时凭证", next to 添加成员/服务凭证) opening in its own `Drawer` — the fourth and last
+ * one this page owns, same `{drawer.kind === '…' ? <Child .../> : null}` shape as the other three.
  */
 export function MembersPage({ http }: MembersPageProps) {
   const t = useT();
@@ -121,6 +127,14 @@ export function MembersPage({ http }: MembersPageProps) {
               </Button>
               <Button variant="secondary" icon="key" onClick={() => setDrawer({ kind: 'create' })}>
                 {t('服务凭证', 'Service credential (API key)')}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="link"
+                onClick={() => setDrawer({ kind: 'issueHandle' })}
+                data-testid="issue-service-handle-trigger"
+              >
+                {t('签发外部运行时凭证', 'Issue a service Handle')}
               </Button>
             </>
           ) : undefined
@@ -243,9 +257,6 @@ export function MembersPage({ http }: MembersPageProps) {
         />
       ) : null}
 
-      {/* D3: moved off 访问 Access — owner-only, same as every other write on this page. */}
-      {canManage ? <IssueServiceHandleSection http={http} principals={allPrincipals} /> : null}
-
       <Drawer
         open={drawer.kind === 'addMember'}
         onClose={() => setDrawer({ kind: 'closed' })}
@@ -294,6 +305,23 @@ export function MembersPage({ http }: MembersPageProps) {
               });
               refreshList();
             }}
+          />
+        ) : null}
+      </Drawer>
+
+      {/* D3 (moved off 访问 Access) / screenshot review of #305 (too heavy inline): owner-only,
+       *  same as every other drawer on this page. */}
+      <Drawer
+        open={drawer.kind === 'issueHandle'}
+        onClose={() => setDrawer({ kind: 'closed' })}
+        title={t('签发外部运行时凭证', 'Issue a service Handle')}
+        testId="issue-service-handle-drawer"
+      >
+        {drawer.kind === 'issueHandle' ? (
+          <IssueServiceHandleSection
+            http={http}
+            principals={allPrincipals}
+            onDone={() => setDrawer({ kind: 'closed' })}
           />
         ) : null}
       </Drawer>

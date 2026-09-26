@@ -96,15 +96,20 @@ describe('MembersPage', () => {
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() => expect(screen.queryByRole('button', { name: /添加成员/ })).toBeNull());
     expect(screen.queryByRole('button', { name: /服务凭证/ })).toBeNull();
-    // D3: the Handle-issuance section moved here from Access is gated the same owner-only way.
-    expect(screen.queryByTestId('issue-service-handle-section')).toBeNull();
+    // D3 / screenshot review of #305: the Handle-issuance trigger moved here from Access is gated
+    // the same owner-only way as every other write button on this page.
+    expect(screen.queryByTestId('issue-service-handle-trigger')).toBeNull();
   });
 
-  it('D3: an owner session sees the Handle-issuance section moved here from Access', async () => {
+  it('D3: an owner session can open the Handle-issuance drawer moved here from Access', async () => {
     const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
     renderPage(http);
     await screen.findByTestId('member-row');
-    await screen.findByTestId('issue-service-handle-section');
+    expect(screen.queryByTestId('issue-service-handle-section')).toBeNull();
+
+    fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
+    const drawer = await screen.findByTestId('issue-service-handle-drawer');
+    expect(within(drawer).getByTestId('issue-service-handle-section')).toBeTruthy();
   });
 
   it('D3/B7: issuing a service Handle — capabilities from the registry checklist / paste box, TTL default 30 days — shows the token once', async () => {
@@ -138,6 +143,7 @@ describe('MembersPage', () => {
     });
     renderPage(http);
 
+    fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
     fireEvent.change(within(form).getByLabelText(/服务主体/), {
       target: { value: 'p-svc' },
@@ -186,9 +192,19 @@ describe('MembersPage', () => {
       }),
     });
     renderPage(http);
+    fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
     fireEvent.change(within(form).getByLabelText(/有效期（天）/), { target: { value: '366' } });
     expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
+  });
+
+  it('D3: no service Principal — the hint names the header 服务凭证 button, no self-link to this page', async () => {
+    const http = scriptedHttp({ list_principals: () => ({ items: [] }) });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
+    const notice = await screen.findByTestId('issue-service-handle-no-principal');
+    expect(notice.textContent).toContain('服务凭证');
+    expect(notice.querySelector('a')).toBeNull();
   });
 
   it('C9: an owner session (authoritative role) keeps the owner-only buttons', async () => {
