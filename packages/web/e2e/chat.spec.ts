@@ -145,8 +145,9 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.getByTestId('chat-rename-input').press('Enter');
     await expect(page.getByTestId('chat-title')).toHaveText(renamed);
 
-    // The 模式 · 模型 · 来源 line is up and the switcher is enabled between Turns.
-    await expect(page.getByTestId('chat-model-line')).toContainText('模式：入口 agent');
+    // Console redesign P3-2: "模式：入口 agent" moved out of the model pill into the header's own
+    // status line; the model pill itself is purely about the model now.
+    await expect(page.getByTestId('chat-header-status')).toContainText('入口 agent');
     await expect(page.getByTestId('chat-model-select')).toBeEnabled();
 
     // Back to the list: the row carries the new title; archive it from the row (tier low → toast

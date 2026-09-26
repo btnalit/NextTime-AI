@@ -14,7 +14,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { Select } from '../ui/Field.js';
+import { Select } from '../kit/select.js';
 import { useToast } from '../ui/Toast.js';
 
 export interface ModelSwitcherProps {
@@ -47,6 +47,13 @@ function modelLabel(id: string, models: readonly ModelRow[]): string {
  * current override no longer in the allow-list is listed, flagged, and still switchable away
  * from. Disabled while a Turn runs, and once `set_agent_profile` has been refused (a member
  * whose policy has `memberCanEditProfile: false` — `usePermissions`).
+ *
+ * Console redesign P3-2 (V3 "对话", V8 "原生 select"): renders as the artboard's compact model
+ * pill — a "模型" label beside a `kit/select` — instead of the old "模式：入口 agent · 模型：… · 来源
+ * Source：…" full-width line; "模式：入口 agent" moved to `ChatHeader`'s own status line (this
+ * component is now purely about the model), and "来源" no longer glues its English translation
+ * into the same literal (`t('来源：', 'Source: ')`, not the old bare "来源 Source：" — V8's own
+ * finding). `data-testid="chat-model-line"` stays on this pill (existing tests key off it).
  */
 export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
   const t = useT();
@@ -60,15 +67,15 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
 
   if (profile.state.status === 'loading') {
     return (
-      <div className="chat-header-meta text-small text-3" data-testid="chat-model-line">
-        {t('模式：入口 agent', 'Mode: entry agent')}
+      <div className="chat-model-pill text-small text-3" data-testid="chat-model-line">
+        {t('模型：加载中…', 'Model: Loading…')}
       </div>
     );
   }
   if (profile.state.status === 'error') {
     return (
-      <div className="chat-header-meta text-small text-3" data-testid="chat-model-line">
-        {t('模式：入口 agent · 模型：—', 'Mode: entry agent · Model: —')}
+      <div className="chat-model-pill text-small text-3" data-testid="chat-model-line">
+        {t('模型：—', 'Model: —')}
       </div>
     );
   }
@@ -130,49 +137,49 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
 
   return (
     <div
-      className="chat-header-meta row-wrap text-small text-3"
+      className="chat-model-pill"
       data-testid="chat-model-line"
       data-source={override === null ? 'workspace_default' : 'override'}
     >
-      <span>{t('模式：入口 agent', 'Mode: entry agent')}</span>
-      <span aria-hidden>·</span>
-      <label htmlFor={selectId} className="row">
-        <span>{t('模型：', 'Model:')}</span>
-        <Select
-          id={selectId}
-          value={override ?? WORKSPACE_DEFAULT}
-          onChange={(event) => void choose(event.target.value)}
-          disabled={disabled}
-          title={disabledReason}
-          aria-describedby={disabledReason ? `${selectId}-why` : undefined}
-          data-testid="chat-model-select"
-        >
-          <option value={WORKSPACE_DEFAULT}>
-            {t('工作区默认', 'Workspace default')}
-            {policyData?.defaultModel ? ` · ${modelLabel(policyData.defaultModel, models)}` : ''}
-          </option>
-          {allowed.map((m) => (
-            <option key={m.id} value={m.id}>
-              {modelLabel(m.id, models)}
-            </option>
-          ))}
-          {overrideOutsideAllowList && override !== null ? (
-            <option value={override} data-testid="chat-model-outside">
-              {modelLabel(override, models)} {t('· 不在允许范围', 'not in the allow-list')}
-            </option>
-          ) : null}
-        </Select>
-      </label>
-      <span aria-hidden>·</span>
-      <span data-testid="chat-model-source">
-        来源 Source：
-        {override === null ? t('工作区默认', 'Workspace default') : t('我的覆盖', 'My override')}
+      <span className="chat-model-pill-label text-3 text-small" aria-hidden>
+        {t('模型', 'Model')}
       </span>
+      <Select
+        aria-label={t(
+          '切换模型（工作区允许的范围）',
+          'Switch model (within the workspace allow-list)',
+        )}
+        value={override ?? WORKSPACE_DEFAULT}
+        onChange={(event) => void choose(event.target.value)}
+        disabled={disabled}
+        title={disabledReason}
+        aria-describedby={disabledReason ? `${selectId}-why` : undefined}
+        data-testid="chat-model-select"
+      >
+        <option value={WORKSPACE_DEFAULT}>
+          {t('工作区默认', 'Workspace default')}
+          {policyData?.defaultModel ? ` · ${modelLabel(policyData.defaultModel, models)}` : ''}
+        </option>
+        {allowed.map((m) => (
+          <option key={m.id} value={m.id}>
+            {modelLabel(m.id, models)}
+          </option>
+        ))}
+        {overrideOutsideAllowList && override !== null ? (
+          <option value={override} data-testid="chat-model-outside">
+            {modelLabel(override, models)} {t('· 不在允许范围', 'not in the allow-list')}
+          </option>
+        ) : null}
+      </Select>
       {overrideOutsideAllowList ? (
         <span className="chip chip-s chip-warn" data-testid="chat-model-flag">
           {t('不在允许范围', 'Not in the allow-list')}
         </span>
       ) : null}
+      <span className="chat-model-source text-3 text-small" data-testid="chat-model-source">
+        {t('来源：', 'Source: ')}
+        {override === null ? t('工作区默认', 'Workspace default') : t('我的覆盖', 'My override')}
+      </span>
       {disabledReason ? (
         <span id={`${selectId}-why`} className="visually-hidden">
           {disabledReason}
