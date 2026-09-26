@@ -29,6 +29,23 @@ function scriptedHttp(
   };
 }
 
+type GateWire = ExecutionReadinessWire['gates'][number];
+
+function gate(overrides: Partial<GateWire> & Pick<GateWire, 'gateId' | 'name'>): GateWire {
+  return {
+    granted: true,
+    publishedOperationCount: 1,
+    observeOperationCount: 1,
+    executeOperationCount: 0,
+    excludedByPolicy: false,
+    excludedByProfile: false,
+    inEntryScope: true,
+    workerDefinitionIds: [],
+    status: 'direct',
+    ...overrides,
+  };
+}
+
 function readiness(overrides: Partial<ExecutionReadinessWire> = {}): ExecutionReadinessWire {
   return {
     principalId: 'p-1',
@@ -48,14 +65,34 @@ describe('ExecutionReadinessCard', () => {
     expect(http.calls).toEqual([{ name: 'execution_readiness', params: {} }]);
   });
 
-  it('ready: shows the three counts and a ready line, no missing list', async () => {
+  it('console redesign M2: one row per system — delegation being ready never hides a system the agent cannot use', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({
           ready: true,
           gates: [
-            { gateId: 'g-1', name: 'CRM', granted: true, publishedOperationCount: 3 },
-            { gateId: 'g-2', name: 'Billing', granted: false, publishedOperationCount: 1 },
+            gate({
+              gateId: 'g-1',
+              name: 'CRM',
+              observeOperationCount: 3,
+              workerDefinitionIds: ['w-1'],
+            }),
+            gate({
+              gateId: 'g-2',
+              name: 'Knowledge base',
+              excludedByProfile: true,
+              inEntryScope: false,
+              status: 'unreachable',
+              reason: 'excluded_by_profile',
+            }),
+            gate({
+              gateId: 'g-3',
+              name: 'Billing',
+              granted: false,
+              inEntryScope: false,
+              status: 'unreachable',
+              reason: 'not_granted',
+            }),
           ],
           workers: [
             {
@@ -70,11 +107,20 @@ describe('ExecutionReadinessCard', () => {
         }),
     });
     render(<ExecutionReadinessCard http={http} />);
-    const counts = await screen.findByTestId('execution-readiness-counts');
-    expect(counts.textContent).toContain('2'); // gates available
-    expect(counts.textContent).toContain('1'); // gates granted
-    expect(screen.getByTestId('execution-readiness-ready')).toBeTruthy();
-    expect(screen.queryByTestId('execution-readiness-missing')).toBeNull();
+    const rows = await screen.findAllByTestId('execution-readiness-gate');
+    expect(rows.map((row) => row.getAttribute('data-status'))).toEqual([
+      'direct',
+      'unreachable',
+      'unreachable',
+    ]);
+    expect(rows[0]?.textContent).toContain('3 个只读操作');
+    expect(rows[0]?.textContent).toContain('Ops runner');
+    // The incident: granted but unticked on My Agent — says so, and links there.
+    expect(rows[1]?.textContent).toContain('取消了勾选');
+    expect(rows[1]?.querySelector('a')?.getAttribute('href')).toBe('#/me/agent');
+    expect(rows[2]?.querySelector('a')?.getAttribute('href')).toBe('#/govern/access');
+    // Delegation readiness is still shown, but no longer as a blanket "ready".
+    expect(screen.getByTestId('execution-readiness-ready').textContent).toContain('委派');
   });
 
   it('no_enabled_gate: cause text and a link to 系统接入, never the raw code', async () => {
@@ -96,7 +142,16 @@ describe('ExecutionReadinessCard', () => {
         readiness({
           ready: false,
           missing: [{ code: 'no_grant', gateId: 'g-9' }],
-          gates: [{ gateId: 'g-9', name: 'Payments', granted: false, publishedOperationCount: 2 }],
+          gates: [
+            gate({
+              gateId: 'g-9',
+              name: 'Payments',
+              granted: false,
+              inEntryScope: false,
+              status: 'unreachable',
+              reason: 'not_granted',
+            }),
+          ],
         }),
     });
     render(<ExecutionReadinessCard http={http} />);

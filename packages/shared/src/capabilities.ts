@@ -515,11 +515,13 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
-    resultSchema: listEnvelope(wire.ObjectWireSchema),
+    resultSchema: listEnvelope(wire.FindOperationItemWireSchema),
     description:
       'Find Operations whose name/description/kind (or Gatekeeper name) matches any keyword in ' +
       '`need` (space/punctuation-separated; a blank need lists every candidate), intersected with ' +
-      'the caller’s Grant.',
+      'the caller’s Grant. For the entry agent each item carries `reachability`: `direct` (call ' +
+      'its `<gate>.<op>` tool yourself), `via_worker` (delegate to a Worker find_workers returns), ' +
+      'or `unreachable` with the first missing condition as `reason`.',
   },
   {
     name: 'find_workers',
