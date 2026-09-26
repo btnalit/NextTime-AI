@@ -671,3 +671,71 @@
   max-height: 220px;
   overflow-y: auto;
 }
+
+/* ---- My Agent (console redesign P3-3, V4): form left, sticky "当前生效" summary right at
+ * ≥1280px; one column below that and at 768px. -------------------------------------------- */
+.agent-profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.agent-profile-summary {
+  position: sticky;
+  top: var(--space-4);
+}
+
+@media (max-width: 1279px) {
+  .agent-profile-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-profile-summary {
+    position: static;
+  }
+}
+
+/* V4: the model select sizes to its content instead of filling the card (§5.9 principle 6). */
+.ap-model-select {
+  max-width: 360px;
+}
+
+/* Bugfix (PR #324 review): the 能力 card's three checklists (Skills / 系统接入 / Worker 定义) ran
+ * into each other with no separation — a 16px gap between adjacent groups (a sibling rule, not a
+ * wrapper `<div>`: nesting one more level would have pushed a couple of `t(zh, en)` calls past the
+ * i18n-pairs guard's same-line lookback). `.checklist-group-title`/`-hint` give each sub-group a
+ * heading distinct from the ordinary `.field-label`/`.field-hint` pair (13/600 title, 12px muted
+ * helper) so it reads as its own section rather than another form field. */
+.checklist-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.checklist-group + .checklist-group {
+  margin-top: var(--space-4);
+}
+
+.checklist-group-title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.checklist-group-hint {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+/* ---- Systems & access (console redesign P3-3, V5): one row per system — the artboard's list
+ * has more per-row content (kind chip, ops summary, who-can-use, reachability, two actions) than
+ * `.data-row`'s other sitewide consumers, so this list wraps rather than truncating at 768px. */
+.systems-list .data-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.systems-list .data-row-trailing {
+  flex-wrap: wrap;
+}
