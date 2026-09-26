@@ -237,7 +237,7 @@ export function DataTable<T>({
             <li
               key={id}
               className={cn(
-                'rounded-l border border-border bg-surface-1 p-3',
+                'rounded-l border border-border bg-surface-1 p-3 shadow-card',
                 onRowClick && 'cursor-pointer hover:bg-surface-2',
                 rowClassName?.(row),
               )}

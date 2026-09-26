@@ -15,9 +15,9 @@ describe('kit/Button', () => {
     expect(button.className).toContain('h-9');
   });
 
-  it('applies the primary variant class (ink background)', () => {
+  it('applies the primary variant class (brand primary background, design system v2)', () => {
     render(<Button variant="primary">确认</Button>);
-    expect(screen.getByRole('button', { name: '确认' }).className).toContain('bg-text');
+    expect(screen.getByRole('button', { name: '确认' }).className).toContain('bg-primary');
   });
 
   it('applies the danger variant class', () => {
@@ -38,6 +38,6 @@ describe('kit/Button', () => {
     );
     const link = screen.getByRole('link', { name: '对话' });
     expect(link.tagName).toBe('A');
-    expect(link.className).toContain('bg-text');
+    expect(link.className).toContain('bg-primary');
   });
 });

@@ -24,16 +24,34 @@
 :root {
   color-scheme: light;
 
-  /* Neutrals (§5.9) */
-  --bg: #f4f5f7;
-  --surface-1: #ffffff;
-  --surface-2: #f8f9fb;
-  --surface-3: #eef0f3;
-  --border: #e3e6ea;
-  --border-strong: #cfd4da;
+  /* Design system v2 (2026-09-26, `design-system/nexttime-ai-console/MASTER.md`): the §5.9
+   * structure and semantics stay; the look moves off "black, white and a 1px border" — one brand
+   * scale, neutrals tinted toward the brand hue, three surface levels separated by tone and a soft
+   * shadow, and short ease-out motion. */
 
-  --text: #12161c;
-  --text-2: #4b5563;
+  /* Brand scale around the §5.9 accent (#1f4fd6 = 600). */
+  --brand-50: #eef3fe;
+  --brand-100: #dce6fd;
+  --brand-200: #bccffb;
+  --brand-300: #8fb0f7;
+  --brand-400: #5b86f0;
+  --brand-500: #3563e6;
+  --brand-600: #1f4fd6;
+  --brand-700: #1a40b0;
+  --brand-800: #1b378e;
+  --brand-900: #1c3271;
+  --brand-950: #152046;
+
+  /* Neutrals (§5.9), tinted toward the brand hue: page < card < popover. */
+  --bg: #f3f5fa;
+  --surface-1: #ffffff;
+  --surface-2: #f7f9fc;
+  --surface-3: #edf1f7;
+  --border: #e1e6ef;
+  --border-strong: #c8d0dc;
+
+  --text: #111a2e;
+  --text-2: #465167;
   /* S8 W1-A8 (audit S5): darkened from #6b7280 (4.43:1 on --bg, 4.16:1 on --accent-soft — both
    * under 4.5:1) to clear 4.5:1 on every surface (min 4.92:1, on --danger-soft). */
   --text-3: #5f6672;
@@ -41,10 +59,17 @@
    * filled danger hover all take this. */
   --text-on-accent: #ffffff;
 
-  /* Accent: links, selection, focus — never the primary button (that is ink). 6.3:1 on white. */
+  /* Accent: links, selection, focus. 6.3:1 on white. */
   --accent: #1f4fd6;
-  --accent-hover: #1a43b8;
+  --accent-hover: #1a40b0;
   --accent-soft: #e8eefc;
+
+  /* Primary action (design system v2): the page's one main button is brand, not ink — blue still
+   * means "you can click this"; the ink look read as unfinished. */
+  --primary: #1f4fd6;
+  --primary-hover: #1a40b0;
+  --primary-press: #1b378e;
+  --text-on-primary: #ffffff;
 
   /* Governance semantics (§5.9 principle 2). */
   --ok: #157347;
@@ -86,10 +111,14 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* Hierarchy is 1px borders, not shadows (§5.9 principle 5) — `--shadow-1` exists for floating
-   * overlays only (drawer, toast stack, the chat's jump-to-latest control). */
-  --shadow-1: 0 1px 2px rgba(18, 22, 28, 0.08), 0 8px 24px rgba(18, 22, 28, 0.12);
-  --overlay: rgba(18, 22, 28, 0.35);
+  /* Depth (design system v2): three surface levels — page (`--bg`), card (`--surface-1` +
+   * `--shadow-card`), floating (`--shadow-1`: drawer, popover, toast, dialog). `--shadow-raised` is
+   * the hover lift of an interactive card or row group. Shadows are tinted with the ink hue. */
+  --shadow-card: 0 1px 2px rgba(17, 26, 46, 0.04), 0 1px 3px rgba(17, 26, 46, 0.06);
+  --shadow-raised: 0 2px 4px rgba(17, 26, 46, 0.05), 0 6px 16px rgba(17, 26, 46, 0.08);
+  --shadow-1: 0 4px 12px rgba(17, 26, 46, 0.1), 0 16px 40px rgba(17, 26, 46, 0.14);
+  --ring: 0 0 0 3px rgba(31, 79, 214, 0.22);
+  --overlay: rgba(17, 26, 46, 0.4);
   --skeleton-a: var(--surface-2);
   --skeleton-b: var(--surface-3);
 
@@ -108,7 +137,12 @@
   --thread-max: 820px;
   --drawer-w: 480px;
 
-  --transition: 120ms ease;
+  /* Motion (design system v2): 150–200ms ease-out for hover / press / open; base.css drops it
+   * under prefers-reduced-motion. */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --transition: var(--dur-fast) var(--ease-out);
 }
 
 /* Dark: same names, same contrast intent (each general text token ≥ 4.5:1 on --bg / --surface-1/2/3
@@ -117,25 +151,31 @@
   :root {
     color-scheme: dark;
 
-    --bg: #0b0d12;
-    --surface-1: #12151c;
-    --surface-2: #181c25;
-    --surface-3: #1f2430;
-    --border: #262c38;
-    --border-strong: #3a4252;
+    /* Design system v2: a deep tinted navy, not black; off-white body text, not #fff. */
+    --bg: #0b1020;
+    --surface-1: #111829;
+    --surface-2: #161f34;
+    --surface-3: #1c2740;
+    --border: #25304a;
+    --border-strong: #35425f;
 
-    --text: #e7eaf0;
-    --text-2: #a9b1c0;
+    --text: #e6ebf5;
+    --text-2: #aab4c8;
     /* S8 W1-A8 (audit S5): lightened from #8b94a5 — that passed --surface-1 (5.98:1) but fell to
      * 4.16:1 / 4.48:1 / 4.40:1 on --warn-soft / --info-soft / --observe-soft respectively (each
      * -soft composited over --surface-1, its usual mounting surface). Now min 4.85:1, on
      * --warn-soft. */
-    --text-3: #98a0af;
-    --text-on-accent: #0b0d12;
+    --text-3: #98a2b6;
+    --text-on-accent: #0b1020;
 
-    --accent: #6ea0ff;
-    --accent-hover: #86b0ff;
-    --accent-soft: rgba(110, 160, 255, 0.16);
+    --accent: #7aa2ff;
+    --accent-hover: #93b4ff;
+    --accent-soft: rgba(122, 162, 255, 0.16);
+
+    --primary: #7aa2ff;
+    --primary-hover: #93b4ff;
+    --primary-press: #a9c3ff;
+    --text-on-primary: #0b1020;
 
     --ok: #4fc38a;
     --ok-soft: rgba(79, 195, 138, 0.16);
@@ -150,7 +190,10 @@
     --muted: #8b94a5;
     --muted-soft: rgba(139, 148, 165, 0.16);
 
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-    --overlay: rgba(4, 6, 10, 0.6);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
+    --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.3);
+    --shadow-1: 0 4px 12px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.45);
+    --ring: 0 0 0 3px rgba(122, 162, 255, 0.3);
+    --overlay: rgba(4, 7, 16, 0.65);
   }
 }
