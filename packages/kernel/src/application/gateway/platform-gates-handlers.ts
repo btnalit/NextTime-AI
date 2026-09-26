@@ -101,8 +101,11 @@ export const setConnectorModeHandler: CapabilityHandler = async (
         actorUserId: ctx?.platformUser?.id,
         action: 'connector.entry_handles_revoked',
         resourceType: 'connector',
-        resourceId: input.name,
+        // `audit_records.resource_id` is a uuid; a connector is keyed by name, so the name goes in
+        // the payload as `resourceRef` — the same place dispatch's own audit row for
+        // `set_connector_mode` puts it.
         payload: {
+          resourceRef: input.name,
           linkedWorkspaceCount,
           revokedWorkspaceCount,
           disabledOperations: after?.disabledOperations ?? [],
