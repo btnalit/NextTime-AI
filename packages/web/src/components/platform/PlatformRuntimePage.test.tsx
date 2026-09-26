@@ -272,6 +272,18 @@ describe('PlatformRuntimePage', () => {
     expect(await screen.findByText(/已重建 2 个/)).toBeTruthy();
   });
 
+  it('pi runtime: says it cannot read the runtime (not "build the image") when worker-supervisor is unreachable', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ activeImage: null, activeImageSource: 'unknown' }),
+      pi_drift: () => piDrift({ status: 'unknown', pinnedPiVersion: '0.87.1' }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    expect(await screen.findByTestId('pi-runtime-unreachable')).toBeTruthy();
+    expect(screen.queryByTestId('pi-runtime-build-needed')).toBeNull();
+  });
+
   it('pi runtime: nothing to do when every resident agent already runs the expected pi', async () => {
     const http = scriptedHttp({
       runtime_inventory: () =>

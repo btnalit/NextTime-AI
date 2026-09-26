@@ -197,6 +197,10 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
             residents={
               inventory.state.status === 'ready' ? inventory.state.data.residentContainers : null
             }
+            runtimeUnreachable={
+              inventory.state.status === 'ready' &&
+              inventory.state.data.activeImageSource === 'unknown'
+            }
             upgrading={rolling}
             onUpgrade={() => rollEntryContainers(true)}
           />
@@ -564,8 +568,8 @@ function RuntimeBody({
             icon="cpu"
             title={t('还没有带平台 label 的镜像', 'No labelled images yet')}
             body={t(
-              '在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。',
-              'Build worker-runtime on the host/CI with the three ai.nexttime.* labels.',
+              '在主机的项目目录运行 sh scripts/build-images.sh worker-runtime，镜像会带上真实的版本标签。',
+              'Run sh scripts/build-images.sh worker-runtime in the project directory on the host; the image gets real version labels.',
             )}
             testId="runtime-images-empty"
           />
@@ -676,11 +680,15 @@ function RuntimeBody({
 function PiRuntimeBody({
   drift,
   residents,
+  runtimeUnreachable,
   upgrading,
   onUpgrade,
 }: {
   readonly drift: PiDriftWire;
   readonly residents: readonly ResidentContainerWire[] | null;
+  /** worker-supervisor could not report its images at all — then "build the image" would be the
+   *  wrong advice; the card says it cannot read the runtime instead. */
+  readonly runtimeUnreachable: boolean;
   readonly upgrading: boolean;
   readonly onUpgrade: () => Promise<void>;
 }) {
@@ -725,6 +733,13 @@ function PiRuntimeBody({
           {t(
             '这次内核构建没有带 pi 版本号——用 scripts/build-images.sh 重新构建后这里会显示本版期望的 pi。',
             'This kernel build carries no pi version — rebuild with scripts/build-images.sh and this card shows the pi this release expects.',
+          )}
+        </Notice>
+      ) : runtimeUnreachable ? (
+        <Notice tone="warn" testId="pi-runtime-unreachable">
+          {t(
+            '读不到 worker-supervisor 的镜像信息，暂时无法判断常驻智能体跑的是哪个 pi——先看「运行状态」页里 worker-supervisor 的健康。',
+            'Could not read the images from worker-supervisor, so which pi the resident agents run is unknown for now — check worker-supervisor on the Status page first.',
           )}
         </Notice>
       ) : !imageReady ? (
