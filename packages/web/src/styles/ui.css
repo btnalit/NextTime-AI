@@ -429,9 +429,11 @@
 /* axe link-in-text-block (WCAG 1.4.1 "Use of Color"): a link inside running hint text must be
  * distinguishable by more than color alone — base.css's `a` only underlines on :hover, which
  * axe does not credit. Scoped to `.field-hint` rather than every `a` so link-styled buttons and
- * nav chips elsewhere keep their own look. */
+ * nav chips elsewhere keep their own look. Same rule as base.css's `.link-inline` (P3-1 V11), kept
+ * as its own selector here since it predates that utility and every `.field-hint` link qualifies. */
 .field-hint a {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .field-error {

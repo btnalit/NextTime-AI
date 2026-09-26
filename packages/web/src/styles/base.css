@@ -67,6 +67,20 @@ a:hover {
   text-decoration: underline;
 }
 
+/* Console redesign P3-1 (V11 "链接"): standalone/nav links stay colour-only, no underline until
+ * hover (`a`/`a:hover` above) — but a link that sits inside a sentence or line of running text,
+ * next to non-link text, must stay distinguishable without colour alone (axe `link-in-text-block`,
+ * WCAG 1.4.1 "Use of Color"). Apply `.link-inline` explicitly at each such call site — it does not
+ * fall out of any ancestor selector, on purpose, so a nav item or button that happens to sit inside
+ * a `<p>` is never silently re-styled. `styles/ui.css`'s `.field-hint a` is the pre-existing
+ * instance of this same rule (every `.field-hint` link is running text with no exceptions to
+ * carve out) and stays its own selector rather than migrating, but shares the same
+ * `text-underline-offset`. */
+.link-inline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 code,
 pre,
 .mono {

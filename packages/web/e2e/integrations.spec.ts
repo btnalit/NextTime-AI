@@ -375,6 +375,9 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
       timeout: 15_000,
     });
+    // Console redesign P3-1 (V7): 服务凭证/签发外部运行时凭证 moved behind the header's "更多操作"
+    // overflow menu (`kit/dropdown-menu`) — was two equal-weight header buttons.
+    await page.getByTestId('members-header-menu').click();
     await page.getByTestId('issue-service-handle-trigger').click();
     const handleDrawer = page.getByTestId('issue-service-handle-drawer');
     await expect(handleDrawer).toBeVisible({ timeout: 15_000 });
@@ -395,7 +398,10 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       await page.keyboard.press('Escape');
       await expect(handleDrawer).toBeHidden();
 
-      await page.getByRole('button', { name: /服务凭证/ }).click();
+      // Console redesign P3-1 (V7): 服务凭证/签发外部运行时凭证 moved behind the header's "更多操作"
+      // overflow menu (`kit/dropdown-menu`) — was two equal-weight header buttons.
+      await page.getByTestId('members-header-menu').click();
+      await page.getByTestId('members-service-credential-trigger').click();
       const createDrawer = page.getByTestId('create-principal-drawer');
       await expect(createDrawer.getByTestId('create-principal-form')).toBeVisible({
         timeout: 15_000,
@@ -408,6 +414,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       await createDrawer.getByRole('button', { name: /我已复制/ }).click();
       await expect(createDrawer).toBeHidden();
 
+      await page.getByTestId('members-header-menu').click();
       await page.getByTestId('issue-service-handle-trigger').click();
       await expect(handleDrawer).toBeVisible({ timeout: 15_000 });
     }

@@ -252,7 +252,7 @@ function GateRow({
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span>{gateReasonText(gate.reason, t)}</span>
           {gate.reason !== undefined && gateReasonHref(gate.reason) !== undefined ? (
-            <a href={gateReasonHref(gate.reason)} style={{ textDecoration: 'underline' }}>
+            <a href={gateReasonHref(gate.reason)} className="link-inline">
               {gateReasonLink(gate.reason, t)}
             </a>
           ) : null}

@@ -12,6 +12,12 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './kit/dropdown-menu.js';
 import { PageHeader } from './kit/page-header.js';
 import { IssueServiceHandleSection } from './members/IssueServiceHandleSection.js';
 import { Button } from './ui/Button.js';
@@ -115,28 +121,42 @@ export function MembersPage({ http }: MembersPageProps) {
           '谁能进入这个工作区、持有什么角色、API key 的生命周期。',
           'Who can sign in, what role they hold, and their API key lifecycle.',
         )}
+        // Console redesign P3-1 (V7 "页头动作"): one ink primary ("添加成员") + the other two
+        // owner-only writes behind a "更多操作" overflow menu — was three equal-weight buttons.
+        primaryAction={
+          canManage ? (
+            <Button variant="primary" icon="plus" onClick={() => setDrawer({ kind: 'addMember' })}>
+              {t('添加成员', 'Add member')}
+            </Button>
+          ) : undefined
+        }
         actions={
           canManage ? (
-            <>
-              <Button
-                variant="primary"
-                icon="plus"
-                onClick={() => setDrawer({ kind: 'addMember' })}
-              >
-                {t('添加成员', 'Add member')}
-              </Button>
-              <Button variant="secondary" icon="key" onClick={() => setDrawer({ kind: 'create' })}>
-                {t('服务凭证', 'Service credential (API key)')}
-              </Button>
-              <Button
-                variant="secondary"
-                icon="link"
-                onClick={() => setDrawer({ kind: 'issueHandle' })}
-                data-testid="issue-service-handle-trigger"
-              >
-                {t('签发外部运行时凭证', 'Issue a service Handle')}
-              </Button>
-            </>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="secondary"
+                  icon="more"
+                  iconOnly
+                  aria-label={t('更多操作', 'More actions')}
+                  data-testid="members-header-menu"
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  data-testid="members-service-credential-trigger"
+                  onSelect={() => setDrawer({ kind: 'create' })}
+                >
+                  {t('服务凭证', 'Service credential (API key)')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="issue-service-handle-trigger"
+                  onSelect={() => setDrawer({ kind: 'issueHandle' })}
+                >
+                  {t('签发外部运行时凭证', 'Issue a service Handle')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : undefined
         }
       />
