@@ -499,7 +499,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     // `entryScope(...)`, so authorize.ts's Handle-scope check runs for real (the class of gap that
     // let `explain` 403 unnoticed in S2.6: extension tests never enforce Handle scope).
     describe('observe_operation via an entry-scoped Handle caller', () => {
-      function entryHandleCaller(): ResolvedCaller {
+      function entryHandleCaller(gatekeepers: readonly string[] = [gatekeeperId]): ResolvedCaller {
         const now = Math.floor(Date.now() / 1000);
         return {
           channel: 'handle',
@@ -507,13 +507,56 @@ describe.runIf(DATABASE_URL !== undefined)(
             ws: workspaceId,
             sid: randomUUID(),
             obo: ownerId,
-            scope: entryScope({ resources: { gatekeeper: [gatekeeperId] } }),
+            scope: entryScope(
+              gatekeepers.length > 0 ? { resources: { gatekeeper: [...gatekeepers] } } : {},
+            ),
             jti: randomUUID(),
             iat: now,
             exp: now + 600,
           },
         };
       }
+
+      // Design decision D4 (2026-09-26): observation skips approval, not authorization scope — a
+      // Handle whose `resources.gatekeeper` does not cover the gate is refused, whether the list
+      // names another gate or is absent (a member with no gate Grant at all).
+      it('refuses a Gatekeeper outside the Handle scope (D4), for another gate and for no gate', async () => {
+        for (const caller of [entryHandleCaller([randomUUID()]), entryHandleCaller([])]) {
+          await expect(
+            dispatchCapability({ pool }, caller, 'observe_operation', {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: {},
+            }),
+          ).rejects.toThrow(/does not cover/);
+        }
+      });
+
+      // D4 on request_action's observe branch: a Worker-shaped Handle (holds request_action) whose
+      // gate scope names a different Gatekeeper cannot observe through this one — the observe path
+      // never reaches governance/policy's coverage check, so the handler checks it itself.
+      it('request_action on an observe-class Operation refuses a Handle whose scope does not cover the gate (D4)', async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const uncovered: ResolvedCaller = {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [randomUUID()] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+        await expect(
+          dispatchCapability({ pool }, uncovered, 'request_action', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/does not cover/);
+      });
 
       it('runs a published observe-class Operation and returns its data', async () => {
         const result = (await dispatchCapability(
