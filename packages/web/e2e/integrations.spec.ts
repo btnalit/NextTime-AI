@@ -371,8 +371,10 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
 
     // No service Principal yet ⇒ create one right here first (`CreatePrincipalForm` — always
     // `kind: 'service'`, docs/platform-admin-design.md §6.3's "外部运行时" flow). `MembersPage` owns
-    // one drawer at a time, so opening 服务凭证 closes this one — reopen it once the principal
-    // exists.
+    // one drawer at a time, but `handleDrawer`'s own full-viewport overlay still covers the header
+    // buttons while it is open — close it explicitly (Esc) and wait for it to be hidden before
+    // clicking 服务凭证, or Playwright can never hit-test through the overlay to the real button
+    // and retries until its own timeout. Reopen 签发外部运行时凭证 once the principal exists.
     if (
       await handleDrawer
         .getByTestId('issue-service-handle-no-principal')
@@ -380,6 +382,9 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
         .catch(() => false)
     ) {
       const suffix = Date.now().toString(36);
+      await page.keyboard.press('Escape');
+      await expect(handleDrawer).toBeHidden();
+
       await page.getByRole('button', { name: /服务凭证/ }).click();
       const createDrawer = page.getByTestId('create-principal-drawer');
       await expect(createDrawer.getByTestId('create-principal-form')).toBeVisible({
