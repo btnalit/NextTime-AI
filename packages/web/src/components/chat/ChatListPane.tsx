@@ -253,6 +253,20 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
                           >
                             {formatRelative(timeValue)}
                           </time>
+                          <span className="text-3" aria-hidden>
+                            ·
+                          </span>
+                          <div className="chat-row-actions">
+                            <ChatLifecycleActions
+                              chat={chat}
+                              onRename={() => setRenamingId(chat.id)}
+                              onArchive={() => setArchiveTarget(chat)}
+                              onRestore={() => void restore(chat)}
+                              restoring={restoringId === chat.id}
+                              testIdPrefix="chat-row"
+                              iconOnly
+                            />
+                          </div>
                         </div>
                         <div className="chat-row-line2 text-3">
                           {archived ? (
@@ -278,16 +292,6 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
                               {t('运行中', 'Running')}
                             </span>
                           ) : null}
-                        </div>
-                        <div className="chat-row-actions">
-                          <ChatLifecycleActions
-                            chat={chat}
-                            onRename={() => setRenamingId(chat.id)}
-                            onArchive={() => setArchiveTarget(chat)}
-                            onRestore={() => void restore(chat)}
-                            restoring={restoringId === chat.id}
-                            testIdPrefix="chat-row"
-                          />
                         </div>
                       </>
                     )}

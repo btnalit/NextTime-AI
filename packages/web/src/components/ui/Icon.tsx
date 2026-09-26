@@ -46,7 +46,10 @@ export type IconName =
   | 'box'
   | 'settings'
   | 'menu'
-  | 'more';
+  | 'more'
+  // console redesign P3-2 layout fix: `edit` (a compact rename trigger, `chat/
+  // ChatLifecycleActions`'s icon-only row actions).
+  | 'edit';
 
 const PATHS: Readonly<Record<IconName, string>> = {
   chat: 'M4 5h16v10H9l-5 4V5z',
@@ -89,6 +92,7 @@ const PATHS: Readonly<Record<IconName, string>> = {
     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1',
   menu: 'M4 7h16M4 12h16M4 17h16',
   more: 'M12 5v.01M12 12v.01M12 19v.01',
+  edit: 'M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z',
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

@@ -22,6 +22,12 @@ export interface ChatLifecycleActionsProps {
   readonly onRestore: () => void;
   readonly restoring?: boolean;
   readonly testIdPrefix?: string;
+  /** Console redesign P3-2 layout fix: `chat/ChatListPane`'s row needs these as compact icon-only
+   *  ghost buttons (pencil / archive / restore) on the row's own title line, not full text buttons
+   *  on a line of their own (the three-line, ~90px row the first version of that redesign produced).
+   *  `aria-label`/`title` still resolve to the same current-locale-only text either way (`ui/
+   *  Button`'s own `iconOnly` label logic) — omit for the (currently unused) full-label mode. */
+  readonly iconOnly?: boolean;
 }
 
 /**
@@ -38,6 +44,7 @@ export function ChatLifecycleActions({
   onRestore,
   restoring = false,
   testIdPrefix = 'chat',
+  iconOnly = false,
 }: ChatLifecycleActionsProps) {
   const t = useT();
   const archived = isArchived(chat);
@@ -47,9 +54,11 @@ export function ChatLifecycleActions({
         <Button
           variant="ghost"
           size="s"
+          icon="edit"
+          iconOnly={iconOnly}
           onClick={onRename}
           data-testid={`${testIdPrefix}-rename`}
-          title={t('改名', 'Rename this chat')}
+          title={t('改名', 'Rename')}
         >
           {t('改名', 'Rename')}
         </Button>
@@ -58,10 +67,12 @@ export function ChatLifecycleActions({
         <Button
           variant="ghost"
           size="s"
+          icon="refresh"
+          iconOnly={iconOnly}
           onClick={onRestore}
           loading={restoring}
           data-testid={`${testIdPrefix}-restore`}
-          title={t('恢复到活跃列表', 'Restore to the active list')}
+          title={t('恢复', 'Restore')}
         >
           {t('恢复', 'Restore')}
         </Button>
@@ -69,12 +80,11 @@ export function ChatLifecycleActions({
         <Button
           variant="ghost"
           size="s"
+          icon="inbox"
+          iconOnly={iconOnly}
           onClick={onArchive}
           data-testid={`${testIdPrefix}-archive`}
-          title={t(
-            '归档（可撤销）Archive —',
-            'hidden from the list, provenance kept; undo from the toast',
-          )}
+          title={t('归档', 'Archive')}
         >
           {t('归档', 'Archive')}
         </Button>

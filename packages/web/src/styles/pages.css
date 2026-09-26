@@ -190,7 +190,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: var(--space-2) var(--space-2);
+  padding: 6px var(--space-2);
   border-radius: var(--radius-m);
   cursor: pointer;
 }
@@ -204,11 +204,14 @@
   background: var(--accent-soft);
 }
 
+/* One line — title, time, a separator, the row actions — not three (console redesign P3-2 layout
+ * fix): `.chat-row-title-text`'s own `flex: 1` already consumes every bit of free space up to its
+ * own max-content width, which is what right-aligns the fixed-width siblings after it without a
+ * separate `margin-left: auto`. */
 .chat-row-line1 {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: 6px;
 }
 
 .chat-row-title-text {
@@ -244,9 +247,14 @@
  * meant for the child (confirmed against a live kernel, `e2e/00-gates/screenshot.spec.ts` "state:
  * chat with a reply" — Playwright's own actionability check reported the row `<li>` itself
  * intercepting the click); it also has no keyboard or touch equivalent of ":hover", so a
- * hover-only reveal makes these actions unreachable outside a mouse. */
+ * hover-only reveal makes these actions unreachable outside a mouse. Sits on the title's own line
+ * as compact icon-only ghost buttons (`chat/ChatLifecycleActions`'s `iconOnly`), not a line of its
+ * own — three lines (~90px) per row was the first version of this redesign's own regression.
+ * `flex-shrink: 0` keeps the icons their full size while `.chat-row-title-text`'s `flex: 1` gives
+ * up the space; `ChatLifecycleActions`'s own `.row` already sets the gap between the icons. */
 .chat-row-actions {
-  margin-top: 2px;
+  flex-shrink: 0;
+  display: flex;
 }
 
 .chat-conversation-pane {
