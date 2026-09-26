@@ -33,9 +33,6 @@ import type { Session } from './session/types.js';
  * there so the next kit component that lands in a page (W1-A3 wires tooltip; more will follow)
  * gets its Radix code split from that page's own chunk instead of inflating it, per-page, forever.
  */
-const AccessPage = lazy(() =>
-  import('./components/AccessPage.js').then((m) => ({ default: m.AccessPage })),
-);
 const AgentProfilePage = lazy(() =>
   import('./components/AgentProfilePage.js').then((m) => ({ default: m.AgentProfilePage })),
 );
@@ -54,8 +51,8 @@ const ChatListPage = lazy(() =>
 const ChatPage = lazy(() =>
   import('./components/ChatPage.js').then((m) => ({ default: m.ChatPage })),
 );
-const ConnectionsPage = lazy(() =>
-  import('./components/ConnectionsPage.js').then((m) => ({ default: m.ConnectionsPage })),
+const SystemsPage = lazy(() =>
+  import('./components/systems/SystemsPage.js').then((m) => ({ default: m.SystemsPage })),
 );
 const MembersPage = lazy(() =>
   import('./components/MembersPage.js').then((m) => ({ default: m.MembersPage })),
@@ -276,12 +273,18 @@ export function Routed({
     case 'members':
       page = <MembersPage http={session.http} />;
       break;
+    // Console redesign P2: 访问 and 系统接入 merged into one page (`components/systems/
+    // SystemsPage.tsx`, docs/console-redesign-plan-2026-09-25.md §4) — `#/govern/access` keeps
+    // working (a bookmark, or `hrefs.access()`'s own callers) by rendering the same page; only
+    // the `systems` route carries an optional `gatekeeperId` deep link.
     case 'access':
-      page = <AccessPage http={session.http} />;
+      page = (
+        <SystemsPage http={session.http} platformAdmin={session.user?.platformRole === 'admin'} />
+      );
       break;
     case 'systems':
       page = (
-        <ConnectionsPage
+        <SystemsPage
           http={session.http}
           selectedGatekeeperId={route.gatekeeperId}
           onSelectGatekeeper={(id) => navigate(id ? hrefs.gatekeeper(id) : hrefs.systems())}

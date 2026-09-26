@@ -79,8 +79,8 @@ const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   我的智能体: 'agent',
   我的账户: 'account',
   成员与授权: 'members',
-  访问: 'access',
-  系统接入: 'systems',
+  // Console redesign P2: 访问 merged into 系统与授权 — one nav item, one testid.
+  系统与授权: 'systems',
   能力目录: 'catalog',
   模型与配额: 'models',
   审计: 'audit',

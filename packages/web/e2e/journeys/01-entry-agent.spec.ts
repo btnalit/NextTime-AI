@@ -11,14 +11,14 @@ import {
  * Journey ①: 让入口 agent 能执行 (development-tasks.md §5e F4/决定, audit J1–J8/R1–R9)
  *
  * 步骤:
- *   1. （全新工作区）在 系统接入 把 CI 已 announce 的 `ci-fixture-mcp` 门实例启用到本工作区——
+ *   1. （全新工作区）在 系统与授权 把 CI 已 announce 的 `ci-fixture-mcp` 门实例启用到本工作区——
  *      发布它的两个 Operation（`list_things` 观察类 / `restart_thing` 执行类）。这一个门是
  *      `gate-host.spec.ts`/`integrations.spec.ts`（P-B1）已经用过的同一个 CI fixture，不是本
  *      旅程新起的 fixture；平台侧的 `discovered → enabled` 由 integrations.spec.ts 的第一个测试
  *      完成——按文件名排序（g/gate-host、i/integrations 都在 j/journeys 之前，`playwright.config.
  *      ts` 的 `workers: 1`/`fullyParallel: false` 让整个套件按发现顺序顺序跑），本旅程运行时那一步
  *      已经做完，这里只做"本工作区自己的启用"（workspace-scope `enable_gate_instance`）。
- *   2. 在 访问 把这个门授权给自己（新建工作区的 owner——入口 agent 以 owner 的身份委派）。
+ *   2. 在 系统与授权 把这个门授权给自己（新建工作区的 owner——入口 agent 以 owner 的身份委派）。
  *   3. 在 能力目录 · Worker "从模板创建（ops-runner）"，勾选这个门，保存草稿、发布。
  *   4. 在 对话 新建一个对话，给入口 agent 发一条消息。
  *   5. 观察回复；见下方"今天为什么走不到「委派」"——第 5 步在 CI 的 fake 栈上只能观察到入口 agent
@@ -26,14 +26,15 @@ import {
  *
  * 状态覆盖:
  *   - 空: 用 `createFreshWorkspace` 建一个全新工作区（不是每个 spec 共用、会不断累积状态的
- *     `ci-e2e`），第 1 步之前断言 系统接入（`gatekeepers-empty`，`available-gate-ci-fixture-mcp`
- *     还没有"已启用"链接，`execution-prerequisite-bar` 可见）、能力目录 · Worker（`catalog-empty`）、
- *     访问（`grants-empty`）都还是空的，以及 对话 上的状态条（console redesign P2-b，
- *     `execution-readiness-missing`）零系统时收成一行——"还没有可以作用的系统"
- *     （`no_enabled_gate`）——按可见的缘由文案断言，不断言内部 `code`
- *     （`packages/web/src/components/readiness/readiness-copy.ts`）。"没有可委派的 Worker"
- *     （`no_published_worker`）在这一刻没有意义（连一个系统都还没有），状态条不重复它——见下方第 1
- *     步之后的中间状态，那时它才会出现。
+ *     `ci-e2e`），第 1 步之前断言 系统与授权（`systems-empty`，`available-gate-ci-fixture-mcp`
+ *     还没有"已启用"链接）、能力目录 · Worker（`catalog-empty`）都还是空的，以及 对话 上的状态条
+ *     （console redesign P2-b，`execution-readiness-missing`）零系统时收成一行——"还没有可以作用
+ *     的系统"（`no_enabled_gate`）——按可见的缘由文案断言，不断言内部 `code`（`packages/web/src/
+ *     components/readiness/readiness-copy.ts`）。"没有可委派的 Worker"（`no_published_worker`）
+ *     在这一刻没有意义（连一个系统都还没有），状态条不重复它——见下方第 1 步之后的中间状态，那时它
+ *     才会出现。控制台重构 P2 把 访问 的授权半边并入 系统与授权（`components/systems/
+ *     SystemsPage.tsx`），这一页不再重复渲染 `execution-prerequisite-bar`（能力目录 / 对话页各自
+ *     还有一份）——本旅程相应地不再在这一页断言它，也不再把 访问 当成独立于 系统接入 的第三处空态。
  *   - 错: 产品今天没有"委派在提交前被挡住"这个机制（W1-C 的 `execution_readiness` 是读模型，没有接
  *     到对话的发送按钮上）；断言这一点不成立，会断言一个不存在的产品行为。退而求其次、但仍然真实的
  *     一件事：本旅程的步骤顺序天然会经过"门已授权、Worker 还未发布"这个中间状态（第 1、2 步之后，
@@ -49,13 +50,13 @@ import {
  *     （`draft-proposed` 出现）——顺带走一次 `goToByLabel` 在 ≤960px 时打开 `NavDrawer` 的分支。
  *
  * 成功判据:
- *   - 从一个全新工作区、不碰 SQL/CLI，一个人凭页面上的信息能把"系统接入 → 授权 → 发布 Worker"
- *     走完，并在 对话 里发出一条消息、看到入口 agent 的回复。
+ *   - 从一个全新工作区、不碰 SQL/CLI，一个人凭页面上的信息能把"系统与授权（接入 → 授权）→ 发布
+ *     Worker"走完，并在 对话 里发出一条消息、看到入口 agent 的回复。
  *   - 这条旅程测的不是"委派真的执行了"（见下），而是"委派的三个前置条件——门已启用、已授权给
  *     会说话的这个 owner、Worker 已发布——全部可以只凭 UI 完成"，加上"对话本身是通的"；发布 Worker
- *     后 `execution_readiness` 自己也认为"已就绪"（`execution-readiness-ready`，`对话` 页）、三页的
- *     `execution-prerequisite-bar` 也随之消失——见下方"执行就绪为什么在这里会变 ready"关于
- *     `computeChildHandleScope` 的说明。
+ *     后 `execution_readiness` 自己也认为"已就绪"（`execution-readiness-ready`，`对话` 页）、能力
+ *     目录页的 `execution-prerequisite-bar` 也随之消失——见下方"执行就绪为什么在这里会变 ready"
+ *     关于 `computeChildHandleScope` 的说明。
  *
  * 执行就绪为什么在这里会变 ready（读 `packages/kernel/src/application/gateway/
  * execution-readiness-handler.ts` + `application/task/handle-mint.ts` 后的结论）：
@@ -135,22 +136,19 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     const availableRow = page.getByTestId(`available-gate-${GATE_ID}`);
     const enableButton = availableRow.getByTestId(`enable-gate-${GATE_ID}`);
 
-    // --- 空: 三样都还没有 ----------------------------------------------------------------------
-    await goToByLabel(page, '系统接入');
-    await expect(page.getByTestId('gatekeepers-empty')).toBeVisible();
+    // --- 空: 两样都还没有（访问的授权半边已并入这一页，不再是第三处独立空态）-------------------
+    await goToByLabel(page, '系统与授权');
+    await expect(page.getByTestId('systems-empty')).toBeVisible();
     await expect(availableRow).toBeVisible();
     await expect(enableButton).toBeVisible();
-    await expect(page.getByTestId('execution-prerequisite-bar')).toBeVisible({ timeout: 15_000 });
 
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(page.getByTestId('catalog-empty')).toBeVisible();
 
-    await goToByLabel(page, '访问');
-    await expect(page.getByTestId('grants-empty')).toBeVisible();
-
     // 对话页状态条（console redesign P2-b）：零系统时收成一行，只指向第一步——"还没有已发布的
-    // Worker"在这一刻没有意义（连一个系统都还没有，delegation 无从谈起），状态条不再重复它。
+    // Worker"在这一刻没有意义（连一个系统都还没有，delegation 无从谈起），状态条不再重复它。访问
+    // 的空态已随控制台重构 P2 并入 系统与授权（上面已经断言过 `systems-empty`），不再单独断言。
     await goToByLabel(page, '对话');
     const readinessBody = page.getByTestId('execution-readiness-body');
     await expect(readinessBody).toBeVisible({ timeout: 15_000 });
@@ -161,8 +159,8 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     });
     await expect(readinessMissing).toContainText(READINESS_NO_ENABLED_GATE_TEXT);
 
-    // --- 1. 系统接入: 启用 ci-fixture-mcp 到本工作区 ------------------------------------------
-    await goToByLabel(page, '系统接入');
+    // --- 1. 系统与授权: 启用 ci-fixture-mcp 到本工作区 ----------------------------------------
+    await goToByLabel(page, '系统与授权');
     await enableButton.click();
     const enableConfirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
     await expect(enableConfirm).toBeVisible({ timeout: 15_000 });
@@ -170,16 +168,19 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByTestId('gatekeeper-card').filter({ hasText: GATE_DISPLAY_NAME }),
-    ).toHaveCount(1, { timeout: 15_000 });
+    const gateCard = page.getByTestId('gatekeeper-card').filter({ hasText: GATE_DISPLAY_NAME });
+    await expect(gateCard).toHaveCount(1, { timeout: 15_000 });
 
-    // --- 2. 访问: 把这个门授权给自己 -----------------------------------------------------------
-    await goToByLabel(page, '访问');
-    await page.getByRole('button', { name: /授予能力/ }).click();
+    // --- 2. 系统与授权: 把这个门授权给自己（同一张卡，不再是单独一页）-------------------------
+    await gateCard.getByTestId('gatekeeper-grant-button').click();
     const grantDrawer = page.getByTestId('grant-gate-drawer');
     const grantForm = grantDrawer.getByTestId('grant-gate-form');
     await expect(grantForm).toBeVisible({ timeout: 15_000 });
+    // Opened from the card: the gate is locked, no picker/checklist renders for it (GrantGateForm's
+    // own `lockedGatekeeper` contract) — the covered-operations list populates immediately.
+    const operationsList = grantForm.getByTestId('ggf-operations-list');
+    await expect(operationsList).toContainText(OBSERVE_OP, { timeout: 15_000 });
+    await expect(operationsList).toContainText(EXECUTE_OP);
 
     const memberSelect = grantForm.getByTestId('ggf-member-select');
     await expect(memberSelect).toBeEnabled({ timeout: 15_000 });
@@ -190,26 +191,11 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     expect(memberId ?? '').not.toBe('');
     await memberSelect.selectOption(memberId as string);
 
-    const gateCheckbox = grantForm
-      .getByTestId('ggf-gate-list')
-      .locator('label.checkbox')
-      .filter({ hasText: GATE_DISPLAY_NAME })
-      .locator('input[type="checkbox"]');
-    await gateCheckbox.check();
-    const operationsList = grantForm.getByTestId('ggf-operations-list');
-    await expect(operationsList).toContainText(OBSERVE_OP, { timeout: 15_000 });
-    await expect(operationsList).toContainText(EXECUTE_OP);
-
     await grantForm.getByTestId('ggf-submit').click();
     await expect(grantForm.getByTestId('ggf-granted-summary')).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press('Escape');
     await expect(grantDrawer).toBeHidden();
-    await expect(
-      page
-        .getByTestId('grants-list')
-        .getByTestId('grant-row')
-        .filter({ hasText: GATE_DISPLAY_NAME }),
-    ).toHaveCount(1, { timeout: 15_000 });
+    await expect(gateCard.getByTestId('system-access-row')).toHaveCount(1, { timeout: 15_000 });
 
     // --- 错（部分覆盖，见本文件顶部说明）: 门已授权、Worker 还未发布 ---------------------------
     await goToByLabel(page, '能力目录');
@@ -293,21 +279,19 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.getByTestId('execution-readiness-ready')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('execution-readiness-missing')).toHaveCount(0);
 
-    await goToByLabel(page, '系统接入');
+    // 系统与授权: the card's own "谁能用" row is the strongest honest signal here now — it went
+    // from "用不了"（not_granted, before step 2）to "可直接调用" once granted and published,
+    // console redesign P2's own acceptance criterion (docs/console-redesign-plan-2026-09-25.md
+    // §6 P2: "授权后能力视图从「不可用」变「可直接调用」").
+    await goToByLabel(page, '系统与授权');
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible();
-    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
-      timeout: 15_000,
-    });
-    await goToByLabel(page, '访问');
+    const readyGateCard = page
+      .getByTestId('gatekeeper-card')
+      .filter({ hasText: GATE_DISPLAY_NAME });
     await expect(
-      page
-        .getByTestId('grants-list')
-        .getByTestId('grant-row')
-        .filter({ hasText: GATE_DISPLAY_NAME }),
-    ).toHaveCount(1);
-    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
-      timeout: 15_000,
-    });
+      readyGateCard.getByTestId('system-access-row').filter({ hasText: '可直接调用' }),
+    ).toHaveCount(1, { timeout: 15_000 });
+
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(
