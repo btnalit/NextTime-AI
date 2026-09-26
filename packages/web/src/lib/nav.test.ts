@@ -17,7 +17,7 @@ describe('lib/nav', () => {
 
   it('breadcrumbFor resolves a 治理-group section to [治理, <page label>]', () => {
     expect(breadcrumbFor('members')).toEqual([{ label: '治理' }, { label: '成员与授权' }]);
-    expect(breadcrumbFor('systems')).toEqual([{ label: '治理' }, { label: '系统接入' }]);
+    expect(breadcrumbFor('systems')).toEqual([{ label: '治理' }, { label: '系统与授权' }]);
   });
 
   it('breadcrumbFor resolves a 平台-group section to [平台, <page label>]', () => {

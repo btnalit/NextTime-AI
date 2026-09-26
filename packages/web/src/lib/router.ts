@@ -168,6 +168,12 @@ export function sectionOf(route: Route): NavSection {
       return 'chats';
     case 'login':
       return 'chats';
+    // Console redesign P2: `#/govern/access` still parses to its own `Route` (kept working, see
+    // `routeFromHash`'s own doc comment on not rewriting a stale hash) and `routes.tsx` renders the
+    // same `SystemsPage` for it as for `systems` — the Sidebar highlights the one remaining nav
+    // item (系统与授权) for either URL rather than an item that no longer exists.
+    case 'access':
+      return 'systems';
     default:
       return route.kind;
   }
@@ -184,6 +190,13 @@ export const hrefs = {
   agent: () => '#/me/agent',
   account: () => '#/me/account',
   members: () => '#/govern/members',
+  // Console redesign P2: 访问 is no longer its own page — `#/govern/access` renders the same
+  // `SystemsPage` (系统与授权) as `systems()` below (`routes.tsx`, `sectionOf` above). Left
+  // pointing at its own hash rather than rewritten to `systems()`'s: every existing caller
+  // (`readiness-copy.ts`'s `no_grant`/`not_granted` fix-links, `AgentProfileForm`'s "查看授权")
+  // already lands on the merged page this way, with zero risk of drifting `components/
+  // readiness/**`'s own hard-coded href assertions (out of this lane's file scope) — see the PR
+  // report for the alternative considered.
   access: () => '#/govern/access',
   systems: () => '#/govern/systems',
   gatekeeper: (gatekeeperId: string) => `#/govern/systems/${encodeURIComponent(gatekeeperId)}`,

@@ -1,6 +1,5 @@
 [
   "packages/web/src/App.tsx",
-  "packages/web/src/components/AccessPage.tsx",
   "packages/web/src/components/AccountPage.tsx",
   "packages/web/src/components/ActionRequestCard.tsx",
   "packages/web/src/components/ActionRequestDetail.tsx",
@@ -22,7 +21,6 @@
   "packages/web/src/components/ChatPage.test.tsx",
   "packages/web/src/components/ChatPage.tsx",
   "packages/web/src/components/CompleteConnectionForm.tsx",
-  "packages/web/src/components/ConnectionsPage.tsx",
   "packages/web/src/components/CreatePrincipalForm.tsx",
   "packages/web/src/components/GatekeeperDetailDrawer.tsx",
   "packages/web/src/components/LoginPage.tsx",
@@ -33,7 +31,6 @@
   "packages/web/src/components/OnboardingWizard.tsx",
   "packages/web/src/components/OnboardingWizardReview.tsx",
   "packages/web/src/components/PrincipalDetail.tsx",
-  "packages/web/src/components/RegisteredSystemsSection.tsx",
   "packages/web/src/components/RequestConnectionForm.tsx",
   "packages/web/src/components/SystemStatusLineView.tsx",
   "packages/web/src/components/TaskDetail.tsx",

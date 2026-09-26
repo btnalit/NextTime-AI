@@ -28,18 +28,30 @@ export const SheetOverlay = forwardRef<
 });
 
 const sheetVariants = cva(
-  'fixed z-50 flex flex-col gap-4 border-border bg-surface-1 p-5 shadow-1',
+  'fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface-1 p-5 shadow-1',
   {
     variants: {
       side: {
-        right: 'inset-y-0 right-0 h-full w-full max-w-md border-l',
-        left: 'inset-y-0 left-0 h-full w-full max-w-md border-r',
+        right: 'inset-y-0 right-0 h-full w-full border-l',
+        left: 'inset-y-0 left-0 h-full w-full border-r',
         top: 'inset-x-0 top-0 w-full border-b',
         bottom: 'inset-x-0 bottom-0 w-full border-t',
+      },
+      // console redesign P2 (components/systems/SystemsPage): `default` keeps every existing
+      // consumer's exact width (`max-w-md`, unchanged); `wide` is for a multi-step form
+      // (`ConnectSystemLauncher`/`OnboardingWizard`/`CompleteConnectionForm`/
+      // `RequestConnectionForm`) that used to open in `components/ui/Drawer`'s own `wide` prop
+      // (640px) — a page built only from `components/kit/*` has no other way to size one wider,
+      // since Tailwind utilities are only generated for files under `components/kit/**`
+      // (`styles/tailwind.css`'s `@source`).
+      size: {
+        default: 'max-w-md',
+        wide: 'max-w-2xl',
       },
     },
     defaultVariants: {
       side: 'right',
+      size: 'default',
     },
   },
 );

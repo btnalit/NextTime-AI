@@ -81,11 +81,13 @@ export const WORK_NAV: readonly NavItem[] = [
  *  platform admin with zero memberships has nothing here to configure). */
 export const GOVERN_NAV: readonly NavItem[] = [
   { section: 'members', label: '成员与授权', sub: 'Members', icon: 'users', href: hrefs.members() },
-  { section: 'access', label: '访问', sub: 'Access', icon: 'key', href: hrefs.access() },
+  // Console redesign P2 (docs/console-redesign-plan-2026-09-25.md §4): 访问's per-member grant
+  // half merged into this page (`components/systems/SystemsPage.tsx`) — no separate 访问 nav item
+  // any more; `#/govern/access` still works (`lib/router.ts`'s `sectionOf`) for old links/bookmarks.
   {
     section: 'systems',
-    label: '系统接入',
-    sub: 'Systems',
+    label: '系统与授权',
+    sub: 'Systems & access',
     icon: 'connections',
     href: hrefs.systems(),
   },

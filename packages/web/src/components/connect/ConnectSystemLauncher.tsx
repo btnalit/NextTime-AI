@@ -741,8 +741,8 @@ function SelectedGateSummary({
       platform.definition?.credentialMode === 'connected_account' ? (
         <Notice>
           {t(
-            '按人凭证：每个成员在工作区「系统接入」页的目录行里录入自己的一份。 Per-member credential — each member enters their own from the workspace 系统接入',
-            'catalog row.',
+            '按人凭证：每个成员在工作区「系统与授权」页里录入自己的一份。',
+            'Per-member credential — each member enters their own on the workspace’s Systems & access page.',
           )}
         </Notice>
       ) : null}
@@ -846,7 +846,7 @@ function PolicyStep({
             '页完成（owner）。',
             'A workspace owner enables it, reviews the classification and grants members on',
           )}{' '}
-          <a href={hrefs.systems()}>{t('系统接入', 'Systems')}</a>.
+          <a href={hrefs.systems()}>{t('系统与授权', 'Systems & access')}</a>.
         </Notice>
       )}
     </div>
@@ -1197,7 +1197,9 @@ function HandshakeStep({
           ) : onWorkspace ? (
             t('未启用', 'Not enabled here')
           ) : (
-            <a href={hrefs.systems()}>到工作区系统接入页启用 Enable on 系统接入</a>
+            <a href={hrefs.systems()}>
+              {t('到工作区「系统与授权」页启用', 'Enable on the workspace’s Systems & access page')}
+            </a>
           )}
         </dd>
         {enabled ? (
