@@ -162,8 +162,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
 
+      // The caller's scope covers the step's gate (D4: an observe step is usable only then).
       const matches = await inTx((client) =>
-        findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
+        findProcedures(
+          client,
+          workspaceId,
+          { parentAuthority: entryScope({ resources: { gatekeeper: [gatekeeperId] } }) },
+          unique,
+        ),
       );
       expect(matches.some((m) => m.procedureId === draft.id)).toBe(true);
     });
