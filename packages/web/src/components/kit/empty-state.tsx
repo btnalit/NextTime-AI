@@ -52,7 +52,7 @@ export function EmptyState({
         {icon !== undefined ? <span className="shrink-0 text-text-3">{icon}</span> : null}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <p className="m-0 truncate text-13 font-semibold text-text">{title}</p>
-          {body !== undefined ? <p className="m-0 truncate text-12 text-text-3">{body}</p> : null}
+          {body !== undefined ? <p className="m-0 text-12 text-text-3">{body}</p> : null}
         </div>
         {action !== undefined ? <div className="shrink-0">{action}</div> : null}
       </div>
