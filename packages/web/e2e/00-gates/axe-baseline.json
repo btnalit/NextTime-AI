@@ -1,9 +1,5 @@
 {
-  "access": {
-    "link-in-text-block": {
-      "count": 1
-    }
-  },
+  "access": {},
   "account": {},
   "agent": {},
   "approvals": {},
