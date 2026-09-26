@@ -237,8 +237,9 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
     } else if (wantsExecute) {
       missingExecuteGates.push(gate);
     }
-    // else: an observe-only gate the caller doesn't hold — silently dropped (design doc §11:
-    // observation is ungated by design; only execute-class access is credential-gated).
+    // else: an observe-only gate the caller doesn't hold — silently dropped rather than refused
+    // (only execute-class access fails the delegation outright); since D4 (2026-09-26) the child
+    // cannot observe it either — `observe_operation` checks the Handle's own gate scope.
   }
   if (missingExecuteGates.length > 0) {
     throw new InvokeWorkerAttenuationError(

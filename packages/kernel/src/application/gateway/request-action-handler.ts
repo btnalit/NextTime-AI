@@ -1000,11 +1000,12 @@ async function resolveRequesterScope(
  *     needs an execute-class effect delegates through `invoke_worker`; a Worker uses
  *     `request_action`.
  *
- * On the **handle** channel this still does not check `resources.gatekeeper` (S2.4 known gap —
- * projected tools only exist for granted gates, but a direct call is not narrowed; a Handle's own
- * scope is still checked by `authorize.ts` before this handler ever runs, just not narrowed to
- * *this* Gatekeeper specifically). On the **human** channel (item 1 fix, review job 652a4abc), a
- * non-owner caller must hold an active `'gatekeeper'` Grant for `gatekeeperId` —
+ * On the **handle** channel the Gatekeeper must be in the Handle's own `resources.gatekeeper`
+ * (`assertHandleGatekeeperScope` below — design decision D4, 2026-09-26: "观察免审" exempts an
+ * observation from *approval*, not from *authorization scope*; this closes the S2.4 known gap where
+ * `authorize.ts` checked the capability name but not which Gatekeeper, so an `mcp_session` Handle
+ * could observe any gate in the workspace). On the **human** channel (item 1 fix, review job
+ * 652a4abc), a non-owner caller must hold an active `'gatekeeper'` Grant for `gatekeeperId` —
  * `assertHumanGatekeeperAccess` below, same gate `request_action` now applies.
  */
 export const observeOperationHandler: CapabilityHandler = async (
@@ -1026,6 +1027,8 @@ export const observeOperationHandler: CapabilityHandler = async (
   if ((ctx?.channel ?? 'handle') === 'human') {
     const role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
     await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+  } else {
+    assertHandleGatekeeperScope(ctx?.scope, gatekeeperId);
   }
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
@@ -1133,6 +1136,9 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
 
   if (published && published.operation.mode === 'observe') {
+    // D4: the observe branch never reaches `governance/policy`'s coverage check (that only runs
+    // for the governed execute path below), so a Handle caller's gate scope is checked here.
+    if (channel === 'handle') assertHandleGatekeeperScope(ctx?.scope, gatekeeperId);
     return runObserve(
       client,
       workspaceId,
@@ -1212,6 +1218,25 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     workerRun: workerRun ?? undefined,
   });
 };
+
+/** Design decision D4 (2026-09-26, `docs/productization-plan-v2-2026-09-26.md` §2): a Handle caller
+ *  may observe only through a Gatekeeper in its own `resources.gatekeeper` — the same scope
+ *  `list_allowed_operations` projects tools from, `computeChildHandleScope` narrows Workers to and
+ *  `computeCapabilityReachability` reports as `direct`. An absent list is empty (`entryScope` only
+ *  sets the key when the member holds at least one gate Grant), never "unconstrained". Same
+ *  `ForbiddenError` shape as the human channel's `assertHumanGatekeeperAccess`, so reachability's
+ *  `not_granted` maps to one refusal whichever channel the call came through. */
+function assertHandleGatekeeperScope(
+  scope: CapabilityScope | undefined,
+  gatekeeperId: string,
+): void {
+  const covered = scope?.resources[GATEKEEPER_RESOURCE_SCOPE_KEY] ?? [];
+  if (!covered.includes(gatekeeperId)) {
+    throw new ForbiddenError(
+      `request_action/observe_operation: this Handle's scope does not cover "${GATEKEEPER_RESOURCE_SCOPE_KEY}" ${gatekeeperId} — observation needs no approval, but it still needs the gate in scope (a member Grant, narrowed per Worker)`,
+    );
+  }
+}
 
 /** P-B1: the per-call half of "按 Operation 开关" — `null` link = a gate this workspace connected
  *  itself, no platform deny list applies. Routes through `operationPlatformStatus`

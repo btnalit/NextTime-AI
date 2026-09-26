@@ -548,17 +548,15 @@ export async function findWorkers(
  * exactly this (S2.7's own note, which this supersedes).
  *
  * **The exact rule is per-candidate `mode`, not "every candidate needs `resources.gatekeeper`
- * coverage"** — matches `findProcedures`'s own `stepUsableByCaller` (S2.14, same file, an
- * `operation`-kind step) exactly, both being projections of the same design-doc rule (§11
- * "observation is ungated by design; only execute-class access is credential-gated" —
- * `application/task/handle-mint.ts`'s `computeChildHandleScope` documents the identical rule for
- * `invoke_worker`'s own gate narrowing): an `observe`-mode Operation is always included —
- * `'unconstrained'` or not, granted or not; an `execute`-mode Operation additionally requires
- * `identityKey.gatekeeperId` to be in `resources.gatekeeper` (`'unconstrained'` — owner, human
- * channel, no Handle to narrow from — always satisfies this). `connect_gatekeeper`'s observable
- * effect on `find_operations` is therefore specifically on which *execute*-class Operations a
- * caller sees as usable, not on observation — the same scope this whole platform's I14/§11 model
- * ever puts a credential/authorization gate on.
+ * coverage"**: an `observe`-mode Operation is always *listed* — `'unconstrained'` or not, granted
+ * or not — so the agent can discover it and tell the member what is missing; an `execute`-mode
+ * Operation additionally requires `identityKey.gatekeeperId` to be in `resources.gatekeeper`
+ * (`'unconstrained'` — owner, human channel, no Handle to narrow from — always satisfies this).
+ * Listed is not callable: since design decision D4 (2026-09-26) an observation skips *approval*,
+ * not *authorization scope* — `observe_operation` refuses a Handle whose scope does not cover the
+ * gate, and `find_operations`' per-Operation `reachability` annotation (root Handle callers) says
+ * `not_granted` for exactly those. `findProcedures`' `stepUsableByCaller` (same file) answers the
+ * different question "can this caller run the step", so it requires coverage for both modes.
  */
 export async function findOperations(
   client: PoolClient,
@@ -646,7 +644,14 @@ async function stepUsableByCaller(
       step.operationName,
     );
     if (!operation) return false; // I17: draft/deprecated/unknown is never usable.
-    if (operation.operation.mode !== 'execute') return true; // §11: observe is ungated by design.
+    if (operation.operation.mode !== 'execute') {
+      // D4 (2026-09-26): observation skips approval, not authorization scope — an observe step is
+      // usable only when the caller's scope covers its Gatekeeper, the same check
+      // `observe_operation` now enforces for a Handle caller (request-action-handler.ts
+      // `assertHandleGatekeeperScope`).
+      if (caller.parentAuthority === 'unconstrained') return true;
+      return (caller.parentAuthority.resources.gatekeeper ?? []).includes(step.gatekeeperId);
+    }
     try {
       // A synthetic single-gate "WorkerDefinition" dry run — `request_action` is the fixed
       // execute-class capability name every gate-execute call goes through

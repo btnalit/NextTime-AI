@@ -204,7 +204,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(matches).toEqual([]);
     });
 
-    it('includes a Procedure whose only step is an observe-mode Operation, for an entry (no-gate) caller', async () => {
+    it('an observe-mode step counts only when the caller scope covers its Gatekeeper (D4)', async () => {
       const opName = await publishedOperation('observe');
       const unique = uniqueNeed('observe-only');
       const draft = await inTx((client) =>
@@ -216,12 +216,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
 
-      // entryScope() never holds any gatekeeper resource — an observe-mode step must still pass
-      // (design doc §11 "observation is ungated by design").
-      const matches = await inTx((client) =>
+      // D4 (2026-09-26): observation skips approval, not authorization scope. A no-gate entry
+      // caller cannot run the step, so the Procedure is not usable for it; a caller whose scope
+      // covers the Gatekeeper can.
+      const noGate = await inTx((client) =>
         findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
       );
-      expect(matches.some((m) => m.procedureId === draft.id)).toBe(true);
+      expect(noGate.some((m) => m.procedureId === draft.id)).toBe(false);
+      const covered = await inTx((client) =>
+        findProcedures(
+          client,
+          workspaceId,
+          { parentAuthority: entryScope({ resources: { gatekeeper: [gatekeeperId] } }) },
+          unique,
+        ),
+      );
+      expect(covered.some((m) => m.procedureId === draft.id)).toBe(true);
     });
 
     it('excludes a Procedure whose step is an execute-mode Operation, for a caller whose scope does not cover that Gatekeeper', async () => {
