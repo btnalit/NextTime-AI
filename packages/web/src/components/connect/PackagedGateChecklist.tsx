@@ -173,7 +173,7 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
             <>
               启动后它 announce 到内核，出现在平台「集成 → 门实例」；管理员<strong>启用</strong>
               它并把接入包 <code>{system}</code> 设为<strong>平台预置</strong>后，工作区 owner
-              才能在「系统接入」启用。
+              才能在「系统与授权」启用。
             </>,
             <>
               After start it announces itself to the kernel and shows up under Platform →

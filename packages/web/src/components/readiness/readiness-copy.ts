@@ -102,9 +102,9 @@ export function missingLinkHref(item: ExecutionReadinessMissingWire): string {
 export function missingLinkLabel(item: ExecutionReadinessMissingWire, t: Translate): string {
   switch (item.code) {
     case 'no_enabled_gate':
-      return t('去系统接入', 'Go to Systems');
+      return t('去系统与授权', 'Go to Systems & access');
     case 'no_grant':
-      return t('去访问', 'Go to Access');
+      return t('去系统与授权', 'Go to Systems & access');
     case 'no_published_worker':
     case 'no_worker_gate':
       return t('去能力目录', 'Go to Catalog');
@@ -164,9 +164,9 @@ export function gateReasonHref(reason: GateUnreachableReason): string {
 export function gateReasonLink(reason: GateUnreachableReason, t: Translate): string {
   switch (reason) {
     case 'no_published_operation':
-      return t('去系统接入', 'Go to Systems');
+      return t('去系统与授权', 'Go to Systems & access');
     case 'not_granted':
-      return t('去访问', 'Go to Access');
+      return t('去系统与授权', 'Go to Systems & access');
     case 'excluded_by_policy':
       return t('去模型与配额', 'Go to Models & Quotas');
     case 'excluded_by_profile':

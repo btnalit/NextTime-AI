@@ -606,7 +606,7 @@ function WorkspacesUsingSection({
         // sentence this section rendered before W4-C, kept as a fallback.
         <p className="text-2">
           {t(
-            `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。`,
+            `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的「系统与授权」页）。`,
             `${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's own Systems page.`,
           )}
         </p>
@@ -625,7 +625,7 @@ function WorkspacesUsingSection({
         </div>
       ) : null}
       <a href={hrefs.systems()} data-testid="gate-instance-systems-link">
-        {t('打开工作区系统接入页 Open the workspace 系统接入', 'page')}
+        {t('打开工作区「系统与授权」页', 'Open the workspace’s Systems & access page')}
       </a>
     </div>
   );
