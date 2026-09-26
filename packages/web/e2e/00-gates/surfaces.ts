@@ -113,19 +113,15 @@ export const SURFACES: readonly Surface[] = [
     role: 'owner',
     ready: (page) => page.getByTestId('members-list'), // MembersPage.tsx
   },
-  {
-    id: 'access',
-    labelZh: '访问',
-    hash: '#/govern/access',
-    role: 'owner',
-    ready: (page) => heading(page, '访问'), // AccessPage.tsx
-  },
+  // Console redesign P2: 访问 merged into 系统与授权 (`components/systems/SystemsPage.tsx`) —
+  // `#/govern/access` renders the identical page, so it is no longer a separate gate surface
+  // (dropped rather than kept as a second copy of the same screenshot/axe/copy assertions).
   {
     id: 'systems',
-    labelZh: '系统接入',
+    labelZh: '系统与授权',
     hash: '#/govern/systems',
     role: 'owner',
-    ready: (page) => heading(page, '系统接入'), // ConnectionsPage.tsx
+    ready: (page) => heading(page, '系统与授权'), // components/systems/SystemsPage.tsx
   },
   // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all five tabs — only the tab
   // body under it changes (Tabs component, `#/govern/catalog/<tab>`).

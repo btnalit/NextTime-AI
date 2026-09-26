@@ -11,17 +11,17 @@ import {
  * Journey ②: 接入一个新系统 (development-tasks.md §5e F4; 系统接入页收敛 SY1–SY4/U5/L4, W3 波次)
  *
  * 步骤:
- *   1. 系统接入 → 新建（"接入一个系统" 主按钮，`ConnectSystemLauncher` — 系统接入页§5.9 原则 1
+ *   1. 系统与授权 → 新建（"接入一个系统" 主按钮，`ConnectSystemLauncher` — 系统与授权页§5.9 原则 1
  *      "一个墨色主按钮"下的当前路径；页面自身的旧 "接入向导" `OnboardingWizard` 走
  *      `CompleteConnectionForm`/`create_connection` 直连注册，与本旅程可用的 fixture（见下）不是
  *      同一条机制，本旅程走当前主路径）→ 选择接入方式。
  *   2. 填写连接信息，测试连通。
  *   3. 门注册成功后，看到它发现/声明的 Operation 列表。
  *   4. 挑选要发布的 Operation，逐个或批量发布。
- *   5. 回到 系统接入 列表，确认这个门状态健康、Operation 数量正确。
+ *   5. 回到 系统与授权 列表，确认这个门状态健康、Operation 数量正确。
  * 状态覆盖:
  *   - 空: `createFreshWorkspace` 给一个全新工作区（同 01-entry-agent.spec.ts 的"空"覆盖）——第 1 步
- *     之前断言 系统接入 的空态（`gatekeepers-empty`）与"接入一个系统"主按钮都可见。
+ *     之前断言 系统与授权 的空态（`systems-empty`）与"接入一个系统"主按钮都可见。
  *   - 错: 连接信息错误/端点不可达——测试连通要给出具体原因，不是泛化的"失败"（本旅程没有走到这一
  *     步，见下方"今天能做到哪一步"；ConnectSystemLauncher.test.tsx 与 EnableGateConfirm 自己的失败
  *     态由组件测试覆盖）。
@@ -30,7 +30,7 @@ import {
  *   - 窄屏: 跳过——W1-B 的截图/axe 门槛与批量设计评审已覆盖向导多步表单在 768px 下的可用性，本旅程
  *     只加一次真实端到端跑通。
  * 成功判据:
- *   - 一个人从"系统接入"空态开始，不碰 SQL/CLI，把一个系统的至少一个 Operation 发布出来，且这个
+ *   - 一个人从"系统与授权"空态开始，不碰 SQL/CLI，把一个系统的至少一个 Operation 发布出来，且这个
  *     Operation 出现在 能力目录 · Operation 里。
  *
  * 今天能做到哪一步（S8 W4-D，读代码后的结论，不是猜测）：steps 2-5 曾经 `test.fixme`，理由是"fake
@@ -48,11 +48,11 @@ import {
  * `fromAvailableRow` 恒 `platform: null`，`PolicyStep` 那张静态"已声明的 Operation"表格只对读
  * `list_gate_instances` 的管理员视角渲染——这条路径上"看到 Operation 列表"实际发生在
  * `EnableGateConfirm` 的 `preview_gate_instance_enable` 预览里，不是那张表格）、确认发布——到
- * "系统接入"列表与"能力目录"确认，是本次新增打通的部分，与 `ConnectSystemLauncher.test.tsx`
+ * "系统与授权"列表与"能力目录"确认，是本次新增打通的部分，与 `ConnectSystemLauncher.test.tsx`
  * （组件级，scripted http）的 "hosted path from the workspace page (non-admin owner)" 用例走的是
  * 同一段真实组件代码。
  *
- * `01-entry-agent.spec.ts` 已经用同一个 `ci-fixture-mcp` 做过"工作区自己启用"，但走的是 系统接入
+ * `01-entry-agent.spec.ts` 已经用同一个 `ci-fixture-mcp` 做过"工作区自己启用"，但走的是 系统与授权
  * 列表页自己的内联启用按钮（`AvailableGateInstancesSection`），不是这条旅程要证明的向导本身
  * （`ConnectSystemLauncher`）——两条旅程各自的 `createFreshWorkspace` 互不干扰，这里不是重复覆盖。
  */
@@ -81,9 +81,9 @@ test.describe('Journey ②: 接入一个新系统', () => {
     await selectOwnedWorkspace(page);
     await expect(page.getByTestId('nav-chats')).toBeVisible();
 
-    // --- 空: 系统接入还没有任何门，"接入一个系统"主按钮是唯一入口 -----------------------------
-    await goToByLabel(page, '系统接入');
-    await expect(page.getByTestId('gatekeepers-empty')).toBeVisible();
+    // --- 空: 系统与授权还没有任何门，"接入一个系统"主按钮是唯一入口 ---------------------------
+    await goToByLabel(page, '系统与授权');
+    await expect(page.getByTestId('systems-empty')).toBeVisible();
     const connectButton = page.getByTestId('connect-system-button');
     await expect(connectButton).toBeVisible();
 
@@ -137,7 +137,7 @@ test.describe('Journey ②: 接入一个新系统', () => {
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
 
-    // --- 5. 回到 系统接入 列表，确认门已注册、状态健康 -----------------------------------------
+    // --- 5. 回到 系统与授权 列表，确认门已注册、状态健康 ---------------------------------------
     await expect(
       page.getByTestId('gatekeeper-card').filter({ hasText: GATE_DISPLAY_NAME }),
     ).toHaveCount(1, { timeout: 15_000 });

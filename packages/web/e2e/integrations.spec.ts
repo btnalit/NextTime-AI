@@ -29,7 +29,7 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * pre-created platform administrator `workspaces.spec.ts` uses (see that file's own doc comment).
  * The admin is assumed to be the owner of the platform default workspace (true on a fresh stack:
  * `ensureDefaultWorkspace` creates it with the earliest administrator as owner) — every 管理 page
- * this file visits (系统接入/成员与授权/能力目录) needs a workspace in scope, and this file
+ * this file visits (系统与授权/成员与授权/能力目录) needs a workspace in scope, and this file
  * creates no workspace of its own the way `workspaces.spec.ts` does.
  */
 
@@ -206,7 +206,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await ensureOwnedWorkspaceSelected(page);
 
     await page.getByTestId('nav-systems').click();
-    await expect(page.getByRole('heading', { name: '系统接入' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '系统与授权' })).toBeVisible({
       timeout: 15_000,
     });
 
@@ -286,11 +286,11 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
   });
 
   // S6-C (docs/console-completion-plan.md §5.6): the same "接入一个系统" launcher opens from both
-  // pages. On 集成 an http kind offers the hosted-instance form; on 系统接入 an ssh kind shows the
+  // pages. On 集成 an http kind offers the hosted-instance form; on 系统与授权 an ssh kind shows the
   // packaged-gate checklist (the page never pretends to create a packaged gate). Read-only: it
   // creates nothing, so it is safe on a retry. The seeded mcp instance is also pickable from the
-  // launcher's list on 系统接入 (test 2 enabled it there), with no 启用 button left (B7).
-  test('admin: the "接入一个系统" launcher opens from 集成 and 系统接入 with the right step-2 body', async ({
+  // launcher's list on 系统与授权 (test 2 enabled it there), with no 启用 button left (B7).
+  test('admin: the "接入一个系统" launcher opens from 集成 and 系统与授权 with the right step-2 body', async ({
     page,
   }) => {
     test.slow();
@@ -317,7 +317,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
 
     await ensureOwnedWorkspaceSelected(page);
     await page.getByTestId('nav-systems').click();
-    await expect(page.getByRole('heading', { name: '系统接入' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '系统与授权' })).toBeVisible({
       timeout: 15_000,
     });
     await page.getByTestId('connect-system-button').click();
