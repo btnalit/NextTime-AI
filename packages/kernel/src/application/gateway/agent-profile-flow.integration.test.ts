@@ -58,18 +58,16 @@ function humanCaller(workspaceId: string, principalId: string, role: Role): Reso
 interface WireAgentProfile {
   readonly principalId: string;
   readonly model: string | null;
-  readonly enabledSkills: readonly string[] | null;
-  readonly enabledGatekeepers: readonly string[] | null;
-  readonly enabledWorkerDefinitions: readonly string[] | null;
+  /** Exclusion lists (governance 0012, console redesign D1): `[]` excludes nothing. */
+  readonly excludedSkills: readonly string[];
+  readonly excludedGatekeepers: readonly string[];
+  readonly excludedWorkerDefinitions: readonly string[];
   readonly promptAddendum: string | null;
   readonly autoApproveLow: boolean | null;
   readonly updatedAt: string | null;
   readonly updatedBy: string | null;
-  /** Always concrete (never `null`) — `null` (inherit) on any raw list field above resolves to
-   *  "every currently available resource" here, not to nothing (`governance/agent-profile/
-   *  resolve.ts`'s own doc comment) — the already-shipped web console's `EffectivePanel` renders
-   *  every one of these fields, including a `.length` call on each list, so a `null` here would
-   *  break it. */
+  /** Always concrete (never `null`) — every currently available resource minus the exclusions
+   *  above (`governance/agent-profile/resolve.ts`'s own doc comment). */
   readonly effective: {
     readonly model: string;
     readonly enabledSkills: readonly string[];
@@ -138,7 +136,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    /** Publishes one Skill (workspace-wide) — for `enabledSkills` validation fixtures. */
+    /** Publishes one Skill (workspace-wide) — for `excludedSkills` / effective fixtures. */
     async function publishTestSkill(
       ws: string,
       byPrincipalId: string,
@@ -159,7 +157,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
-    /** Registers one Gatekeeper — for `enabledGatekeepers` validation fixtures. */
+    /** Registers one Gatekeeper — for `excludedGatekeepers` / effective fixtures. */
     async function registerTestGatekeeper(
       ws: string,
       byPrincipalId: string,
@@ -275,7 +273,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('get_agent_profile', () => {
-      it('defaults: no row for a fresh principal in a fresh workspace — every raw field null, effective resolves to concrete "nothing configured" values', async () => {
+      it('defaults: no row for a fresh principal in a fresh workspace — scalars null, no exclusions, effective resolves to concrete "nothing configured" values', async () => {
         // Isolated workspace (not the shared top-level one) so "nothing currently available" is
         // actually true — the shared workspace accumulates published Skills/Gatekeepers from
         // other tests in this file.
@@ -292,9 +290,9 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(profile.principalId).toBe(memberId);
         expect(profile.model).toBeNull();
-        expect(profile.enabledSkills).toBeNull();
-        expect(profile.enabledGatekeepers).toBeNull();
-        expect(profile.enabledWorkerDefinitions).toBeNull();
+        expect(profile.excludedSkills).toEqual([]);
+        expect(profile.excludedGatekeepers).toEqual([]);
+        expect(profile.excludedWorkerDefinitions).toEqual([]);
         expect(profile.promptAddendum).toBeNull();
         expect(profile.autoApproveLow).toBeNull();
         expect(profile.updatedAt).toBeNull();
@@ -335,9 +333,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           {},
         )) as WireAgentProfile;
 
-        // The raw fields are still null (never touched) — only `effective` resolves the ceiling.
-        expect(profile.enabledSkills).toBeNull();
-        expect(profile.enabledGatekeepers).toBeNull();
+        // Nothing excluded (never touched) — `effective` is everything on offer.
+        expect(profile.excludedSkills).toEqual([]);
+        expect(profile.excludedGatekeepers).toEqual([]);
         expect(profile.effective.enabledSkills).toEqual([skillId]);
         expect(profile.effective.enabledGatekeepers).toEqual([gatekeeperId]);
       });
@@ -455,63 +453,64 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(AgentProfileValidationError);
       });
 
-      it('enabledSkills: accepts a published Skill by id, rejects an unpublished/unknown one', async () => {
-        const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Kevin');
+      it('excludedSkills: an excluded published Skill leaves effective; the stored list is deduplicated; an unknown id is accepted as a no-op', async () => {
+        const skillWs = await adminInsertWorkspace('agent-profile-flow-exclude-skills');
+        const skillOwnerId = await adminInsertPrincipal(skillWs, 'owner', 'SkillOwner');
+        const memberId = await adminInsertPrincipal(skillWs, 'member', 'Kevin');
+        const member = humanCaller(skillWs, memberId, 'member');
+        const keep = await publishTestSkill(skillWs, skillOwnerId, `keep-${randomUUID()}`);
+        const drop = await publishTestSkill(skillWs, skillOwnerId, `drop-${randomUUID()}`);
+
+        const updated = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          excludedSkills: [drop, drop, randomUUID()],
+        })) as WireAgentProfile;
+        expect(updated.excludedSkills).toHaveLength(2);
+        expect(updated.excludedSkills).toContain(drop);
+        expect(updated.effective.enabledSkills).toEqual([keep]);
+      });
+
+      it('excludedGatekeepers (console redesign D1): excluding a granted Gatekeeper narrows effective, and a Gatekeeper granted afterwards is picked up without touching the profile', async () => {
+        const gateWs = await adminInsertWorkspace('agent-profile-flow-exclude-gates');
+        const gateOwnerId = await adminInsertPrincipal(gateWs, 'owner', 'GateOwner');
+        const memberId = await adminInsertPrincipal(gateWs, 'member', 'Laura');
+        const member = humanCaller(gateWs, memberId, 'member');
+        const first = await registerTestGatekeeper(gateWs, gateOwnerId, `first-${randomUUID()}`);
+        const other = await registerTestGatekeeper(gateWs, gateOwnerId, `other-${randomUUID()}`);
+        await grantGatekeeper(gateWs, gateOwnerId, memberId, first);
+        await grantGatekeeper(gateWs, gateOwnerId, memberId, other);
+
+        const saved = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          excludedGatekeepers: [other],
+        })) as WireAgentProfile;
+        expect(saved.effective.enabledGatekeepers).toEqual([first]);
+
+        // The production incident: a system connected and granted after the profile was saved.
+        const later = await registerTestGatekeeper(gateWs, gateOwnerId, `later-${randomUUID()}`);
+        await grantGatekeeper(gateWs, gateOwnerId, memberId, later);
+        const after = (await dispatchCapability(
+          { pool },
+          member,
+          'get_agent_profile',
+          {},
+        )) as WireAgentProfile;
+        expect([...after.effective.enabledGatekeepers].sort()).toEqual([first, later].sort());
+        expect(after.excludedGatekeepers).toEqual([other]);
+      });
+
+      it('excludedGatekeepers: excluding a Gatekeeper the principal holds no Grant for is accepted and never widens effective', async () => {
+        const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Mallory');
         const member = humanCaller(workspaceId, memberId, 'member');
-        const skillId = await publishTestSkill(
+        const ungranted = await registerTestGatekeeper(
           workspaceId,
           ownerId,
-          `writing-tips-${randomUUID()}`,
+          `ungranted-${randomUUID()}`,
         );
 
         const updated = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
-          enabledSkills: [skillId],
+          excludedGatekeepers: [ungranted],
         })) as WireAgentProfile;
-        expect(updated.enabledSkills).toEqual([skillId]);
-
-        await expect(
-          dispatchCapability({ pool }, member, 'set_agent_profile', {
-            enabledSkills: [randomUUID()],
-          }),
-        ).rejects.toThrow(AgentProfileValidationError);
-      });
-
-      it('enabledGatekeepers: accepts a Gatekeeper the principal holds a Grant for, rejects an ungranted one', async () => {
-        const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Laura');
-        const member = humanCaller(workspaceId, memberId, 'member');
-        const gatekeeperId = await registerTestGatekeeper(
-          workspaceId,
-          ownerId,
-          `gate-${randomUUID()}`,
-        );
-
-        await expect(
-          dispatchCapability({ pool }, member, 'set_agent_profile', {
-            enabledGatekeepers: [gatekeeperId],
-          }),
-        ).rejects.toThrow(AgentProfileValidationError);
-
-        await grantGatekeeper(workspaceId, ownerId, memberId, gatekeeperId);
-        const updated = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
-          enabledGatekeepers: [gatekeeperId],
-        })) as WireAgentProfile;
-        expect(updated.enabledGatekeepers).toEqual([gatekeeperId]);
-      });
-
-      it('enabledGatekeepers: an owner target may select any registered Gatekeeper without an explicit Grant (I14 owner override)', async () => {
-        const secondOwnerId = await adminInsertPrincipal(workspaceId, 'owner', 'Owner Two');
-        const owner = humanCaller(workspaceId, ownerId, 'owner');
-        const gatekeeperId = await registerTestGatekeeper(
-          workspaceId,
-          ownerId,
-          `owner-gate-${randomUUID()}`,
-        );
-
-        const updated = (await dispatchCapability({ pool }, owner, 'set_agent_profile', {
-          principalId: secondOwnerId,
-          enabledGatekeepers: [gatekeeperId],
-        })) as WireAgentProfile;
-        expect(updated.enabledGatekeepers).toEqual([gatekeeperId]);
+        expect(updated.excludedGatekeepers).toEqual([ungranted]);
+        expect(updated.effective.enabledGatekeepers).not.toContain(ungranted);
       });
 
       it('authorization: a member editing another principal → 403', async () => {
@@ -686,14 +685,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           allowedSkills: [skillA],
         });
 
-        // The write itself succeeds — enabledSkills is validated against published Skills, not
-        // the policy cap (that cap only narrows the *effective* resolution).
+        // The profile excludes nothing, but the resolved effective value is capped to what the
+        // policy allows (the cap only narrows the *effective* resolution).
         const updated = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
-          enabledSkills: [skillA, skillB],
+          excludedSkills: [],
         })) as WireAgentProfile;
-        expect(updated.enabledSkills).toEqual([skillA, skillB]);
-        // But the resolved effective value is capped to what the policy allows.
+        expect(updated.excludedSkills).toEqual([]);
         expect(updated.effective.enabledSkills).toEqual([skillA]);
+        expect(updated.effective.enabledSkills).not.toContain(skillB);
       });
     });
 

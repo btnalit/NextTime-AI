@@ -27,27 +27,29 @@ interface AgentProfileDbRow {
   workspace_id: string;
   principal_id: string;
   model: string | null;
-  enabled_skills: readonly string[] | null;
-  enabled_gatekeepers: readonly string[] | null;
-  enabled_worker_definitions: readonly string[] | null;
+  excluded_skills: readonly string[];
+  excluded_gatekeepers: readonly string[];
+  excluded_worker_definitions: readonly string[];
   prompt_addendum: string | null;
   auto_approve_low: boolean | null;
   updated_by: string | null;
   updated_at: Date;
 }
 
+// The pre-0012 `enabled_*` allow-list columns are deliberately neither read nor written: they are
+// kept only so a rollback to the previous release behaves exactly as before (0012's header).
 const AGENT_PROFILE_COLUMNS =
-  'workspace_id, principal_id, model, enabled_skills, enabled_gatekeepers, ' +
-  'enabled_worker_definitions, prompt_addendum, auto_approve_low, updated_by, updated_at';
+  'workspace_id, principal_id, model, excluded_skills, excluded_gatekeepers, ' +
+  'excluded_worker_definitions, prompt_addendum, auto_approve_low, updated_by, updated_at';
 
 function mapAgentProfileRow(row: AgentProfileDbRow): AgentProfileRow {
   return {
     workspaceId: row.workspace_id,
     principalId: row.principal_id,
     model: row.model,
-    enabledSkills: row.enabled_skills,
-    enabledGatekeepers: row.enabled_gatekeepers,
-    enabledWorkerDefinitions: row.enabled_worker_definitions,
+    excludedSkills: row.excluded_skills,
+    excludedGatekeepers: row.excluded_gatekeepers,
+    excludedWorkerDefinitions: row.excluded_worker_definitions,
     promptAddendum: row.prompt_addendum,
     autoApproveLow: row.auto_approve_low,
     updatedBy: row.updated_by,
@@ -70,30 +72,30 @@ export async function readAgentProfile(
 
 /**
  * Every field is independently optional; an **omitted** (`undefined`) field leaves the existing
- * value (or the "inherit" default of `null`, for a principal with no row yet) untouched — a
- * present `null` resets that field to "inherit". `application/gateway/agent-profile-handlers.ts`
- * is what turns "the key was absent from the wire params" into an actual `undefined` here (zod's
- * own optional/nullable distinction, `packages/shared/src/capabilities.ts`'s `set_agent_profile`
- * paramsSchema doc comment).
+ * value (or the default — `null` "inherit" for the scalars, `[]` "exclude nothing" for the three
+ * exclusion lists — for a principal with no row yet) untouched; a present `null` resets a scalar
+ * to "inherit". `application/gateway/agent-profile-handlers.ts` is what turns "the key was absent
+ * from the wire params" into an actual `undefined` here (zod's own optional/nullable distinction,
+ * `packages/shared/src/capabilities.ts`'s `set_agent_profile` paramsSchema doc comment).
  */
 export interface SetAgentProfileFields {
   readonly model?: string | null;
-  readonly enabledSkills?: readonly string[] | null;
-  readonly enabledGatekeepers?: readonly string[] | null;
-  readonly enabledWorkerDefinitions?: readonly string[] | null;
+  readonly excludedSkills?: readonly string[];
+  readonly excludedGatekeepers?: readonly string[];
+  readonly excludedWorkerDefinitions?: readonly string[];
   readonly promptAddendum?: string | null;
   readonly autoApproveLow?: boolean | null;
 }
 
-function toJsonbParam(value: readonly string[] | null): string | null {
-  return value === null ? null : JSON.stringify(value);
+function toJsonbList(value: readonly string[]): string {
+  return JSON.stringify([...new Set(value)]);
 }
 
 /**
  * Merges `fields` (partial update semantics — see `SetAgentProfileFields`'s own doc comment) onto
  * `principalId`'s existing AgentProfile row (or the all-`null` baseline, for a principal with none
- * yet) and upserts the result. Validation (model whitelist, published-Skill/Grant subset checks,
- * the addendum length cap, the auto-approve-low policy gate) is the caller's own job
+ * yet) and upserts the result. Validation (model whitelist, the addendum length cap, the
+ * auto-approve-low policy gate — exclusion lists need none, they can only narrow) is the caller's own job
  * (`application/gateway/agent-profile-handlers.ts`) — this function only ever persists whatever it
  * is given.
  */
@@ -108,16 +110,10 @@ export async function setAgentProfile(
 
   const merged = {
     model: fields.model !== undefined ? fields.model : (existing?.model ?? null),
-    enabledSkills:
-      fields.enabledSkills !== undefined ? fields.enabledSkills : (existing?.enabledSkills ?? null),
-    enabledGatekeepers:
-      fields.enabledGatekeepers !== undefined
-        ? fields.enabledGatekeepers
-        : (existing?.enabledGatekeepers ?? null),
-    enabledWorkerDefinitions:
-      fields.enabledWorkerDefinitions !== undefined
-        ? fields.enabledWorkerDefinitions
-        : (existing?.enabledWorkerDefinitions ?? null),
+    excludedSkills: fields.excludedSkills ?? existing?.excludedSkills ?? [],
+    excludedGatekeepers: fields.excludedGatekeepers ?? existing?.excludedGatekeepers ?? [],
+    excludedWorkerDefinitions:
+      fields.excludedWorkerDefinitions ?? existing?.excludedWorkerDefinitions ?? [],
     promptAddendum:
       fields.promptAddendum !== undefined
         ? fields.promptAddendum
@@ -130,14 +126,14 @@ export async function setAgentProfile(
 
   const result = await client.query<AgentProfileDbRow>(
     `insert into agent_profiles (
-       workspace_id, principal_id, model, enabled_skills, enabled_gatekeepers,
-       enabled_worker_definitions, prompt_addendum, auto_approve_low, updated_by, updated_at
+       workspace_id, principal_id, model, excluded_skills, excluded_gatekeepers,
+       excluded_worker_definitions, prompt_addendum, auto_approve_low, updated_by, updated_at
      ) values ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8, $9, now())
      on conflict (workspace_id, principal_id) do update set
        model = excluded.model,
-       enabled_skills = excluded.enabled_skills,
-       enabled_gatekeepers = excluded.enabled_gatekeepers,
-       enabled_worker_definitions = excluded.enabled_worker_definitions,
+       excluded_skills = excluded.excluded_skills,
+       excluded_gatekeepers = excluded.excluded_gatekeepers,
+       excluded_worker_definitions = excluded.excluded_worker_definitions,
        prompt_addendum = excluded.prompt_addendum,
        auto_approve_low = excluded.auto_approve_low,
        updated_by = excluded.updated_by,
@@ -147,9 +143,9 @@ export async function setAgentProfile(
       workspaceId,
       principalId,
       merged.model,
-      toJsonbParam(merged.enabledSkills),
-      toJsonbParam(merged.enabledGatekeepers),
-      toJsonbParam(merged.enabledWorkerDefinitions),
+      toJsonbList(merged.excludedSkills),
+      toJsonbList(merged.excludedGatekeepers),
+      toJsonbList(merged.excludedWorkerDefinitions),
       merged.promptAddendum,
       merged.autoApproveLow,
       updatedBy,

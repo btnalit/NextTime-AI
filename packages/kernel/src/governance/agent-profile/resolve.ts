@@ -26,6 +26,13 @@ import type { AgentPolicyRow, AgentProfileRow } from './types.js';
  * `AgentPolicyRow`'s `allowedSkills`/`allowedGatekeepers` remain *caps* — `[]` means "unrestricted"
  * (S3.13: "上限集合（空 = 不限制）"), a non-empty list means "never resolve wider than this set"
  * regardless of what the profile (or the available-resources ceiling) would otherwise include.
+ *
+ * Since governance 0012 (console redesign D1, 2026-09-25) the profile's three lists are
+ * *exclusion* lists: the effective set is "what is available now, minus what the member
+ * excluded". Before that they were allow-lists resolved as `explicit ?? available`, which froze on
+ * the first save and silently dropped every later grant / publish (a newly granted system could
+ * not be used from chat, docs/console-redesign-plan-2026-09-25.md §2). An exclusion can only ever narrow, so the
+ * "never wider than the Grants / policy" invariant holds by construction.
  */
 
 /** The resources currently available to resolve `null` (inherit) against — computed by the
@@ -67,22 +74,19 @@ export interface EffectiveAgentProfile {
 }
 
 /**
- * `explicit` (a raw `AgentProfileRow` list field) resolved against `available` (the "inherit"
- * ceiling) and capped by `cap` (an `AgentPolicyRow` upper-bound list, `[]` = "no cap"). Never
- * returns something wider than either input allows:
- *   - `explicit` is `null`/`undefined` (inherit): resolves to `available` — every resource
- *     currently on offer, not "nothing".
- *   - `explicit` is a real (possibly empty) list: that list wins outright — an explicit `[]` means
- *     "nothing", genuinely different from `null`.
- *   - either way, `cap` (when non-empty) filters the result down further — a policy cap can only
- *     ever narrow, whether the profile expressed an explicit choice or inherited the full ceiling.
+ * `available` (every resource currently on offer) minus `excluded` (a raw `AgentProfileRow`
+ * exclusion list, `[]` / absent = exclude nothing), then capped by `cap` (an `AgentPolicyRow`
+ * upper-bound list, `[]` = "no cap"). Never returns anything outside `available`, so it can never
+ * be wider than the principal's own Grants / what is published; an excluded id that is not (or no
+ * longer) available is simply irrelevant.
  */
 function resolveList(
-  explicit: readonly string[] | null | undefined,
+  excluded: readonly string[] | undefined,
   available: readonly string[],
   cap: readonly string[],
 ): readonly string[] {
-  const base = explicit ?? available;
+  const dropped = new Set(excluded ?? []);
+  const base = available.filter((entry) => !dropped.has(entry));
   if (cap.length === 0) return base;
   const allowed = new Set(cap);
   return base.filter((entry) => allowed.has(entry));
@@ -134,17 +138,20 @@ export function resolveEffectiveAgentProfile(
   return {
     model: resolveModel(profile?.model, policy),
     enabledSkills: resolveList(
-      profile?.enabledSkills,
+      profile?.excludedSkills,
       available.publishedSkillIds,
       policy.allowedSkills,
     ),
     enabledGatekeepers: resolveList(
-      profile?.enabledGatekeepers,
+      profile?.excludedGatekeepers,
       available.grantedGatekeeperIds,
       policy.allowedGatekeepers,
     ),
-    enabledWorkerDefinitions:
-      profile?.enabledWorkerDefinitions ?? available.publishedWorkerDefinitionIds,
+    enabledWorkerDefinitions: resolveList(
+      profile?.excludedWorkerDefinitions,
+      available.publishedWorkerDefinitionIds,
+      [],
+    ),
     promptAddendum: profile?.promptAddendum ?? '',
     autoApproveLow: profile?.autoApproveLow ?? policy.allowMemberAutoApproveLow,
   };

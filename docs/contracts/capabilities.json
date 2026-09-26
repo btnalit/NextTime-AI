@@ -4688,44 +4688,23 @@
           ],
           "type": "object"
         },
-        "enabledGatekeepers": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedGatekeepers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledSkills": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedSkills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledWorkerDefinitions": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedWorkerDefinitions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "model": {
           "type": [
@@ -4758,9 +4737,9 @@
       "required": [
         "principalId",
         "model",
-        "enabledSkills",
-        "enabledGatekeepers",
-        "enabledWorkerDefinitions",
+        "excludedSkills",
+        "excludedGatekeepers",
+        "excludedWorkerDefinitions",
         "promptAddendum",
         "autoApproveLow",
         "updatedAt",
@@ -15945,47 +15924,26 @@
             "null"
           ]
         },
-        "enabledGatekeepers": {
-          "anyOf": [
-            {
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedGatekeepers": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledSkills": {
-          "anyOf": [
-            {
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedSkills": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledWorkerDefinitions": {
-          "anyOf": [
-            {
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedWorkerDefinitions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
         },
         "model": {
           "anyOf": [
@@ -16062,44 +16020,23 @@
           ],
           "type": "object"
         },
-        "enabledGatekeepers": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedGatekeepers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledSkills": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedSkills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "enabledWorkerDefinitions": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "excludedWorkerDefinitions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "model": {
           "type": [
@@ -16132,9 +16069,9 @@
       "required": [
         "principalId",
         "model",
-        "enabledSkills",
-        "enabledGatekeepers",
-        "enabledWorkerDefinitions",
+        "excludedSkills",
+        "excludedGatekeepers",
+        "excludedWorkerDefinitions",
         "promptAddendum",
         "autoApproveLow",
         "updatedAt",

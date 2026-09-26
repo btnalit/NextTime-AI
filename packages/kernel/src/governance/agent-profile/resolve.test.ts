@@ -12,9 +12,9 @@ function profile(overrides: Partial<AgentProfileRow> = {}): AgentProfileRow {
     workspaceId: WORKSPACE_ID,
     principalId: PRINCIPAL_ID,
     model: null,
-    enabledSkills: null,
-    enabledGatekeepers: null,
-    enabledWorkerDefinitions: null,
+    excludedSkills: [],
+    excludedGatekeepers: [],
+    excludedWorkerDefinitions: [],
     promptAddendum: null,
     autoApproveLow: null,
     updatedBy: null,
@@ -94,90 +94,108 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     expect(effective.model).toBe('anthropic/claude-sonnet');
   });
 
-  it('enabledGatekeepers: null (inherit) resolves to every currently-available (granted) id, not an empty list', () => {
+  it('enabledGatekeepers: no exclusions resolves to every currently-granted id', () => {
     const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: null }),
+      profile(),
       policy({ allowedGatekeepers: [] }),
       available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
     );
     expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-2']);
   });
 
-  it('enabledGatekeepers: an explicit empty list means "nothing" — genuinely different from null', () => {
-    const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: [] }),
-      policy({ allowedGatekeepers: [] }),
-      available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
+  it('enabledGatekeepers (console redesign D1): a Gatekeeper granted after the profile was saved is picked up automatically', () => {
+    const saved = profile({ excludedGatekeepers: ['gk-old-excluded'] });
+    const before = resolveEffectiveAgentProfile(
+      saved,
+      policy(),
+      available({ grantedGatekeeperIds: ['gk-first', 'gk-old-excluded'] }),
     );
-    expect(effective.enabledGatekeepers).toEqual([]);
+    expect(before.enabledGatekeepers).toEqual(['gk-first']);
+
+    // Same saved profile, one more Grant since: it flows in without the member touching anything.
+    const after = resolveEffectiveAgentProfile(
+      saved,
+      policy(),
+      available({ grantedGatekeeperIds: ['gk-first', 'gk-old-excluded', 'gk-granted-later'] }),
+    );
+    expect(after.enabledGatekeepers).toEqual(['gk-first', 'gk-granted-later']);
   });
 
-  it('enabledGatekeepers: an explicit profile list passes through unchanged when the policy has no cap', () => {
+  it('enabledGatekeepers: an exclusion removes a granted id', () => {
     const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: ['gk-1', 'gk-2'] }),
+      profile({ excludedGatekeepers: ['gk-2'] }),
       policy({ allowedGatekeepers: [] }),
       available({ grantedGatekeeperIds: ['gk-1', 'gk-2', 'gk-3'] }),
     );
-    expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-2']);
+    expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-3']);
   });
 
-  it('enabledGatekeepers: a policy cap narrows the "everything available" inherited set', () => {
+  it('enabledGatekeepers: an excluded id that is not granted is irrelevant — never widens', () => {
     const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: null }),
+      profile({ excludedGatekeepers: ['gk-not-granted'] }),
+      policy(),
+      available({ grantedGatekeeperIds: ['gk-1'] }),
+    );
+    expect(effective.enabledGatekeepers).toEqual(['gk-1']);
+  });
+
+  it('enabledGatekeepers: a policy cap narrows the granted set', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile(),
       policy({ allowedGatekeepers: ['gk-1'] }),
       available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
     );
     expect(effective.enabledGatekeepers).toEqual(['gk-1']);
   });
 
-  it('enabledGatekeepers: a policy cap narrows an explicit profile list to the intersection — never widens', () => {
+  it('enabledGatekeepers: exclusions and the policy cap both apply', () => {
     const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: ['gk-1', 'gk-2', 'gk-3'] }),
+      profile({ excludedGatekeepers: ['gk-2'] }),
       policy({ allowedGatekeepers: ['gk-2', 'gk-3', 'gk-4'] }),
-      available(),
+      available({ grantedGatekeeperIds: ['gk-1', 'gk-2', 'gk-3'] }),
     );
-    expect(effective.enabledGatekeepers).toEqual(['gk-2', 'gk-3']);
+    expect(effective.enabledGatekeepers).toEqual(['gk-3']);
   });
 
-  it('enabledGatekeepers: intersection can be empty when the profile and the cap share nothing', () => {
+  it('enabledGatekeepers: never includes an id that is not granted, whatever the cap says', () => {
     const effective = resolveEffectiveAgentProfile(
-      profile({ enabledGatekeepers: ['gk-1'] }),
+      profile(),
       policy({ allowedGatekeepers: ['gk-2'] }),
-      available(),
+      available({ grantedGatekeeperIds: ['gk-1'] }),
     );
     expect(effective.enabledGatekeepers).toEqual([]);
   });
 
-  it('enabledSkills: follows the identical inherit/cap rule as enabledGatekeepers, against published Skills', () => {
-    const inherited = resolveEffectiveAgentProfile(
-      profile({ enabledSkills: null }),
+  it('enabledSkills: follows the identical exclusion/cap rule as enabledGatekeepers, against published Skills', () => {
+    const all = resolveEffectiveAgentProfile(
+      profile(),
       policy(),
       available({ publishedSkillIds: ['skill-a', 'skill-b'] }),
     );
-    expect(inherited.enabledSkills).toEqual(['skill-a', 'skill-b']);
+    expect(all.enabledSkills).toEqual(['skill-a', 'skill-b']);
 
-    const capped = resolveEffectiveAgentProfile(
-      profile({ enabledSkills: ['skill-a', 'skill-b'] }),
-      policy({ allowedSkills: ['skill-b'] }),
-      available(),
+    const excludedAndCapped = resolveEffectiveAgentProfile(
+      profile({ excludedSkills: ['skill-c'] }),
+      policy({ allowedSkills: ['skill-b', 'skill-c'] }),
+      available({ publishedSkillIds: ['skill-a', 'skill-b', 'skill-c'] }),
     );
-    expect(capped.enabledSkills).toEqual(['skill-b']);
+    expect(excludedAndCapped.enabledSkills).toEqual(['skill-b']);
   });
 
-  it('enabledWorkerDefinitions: null (inherit) resolves to every currently-published WorkerDefinition id — no policy cap exists for it', () => {
-    const inherited = resolveEffectiveAgentProfile(
-      profile({ enabledWorkerDefinitions: null }),
+  it('enabledWorkerDefinitions: every published WorkerDefinition minus exclusions — no policy cap exists for it, and a newly published one flows in', () => {
+    const all = resolveEffectiveAgentProfile(
+      profile(),
       policy(),
       available({ publishedWorkerDefinitionIds: ['def-1', 'def-2'] }),
     );
-    expect(inherited.enabledWorkerDefinitions).toEqual(['def-1', 'def-2']);
+    expect(all.enabledWorkerDefinitions).toEqual(['def-1', 'def-2']);
 
-    const explicit = resolveEffectiveAgentProfile(
-      profile({ enabledWorkerDefinitions: ['def-1'] }),
+    const excluded = resolveEffectiveAgentProfile(
+      profile({ excludedWorkerDefinitions: ['def-2'] }),
       policy(),
-      available({ publishedWorkerDefinitionIds: ['def-1', 'def-2'] }),
+      available({ publishedWorkerDefinitionIds: ['def-1', 'def-2', 'def-3'] }),
     );
-    expect(explicit.enabledWorkerDefinitions).toEqual(['def-1']);
+    expect(excluded.enabledWorkerDefinitions).toEqual(['def-1', 'def-3']);
   });
 
   it('promptAddendum: profile value passes through; empty string when the profile has none', () => {

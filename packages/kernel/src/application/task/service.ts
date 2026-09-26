@@ -435,12 +435,11 @@ export interface FindMeansCaller {
   /** `findWorkers` only (S3.13 runtime consumer) — `findOperations`/`findProcedures` never read
    *  this field; AgentProfile narrows WorkerDefinition visibility only (S3.13's own six-item
    *  runtime-projection list, docs/development-tasks.md, never named Operation/Procedure search).
-   *  The calling principal's raw `AgentProfile.enabledWorkerDefinitions` — `undefined`/`null`
-   *  ("no profile row" or an explicit `null` field, both mean "inherit") applies no filter at all:
-   *  `governance/agent-profile/resolve.ts`'s own doc comment notes this field has no AgentPolicy
-   *  cap, so a non-null value here already *is* the caller's final effective list — nothing left to
-   *  intersect against `resolveEffectiveAgentProfile`'s own "available" ceiling for. */
-  readonly enabledWorkerDefinitionIds?: readonly string[] | null;
+   *  The calling principal's raw `AgentProfile.excludedWorkerDefinitions` (governance 0012,
+   *  console redesign D1) — `undefined` / `[]` excludes nothing. This field has no AgentPolicy cap
+   *  (`governance/agent-profile/resolve.ts`), so "published minus excluded" is already the caller's
+   *  final effective set. */
+  readonly excludedWorkerDefinitionIds?: readonly string[];
 }
 
 export interface WorkerDefinitionMatch {
@@ -467,10 +466,9 @@ function toWorkerDefinitionMatch(object: GraphObject): WorkerDefinitionMatch | u
   };
 }
 
-/** Whether `definitionId` passes `caller`'s own `AgentProfile.enabledWorkerDefinitions` whitelist
- *  (S3.13) — `undefined`/`null` means "no profile row, or one that never set this field", which is
- *  "inherit"/"no filter" (see `FindMeansCaller.enabledWorkerDefinitionIds`'s own doc comment for
- *  why that is already the caller's final effective list). Shared by `findWorkers` (below) and
+/** Whether `definitionId` is not excluded by `caller`'s own `AgentProfile.excludedWorkerDefinitions`
+ *  (S3.13; exclusion semantics since governance 0012) — see
+ *  `FindMeansCaller.excludedWorkerDefinitionIds`'s own doc comment. Shared by `findWorkers` (below) and
  *  `stepUsableByCaller`'s own `'worker'` branch (B4, audit leftover 71: "find_procedures 的步骤可用性
  *  判断不套 enabledWorkerDefinitions（invoke_worker 会拒）") so the two can never independently drift
  *  on this rule the way `invoke_worker`'s own `InvokeWorkerDefinitionNotEnabledError` check
@@ -480,8 +478,7 @@ function isWorkerDefinitionEnabledForCaller(
   caller: FindMeansCaller,
   definitionId: string,
 ): boolean {
-  if (caller.enabledWorkerDefinitionIds == null) return true;
-  return caller.enabledWorkerDefinitionIds.includes(definitionId);
+  return !(caller.excludedWorkerDefinitionIds ?? []).includes(definitionId);
 }
 
 /**
@@ -496,8 +493,8 @@ function isWorkerDefinitionEnabledForCaller(
  * WorkerDefinitions never appear (`find_workers` finds things *to invoke*, and only `kind='worker'`
  * is invocable — `invoke.ts`'s own check).
  *
- * S3.13 runtime consumer: also filtered to `caller.enabledWorkerDefinitionIds` when the caller's
- * AgentProfile sets one — the same narrowing `invoke_worker` itself now enforces
+ * S3.13 runtime consumer: also drops `caller.excludedWorkerDefinitionIds` (the caller's
+ * AgentProfile exclusions) — the same narrowing `invoke_worker` itself now enforces
  * (`InvokeWorkerDefinitionNotEnabledError`, `invoke.ts`), applied here so a definition the caller
  * could never successfully invoke never even surfaces as a candidate, same reasoning as the
  * attenuation filter just above.

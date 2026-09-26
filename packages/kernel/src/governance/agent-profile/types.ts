@@ -12,9 +12,12 @@ export interface AgentProfileRow {
   readonly workspaceId: string;
   readonly principalId: string;
   readonly model: string | null;
-  readonly enabledSkills: readonly string[] | null;
-  readonly enabledGatekeepers: readonly string[] | null;
-  readonly enabledWorkerDefinitions: readonly string[] | null;
+  /** Exclusion lists (governance 0012, console redesign D1): the effective set is everything on
+   *  offer minus these, so a later grant / publish is picked up automatically. `[]` = exclude
+   *  nothing. */
+  readonly excludedSkills: readonly string[];
+  readonly excludedGatekeepers: readonly string[];
+  readonly excludedWorkerDefinitions: readonly string[];
   readonly promptAddendum: string | null;
   readonly autoApproveLow: boolean | null;
   readonly updatedBy: string | null;

@@ -320,16 +320,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(includedWithoutWhitelist.some((m) => m.procedureId === draft.id)).toBe(true);
 
-      // A caller whose AgentProfile.enabledWorkerDefinitions is a non-null list that omits this
-      // WorkerDefinition must not see the Procedure as usable — invoke_worker would itself reject
-      // it (InvokeWorkerDefinitionNotEnabledError), so find_procedures must not report it usable.
+      // A caller whose AgentProfile.excludedWorkerDefinitions names this WorkerDefinition must not
+      // see the Procedure as usable — invoke_worker would itself reject it
+      // (InvokeWorkerDefinitionNotEnabledError), so find_procedures must not report it usable.
       const excludedWithWhitelist = await inTx((client) =>
         findProcedures(
           client,
           workspaceId,
           {
             parentAuthority: entryScope(),
-            enabledWorkerDefinitionIds: ['some-other-definition-id'],
+            excludedWorkerDefinitionIds: [workerDef.id],
           },
           unique,
         ),

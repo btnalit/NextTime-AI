@@ -402,9 +402,9 @@ function persisted(sequence: number, role: 'user' | 'assistant', text: string): 
 const PROFILE = {
   principalId: 'p-1',
   model: null as string | null,
-  enabledSkills: null,
-  enabledGatekeepers: null,
-  enabledWorkerDefinitions: null,
+  excludedSkills: [],
+  excludedGatekeepers: [],
+  excludedWorkerDefinitions: [],
   promptAddendum: null,
   autoApproveLow: null,
   updatedAt: null,

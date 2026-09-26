@@ -22,9 +22,9 @@ function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
     principalId: 'p-1',
     model: null,
-    enabledSkills: null,
-    enabledGatekeepers: null,
-    enabledWorkerDefinitions: null,
+    excludedSkills: [],
+    excludedGatekeepers: [],
+    excludedWorkerDefinitions: [],
     promptAddendum: null,
     autoApproveLow: null,
     updatedAt: '2026-09-01T00:00:00Z',
@@ -158,16 +158,16 @@ describe('AgentProfilePage', () => {
     await screen.findByTestId('agent-profile-error');
   });
 
-  it('save sends the full six-field state, using null for inherited/empty fields', async () => {
+  it('save sends the full six-field state: null for inherited scalars, [] for "exclude nothing"', async () => {
     const http = scriptedHttp({
       get_agent_profile: () => profile(),
       set_agent_profile: (params) => {
         expect(params).toEqual({
           principalId: 'p-1',
           model: null,
-          enabledSkills: null,
-          enabledGatekeepers: null,
-          enabledWorkerDefinitions: null,
+          excludedSkills: [],
+          excludedGatekeepers: [],
+          excludedWorkerDefinitions: [],
           promptAddendum: null,
           autoApproveLow: false,
         });
@@ -178,6 +178,55 @@ describe('AgentProfilePage', () => {
     const form = await screen.findByTestId('agent-profile-form');
     fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+  });
+
+  it('console redesign D1: granted systems are listed ticked; unticking one saves it as an exclusion', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          effective: {
+            model: 'anthropic/claude',
+            enabledSkills: [],
+            enabledGatekeepers: ['gk-docker', 'gk-ragflow'],
+            enabledWorkerDefinitions: [],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+      list_gatekeepers: () => ({
+        items: [
+          { id: 'gk-docker', name: 'docker', kind: 'http', status: 'active' },
+          { id: 'gk-ragflow', name: 'ragflow', kind: 'http', status: 'active' },
+          { id: 'gk-not-granted', name: 'not-granted', kind: 'http', status: 'active' },
+        ],
+      }),
+      set_agent_profile: (params) => {
+        expect((params as { excludedGatekeepers: string[] }).excludedGatekeepers).toEqual([
+          'gk-docker',
+        ]);
+        return profile();
+      },
+    });
+    renderPage(http);
+    const gates = await screen.findByTestId('agent-profile-gatekeepers');
+    const ragflow = await within(gates).findByRole('checkbox', { name: 'ragflow' });
+    const docker = within(gates).getByRole('checkbox', { name: 'docker' });
+    expect(ragflow).toHaveProperty('checked', true);
+    expect(docker).toHaveProperty('checked', true);
+    // A workspace system nobody granted this member is not offered as "in use".
+    expect(within(gates).queryByRole('checkbox', { name: 'not-granted' })).toBeNull();
+
+    fireEvent.click(docker);
+    const form = screen.getByTestId('agent-profile-form');
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+  });
+
+  it('with no system granted, the systems field says who has to grant one instead of an empty checklist', async () => {
+    const http = scriptedHttp({ get_agent_profile: () => profile() });
+    renderPage(http);
+    const empty = await screen.findByTestId('agent-profile-gatekeepers-empty');
+    expect(empty.textContent).toContain('所有者授权');
   });
 
   it('a 400 invalid_params on save shows an inline field error', async () => {
