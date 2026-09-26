@@ -11,7 +11,13 @@ import type { LlmProvidersFile, ModelCost, ProviderConfig } from './config.js';
  * tested as part of this package (see gen-models-json.test.ts).
  *
  * Verified against pi 0.84.4's own `models.json` schema and resolution logic before writing this
- * (paths relative to the pi checkout, cited per detail below):
+ * (paths relative to the pi checkout, cited per detail below). Re-verified for the 0.87.1 upgrade
+ * against the published package's `dist/core/{model-config,resolve-config-value,provider-
+ * composer}.js`: every field emitted here (`baseUrl`/`apiKey`/`api`/`models[].{id,name,cost}`) is
+ * unchanged; 0.85–0.87 only added optional fields (`inputLimits`, `promptCache`, new `compat`
+ * keys) and dropped `compat` keys this generator never writes. Leaving `promptCache` unset also
+ * keeps 0.86's prompt-cache warming inert for platform models (`modelFromJson` copies it only from
+ * the definition; no lifetime -> no warm requests):
  *
  *   - Shape (`packages/coding-agent/src/core/model-config.ts` `ProviderConfigSchema`/
  *     `ModelDefinitionSchema`/`ModelsConfigSchema`): `{ providers: { <id>: { baseUrl?, apiKey?,
@@ -39,7 +45,8 @@ import type { LlmProvidersFile, ModelCost, ProviderConfig } from './config.js';
 
 export interface PiModelDefinition {
   readonly id: string;
-  /** pi's own optional display name (`ModelDefinitionSchema.name`, pi 0.84.4 model-config.ts) —
+  /** pi's own optional display name (`ModelDefinitionSchema.name`, pi 0.84.4 model-config.ts;
+   *  unchanged in 0.87.1) —
    *  S6-B writes the console's per-model display name here; absent when none was set. */
   readonly name?: string;
   readonly cost?: ModelCost;

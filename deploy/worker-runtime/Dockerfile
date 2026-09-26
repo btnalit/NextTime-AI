@@ -10,14 +10,21 @@
 # docs/private/host-s1-5a-*.md and the PR body "主机验收结果".
 #
 # Verified against the pi 0.84.4 reference checkout (D:\NextTime AI\pi-0.84.4 — read-only
-# reference project, never copied into this repo):
+# reference project, never copied into this repo), and re-verified for the 0.87.1 upgrade against
+# the published npm package's own `dist/` + `docs/` (the same modules, compiled: `dist/cli/args.js`,
+# `dist/core/resource-loader.js`, `dist/config.js`, `dist/core/extensions/loader.js`,
+# `dist/core/tools/index.js`, `dist/core/sdk.js`) plus a real `pi --mode rpc -e <extension>` run
+# against deploy/fake-llm (docs/runbooks/pi-upgrade.md §2). Every bullet below still holds on
+# 0.87.1; the only CLI change is that `--mode` now rejects a missing/invalid value instead of
+# silently ignoring it (`rpc` is valid):
 #   - packages/coding-agent/docs/containerization.md "Plain Docker" recipe is the base for the
 #     runtime stage below: `node:24-bookworm-slim`, apt `bash ca-certificates git ripgrep`,
 #     `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`. This Dockerfile adds
 #     curl/python3/python3-pip/python3-venv/build-essential on top, per this task's own toolchain
-#     list — pi's own install needs none of them (no native compilation: its one optional native
-#     dep, @mariozechner/clipboard, ships prebuilt platform binaries); they exist for the agent's
-#     own bash/python tool use inside the container.
+#     list — pi's own install needs none of them (no native compilation: 0.84.4's one optional
+#     native dep, @mariozechner/clipboard, shipped prebuilt platform binaries, and 0.86.0 dropped
+#     it for bundled clipboard helpers); they exist for the agent's own bash/python tool use
+#     inside the container.
 #   - packages/coding-agent/package.json `engines.node: ">=22.19.0"` — node:24 satisfies it.
 #   - packages/coding-agent/src/cli/args.ts: `--mode rpc`, `--session-dir <dir>`,
 #     `--system-prompt <text-or-path>`, `--extension`/`-e <path>` (repeatable) are the real CLI
@@ -40,8 +47,11 @@
 #     `node_modules`, which `pnpm deploy --prod` (build stage) provides.
 #   - packages/coding-agent/src/core/tools/index.ts: built-in tools are bash/edit/find/grep/ls/
 #     powershell/read/write. entrypoint.sh passes none of `--tools`/`--no-tools`/
-#     `--no-builtin-tools`/`--exclude-tools`, so all of them (minus powershell, irrelevant here)
-#     stay enabled by pi's own default — "内置工具全开" (design doc §7.2/§7.3/§11).
+#     `--no-builtin-tools`/`--exclude-tools`, so pi's own default *active* set applies — which is
+#     `read`/`bash`/`edit`/`write` (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4
+#     and 0.87.1, and confirmed by the `toolsAdded` of a real 0.87.1 RPC run), not all eight:
+#     find/grep/ls are reached through `bash` (ripgrep is installed below). Design doc
+#     §7.2/§7.3/§11 "内置工具全开" holds in that sense only.
 #
 # Build context is the repo root: `docker compose build worker-runtime` (docker-compose.yml
 # `worker-runtime` service, profile `build-only` — it exists only to produce the
@@ -67,7 +77,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
-# agent@0.84.4"). --ignore-scripts matches pi's own containerization.md recipe (header above).
+# agent@<pi.version>", currently 0.87.1). --ignore-scripts matches pi's own containerization.md
+# recipe (header above; unchanged in 0.87.1).
 #
 # Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file,
 # read here rather than hardcoded — bumping pi means editing exactly that one file for the image.
@@ -107,7 +118,8 @@ WORKDIR /workspace
 USER nexttime
 ENV NODE_ENV=production
 ENV HOME=/workspace
-# pi 0.84.4 performs "startup network operations" of its own — a release check
+# pi (0.84.4; unchanged in 0.87.1, whose `dist/main.js` still skips the RPC-mode catalog refresh
+# under it) performs "startup network operations" of its own — a release check
 # (dist/utils/version-check.js → https://pi.dev/api/latest-version) and a remote model-catalog
 # refresh (DEFAULT_CATALOG_BASE_URL = https://pi.dev, written to <agentDir>/models-store.json) —
 # observed on the host as unexplained `pi.dev` entries in Turns' activities.metadata.egress.

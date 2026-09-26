@@ -62,7 +62,10 @@ kernel → agent-host：
 验证依据（非凭空猜测——见 bridge.ts 自己的模块注释引用的具体源码路径）：
 `pi-0.84.4/packages/coding-agent/docs/rpc.md`、`.../src/modes/rpc/{rpc-mode,rpc-types}.ts`，以及
 本仓库 `packages/platform-extension/src/modes/entry.ts`（同一份事件流的另一个消费者，其
-`agent_start`/`agent_settled` 定义"一个平台 Turn"的先例，本模块照抄同一约定）。
+`agent_start`/`agent_settled` 定义"一个平台 Turn"的先例，本模块照抄同一约定）。升级到 pi 0.87.1
+时已用真实 `pi --mode rpc` 进程复核（`docs/runbooks/pi-upgrade.md` §2.1）：下表每一行不变；0.87.1
+在首轮开头多一对 `role: system` 的 `message_start`/`message_end`（系统提示进 transcript），按
+下表 `message_end` 行"`role` 非 assistant 一律丢弃"处理。
 
 | pi RPC 事件 | 平台事件 | 备注 |
 |---|---|---|

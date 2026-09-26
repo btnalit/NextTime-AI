@@ -17,8 +17,8 @@
 ## 1. 目的
 
 `worker-runtime` 镜像（`deploy/worker-runtime/Dockerfile`）是入口容器与（后续 S2.8/S2.9）Worker
-容器共用的唯一镜像：`node:24-bookworm-slim` + pi 0.84.4 + `@nexttime/platform-extension` +
-`git curl python3 pip build-essential ripgrep`。`worker-supervisor` 的常驻模式
+容器共用的唯一镜像：`node:24-bookworm-slim` + pi（版本见根目录 `pi.version`，当前 0.87.1）+
+`@nexttime/platform-extension` + `git curl python3 pip build-essential ripgrep`。`worker-supervisor` 的常驻模式
 （`POST /resident/spawn` 等）按用户拉起该镜像的常驻容器（设计文档 §7.2）。
 
 本任务不含：agent-host 事件桥（下一个任务把容器 stdout 的 JSONL 事件桥到内核）、内核侧真正的
@@ -42,7 +42,7 @@ label 不再是 `dev`，控制台运行层页「pi 运行时」卡片才看得�
 
 ```bash
 docker image inspect nexttime-ai-worker-runtime --format '{{.Id}}'
-docker run --rm nexttime-ai-worker-runtime pi --version   # 期望输出含 0.84.4；这条命令会因缺
+docker run --rm nexttime-ai-worker-runtime pi --version   # 期望输出含 pi.version（0.87.1）；这条命令会因缺
                                                             # NEXTTIME_MODE 等必需 env 而在 entrypoint
                                                             # 里 exec pi 后由 platform-extension 报错退出
                                                             # 非 0——用下面这条只测 pi 本身版本：
@@ -403,7 +403,7 @@ fetch('http://localhost:8081/task/spawn', {
   `chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json"`（或等价的组可写方案）egress
   登记才会真正生效——这条留给 `scripts/host-env-init.sh`（E2，不在本任务所有权范围）或主会话决定
   是否把这个文件也纳入它现有的 chown 列表（`workspaces/ artifacts/ caddy/`）。
-- **`--system-prompt-file` 不存在**：pi 0.84.4 没有这个 flag；用 `--system-prompt <path>`
+- **`--system-prompt-file` 不存在**：pi 0.84.4 没有这个 flag（0.87.1 也没有）；用 `--system-prompt <path>`
   代替——`resource-loader.ts` 的 `resolvePromptInput` 在路径存在时按文件内容读取，效果等价。
 - **`sessions/` 顶层目录已废弃（2026-09-02 决定）**：入口容器的 `--session-dir` 是
   `/workspace/.pi/sessions`（在 `workspaces/<uid>/` 内），一个用户只有一个挂载点（I15）。顶层
@@ -430,7 +430,8 @@ fetch('http://localhost:8081/task/spawn', {
   `host-paths.ts` `taskWorkspacePaths` 挂载 `models.json`/skills 的同一路径，不需要重复设置。
 - **S2.8：skills 挂载目标目录已对照 pi 源码验证，不是派发文字给的兜底猜测**：对照同一参考项目的
   `packages/coding-agent/src/core/skills.ts` `loadSkills`（`join(resolvedAgentDir, 'skills')`），
-  `/workspace/.pi/agent/skills/<name>` 就是 pi 0.84.4 的默认全局 skills 目录，非猜测的兜底路径。
+  `/workspace/.pi/agent/skills/<name>` 就是 pi 0.84.4 的默认全局 skills 目录，非猜测的兜底路径
+  （`config.ts` 默认 agent dir 与 skills 目录在 0.87.1 的 `dist/` 里均未变）。
 - **S2.8：`no-new-privileges` 加在 `docker-client.ts` 共享的 `createAndStart` 里，同时影响 resident
   模式**：派发文字把它列为 Task 模式的容器 flag，但 `--read-only`/`--cap-drop ALL`/tmpfs `/tmp`
   这几项本来就是这个共享函数无条件加给所有容器的（不是每个 spec 各自的字段）——按同一模式加

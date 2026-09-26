@@ -345,9 +345,10 @@ export function createHost(options: HostOptions): Host {
       record.command === 'switch_session' &&
       turn &&
       turn.pendingSwitchId !== undefined &&
-      // pi 0.84.4 echoes the command's `id` (`rpc-mode.js`: `success(id, "switch_session", …)`,
-      // `id = command.id`); tolerate a response without one while a switch is pending so a future
-      // pi that drops the echo cannot leave this principal wedged.
+      // pi 0.84.4 (and 0.87.1, unchanged) echoes the command's `id` (`rpc-mode.js`:
+      // `success(id, "switch_session", …)`, `id = command.id`); tolerate a response without one
+      // while a switch is pending so a future pi that drops the echo cannot leave this principal
+      // wedged.
       (record.id === turn.pendingSwitchId || record.id === undefined)
     ) {
       handleSwitchSessionResponse(principalId, turn, record);
