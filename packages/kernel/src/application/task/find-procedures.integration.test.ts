@@ -31,6 +31,15 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
+/** A Procedure name that is also a collision-free `need`: ONE keyword token. `find_*` splits a
+ *  need on punctuation and matches ANY token as a substring (`substrate/graph/find-means.ts`'s
+ *  `tokenizeNeed`), so a hyphenated `prefix-<uuid>` became five short tokens — a 4-hex UUID
+ *  group occasionally occurs inside another test's Procedure name in this shared workspace and
+ *  the "excludes …" tests then saw an unrelated published Procedure (flaky CI, 2026-09-26). */
+function uniqueNeed(prefix: string): string {
+  return `${prefix.replace(/[^a-z0-9]/gi, '')}${randomUUID().replace(/-/g, '')}`;
+}
+
 function testOperation(overrides: Partial<Operation> = {}): Operation {
   return {
     name: `test.op.${randomUUID()}`,
@@ -143,7 +152,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('finds a published Procedure by need matching its name/description', async () => {
       const opName = await publishedOperation('observe');
-      const unique = `restock-alert-${randomUUID()}`;
+      const unique = uniqueNeed('restock-alert');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -161,7 +170,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('excludes a draft Procedure (never published)', async () => {
       const opName = await publishedOperation('observe');
-      const unique = `draft-only-${randomUUID()}`;
+      const unique = uniqueNeed('draft-only');
       await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -178,7 +187,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('excludes a deprecated Procedure', async () => {
       const opName = await publishedOperation('observe');
-      const unique = `deprecated-${randomUUID()}`;
+      const unique = uniqueNeed('deprecated');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -197,7 +206,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('includes a Procedure whose only step is an observe-mode Operation, for an entry (no-gate) caller', async () => {
       const opName = await publishedOperation('observe');
-      const unique = `observe-only-${randomUUID()}`;
+      const unique = uniqueNeed('observe-only');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -217,7 +226,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('excludes a Procedure whose step is an execute-mode Operation, for a caller whose scope does not cover that Gatekeeper', async () => {
       const opName = await publishedOperation('execute');
-      const unique = `execute-ungranted-${randomUUID()}`;
+      const unique = uniqueNeed('execute-ungranted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -235,7 +244,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('includes a Procedure whose step is an execute-mode Operation, for a caller whose scope already covers that Gatekeeper', async () => {
       const opName = await publishedOperation('execute');
-      const unique = `execute-granted-${randomUUID()}`;
+      const unique = uniqueNeed('execute-granted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -273,7 +282,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
 
-      const unique = `worker-step-ungranted-${randomUUID()}`;
+      const unique = uniqueNeed('worker-step-ungranted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -303,7 +312,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
 
-      const unique = `worker-step-not-enabled-${randomUUID()}`;
+      const unique = uniqueNeed('worker-step-not-enabled');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
@@ -339,7 +348,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('is unconstrained (includes everything usable) for an "unconstrained" caller (owner, human channel)', async () => {
       const opName = await publishedOperation('execute');
-      const unique = `unconstrained-${randomUUID()}`;
+      const unique = uniqueNeed('unconstrained');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
           name: unique,
