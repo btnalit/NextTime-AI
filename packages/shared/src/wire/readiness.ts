@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ObjectWireSchema } from './graph.js';
 
 /**
  * wire/readiness: `execution_readiness`'s result shape (S8 W1-C, docs/development-tasks.md §5e
@@ -20,8 +21,42 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
   'no_published_worker',
   /** Published Workers exist but none declares any gate — delegating reaches no system. */
   'no_worker_gate',
+  /** The member's own AgentProfile excludes it (a granted gate, or a published Worker) — fixed on
+   *  我的智能体, not by an owner (console redesign M2). */
+  'excluded_by_profile',
+  /** A granted gate the workspace AgentPolicy's gate cap leaves out — fixed by an owner on 模型与配额. */
+  'excluded_by_policy',
 ]);
 export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMissingCodeSchema>;
+
+/** Console redesign M2 / M3: how this principal's entry agent can reach a gate or one Operation. */
+export const GateReachabilityStatusSchema = z.enum(['direct', 'via_worker', 'unreachable']);
+export type GateReachabilityStatus = z.infer<typeof GateReachabilityStatusSchema>;
+
+/** The first unmet condition, in the order a person fixes them. */
+export const GateUnreachableReasonSchema = z.enum([
+  'no_published_operation',
+  'not_granted',
+  'excluded_by_policy',
+  'excluded_by_profile',
+  'no_worker',
+]);
+export type GateUnreachableReason = z.infer<typeof GateUnreachableReasonSchema>;
+
+export const ReachabilityWireSchema = z
+  .object({
+    status: GateReachabilityStatusSchema,
+    reason: GateUnreachableReasonSchema.optional(),
+  })
+  .strict();
+export type ReachabilityWire = z.infer<typeof ReachabilityWireSchema>;
+
+/** `find_operations`' result item: the Operation Object plus, for an entry-agent caller, how that
+ *  agent can reach it (absent for a Worker caller, whose own Handle is what counts there). */
+export const FindOperationItemWireSchema = ObjectWireSchema.extend({
+  reachability: ReachabilityWireSchema.optional(),
+}).strict();
+export type FindOperationItemWire = z.infer<typeof FindOperationItemWireSchema>;
 
 export const ExecutionReadinessMissingWireSchema = z
   .object({
@@ -42,6 +77,23 @@ export const ExecutionReadinessGateWireSchema = z
      *  (`application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle`). */
     granted: z.boolean(),
     publishedOperationCount: z.number().int().nonnegative(),
+    // Console redesign M2 (docs/console-redesign-plan-2026-09-25.md §3): per-gate reachability for
+    // this principal's entry agent — `application/gateway/capability-reachability.ts`, the same
+    // computation `find_operations` annotates its results with.
+    observeOperationCount: z.number().int().nonnegative(),
+    executeOperationCount: z.number().int().nonnegative(),
+    /** Granted, but the workspace AgentPolicy's gate cap leaves it out. */
+    excludedByPolicy: z.boolean(),
+    /** Granted, but the member's own AgentProfile excludes it. */
+    excludedByProfile: z.boolean(),
+    /** In the entry Handle's gate scope — its observe Operations are callable directly. */
+    inEntryScope: z.boolean(),
+    /** Delegable Workers (not excluded by the profile) whose child scope carries this gate. */
+    workerDefinitionIds: z.array(z.string()),
+    /** `direct`: the entry agent calls it itself; `via_worker`: only by delegating;
+     *  `unreachable`: `reason` names the first missing condition. */
+    status: GateReachabilityStatusSchema,
+    reason: GateUnreachableReasonSchema.optional(),
   })
   .strict();
 export type ExecutionReadinessGateWire = z.infer<typeof ExecutionReadinessGateWireSchema>;

@@ -5,6 +5,9 @@ import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { DashboardCard } from '../kit/section.js';
 import {
+  gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
   missingCauseText,
   missingKey,
   missingLinkHref,
@@ -66,25 +69,35 @@ export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
 
 function ExecutionReadinessBody({ data }: { readonly data: ExecutionReadinessWire }) {
   const t = useT();
-  const grantedGates = data.gates.filter((gate) => gate.granted).length;
-  const delegableWorkers = data.workers.filter((worker) => worker.delegable).length;
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
+  const workerNames = new Map(
+    data.workers.map((worker) => [worker.definitionId, worker.name ?? worker.definitionId]),
+  );
 
   return (
     <div className="stack" data-testid="execution-readiness-body">
-      <dl className="definition-list" data-testid="execution-readiness-counts">
-        <dt>{t('可用门', 'Gates available')}</dt>
-        <dd>{data.gates.length}</dd>
-        <dt>{t('已授权门', 'Gates granted')}</dt>
-        <dd>{grantedGates}</dd>
-        <dt>{t('可委派 Worker', 'Delegable Workers')}</dt>
-        <dd>{delegableWorkers}</dd>
-      </dl>
+      {/* Console redesign M2: one row per system — what the entry agent can do with it right now,
+       *  and if nothing, the first missing step and where to fix it. The old three counters and a
+       *  single "ready" flag read green as soon as *any* system worked. */}
+      {data.gates.length > 0 ? (
+        <ul
+          className="stack-s"
+          style={{ listStyle: 'none', margin: 0, padding: 0 }}
+          data-testid="execution-readiness-gates"
+        >
+          {data.gates.map((gate) => (
+            <GateRow key={gate.gateId} gate={gate} workerNames={workerNames} />
+          ))}
+        </ul>
+      ) : null}
       {data.ready ? (
         <div className="row" data-testid="execution-readiness-ready">
-          <span className="chip chip-ok chip-s">{t('已就绪', 'Ready')}</span>
+          <span className="chip chip-ok chip-s">{t('可委派', 'Can delegate')}</span>
           <span>
-            {t('入口 agent 已经可以委派执行任务。', 'Your entry agent can already delegate work.')}
+            {t(
+              '需要多步或写操作的任务，入口 agent 已经可以委派给 Worker。',
+              'Your entry agent can already delegate multi-step or write tasks to a Worker.',
+            )}
           </span>
         </div>
       ) : (
@@ -109,5 +122,63 @@ function ExecutionReadinessBody({ data }: { readonly data: ExecutionReadinessWir
         </ul>
       )}
     </div>
+  );
+}
+
+type GateWire = ExecutionReadinessWire['gates'][number];
+
+function GateRow({
+  gate,
+  workerNames,
+}: {
+  readonly gate: GateWire;
+  readonly workerNames: ReadonlyMap<string, string>;
+}) {
+  const t = useT();
+  const workers = gate.workerDefinitionIds.map((id) => workerNames.get(id) ?? id).join('、');
+  return (
+    <li
+      className="row-wrap"
+      data-testid="execution-readiness-gate"
+      data-gate-id={gate.gateId}
+      data-status={gate.status}
+    >
+      <strong>{gate.name}</strong>
+      {gate.status === 'direct' ? (
+        <>
+          <span className="chip chip-ok chip-s">{t('可直接调用', 'Callable directly')}</span>
+          <span>
+            {t(
+              `你的智能体可以直接调用它的 ${gate.observeOperationCount} 个只读操作${
+                gate.workerDefinitionIds.length > 0 ? `，也可委派给 ${workers}` : ''
+              }。`,
+              `Your agent can call its ${gate.observeOperationCount} read operation(s) itself${
+                gate.workerDefinitionIds.length > 0 ? `, or delegate to ${workers}` : ''
+              }.`,
+            )}
+          </span>
+        </>
+      ) : gate.status === 'via_worker' ? (
+        <>
+          <span className="chip chip-info chip-s">{t('需委派', 'Via a Worker')}</span>
+          <span>
+            {t(
+              `你的智能体要委派给 ${workers} 才能用它。`,
+              `Your agent has to delegate to ${workers} to use it.`,
+            )}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
+          <span>{gateReasonText(gate.reason, t)}</span>
+          {gate.reason !== undefined ? (
+            <a href={gateReasonHref(gate.reason)} style={{ textDecoration: 'underline' }}>
+              {gateReasonLink(gate.reason, t)}
+            </a>
+          ) : null}
+        </>
+      )}
+    </li>
   );
 }
