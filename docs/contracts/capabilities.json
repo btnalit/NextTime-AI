@@ -3163,25 +3163,73 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "excludedByPolicy": {
+                "type": "boolean"
+              },
+              "excludedByProfile": {
+                "type": "boolean"
+              },
+              "executeOperationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "gateId": {
                 "type": "string"
               },
               "granted": {
                 "type": "boolean"
               },
+              "inEntryScope": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
+              },
+              "observeOperationCount": {
+                "minimum": 0,
+                "type": "integer"
               },
               "publishedOperationCount": {
                 "minimum": 0,
                 "type": "integer"
+              },
+              "reason": {
+                "enum": [
+                  "no_published_operation",
+                  "not_granted",
+                  "excluded_by_policy",
+                  "excluded_by_profile",
+                  "no_worker"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "direct",
+                  "via_worker",
+                  "unreachable"
+                ],
+                "type": "string"
+              },
+              "workerDefinitionIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "required": [
               "gateId",
               "name",
               "granted",
-              "publishedOperationCount"
+              "publishedOperationCount",
+              "observeOperationCount",
+              "executeOperationCount",
+              "excludedByPolicy",
+              "excludedByProfile",
+              "inEntryScope",
+              "workerDefinitionIds",
+              "status"
             ],
             "type": "object"
           },
@@ -3196,7 +3244,9 @@
                   "no_enabled_gate",
                   "no_grant",
                   "no_published_worker",
-                  "no_worker_gate"
+                  "no_worker_gate",
+                  "excluded_by_profile",
+                  "excluded_by_policy"
                 ],
                 "type": "string"
               },
@@ -3233,7 +3283,9 @@
                         "no_enabled_gate",
                         "no_grant",
                         "no_published_worker",
-                        "no_worker_gate"
+                        "no_worker_gate",
+                        "excluded_by_profile",
+                        "excluded_by_policy"
                       ],
                       "type": "string"
                     },
@@ -4091,6 +4143,33 @@
               },
               "properties": {
                 "additionalProperties": {},
+                "type": "object"
+              },
+              "reachability": {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "no_published_operation",
+                      "not_granted",
+                      "excluded_by_policy",
+                      "excluded_by_profile",
+                      "no_worker"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "direct",
+                      "via_worker",
+                      "unreachable"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
                 "type": "object"
               },
               "updatedAt": {

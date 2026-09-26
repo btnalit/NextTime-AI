@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role } from '@nexttime/shared';
+import type { Operation, Role } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { entryScope, grantCapability } from '../../governance/capability/index.js';
-import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { findWorkers } from '../task/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -61,6 +65,11 @@ interface ExecutionReadinessResult {
     readonly name: string;
     readonly granted: boolean;
     readonly publishedOperationCount: number;
+    readonly observeOperationCount: number;
+    readonly inEntryScope: boolean;
+    readonly excludedByProfile: boolean;
+    readonly status: string;
+    readonly reason?: string;
   }[];
   readonly workers: readonly {
     readonly definitionId: string;
@@ -421,11 +430,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       )) as ExecutionReadinessResult;
 
       const gate = result.gates.find((g) => g.gateId === gatekeeperId);
-      expect(gate).toEqual({
+      expect(gate).toMatchObject({
         gateId: gatekeeperId,
         name: 'gate-ungranted',
         granted: false,
         publishedOperationCount: 0,
+        // Console redesign M2: nothing published is the first gap, before "not granted".
+        status: 'unreachable',
+        reason: 'no_published_operation',
+        inEntryScope: false,
       });
 
       const worker = result.workers.find((w) => w.definitionId === definitionId);
@@ -487,6 +500,121 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Pin: findWorkers (the real find_workers dry run) now agrees this definition is usable.
       expect(await definitionIsFindable(memberId, 'member', definitionId)).toBe(true);
+    });
+
+    it('console redesign M2: per-gate reachability — callable directly, excluded on My Agent, not granted, nothing published', async () => {
+      const fresh = await adminFreshWorkspaceOwner('execution-readiness-reachability-workspace');
+      const freshMemberId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: fresh.workspaceId, principalId: freshMemberId },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'member', 'reach-member')`,
+            [fresh.workspaceId, freshMemberId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      const listOp: Operation = {
+        name: 'items.list',
+        binding: { kind: 'http', method: 'GET', path: '/items' },
+        params_schema: {},
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+      const registerWithOp = async (name: string, publish: boolean): Promise<string> =>
+        withWorkspace(
+          pool,
+          { workspaceId: fresh.workspaceId, principalId: fresh.ownerId },
+          async (client) => {
+            const activity = await startActivity(client, fresh.workspaceId, {
+              kind: 'test.register_gatekeeper',
+              principalId: fresh.ownerId,
+            });
+            const { gatekeeperId } = await registerGatekeeper(client, fresh.workspaceId, {
+              name,
+              transportKind: 'http',
+              target: `execution-readiness-reach-${name}`,
+              endpoint: `https://gate.execution-readiness-test.invalid/reach/${name}`,
+              activityId: activity.id,
+              registeredBy: { id: fresh.ownerId, kind: 'human' },
+            });
+            if (publish) {
+              await importManifest(client, fresh.workspaceId, {
+                gatekeeperId,
+                operations: [listOp],
+                proposedBy: { id: fresh.ownerId, kind: 'human' },
+                activityId: activity.id,
+              });
+              await publishOperation(client, fresh.workspaceId, {
+                gatekeeperId,
+                name: listOp.name,
+              });
+            }
+            return gatekeeperId;
+          },
+        );
+      const grant = (gatekeeperId: string) =>
+        withWorkspace(pool, { workspaceId: fresh.workspaceId, principalId: fresh.ownerId }, (c) =>
+          grantCapability(c, fresh.workspaceId, {
+            principalId: freshMemberId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: fresh.ownerId,
+          }),
+        );
+
+      const direct = await registerWithOp('reach-direct', true);
+      const excluded = await registerWithOp('reach-excluded', true);
+      const ungranted = await registerWithOp('reach-ungranted', true);
+      const empty = await registerWithOp('reach-empty', false);
+      await grant(direct);
+      await grant(excluded);
+      await grant(empty);
+
+      const member = humanCaller(fresh.workspaceId, freshMemberId, 'member');
+      await dispatchCapability({ pool }, member, 'set_agent_profile', {
+        excludedGatekeepers: [excluded],
+      });
+      const result = (await dispatchCapability(
+        { pool },
+        member,
+        'execution_readiness',
+        {},
+      )) as ExecutionReadinessResult;
+      const byId = new Map(result.gates.map((gate) => [gate.gateId, gate]));
+
+      expect(byId.get(direct)).toMatchObject({
+        status: 'direct',
+        inEntryScope: true,
+        observeOperationCount: 1,
+      });
+      expect(byId.get(excluded)).toMatchObject({
+        status: 'unreachable',
+        reason: 'excluded_by_profile',
+        granted: true,
+        excludedByProfile: true,
+        inEntryScope: false,
+      });
+      expect(byId.get(ungranted)).toMatchObject({
+        status: 'unreachable',
+        reason: 'not_granted',
+        granted: false,
+      });
+      expect(byId.get(empty)).toMatchObject({
+        status: 'unreachable',
+        reason: 'no_published_operation',
+      });
+      expect(result.missing).toEqual(
+        expect.arrayContaining([{ code: 'excluded_by_profile', gateId: excluded }]),
+      );
     });
 
     it('defaults to the caller’s own readiness; an operator+ may read another principal’s, a plain member may not', async () => {

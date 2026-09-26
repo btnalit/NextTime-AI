@@ -69,7 +69,22 @@ describe('ExecutionPrerequisiteBar', () => {
         readiness({
           ready: false,
           missing: [{ code: 'no_enabled_gate' }, { code: 'no_grant', gateId: 'g-1' }],
-          gates: [{ gateId: 'g-1', name: 'CRM', granted: false, publishedOperationCount: 0 }],
+          gates: [
+            {
+              gateId: 'g-1',
+              name: 'CRM',
+              granted: false,
+              publishedOperationCount: 0,
+              observeOperationCount: 0,
+              executeOperationCount: 0,
+              excludedByPolicy: false,
+              excludedByProfile: false,
+              inEntryScope: false,
+              workerDefinitionIds: [],
+              status: 'unreachable',
+              reason: 'no_published_operation',
+            },
+          ],
         }),
     });
     render(<ExecutionPrerequisiteBar http={http} />);
