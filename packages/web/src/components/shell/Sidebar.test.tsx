@@ -248,7 +248,10 @@ describe('Sidebar', () => {
       />,
     );
     expect(screen.getByTestId('kernel-version').textContent).toBe('0.13.2');
-    expect(screen.getByTestId('current-user').textContent).toBe('Ada');
+    // P3-1 (V1): the footer identity row is now "<avatar initial>" + "name · role" — no longer
+    // exactly the bare name (the avatar and role text are new, non-testid'd siblings inside the
+    // same `current-user` element).
+    expect(screen.getByTestId('current-user').textContent).toContain('Ada');
     expect(screen.getByTestId('current-user').getAttribute('title')).toBe('Ada (ada)');
   });
 

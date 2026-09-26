@@ -67,6 +67,13 @@ function renderPage(http: CapabilityCaller) {
   );
 }
 
+/** Console redesign P3-1 (V7): 服务凭证/签发外部运行时凭证 moved behind the header's "更多操作"
+ *  overflow menu (`kit/dropdown-menu`, Radix) — same as `ChatPage.test.tsx`'s own
+ *  `openChatHeaderMenu`, the trigger opens on `pointerdown`, not `click`. */
+function openMembersHeaderMenu(): void {
+  fireEvent.pointerDown(screen.getByTestId('members-header-menu'), { button: 0 });
+}
+
 describe('MembersPage', () => {
   it('lists members with a role chip, and shows the owner-only explanation on 403', async () => {
     const http = scriptedHttp({
@@ -107,6 +114,7 @@ describe('MembersPage', () => {
     await screen.findByTestId('member-row');
     expect(screen.queryByTestId('issue-service-handle-section')).toBeNull();
 
+    openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const drawer = await screen.findByTestId('issue-service-handle-drawer');
     expect(within(drawer).getByTestId('issue-service-handle-section')).toBeTruthy();
@@ -143,6 +151,7 @@ describe('MembersPage', () => {
     });
     renderPage(http);
 
+    openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
     fireEvent.change(within(form).getByLabelText(/服务主体/), {
@@ -192,6 +201,7 @@ describe('MembersPage', () => {
       }),
     });
     renderPage(http);
+    openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
     fireEvent.change(within(form).getByLabelText(/有效期（天）/), { target: { value: '366' } });
@@ -201,6 +211,7 @@ describe('MembersPage', () => {
   it('D3: no service Principal — the hint names the header 服务凭证 button, no self-link to this page', async () => {
     const http = scriptedHttp({ list_principals: () => ({ items: [] }) });
     renderPage(http);
+    openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const notice = await screen.findByTestId('issue-service-handle-no-principal');
     expect(notice.textContent).toContain('服务凭证');
@@ -230,7 +241,8 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
 
-    fireEvent.click(screen.getByRole('button', { name: /服务凭证/ }));
+    openMembersHeaderMenu();
+    fireEvent.click(screen.getByTestId('members-service-credential-trigger'));
     const form = await screen.findByTestId('create-principal-form');
     fireEvent.change(within(form).getByLabelText(/显示名/), {
       target: { value: 'Carol' },

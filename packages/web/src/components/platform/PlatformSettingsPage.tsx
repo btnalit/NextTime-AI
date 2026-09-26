@@ -353,12 +353,16 @@ function PlatformSettingsForm({
               {t(
                 <>
                   默认入口模型在
-                  <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models & providers')}</a>
+                  <a href={hrefs.platformModels()} className="link-inline">
+                    {t('模型与供应商', 'Models & providers')}
+                  </a>
                   页设置（经目录校验）。
                 </>,
                 <>
                   The default entry model is set on the{' '}
-                  <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models & providers')}</a>{' '}
+                  <a href={hrefs.platformModels()} className="link-inline">
+                    {t('模型与供应商', 'Models & providers')}
+                  </a>{' '}
                   page (validated against the catalog there).
                 </>,
               )}

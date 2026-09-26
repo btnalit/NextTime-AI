@@ -63,7 +63,9 @@ test.describe('CI smoke: governance surface', () => {
 
     // P-A1: "Add member" now adds an existing platform user by login (`add_member`); the API-key
     // Principal this test creates comes from the relabelled service-credential form.
-    await page.getByRole('button', { name: /服务凭证/ }).click();
+    // Console redesign P3-1 (V7): 服务凭证 moved behind the header's "更多操作" overflow menu.
+    await page.getByTestId('members-header-menu').click();
+    await page.getByTestId('members-service-credential-trigger').click();
     const drawer = page.getByTestId('create-principal-drawer');
     await expect(drawer).toBeVisible();
     await drawer.locator('#cp-name').fill(`ci-e2e-member-${Date.now()}`);

@@ -179,7 +179,8 @@ describe('AppShell', () => {
       renderShell(http);
       // MobileTopBar's identity line combines product/workspace/role into one text node
       // ("NextTime AI · Acme · 所有者") — a regex matches the substring where an exact string
-      // wouldn't (the wide Sidebar's `.sidebar-workspace` span, by contrast, holds only the name).
+      // wouldn't (the wide Sidebar's `.sidebar-workspace-name` span, by contrast, holds only the
+      // name).
       await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
 
       expect(document.querySelector('aside.sidebar')).toBeNull();

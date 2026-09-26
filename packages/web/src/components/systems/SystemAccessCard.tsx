@@ -172,7 +172,7 @@ export function SystemAccessCard({
             `${gate.observeOperationCount} read operation(s) · ${gate.executeOperationCount} write operation(s)`,
           )}
           {' — '}
-          <a href={hrefs.catalog('operations')} style={{ textDecoration: 'underline' }}>
+          <a href={hrefs.catalog('operations')} className="link-inline">
             {t('去能力目录看 Operation', 'See in Catalog')}
           </a>
         </p>
@@ -293,7 +293,7 @@ function GranteeRow({
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
           {gateStatus.reason !== undefined ? (
-            <a href={gateReasonHref(gateStatus.reason)} style={{ textDecoration: 'underline' }}>
+            <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
               {gateReasonLink(gateStatus.reason, t)}
             </a>
           ) : null}

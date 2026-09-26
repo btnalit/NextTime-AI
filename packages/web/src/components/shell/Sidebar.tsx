@@ -147,48 +147,57 @@ export function SidebarContent({
         <div className="sidebar-mark" aria-hidden>
           N
         </div>
-        <div className="sidebar-brand-text">
-          <span className="sidebar-product">NextTime AI</span>
-          <span className="sidebar-workspace-row">
-            {showSwitcher ? (
-              <Select
-                aria-label={t('切换工作区', 'Switch workspace')}
-                data-testid="workspace-switcher"
-                value={selectedWorkspaceId ?? ''}
-                disabled={switchingWorkspace === true}
-                onChange={(event) => onSwitchWorkspace?.(event.target.value)}
-              >
-                {(memberships ?? []).map((m) => (
-                  <option key={m.workspaceId} value={m.workspaceId}>
-                    {m.workspaceName} ({roleLabel(m.role, t)})
-                  </option>
-                ))}
-              </Select>
-            ) : (
-              <span className="sidebar-workspace" title={workspaceName}>
-                {workspaceName}
-              </span>
-            )}
-            {role.kind === 'known' ? (
-              <span data-testid="role-badge" title={`Role: ${role.role}`}>
-                <StatusChip machine="role" status={role.role} size="s" />
-              </span>
-            ) : (
-              <span
-                className={`role-badge ${ROLE_BADGE_CLASS[role.role]}`}
-                data-testid="role-badge"
-                title={`Inferred role: ${ROLE_BADGE_LABEL[role.role]}`}
-              >
-                {ROLE_BADGE_LABEL[role.role]}
-              </span>
-            )}
+        <span className="sidebar-product truncate">NextTime AI</span>
+      </div>
+
+      {/* S8/P3-1 (console redesign V1): a bordered block distinct from the brand row — the name
+       *  (or, with >1 membership, the `workspace-switcher` select) plus a "工作区 · 角色" caption.
+       *  Previously the workspace name/switcher and role badge lived inside `.sidebar-brand-text`,
+       *  a plain text row under the product name that read as a small pill rather than the
+       *  console's own primary scope selector — screenshot review of the P3 design artboards. */}
+      <div className="sidebar-workspace-block">
+        {showSwitcher ? (
+          <Select
+            aria-label={t('切换工作区', 'Switch workspace')}
+            data-testid="workspace-switcher"
+            className="sidebar-workspace-select"
+            value={selectedWorkspaceId ?? ''}
+            disabled={switchingWorkspace === true}
+            onChange={(event) => onSwitchWorkspace?.(event.target.value)}
+          >
+            {(memberships ?? []).map((m) => (
+              <option key={m.workspaceId} value={m.workspaceId}>
+                {m.workspaceName} ({roleLabel(m.role, t)})
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <span className="sidebar-workspace-name" title={workspaceName}>
+            {workspaceName}
           </span>
-        </div>
+        )}
+        <span className="sidebar-workspace-caption">
+          <span>{t('工作区', 'Workspace')}</span>
+          <span aria-hidden>·</span>
+          {role.kind === 'known' ? (
+            <span data-testid="role-badge" title={`Role: ${role.role}`}>
+              <StatusChip machine="role" status={role.role} size="s" />
+            </span>
+          ) : (
+            <span
+              className={`role-badge ${ROLE_BADGE_CLASS[role.role]}`}
+              data-testid="role-badge"
+              title={`Inferred role: ${ROLE_BADGE_LABEL[role.role]}`}
+            >
+              {ROLE_BADGE_LABEL[role.role]}
+            </span>
+          )}
+        </span>
       </div>
 
       <nav className="sidebar-nav" aria-label="Sections">
         <NavSectionGroup titleZh="使用" titleEn="Use" testId="nav-section-use">
-          {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount))}
+          {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
         </NavSectionGroup>
 
         {showGovern ? (
@@ -200,13 +209,16 @@ export function SidebarContent({
             // other reaches every workspace on the deployment — `系统接入`(治理) vs `集成`(平台),
             // `模型与配额`(治理) vs `模型与供应商`(平台), `审计`(治理) vs `平台审计`(平台) read as
             // near-duplicates without this line. Near-term fix only (§5.9's "使用面/管理面/维护面"
-            // convergence is a later, larger IA change, out of this lane's scope).
+            // convergence is a later, larger IA change, out of this lane's scope). P3-1 folds this
+            // scope note onto the group-title row itself (`nav-section-scope` keeps its testid and
+            // text — see NavSectionGroup below) instead of a second full-height row, so it stays
+            // discoverable without costing the vertical space V1 flagged as a 900px-height risk.
             scopeZh="本工作区"
             scopeEn="This workspace"
             testId="nav-section-govern"
           >
-            {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
-            {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV) : null}
+            {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+            {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV, t) : null}
           </NavSectionGroup>
         ) : null}
 
@@ -218,7 +230,7 @@ export function SidebarContent({
             scopeEn="Platform-wide"
             testId="nav-section-platform"
           >
-            {PLATFORM_NAV.map((item) => renderNavItem(item, active, pendingCount))}
+            {PLATFORM_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
           </NavSectionGroup>
         ) : null}
       </nav>
@@ -243,42 +255,55 @@ export function SidebarContent({
             </span>
           ) : null}
         </div>
-        {currentUser ? (
-          <div
-            className="sidebar-user"
-            title={
-              currentUser.login
-                ? `${currentUser.displayName} (${currentUser.login})`
-                : currentUser.displayName
-            }
-            data-testid="current-user"
-          >
-            <Icon name="user" size="s" />
-            <span className="sidebar-user-name truncate">{currentUser.displayName}</span>
-          </div>
-        ) : null}
-        {authMode === 'cookie' ? (
-          <Button
-            variant="ghost"
-            size="s"
-            icon="logout"
-            onClick={onLogout}
-            title={t('登出', 'Sign out')}
-          >
-            {t('登出', 'Sign out')}
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="s"
-            icon="logout"
-            onClick={onLogout}
-            title={t('清除密钥', 'Forget key')}
-          >
-            {t('清除密钥', 'Forget key')}
-          </Button>
-        )}
-        <LangSwitch />
+        {/* P3-1 (V1): one row — initial avatar, "name · role" (ellipsised), icon-only sign-out —
+         *  replacing the icon + name row that used to sit above a separate full-text sign-out
+         *  button. The sign-out button still renders unconditionally (it is the only way out of a
+         *  session where `currentUser` has not resolved yet); only the identity block is
+         *  conditional, same as before. */}
+        <div className="sidebar-user-row">
+          {currentUser ? (
+            <div
+              className="sidebar-user"
+              title={
+                currentUser.login
+                  ? `${currentUser.displayName} (${currentUser.login})`
+                  : currentUser.displayName
+              }
+              data-testid="current-user"
+            >
+              <span className="sidebar-user-avatar" aria-hidden>
+                {currentUser.displayName.charAt(0).toUpperCase()}
+              </span>
+              <span className="sidebar-user-name truncate">
+                {currentUser.displayName} · {roleText(role, t)}
+              </span>
+            </div>
+          ) : null}
+          {authMode === 'cookie' ? (
+            <Button
+              variant="ghost"
+              size="s"
+              icon="logout"
+              iconOnly
+              onClick={onLogout}
+              title={t('登出', 'Sign out')}
+            >
+              {t('登出', 'Sign out')}
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="s"
+              icon="logout"
+              iconOnly
+              onClick={onLogout}
+              title={t('清除密钥', 'Forget key')}
+            >
+              {t('清除密钥', 'Forget key')}
+            </Button>
+          )}
+        </div>
+        <LangSwitch className="sidebar-lang-switch" />
       </div>
     </>
   );
@@ -392,7 +417,12 @@ export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProp
   );
 }
 
-function renderNavItem(item: NavItem, active: NavSection, pendingCount: number | null): ReactNode {
+function renderNavItem(
+  item: NavItem,
+  active: NavSection,
+  pendingCount: number | null,
+  t: Translate,
+): ReactNode {
   const badge = item.section === 'approvals' && pendingCount !== null && pendingCount > 0;
   return (
     <a
@@ -400,6 +430,8 @@ function renderNavItem(item: NavItem, active: NavSection, pendingCount: number |
       href={item.href}
       className="nav-item"
       aria-current={item.section === active ? 'page' : undefined}
+      // P3-1 (V1): the visible label is single-line, current-locale only (`t()`); the bilingual
+      // pair stays on `title` — the (960px, 1100px] icon rail's only remaining name for the item.
       title={`${item.label} ${item.sub}`}
       data-testid={`nav-${item.section}`}
     >
@@ -407,10 +439,7 @@ function renderNavItem(item: NavItem, active: NavSection, pendingCount: number |
        *  components/ui/Icon.js itself, scripts/guards/legacy-ui-importers.json only shrinks); cast
        *  back to IconName at this one render call. */}
       <Icon name={item.icon as IconName} />
-      <span className="nav-label">
-        {item.label}
-        <span className="nav-label-sub">{item.sub}</span>
-      </span>
+      <span className="nav-label truncate">{t(item.label, item.sub)}</span>
       {badge ? (
         <span className="nav-badge" aria-label={`${pendingCount} pending approvals`}>
           {pendingCount > 99 ? '99+' : pendingCount}
@@ -420,7 +449,7 @@ function renderNavItem(item: NavItem, active: NavSection, pendingCount: number |
   );
 }
 
-function renderExternalNavItem(item: ExternalNavItem): ReactNode {
+function renderExternalNavItem(item: ExternalNavItem, t: Translate): ReactNode {
   return (
     <a
       key={item.testId}
@@ -432,10 +461,7 @@ function renderExternalNavItem(item: ExternalNavItem): ReactNode {
       rel="noopener noreferrer"
     >
       <Icon name={item.icon as IconName} />
-      <span className="nav-label">
-        {item.label}
-        <span className="nav-label-sub">{item.sub}</span>
-      </span>
+      <span className="nav-label truncate">{t(item.label, item.sub)}</span>
     </a>
   );
 }
@@ -464,12 +490,15 @@ function NavSectionGroup({
       <div className="nav-section-title">
         <span>{titleZh}</span>
         <span className="nav-section-title-sub">{titleEn}</span>
+        {/* P3-1 (V1): folded onto the title row (was its own full-height line below the title) —
+         *  same testid/text, kept for the 治理/平台 scope distinction (see the caller's own doc
+         *  comment on `scopeZh`), just no longer costing a whole extra row per group. */}
+        {scopeZh !== undefined ? (
+          <span className="nav-section-scope" data-testid={`${testId}-scope`}>
+            · {scopeZh} <span className="nav-section-title-sub">{scopeEn}</span>
+          </span>
+        ) : null}
       </div>
-      {scopeZh !== undefined ? (
-        <div className="nav-section-scope" data-testid={`${testId}-scope`}>
-          {scopeZh} <span className="nav-section-title-sub">{scopeEn}</span>
-        </div>
-      ) : null}
       {children}
     </div>
   );

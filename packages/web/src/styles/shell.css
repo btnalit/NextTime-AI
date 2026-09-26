@@ -30,11 +30,14 @@
   min-height: 40px;
 }
 
+/* Ink, not accent (console redesign P3-1 V1, §5.9 principle 1): blue means "clickable" — the mark
+ * is a brand glyph, not a control, so it takes the same neutral `--text` fill as the ink primary
+ * button rather than `--accent`. */
 .sidebar-mark {
   width: 28px;
   height: 28px;
   border-radius: var(--radius-m);
-  background: var(--accent);
+  background: var(--text);
   color: var(--text-on-accent);
   display: grid;
   place-items: center;
@@ -43,31 +46,68 @@
   flex-shrink: 0;
 }
 
-.sidebar-brand-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.25;
-}
-
 .sidebar-product {
   font-weight: 600;
   font-size: var(--fs-14);
-}
-
-.sidebar-workspace-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   min-width: 0;
 }
 
-.sidebar-workspace {
-  font-size: var(--fs-12);
-  color: var(--text-3);
+/* P3-1 (V1): a bordered block distinct from the brand row — was a plain text row
+ * (`.sidebar-workspace-row`) under the product name that read as a small pill rather than the
+ * console's primary scope selector. Doubles as the workspace switcher's own hit target when it
+ * renders a `<select>` (`.sidebar-workspace-select` below) instead of the static name. */
+.sidebar-workspace-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 var(--space-2);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.sidebar-workspace-block:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sidebar-workspace-name {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Overlaid on the bordered block above rather than keeping its own `.select` chrome (border/
+ * background/min-height) — the block already supplies those, and `.select`'s specificity is beaten
+ * on purpose via the compound selector so import order inside the `legacy` layer cannot flip it. */
+.select.sidebar-workspace-select {
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.select.sidebar-workspace-select:hover,
+.select.sidebar-workspace-select:focus-visible {
+  border: 0;
+  box-shadow: none;
+}
+
+.sidebar-workspace-caption {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  min-width: 0;
 }
 
 .role-badge {
@@ -116,11 +156,13 @@
 .nav-section-title {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 4px 10px;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  column-gap: 6px;
+  padding: 4px 8px;
   font-size: var(--fs-12);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-3);
 }
@@ -135,11 +177,14 @@
    * opacity keeps that without silently undoing the token's contrast guarantee. */
 }
 
-/* S8 W4 (audit U1 "两组的作用范围从未说明"): the 治理/平台 group's one-line scope note, under the
- * group title, above its items (`components/shell/Sidebar.tsx`'s `NavSectionGroup`). */
+/* S8 W4 (audit U1 "两组的作用范围从未说明"): the 治理/平台 group's one-line scope note. P3-1 (V1)
+ * folds this onto the group-title row itself (`components/shell/Sidebar.tsx`'s `NavSectionGroup`)
+ * instead of its own full-height line below the title — same testid/text, one less row per group. */
 .nav-section-scope {
-  padding: 0 10px 2px;
   font-size: var(--fs-12);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-3);
 }
 
@@ -150,14 +195,19 @@
   color: var(--text-3);
 }
 
+/* P3-1 (V1): single-line rows (~32px) — was 8px/10px padding with a two-line label (Chinese +
+ * English sub-label) that ran ~62px tall and pushed the 平台 group below the fold at 900px height.
+ * The label is now current-locale only (`t()`, Sidebar.tsx `renderNavItem`); `.sidebar-nav` still
+ * scrolls independently (`overflow-y: auto`, below) if the combined groups ever overflow. */
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 8px 10px;
-  border-radius: var(--radius-m);
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 7px;
   color: var(--text-2);
   font-weight: 500;
+  font-size: var(--fs-13);
   border: 1px solid transparent;
   transition: background var(--transition), color var(--transition);
 }
@@ -229,22 +279,52 @@
   max-width: 50%;
 }
 
+/* P3-1 (V1): identity + sign-out on one row — `.sidebar-user` (the identity block, testid
+ * `current-user`) and the sign-out/forget-key icon button are siblings inside this row; the button
+ * still renders even while `.sidebar-user` is absent (identity not resolved yet). */
+.sidebar-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 2px;
+}
+
 .sidebar-user {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 4px 10px;
   font-size: var(--fs-13);
   color: var(--text-2);
   min-width: 0;
 }
 
-.sidebar-user .icon {
-  color: var(--text-3);
+/* Initial-letter avatar (console redesign P3-1 V1) — same accent-soft/accent pairing as a selected
+ * nav item, replacing the plain user-outline icon that used to sit here. */
+.sidebar-user-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: var(--fs-12);
+  font-weight: 600;
 }
 
 .sidebar-user-name {
   min-width: 0;
+}
+
+/* Footer language toggle (V1 "compact"): the same `.tabs`/`.tab` LangSwitch renders elsewhere
+ * (e.g. the account page), just smaller — this is the only place it sits in a tight footer row. */
+.sidebar-lang-switch .tab {
+  padding: 2px 8px;
+  min-height: 24px;
+  font-size: var(--fs-12);
 }
 
 .conn-dot {
@@ -425,15 +505,14 @@
     padding: 0;
   }
 
-  .sidebar-brand-text,
+  .sidebar-product,
+  .sidebar-workspace-block,
   .nav-label,
   .nav-section-title,
-  .nav-section-scope,
   .conn-status-label,
   .sidebar-version,
   .sidebar-user,
-  .lang-switch,
-  .sidebar-footer .btn-label {
+  .lang-switch {
     display: none;
   }
 
@@ -457,6 +536,11 @@
   .conn-status {
     justify-content: center;
     padding: 6px 0;
+  }
+
+  .sidebar-user-row {
+    justify-content: center;
+    padding: 0;
   }
 }
 
