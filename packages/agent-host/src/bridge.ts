@@ -25,6 +25,18 @@ import type { AgentRuntimeEventWire } from '@nexttime/shared';
  *     the precedent this module's `extractAssistantText` and "settle on `agent_settled`" choice
  *     below both follow, for consistency between the two independent consumers of the same stream.
  *
+ * Re-verified for the pi 0.87.1 upgrade (docs/runbooks/pi-upgrade.md §2): the published package's
+ * `dist/modes/rpc/{rpc-mode,rpc-types,jsonl}.js`/`dist/modes/json-event.js` and pi-agent-core's
+ * `AgentEvent` union are unchanged for every event/command this module reads or builds (rpc-mode
+ * only gained a `source` tag on steer/follow_up), and a real `pi --mode rpc` run (0.84.4 and
+ * 0.87.1 side by side, with and without the platform extension, against deploy/fake-llm) fed
+ * through `translatePiEvent` produced identical platform events. The one new record on 0.87.1's
+ * stream is a `message_start`/`message_end` pair with `message.role === 'system'` (0.86.0's
+ * transcript-backed system prompt: empty `content`, plus `sections`/`toolsAdded`) at the start of
+ * a session's first run — non-assistant, so `translateMessageEnd` already drops it. `turn_end` on
+ * the RPC stream is still `{message, toolResults}`: 0.87.0's expanded `TurnEndEvent` is the
+ * *extension* hook payload, not this stream, and this module ignores `turn_end` regardless.
+ *
  * Scope decisions (see PR body "假设与偏离"):
  *   - Only `assistantMessageEvent.type === 'text_delta'` from `message_update` becomes a
  *     `textDelta` — every other streaming sub-type (`thinking_*`, `toolcall_*`, `text_start`/
@@ -197,9 +209,11 @@ export function buildPromptCommand(turnId: string, message: string): Record<stri
  *  it failed outright). A `sessionPath` that does not exist yet starts a new session there, which
  *  is what makes "one pi session file per chat" a decision `host.ts` can make on its own — see its
  *  module doc comment. `docs/rpc.md`'s own `switch_session` example omits the optional `id`, but
- *  every command accepts one and every response echoes it (pi 0.84.4's
- *  `dist/modes/rpc/rpc-mode.js`: `case "switch_session": ... return success(id, "switch_session",
- *  result)`, the same `success(id, ...)` helper the documented `prompt` echo goes through) — so
+ *  every command accepts one and every response echoes it (pi 0.84.4's — and, unchanged, 0.87.1's
+ *  — `dist/modes/rpc/rpc-mode.js`: `case "switch_session": ... return success(id, "switch_session",
+ *  result)`, the same `success(id, ...)` helper the documented `prompt` echo goes through; 0.87.1's
+ *  `docs/rpc.md` now states the id echo as the general rule, "Correlate commands and responses",
+ *  and moved the per-command reference to `docs/rpc-commands.md`) — so
  *  `host.ts` correlates its own switch the same way it already correlates a `prompt`. */
 export function buildSwitchSessionCommand(
   id: string,

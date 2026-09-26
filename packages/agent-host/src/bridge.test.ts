@@ -9,7 +9,9 @@ import {
 /**
  * bridge.test: pi 0.84.4 RPC event fixtures (hand-written per `docs/rpc.md`'s own documented
  * shapes — see bridge.ts's module doc comment for the exact pi source paths this was verified
- * against) -> platform `AgentRuntimeEvent` translation. Pure, no I/O.
+ * against) -> platform `AgentRuntimeEvent` translation. Pure, no I/O. Re-checked against a real
+ * pi 0.87.1 `--mode rpc` capture for the upgrade: every fixture shape below still matches; the one
+ * new 0.87.1 record (a `role: 'system'` transcript message) has its own case under message_end.
  */
 
 describe('translatePiEvent — message_update', () => {
@@ -181,6 +183,31 @@ describe('translatePiEvent — message_end', () => {
         message: { role, content: 'some text' },
       });
       expect(result).toEqual({ kind: 'none' });
+    }
+  });
+
+  it('ignores pi ≥0.86 transcript system messages (role: system), as captured from pi 0.87.1', () => {
+    // Shape from a real `pi --mode rpc` 0.87.1 run (trimmed): the session's system prompt is now a
+    // transcript message, streamed as message_start/message_end at the start of the first run. A
+    // later mid-conversation system message may carry text content — still not a chat message.
+    for (const message of [
+      {
+        role: 'system',
+        content: '',
+        sections: { preamble: 'You are the entry agent.\n', cwd: '<cwd>\n/workspace\n</cwd>' },
+        timestamp: 1790440399742,
+        toolsAdded: [
+          {
+            name: 'read',
+            description: 'Read the contents of a file.',
+            parameters: { type: 'object', required: ['path'], properties: {} },
+          },
+        ],
+      },
+      { role: 'system', content: [{ type: 'text', text: 'Updated instructions.' }] },
+    ]) {
+      expect(translatePiEvent({ type: 'message_start', message })).toEqual({ kind: 'none' });
+      expect(translatePiEvent({ type: 'message_end', message })).toEqual({ kind: 'none' });
     }
   });
 
