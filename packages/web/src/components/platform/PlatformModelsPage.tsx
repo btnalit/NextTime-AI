@@ -28,6 +28,7 @@ import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
+import { type DrawerState, useProviderActions } from './models/useProviderActions.js';
 import { CredentialState } from './providers/CredentialState.js';
 import { DefaultModelControl } from './providers/DefaultModelControl.js';
 import { ProviderForm } from './providers/ProviderForm.js';
@@ -39,12 +40,6 @@ export interface PlatformModelsPageProps {
   /** Test seam: the `fetch` the llm-admin client uses for `/api/llm-admin/*`. */
   readonly fetchImpl?: typeof fetch;
 }
-
-type DrawerState =
-  | { readonly kind: 'closed' }
-  | { readonly kind: 'create' }
-  | { readonly kind: 'edit'; readonly provider: LlmProviderWire }
-  | { readonly kind: 'detail'; readonly provider: LlmProviderWire };
 
 type ConfirmState =
   | { readonly kind: 'none' }
@@ -97,101 +92,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   );
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'none' });
-  const [testing, setTesting] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, LlmProviderTestResultWire>>({});
-  const [rowError, setRowError] = useState<{ id: string; error: unknown } | null>(null);
+  const { testing, testResults, rowError, replaceRow, save, setEnabled, remove, runTest } =
+    useProviderActions(client, drawer, list, setDrawer, toast, t);
 
   const providers = list.state.status === 'ready' ? list.state.data.items : [];
   const meta = list.state.status === 'ready' ? list.state.data : null;
-
-  function replaceRow(updated: LlmProviderWire): void {
-    list.mutate((data) => ({
-      ...data,
-      items: data.items.some((row) => row.id === updated.id)
-        ? data.items.map((row) => (row.id === updated.id ? updated : row))
-        : [...data.items, updated],
-    }));
-  }
-
-  async function save(
-    input: LlmProviderInputWire,
-    existing: LlmProviderWire | undefined,
-  ): Promise<void> {
-    const saved = existing
-      ? await client.updateProvider(input)
-      : await client.createProvider(input);
-    replaceRow(saved);
-    setDrawer({ kind: 'closed' });
-    toast.push({
-      tone: 'ok',
-      title: existing ? `已保存 ${saved.displayName}` : `已新增 ${saved.displayName}`,
-      description: t(
-        'models.json 已重写；工作区"模型与配额"可勾选它的模型。 models.json rewritten —',
-        'workspaces can now allow its models.',
-      ),
-    });
-    void list.reload();
-  }
-
-  async function setEnabled(provider: LlmProviderWire, enabled: boolean): Promise<void> {
-    const updated = await client.updateProvider({
-      id: provider.id,
-      displayName: provider.displayName,
-      api: provider.api,
-      upstreamBaseUrl: provider.upstreamBaseUrl,
-      authHeader: provider.authHeader,
-      authScheme: provider.authScheme,
-      ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
-      models: provider.models,
-      enabled,
-    });
-    replaceRow(updated);
-    void list.reload();
-  }
-
-  async function remove(provider: LlmProviderWire): Promise<void> {
-    const result = await client.deleteProvider(provider.id);
-    list.mutate((data) => ({ ...data, items: data.items.filter((row) => row.id !== provider.id) }));
-    if (
-      drawer.kind !== 'closed' &&
-      drawer.kind !== 'create' &&
-      drawer.provider.id === provider.id
-    ) {
-      setDrawer({ kind: 'closed' });
-    }
-    toast.push({
-      tone: 'ok',
-      title: result.restoredFileEntry
-        ? `已删除覆盖记录，恢复为 yaml 里的 ${provider.id}`
-        : `已删除 ${provider.displayName}`,
-    });
-    // P2 hotfix (post-v0.16.0 review): a deleted provider's console key is now also cleared
-    // (llm-proxy's DELETE /providers/:id) — surface it separately so it is not lost inside the
-    // delete toast's own title.
-    if (result.secretCleared) {
-      toast.push({ tone: 'ok', title: t('已一并清除控制台密钥 ·', 'Console key cleared as well') });
-    }
-    void list.reload();
-  }
-
-  async function runTest(provider: LlmProviderWire): Promise<void> {
-    setTesting(provider.id);
-    setRowError(null);
-    try {
-      const result = await client.testProvider(provider.id);
-      setTestResults((prev) => ({ ...prev, [provider.id]: result }));
-      replaceRow({ ...provider, lastTest: result });
-      toast.push({
-        tone: result.completion === 'ok' && result.toolCall === 'ok' ? 'ok' : 'warn',
-        title: `${provider.displayName}：补全 ${result.completion} · 工具调用 ${result.toolCall}`,
-        description: result.error ?? `${result.latencyMs} ms`,
-      });
-    } catch (error) {
-      setRowError({ id: provider.id, error });
-    } finally {
-      setTesting(null);
-    }
-  }
 
   const drawerProvider =
     drawer.kind === 'edit' || drawer.kind === 'detail'

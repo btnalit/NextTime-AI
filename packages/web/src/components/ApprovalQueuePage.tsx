@@ -1,20 +1,16 @@
 import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import type { ActionRequestStatus } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
-import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
-import {
-  type ApprovalDecisionInput,
-  ApprovalDetail,
-  type PendingConfirm,
-} from './approvals/ApprovalDetail.js';
+import { ApprovalDetail } from './approvals/ApprovalDetail.js';
+import { useApprovalQueue } from './approvals/useApprovalQueue.js';
 import { nameOf, useGatekeeperNames, usePrincipalNames } from './approvals/useDirectoryNames.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
@@ -43,26 +39,15 @@ type HistoryStatusFilter = 'all' | ActionRequestStatus;
 
 const HISTORY_PAGE_SIZE = 50;
 
-interface DecisionState {
-  readonly busy: boolean;
-  readonly error: unknown | null;
-}
-
-const IDLE: DecisionState = { busy: false, error: null };
-
-function byNewest(a: ActionRequestRow, b: ActionRequestRow): number {
-  return (b.requestedAt ?? '').localeCompare(a.requestedAt ?? '');
-}
-
 /**
  * components/ApprovalQueuePage: 待我审批 Approvals — the caller's own I14-scoped queue
  * (`list_pending`, design doc §7.6/§8.5; S2.10 deliverable 3) with a detail drawer per request.
- * States: skeleton → error (code + Retry) → empty → list. Live: `action.pending` reloads the
- * queue; `action.updated` moves the row out of Pending into the session-local "decided" set
- * immediately and reconciles that one row with `get_action` (C7: no full `list_pending` reload on
- * top — the push already names the row, and the queue itself only ever loses rows on
- * `action.updated`). Decisions are optimistic — the row leaves Pending on click and comes back
- * with the kernel's error if the call fails.
+ * States: skeleton → error (code + Retry) → empty → list. The queue's own state and decision
+ * handling live in `components/approvals/useApprovalQueue` (console redesign P1) — it doesn't
+ * render anything and needs nothing from `components/ui/*`, so it moved to its own file; this page
+ * still needs `components/ui/*` throughout for its own rendering (no kit equivalents exist yet for
+ * `DataList`/`EmptyState`/`SkeletonRows`/`Icon`/`Tabs`/`Drawer`, `scripts/guards/
+ * legacy-ui-importers.json`).
  *
  * S6-A (B2 / C25 / B3 / B4, docs/console-completion-plan.md §5.8, §5.9 "待我审批"), S8 W1-A7
  * (audit S13): the drawer renders `approvals/ApprovalDetail`, which owns its own `kit/confirm`
@@ -70,254 +55,27 @@ function byNewest(a: ActionRequestRow, b: ActionRequestRow): number {
  * every Reject pass through it before the call; low/medium Approve is the card's one click (§5.9
  * principle 4). `approve{reason?}` / `reject{reason?}` carry the reason the card collected
  * (mandatory for high, validated by the card in front of the kernel's own 400 `reason_required`).
- * This page hands `ApprovalDetail` only the two confirmed mutations (`handleApprove`/
- * `handleReject` below) — the confirm/no-confirm decision and its popover live entirely inside
- * `ApprovalDetail` now, nested in the same detail `Drawer` rather than a page-level sibling of it
- * (the popover's own Escape handler stops the keydown from also reaching the drawer's — see
- * `kit/confirm.tsx`'s own doc comment). Bare ids are `RefChip`s with names from `list_principals` /
- * `list_gatekeepers` (`approvals/useDirectoryNames`).
+ * This page hands `ApprovalDetail` only the two confirmed mutations (`useApprovalQueue`'s
+ * `handleApprove`/`handleReject`) — the confirm/no-confirm decision and its popover live entirely
+ * inside `ApprovalDetail` now, nested in the same detail `Drawer` rather than a page-level sibling
+ * of it. Bare ids are `RefChip`s with names from `list_principals` / `list_gatekeepers`
+ * (`approvals/useDirectoryNames`).
  *
  * "History" (S5.5 leftover 21, docs/STATUS.md row 21) — `list_action_requests` (same I14
  * visibility as `list_pending`, every status, keyset-paginated) is a real server-backed read.
- * Split into its own `ApprovalHistoryTab` component, mounted only while that tab is selected —
- * same "one tab, one child component, one `useCapabilityList`" convention `CatalogPage.tsx`'s
- * per-tab components use. `decided` (below) is unrelated to that tab; it only keeps the drawer's
- * subject resolvable between an optimistic decision and the next `list_pending` reload — a
- * selection in neither `pendingRows` nor `decided` (e.g. a row opened from History) falls through
- * to the plain `get_action` fetch below, which is workspace-scoped and not I14-narrowed (§9.3).
+ * Split into its own `ApprovalHistoryTab` component below, mounted only while that tab is selected
+ * — same "one tab, one child component, one `useCapabilityList`" convention `CatalogPage.tsx`'s
+ * per-tab components use.
  */
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
-  const load = useCallback(
-    () =>
-      http.call<{ items: readonly ActionRequestRow[] }>('list_pending').then((page) => page.items),
-    [http],
-  );
-  const pending = useResource(load);
   const principalNames = usePrincipalNames(http);
   const gatekeeperNames = useGatekeeperNames(http);
   const [filter, setFilter] = useState<Filter>('pending');
-  const [decided, setDecided] = useState<Readonly<Record<string, ActionRequestRow>>>({});
-  const [decision, setDecision] = useState<Readonly<Record<string, DecisionState>>>({});
-  const [fetchedDetail, setFetchedDetail] = useState<ActionRequestRow | null>(null);
-  const [detailError, setDetailError] = useState<unknown | null>(null);
-  // The confirm's own state, owned here rather than inside `ApprovalDetail` — see that prop's own
-  // doc comment (S8 W1-A7): `ApprovalDetail` can remount mid-decision, and state kept there would
-  // be lost when it does. Reset whenever the open request changes so a stale confirm from a
-  // previous selection can never reopen against the wrong row.
-  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId is the intentional reset trigger, not read in the effect body.
-  useEffect(() => {
-    setPendingConfirm(null);
-  }, [selectedId]);
-  const forbidden = pending.state.status === 'error' && isForbiddenError(pending.state.error);
-  useEffect(() => {
-    if (forbidden) permissions.markDenied('list_pending');
-  }, [forbidden, permissions]);
-
-  const refreshRow = useCallback(
-    async (actionRequestId: string): Promise<ActionRequestRow | null> => {
-      try {
-        return await http.call<ActionRequestRow>('get_action', { actionRequestId });
-      } catch {
-        return null;
-      }
-    },
-    [http],
-  );
-
-  const pendingRows = pending.state.status === 'ready' ? pending.state.data : [];
-  // Mirror of the current Pending rows for the push handler below (C3): the handler reads the
-  // row it is moving from here rather than from inside `pending.mutate`'s updater, which must
-  // stay a pure function of its argument (React runs updaters twice under StrictMode, and a
-  // `setDecided` inside one is a side effect even when it happens to be idempotent).
-  const pendingRowsRef = useRef(pendingRows);
-  pendingRowsRef.current = pendingRows;
-
-  useEffect(() => {
-    const unsubPending = pushes.onActionPending(() => void pending.reload());
-    const unsubUpdated = pushes.onActionUpdated((event) => {
-      const row = pendingRowsRef.current.find((candidate) => candidate.id === event.id);
-      if (row) {
-        setDecided((prev) => ({ ...prev, [row.id]: { ...row, status: event.status } }));
-        pending.mutate((rows) => rows.filter((candidate) => candidate.id !== event.id));
-      } else {
-        setDecided((prev) => {
-          const existing = prev[event.id];
-          return existing ? { ...prev, [event.id]: { ...existing, status: event.status } } : prev;
-        });
-      }
-      // C7: one `get_action` for the row the push named is the whole reconciliation — the
-      // former unconditional `pending.reload()` doubled every push into a full list fetch.
-      void refreshRow(event.id).then((fresh) => {
-        if (fresh && fresh.status !== 'pending_approval') {
-          setDecided((prev) => ({ ...prev, [fresh.id]: fresh }));
-        }
-      });
-    });
-    return () => {
-      unsubPending();
-      unsubUpdated();
-    };
-  }, [pushes, pending.reload, pending.mutate, refreshRow]);
-
-  const rows = useMemo(() => [...pendingRows].sort(byNewest), [pendingRows]);
-
-  // Deep link (`#/work/approvals/<id>`) to a request that is not in the Pending list: fetch it by
-  // id (covers a History-tab selection too — `get_action` is workspace-scoped, not I14-narrowed).
-  const selectedFromList =
-    selectedId === undefined
-      ? undefined
-      : (pendingRows.find((row) => row.id === selectedId) ?? decided[selectedId]);
-  useEffect(() => {
-    setFetchedDetail(null);
-    setDetailError(null);
-    if (!selectedId || selectedFromList || pending.state.status === 'loading') return;
-    let cancelled = false;
-    http
-      .call<ActionRequestRow>('get_action', { actionRequestId: selectedId })
-      .then((row) => {
-        if (!cancelled) setFetchedDetail(row);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setDetailError(err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId, selectedFromList, http, pending.state.status]);
-  // S8 W1-A7: an optimistic decision (`moveToDecided`) can, for one render, leave the row
-  // findable in neither `pendingRows` nor `decided` — `moveToDecided`'s removal and `revert`'s
-  // undo of it land in separate renders around the awaited kernel call. Previously that render's
-  // `selectedRow` fell all the way through to `undefined` and this page swapped in a skeleton,
-  // unmounting `ApprovalDetail` (and, now that the confirm is anchored inside it rather than a
-  // page-level sibling, whatever confirm popover happened to be open, along with its own inline
-  // error). Caching the last row resolved for the *current* `selectedId` and falling back to it
-  // keeps `ApprovalDetail` mounted through that one-render gap; a genuine selection change (a
-  // different id) never reads a stale cache, since the id guard below only matches the same one.
-  const lastRowForSelection = useRef<{
-    readonly id: string;
-    readonly row: ActionRequestRow;
-  } | null>(null);
-  if (selectedId !== undefined && selectedFromList !== undefined) {
-    lastRowForSelection.current = { id: selectedId, row: selectedFromList };
-  }
-  const selectedRow =
-    selectedFromList ??
-    fetchedDetail ??
-    (selectedId !== undefined && lastRowForSelection.current?.id === selectedId
-      ? lastRowForSelection.current.row
-      : undefined);
-
-  function setBusy(id: string, busy: boolean): void {
-    setDecision((prev) => ({
-      ...prev,
-      [id]: { busy, error: busy ? null : (prev[id]?.error ?? null) },
-    }));
-  }
-
-  function settle(id: string, error: unknown | null): void {
-    setDecision((prev) => ({ ...prev, [id]: { busy: false, error } }));
-  }
-
-  function moveToDecided(row: ActionRequestRow, status: string): void {
-    setDecided((prev) => ({ ...prev, [row.id]: { ...row, status } }));
-    pending.mutate((current) => current.filter((candidate) => candidate.id !== row.id));
-  }
-
-  function revert(id: string): void {
-    setDecided((prev) => {
-      const { [id]: _dropped, ...rest } = prev;
-      return rest;
-    });
-  }
-
-  function rowFor(id: string): ActionRequestRow | undefined {
-    return rows.find((candidate) => candidate.id === id) ?? selectedRow ?? undefined;
-  }
-
-  /** The `approve` call itself (optimistic; throws on failure so `ApprovalDetail`'s confirm keeps
-   *  its popover open with the kernel's error — the direct path catches it in `handleApprove`). */
-  async function performApprove(row: ActionRequestRow, input: ApprovalDecisionInput) {
-    const id = row.id;
-    setBusy(id, true);
-    moveToDecided(row, 'approved');
-    try {
-      const result = await http.call<ActionRequestRow>('approve', {
-        actionRequestId: id,
-        ...(input.reason !== undefined ? { reason: input.reason } : {}),
-      });
-      setDecided((prev) => ({ ...prev, [id]: { ...row, ...result } }));
-      settle(id, null);
-      toast.push({ tone: 'ok', title: `已批准 Approved · ${humanizeKind(row.actionKindTag)}` });
-    } catch (err) {
-      revert(id);
-      settle(id, err);
-      await pending.reload();
-      throw err;
-    }
-    if (input.alwaysAllow) {
-      try {
-        await http.call('set_auto_approved_action_kind', { actionKindTag: row.actionKindTag });
-        toast.push({
-          tone: 'info',
-          title: `今后自动批准 Auto-approved from now on · ${row.actionKindTag}`,
-        });
-      } catch (err) {
-        if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
-        toast.push({
-          tone: 'warn',
-          title: t(
-            '已批准，但自动批准规则未写入',
-            'Approved, but the auto-approval rule was not written',
-          ),
-        });
-      }
-    }
-  }
-
-  async function performReject(row: ActionRequestRow, reason: string | undefined) {
-    const id = row.id;
-    setBusy(id, true);
-    moveToDecided(row, 'rejected');
-    try {
-      const result = await http.call<ActionRequestRow>('reject', {
-        actionRequestId: id,
-        ...(reason !== undefined ? { reason } : {}),
-      });
-      setDecided((prev) => ({ ...prev, [id]: { ...row, ...result } }));
-      settle(id, null);
-      toast.push({ tone: 'info', title: `已拒绝 Rejected · ${humanizeKind(row.actionKindTag)}` });
-    } catch (err) {
-      revert(id);
-      settle(id, err);
-      await pending.reload();
-      throw err;
-    }
-  }
-
-  /** `ApprovalDetail` itself decides whether a confirm precedes the call (§5.9 principle 4: low /
-   *  medium Approve straight through, high Approve and every Reject via its own `kit/confirm`) —
-   *  this page only ever hands it the confirmed mutation, and always lets it throw: for a
-   *  confirmed call `ApprovalDetail`'s own `runConfirm` re-throws into `Confirm`'s `onConfirm`,
-   *  which shows the error inline and keeps the popover open; for the direct (no-confirm) path
-   *  `ApprovalDetail` swallows the rejection itself (its own comment explains why) and relies on
-   *  `decision[id].error` below instead. */
-  async function handleApprove(input: ApprovalDecisionInput): Promise<void> {
-    const row = rowFor(input.actionRequestId);
-    if (!row) return;
-    await performApprove(row, input);
-  }
-
-  async function handleReject(input: Omit<ApprovalDecisionInput, 'alwaysAllow'>): Promise<void> {
-    const row = rowFor(input.actionRequestId);
-    if (!row) return;
-    await performReject(row, input.reason);
-  }
-
-  const pendingCount = pendingRows.length;
+  const queue = useApprovalQueue({ http, pushes, selectedId, permissions, toast, t });
+  const { pending, rows, pendingCount, forbidden, selectedRow, detailError } = queue;
 
   return (
     <div className="page">
@@ -487,11 +245,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
             principalNames={principalNames}
             gatekeeperNames={gatekeeperNames}
             canAlwaysAllow={!permissions.isDenied('set_auto_approved_action_kind')}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            error={decision[selectedRow.id]?.error ?? IDLE.error}
-            pending={pendingConfirm}
-            onPendingChange={setPendingConfirm}
+            onApprove={queue.handleApprove}
+            onReject={queue.handleReject}
+            error={queue.decision[selectedRow.id]?.error ?? null}
+            pending={queue.pendingConfirm}
+            onPendingChange={queue.setPendingConfirm}
           />
         ) : detailError ? (
           <ErrorBanner
@@ -521,6 +279,10 @@ interface ApprovalHistoryTabProps {
  * `PlatformUsersPage.tsx` already use for their own cursor-paged governance lists). Its own
  * component (not inlined in `ApprovalQueuePage` above) so the capability call only fires while
  * this tab is actually selected — same convention `CatalogPage.tsx`'s per-tab components use.
+ * Kept in this file rather than moved to `components/approvals/` (console redesign P1): it renders
+ * `Button`/`DataList`/`EmptyState`/`ErrorBanner`/`Field`/`Select`/`SkeletonRows`/`StatusChip`/
+ * `Icon`/`RefChip`, none of which have an identical-rendering `components/kit/*` replacement yet
+ * (`scripts/guards/legacy-ui-importers.json`).
  *
  * S6-A C25: rows now carry `decisionReason` / `decidedBy` / `decidedAt` (packages/shared/src/
  * wire/governance.ts) — the decider is a principal `RefChip`, the reason is shown inline; a row
