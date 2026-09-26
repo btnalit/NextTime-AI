@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.27.0](https://github.com/btnalit/NextTime-AI/compare/v0.26.0...v0.27.0) (2026-09-26)
+
+
+### Features
+
+* **pi:** upgrade pi to 0.87.1 ([#329](https://github.com/btnalit/NextTime-AI/issues/329)) ([72f31ae](https://github.com/btnalit/NextTime-AI/commit/72f31ae79c23b663666fb3660f77f94c007814f5))
+* **platform:** pi runtime card with one-click upgrade; images always built with real version labels ([#330](https://github.com/btnalit/NextTime-AI/issues/330)) ([ee79c6b](https://github.com/btnalit/NextTime-AI/commit/ee79c6b4b206d45140815a835770fd3ecedfeb60))
+
 ## [0.26.0](https://github.com/btnalit/NextTime-AI/compare/v0.25.0...v0.26.0) (2026-09-26)
 
 
