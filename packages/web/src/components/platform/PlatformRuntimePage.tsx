@@ -134,8 +134,11 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
       const upToDate = result.outcomes.filter((o) => o.action === 'skipped_up_to_date').length;
       toast.push({
         tone: 'ok',
-        title: `已重建 ${result.stoppedCount} 个 rebuilt`,
-        description: `跳过：忙碌 ${busy} 个，已是最新 ${upToDate} 个。 Skipped: ${busy} busy, ${upToDate} up to date.`,
+        title: t(`已重建 ${result.stoppedCount} 个`, `Rebuilt ${result.stoppedCount}`),
+        description: t(
+          `跳过：忙碌 ${busy} 个，已是最新 ${upToDate} 个。`,
+          `Skipped: ${busy} busy, ${upToDate} up to date.`,
+        ),
       });
       setSelected(new Set());
       void inventory.reload();
@@ -246,6 +249,7 @@ function RuntimeBody({
   // any) is open, since every row shares the same "设为活动" button and each needs its own.
   const [activatingImageId, setActivatingImageId] = useState<string | null>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
+  const [rollOpen, setRollOpen] = useState(false);
   // Roll back needs at least two known images to have a genuinely different one to switch to —
   // see the module doc comment for why this client-side proxy, not a true "has history" field.
   const canRollBack = data.images.length >= 2;
@@ -529,18 +533,17 @@ function RuntimeBody({
               </Button>
             }
             title={t('回滚到上一个镜像', 'Roll back to the previous image')}
-            description={
+            description={t(
               <>
                 改回设置历史里最近一个<em>不同</em>
-                {t(
-                  '的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。',
-                  'Switches to the most recent',
-                )}
-                <em>different</em> value in the settings history; calling it again toggles between
-                the last two distinct values. Running entry containers converge the same way — at
-                their own next turn, never forced.
-              </>
-            }
+                的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。
+              </>,
+              <>
+                Switches to the most recent <em>different</em> value in the settings history;
+                calling it again toggles between the last two distinct values. Running entry
+                containers converge the same way — at their own next turn, never forced.
+              </>,
+            )}
             confirmLabel={t('回滚', 'Roll back')}
             onConfirm={onRollback}
             testId="runtime-rollback-confirm"
@@ -578,19 +581,56 @@ function RuntimeBody({
       <Card
         title={t('常驻容器', 'Resident containers')}
         actions={
-          <Button
-            variant="secondary"
-            size="s"
-            icon="refresh"
-            onClick={onRollEntryContainers}
-            loading={rolling}
-            disabled={needsRebuildCount === 0}
-            data-testid="runtime-roll-entry-containers"
-          >
-            {selected.size > 0
-              ? `现在重建选中的 (${selected.size}) Rebuild selected now`
-              : t('现在重建空闲的', 'Rebuild idle now')}
-          </Button>
+          // Coverage-map gap G6: the one runtime write on this page without a confirm, and the
+          // widest — with nothing selected it stops every idle resident entry container on the
+          // platform that needs a rebuild. Same `medium` tier as its two siblings above.
+          <Confirm
+            tier="medium"
+            open={rollOpen}
+            onOpenChange={setRollOpen}
+            anchor={
+              <Button
+                variant="secondary"
+                size="s"
+                icon="refresh"
+                onClick={() => setRollOpen(true)}
+                loading={rolling}
+                disabled={needsRebuildCount === 0}
+                data-testid="runtime-roll-entry-containers"
+              >
+                {selected.size > 0
+                  ? t(
+                      `现在重建选中的 (${selected.size})`,
+                      `Rebuild selected now (${selected.size})`,
+                    )
+                  : t('现在重建空闲的', 'Rebuild idle now')}
+              </Button>
+            }
+            title={
+              selected.size > 0
+                ? t(
+                    `重建选中的 ${selected.size} 个入口容器`,
+                    `Rebuild ${selected.size} selected entry containers`,
+                  )
+                : t(
+                    `重建全平台 ${needsRebuildCount} 个需要重建的入口容器`,
+                    `Rebuild ${needsRebuildCount} entry containers platform-wide`,
+                  )
+            }
+            impact={[
+              t(
+                '只停止空闲且镜像已过期的容器；正在跑一轮对话的会被跳过。',
+                'Only idle containers on an outdated image are stopped; one in the middle of a turn is skipped.',
+              ),
+              t(
+                '被停止的成员在下一轮对话时自动用活动镜像重建，首轮会慢几秒。',
+                "Each stopped member's container is recreated on the active image at their next turn, which is a few seconds slower.",
+              ),
+            ]}
+            confirmLabel={t('重建', 'Rebuild')}
+            onConfirm={onRollEntryContainers}
+            testId="runtime-roll-confirm"
+          />
         }
         padded={false}
       >
