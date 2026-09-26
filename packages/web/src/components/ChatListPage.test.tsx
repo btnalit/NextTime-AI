@@ -187,14 +187,21 @@ describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
       unarchive_chat: (params) =>
         chat({ ...FIXTURE[1], id: (params as { chatId: string }).chatId, archivedAt: null }),
     });
-    renderList(client);
+    const { onSelectChat } = renderList(client);
     await screen.findByTestId('chats-list');
 
     const opsRow = screen.getAllByTestId('chat-row')[1] as HTMLElement;
+    // Regression (CI run 36239115293): the row's own click handler must never fire for a click
+    // that lands on a nested control — a CSS-only hover-reveal on `.chat-row-actions` used to make
+    // the parent `<li>` intercept every pointer event meant for `chat-row-archive` in a real
+    // browser (jsdom does not enforce `pointer-events`/`:hover`, so this half of the regression —
+    // the click handler's own interactive-element guard — is what a unit test can verify; the CSS
+    // fix itself, `.chat-row-actions` no longer hover-gated, is `styles/pages.css`).
     fireEvent.click(within(opsRow).getByTestId('chat-row-archive'));
     await waitFor(() => expect(rowTitles()).toEqual(['新对话']));
     expect(client.calls.at(-1)).toEqual({ name: 'archive_chat', params: { chatId: 'c-ops' } });
     expect(screen.getByTestId('chats-tab-archived').textContent).toContain('2');
+    expect(onSelectChat).not.toHaveBeenCalled();
 
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('已归档 ·');
@@ -210,12 +217,13 @@ describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
       list_chats: () => ({ items: FIXTURE }),
       unarchive_chat: () => chat({ ...FIXTURE[2], archivedAt: null }),
     });
-    renderList(client);
+    const { onSelectChat } = renderList(client);
     await screen.findByTestId('chats-list');
     fireEvent.click(screen.getByTestId('chats-tab-archived'));
     fireEvent.click(screen.getByTestId('chat-row-restore'));
     await screen.findByTestId('chats-archived-empty');
     expect(client.calls.at(-1)).toEqual({ name: 'unarchive_chat', params: { chatId: 'c-old' } });
+    expect(onSelectChat).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('chats-tab-active'));
     expect(rowTitles()).toEqual(['新对话', 'Ops chat', 'Old incident']);
     expect((await screen.findByTestId('toast')).textContent).toContain('已恢复');

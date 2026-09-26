@@ -213,6 +213,7 @@ export function Routed({
           http={session.http}
           chatId={route.chatId}
           onBack={() => navigate(hrefs.chats())}
+          onSelectChat={(id) => navigate(hrefs.chat(id))}
           onOpenApproval={openApproval}
           onOpenTask={openTask}
         />
