@@ -399,7 +399,7 @@ function ChecklistField({
       <span className="field-label">{title}</span>
       <p className="field-hint">{subtitle}</p>
       {options.length === 0 ? (
-        <p className="text-3 text-small" data-testid={`${testId}-empty`}>
+        <p className="field-hint" data-testid={`${testId}-empty`}>
           {empty}
         </p>
       ) : (
