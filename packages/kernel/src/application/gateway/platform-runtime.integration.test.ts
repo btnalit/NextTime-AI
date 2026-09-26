@@ -764,10 +764,15 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       beforeEach(async () => {
         versionDir = await mkdtemp(path.join(tmpdir(), 'pi-version-'));
+        // Earlier tests in this file set an active image; these cases resolve the active image
+        // through worker-supervisor's own default instead.
+        await pool.query(
+          `update platform_settings set settings = settings - 'activeRuntimeImage' where singleton`,
+        );
       });
 
       afterEach(async () => {
-        delete process.env.PI_VERSION_FILE;
+        Reflect.deleteProperty(process.env, 'PI_VERSION_FILE');
         supervisor.defaultImage = 'nexttime-ai-worker-runtime';
         await rm(versionDir, { recursive: true, force: true });
       });
@@ -802,9 +807,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('is unknown when the image was built without real labels ("dev")', async () => {
         await pinPiVersion('0.84.4');
-        supervisor.images = [
-          { ...IMAGE_V1, labels: { 'ai.nexttime.pi-version': 'dev' } },
-        ];
+        supervisor.images = [{ ...IMAGE_V1, labels: { 'ai.nexttime.pi-version': 'dev' } }];
         supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
         const result = await callAsAdmin<PiDriftWire>('pi_drift');
         expect(result.status).toBe('unknown');
