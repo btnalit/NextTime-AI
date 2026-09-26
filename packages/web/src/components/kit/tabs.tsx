@@ -18,7 +18,8 @@ export interface TabsProps<V extends string> {
 
 /**
  * components/kit/tabs (console redesign P3-1, DesignSystem.dc.html): a segmented control — the
- * selected option is ink-filled, the rest are ghost. Same tablist contract as the legacy
+ * selected option is a raised surface chip on a recessed track (design system v2), the rest are
+ * ghost. Same tablist contract as the legacy
  * `components/ui/Tabs` (`role="tablist"`/`role="tab"`, roving `tabIndex`, arrow keys move
  * selection) plus Home/End and DOM focus following the selection, so a page can adopt this look
  * without changing how it drives the component. Radix has no bare tablist/toggle-group primitive
@@ -44,7 +45,7 @@ export function Tabs<V extends string>({
   return (
     <div
       className={cn(
-        'inline-flex gap-0.5 rounded-m border border-border bg-surface-2 p-0.5',
+        'inline-flex gap-0.5 rounded-m border border-border bg-surface-3 p-0.5',
         className,
       )}
       role="tablist"
@@ -90,7 +91,7 @@ export function Tabs<V extends string>({
             className={cn(
               'inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-s px-3 text-13 font-medium transition-colors',
               selected
-                ? 'bg-text text-text-on-accent'
+                ? 'bg-surface-1 text-text shadow-card'
                 : 'bg-transparent text-text-2 hover:text-text',
             )}
             data-value={option.value}

@@ -265,7 +265,9 @@
   text-align: center;
   gap: var(--space-2);
   padding: var(--space-6) var(--space-4);
-  border: 1px dashed var(--border-strong);
+  /* Design system v2: a quiet filled surface, not a dashed box. */
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-l);
   color: var(--text-2);
 }

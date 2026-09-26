@@ -419,6 +419,9 @@ jobs:
         if: ${{ github.event.inputs.update_baselines == 'true' }}
         env:
           E2E_GATE_UPDATE_BASELINE: '1'
+          # Design system v2: 00-gates/review-capture.spec.ts writes dark-theme and 390px review
+          # captures under test-results/review/ (uploaded with the playwright-report artifact).
+          E2E_REVIEW_CAPTURE: '1'
         run: pnpm --filter @nexttime/web exec playwright test --update-snapshots=all
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
