@@ -105,18 +105,19 @@ export function AgentProfileForm({
     policy?.allowedSkills,
     (s) => s.id,
   );
-  // Only the systems actually granted to this member are on offer (in use or excluded) — a
-  // workspace system nobody granted them would show as "in use" without the agent being able to
-  // reach it.
-  const grantedGateIds = new Set([
-    ...profile.effective.enabledGatekeepers,
-    ...profile.excludedGatekeepers,
-  ]);
+  // Leftover 98: every system on offer, as the kernel lists it (`availableGatekeepers`) — the ones
+  // granted to this member (read and write) and every other one their agent may read without a
+  // Grant (design doc §11 "门上的观察") — narrowed by the policy's gate cap like the other lists.
+  // Unticking either kind excludes it; the name comes from the workspace's own gate list.
+  const gateNames = new Map(gatekeepers.map((g) => [g.id, g.name]));
   const allowedGatekeepers = narrowByPolicyAllowList(
-    gatekeepers,
+    profile.availableGatekeepers,
     policy?.allowedGatekeepers,
-    (g) => g.id,
-  ).filter((g) => grantedGateIds.has(g.id));
+    (g) => g.gatekeeperId,
+  ).flatMap((g) => {
+    const name = gateNames.get(g.gatekeeperId);
+    return name === undefined ? [] : [{ ...g, name }];
+  });
 
   const maxChars = policy?.maxPromptAddendumChars;
   const overLimit = maxChars !== undefined && state.promptAddendum.length > maxChars;
@@ -247,8 +248,17 @@ export function AgentProfileForm({
 
         <ChecklistField
           title={t('系统接入', 'Connected systems')}
-          subtitle={t('已授权给你的系统', 'Systems granted to you')}
-          options={allowedGatekeepers.map((g) => ({ id: g.id, label: g.name }))}
+          subtitle={t(
+            '本工作区可读的系统，以及授权给你的系统',
+            'Systems readable in this workspace, and those granted to you',
+          )}
+          options={allowedGatekeepers.map((g) => ({
+            id: g.gatekeeperId,
+            label: g.name,
+            note: g.granted
+              ? t('读写（已授权）', 'Read & write (granted)')
+              : t('只读（未授权）', 'Read only (not granted)'),
+          }))}
           excluded={state.excludedGatekeepers}
           onToggle={(id) =>
             update('excludedGatekeepers', toggleItem(state.excludedGatekeepers, id))
@@ -256,7 +266,7 @@ export function AgentProfileForm({
           disabled={disabled}
           error={fieldErrors.excludedGatekeepers}
           testId="agent-profile-gatekeepers"
-          emptyTitle={t('还没有系统授权给你', 'No system is granted to you yet')}
+          emptyTitle={t('还没有可用的系统', 'No system available yet')}
           empty={
             <>
               {t(
@@ -392,7 +402,12 @@ function ChecklistField({
 }: {
   readonly title: string;
   readonly subtitle: string;
-  readonly options: readonly { readonly id: string; readonly label: string }[];
+  /** `note`: a short qualifier shown after the label (the systems list's 读写 / 只读). */
+  readonly options: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly note?: string;
+  }[];
   readonly excluded: readonly string[];
   readonly onToggle: (id: string) => void;
   readonly disabled: boolean;
@@ -422,6 +437,7 @@ function ChecklistField({
                 disabled={disabled}
               />
               <span>{option.label}</span>
+              {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
             </label>
           ))}
         </fieldset>
