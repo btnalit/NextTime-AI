@@ -100,6 +100,14 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
     await page.keyboard.press('Escape');
     await historyRows.nth(i).press('Enter');
     await expect(detail).toBeVisible({ timeout: 15_000 });
+    // The wide pane is always mounted, so "visible" can still be the *previous* row's detail —
+    // reading it right away raced the re-render (a real flake on #341's CI run). Wait until the
+    // pane shows the request this row selected (the id the row put in the URL) before reading it.
+    await expect(page).toHaveURL(/#\/work\/approvals\/[^/?#]+$/);
+    const selectedId = decodeURIComponent(new URL(page.url()).hash.split('/').pop() ?? '');
+    await expect(detail).toHaveAttribute('data-action-request-id', selectedId, {
+      timeout: 15_000,
+    });
     if ((await detail.getByText(scope, { exact: true }).count()) > 0) {
       found = true;
       break;

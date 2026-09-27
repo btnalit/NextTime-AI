@@ -22,6 +22,37 @@
   gap: var(--space-4);
 }
 
+/* Design system v2.1 — the navigation as a brand-navy island (tokens.css "Sidebar island"). The
+ * general tokens are re-pointed here, on the panel itself, so the nav items, workspace block, role
+ * badges, pending-count badge, connection line, user row and language switch — legacy classes and
+ * kit utilities alike — all resolve to the island values with no per-control override. The mobile
+ * `NavDrawer` carries `.nav-drawer` on its sheet content, so it is the same island. */
+.sidebar,
+.nav-drawer {
+  --surface-1: var(--sidebar-bg);
+  --surface-2: var(--sidebar-surface-2);
+  --surface-3: var(--sidebar-surface-3);
+  --border: var(--sidebar-border);
+  --border-strong: var(--sidebar-border);
+  --text-strong: var(--sidebar-text-strong);
+  --text: var(--sidebar-text);
+  --text-2: var(--sidebar-text-2);
+  --text-3: var(--sidebar-text-3);
+  --accent: var(--sidebar-accent);
+  --accent-hover: var(--sidebar-text-strong);
+  --accent-soft: var(--sidebar-accent-soft);
+  --warn: var(--sidebar-warn);
+  --warn-soft: var(--sidebar-warn-soft);
+  --info: var(--sidebar-info);
+  --info-soft: var(--sidebar-info-soft);
+  --ok: var(--sidebar-ok);
+  --ok-soft: var(--sidebar-ok-soft);
+  background: var(--sidebar-bg);
+  /* `color` is inherited as a computed value from `body`, not re-resolved from the remapped
+   * `--text` — so the island has to restate it, or unstyled text stays page ink on navy. */
+  color: var(--text);
+}
+
 .sidebar-brand {
   display: flex;
   align-items: center;
