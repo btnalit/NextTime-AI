@@ -8,9 +8,9 @@ import {
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import type { ModelRow } from '../../../lib/governance.js';
 import { useT } from '../../../lib/i18n.js';
+import { Select } from '../../kit/select.js';
 import { Card } from '../../ui/Card.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
-import { Field, Select } from '../../ui/Field.js';
 import { Notice } from '../../ui/Notice.js';
 import { SkeletonRows } from '../../ui/Skeleton.js';
 
@@ -87,22 +87,21 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             testId="platform-default-model-load-error"
           />
         ) : (
-          <Field id="platform-default-model" label={t('默认入口模型', 'Default model')}>
-            <Select
-              id="platform-default-model"
-              value={settings.state.data.defaultEntryModel ?? PI_DEFAULT}
-              onChange={(event) => void handleChange(event.target.value)}
-              disabled={submitting}
-              data-testid="platform-default-model-select"
-            >
-              <option value={PI_DEFAULT}>{t('pi 自己的默认值', "pi's own default")}</option>
-              {catalog.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <Select
+            id="platform-default-model"
+            label={t('默认入口模型', 'Default model')}
+            value={settings.state.data.defaultEntryModel ?? PI_DEFAULT}
+            onChange={(event) => void handleChange(event.target.value)}
+            disabled={submitting}
+            data-testid="platform-default-model-select"
+          >
+            <option value={PI_DEFAULT}>{t('pi 自己的默认值', "pi's own default")}</option>
+            {catalog.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.id}
+              </option>
+            ))}
+          </Select>
         )}
         {saved ? (
           <Notice testId="platform-default-model-saved">{t('已保存', 'Saved')}</Notice>

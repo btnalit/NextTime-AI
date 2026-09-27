@@ -154,6 +154,11 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 }
 
 const WCAG_AA_NORMAL_TEXT_MIN = 4.5;
+/** WCAG 2.x "non-text contrast" minimum (1.4.11) — a UI component or graphic against its
+ *  background, not running text. The console redesign P3-6 `--deco-*` icon-tile pairs (an icon
+ *  glyph, never a text label, drawn on its own tinted tile) are checked against this floor rather
+ *  than the 4.5:1 text minimum above. */
+const WCAG_NON_TEXT_MIN = 3;
 
 /** General-purpose text — checked against every neutral surface and every semantic `-soft`. */
 const GENERAL_TEXT_TOKENS = ['--text', '--text-2', '--text-3', '--accent'] as const;
@@ -182,6 +187,16 @@ const SEMANTIC_TEXT_TOKENS = [
   '--muted',
 ] as const;
 const NEUTRAL_SURFACES_FOR_SEMANTIC_TEXT = ['--bg', '--surface-1'] as const;
+
+/** Decorative icon-tile pairs (P3-6, V10) — each icon colour against its own tile background
+ *  only; a deco colour never sits on a different pair's tile. */
+const DECO_PAIRS = [
+  ['--deco-blue', '--deco-blue-soft'],
+  ['--deco-violet', '--deco-violet-soft'],
+  ['--deco-pink', '--deco-pink-soft'],
+  ['--deco-cyan', '--deco-cyan-soft'],
+  ['--deco-indigo', '--deco-indigo-soft'],
+] as const;
 
 const { light: lightTokens, dark: darkTokens } = loadThemeTokens();
 
@@ -223,4 +238,10 @@ describe.each([
       });
     },
   );
+
+  it.each(DECO_PAIRS)('%s meets 3:1 (non-text) on %s', (icon, soft) => {
+    const fg = resolveOpaqueRgb(icon, tokens, mountSurface);
+    const bg = resolveOpaqueRgb(soft, tokens, mountSurface);
+    expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(WCAG_NON_TEXT_MIN);
+  });
 });
