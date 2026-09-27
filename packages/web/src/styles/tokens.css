@@ -68,8 +68,20 @@
   --primary-hover: #2b44e6;
   --primary-press: #2338c9;
   --text-on-primary: #ffffff;
-  /* The product mark only (decorative, not a governance meaning): primary blue into violet. */
-  --brand-gradient: linear-gradient(135deg, #3551f9 0%, #7b61ff 100%);
+  /* Signature layer (v3): the primary as an indigo-to-violet sweep on the few surfaces that carry
+   * the brand — the primary button, the active nav pill, the product mark and wordmark. Every stop
+   * keeps a white label ≥ 5.68:1 (hover ≥ 6.44:1, press ≥ 7.04:1). Decorative, not a governance
+   * meaning; running text never uses it. */
+  --gradient-primary: linear-gradient(135deg, #3551f9 0%, #6d42f0 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #2b44e6 0%, #6139e8 100%);
+  --gradient-primary-press: linear-gradient(135deg, #2338c9 0%, #5436e0 100%);
+  --gradient-text: linear-gradient(135deg, #3551f9 0%, #6d42f0 100%);
+  --highlight-inset: rgba(255, 255, 255, 0.18);
+  /* The control-plane dot grid behind every page (faded out towards the bottom in base.css), the
+   * frosted mobile top bar, and text selection. */
+  --grid-dot: rgba(31, 34, 48, 0.07);
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --selection: rgba(53, 81, 249, 0.18);
 
   /* Governance semantics (§5.9 principle 2). */
   --ok: #157347;
@@ -182,6 +194,14 @@
     --primary-hover: #3f60e8;
     --primary-press: #3858e0;
     --text-on-primary: #ffffff;
+    --gradient-primary: linear-gradient(135deg, #4466ee 0%, #6a4ff0 100%);
+    --gradient-primary-hover: linear-gradient(135deg, #3f60e8 0%, #6139e8 100%);
+    --gradient-primary-press: linear-gradient(135deg, #3858e0 0%, #5436e0 100%);
+    --gradient-text: linear-gradient(135deg, #8aa2ff 0%, #b197fc 100%);
+    --highlight-inset: rgba(255, 255, 255, 0.14);
+    --grid-dot: rgba(255, 255, 255, 0.05);
+    --surface-glass: rgba(22, 24, 35, 0.72);
+    --selection: rgba(138, 162, 255, 0.28);
 
     --ok: #4fc38a;
     --ok-soft: rgba(79, 195, 138, 0.16);
