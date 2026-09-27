@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
 import {
   ARTIFACT_CONTENT_MAX_CHARS,
   MAX_ARTIFACTS_PER_CONTRACT,
   WorkerResultArtifactSchema,
   WorkerResultContractSchema,
+  WorkerResultEvidenceSchema,
 } from './worker-result.js';
 
 /**
@@ -63,5 +65,26 @@ describe('WorkerResultContractSchema — artifacts array cap', () => {
       contractWithArtifacts(MAX_ARTIFACTS_PER_CONTRACT + 1),
     );
     expect(result.success).toBe(false);
+  });
+});
+
+// STATUS leftover 89: `human_attestation` is a person's own confirmation (`attest_fact`) — a
+// Worker's machine evidence may never carry that kind.
+describe('WorkerResultEvidenceSchema — reserved human_attestation kind', () => {
+  it('accepts a machine evidence kind', () => {
+    const result = WorkerResultEvidenceSchema.safeParse({
+      kind: 'command_output',
+      content: { stdout: 'ok' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('refuses the reserved kind, and so the whole contract', () => {
+    const entry = { kind: HUMAN_ATTESTATION_EVIDENCE_KIND, content: { note: 'trust me' } };
+    const single = WorkerResultEvidenceSchema.safeParse(entry);
+    expect(single.success).toBe(false);
+    expect(single.error?.issues[0]?.message).toMatch(/reserved/);
+    const contract = WorkerResultContractSchema.safeParse({ summary: 'ok', evidence: [entry] });
+    expect(contract.success).toBe(false);
   });
 });

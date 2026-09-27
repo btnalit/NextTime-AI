@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ATTEST_FACT_NOTE_MAX_LENGTH,
   CAPABILITY_REGISTRY,
   INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
   assertRegistryConsistent,
@@ -69,6 +70,8 @@ const EXPECTED_CAPABILITY_NAMES = [
   'list_conflicts',
   'resolve_conflict',
   'verify_fact',
+  // STATUS leftover 89 — not in §9.3: a person's own confirmation, recorded as Evidence.
+  'attest_fact',
   // governance
   'request_action',
   'approve',
@@ -114,6 +117,7 @@ const HUMAN_ONLY_NAMES = [
   'set_policy',
   'set_quota',
   'issue_handle',
+  'attest_fact',
 ];
 
 describe('CAPABILITY_REGISTRY', () => {
@@ -192,6 +196,7 @@ describe('CAPABILITY_REGISTRY', () => {
       'record_decision',
       'resolve_conflict',
       'verify_fact',
+      'attest_fact',
       'report_turn',
       'invoke_worker',
       'report_task_result',
@@ -285,5 +290,61 @@ describe('grant_capability params (leftover 80, 2026-09-25)', () => {
       scope: { operationNames: ['container.restart'] },
     });
     expect(result?.success).toBe(false);
+  });
+});
+
+// STATUS leftover 89 (maintainer decision 2026-09-27): a person's own confirmation of a Fact.
+describe('attest_fact (leftover 89)', () => {
+  const factId = '00000000-0000-4000-8000-000000000002';
+  const capability = () => getCapability('attest_fact');
+
+  it('is a human-channel write with the same role gate as verify_fact', () => {
+    const attest = capability();
+    const verify = getCapability('verify_fact');
+    expect(attest?.channel).toBe('human');
+    expect(attest?.mode).toBe('write');
+    expect(attest?.group).toBe('epistemic');
+    expect(attest?.minRole).toBe(verify?.minRole);
+    // Never in a Handle's reach: listByChannel('handle') is everything the Handle side can see.
+    expect(listByChannel('handle').some((c) => c.name === 'attest_fact')).toBe(false);
+  });
+
+  it('requires a non-blank note and trims it', () => {
+    const schema = capability()?.paramsSchema;
+    expect(schema?.safeParse({ factId }).success).toBe(false);
+    expect(schema?.safeParse({ factId, note: '   ' }).success).toBe(false);
+    const parsed = schema?.safeParse({ factId, note: '  checked on the console  ' });
+    expect(parsed?.success).toBe(true);
+    expect((parsed?.data as { note: string }).note).toBe('checked on the console');
+  });
+
+  it('bounds the note', () => {
+    const schema = capability()?.paramsSchema;
+    const atCap = 'x'.repeat(ATTEST_FACT_NOTE_MAX_LENGTH);
+    expect(schema?.safeParse({ factId, note: atCap }).success).toBe(true);
+    expect(schema?.safeParse({ factId, note: `${atCap}x` }).success).toBe(false);
+  });
+
+  it('accepts only an http(s) link — never javascript: or another scheme', () => {
+    const schema = capability()?.paramsSchema;
+    const note = 'n';
+    expect(schema?.safeParse({ factId, note, link: 'https://wiki.example/runbook' }).success).toBe(
+      true,
+    );
+    expect(schema?.safeParse({ factId, note, link: 'http://ticket.example/42' }).success).toBe(
+      true,
+    );
+    expect(schema?.safeParse({ factId, note, link: 'javascript:alert(1)' }).success).toBe(false);
+    expect(schema?.safeParse({ factId, note, link: 'file:///etc/passwd' }).success).toBe(false);
+    expect(schema?.safeParse({ factId, note, link: 'not a url' }).success).toBe(false);
+  });
+
+  it('refuses any extra field — the attester is the caller, never a request field', () => {
+    const schema = capability()?.paramsSchema;
+    expect(
+      schema?.safeParse({ factId, note: 'n', attestedBy: '00000000-0000-4000-8000-000000000003' })
+        .success,
+    ).toBe(false);
+    expect(schema?.safeParse({ factId, note: 'n', kind: 'observation' }).success).toBe(false);
   });
 });

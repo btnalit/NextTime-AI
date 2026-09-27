@@ -90,7 +90,7 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
 | 缺口 | capability | 判断 | 去向 |
 |---|---|---|---|
 | G1 本体治理无界面 | `get_type` `validate` `propose_ontology_change` `publish_ontology_version` | 本体只能由智能体提案，人看不到也批不了 | v2 功能切片 F1：图谱页「类型」抽屉 + 提案审阅（复用审批主从） |
-| G2 人不能改事实 | `assert_fact` `supersede_fact` `invalidate_fact` | 只有「验证」和「冲突裁决」 | F2：事实行菜单「作废 / 取代」（高影响确认 + 审计） |
+| G2 人不能改事实 | `assert_fact` `supersede_fact` `invalidate_fact` | 只有「验证」和「冲突裁决」 | F2：事实行菜单「作废 / 取代」（高影响确认 + 审计）——2026-09-27 收尾波次 C2 已做（`feat/human-attestation`，待主机核对）：「作废…」中档确认、原因必填；「取代…」改值 → 核对变更 → 确认；同一菜单另有遗留 89 的「附人工确认」。`assert_fact`（人手工新建事实）仍无入口 |
 | G3 已部署 Operation 治理字段刷新无入口 | `refresh_operation_governance` | 读半（预览 diff）已接，写半没接 = 遗留 79 的出口 | F3：系统抽屉「与门公告对齐」 |
 | G4 死读 | `get_gate_instance` `list_runtime_images` `list_user_memberships` | 前端在客户端筛列表代替 | 用上（深链直接读单个实例）或删除；先核 `UserMembershipsPanel` 数据来源 |
 | G5 半成品 | `connect_gatekeeper` | 启动器注释里的待办 | 与「接入包契约」一起定：删或并入启用流程 |
