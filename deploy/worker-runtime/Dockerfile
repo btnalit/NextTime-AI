@@ -62,8 +62,35 @@ FROM node:24-bookworm-slim AS build
 RUN corepack enable
 WORKDIR /workspace
 
+# Dependency layer keyed only on the workspace manifests + lockfile, not the full source tree
+# (STATUS leftover 93; full rationale in docs/runbooks/release.md §3.4). Every workspace
+# package.json is copied — `pnpm install` always resolves the whole workspace graph (workspace:*
+# cross-refs), regardless of which package this Dockerfile later --filters — so a source-only
+# change anywhere else in the repo still hits this layer's cache. `pnpm fetch` reads only
+# pnpm-lock.yaml (package manifests are ignored); the cache mount persists the downloaded store
+# across separate builds/releases, so even a lockfile change reuses whatever it doesn't need to
+# re-fetch. network-concurrency=4 (pnpm default 16): this host's outbound goes through an upstream
+# gateway that cuts concurrent downloads (UND_ERR_SOCKET) — fewer simultaneous connections trades
+# fetch speed for not tripping it.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/agent-host/package.json packages/agent-host/package.json
+COPY packages/egress-proxy/package.json packages/egress-proxy/package.json
+COPY packages/gatekeeper-base/package.json packages/gatekeeper-base/package.json
+COPY packages/kernel/package.json packages/kernel/package.json
+COPY packages/llm-proxy/package.json packages/llm-proxy/package.json
+COPY packages/platform-extension/package.json packages/platform-extension/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/web/package.json packages/web/package.json
+COPY packages/worker-supervisor/package.json packages/worker-supervisor/package.json
+COPY gatekeepers/docker/package.json gatekeepers/docker/package.json
+COPY gatekeepers/ragflow/package.json gatekeepers/ragflow/package.json
+COPY collectors/host-inventory/package.json collectors/host-inventory/package.json
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    corepack pnpm fetch --frozen-lockfile --network-concurrency=4 --store-dir=/pnpm/store
+
 COPY . .
-RUN corepack pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    corepack pnpm install --offline --frozen-lockfile --store-dir=/pnpm/store
 RUN corepack pnpm --filter @nexttime/platform-extension... build
 RUN corepack pnpm --filter @nexttime/platform-extension deploy --prod --legacy /out/platform-extension
 
@@ -89,8 +116,15 @@ RUN apt-get update \
 # Dockerfile ARG wired through docker-compose.yml's build args was not used instead (this COPY
 # needs no change to the build invocation `docker compose build worker-runtime` already uses).
 COPY pi.version /tmp/pi.version
-RUN PI_VERSION="$(cat /tmp/pi.version)" \
- && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+# This layer's own cache key is already only `pi.version` (the COPY right above it, on top of the
+# stable apt/user layers above that) — bumping pi.version invalidates exactly this RUN and nothing
+# earlier, so a release that doesn't touch pi still skips this download entirely. The cache mount
+# is the STATUS leftover 93 fix's other half: even a *version bump* reuses whatever of the new
+# version's dependency tree npm already has tarballs for, instead of re-downloading it whole
+# against this host's gateway (see docs/runbooks/release.md §3.4).
+RUN --mount=type=cache,id=npm-cache,target=/npm-cache \
+    PI_VERSION="$(cat /tmp/pi.version)" \
+ && npm install -g --ignore-scripts --cache=/npm-cache "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && rm /tmp/pi.version
 
 # Same non-root uid:gid every other @nexttime/* image uses (kernel/agent-host/worker-supervisor/
