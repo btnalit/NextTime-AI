@@ -99,7 +99,7 @@ export function PageHeader({
       ) : null}
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div className="flex min-w-56 flex-1 flex-col gap-1">
-          <h1 className="text-24 font-bold text-text">{title}</h1>
+          <h1 className="text-24 font-semibold text-text">{title}</h1>
           {description !== undefined ? <p className="text-13 text-text-3">{description}</p> : null}
         </div>
         {hasActions ? (

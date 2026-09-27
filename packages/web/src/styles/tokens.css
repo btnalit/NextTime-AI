@@ -50,11 +50,12 @@
   --border: #e3e7ee;
   --border-strong: #cfd5df;
 
-  /* Ink: neutral, not tinted (v2.1's navy ink is an anti-pattern now). Minimum contrast over every
-   * background below: text 13.43:1, text-2 6.94:1, text-3 4.86:1 (all on --danger-soft). */
-  --text: #1f2230;
-  --text-2: #4b4f5c;
-  --text-3: #626674;
+  /* Ink: neutral and soft (v3.1: a charcoal, never pure black — the reference console reads light
+   * because only key values are dark and labels are grey). Minimum contrast over every background:
+   * text 10.69:1, text-2 5.43:1, text-3 4.58:1 (all on --danger-soft). Never tinted (v2.1). */
+  --text: #30333f;
+  --text-2: #5a5f6d;
+  --text-3: #666a78;
   /* Text on a filled control — the accent and the filled danger hover take this. */
   --text-on-accent: #ffffff;
 
@@ -179,7 +180,7 @@
     --border: #292a34;
     --border-strong: #3a3c48;
 
-    --text: #e4e6ee;
+    --text: #dcdfe8;
     --text-2: #aab0c0;
     --text-3: #98a1b5;
     --text-on-accent: #0f1018;

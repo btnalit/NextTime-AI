@@ -49,9 +49,9 @@ neutral; the §5.9 governance semantics are unchanged.
 | Pressed / hover on page / table head | `--surface-3` | `#eef1f5` | `#20222c` |
 | Border | `--border` | `#e3e7ee` | `#292a34` |
 | Strong border / input | `--border-strong` | `#cfd5df` | `#3a3c48` |
-| Text (headings and body) | `--text` | `#1f2230` (neutral) | `#e4e6ee` (off-white, never `#fff`) |
-| Secondary text | `--text-2` | `#4b4f5c` | `#aab0c0` |
-| Caption / section label | `--text-3` | `#626674` | `#98a1b5` |
+| Text (headings and body) | `--text` | `#30333f` (soft charcoal, never pure black) | `#dcdfe8` (off-white, never `#fff`) |
+| Secondary text | `--text-2` | `#5a5f6d` | `#aab0c0` |
+| Caption / section label | `--text-3` | `#666a78` | `#98a1b5` |
 | Primary action, active nav pill | `--primary` / hover / press | `#3551f9` / `#2b44e6` / `#2338c9` | `#4466ee` / `#3f60e8` / `#3858e0` |
 | Text on primary | `--text-on-primary` | `#ffffff` | `#ffffff` (a saturated fill in both themes) |
 | Link / selection / focus | `--accent`, `--accent-soft` | `#3551f9`, `#eef1ff` | `#8aa2ff`, 18% primary tint |
@@ -81,10 +81,11 @@ label on all three primary states.
 - **Families:** Geist Sans (Latin UI, the reference console's face) + Noto Sans SC (CJK) + Geist Mono
   (ids, operations, code). Self-hosted and bundled (the console runs on a LAN host with no
   internet); Noto Sans SC is unicode-range sliced.
-- **Scale (six stops, 12px floor):** 24/700 page title · 19/600 section · 16/600 dialog title ·
+- **Scale (six stops, 12px floor):** 24/600 page title · 19/600 section · 16/600 dialog title ·
   14/400 body and chat (line-height 1.6) · 13/400 dense tables and forms · 12/400 caption.
-- **Weights:** 400 / 500 / 600 / 700, all real faces (Noto Sans SC 700 included; CJK 600 resolves
-  to it — never a browser-synthesised bold). Tabular numbers in data views.
+- **Weights:** 400 / 500 / 600 / 700, all real faces (Noto Sans SC 600 and 700 included — CJK
+  semibold stays semibold, never a synthesised bold). Prefer 500 / 600 over 700 for the soft, light
+  read of the reference console; 700 only for the wordmark. Tabular numbers in data views.
 - **Ink:** one neutral `--text` for headings and body, `--text-2` / `--text-3` below it. Section
   labels (`.section-title`, drawer-section titles) are `--text-3`, 12/600, uppercase, 0.08em
   tracking. No negative letter-spacing on CJK titles.

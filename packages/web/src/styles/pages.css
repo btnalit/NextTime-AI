@@ -907,7 +907,7 @@
 
 .platform-tile-value {
   font-size: var(--fs-24);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
