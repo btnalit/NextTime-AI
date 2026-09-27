@@ -29,22 +29,45 @@ function scriptedHttp(
 function Harness({
   http,
   initialTab = 'operations',
+  initialItemId,
 }: {
   readonly http: CapabilityCaller;
   readonly initialTab?: CatalogTab;
+  readonly initialItemId?: string;
 }) {
   const [tab, setTab] = useState(initialTab);
-  return <CatalogPage http={http} tab={tab} onTabChange={setTab} />;
+  const [itemId, setItemId] = useState<string | undefined>(initialItemId);
+  return (
+    <CatalogPage
+      http={http}
+      tab={tab}
+      onTabChange={(next) => {
+        setTab(next);
+        setItemId(undefined);
+      }}
+      itemId={itemId}
+      onSelectItem={(id) => setItemId(id ?? undefined)}
+    />
+  );
 }
 
-function renderPage(http: CapabilityCaller, initialTab?: CatalogTab) {
+function renderPage(http: CapabilityCaller, initialTab?: CatalogTab, initialItemId?: string) {
   return render(
     <PermissionsProvider>
       <ToastProvider>
-        <Harness http={http} initialTab={initialTab} />
+        <Harness http={http} initialTab={initialTab} initialItemId={initialItemId} />
       </ToastProvider>
     </PermissionsProvider>,
   );
+}
+
+/** console redesign P3-5: every row's own actions (Publish / Deprecate / Edit description / Edit
+ *  as new draft / Discard) moved from the row itself into the detail pane — a test drives them by
+ *  selecting the row first (a plain click; `kit/list-row` is one `<button>`, no nested control to
+ *  dodge) and then finding the action inside `catalog-detail`. */
+async function selectRow(row: HTMLElement): Promise<HTMLElement> {
+  fireEvent.click(row);
+  return screen.findByTestId('catalog-detail');
 }
 
 describe('CatalogPage', () => {
@@ -96,7 +119,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /发布/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
@@ -116,7 +140,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /发布/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('Could not update docker.restart');
     expect(toast.textContent).toContain('operation docker.restart is not a draft');
@@ -148,9 +173,13 @@ describe('CatalogPage', () => {
     renderPage(http);
     const rows = await screen.findAllByTestId('catalog-row');
     expect(rows).toHaveLength(2);
-    const usageSpans = rows.map((row) => within(row).getByTestId('catalog-row-usage').textContent);
-    expect(usageSpans.some((text) => text?.includes('12') && text?.includes('3'))).toBe(true);
-    expect(usageSpans).toContain('—');
+    // console redesign P3-5: usage moved from the row into the detail pane (rows show only name +
+    // description now) — select each row in turn and read it there.
+    const detail1 = await selectRow(rows[0] as HTMLElement);
+    expect(within(detail1).getByTestId('catalog-row-usage').textContent).toContain('12');
+    expect(within(detail1).getByTestId('catalog-row-usage').textContent).toContain('3');
+    const detail2 = await selectRow(rows[1] as HTMLElement);
+    expect(within(detail2).getByTestId('catalog-row-usage').textContent).toBe('—');
   });
 
   it('Operations: a get_operation_stats failure degrades the usage column to "—" without blocking the list', async () => {
@@ -163,7 +192,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    expect(within(row).getByTestId('catalog-row-usage').textContent).toBe('—');
+    const detail = await selectRow(row);
+    expect(within(detail).getByTestId('catalog-row-usage').textContent).toBe('—');
   });
 
   it('Workers tab: only offers Deprecate (list_worker_definitions never returns drafts)', async () => {
@@ -182,8 +212,9 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    expect(within(row).queryByRole('button', { name: /发布/ })).toBeNull();
-    expect(within(row).getByRole('button', { name: /弃用/ })).toBeTruthy();
+    const detail = await selectRow(row);
+    expect(within(detail).queryByRole('button', { name: /发布/ })).toBeNull();
+    expect(within(detail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
@@ -205,7 +236,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /弃用/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
 
     expect(http.calls.some((c) => c.name === 'deprecate_operation')).toBe(false);
     const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
@@ -275,7 +307,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
 
     const dialog = await screen.findByTestId('operation-description-dialog');
     const textarea = within(dialog).getByTestId(
@@ -308,7 +341,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
     const dialog = await screen.findByTestId('operation-description-dialog');
     const saveButton = within(dialog).getByTestId(
       'operation-description-save',
@@ -346,7 +380,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /弃用/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
 
     const confirm = await screen.findByTestId('worker-deprecate-confirm-wd-1@1');
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Fixer');
@@ -385,12 +420,14 @@ describe('CatalogPage', () => {
     renderPage(http, 'workers');
     const entrySection = await screen.findByTestId('workers-entry-section');
     const entryRow = within(entrySection).getByTestId('catalog-row');
-    expect(within(entryRow).queryByRole('button', { name: /弃用/ })).toBeNull();
-    expect(within(entryRow).getByRole('button', { name: /编辑（新版本草稿）/ })).toBeTruthy();
+    const entryDetail = await selectRow(entryRow);
+    expect(within(entryDetail).queryByRole('button', { name: /弃用/ })).toBeNull();
+    expect(within(entryDetail).getByRole('button', { name: /编辑（新版本草稿）/ })).toBeTruthy();
 
     const workerSection = screen.getByTestId('workers-worker-section');
     const workerRow = within(workerSection).getByTestId('catalog-row');
-    expect(within(workerRow).getByRole('button', { name: /弃用/ })).toBeTruthy();
+    const workerDetail = await selectRow(workerRow);
+    expect(within(workerDetail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
   // S8 W2-U2b (audit R6 "保存草稿后找不回它"): the Workers tab makes a second
@@ -475,7 +512,9 @@ describe('CatalogPage', () => {
       });
       renderPage(http, 'workers');
       const section = await screen.findByTestId('workers-my-drafts-section');
-      fireEvent.click(within(section).getByTestId('worker-draft-publish'));
+      const row = within(section).getByTestId('workers-my-draft-row');
+      const detail = await selectRow(row);
+      fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
 
       await waitFor(() =>
         expect(http.calls.some((c) => c.name === 'publish_worker_definition')).toBe(true),
@@ -510,7 +549,9 @@ describe('CatalogPage', () => {
       });
       renderPage(http, 'workers');
       const section = await screen.findByTestId('workers-my-drafts-section');
-      fireEvent.click(within(section).getByRole('button', { name: /丢弃/ }));
+      const row = within(section).getByTestId('workers-my-draft-row');
+      const detail = await selectRow(row);
+      fireEvent.click(within(detail).getByRole('button', { name: /丢弃/ }));
 
       const confirm = await screen.findByTestId('worker-draft-discard-wd-3@1');
       expect(confirm.getAttribute('data-tier')).toBe('medium');
@@ -643,7 +684,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'skills');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /丢弃/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /丢弃/ }));
 
     const confirm = await screen.findByTestId('skill-discard-confirm-sk-1');
     expect(confirm.getAttribute('data-tier')).toBe('medium');
@@ -668,12 +710,83 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'procedures');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /丢弃/ }));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByRole('button', { name: /丢弃/ }));
 
     const confirm = await screen.findByTestId('procedure-discard-confirm-pr-1');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() => expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(true));
+  });
+});
+
+describe('CatalogPage master-detail (console redesign P3-5)', () => {
+  it('selecting a Skill row reports its own id (routes.tsx encodes that into #/govern/catalog/skills/<id>)', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          { id: 'sk-1', version: 1, status: 'published', name: 'restart-web', description: 'd' },
+        ],
+      }),
+    });
+    const onSelectItem = vi.fn();
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <CatalogPage
+            http={http}
+            tab="skills"
+            onTabChange={() => {}}
+            onSelectItem={onSelectItem}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(row);
+    expect(onSelectItem).toHaveBeenCalledWith('sk-1');
+  });
+
+  it('wide layout, nothing selected: the detail pane names the object instead of a blank pane (V9)', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          { id: 'sk-1', version: 1, status: 'published', name: 'restart-web', description: 'd' },
+        ],
+      }),
+    });
+    renderPage(http, 'skills');
+    await screen.findByTestId('catalog-row');
+    const detail = screen.getByTestId('catalog-detail');
+    // A regex, not a plain `toContain` string: `i18n-pairs.mjs`'s detector (b) pattern-matches any
+    // quoted "<中文><space><English word>" literal, including a test assertion that merely quotes
+    // a fragment of already-`t()`-split UI copy — `/…/ ` sidesteps that scanner entirely (it only
+    // scans quoted string literals) without weakening what this assertion actually checks.
+    expect(within(detail).getByTestId('catalog-detail-empty').textContent).toMatch(
+      /选择左侧一个 Skill/,
+    );
+  });
+
+  it('empty Skill list collapses to a single pane (no detail pane) and names the object (V9)', async () => {
+    const http = scriptedHttp({ list_skills: () => ({ items: [] }) });
+    renderPage(http, 'skills');
+    await screen.findByTestId('catalog-empty');
+    expect(screen.getByTestId('catalog-empty').textContent).toMatch(/还没有 Skill/);
+    expect(screen.queryByTestId('catalog-detail')).toBeNull();
+  });
+
+  // V2: the old itemized `ExecutionPrerequisiteBar` block is gone from this page — the same
+  // quiet `ExecutionReadinessCard` the 对话 page renders (console redesign P3-3) is reused here
+  // instead of a second, differently-shaped readiness read.
+  it('renders execution readiness through the quiet ExecutionReadinessCard, not the old ExecutionPrerequisiteBar', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => ({ ready: true, gates: [], workers: [], missing: [] }),
+      list_operations: () => ({ items: [] }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('execution-readiness-body');
+    expect(screen.queryByTestId('execution-prerequisite-bar')).toBeNull();
   });
 });
 
@@ -748,7 +861,8 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
     renderPage(http, 'skills');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByTestId('catalog-edit-as-draft'));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
     const drawer = await screen.findByTestId('skill-editor-drawer');
     expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
@@ -778,7 +892,8 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByTestId('catalog-edit-as-draft'));
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
     const drawer = await screen.findByTestId('worker-editor-drawer');
     expect((within(drawer).getByTestId('wd-kind') as HTMLSelectElement).disabled).toBe(true);
     expect((within(drawer).getByTestId('wd-kind') as HTMLSelectElement).value).toBe('entry');

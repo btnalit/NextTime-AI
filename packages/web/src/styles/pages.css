@@ -1084,7 +1084,8 @@
 }
 
 .approval-detail-title,
-.task-detail-title {
+.task-detail-title,
+.catalog-detail-title {
   font-size: var(--fs-19);
   font-weight: 600;
   line-height: var(--lh-tight);

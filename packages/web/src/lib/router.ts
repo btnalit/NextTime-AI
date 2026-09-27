@@ -61,7 +61,7 @@ export type Route =
   | { readonly kind: 'members' }
   | { readonly kind: 'access' }
   | { readonly kind: 'systems'; readonly gatekeeperId?: string }
-  | { readonly kind: 'catalog'; readonly tab: CatalogTab }
+  | { readonly kind: 'catalog'; readonly tab: CatalogTab; readonly itemId?: string }
   | { readonly kind: 'models' }
   | { readonly kind: 'audit' }
   | { readonly kind: 'platformOverview' }
@@ -125,10 +125,19 @@ export function routeFromHash(fullHash: string): Route {
       : { kind: 'systems' };
   }
 
-  const catalog = /^#\/govern\/catalog(?:\/(.+))?$/.exec(hash);
+  // console redesign P3-5: an optional trailing item segment (a Skill/Procedure/Worker/Operation's
+  // own key, or the sentinel `'new'` while an editor is open) — `#/govern/catalog/<tab>` alone
+  // keeps parsing exactly as before (group 2 is `undefined`), so every pre-P3-5 bookmark/link
+  // still works.
+  const catalog = /^#\/govern\/catalog(?:\/([^/]+)(?:\/(.+))?)?$/.exec(hash);
   if (catalog) {
     const tab = catalog[1] ? decodeURIComponent(catalog[1]) : undefined;
-    return { kind: 'catalog', tab: isCatalogTab(tab) ? tab : 'operations' };
+    const itemId = catalog[2] ? decodeURIComponent(catalog[2]) : undefined;
+    return {
+      kind: 'catalog',
+      tab: isCatalogTab(tab) ? tab : 'operations',
+      ...(itemId !== undefined ? { itemId } : {}),
+    };
   }
 
   if (hash === '#/govern/models') return { kind: 'models' };
@@ -200,7 +209,10 @@ export const hrefs = {
   access: () => '#/govern/access',
   systems: () => '#/govern/systems',
   gatekeeper: (gatekeeperId: string) => `#/govern/systems/${encodeURIComponent(gatekeeperId)}`,
-  catalog: (tab: CatalogTab = 'operations') => `#/govern/catalog/${tab}`,
+  catalog: (tab: CatalogTab = 'operations', itemId?: string) =>
+    itemId !== undefined
+      ? `#/govern/catalog/${tab}/${encodeURIComponent(itemId)}`
+      : `#/govern/catalog/${tab}`,
   models: () => '#/govern/models',
   audit: () => '#/govern/audit',
   graph: () => '#/work/graph',

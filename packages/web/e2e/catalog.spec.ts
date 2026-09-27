@@ -69,8 +69,11 @@ test.describe('catalog editors', () => {
     await expect(procedure.getByTestId('procedure-step')).toHaveCount(1);
     await procedure.getByTestId('procedure-view-json').click();
     await expect(procedure.getByTestId('procedure-json')).toBeVisible();
+    // console redesign P3-5: the editor lives in `kit/master-detail`'s own pane now, not a
+    // `ui/Drawer` — at this default (wide, ≥1180px) viewport that pane is always inline, so
+    // Escape is a no-op here (same call this lane made for the approvals/tasks journeys in P3-4);
+    // the `page.goto` below moves on regardless of whether anything closed.
     await page.keyboard.press('Escape');
-    await expect(procedure).toBeHidden();
 
     await page.goto('/#/govern/catalog/workers');
     await page.getByTestId('workers-new-draft').click();

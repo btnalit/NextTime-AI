@@ -33,16 +33,19 @@ import {
  *     components/readiness/readiness-copy.ts`）。"没有可委派的 Worker"（`no_published_worker`）
  *     在这一刻没有意义（连一个系统都还没有），状态条不重复它——见下方第 1 步之后的中间状态，那时它
  *     才会出现。控制台重构 P2 把 访问 的授权半边并入 系统与授权（`components/systems/
- *     SystemsPage.tsx`），这一页不再重复渲染 `execution-prerequisite-bar`（能力目录 / 对话页各自
- *     还有一份）——本旅程相应地不再在这一页断言它，也不再把 访问 当成独立于 系统接入 的第三处空态。
+ *     SystemsPage.tsx`），这一页不再重复渲染 readiness 提示条（能力目录 / 对话页各自还有一份，
+ *     P3-5 起两边共用同一个 `ExecutionReadinessCard`）——本旅程相应地不再在这一页断言它，也不再把
+ *     访问 当成独立于 系统接入 的第三处空态。
  *   - 错: 产品今天没有"委派在提交前被挡住"这个机制（W1-C 的 `execution_readiness` 是读模型，没有接
  *     到对话的发送按钮上）；断言这一点不成立，会断言一个不存在的产品行为。退而求其次、但仍然真实的
  *     一件事：本旅程的步骤顺序天然会经过"门已授权、Worker 还未发布"这个中间状态（第 1、2 步之后，
- *     第 3 步之前）——在那一刻 能力目录 · Worker 仍是 `catalog-empty`，`execution-prerequisite-bar`
- *     和对话页的 readiness card 都只剩"没有可委派的 Worker"这一项缺口（门已启用/已授权那两条缺口
- *     消失了）——PR #273（`feat/s8-w2u3-overview-readiness`，已合并 `62a09a5`）把
- *     `execution_readiness` 接上页面后，这个"缺口收窄"的过程本身就是产品今天能验证的、最接近"错"
- *     状态原文设想的东西：不是拦下提交，是如实反映还差什么。
+ *     第 3 步之前）——在那一刻 能力目录 · Worker 仍是 `catalog-empty`，能力目录页与对话页现在共用
+ *     同一个 `ExecutionReadinessCard`（`execution-readiness-body`，控制台重构 P3-5 把能力目录从
+ *     它自己原来那条逐项列出的 `ExecutionPrerequisiteBar` 换成了这个），两边都只剩"没有可委派的
+ *     Worker"这一项缺口（门已启用/已授权那两条缺口消失了）——PR #273
+ *     （`feat/s8-w2u3-overview-readiness`，已合并 `62a09a5`）把 `execution_readiness` 接上页面后，
+ *     这个"缺口收窄"的过程本身就是产品今天能验证的、最接近"错"状态原文设想的东西：不是拦下提交，是
+ *     如实反映还差什么。
  *   - 无权限: 跳过——需要平台管理员再建一个 member 角色的第三个主体、登入、切工作区，是这条旅程
  *     已有的"建号 → 登入 → 强制改密 → 选工作区"链路（第 0 步）的又一整套重复，不 cheap；
  *     `governance.spec.ts`/`06-add-member.spec.ts` 已经从别的角度覆盖了"member 看不到治理分组"。
@@ -55,8 +58,8 @@ import {
  *   - 这条旅程测的不是"委派真的执行了"（见下），而是"委派的三个前置条件——门已启用、已授权给
  *     会说话的这个 owner、Worker 已发布——全部可以只凭 UI 完成"，加上"对话本身是通的"；发布 Worker
  *     后 `execution_readiness` 自己也认为"已就绪"（`execution-readiness-ready`，`对话` 页）、能力
- *     目录页的 `execution-prerequisite-bar` 也随之消失——见下方"执行就绪为什么在这里会变 ready"
- *     关于 `computeChildHandleScope` 的说明。
+ *     目录页自己那份 `ExecutionReadinessCard` 的 missing 列表也随之清空——见下方"执行就绪为什么在
+ *     这里会变 ready"关于 `computeChildHandleScope` 的说明。
  *
  * 执行就绪为什么在这里会变 ready（读 `packages/kernel/src/application/gateway/
  * execution-readiness-handler.ts` + `application/task/handle-mint.ts` 后的结论）：
@@ -209,12 +212,18 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await goToByLabel(page, '能力目录');
     await page.getByRole('tab', { name: 'Worker', exact: true }).click();
     await expect(page.getByTestId('catalog-empty')).toBeVisible();
-    // 门已启用/已授权那两项缺口消失了，只剩"没有已发布 Worker"——同一次页面加载上顺带断言
-    // ExecutionPrerequisiteBar（不用额外导航）。
-    const catalogPrereqBar = page.getByTestId('execution-prerequisite-bar');
-    await expect(catalogPrereqBar).toBeVisible({ timeout: 15_000 });
-    await expect(catalogPrereqBar).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
-    await expect(catalogPrereqBar).not.toContainText(READINESS_NO_ENABLED_GATE_TEXT);
+    // 门已启用/已授权那两项缺口消失了，只剩"没有已发布 Worker"——同一次页面加载上顺带断言能力目录
+    // 页自己的 readiness 条（控制台重构 P3-5：与对话页共用同一个安静的 ExecutionReadinessCard，
+    // 不再是逐条罗列的 ExecutionPrerequisiteBar，不用额外导航）。
+    const catalogReadinessMid = page.getByTestId('execution-readiness-body');
+    await expect(catalogReadinessMid).toBeVisible({ timeout: 15_000 });
+    const catalogMissingMid = catalogReadinessMid.getByTestId('execution-readiness-missing');
+    await expect(catalogMissingMid).toBeVisible();
+    await expect(catalogMissingMid.getByTestId('execution-readiness-missing-item')).toHaveCount(1, {
+      timeout: 15_000,
+    });
+    await expect(catalogMissingMid).toContainText(READINESS_NO_PUBLISHED_WORKER_TEXT);
+    await expect(catalogMissingMid).not.toContainText(READINESS_NO_ENABLED_GATE_TEXT);
 
     await goToByLabel(page, '对话');
     const readinessBodyMid = page.getByTestId('execution-readiness-body');
@@ -307,7 +316,10 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(
       page.getByTestId('catalog-list').getByText(WORKER_TEMPLATE_NAME, { exact: true }),
     ).toBeVisible();
-    await expect(page.getByTestId('execution-prerequisite-bar')).toHaveCount(0, {
+    // 控制台重构 P3-5: 能力目录页也换成了 ExecutionReadinessCard；ready 时 missing 列表清空，
+    // 同上面对话页自己的终态断言（execution-readiness-ready 那一段）。
+    await expect(page.getByTestId('execution-readiness-body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('execution-readiness-missing')).toHaveCount(0, {
       timeout: 15_000,
     });
 
