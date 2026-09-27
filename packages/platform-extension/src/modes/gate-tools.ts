@@ -1,11 +1,10 @@
 /**
  * Gate tool projection shared by `entry` and `worker` mode: `list_allowed_operations` → one pi
  * tool per Operation, named `<gate>.<op>` (design doc §7.4/§9.3). The two modes differ only in
- * *which* Operations they project and *which* capability the tool calls — a Worker projects every
- * allowed Operation onto `request_action` (the kernel resolves observe vs execute; execute becomes
- * an ActionRequest), an entry agent projects observe-class Operations only onto
- * `observe_operation` (it holds no execute-mode capability at all —
- * governance/capability/handles.ts `entryScope()`).
+ * *which* Operations they project — a Worker projects every allowed Operation (observe-class onto
+ * `observe_operation`, execute-class onto `request_action`, which becomes an ActionRequest —
+ * leftover 98), an entry agent projects observe-class Operations only, onto `observe_operation`
+ * (it holds no execute-mode capability at all — governance/capability/handles.ts `entryScope()`).
  */
 
 /** One row of `list_allowed_operations`'s result (application/gateway/worker-result-handler.ts). */

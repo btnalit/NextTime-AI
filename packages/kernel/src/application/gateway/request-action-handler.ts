@@ -240,8 +240,9 @@ function sleep(ms: number): Promise<void> {
  *  query after it (a real SQL error inside a Postgres transaction poisons it until the failing
  *  statement is rolled back to a savepoint — the same reason `application/task/result.ts`'s own
  *  per-Fact `savepoint result_fact` exists). Only ever called for a genuine WorkerRun caller
- *  (`workerRun` is `undefined` for a human/entry caller — `observe_operation`, S2.12, structurally
- *  never has one, and this is the only other `runObserve` call site). */
+ *  (`workerRun` is `undefined` for a human, entry, interactive or service caller — both
+ *  `runObserve` call sites, `observe_operation` and `request_action`'s observe branch, resolve it
+ *  from the calling Handle's `sid`; worker mode calls the former since leftover 98). */
 async function recordWorkerGateObservationSafely(
   client: PoolClient,
   workspaceId: string,
@@ -925,6 +926,10 @@ async function resolvePrincipalRole(
  * Never called for a `handle`-channel caller: a Worker/entry Handle's own scope (checked by
  * `authorize.ts`'s `authorizeCapabilityCall` before this handler ever runs) is the actual gate for
  * that channel — this function is human-channel-only, matching this task's own scope.
+ *
+ * `request_action` only (leftover 97, maintainer 2026-09-27 "也放开吧"): a person *observing*
+ * through `observe_operation` needs no Grant any more — that handler runs only the role half,
+ * `assertRoleMayReachGatekeeper` below, then `observeRefusal`. A Grant is execute authority.
  */
 async function assertHumanGatekeeperAccess(
   client: PoolClient,
@@ -933,11 +938,7 @@ async function assertHumanGatekeeperAccess(
   role: Role,
   gatekeeperId: string,
 ): Promise<void> {
-  if (role === 'auditor') {
-    throw new ForbiddenError(
-      'request_action/observe_operation: role "auditor" may never call a Gatekeeper (read-only role)',
-    );
-  }
+  assertRoleMayReachGatekeeper(role);
   if (role === 'owner') return;
 
   const allowed = await hasActiveGrant(client, workspaceId, {
@@ -949,6 +950,18 @@ async function assertHumanGatekeeperAccess(
     throw new ForbiddenError(
       `request_action/observe_operation: principal ${principalId} holds no active ` +
         `"${GATEKEEPER_RESOURCE_SCOPE_KEY}" grant for gatekeeper ${gatekeeperId}`,
+    );
+  }
+}
+
+/** The role half of the human-channel gate, shared by `request_action` (inside
+ *  `assertHumanGatekeeperAccess`) and `observe_operation` (alone — leftover 97): `auditor` is the
+ *  one role scoped to read-only platform data (§5.1.1 "auditor 只读含密钥元数据"; "member 对话、调用、
+ *  观察") and never reaches a Gatekeeper, observe or execute, granted or not. */
+function assertRoleMayReachGatekeeper(role: Role): void {
+  if (role === 'auditor') {
+    throw new ForbiddenError(
+      'request_action/observe_operation: role "auditor" may never call a Gatekeeper (read-only role)',
     );
   }
 }
@@ -1008,14 +1021,21 @@ async function resolveRequesterScope(
  *
  * Who may observe is decided by one predicate, `observeRefusal` (application/gates/
  * observe-access.ts — design doc §11 "门上的观察", decision D4 revoked 2026-09-27: "只读调用不需要授权").
- * On the **handle** channel no gate Grant / `resources.gatekeeper` is involved: any Handle in the
- * workspace may observe a registered gate's published, not-platform-disabled observe-class
- * Operation unless the workspace AgentPolicy gate cap or the calling member's own AgentProfile
- * excludes the gate. On the **human** channel (item 1 fix, review job 652a4abc — unchanged, the
- * maintainer has not decided that channel), a non-owner caller must still hold an active
- * `'gatekeeper'` Grant for `gatekeeperId` (`assertHumanGatekeeperAccess` below, same gate
- * `request_action` applies); the predicate runs with no exclusions there, so its checks are
- * exactly the ones this handler always made. Either way the call is audited by `dispatch.ts`.
+ * No gate Grant / `resources.gatekeeper` is involved on either channel:
+ *
+ *   - **handle**: any Handle in the workspace may observe a registered gate's published,
+ *     not-platform-disabled observe-class Operation unless the workspace AgentPolicy gate cap or
+ *     the calling member's own AgentProfile excludes the gate. A Worker's call (worker mode routes
+ *     observe-class tools here, leftover 98) is also recorded on its WorkerRun
+ *     (`recordWorkerGateObservation`, S8 W5-A) exactly as `request_action`'s observe branch does.
+ *   - **human** (leftover 97, maintainer 2026-09-27 "也放开吧"): a person observing from the
+ *     console needs no Grant either. The predicate runs with `NO_OBSERVE_EXCLUSIONS` — AgentPolicy
+ *     and AgentProfile configure the member's *agent* (S3.13), not the person's own reads. Only the
+ *     role rule stays (`assertRoleMayReachGatekeeper`: `auditor` never reaches a Gatekeeper).
+ *     `request_action` on the human channel reads an observe-class Operation the same way (no
+ *     Grant); its execute-class and unclassified paths keep `assertHumanGatekeeperAccess`.
+ *
+ * Either way the call is audited by `dispatch.ts`, exactly as before.
  */
 export const observeOperationHandler: CapabilityHandler = async (
   client,
@@ -1035,8 +1055,7 @@ export const observeOperationHandler: CapabilityHandler = async (
 
   const channel: CapabilityChannel = ctx?.channel ?? 'handle';
   if (channel === 'human') {
-    const role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
-    await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+    assertRoleMayReachGatekeeper(await resolvePrincipalRole(client, workspaceId, onBehalfOf));
   }
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
@@ -1056,6 +1075,12 @@ export const observeOperationHandler: CapabilityHandler = async (
   if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId); // narrowing only — refused above
 
+  // A Worker's own WorkerRun (by `sid`, the identity `request_action` and `report_task_result`
+  // already trust) — `null` for a human caller or a Handle whose session is not a WorkerRun
+  // (entry, interactive, service), which records nothing extra, as before.
+  const sid = channel === 'handle' ? ctx?.claims?.sid : undefined;
+  const workerRun = sid ? await findWorkerRunBySessionId(client, workspaceId, sid) : null;
+
   return runObserve(
     client,
     workspaceId,
@@ -1063,6 +1088,7 @@ export const observeOperationHandler: CapabilityHandler = async (
     operationName,
     operationParams ?? {},
     onBehalfOf,
+    workerRun ?? undefined,
   );
 };
 
@@ -1088,10 +1114,14 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   // Item 1 fix (review job 652a4abc lane3 P1-5 / lane2 P1): resolved once, before *any* branch
   // below (including the observe fallthrough and the I17 unclassified path) — every way this
   // handler can reach a Gatekeeper on the human channel goes through the same gate.
+  // Leftover 97 (2026-09-27): the role check stays up front, but the Grant check moves below the
+  // observe branch — reading a published observe-class Operation needs no Grant on either
+  // channel; execute-class and unclassified (I17) calls still hit `assertHumanGatekeeperAccess`
+  // before anything else can reach the Gatekeeper.
   let role: Role | undefined;
   if (channel === 'human') {
     role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
-    await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+    assertRoleMayReachGatekeeper(role);
   }
 
   const requesterScope = await resolveRequesterScope(
@@ -1133,6 +1163,17 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const workerRun = sid ? await findWorkerRunBySessionId(client, workspaceId, sid) : null;
   const parentWorkerRunId = workerRun?.id;
 
+  // Leftover 97: a human caller reading a *published observe-class* Operation needs no Grant; every
+  // other human call (execute-class, unclassified I17) keeps the Grant check, and keeps it *before*
+  // the Gatekeeper lookup below as it always was — an ungranted person learns nothing about which
+  // gate ids exist from a 403 vs 404 difference.
+  if (channel === 'human' && role !== undefined) {
+    const target = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
+    if (!(target && target.operation.mode === 'observe')) {
+      await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+    }
+  }
+
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
 
@@ -1149,8 +1190,8 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     // (application/gates/observe-access.ts; D4 revoked 2026-09-27), the same predicate
     // `observe_operation` and `list_allowed_operations` use. Gate enabled, not platform-disabled
     // and published observe-class are already established above, so for a Handle caller only the
-    // AgentPolicy cap / AgentProfile exclusion can refuse here. The human channel keeps its Grant
-    // check (`assertHumanGatekeeperAccess` above) and nothing more, unchanged.
+    // AgentPolicy cap / AgentProfile exclusion can refuse here; a human caller (leftover 97) reads
+    // with no Grant and no agent exclusions — the same rule `observe_operation` applies.
     if (channel === 'handle') {
       const refusal = observeRefusal(await readObserveExclusions(client, workspaceId, onBehalfOf), {
         gatekeeperId,

@@ -20,6 +20,13 @@ import {
   listActiveGrantResourceScopes,
   revokeEntrySessionHandles,
 } from '../../governance/capability/index.js';
+import { listGatekeepers } from '../../governance/gatekeepers/index.js';
+import type { ObserveExclusions } from '../gates/index.js';
+import {
+  observableGatekeeperIds,
+  observeExclusionsOf,
+  observeGateExclusion,
+} from '../gates/index.js';
 import { listPublishedSkillIds, listWorkerDefinitions } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -158,10 +165,54 @@ async function assertModelAllowed(model: string, policy: AgentPolicyRow): Promis
 // contract this task implements against names both fields explicitly.
 // -------------------------------------------------------------------------------------------
 
+/** One row of `availableGatekeepers` (`AvailableGatekeeperWire`, packages/shared wire/identity). */
+interface AvailableGatekeeper {
+  readonly gatekeeperId: string;
+  readonly granted: boolean;
+  readonly inUse: boolean;
+}
+
+/**
+ * Leftover 98 (a): every gate the My Agent checklist offers — the gates granted to `target` (read
+ * and write) plus every other registered gate with an Operation any Handle may observe without a
+ * Grant (`observableGatekeeperIds`, the `observeRefusal` predicate — design doc §11 "门上的观察").
+ * Before this, the checklist offered granted gates only, so a member could not keep their agent
+ * out of a system it may now read. `inUse` is `observeGateExclusion` — the same gate-level check
+ * every observe enforcement point makes per call (not unticked on My Agent, inside the AgentPolicy
+ * cap); for a granted gate it equals membership of `effective.enabledGatekeepers`.
+ *
+ * Execute semantics are untouched: `effective.enabledGatekeepers` — what the entry Handle's
+ * `resources.gatekeeper` is minted from (`ensureEntryHandle`) — is still granted ∩ not excluded;
+ * an ungranted gate listed here never becomes execute authority. Listed in `listGatekeepers`
+ * order (registration time); a Grant naming a gate no longer registered is not offered.
+ */
+async function resolveAvailableGatekeepers(
+  client: PoolClient,
+  workspaceId: string,
+  available: AvailableAgentResources,
+  exclusions: ObserveExclusions,
+): Promise<readonly AvailableGatekeeper[]> {
+  const gates = await listGatekeepers(client, workspaceId);
+  const observable = await observableGatekeeperIds(
+    client,
+    workspaceId,
+    gates.map((gate) => gate.gatekeeperId),
+  );
+  const granted = new Set(available.grantedGatekeeperIds);
+  return gates
+    .filter((gate) => granted.has(gate.gatekeeperId) || observable.has(gate.gatekeeperId))
+    .map((gate) => ({
+      gatekeeperId: gate.gatekeeperId,
+      granted: granted.has(gate.gatekeeperId),
+      inUse: observeGateExclusion(exclusions, gate.gatekeeperId) === undefined,
+    }));
+}
+
 function toWireAgentProfile(
   principalId: string,
   profile: AgentProfileRow | undefined,
   effective: EffectiveAgentProfile,
+  availableGatekeepers: readonly AvailableGatekeeper[],
 ) {
   return {
     principalId,
@@ -173,6 +224,7 @@ function toWireAgentProfile(
     autoApproveLow: profile?.autoApproveLow ?? null,
     updatedAt: profile?.updatedAt ? profile.updatedAt.toISOString() : null,
     updatedBy: profile?.updatedBy ?? null,
+    availableGatekeepers,
     effective: {
       model: effective.model,
       enabledSkills: effective.enabledSkills,
@@ -230,9 +282,15 @@ export const getAgentProfileHandler: CapabilityHandler = async (
   const policy = await readAgentPolicy(client, workspaceId);
   const available = await resolveAvailableResources(client, workspaceId, target);
   const effective = resolveEffectiveAgentProfile(profile, policy, available);
+  const availableGatekeepers = await resolveAvailableGatekeepers(
+    client,
+    workspaceId,
+    available,
+    observeExclusionsOf(profile, policy),
+  );
 
   return {
-    result: toWireAgentProfile(target, profile, effective),
+    result: toWireAgentProfile(target, profile, effective, availableGatekeepers),
     resourceType: 'agent_profile',
     resourceId: target,
   };
@@ -312,8 +370,14 @@ export const setAgentProfileHandler: CapabilityHandler = async (
 
   const available = await resolveAvailableResources(client, workspaceId, target);
   const effective = resolveEffectiveAgentProfile(updated, policy, available);
+  const availableGatekeepers = await resolveAvailableGatekeepers(
+    client,
+    workspaceId,
+    available,
+    observeExclusionsOf(updated, policy),
+  );
   return {
-    result: toWireAgentProfile(target, updated, effective),
+    result: toWireAgentProfile(target, updated, effective, availableGatekeepers),
     resourceType: 'agent_profile',
     resourceId: target,
   };

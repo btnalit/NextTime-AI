@@ -20,10 +20,22 @@ export interface AgentProfile {
   readonly autoApproveLow: boolean | null;
   readonly updatedAt: string;
   readonly updatedBy: string;
+  /** The systems the My Agent checklist offers (leftover 98): granted ones (read + write) plus
+   *  every system readable without a Grant — before exclusions, not capped by the policy. */
+  readonly availableGatekeepers: readonly AvailableGatekeeper[];
   /** Resolved — never `null`: the model / addendum / auto-approve fall back to the policy's
    *  defaults, and each list is everything currently granted / published minus the exclusions,
-   *  capped by the policy. */
+   *  capped by the policy. `enabledGatekeepers` is the *granted* (read + write) set only. */
   readonly effective: EffectiveAgentProfile;
+}
+
+/** `AvailableGatekeeperWire` (packages/shared wire/identity): `granted` = the member holds a gate
+ *  Grant (their agent may also act on it through a Worker); `inUse` = not unticked here and inside
+ *  the workspace policy's gate cap, as the kernel decides it for every read. */
+export interface AvailableGatekeeper {
+  readonly gatekeeperId: string;
+  readonly granted: boolean;
+  readonly inUse: boolean;
 }
 
 export interface EffectiveAgentProfile {

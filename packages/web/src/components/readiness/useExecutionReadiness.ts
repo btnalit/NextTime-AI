@@ -4,8 +4,8 @@ import type { Resource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 
 /**
- * components/readiness/useExecutionReadiness: the one `execution_readiness` read both J1 surfaces
- * (`ExecutionReadinessCard`, `ExecutionPrerequisiteBar`) call. No `principalId` is ever passed —
+ * components/readiness/useExecutionReadiness: the one `execution_readiness` read the J1 surface
+ * (`ExecutionReadinessCard`) calls. No `principalId` is ever passed —
  * every mount reads the signed-in caller's own readiness (the capability's own default), matching
  * this lane's scope decision to skip the optional operator "check another member" picker (see the
  * PR report). `http` only: `execution_readiness` is `group:'governance'`, not `chat` — the `ws`

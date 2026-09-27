@@ -176,12 +176,13 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
   const parentCapabilitySet = new Set(parentScope.capabilities);
 
   // S2.9: force-union the fixed worker-infrastructure capabilities (list_allowed_operations,
-  // report_task_result — governance/capability/handles.ts's own doc comment on
-  // WORKER_INFRASTRUCTURE_CAPABILITY_NAMES has the full rationale) into the declared set *before*
-  // narrowing, so no WorkerDefinition's own explicit `capabilities` list can omit them. They still
-  // go through the exact same parent-intersection every other non-execute-class name does below
-  // (never a bypass of I13/§5.3-item-8) — granted whenever the parent Handle is an entry Handle
-  // (both names are also in ENTRY_CEILING_EXTRA_CAPABILITY_NAMES) or the call is `unconstrained`.
+  // report_task_result, get_task, observe_operation — governance/capability/handles.ts's doc
+  // comment on WORKER_INFRASTRUCTURE_CAPABILITY_NAMES has the rationale) into the declared set
+  // *before* narrowing, so no WorkerDefinition's own explicit `capabilities` list can omit them.
+  // They still go through the exact same parent-intersection every other non-execute-class name
+  // does below (never a bypass of I13/§5.3-item-8) — granted whenever the parent Handle is an entry
+  // Handle (all four are also in ENTRY_CEILING_EXTRA_CAPABILITY_NAMES) or the call is
+  // `unconstrained`.
   const effectiveDeclaredCapabilities = [
     ...new Set([...input.declaredCapabilities, ...WORKER_INFRASTRUCTURE_CAPABILITY_NAMES]),
   ];
@@ -240,7 +241,8 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
     // else: an observe-only gate the caller doesn't hold — left out of the child's
     // `resources.gatekeeper` rather than refused (only execute-class access fails the delegation
     // outright). The Worker still reaches it: observation needs no gate scope (design doc §11
-    // "门上的观察", D4 revoked 2026-09-27) — `request_action`'s observe branch and
+    // "门上的观察", D4 revoked 2026-09-27) — `observe_operation` (worker infrastructure since
+    // leftover 98, force-unioned above), `request_action`'s observe branch and
     // `list_allowed_operations` decide it with `observeRefusal` (application/gates/
     // observe-access.ts) for the member the Worker acts for. It must NOT be added here:
     // `resources.gatekeeper` is execute authority — `governance/policy`'s coverage check reads it

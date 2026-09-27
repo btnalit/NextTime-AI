@@ -9,6 +9,7 @@ import {
 } from '@nexttime/gatekeeper-base';
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type {
+  AgentProfileWire,
   AvailableGateInstanceWire,
   ConnectorWire,
   EnableGateInstanceResultWire,
@@ -34,6 +35,7 @@ import { ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   type CapabilityScope,
   HANDLE_SIGNING_ALG,
+  WORKER_CEILING_CAPABILITIES,
   grantCapability,
   issueHandle,
   revokeCapabilityGrant,
@@ -50,6 +52,11 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { upsertAnnouncement } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
+import {
+  InvokeWorkerAttenuationError,
+  computeChildHandleScope,
+  defaultWorkerCapabilities,
+} from '../task/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
@@ -1423,8 +1430,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       // entry agent's reachability and Handle-channel enforcement must agree for a member with no
       // Grant at all. Enforcement is exercised through the member's own entry Handle — its scope is
       // exactly `reach.parentAuthority`, the scope `ensureEntryHandle` would mint right now — and a
-      // Worker-shaped Handle (`request_action`, gate scope naming some other gate). The human
-      // channel's own Grant check is unchanged and pinned alongside.
+      // Worker-shaped Handle (`request_action`, gate scope naming some other gate). Since leftover
+      // 97 the human channel (the member reading from the console) needs no Grant either, and is
+      // pinned alongside; leftover 98 adds a Worker delegated from that same entry scope.
       // -------------------------------------------------------------------------------------
 
       function handleCaller(scope: CapabilityScope): ResolvedCaller {
@@ -1561,7 +1569,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       }
 
-      it('no Grant: reachability says direct, and the member’s entry Handle and a Worker-shaped Handle both observe (audited); the human channel still refuses', async () => {
+      it('no Grant: reachability says direct, and the member’s entry Handle, a Worker-shaped Handle and the member on the human channel all observe (audited)', async () => {
         await withGrantRevoked(async () => {
           const reach = await reachForMember();
           const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
@@ -1586,14 +1594,109 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           expect(await projectedOperationNames(reach)).toEqual([OP_A.name, OP_B.name].sort());
 
-          // Human channel (console) — unchanged, pending the maintainer's own decision.
-          await expect(observeAsMember(OP_A.name)).rejects.toBeInstanceOf(ForbiddenError);
+          // Human channel (the member reading from the console, a non-owner with no Grant) —
+          // leftover 97: allowed, and audited exactly like the Handle-channel call above.
+          const beforeHuman = await memberObserveAuditCount();
+          await expect(observeAsMember(OP_A.name)).resolves.toMatchObject({ status: 'ok' });
+          expect(await memberObserveAuditCount()).toBe(beforeHuman + 1);
         });
       });
 
-      it('no Grant + excluded on My Agent: reachability says excluded_by_profile, and both Handle paths refuse and project nothing', async () => {
+      // Leftover 98 (b): a Worker the ungranted member's entry agent delegates to. Its Handle scope
+      // is what `invoke_worker` would mint from that entry scope (`computeChildHandleScope`, the
+      // WorkerDefinition default capabilities, declaring this gate): it reads the gate through
+      // `observe_operation` — the capability worker mode now routes observe-class tools to —
+      // audited; it carries no execute authority for the gate, so its execute path is refused
+      // exactly as before (no `request_action` in scope; declaring it rejects the delegation).
+      it('no Grant: a Worker delegated by the member’s entry agent observes the gate (audited), and its execute path stays refused', async () => {
+        await withGrantRevoked(async () => {
+          const reach = await reachForMember();
+          const childScope = computeChildHandleScope({
+            parentAuthority: reach.parentAuthority,
+            declaredCapabilities: defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+            declaredGates: [cGatekeeperId],
+          });
+          expect(childScope.capabilities).toContain('observe_operation');
+          expect(childScope.capabilities).not.toContain('request_action');
+          expect(childScope.resources.gatekeeper ?? []).not.toContain(cGatekeeperId);
+
+          const before = await memberObserveAuditCount();
+          await expect(
+            dispatchCapability({ pool }, handleCaller(childScope), 'observe_operation', {
+              gatekeeperId: cGatekeeperId,
+              operation: OP_B.name,
+              params: {},
+            }),
+          ).resolves.toMatchObject({ status: 'ok' });
+          expect(await memberObserveAuditCount()).toBe(before + 1);
+
+          await expect(
+            dispatchCapability({ pool }, handleCaller(childScope), 'request_action', {
+              gatekeeperId: cGatekeeperId,
+              operation: OP_B.name,
+              params: {},
+            }),
+          ).rejects.toBeInstanceOf(ForbiddenError);
+          expect(() =>
+            computeChildHandleScope({
+              parentAuthority: reach.parentAuthority,
+              declaredCapabilities: [
+                ...defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+                'request_action',
+              ],
+              declaredGates: [cGatekeeperId],
+            }),
+          ).toThrow(InvokeWorkerAttenuationError);
+        });
+      });
+
+      // Leftover 98 (a): My Agent now offers a gate the member may read without a Grant
+      // (`availableGatekeepers`, granted:false) so they can exclude it; the execute set
+      // (`effective.enabledGatekeepers`) never gains it either way.
+      it('no Grant: My Agent offers the readable gate as granted:false / in use, never in the execute set', async () => {
+        await withGrantRevoked(async () => {
+          const profile = (await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+            'get_agent_profile',
+            {},
+          )) as AgentProfileWire;
+          expect(
+            profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
+          ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: true });
+          expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
+        });
+        // With the Grant back in place the same gate is offered as granted, and is in the
+        // execute set.
+        const granted = (await dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+          'get_agent_profile',
+          {},
+        )) as AgentProfileWire;
+        expect(granted.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId)).toEqual({
+          gatekeeperId: cGatekeeperId,
+          granted: true,
+          inUse: true,
+        });
+        expect(granted.effective.enabledGatekeepers).toContain(cGatekeeperId);
+      });
+
+      it('no Grant + excluded on My Agent: My Agent still offers it (not in use), reachability says excluded_by_profile, and every Handle path — entry, Worker-shaped, delegated Worker — refuses and projects nothing', async () => {
         await withGrantRevoked(() =>
           withProfileExclusion(async () => {
+            const profile = (await dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+              'get_agent_profile',
+              {},
+            )) as AgentProfileWire;
+            expect(profile.excludedGatekeepers).toEqual([cGatekeeperId]);
+            expect(
+              profile.availableGatekeepers.find((g) => g.gatekeeperId === cGatekeeperId),
+            ).toEqual({ gatekeeperId: cGatekeeperId, granted: false, inUse: false });
+            expect(profile.effective.enabledGatekeepers).not.toContain(cGatekeeperId);
+
             const reach = await reachForMember();
             const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
             expect(gate?.granted).toBe(false);
@@ -1609,7 +1712,27 @@ describe.runIf(DATABASE_URL !== undefined)(
               /excluded_by_profile/,
             );
             await expect(observeViaWorkerHandle(OP_A.name)).rejects.toThrow(/excluded_by_profile/);
+            const delegatedWorkerScope = computeChildHandleScope({
+              parentAuthority: reach.parentAuthority,
+              declaredCapabilities: defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+              declaredGates: [cGatekeeperId],
+            });
+            await expect(
+              dispatchCapability(
+                { pool },
+                handleCaller(delegatedWorkerScope),
+                'observe_operation',
+                {
+                  gatekeeperId: cGatekeeperId,
+                  operation: OP_A.name,
+                  params: {},
+                },
+              ),
+            ).rejects.toThrow(/excluded_by_profile/);
             expect(await projectedOperationNames(reach)).toEqual([]);
+
+            // The person's own console read is not their agent's setting (leftover 97).
+            await expect(observeAsMember(OP_A.name)).resolves.toMatchObject({ status: 'ok' });
           }),
         );
       });
