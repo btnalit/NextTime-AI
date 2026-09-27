@@ -13,7 +13,7 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          'bg-primary text-text-on-primary shadow-card hover:bg-primary-hover active:bg-primary-press',
+          'nt-gradient-primary bg-primary text-text-on-primary hover:bg-primary-hover active:bg-primary-press',
         secondary: 'border border-border-strong bg-surface-2 text-text hover:bg-surface-3',
         ghost: 'bg-transparent text-text-2 hover:bg-surface-2 hover:text-text',
         danger: 'bg-danger-soft text-danger hover:bg-danger hover:text-text-on-accent',

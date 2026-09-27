@@ -24,7 +24,7 @@ export interface DrawerSectionProps {
 export function DrawerSection({ title, children, testId }: DrawerSectionProps) {
   return (
     <section className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0" data-testid={testId}>
-      <h3 className="text-12 font-semibold text-text-accent">{title}</h3>
+      <h3 className="text-12 font-semibold uppercase tracking-wider text-text-3">{title}</h3>
       {children}
     </section>
   );

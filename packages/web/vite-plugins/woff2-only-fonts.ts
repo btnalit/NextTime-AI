@@ -14,6 +14,23 @@ const WOFF2_PLUS_WOFF_SRC =
 
 /** Every `@import "…";` line's specifier, in file order — `fonts.src.css` is the single source of
  *  truth for which weights/subsets load; this plugin never hard-codes that list itself. */
+/** Fontsource's own "latin" subset range. Design system v3: Geist's packages ship their
+ *  `latin-*.css` faces with *no* `unicode-range`, so the browser used Geist for every character
+ *  the file has a glyph for — including the fullwidth CJK punctuation block (：（），；), drawn
+ *  narrow — ahead of Noto Sans SC. Pinning a latin face to this range sends CJK punctuation
+ *  (U+3000 / U+FF00 blocks) back to Noto Sans SC. */
+const FONTSOURCE_LATIN_RANGE =
+  'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD';
+
+/** A `latin-*.css` face without its own `unicode-range` gets the latin one (see above). */
+function pinLatinRange(specifier: string, css: string): string {
+  if (!/\/latin(-\d+)?\.css$/.test(specifier) || css.includes('unicode-range')) return css;
+  return css.replace(
+    /@font-face\s*\{/g,
+    `@font-face {\n  unicode-range: ${FONTSOURCE_LATIN_RANGE};`,
+  );
+}
+
 function importSpecifiers(cssSource: string): readonly string[] {
   return [...cssSource.matchAll(/@import\s+["']([^"']+)["'];/g)].map((match) => match[1] as string);
 }
@@ -27,7 +44,7 @@ function generateFontsCss(fontsSrcCssPath: string): string {
   const bodies = importSpecifiers(source).map((specifier) => {
     const entryPath = require.resolve(specifier);
     const entryDir = dirname(entryPath);
-    const css = readFileSync(entryPath, 'utf8');
+    const css = pinLatinRange(specifier, readFileSync(entryPath, 'utf8'));
     return css.replace(WOFF2_PLUS_WOFF_SRC, (_match, woff2Ref: string) => {
       const woff2AbsPath = join(entryDir, woff2Ref.trim());
       const woff2RelPath = relative(outDir, woff2AbsPath).split('\\').join('/');
