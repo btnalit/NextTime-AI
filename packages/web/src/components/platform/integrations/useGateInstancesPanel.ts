@@ -45,13 +45,56 @@ export function useGateInstancesPanel(
   }
   const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {});
   const rows = instances.state.status === 'ready' ? instances.state.data.items : [];
-  const open = panel.kind === 'gate' ? rows.find((row) => row.gateId === panel.gateId) : undefined;
+  const panelGateId = panel.kind === 'gate' ? panel.gateId : undefined;
+  const listMatch =
+    panelGateId !== undefined ? rows.find((row) => row.gateId === panelGateId) : undefined;
+
+  // G4 (kernel-console-coverage-2026-09-26, closing wave C6): `list_gate_instances` above has no
+  // `autoLoadAll` — a browsable table intentionally only loads its first page. A deep link
+  // (`#/platform/integrations/<gateId>`, `PlatformIntegrationsPage`'s own `selectedGateId`) naming
+  // an instance outside that page used to leave the drawer silently closed forever (`open` stayed
+  // `undefined`). Falls back to the dedicated single-object getter exactly for that miss, once the
+  // list has actually finished loading (so this never races the ordinary, in-page `setPanel`
+  // click, which always finds its row already in `rows`). A `not_found`/`forbidden` on the
+  // fallback itself degrades the same way it always did — drawer stays closed, no new error UI.
+  const [fallback, setFallback] = useState<{
+    readonly gateId: string;
+    readonly row: GateInstanceWire;
+  } | null>(null);
+  const hasListMatch = listMatch !== undefined;
+  const instancesReady = instances.state.status === 'ready';
+  useEffect(() => {
+    if (panelGateId === undefined || hasListMatch || !instancesReady) return;
+    let cancelled = false;
+    void http
+      .call<GateInstanceWire>('get_gate_instance', { gateId: panelGateId })
+      .then((row) => {
+        if (!cancelled) setFallback({ gateId: panelGateId, row });
+      })
+      .catch(() => {
+        /* not_found / forbidden — leave the drawer closed, same as before this fallback existed. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelGateId, hasListMatch, instancesReady, http]);
+
+  const open =
+    listMatch ?? (fallback !== null && fallback.gateId === panelGateId ? fallback.row : undefined);
 
   function replace(updated: GateInstanceWire): void {
     instances.mutate((data) => ({
       ...data,
       items: data.items.map((row) => (row.gateId === updated.gateId ? updated : row)),
     }));
+    // A row `open` only via the G4 fallback above (not in the loaded page) is not in `data.items`
+    // for the `mutate` above to reach — keep it in sync too, or an edit inside the deep-linked
+    // drawer would silently revert to the pre-edit fallback row on the next render.
+    setFallback((current) =>
+      current !== null && current.gateId === updated.gateId
+        ? { gateId: updated.gateId, row: updated }
+        : current,
+    );
   }
 
   /** `create_gate_instance` already answers with the full, current row — no reload needed before
