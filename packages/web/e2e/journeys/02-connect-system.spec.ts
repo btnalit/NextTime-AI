@@ -15,16 +15,18 @@ import {
  *      "一个墨色主按钮"下的当前路径；页面自身的旧 "接入向导" `OnboardingWizard` 走
  *      `CompleteConnectionForm`/`create_connection` 直连注册，与本旅程可用的 fixture（见下）不是
  *      同一条机制，本旅程走当前主路径）→ 选择接入方式。
- *   2. 填写连接信息，测试连通。
+ *   2. 填写连接信息，测试连通——STATUS 遗留 83：这条旅程的 owner 角色结构性地走不到这一步（见下方
+ *      "步骤②……为什么仍然不在这个旅程里跑"）；这个能力本身已经在 gate-host.spec.ts 里对着同一个
+ *      CI 可达的 fixture-mcp/gate-host 真实验证过。
  *   3. 门注册成功后，看到它发现/声明的 Operation 列表。
  *   4. 挑选要发布的 Operation，逐个或批量发布。
  *   5. 回到 系统与授权 列表，确认这个门状态健康、Operation 数量正确。
  * 状态覆盖:
  *   - 空: `createFreshWorkspace` 给一个全新工作区（同 01-entry-agent.spec.ts 的"空"覆盖）——第 1 步
  *     之前断言 系统与授权 的空态（`systems-empty`）与"接入一个系统"主按钮都可见。
- *   - 错: 连接信息错误/端点不可达——测试连通要给出具体原因，不是泛化的"失败"（本旅程没有走到这一
- *     步，见下方"今天能做到哪一步"；ConnectSystemLauncher.test.tsx 与 EnableGateConfirm 自己的失败
- *     态由组件测试覆盖）。
+ *   - 错: 连接信息错误/端点不可达——测试连通要给出具体原因，不是泛化的"失败"（这个 owner 角色走不到
+ *     步骤②本身，见下方说明；`gate-host.spec.ts` 走的是"测试连接"成功的那条真实路径，
+ *     ConnectSystemLauncher.test.tsx 与 EnableGateConfirm 自己的失败态由组件测试覆盖）。
  *   - 无权限: 跳过——governance.spec.ts 已经覆盖"builder 以下角色看不到治理分组"的同类断言，本旅程
  *     不重复建号。
  *   - 窄屏: 跳过——W1-B 的截图/axe 门槛与批量设计评审已覆盖向导多步表单在 768px 下的可用性，本旅程
@@ -33,28 +35,47 @@ import {
  *   - 一个人从"系统与授权"空态开始，不碰 SQL/CLI，把一个系统的至少一个 Operation 发布出来，且这个
  *     Operation 出现在 能力目录 · Operation 里。
  *
- * 今天能做到哪一步（S8 W4-D，读代码后的结论，不是猜测）：steps 2-5 曾经 `test.fixme`，理由是"fake
- * 栈上没有可用的真实门可接"——但 `ConnectSystemLauncher` 本身就是 gate-host.spec.ts（P-B2a）与
- * integrations.spec.ts（P-B1）已经证明可达的同一条 fixture 的**工作区侧**半程：`ci-fixture-mcp`
- * （connector `fixture-mcp`）由 `.github/workflows/e2e.yml` 的 CI 种子步骤宣告为 `discovered`，
- * `integrations.spec.ts` 的第一个测试把它拨到平台 `enabled` + 接入包 `platform_preset`（按文件名
- * 排序 i < j，`playwright.config.ts` 的 `workers: 1`/`fullyParallel: false` 让整个套件顺序跑——
- * `01-entry-agent.spec.ts` 自己的 doc comment 已经依赖同一个事实）。到这一步为止，`ci-fixture-mcp`
- * 已经是"平台已提供的系统"（J5），`ConnectSystemLauncher` 的向导第一屏会在"使用已接入的系统"里列出
- * 它——选中它直接跳到"能力与策略"步，跳过的正是"填写连接信息、测试连通"这一段真人对着一个全新目标
- * 网络地址走的连接过程（这一段仍然需要真实网络/docker socket，fake 栈没有，留给以后一个专门的 W3
- * fixture 系统去补，不在这里假装接了一个真实系统）；从"能力与策略"步开始——点"启用"、在确认发布前的
- * 预览里看到它声明的 Operation 列表（非管理员 owner 读的是 `list_available_gate_instances`，
+ * 今天能做到哪一步（S8 W4-D 的结论仍然成立，STATUS 遗留 83 收口时复核并订正了其中一句过时的话——读
+ * 代码后的结论，不是猜测）：steps 2-5 曾经 `test.fixme`，理由是"fake 栈上没有可用的真实门可接"——但
+ * `ConnectSystemLauncher` 本身就是 gate-host.spec.ts（P-B2a）与 integrations.spec.ts（P-B1）已经
+ * 证明可达的同一条 fixture 的**工作区侧**半程：`ci-fixture-mcp`（connector `fixture-mcp`）由
+ * `.github/workflows/e2e.yml` 的 CI 种子步骤宣告为 `discovered`，`integrations.spec.ts` 的第一个
+ * 测试把它拨到平台 `enabled` + 接入包 `platform_preset`（按文件名排序 i < j，`playwright.config.ts`
+ * 的 `workers: 1`/`fullyParallel: false` 让整个套件顺序跑——`01-entry-agent.spec.ts` 自己的 doc
+ * comment 已经依赖同一个事实）。到这一步为止，`ci-fixture-mcp` 已经是"平台已提供的系统"（J5），
+ * `ConnectSystemLauncher` 的向导第一屏会在"使用已接入的系统"里列出它——选中它直接跳到"能力与策略"
+ * 步，跳过的正是步骤②"填写连接信息、测试连通"这一段。从"能力与策略"步开始——点"启用"、在确认发布前
+ * 的预览里看到它声明的 Operation 列表（非管理员 owner 读的是 `list_available_gate_instances`，
  * `fromAvailableRow` 恒 `platform: null`，`PolicyStep` 那张静态"已声明的 Operation"表格只对读
  * `list_gate_instances` 的管理员视角渲染——这条路径上"看到 Operation 列表"实际发生在
  * `EnableGateConfirm` 的 `preview_gate_instance_enable` 预览里，不是那张表格）、确认发布——到
- * "系统与授权"列表与"能力目录"确认，是本次新增打通的部分，与 `ConnectSystemLauncher.test.tsx`
+ * "系统与授权"列表与"能力目录"确认，是 S8 W4-D 新增打通的部分，与 `ConnectSystemLauncher.test.tsx`
  * （组件级，scripted http）的 "hosted path from the workspace page (non-admin owner)" 用例走的是
  * 同一段真实组件代码。
  *
  * `01-entry-agent.spec.ts` 已经用同一个 `ci-fixture-mcp` 做过"工作区自己启用"，但走的是 系统与授权
  * 列表页自己的内联启用按钮（`AvailableGateInstancesSection`），不是这条旅程要证明的向导本身
  * （`ConnectSystemLauncher`）——两条旅程各自的 `createFreshWorkspace` 互不干扰，这里不是重复覆盖。
+ *
+ * 步骤②"填写连接信息、测试连通"为什么仍然不在**这个**旅程里跑（STATUS 遗留 83，读代码后订正）：
+ *   S8 W4-D 这份文档此前说"这一段仍然需要真实网络/docker socket，fake 栈没有"——这句话现在是错的：
+ *   `deploy/ci/docker-compose.ci.yml` 早已把 `gate-host` 与 `fixture-mcp` 两个常驻容器纳入这个 job
+ *   （见该文件自己的注释："The console e2e creates a hosted mcp instance targeting
+ *   http://fixture-mcp:8080/"），`gate-host.spec.ts`（P-B2a）就是对着这个真实、CI 可达的目标走一遍
+ *   "填连接信息（`CreateGateInstanceForm`：GATE_ID/显示名/`transportKind=mcp`/目标地址）→ 门宿主真实
+ *   接管 → 录入共享凭证 → 点「测试连接」，`gate-instance-test-health` 断言 `data-status="ok"`（不是
+ *   `unreachable`）"——一次真实握手，不是假的。也就是说，"填连接信息、测连通"这个能力本身，今天*已经*
+ *   在 CI 里被真实验证，只是在 gate-host.spec.ts 里，不在这份 journeys/02 里。
+ *
+ *   这份旅程自己仍然走不到那一步的原因，是产品今天的一条真实权限边界，不是 fixture 缺口：
+ *   `ConnectSystemLauncher` 的步骤②（`ConnectionStep`）里，`CreateGateInstanceForm`（新建一个 hosted
+ *   实例、填目标地址）只在 `isAdmin` 时渲染（`ConnectSystemLauncher.tsx` 自己的注释："管理员在此建
+ *   实例……凭证直接录入门宿主"）——工作区页面上的普通 owner（`isAdmin` 恒 false）看到的只是"需要管理
+ *   员在平台集成页创建实例"的提示（`launcher-needs-admin`），而这条旅程从 `createFreshWorkspace` 开
+ *   始就故意是一个全新的、非管理员的 owner（同 01-entry-agent.spec.ts 的"空"覆盖哲学：不冒充一个这
+ *   条旅程原本不是写给他的角色）。让这个 owner 中途登出、切成管理员去走 gate-host.spec.ts 已经覆盖的
+ *   同一段管理员流程，只是把已经存在的覆盖换个文件名重复一遍，不会验证任何新东西——所以本文件的第 1
+ *   步仍然走"使用已接入的系统"这条工作区 owner 真正能走的路径，步骤②本身留给 gate-host.spec.ts。
  */
 
 const GATE_ID = 'ci-fixture-mcp';
