@@ -40,12 +40,17 @@ Main / Workspaces / Audit / Catalog / Models；设计稿是维护者的私有 ar
   实现说明（#333 / #336，v0.28.0）：主从机制抽成 `kit/master-detail`——视口 ≥1180px 两栏（列表卡 | 详情卡，
   1280 的默认 e2e 视口落在两栏），以下列表 + `kit/sheet`；选中只由 URL 决定、不自动选中，未选时详情栏写明
   对象；列表为空且未选中时只显示列表卡。行用 `kit/list-row`（整行一个 `<button>`，行内不放 RefChip 等
-  可交互元素，完整 chip 在详情里）。审批决定语义不变：确认层级仍是 medium（输入目标名的 irreversible 层
-  是否用于高影响批准仍待维护者决定）；画板的"影响范围（来自图谱）"与"不可逆"没有读模型支撑，不渲染。
+  可交互元素，完整 chip 在详情里）。审批决定语义不变：确认层级仍是 medium（维护者 2026-09-27 决定：高影响
+  批准不改成输入目标名的 irreversible 层）；画板的"影响范围（来自图谱）"与"不可逆"没有读模型支撑，不渲染。
   会推送 toast 的页面仍从 `ui/Toast` 取 hook（App 挂的是它的 Provider），因此留在旧组件白名单上。
   成员页保持列表 + 表单抽屉（不做主从）。
 - **P3-5 能力目录**。
 - **P3-6 平台页（概览、集成、工作区、用户、模型）**：V10、V8 余量。
+- **设计系统 v2.1（插在 P3-4 与 P3-5 之间，#338 / #341，v0.29.0）**：维护者 2026-09-27 确认视觉方向
+  （品牌蓝 + 阴影），并指出"字体基本就是单纯黑色，非常不好看"。字色改到品牌色相上（标题 `--text-strong`
+  深藏青、正文石板藏青、分区眉题 `--text-accent`），补 Plex / Noto Sans SC 700 真粗体，页标题 24/700；
+  侧栏与移动导航抽屉改深藏青岛（`.sidebar` / `.nav-drawer` 内把通用 token 重映射到 `--sidebar-*`）。
+  规格与数值见 `design-system/nexttime-ai-console/MASTER.md`，对比度由 `tokens-contrast.test.ts` 覆盖。
 
 每片验收：对应 1440/1280/768 截图与画板并排做 design-critique，无 🔴；axe 不新增违规；copy-guard 不新增；
 单测与 e2e 绿。
