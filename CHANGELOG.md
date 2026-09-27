@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.30.0](https://github.com/btnalit/NextTime-AI/compare/v0.29.0...v0.30.0) (2026-09-27)
+
+
+### Features
+
+* **kernel:** observing through a gate needs no Grant — one predicate for enforcement, tools and readiness (revert D4) ([#344](https://github.com/btnalit/NextTime-AI/issues/344)) ([0e268b9](https://github.com/btnalit/NextTime-AI/commit/0e268b9431919ef803b2a61c7732b529d8b03882))
+* **web:** capability catalog as master-detail (console redesign P3-5) ([#347](https://github.com/btnalit/NextTime-AI/issues/347)) ([f6a3b81](https://github.com/btnalit/NextTime-AI/commit/f6a3b812887d286c8eeeb70150793b10cdf1388b))
+* **web:** design system v3 — neutral ink, vivid primary, nav pill, ambient page ([#343](https://github.com/btnalit/NextTime-AI/issues/343)) ([ccb1db2](https://github.com/btnalit/NextTime-AI/commit/ccb1db2b1fc56ace0b495cfbea885cbd0f565be9))
+* **web:** design system v3.1 — soft charcoal ink and a real CJK semibold ([#346](https://github.com/btnalit/NextTime-AI/issues/346)) ([1291eef](https://github.com/btnalit/NextTime-AI/commit/1291eef5c4ca26a256546a3175500e50fc08b726))
+
 ## [0.29.0](https://github.com/btnalit/NextTime-AI/compare/v0.28.0...v0.29.0) (2026-09-27)
 
 
