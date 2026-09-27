@@ -1,11 +1,12 @@
 import http from 'node:http';
-import type { HandleClaims } from '@nexttime/shared';
+import { CORRELATION_ID_HEADER, type HandleClaims, resolveCorrelationId } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { ExhaustedBudgetRow } from './budget-sync.js';
 import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
-import type { LlmUsageRecord } from './report.js';
+import { type LlmProxyMetrics, createLlmProxyMetrics, respondMetrics } from './metrics.js';
+import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
 import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
 
 /**
@@ -35,6 +36,12 @@ import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } 
  *
  * Response bytes are never altered, streaming or not — only the outbound *request* body is ever
  * mutated, and only in the one case above.
+ *
+ * Leftover 87: every request gets a correlation id — the caller's `x-correlation-id` when valid
+ * (the platform extension sends the Turn id / the Worker's inherited id on every model call), else
+ * a minted one — echoed back, written into each log line and the usage line, and **stripped**
+ * before anything goes upstream (an internal id never reaches a third-party provider). `GET
+ * /internal/metrics` (metrics.ts) is answered before any provider routing, internal-token guarded.
  */
 
 /**
@@ -65,6 +72,8 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   // through the *other* header name.
   'authorization',
   'x-api-key',
+  // Leftover 87: the platform's internal correlation id stays inside the platform.
+  CORRELATION_ID_HEADER,
 ]);
 
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
@@ -197,7 +206,7 @@ export interface ProxyServerOptions {
     res: http.ServerResponse,
     remainderPath: string,
   ) => Promise<void>;
-  readonly reporter: { record(record: LlmUsageRecord): void };
+  readonly reporter: { record(record: LlmUsageRecord, context?: LlmUsageRecordContext): void };
   readonly maxRequestBodyBytes: number;
   /** Ceiling for establishing the upstream connection / receiving response headers. */
   readonly upstreamConnectTimeoutMs: number;
@@ -217,6 +226,11 @@ export interface ProxyServerOptions {
   /** Defaults to `console.log`; overridable for tests. Never receives a key, a Handle, or a
    *  request/response body — see the calls below. */
   readonly log?: (line: string) => void;
+  /** Leftover 87: this process's metric set; omitted (tests) → a fresh one. */
+  readonly metrics?: LlmProxyMetrics;
+  /** Leftover 87: the internal-plane `Authorization` value (`Bearer <internal_token>`) that
+   *  `GET /internal/metrics` requires; `undefined` (no kernel configured) → that route always 401s. */
+  readonly internalAuthorizationHeader?: string;
 }
 
 /**
@@ -240,13 +254,26 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       ? providersOption
       : (name: string) => providersOption[name];
   const isBudgetExhausted = options.isBudgetExhausted ?? (() => undefined);
+  const metrics = options.metrics ?? createLlmProxyMetrics();
 
-  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  async function handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    correlationId: string,
+  ): Promise<void> {
     const startedAt = new Date();
     const url = new URL(req.url ?? '/', 'http://llm-proxy.internal');
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
       sendJson(res, 200, { status: 'ok' });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/internal/metrics') {
+      respondMetrics(req, res, {
+        authorizationHeader: options.internalAuthorizationHeader,
+        render: metrics.render,
+      });
       return;
     }
 
@@ -262,6 +289,12 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     }
 
     const provider = providerName ? lookupProvider(providerName) : undefined;
+    // Leftover 87: one `requests_total` sample per model-traffic request, labelled only with a
+    // configured provider id and (once validated below) an allowlisted model — never raw input.
+    const observed = { provider: provider && providerName ? providerName : 'unknown', model: '' };
+    res.once('finish', () =>
+      metrics.recordRequest(observed.provider, observed.model, res.statusCode),
+    );
     if (!providerName || !provider) {
       sendJson(res, 404, { error: { code: 'unknown_provider', message: 'unknown provider' } });
       return;
@@ -280,6 +313,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
           JSON.stringify({
             level: 'warn',
             msg: 'llm-proxy: handle auth failed',
+            correlationId,
             provider: providerName,
             reason: err.reason,
           }),
@@ -300,6 +334,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         JSON.stringify({
           level: 'warn',
           msg: 'llm-proxy: refused, workspace budget exhausted',
+          correlationId,
           provider: providerName,
           workspaceId: claims.ws,
           scope: exhausted.scope,
@@ -367,6 +402,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       sendJson(res, 403, { error: { code: 'model_not_allowed', message: 'model not allowed' } });
       return;
     }
+    observed.model = modelId;
 
     // S7-A resolution order: a console key for this provider id, then the env var named by
     // `api_key_env` (now optional — a store provider may have none), else no key at all.
@@ -378,6 +414,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         JSON.stringify({
           level: 'error',
           msg: 'llm-proxy: no provider key resolved (no console key, and api_key_env is unset or its env var is empty)',
+          correlationId,
           provider: providerName,
           envVar: provider.api_key_env ?? null,
         }),
@@ -404,6 +441,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     };
     armTimeout(options.upstreamConnectTimeoutMs);
 
+    const upstreamStartedMs = Date.now();
     let upstreamRes: Response;
     try {
       upstreamRes = await fetchImpl(upstreamUrl, {
@@ -414,6 +452,21 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       });
     } catch {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      metrics.observeUpstream(
+        providerName,
+        modelId,
+        'error',
+        (Date.now() - upstreamStartedMs) / 1000,
+      );
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: upstream request failed',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+        }),
+      );
       sendJson(res, 502, { error: { code: 'bad_gateway', message: 'upstream request failed' } });
       return;
     }
@@ -459,36 +512,55 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     }
 
     const finishedAt = new Date();
+    const upstreamOutcome = streamError || !upstreamRes.ok ? 'error' : 'completed';
+    metrics.observeUpstream(
+      providerName,
+      modelId,
+      upstreamOutcome,
+      (finishedAt.getTime() - upstreamStartedMs) / 1000,
+    );
+    metrics.recordTokens(
+      providerName,
+      modelId,
+      parsedUsage?.inputTokens ?? 0,
+      parsedUsage?.outputTokens ?? 0,
+    );
     const modelConfig = modelId ? provider.models.find((m) => m.id === modelId) : undefined;
-    options.reporter.record({
-      workspaceId: claims.ws,
-      sessionId: claims.sid,
-      jti: claims.jti,
-      provider: providerName,
-      model: modelId ?? 'unknown',
-      inputTokens: parsedUsage?.inputTokens ?? 0,
-      outputTokens: parsedUsage?.outputTokens ?? 0,
-      ...(parsedUsage?.cacheReadTokens !== undefined
-        ? { cacheReadTokens: parsedUsage.cacheReadTokens }
-        : {}),
-      ...(parsedUsage?.cacheWriteTokens !== undefined
-        ? { cacheWriteTokens: parsedUsage.cacheWriteTokens }
-        : {}),
-      ...(parsedUsage && modelConfig?.cost
-        ? { costUsd: computeCostUsd(modelConfig.cost, parsedUsage) }
-        : {}),
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      status: streamError || !upstreamRes.ok ? 'error' : 'completed',
-    });
+    options.reporter.record(
+      {
+        workspaceId: claims.ws,
+        sessionId: claims.sid,
+        jti: claims.jti,
+        provider: providerName,
+        model: modelId ?? 'unknown',
+        inputTokens: parsedUsage?.inputTokens ?? 0,
+        outputTokens: parsedUsage?.outputTokens ?? 0,
+        ...(parsedUsage?.cacheReadTokens !== undefined
+          ? { cacheReadTokens: parsedUsage.cacheReadTokens }
+          : {}),
+        ...(parsedUsage?.cacheWriteTokens !== undefined
+          ? { cacheWriteTokens: parsedUsage.cacheWriteTokens }
+          : {}),
+        ...(parsedUsage && modelConfig?.cost
+          ? { costUsd: computeCostUsd(modelConfig.cost, parsedUsage) }
+          : {}),
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        status: upstreamOutcome,
+      },
+      { correlationId },
+    );
   }
 
   const server = http.createServer((req, res) => {
-    void handleRequest(req, res).catch((err: unknown) => {
+    const correlationId = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
+    res.setHeader(CORRELATION_ID_HEADER, correlationId);
+    void handleRequest(req, res, correlationId).catch((err: unknown) => {
       log(
         JSON.stringify({
           level: 'error',
           msg: 'llm-proxy: unhandled request error',
+          correlationId,
           error: String(err),
         }),
       );

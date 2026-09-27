@@ -13,6 +13,7 @@ import { createContainerIoClient, parseDockerConnection } from './container-io.j
 import { createHost } from './host.js';
 import type { Host } from './host.js';
 import { createKernelLink } from './kernel-link.js';
+import { createAgentHostMetrics, handleMetricsRequest } from './metrics.js';
 import { SupervisorClient } from './supervisor-client.js';
 
 /**
@@ -90,8 +91,15 @@ export function kernelWsUrlFrom(kernelUrl: string): string {
   return `${kernelUrl.replace(/^http/i, 'ws').replace(/\/+$/, '')}/internal/agent-host`;
 }
 
-function startHealthzServer(): http.Server {
+/** `GET /healthz` (open) and, leftover 87, `GET /internal/metrics` (internal-plane token — the
+ *  same `Authorization` value agent-host sends the kernel; metrics.ts) on the one fixed port. The
+ *  port is on `control`/`dockerapi` only and is not published through caddy. */
+function startHealthzServer(metrics: {
+  readonly authorizationHeader: string;
+  readonly render: () => string;
+}): http.Server {
   const server = http.createServer((req, res) => {
+    if (handleMetricsRequest(req, res, metrics)) return;
     if (req.method === 'GET' && req.url === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok' }));
@@ -116,6 +124,7 @@ export function main(): void {
 
   const instanceId = randomUUID();
   const log = (line: string): void => console.error(line);
+  const metrics = createAgentHostMetrics({ log });
 
   const supervisorClient = new SupervisorClient({ supervisorUrl, authorizationHeader });
   const containerIoClient = createContainerIoClient({ connection: dockerConnection });
@@ -131,6 +140,7 @@ export function main(): void {
     authorizationHeader,
     instanceId,
     onStartTurn: (cmd) => {
+      metrics.turnStarted(cmd);
       void hostRef.current?.handleStartTurn(cmd);
     },
     onStopTurn: (cmd) => {
@@ -141,13 +151,14 @@ export function main(): void {
   hostRef.current = createHost({
     supervisorClient,
     containerIoClient,
-    kernelLink,
+    // Leftover 87: host.ts sends every Turn outcome through this decorator (counted + logged).
+    kernelLink: metrics.observe(kernelLink),
     kernelUrl,
     defaultKernelLlmUrl: kernelLlmUrl,
     log,
   });
 
-  const healthzServer = startHealthzServer();
+  const healthzServer = startHealthzServer({ authorizationHeader, render: metrics.render });
   kernelLink.start();
 
   const shutdown = (): void => {

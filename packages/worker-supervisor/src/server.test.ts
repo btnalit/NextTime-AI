@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
+import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
 import { createServer } from './server.js';
 import { createTaskService } from './task-service.js';
@@ -718,5 +719,111 @@ describe('GET /task/:workerRunId', () => {
     await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate` });
     const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
     expect(res.json()).toMatchObject({ status: 'terminated', reason: 'requested' });
+  });
+});
+
+// Leftover 87: correlation id in, into the Worker container, into the egress map, and metrics.
+describe('correlation id + /internal/metrics (leftover 87)', () => {
+  function setupWithMetrics() {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const egressMap = createEgressMapStore(config.egressSourceMapFile);
+    const metrics = createSupervisorMetrics();
+    const residentService = createResidentService({ config, docker, egressMap });
+    const taskService = createTaskService({
+      config,
+      docker,
+      egressMap,
+      onTaskFinished: (event) => metrics.recordTaskFinished(event),
+    });
+    const app = createServer({
+      residentService,
+      taskService,
+      config,
+      internalToken: TEST_INTERNAL_TOKEN,
+      metrics,
+    });
+    return { app, docker, config };
+  }
+
+  it('POST /task/spawn hands the inbound id to the Worker container (env + label) and the egress map', async () => {
+    const { app, docker, config } = setupWithMetrics();
+    const turnId = '7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: { ...AUTH, 'x-correlation-id': turnId },
+      payload: validTaskSpawnBody,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['x-correlation-id']).toBe(turnId);
+    const spec = docker.createCalls[0];
+    expect(spec?.env).toContain(`NEXTTIME_CORRELATION_ID=${turnId}`);
+    expect(spec?.labels['nexttime.correlation-id']).toBe(turnId);
+    const egress = JSON.parse(readFileSync(config.egressSourceMapFile as string, 'utf8'));
+    expect(Object.values(egress)).toEqual([
+      expect.objectContaining({ correlationId: turnId, sourceId: expect.any(String) }),
+    ]);
+  });
+
+  it('an invalid inbound id is replaced by a minted one — the container never sees the bad value', async () => {
+    const { app, docker } = setupWithMetrics();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: { ...AUTH, 'x-correlation-id': 'bad id; rm -rf' },
+      payload: validTaskSpawnBody,
+    });
+    expect(res.statusCode).toBe(200);
+    const minted = res.headers['x-correlation-id'] as string;
+    expect(minted).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    const envLine = docker.createCalls[0]?.env.find((e) =>
+      e.startsWith('NEXTTIME_CORRELATION_ID='),
+    );
+    expect(envLine).toBe(`NEXTTIME_CORRELATION_ID=${minted}`);
+  });
+
+  it('GET /internal/metrics is internal-token guarded', async () => {
+    const { app } = setupWithMetrics();
+    const res = await app.inject({ method: 'GET', url: '/internal/metrics' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('renders operation counters, latency and Worker exits after real calls', async () => {
+    const { app, docker } = setupWithMetrics();
+    await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: validTaskSpawnBody,
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: { taskId: TASK_ID },
+    });
+    const name = docker.createCalls[0]?.name as string;
+    docker.simulateExit(name, 1);
+    await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
+
+    const res = await app.inject({ method: 'GET', url: '/internal/metrics', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    const text = res.body;
+    expect(text).toContain(
+      'nexttime_supervisor_operations_total{operation="task_spawn",outcome="ok"} 1',
+    );
+    expect(text).toContain(
+      'nexttime_supervisor_operations_total{operation="task_spawn",outcome="rejected"} 1',
+    );
+    expect(text).toContain(
+      'nexttime_supervisor_operation_duration_seconds_count{operation="task_spawn"} 2',
+    );
+    expect(text).toContain('nexttime_supervisor_task_exits_total{state="failed"} 1');
   });
 });

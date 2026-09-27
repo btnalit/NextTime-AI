@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { runWithCorrelationId } from '../../substrate/correlation/index.js';
 import { TaskSupervisorClient, TaskSupervisorError } from './index.js';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -335,5 +336,47 @@ describe('TaskSupervisorClient', () => {
       expect(String(err)).not.toContain(AUTH_HEADER);
       expect(String(err)).not.toContain('the-internal-token');
     });
+  });
+});
+
+// Leftover 87: the correlation id rides a header (never the strict `/task/spawn` body).
+describe('TaskSupervisorClient — x-correlation-id', () => {
+  const spawnInput = {
+    taskId: 't1',
+    workerRunId: 'wr1',
+    workspaceId: 'ws1',
+    onBehalfOf: 'p1',
+    capabilityHandle: 'h',
+  };
+
+  function recordingFetch() {
+    const seen: Array<{ header: string | null; body: unknown }> = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        header: new Headers(init?.headers).get('x-correlation-id'),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      });
+      return jsonResponse(200, { containerId: 'c1', ip: '198.51.100.3' });
+    });
+    return { seen, fetchImpl };
+  }
+
+  it('spawn sends the explicit id as a header and keeps the body unchanged', async () => {
+    const { seen, fetchImpl } = recordingFetch();
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await client.spawn(spawnInput, { correlationId: 'turn-9999-0000' });
+    expect(seen[0]?.header).toBe('turn-9999-0000');
+    expect(seen[0]?.body).toEqual(spawnInput);
+  });
+
+  it('every call falls back to the current call context, and sends none outside one', async () => {
+    const { seen, fetchImpl } = recordingFetch();
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await runWithCorrelationId('ctx-id-12345', async () => {
+      await client.spawn(spawnInput);
+      await client.status('wr1').catch(() => {});
+    });
+    await client.spawn(spawnInput);
+    expect(seen.map((s) => s.header)).toEqual(['ctx-id-12345', 'ctx-id-12345', null]);
   });
 });

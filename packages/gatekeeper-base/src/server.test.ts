@@ -2,12 +2,18 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Operation } from '@nexttime/shared';
+import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConnectedAccountStore } from './credentials/index.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
-import { createGatekeeperServer } from './server.js';
+import {
+  type GateCallLogFields,
+  createGatekeeperServer,
+  gateRequestId,
+  registerGateRoutes,
+} from './server.js';
 
 const observeOp: Operation = {
   name: 'stock.get',
@@ -299,5 +305,81 @@ describe('gatekeeper protocol server', () => {
       expect(response.json().result).toEqual({ deleted: true });
       expect(await store.get('user-a')).toBeUndefined();
     });
+  });
+});
+
+// Leftover 87: the kernel's correlation id becomes the gate's request id (logged with each call),
+// and every protocol call is counted for the gate-token-guarded /internal/metrics.
+describe('correlation id + /internal/metrics (leftover 87)', () => {
+  it('GET /internal/metrics is gate-token guarded and counts calls by published operation and status', async () => {
+    app = buildApp(fakeTransport);
+    expect((await app.inject({ method: 'GET', url: '/internal/metrics' })).statusCode).toBe(401);
+
+    await app.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'made.up', params: {} },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/internal/metrics',
+      headers: AUTH_HEADERS,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('version=0.0.4');
+    expect(response.body).toContain(
+      'nexttime_gate_calls_total{gate="",route="observe",operation="stock.get",status="200"} 1',
+    );
+    // An operation this gate does not publish is never a label value.
+    expect(response.body).toContain(
+      'nexttime_gate_calls_total{gate="",route="observe",operation="",status="404"} 1',
+    );
+    expect(response.body).not.toContain('made.up');
+  });
+
+  it('adopts a valid x-correlation-id as the request id, replaces an invalid one, logs each call', async () => {
+    const gate = new GatekeeperBase({
+      manifest: [observeOp],
+      transport: fakeTransport,
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    const logged: Array<{ id: string; fields: GateCallLogFields }> = [];
+    const bare = Fastify({ genReqId: gateRequestId });
+    registerGateRoutes(bare, {
+      prefix: '',
+      resolve: () => ({ gate }),
+      logCall: (request, fields) => logged.push({ id: request.id, fields }),
+    });
+    await bare.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: { 'x-correlation-id': 'turn-abcd-0001' },
+      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+    });
+    await bare.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: { 'x-correlation-id': 'bad id!' },
+      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+    });
+    await bare.close();
+
+    expect(logged[0]?.id).toBe('turn-abcd-0001');
+    expect(logged[0]?.fields).toMatchObject({
+      gateRoute: 'observe',
+      operation: 'stock.get',
+      status: 200,
+    });
+    expect(logged[1]?.id).not.toBe('bad id!');
+    expect(logged[1]?.id).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
   });
 });

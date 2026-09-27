@@ -358,6 +358,42 @@ describe('POST /api/cap/:name — no database access when unauthenticated (unit)
   });
 });
 
+describe('POST /api/cap/:name — correlation id (leftover 87, unit)', () => {
+  it('adopts a valid inbound x-correlation-id and echoes it, even on a refused call', async () => {
+    const app = createServer({ pool: neverConnectPool });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/cap/get_object',
+      headers: { 'x-correlation-id': 'turn-7f0c7c1e-8a44' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['x-correlation-id']).toBe('turn-7f0c7c1e-8a44');
+  });
+
+  it('replaces an invalid inbound id with a minted one (never echoes the bad value)', async () => {
+    const app = createServer({ pool: neverConnectPool });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/cap/get_object',
+      headers: { 'x-correlation-id': 'not valid; drop table' },
+      payload: {},
+    });
+    const echoed = response.headers['x-correlation-id'];
+    expect(typeof echoed).toBe('string');
+    expect(echoed).not.toBe('not valid; drop table');
+    expect(echoed).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  });
+
+  it('mints a distinct id per request when none is sent', async () => {
+    const app = createServer({ pool: neverConnectPool });
+    const a = await app.inject({ method: 'POST', url: '/api/cap/get_object', payload: {} });
+    const b = await app.inject({ method: 'POST', url: '/api/cap/get_object', payload: {} });
+    expect(a.headers['x-correlation-id']).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(a.headers['x-correlation-id']).not.toBe(b.headers['x-correlation-id']);
+  });
+});
+
 const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -485,6 +521,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
       expect(audit.rows[0]).toMatchObject({ resource_type: 'quota', resource_id: null });
+    });
+
+    // Leftover 87: the dispatch audit row carries the call's correlation id — the caller's when it
+    // sent a valid one, else the one the kernel minted (and echoed in the response header).
+    it('audits the call with its correlation id (inbound, or minted and echoed)', async () => {
+      const app = createServer({ pool });
+      const readLatestSetQuotaPayload = async () =>
+        withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (client) =>
+            client.query<{ payload: Record<string, unknown> }>(
+              `select payload from audit_records
+               where workspace_id = $1 and action = 'set_quota' order by created_at desc limit 1`,
+              [workspaceId],
+            ),
+          { skipRoleSwitch: true },
+        );
+
+      const inbound = `turn-${randomUUID()}`;
+      const withHeader = await app.inject({
+        method: 'POST',
+        url: '/api/cap/set_quota',
+        headers: { authorization: `Bearer ${ownerApiKey}`, 'x-correlation-id': inbound },
+        payload: { key: 'task.max_depth', value: 3 },
+      });
+      expect(withHeader.statusCode).toBe(200);
+      expect(withHeader.headers['x-correlation-id']).toBe(inbound);
+      expect((await readLatestSetQuotaPayload()).rows[0]?.payload.correlationId).toBe(inbound);
+
+      const withoutHeader = await app.inject({
+        method: 'POST',
+        url: '/api/cap/set_quota',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: { key: 'task.max_depth', value: 2 },
+      });
+      expect(withoutHeader.statusCode).toBe(200);
+      const minted = withoutHeader.headers['x-correlation-id'];
+      expect(minted).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+      expect((await readLatestSetQuotaPayload()).rows[0]?.payload.correlationId).toBe(minted);
     });
 
     it('publish_procedure with a step referencing a nonexistent Operation → 400 invalid_step_reference (S2.14 acceptance)', async () => {

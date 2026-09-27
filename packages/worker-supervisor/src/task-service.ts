@@ -49,6 +49,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
+import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { DockerClient } from './docker-client.js';
@@ -60,6 +61,7 @@ import {
   taskWorkspacePaths,
 } from './host-paths.js';
 import {
+  TASK_CORRELATION_ID_LABEL,
   TASK_EGRESS_DENY_LABEL,
   TASK_ID_LABEL,
   TASK_ROLE_LABEL,
@@ -113,6 +115,20 @@ export interface TaskSpawnInput {
    *  WorkerRun's `SOURCE_MAP_FILE` entry (`registerEgress` below) and stamped onto the container
    *  as `TASK_EGRESS_DENY_LABEL` so `reconcile()` can restore it after a supervisor restart. */
   readonly egressDeny?: readonly string[];
+  /** Leftover 87: the delegating call's correlation id (`server.ts` passes the request's own id —
+   *  the kernel's `x-correlation-id`, or one minted here). Becomes the container's
+   *  `NEXTTIME_CORRELATION_ID` and label, and this run's egress source-map `correlationId`. */
+  readonly correlationId?: string;
+}
+
+/** One Worker container reaching a terminal state (leftover 87 metrics / log line). */
+export interface TaskFinishedEvent {
+  readonly workerRunId: string;
+  readonly taskId: string;
+  readonly state: Exclude<TaskState, 'running'>;
+  readonly exitCode: number | undefined;
+  readonly reason: string | undefined;
+  readonly correlationId: string | undefined;
 }
 
 export interface TaskSpawnOutcome {
@@ -147,6 +163,8 @@ interface RegistryEntry {
    *  read by `reconcileOne` so the subsequent "no longer running" observation is classified
    *  `terminated`, not misread by exit code as `failed`. */
   terminating: boolean;
+  /** Leftover 87 — see `TaskSpawnInput.correlationId`. */
+  correlationId: string | undefined;
 }
 
 export interface TaskServiceDeps {
@@ -154,6 +172,8 @@ export interface TaskServiceDeps {
   readonly docker: DockerClient;
   readonly egressMap: EgressMapStore;
   readonly now?: () => number;
+  /** Leftover 87: called once per Worker container reaching a terminal state (metrics). */
+  readonly onTaskFinished?: (event: TaskFinishedEvent) => void;
 }
 
 export interface TaskService {
@@ -209,6 +229,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     workerRunId: string,
     ip: string | undefined,
     egressDeny?: readonly string[],
+    correlationId?: string,
   ): void {
     if (!ip) return;
     try {
@@ -218,6 +239,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         // resident-service.ts's own registerEgress (keeps the common "no list" case byte-for-byte
         // identical to before this field existed).
         ...(egressDeny && egressDeny.length > 0 ? { deny: egressDeny } : {}),
+        // Leftover 87: same "omit when absent" convention.
+        ...(correlationId !== undefined ? { correlationId } : {}),
       });
     } catch (err) {
       console.error(
@@ -261,8 +284,24 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
     entry.finishedAt = new Date(now()).toISOString();
     entry.exitCode = state?.exitCode;
-    entry.state = entry.terminating ? 'terminated' : entry.exitCode === 0 ? 'exited' : 'failed';
+    const finalState: TaskFinishedEvent['state'] = entry.terminating
+      ? 'terminated'
+      : entry.exitCode === 0
+        ? 'exited'
+        : 'failed';
+    entry.state = finalState;
     unregisterEgress(workerRunId, entry.ip);
+    // Leftover 87: one line per finished Worker run, carrying the delegation's correlation id.
+    const finished: TaskFinishedEvent = {
+      workerRunId,
+      taskId: entry.taskId,
+      state: finalState,
+      exitCode: entry.exitCode,
+      reason: entry.reason,
+      correlationId: entry.correlationId,
+    };
+    console.log(JSON.stringify({ level: 'info', msg: 'task container finished', ...finished }));
+    deps.onTaskFinished?.(finished);
 
     // Best-effort: a removal failure must not stop this service from reporting the (already
     // accurate) terminal state — the container just lingers, visible to `docker ps -a`, until an
@@ -318,6 +357,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         skillsInline,
         timeoutSec,
         egressDeny,
+        correlationId,
       } = input;
       const paths = taskWorkspacePaths(config, taskId);
 
@@ -366,8 +406,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         model,
         networkName,
         egressDeny,
+        correlationId,
       });
       const created = await docker.createAndStart(spec);
+      // Only what the spec builder accepted (a valid id) is remembered and registered.
+      const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
 
       registry.set(workerRunId, {
         taskId,
@@ -381,8 +424,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         finishedAt: undefined,
         reason: undefined,
         terminating: false,
+        correlationId: acceptedCorrelationId,
       });
-      registerEgress(workspaceId, workerRunId, created.ip, egressDeny);
+      registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
 
       return { containerId: created.id, ip: created.ip };
     },
@@ -409,6 +453,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         const workerRunId = state.labels[WORKER_RUN_ID_LABEL];
         const workspaceId = state.labels[TASK_WORKSPACE_LABEL];
         if (!taskId || !workerRunId || !workspaceId || registry.has(workerRunId)) continue;
+        // A label is only as trustworthy as whoever set it: re-check the charset before this id
+        // reaches a log line or the egress source map again (it was validated at spawn).
+        const labelCorrelationId = state.labels[TASK_CORRELATION_ID_LABEL];
+        const restoredCorrelationId = isValidCorrelationId(labelCorrelationId)
+          ? labelCorrelationId
+          : undefined;
 
         registry.set(workerRunId, {
           taskId,
@@ -425,6 +475,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           finishedAt: state.running ? undefined : new Date(now()).toISOString(),
           reason: undefined,
           terminating: false,
+          correlationId: restoredCorrelationId,
         });
         // Restores the egress deny list this container was spawned with (TASK_EGRESS_DENY_LABEL)
         // — without this, a supervisor restart would re-register a still-running Task's source-map
@@ -436,6 +487,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
             workerRunId,
             state.ip,
             splitEgressDenyLabel(state.labels[TASK_EGRESS_DENY_LABEL]),
+            restoredCorrelationId,
           );
         }
       }

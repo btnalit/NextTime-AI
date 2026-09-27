@@ -274,6 +274,37 @@ describe('GraphPage', () => {
   });
 });
 
+describe('GraphPage — 类型抽屉 (C5/G1)', () => {
+  it('opens from the header action, deep-links via ?types=1, and closes back to a clean hash', async () => {
+    const { http } = renderPage();
+    await screen.findAllByTestId('graph-result-row');
+    expect(screen.queryByTestId('graph-types-drawer')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('graph-open-types'));
+    expect(window.location.hash).toBe('#/work/graph?types=1');
+    const drawer = await screen.findByTestId('graph-types-drawer');
+    const rows = await screen.findAllByTestId('graph-type-row');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(http.callsTo('list_types')).toContainEqual({});
+
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('graph-types-drawer')).toBeNull());
+    expect(window.location.hash).toBe('#/work/graph');
+  });
+
+  it('deep-links straight into a type’s detail via ?types=1&typeName=', async () => {
+    window.location.hash = '#/work/graph?types=1&typeName=Host';
+    const { http } = renderPage(
+      scriptedHttp({
+        get_type: () => ({ kind: 'object', name: 'Host', description: 'A machine' }),
+      }),
+    );
+    const body = await screen.findByTestId('graph-type-detail-body');
+    expect(body.textContent).toContain('Host');
+    expect(http.callsTo('get_type')).toEqual([{ typeName: 'Host' }]);
+  });
+});
+
 describe('GraphPage without list_types / list_conflicts', () => {
   it('degrades the type filter to a text input and shows no conflict marks', async () => {
     window.location.hash = '#/work/graph?objectId=h-1';

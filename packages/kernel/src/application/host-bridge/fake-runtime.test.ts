@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentRuntimeEvent, StartTurnInput } from './agent-runtime.js';
-import { FakeAgentRuntime } from './fake-runtime.js';
+import {
+  FAKE_DELEGATE_MARKER,
+  FakeAgentRuntime,
+  type FakeDelegateOutcome,
+} from './fake-runtime.js';
 
 /**
  * Unit tests (no IO) for FakeAgentRuntime — docs/development-tasks.md S1.4 deliverable 5:
@@ -144,5 +148,106 @@ describe('FakeAgentRuntime', () => {
     // inside the call itself.
     void runtime.startTurn(INPUT);
     expect(handle).not.toHaveBeenCalled();
+  });
+
+  // STATUS leftover 83 (CI invoke_worker path): `onDelegate` — see fake-runtime.ts's own doc
+  // comment. The composition-root wiring (packages/kernel/src/fake-invoke-worker.ts) is exercised
+  // for real by the e2e suite in CI; these are pure, no-IO unit tests of the marker/hook plumbing
+  // itself, same shape as every other test in this file.
+  describe('onDelegate (STATUS leftover 83)', () => {
+    const OUTCOME: FakeDelegateOutcome = {
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      status: 'completed',
+    };
+
+    it('a prompt without the marker still echoes even when onDelegate is wired', async () => {
+      const { sink, events } = collectingSink();
+      const onDelegate = vi.fn(async () => OUTCOME);
+      const runtime = new FakeAgentRuntime({ sink, onDelegate });
+
+      await runtime.startTurn(INPUT);
+      await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+
+      expect(onDelegate).not.toHaveBeenCalled();
+      expect(events.some((e) => e.type === 'message')).toBe(true);
+      const message = events.find((e) => e.type === 'message');
+      expect(message).toMatchObject({ content: { text: `echo: ${INPUT.prompt}` } });
+    });
+
+    it('a marker prompt with no onDelegate wired still echoes (opt-in, never a silent behavior change)', async () => {
+      const { sink, events } = collectingSink();
+      const runtime = new FakeAgentRuntime({ sink });
+      const input: StartTurnInput = { ...INPUT, prompt: `${FAKE_DELEGATE_MARKER} 委派` };
+
+      await runtime.startTurn(input);
+      await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+
+      expect(events.some((e) => e.type === 'toolCallStarted')).toBe(false);
+      const message = events.find((e) => e.type === 'message');
+      expect(message).toMatchObject({ content: { text: `echo: ${input.prompt}` } });
+    });
+
+    it('a marker prompt with onDelegate wired calls it once, emits a toolCall pair, and ends completed', async () => {
+      const { sink, events } = collectingSink();
+      const onDelegate = vi.fn(async () => OUTCOME);
+      const runtime = new FakeAgentRuntime({ sink, onDelegate });
+      const input: StartTurnInput = {
+        ...INPUT,
+        prompt: `${FAKE_DELEGATE_MARKER} 委派给 ops-runner`,
+      };
+
+      await runtime.startTurn(input);
+      await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+
+      expect(onDelegate).toHaveBeenCalledTimes(1);
+      expect(onDelegate).toHaveBeenCalledWith(input);
+      expect(events.some((e) => e.type === 'textDelta')).toBe(false);
+
+      const started = events.find((e) => e.type === 'toolCallStarted');
+      const ended = events.find((e) => e.type === 'toolCallEnded');
+      expect(started).toMatchObject({ type: 'toolCallStarted', name: 'invoke_worker' });
+      expect(ended).toMatchObject({ type: 'toolCallEnded', result: OUTCOME });
+      expect((ended as { toolCallId?: string })?.toolCallId).toBe(
+        (started as { toolCallId?: string })?.toolCallId,
+      );
+
+      const message = events.find((e) => e.type === 'message');
+      expect(message).toMatchObject({
+        role: 'assistant',
+        content: {
+          text: `invoke_worker: task ${OUTCOME.taskId} (worker run ${OUTCOME.workerRunId}) ended ${OUTCOME.status}.`,
+        },
+      });
+
+      const turnEnded = events.find((e) => e.type === 'turnEnded');
+      expect(turnEnded).toMatchObject({ status: 'completed' });
+      // Started before ended, ended before the message, message before turnEnded.
+      const types = events.map((e) => e.type);
+      expect(types.indexOf('toolCallStarted')).toBeLessThan(types.indexOf('toolCallEnded'));
+      expect(types.indexOf('toolCallEnded')).toBeLessThan(types.indexOf('message'));
+      expect(types.indexOf('message')).toBeLessThan(types.indexOf('turnEnded'));
+    });
+
+    it('onDelegate rejecting ends the turn failed with the error message, never throwing out of startTurn', async () => {
+      const { sink, events } = collectingSink();
+      const onDelegate = vi.fn(async () => {
+        throw new Error('no delegable WorkerDefinition');
+      });
+      const runtime = new FakeAgentRuntime({ sink, onDelegate });
+      const input: StartTurnInput = { ...INPUT, prompt: `${FAKE_DELEGATE_MARKER} 委派` };
+
+      await runtime.startTurn(input);
+      await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+
+      const ended = events.find((e) => e.type === 'toolCallEnded');
+      expect(ended).toMatchObject({ isError: true });
+      const message = events.find((e) => e.type === 'message');
+      expect(message).toMatchObject({
+        content: { text: 'invoke_worker failed: no delegable WorkerDefinition' },
+      });
+      const turnEnded = events.find((e) => e.type === 'turnEnded');
+      expect(turnEnded).toMatchObject({ status: 'failed' });
+    });
   });
 });

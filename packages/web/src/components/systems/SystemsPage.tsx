@@ -135,7 +135,12 @@ export function SystemsPage({
   const healthByGate = useMemo(() => {
     const map = new Map<
       string,
-      { readonly linked: boolean; readonly health?: string; readonly transportKind?: string }
+      {
+        readonly linked: boolean;
+        readonly health?: string;
+        readonly transportKind?: string;
+        readonly platformGateId?: string;
+      }
     >();
     for (const row of availableRows) {
       if (row.gatekeeperId) {
@@ -143,6 +148,9 @@ export function SystemsPage({
           linked: true,
           health: row.health,
           transportKind: row.transportKind,
+          // G3 (closing wave C6): the platform instance id — distinct from `row.gatekeeperId` —
+          // `RefreshOperationGovernanceConfirm` reads the announced manifest from.
+          platformGateId: row.gateId,
         });
       }
     }

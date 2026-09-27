@@ -77,9 +77,38 @@ export function usePrincipalNames(http: CapabilityCaller): ReadonlyMap<string, s
   return usePrincipalDirectory(http).names;
 }
 
-export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, string> {
+export interface GatekeeperDirectory {
+  /** `undefined` while loading (or on error/forbidden) — same "degrade to a fallback" shape every
+   *  caller here already had before this hook existed: `catalog/ProcedureEditorHost` and `catalog/
+   *  WorkerEditorHost` pass this straight through so their editors can still tell "still loading"
+   *  from "this workspace has none" (typed-id fallback vs. an empty picker) — see the module doc
+   *  comment on `list_gatekeepers` not needing `usePrincipalDirectory`'s own guarded-403/keyset-walk
+   *  treatment (it is member-readable and small enough not to paginate past page one in practice). */
+  readonly rows: readonly GatekeeperListRow[] | undefined;
+  readonly names: ReadonlyMap<string, string>;
+}
+
+/**
+ * `list_gatekeepers` as rows + names — the one shared read every page that used to open its own
+ * `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')` now calls instead (closing wave
+ * C6, G7 — `kernel-console-coverage-2026-09-26.md`'s "list_gatekeepers ×7" structural-debt note).
+ * `useCapabilityList`'s own per-`(name, params)` cache (`hooks/useCapability.ts`) already meant
+ * every one of those call sites shared the same underlying read (and the same push-driven
+ * invalidation) — this hook does not add new caching, it removes the seven copies of the same
+ * `state.status === 'ready' ? … : fallback` unwrap around it. `GrantGateForm`'s own gate *picker*
+ * (`list_gatekeepers` with a live `q` search term, `autoLoadAll`, and a `load` override that skips
+ * the read entirely when `lockedGatekeeper` is given) stays on its own `useCapabilityList` call —
+ * a different shape (per-keystroke params, not a static directory) this hook does not generalize
+ * to without either losing that behavior or growing an API only one caller would use.
+ */
+export function useGatekeeperDirectory(http: CapabilityCaller): GatekeeperDirectory {
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
-  return useRefNames(gatekeepers.state.status === 'ready' ? gatekeepers.state.data : undefined);
+  const rows = gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined;
+  return { rows, names: useRefNames(rows) };
+}
+
+export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, string> {
+  return useGatekeeperDirectory(http).names;
 }
 
 /** A `RefChip`-ready `name` for `id`: the resolved name, or `null` (bare-id fallback). */

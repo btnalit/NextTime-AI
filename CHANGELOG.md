@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.32.0](https://github.com/btnalit/NextTime-AI/compare/v0.31.0...v0.32.0) (2026-09-27)
+
+
+### Features
+
+* one correlation id per Turn / delegation across every service; /internal/metrics per service (leftover 87, closing wave C7) ([#361](https://github.com/btnalit/NextTime-AI/issues/361)) ([d173cc4](https://github.com/btnalit/NextTime-AI/commit/d173cc454eb8c97e255a376e468c989ac6e6bf68))
+* **web:** ontology types drawer on the graph page — browse types, check a candidate link (closing wave C5, gap G1 part 1) ([#362](https://github.com/btnalit/NextTime-AI/issues/362)) ([acd276a](https://github.com/btnalit/NextTime-AI/commit/acd276a0f960351893786184bcc43d89d34c4da3))
+
+
+### Bug Fixes
+
+* **scripts:** acceptance runs reclaim their own entry containers on every exit; partial leftovers reviewed (closing wave C9 part A) ([#357](https://github.com/btnalit/NextTime-AI/issues/357)) ([a366c4e](https://github.com/btnalit/NextTime-AI/commit/a366c4e2969f9a41a55ce72512c61c3d3c4fb90b))
+
 ## [0.31.0](https://github.com/btnalit/NextTime-AI/compare/v0.30.0...v0.31.0) (2026-09-27)
 
 

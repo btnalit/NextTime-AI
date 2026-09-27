@@ -2,11 +2,13 @@ import dns from 'node:dns';
 import http from 'node:http';
 import net from 'node:net';
 import type { Socket } from 'node:net';
+import { isValidCorrelationId } from '@nexttime/shared';
+import type { EgressMetrics } from './metrics.js';
 import type { CidrRange } from './net-utils.js';
 import { canonicalizeIpLiteral, normalizeAddress } from './net-utils.js';
 import type { PolicyConfig, PolicyDecision, Resolver, SourcePolicy } from './policy.js';
 import { decideEgress } from './policy.js';
-import type { EgressObservation } from './report.js';
+import type { EgressObservation, EgressObservationContext } from './report.js';
 
 /**
  * The forward proxy itself (design doc §7.9): plain `http://` request forwarding on the
@@ -16,7 +18,7 @@ import type { EgressObservation } from './report.js';
  */
 
 export interface EgressReporterLike {
-  record(observation: EgressObservation): void;
+  record(observation: EgressObservation, context?: EgressObservationContext): void;
 }
 
 export interface ProxyServerOptions {
@@ -35,6 +37,8 @@ export interface ProxyServerOptions {
   /** Injectable DNS resolver for tests. Defaults to a literal-IP shortcut + `dns.promises.lookup`. */
   resolveHost?: Resolver;
   reporter: EgressReporterLike;
+  /** Leftover 87: counted once per recorded observation; omitted (tests) → not counted. */
+  metrics?: EgressMetrics;
   maxTunnelsPerSource?: number;
   idleTimeoutMs?: number;
   connectTimeoutMs?: number;
@@ -113,7 +117,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     bytesUp: number;
     bytesDown: number;
   }): void {
-    options.reporter.record({
+    const observation: EgressObservation = {
       type: 'EgressObserved',
       sourceId: args.source?.sourceId ?? 'unknown',
       clientIp: args.clientIp,
@@ -125,7 +129,15 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       bytesUp: args.bytesUp,
       bytesDown: args.bytesDown,
       observedAt: new Date().toISOString(),
-    });
+    };
+    // Leftover 87: a Worker's egress lines carry its delegation's correlation id (from the source
+    // map entry worker-supervisor wrote) — log line only, never the kernel-bound observation.
+    const correlationId = args.source?.correlationId;
+    options.reporter.record(
+      observation,
+      isValidCorrelationId(correlationId) ? { correlationId } : {},
+    );
+    options.metrics?.recordObservation(observation);
   }
 
   const server = http.createServer();

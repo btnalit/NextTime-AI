@@ -10,6 +10,7 @@ import {
 } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { Button } from '../kit/button.js';
 import { PageHeader } from '../kit/page-header.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ConflictsPanel } from './ConflictsPanel.js';
@@ -18,6 +19,7 @@ import { GraphFreshnessNotice } from './GraphFreshnessNotice.js';
 import { GraphObjectsProvider } from './GraphObjectsContext.js';
 import { ObjectSearch } from './ObjectSearch.js';
 import { ObjectView } from './ObjectView.js';
+import { OntologyTypesDrawer } from './OntologyTypesDrawer.js';
 import { ProvenanceDrawer } from './ProvenanceDrawer.js';
 import { useGraphQuery } from './useGraphQuery.js';
 
@@ -103,6 +105,16 @@ export function GraphPage({ http }: GraphPageProps) {
           '浏览对象、展开邻居、追溯事实来源；颜色表示新鲜度。',
           'Browse Objects, expand neighbours, trace a Fact’s provenance; colour is freshness.',
         )}
+        actions={
+          <Button
+            variant="secondary"
+            size="s"
+            onClick={() => setQuery({ ...query, types: '1' })}
+            data-testid="graph-open-types"
+          >
+            {t('类型', 'Types')}
+          </Button>
+        }
       />
       <GraphFreshnessNotice http={http} />
       <GraphObjectsProvider http={http} identityKeys={identityKeys} baseQuery={query}>
@@ -166,6 +178,19 @@ export function GraphPage({ http }: GraphPageProps) {
           onClose={closeProvenance}
         />
       </GraphObjectsProvider>
+      <OntologyTypesDrawer
+        http={http}
+        open={query.types === '1'}
+        selectedTypeName={query.typeName}
+        onOpenChange={(next) =>
+          setQuery({
+            ...query,
+            types: next ? '1' : undefined,
+            typeName: next ? query.typeName : undefined,
+          })
+        }
+        onSelectType={(name) => setQuery({ ...query, types: '1', typeName: name })}
+      />
     </div>
   );
 }

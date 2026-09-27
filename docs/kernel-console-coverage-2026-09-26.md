@@ -50,6 +50,18 @@ files modified.
    `publish_ontology_version` have zero console callers. An owner/builder cannot review a type,
    dry-run a change, or publish an ontology version from the console despite the capability, role
    and mode being fully modeled in `packages/shared`. Ontology changes today are API/CLI-only.
+   **2026-09-27 (G1, closing wave C5, `feat/ontology-ui`):** `get_type`/`validate` now have a
+   console caller — the graph page's new 「类型 Types」 drawer (`graph/OntologyTypesDrawer.tsx`,
+   `list_types`/`get_type` for a searchable, kind-filterable browse + detail view; `validate`'s own
+   semantics is a candidate-link domain/range check, not a change dry-run, so its console surface
+   is a small "校验一个候选关系" tool under a LinkType's own detail, not a proposal-review step).
+   `propose_ontology_change`/`publish_ontology_version` are **not** covered — there is no kernel
+   capability that lists or reads a pending `ontology_versions` draft row (id/version/status/
+   proposedBy) by any filter (`get_type`/`list_types` return the merged current-state type view,
+   with no such fields, scoped to published rows plus only the caller's own drafts); building a
+   review queue would need a new kernel read capability (e.g. a `list_ontology_versions`/
+   `get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list
+   pattern) — a separate decision, out of scope for a console-only PR.
 2. **No manual fact-correction UI beyond conflict resolution** — `assert_fact`, `supersede_fact`,
    `invalidate_fact` are unused. The only human-facing fact actions are `verify_fact` (mark
    verified) and `resolve_conflict` (pick a winner among existing candidates); there is no way for
@@ -105,7 +117,7 @@ platform-human-only by design).
 | `update_user` | platform | human | W | platform/UserDetailPanel.tsx | - |  |
 | `set_user_status` | platform | human | W | platform/UserDetailPanel.tsx | - |  |
 | `reset_user_password` | platform | human | W | platform/UserDetailPanel.tsx | - |  |
-| `list_user_memberships` | platform | human | R | (none) | - | No console caller found. UserMembershipsPanel.tsx renders per-user membership rows but they arrive embedded in list_users/UserDetailPanel props, not via a direct list_user_memberships call -- capability looks unused end-to-end from web. |
+| `list_user_memberships` | platform | human | R | (none) | - | G4 reviewed 2026-09-27 (closing wave C6): confirmed superseded, not fixed — `UserMembershipsPanel.tsx`'s data source is `UserWire.memberships`, embedded by `list_users`/`get_user`'s own `toWireUser` (`platform-handlers.ts`), built from the exact same `toWireMembership` rows this capability would return; genuinely nothing left for a dedicated per-user call to do from the console. Kernel capability left alone (a wire-contract deletion decision, out of scope here). Was: no console caller found; UserMembershipsPanel.tsx renders per-user membership rows but they arrive embedded in list_users/UserDetailPanel props, not via a direct list_user_memberships call -- capability looks unused end-to-end from web. |
 | `add_membership` | platform | human | W | platform/UserMembershipsPanel.tsx; platform/WorkspaceDetailPanel.tsx | - |  |
 | `set_membership_role` | platform | human | W | platform/UserMembershipsPanel.tsx; platform/WorkspaceDetailPanel.tsx | - |  |
 | `remove_membership` | platform | human | W | platform/UserMembershipsPanel.tsx | - |  |
@@ -127,15 +139,15 @@ platform-human-only by design).
 | `list_connectors` | platform | human | R | connect/ConnectSystemLauncher.tsx; PlatformIntegrationsPage.tsx | - |  |
 | `set_connector_mode` | platform | human | W | connect/ConnectSystemLauncher.tsx (useConnectorDenyList/useConnectorMode) | - |  |
 | `list_gate_instances` | platform | human | R | connect/ConnectSystemLauncher.tsx; integrations/useGateInstancesPanel.ts; integrations/useConnectorDenyList.ts | - |  |
-| `get_gate_instance` | platform | human | R | (none) | - | No console caller. Every gate-instance detail view (incl. the #/platform/integrations deep link) resolves the row by filtering the already-loaded list_gate_instances/list_available_gate_instances result client-side; the dedicated single-object getter is dead from the console's perspective. |
+| `get_gate_instance` | platform | human | R | platform/integrations/useGateInstancesPanel.ts (deep-link fallback) | - | G4 closed 2026-09-27 (closing wave C6): `useGateInstancesPanel.ts`'s `#/platform/integrations/<gateId>` deep link now falls back to this getter once `list_gate_instances`'s (non-`autoLoadAll`) first page has loaded and still does not have the row — the ordinary in-page row click still resolves from the already-loaded list, never calling this. Was: no console caller. Every gate-instance detail view (incl. the #/platform/integrations deep link) resolves the row by filtering the already-loaded list_gate_instances/list_available_gate_instances result client-side; the dedicated single-object getter is dead from the console's perspective. |
 | `update_gate_instance` | platform | human | W | connect/ConnectSystemLauncher.tsx; platform/GateInstanceDetailPanel.tsx | - |  |
 | `test_gate_instance` | platform | human | R | connect/ConnectSystemLauncher.tsx; platform/GateInstanceDetailPanel.tsx | - |  |
 | `list_external_runtimes` | platform | human | R | PlatformIntegrationsPage.tsx | - |  |
 | `revoke_external_runtime` | platform | human | W | integrations/useRevokeRuntime.ts | - |  |
 | `list_available_gate_instances` | connection | human | R | AvailableGateInstancesSection.tsx; connect/ConnectSystemLauncher.tsx; systems/SystemsPage.tsx; platform/GateInstanceDetailPanel.tsx | - |  |
 | `enable_gate_instance` | connection | human | W | connect/EnableGateConfirm.tsx | - |  |
-| `preview_gate_instance_enable` | connection | human | R | connect/EnableGateConfirm.tsx | - |  |
-| `refresh_operation_governance` | connection | human | W | (none) | - | No console caller. Registered as 'the write half of preview_gate_instance_enable's diff' (S8 W3-K1) but nothing in web/src invokes it -- looks like an unfinished wire-up (leftover 79 follow-up may be incomplete). |
+| `preview_gate_instance_enable` | connection | human | R | connect/EnableGateConfirm.tsx; connect/RefreshOperationGovernanceConfirm.tsx | - |  |
+| `refresh_operation_governance` | connection | human | W | connect/RefreshOperationGovernanceConfirm.tsx (systems/SystemAccessCard.tsx's detail drawer) | - | G3 closed 2026-09-27 (closing wave C6, leftover 79's exit): the drawer's 「与门公告对齐 / Align with the gate's announcement」 action — `preview_gate_instance_enable` loads the diff, a `kit/confirm` `tier="medium"` lists exactly which already-deployed Operations' mode/blastRadius/autoApprovable disagree with the gate's current manifest (not `irreversible`: the write only re-syncs governance metadata on an already-published, already-granted Operation — it grants no Handle anything new and is trivially reversible), then this write, then the caller reloads readiness/operations. Was: no console caller. Registered as 'the write half of preview_gate_instance_enable's diff' (S8 W3-K1) but nothing in web/src invokes it -- looks like an unfinished wire-up (leftover 79 follow-up may be incomplete). |
 | `issue_service_handle` | connection | human | W | members/IssueServiceHandleSection.tsx | - |  |
 | `create_gate_instance` | platform | human | W | platform/CreateGateInstanceForm.tsx | - |  |
 | `delete_gate_instance` | platform | human | W | platform/GateInstanceDetailPanel.tsx | - |  |
@@ -225,11 +237,11 @@ platform-human-only by design).
 | `request_connection` | connection | handle | W | RequestConnectionForm.tsx | entry |  |
 | `observe_operation` | gate | handle | R | issue_handle scope picker only (lib/entry-ceiling.ts) — no direct call | entry | No direct console http.call. Entry-agent tool (projected per-gate as <gate>.<op>) + issue_handle scope-picker option only. |
 | `create_connection` | connection | human | W | CompleteConnectionForm.tsx | - |  |
-| `connect_gatekeeper` | connection | human | W | (none) | - | No console caller (only appears in a permission test and a doc comment describing a planned step 'grant a member (connect_gatekeeper)'). Looks like an unfinished/superseded step in the systems-connection flow. |
+| `connect_gatekeeper` | connection | human | W | (none) | - | G5 reviewed 2026-09-27 (closing wave C6): confirmed superseded, not fixed — `connectGatekeeperHandler` (`connection-handlers.ts`) → `connectGatekeeper` (`governance/connections/service.ts`) only pre-validates the Gatekeeper exists, then calls `grantCapability` with `resourceType: 'gatekeeper', resourceId: gatekeeperId` — the exact same domain call `grant_capability` makes, which `systems/SystemAccessCard.tsx`'s 授权 button (`access/GrantGateDrawer` → `GrantGateForm`) already uses for exactly this. `connect/ConnectSystemLauncher.tsx`'s doc comment (the one place that named this as a still-planned step) corrected to point at the real flow. Kernel capability left alone (a wire-contract deletion decision, out of scope here). Was: no console caller (only appears in a permission test and a doc comment describing a planned step 'grant a member (connect_gatekeeper)'). Looks like an unfinished/superseded step in the systems-connection flow. |
 | `list_connection_requests` | connection | human | R | systems/SystemsPage.tsx | - |  |
 | `cancel_connection_request` | connection | human | W | systems/SystemsPage.tsx | - |  |
 | `publish_manifest` | connection | human | W | systems/SystemAccessCard.tsx; OnboardingWizard.tsx; systems/SystemsPage.tsx | - |  |
-| `list_gatekeepers` | connection | human | R | account/IssueOwnHandleSection.tsx; AgentProfilePage.tsx; approvals/useDirectoryNames.tsx; ModelsPage.tsx; catalog/ProcedureEditorHost.tsx; catalog/WorkerEditorHost.tsx; access/GrantGateForm.tsx | - |  |
+| `list_gatekeepers` | connection | human | R | approvals/useDirectoryNames.tsx (`useGatekeeperDirectory`/`useGatekeeperNames`, consumed by account/IssueOwnHandleSection.tsx, AgentProfilePage.tsx, ModelsPage.tsx, catalog/ProcedureEditorHost.tsx, catalog/WorkerEditorHost.tsx); access/GrantGateForm.tsx (its own live-search picker, kept separate) | - | G7 closed 2026-09-27 (closing wave C6): the six static name/row-resolution call sites this row used to list separately now share one hook (`useGatekeeperDirectory`, `useDirectoryNames.tsx`) instead of each opening its own `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`; behaviour unchanged (same `useCapabilityList` under it, same cache-by-key). `access/GrantGateForm.tsx` was deliberately **not** migrated — its call takes a live `q` search term, `autoLoadAll`, and a `load` override that skips the read entirely when `lockedGatekeeper` is given (a searchable picker, not a static directory); folding it into the shared hook would either lose that behavior or grow the hook's API for one caller. |
 | `get_gatekeeper` | connection | human | R | GatekeeperDetailDrawer.tsx | - |  |
 | `list_operations` | connection | human | R | CatalogPage.tsx; systems/SystemsPage.tsx; access/GrantGateForm.tsx | - |  |
 | `get_operation_stats` | connection | human | R | CatalogPage.tsx | - |  |
@@ -245,16 +257,16 @@ platform-human-only by design).
 | `set_agent_profile` | agent_profile | human | W | AgentProfileForm.tsx; chat/ModelSwitcher.tsx | - |  |
 | `get_agent_policy` | agent_profile | human | R | AgentProfilePage.tsx; chat/ModelSwitcher.tsx; ModelsPage.tsx | - |  |
 | `set_agent_policy` | agent_profile | human | W | AgentPolicyForm.tsx (ModelsPage) | - |  |
-| `get_type` | ontology | handle | R | (none) | - | No console caller anywhere. GraphPage's type filter uses list_types only; there is no single-type detail view and no ontology admin page at all. |
-| `list_types` | ontology | handle | R | graph/GraphPage.tsx | - |  |
-| `validate` | ontology | handle | R | (none) | - | No console caller anywhere. No dry-run/validate UI for ontology changes. |
-| `propose_ontology_change` | ontology | handle | W | (none) | entry | No console caller anywhere. Zero ontology-authoring UI exists in the console despite the capability, minRole and mode being fully modeled in packages/shared. |
-| `publish_ontology_version` | ontology | human | W | (none) | - | No console caller anywhere. Same gap -- no ontology publish UI; likely CLI/API-only today. |
+| `get_type` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: the graph page's 「类型 Types」 drawer re-reads a selected row's canonical definition. Was: no console caller anywhere; GraphPage's type filter used list_types only, no single-type detail view. |
+| `list_types` | ontology | handle | R | graph/GraphPage.tsx; graph/OntologyTypesDrawer.tsx | - | The drawer's own list view (all kinds, unfiltered params) is a second, independent caller alongside the existing object-type filter. |
+| `validate` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: a LinkType's detail view offers "校验一个候选关系" — one candidate sourceType/targetType pair against that LinkType's own declared signatures (I2). Its real semantics is a link domain/range check, not a dry-run of a proposed ontology *change*; no console surface exists for the latter (see propose_ontology_change/publish_ontology_version below). Was: no console caller anywhere. |
+| `propose_ontology_change` | ontology | handle | W | (none) | entry | Still no console caller. **Investigated 2026-09-27 (G1, wave C5) and deliberately left undone**: there is no kernel capability that lists or reads a pending `ontology_versions` draft row (id/version/status/proposedBy) by any filter — `get_type`/`list_types` return the merged current-state type view only, scoped to published rows plus the caller's own drafts, with no id/version/proposedBy fields at all. A "review this proposal" UI needs a new read capability first (a `list_ontology_versions`/`get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list pattern) — a separate decision, out of scope for a console-only PR. |
+| `publish_ontology_version` | ontology | human | W | (none) | - | Still no console caller — same gap and same 2026-09-27 investigation as propose_ontology_change above. If a review UI is ever built here, `publish_ontology_version` is a one-way `draft -> published` transition (I12: the DB trigger blocks any further update to `definition` once published, and no unpublish/deprecate capability exists for `ontology_versions`) — its confirm should be `tier="irreversible"`, not `medium`. |
 | `export_prov` | audit | human | R | audit/ExplainSection.tsx (AuditPage) | - |  |
 | `register_source` | ingest | handle | W | (none) | - | No console caller. Ingest is pipeline/collector-only (API key), which is plausibly correct -- flagged for confirmation rather than as a clear defect. |
 | `submit_observations` | ingest | handle | W | (none) | - | No console caller. Same as register_source -- plausibly pipeline-only by design. |
 | `runtime_inventory` | platform | human | R | PlatformResiduePage.tsx; PlatformRuntimePage.tsx | - |  |
-| `list_runtime_images` | platform | human | R | (none) | - | No console caller. PlatformRuntimePage.tsx's own doc comment confirms runtime_inventory's result already carries 'the full image inventory' -- this capability duplicates data already returned by runtime_inventory and is dead from the console's side. |
+| `list_runtime_images` | platform | human | R | (none) | - | G4 reviewed 2026-09-27 (closing wave C6): confirmed superseded, not fixed — `runtime_inventory` (the same read `PlatformRuntimePage.tsx` already loads) embeds the identical image inventory; there is nothing left for this capability to add on the console side. Kernel capability left alone (a wire-contract deletion decision, out of scope here). Was: no console caller. PlatformRuntimePage.tsx's own doc comment confirms runtime_inventory's result already carries 'the full image inventory' -- this capability duplicates data already returned by runtime_inventory and is dead from the console's side. |
 | `set_active_runtime_image` | platform | human | W | PlatformRuntimePage.tsx | - |  |
 | `rollback_runtime_image` | platform | human | W | PlatformRuntimePage.tsx | - |  |
 | `roll_entry_containers` | platform | human | W | PlatformRuntimePage.tsx | - | Has a console caller (PlatformRuntimePage.tsx) but NO confirm/impact dialog -- unlike its sibling actions on the same page (set_active_runtime_image, rollback_runtime_image), which both use a tier='medium' Confirm with descriptive impact text. This one fires immediately on click and force-rebuilds live entry containers (optionally platform-wide). |
@@ -352,6 +364,11 @@ component or its direct children found during this pass — shared sub-component
   `packages/shared/src/capabilities.ts` L~ (group `ontology`) fully models these (role, mode,
   paramsSchema) but no page/component in `packages/web/src` calls any of them. `GraphPage.tsx`
   only reads `list_types` for its filter. Ontology governance is console-invisible today.
+  **2026-09-27 (G1, closing wave C5):** `get_type`/`validate` now have a console caller
+  (`graph/OntologyTypesDrawer.tsx` — see the Top-10 list above for the exact shape).
+  `propose_ontology_change`/`publish_ontology_version` still have none — no kernel capability
+  lists or reads a pending `ontology_versions` draft row by any filter, so there is nothing to
+  build a review queue against without first adding one (out of scope here).
 - `assert_fact`, `supersede_fact`, `invalidate_fact` — `packages/kernel/src/application/gateway/
   fact-handlers.ts`'s three write handlers have no console caller; only `verify_fact`
   (`graph/FactRow.tsx`) and `resolve_conflict` (`graph/ConflictsPanel.tsx`) exist as human fact
@@ -361,22 +378,42 @@ component or its direct children found during this pass — shared sub-component
   附人工确认. `assert_fact` (a brand-new Fact by hand) stays without a console caller.
 - `connect_gatekeeper` — `packages/kernel/src/application/gateway/connection-handlers.ts`; no
   caller, referenced only as a still-to-build step in `connect/ConnectSystemLauncher.tsx`'s own
-  doc comment.
+  doc comment. **2026-09-27 (G5, closing wave C6):** confirmed superseded, not fixed —
+  `connectGatekeeperHandler` → `connectGatekeeper` (`governance/connections/service.ts`) only
+  pre-validates the Gatekeeper exists and then calls the exact same `grantCapability` domain
+  function `grant_capability` calls; `systems/SystemAccessCard.tsx`'s 授权 button already grants
+  through `grant_capability`. `ConnectSystemLauncher.tsx`'s doc comment corrected to stop naming
+  this as a still-planned step. Kernel capability left alone (a wire-contract deletion decision,
+  out of scope here).
 - `refresh_operation_governance` — `packages/kernel/src/application/gateway/platform-gates-
   handlers.ts` (per registry comment); the read half `preview_gate_instance_enable` is wired
-  (`connect/EnableGateConfirm.tsx`), the write half is not.
+  (`connect/EnableGateConfirm.tsx`), the write half is not. **2026-09-27 (G3, closing wave C6,
+  leftover 79's exit):** now has a caller — `connect/RefreshOperationGovernanceConfirm.tsx`, opened
+  from `systems/SystemAccessCard.tsx`'s detail drawer ("与门公告对齐"). Preview → `kit/confirm`
+  `tier="medium"` with a per-Operation diff (not `irreversible` — the write only re-syncs
+  governance metadata on an already-granted Operation, granting no Handle anything new) → write →
+  caller reloads readiness/operations.
 - `list_user_memberships` — `packages/kernel/src/application/gateway/members-handlers.ts`; no
   direct caller found, even though `platform/UserMembershipsPanel.tsx` renders exactly this kind
   of row (worth checking whether that panel's data actually comes from `list_users`/a nested field
-  rather than this capability, or whether it's simply dead).
+  rather than this capability, or whether it's simply dead). **2026-09-27 (G4, closing wave C6):**
+  confirmed — `UserMembershipsPanel.tsx`'s `user.memberships` prop is `UserWire.memberships`,
+  populated by `list_users`/`get_user`'s own `toWireUser` from the identical `toWireMembership` rows
+  this capability would return. Genuinely dead from the console's side; kernel capability left
+  alone (a wire-contract deletion decision, out of scope here).
 
 ### B. Kernel capability that duplicates or is superseded by another read model
 - `list_runtime_images` — duplicates `runtime_inventory`'s embedded image inventory
-  (`PlatformRuntimePage.tsx` doc comment says so explicitly). No caller.
+  (`PlatformRuntimePage.tsx` doc comment says so explicitly). No caller. **2026-09-27 (G4, closing
+  wave C6):** reviewed, confirmed genuinely redundant — no console fix; kernel capability left
+  alone (a wire-contract deletion decision, out of scope here).
 - `get_gate_instance` — duplicates client-side filtering of `list_gate_instances`/
   `list_available_gate_instances` everywhere a single instance is needed, including the
   `#/platform/integrations?gateId=` deep link (`platform/PlatformIntegrationsPage.tsx` →
-  `integrations/useGateInstancesPanel.ts`). No caller.
+  `integrations/useGateInstancesPanel.ts`). No caller. **2026-09-27 (G4, closing wave C6):** now
+  used — `useGateInstancesPanel.ts`'s deep link falls back to this getter once `list_gate_instances`
+  (no `autoLoadAll`, first page only) has loaded and still does not have the row; the ordinary
+  in-page click still resolves from the loaded list, never calling this.
 - (Negative finding, for contrast) `execution_readiness` is the one place this pattern was
   *already fixed*: `systems/useMemberReachability.ts` and `components/readiness/readiness-
   copy.ts` both consume the kernel's own read model rather than recomputing reachability
@@ -406,6 +443,13 @@ component or its direct children found during this pass — shared sub-component
   nav groups (使用/我的智能体, 治理/成员+目录+模型, 治理/系统与授权) purely as a name-resolution
   helper — not a mismatch, but a sign this should probably be one shared hook rather than 7
   independent `useCapabilityList` call sites (a refactor-plan candidate, not a coverage gap).
+  **2026-09-27 (G7, closing wave C6):** done for six of the seven — `useGatekeeperDirectory`
+  (`approvals/useDirectoryNames.tsx`) is now the one shared hook `account/IssueOwnHandleSection.tsx`,
+  `AgentProfilePage.tsx`, `ModelsPage.tsx`, `catalog/ProcedureEditorHost.tsx`, and `catalog/
+  WorkerEditorHost.tsx` call instead of their own `useCapabilityList<GatekeeperListRow>`; behaviour
+  unchanged. `access/GrantGateForm.tsx` stays on its own call deliberately — a live `q`-search
+  picker with `autoLoadAll` and a `load` override for the locked case, not a static directory; not
+  a mismatch this hook should absorb.
 
 ### E. Legacy UI migration (components/ui/* vs components/kit/*)
 Per `scripts/guards/legacy-ui-importers.json` (the shrink-only allowlist `scripts/guards/

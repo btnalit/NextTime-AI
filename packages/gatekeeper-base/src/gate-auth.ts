@@ -87,7 +87,8 @@ export function createGateAuthGuard(token: string): GateAuthGuard {
 
 /**
  * Installs the guard as a root-level `onRequest` hook on `app`, covering every route whose
- * matched pattern starts with `/gate/`. The 401 body matches this package's own envelope
+ * matched pattern starts with `/gate/` or (leftover 87, `GET /internal/metrics`) `/internal/`. The
+ * 401 body matches this package's own envelope
  * (`server.ts`'s `{ok:false,error:{code,message}}`) and never echoes the presented or expected
  * token — not in the body, not in a log line (this module logs nothing at all).
  */
@@ -95,7 +96,11 @@ export function registerGateAuthGuard(app: FastifyInstance, token: string): void
   const guard = createGateAuthGuard(token);
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     const route = request.routeOptions.url;
-    if (typeof route !== 'string' || !route.startsWith('/gate/')) return;
+    if (
+      typeof route !== 'string' ||
+      !(route.startsWith('/gate/') || route.startsWith('/internal/'))
+    )
+      return;
     if (guard.evaluate(request)) return;
     reply.code(401);
     reply.header('www-authenticate', 'Bearer');

@@ -1,6 +1,7 @@
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
+import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { ensureWorkerAgentPrincipal } from './agent-principal.js';
 import {
@@ -169,21 +170,31 @@ export async function spawnWorkerRun(
     },
   );
 
+  // Leftover 87: the id this WorkerRun inherits (worker-supervisor puts it into the container's
+  // `NEXTTIME_CORRELATION_ID`, the Worker's platform extension sends it on every kernel call): the
+  // id of the call doing this spawn — for an entry agent's `invoke_worker` that is its Turn id, for
+  // a Worker's own `invoke_worker` the id it inherited — else, on the reaper's requeue path (no
+  // inbound call), the Task's generating Turn (`created_by_activity_id`). Never placed in the Handle.
+  const correlationId = currentCorrelationId() ?? input.task.createdByActivityId ?? undefined;
+
   let spawnOutcome: { containerId: string; ip: string | undefined };
   try {
-    spawnOutcome = await deps.supervisorClient.spawn({
-      taskId: input.task.id,
-      workerRunId: created.workerRun.id,
-      workspaceId,
-      onBehalfOf: input.onBehalfOf,
-      capabilityHandle: created.handleToken,
-      model: input.model,
-      skillsInline: input.skillsInline,
-      timeoutSec: durationLimitSec,
-      egressDeny: input.egressDeny,
-      systemPrompt: input.systemPrompt,
-      image: input.image,
-    });
+    spawnOutcome = await deps.supervisorClient.spawn(
+      {
+        taskId: input.task.id,
+        workerRunId: created.workerRun.id,
+        workspaceId,
+        onBehalfOf: input.onBehalfOf,
+        capabilityHandle: created.handleToken,
+        model: input.model,
+        skillsInline: input.skillsInline,
+        timeoutSec: durationLimitSec,
+        egressDeny: input.egressDeny,
+        systemPrompt: input.systemPrompt,
+        image: input.image,
+      },
+      { correlationId },
+    );
   } catch (err) {
     await withWorkspace(
       deps.pool,

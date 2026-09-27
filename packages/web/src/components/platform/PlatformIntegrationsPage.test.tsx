@@ -182,6 +182,26 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() => expect(onSelectGate).toHaveBeenCalledWith(null));
   });
 
+  // G4 (kernel-console-coverage-2026-09-26, closing wave C6): `list_gate_instances` has no
+  // `autoLoadAll` — a deep link naming an instance outside the loaded page used to leave the
+  // drawer silently closed forever. `useGateInstancesPanel` now falls back to `get_gate_instance`
+  // once the list has finished loading and still does not have the row.
+  it('a deep-linked selectedGateId outside the loaded list page falls back to get_gate_instance', async () => {
+    const http = scriptedHttp({
+      // The deep-linked instance is not in the (single, non-`autoLoadAll`) loaded page.
+      list_gate_instances: () => ({ items: [gateInstance({ gateId: 'gate-elsewhere' })] }),
+      get_gate_instance: (params) => {
+        expect(params).toEqual({ gateId: 'gate-1' });
+        return gateInstance({ gateId: 'gate-1', displayName: 'Docker prod (page 2)' });
+      },
+    });
+    renderPage(http, { selectedGateId: 'gate-1' });
+    const drawer = await screen.findByTestId('gate-instance-drawer');
+    expect(within(drawer).getByTestId('gate-instance-detail')).toBeTruthy();
+    expect(drawer.textContent).toContain('Docker prod (page 2)');
+    expect(http.calls.some((call) => call.name === 'get_gate_instance')).toBe(true);
+  });
+
   // B7 in the platform detail: an `enabled · ok` instance offers 禁用, never 启用.
   it('B7: an enabled instance’s detail shows 禁用 Disable and its health chip, not a 启用', async () => {
     const http = scriptedHttp({

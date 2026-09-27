@@ -29,6 +29,7 @@
  * explicitly (a `SOME_API_KEY` set on the test process must never appear in the built env).
  */
 
+import { CORRELATION_ID_ENV, isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import { hostModelsJsonPath, taskWorkspacePaths } from './host-paths.js';
@@ -51,6 +52,12 @@ export const TASK_WORKSPACE_LABEL = 'nexttime.workspace-id';
  *  re-registered by `reap()`/`status()` otherwise). */
 export { EGRESS_DENY_LABEL as TASK_EGRESS_DENY_LABEL };
 
+/** Leftover 87: the correlation id this Worker run inherited (its delegating call's id), stamped
+ *  on the container so `reconcile()` can restore it into the egress source map after a supervisor
+ *  restart and an operator can find a delegation's containers with
+ *  `docker ps --filter label=nexttime.correlation-id=<id>`. Only set when an id was given. */
+export const TASK_CORRELATION_ID_LABEL = 'nexttime.correlation-id';
+
 export function taskContainerName(workerRunId: string): string {
   return `nexttime-task-${workerRunId}`;
 }
@@ -72,6 +79,10 @@ export interface BuildTaskSpawnSpecInput {
    *  `TASK_EGRESS_DENY_LABEL` (comma-joined) — see that label's own doc comment. `undefined`/empty
    *  stamps an empty label. */
   readonly egressDeny?: readonly string[];
+  /** Leftover 87: the delegating call's correlation id — becomes the container's
+   *  `NEXTTIME_CORRELATION_ID` (the platform extension's worker mode sends it on every kernel
+   *  call) and `TASK_CORRELATION_ID_LABEL`. Ignored unless valid (`@nexttime/shared`). */
+  readonly correlationId?: string;
 }
 
 export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpec {
@@ -94,6 +105,8 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
     `https_proxy=${config.httpProxyForWorkers}`,
     `no_proxy=${config.noProxyForWorkers}`,
   ];
+  const correlationId = isValidCorrelationId(input.correlationId) ? input.correlationId : undefined;
+  if (correlationId !== undefined) env.push(`${CORRELATION_ID_ENV}=${correlationId}`);
 
   const binds: string[] = [
     `${paths.hostWorkspaceDir}:/workspace`,
@@ -112,6 +125,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
       [WORKER_RUN_ID_LABEL]: input.workerRunId,
       [TASK_WORKSPACE_LABEL]: input.workspaceId,
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
+      ...(correlationId !== undefined ? { [TASK_CORRELATION_ID_LABEL]: correlationId } : {}),
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,
