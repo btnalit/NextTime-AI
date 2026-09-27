@@ -189,6 +189,24 @@ const SEMANTIC_TEXT_TOKENS = [
 ] as const;
 const NEUTRAL_SURFACES_FOR_SEMANTIC_TEXT = ['--bg', '--surface-1'] as const;
 
+const SIDEBAR_TEXT_TOKENS = [
+  '--sidebar-text-strong',
+  '--sidebar-text',
+  '--sidebar-text-2',
+  '--sidebar-text-3',
+  '--sidebar-accent',
+] as const;
+const SIDEBAR_BACKGROUND_TOKENS = [
+  '--sidebar-bg',
+  '--sidebar-surface-2',
+  '--sidebar-surface-3',
+  '--sidebar-accent-soft',
+  '--sidebar-warn-soft',
+  '--sidebar-info-soft',
+  '--sidebar-ok-soft',
+] as const;
+const SIDEBAR_SEMANTIC_TOKENS = ['--sidebar-warn', '--sidebar-info', '--sidebar-ok'] as const;
+
 const { light: lightTokens, dark: darkTokens } = loadThemeTokens();
 
 describe.each([
@@ -217,6 +235,24 @@ describe.each([
       expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(WCAG_AA_NORMAL_TEXT_MIN);
     },
   );
+
+  // Sidebar island (design system v2.1): its own text tokens on its own backgrounds, and its
+  // semantics on their own -soft plus the panel.
+  describe.each(SIDEBAR_TEXT_TOKENS)('%s on every sidebar background', (textToken) => {
+    it.each(SIDEBAR_BACKGROUND_TOKENS)('meets 4.5:1 on %s', (bgToken) => {
+      const fg = resolveOpaqueRgb(textToken, tokens, mountSurface);
+      const bg = resolveOpaqueRgb(bgToken, tokens, mountSurface);
+      expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(WCAG_AA_NORMAL_TEXT_MIN);
+    });
+  });
+
+  describe.each(SIDEBAR_SEMANTIC_TOKENS)('%s on its own -soft and the sidebar panel', (token) => {
+    it.each([`${token}-soft`, '--sidebar-bg'])('meets 4.5:1 on %s', (bgToken) => {
+      const fg = resolveOpaqueRgb(token, tokens, mountSurface);
+      const bg = resolveOpaqueRgb(bgToken, tokens, mountSurface);
+      expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(WCAG_AA_NORMAL_TEXT_MIN);
+    });
+  });
 
   describe.each(SEMANTIC_TEXT_TOKENS)(
     '%s on its own -soft and the neutral page surfaces',

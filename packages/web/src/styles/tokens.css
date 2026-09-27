@@ -95,6 +95,28 @@
   --muted: #626b7b;
   --muted-soft: #f0f1f3;
 
+  /* Sidebar island (design system v2.1): the navigation is a deep brand-navy panel. shell.css
+   * remaps the general tokens (`--text*`, `--surface-*`, `--border*`, `--accent*`, the semantics
+   * the sidebar uses) onto these inside `.sidebar` / `.nav-drawer`, so every nested control picks
+   * them up without its own override; floating content (menus, popovers) portals out and keeps
+   * the page theme. Contrast is checked as its own pair matrix in tokens-contrast.test.ts. */
+  --sidebar-bg: #152046;
+  --sidebar-surface-2: #1d2c5c;
+  --sidebar-surface-3: #22336a;
+  --sidebar-border: #26386e;
+  --sidebar-accent-soft: #26397a;
+  --sidebar-text-strong: #f4f7fe;
+  --sidebar-text: #eef2fb;
+  --sidebar-text-2: #c5d0ea;
+  --sidebar-text-3: #9aa9cf;
+  --sidebar-accent: #93b4ff;
+  --sidebar-warn: #f5c46b;
+  --sidebar-warn-soft: #3a3424;
+  --sidebar-info: #a9c3ff;
+  --sidebar-info-soft: #22336a;
+  --sidebar-ok: #7fd9a8;
+  --sidebar-ok-soft: #1f3a3a;
+
   /* Type scale (C24; S8 W1-A8 dropped the `--fs-11` stop, audit S8: 11px text below the 12px
    * accessible floor — every former `var(--fs-11)` use now reads `var(--fs-12)`, and the
    * Tailwind `text-11` alias in tailwind.css is gone with it). Six stops, 12px minimum. */
@@ -199,6 +221,24 @@
     --observe-soft: rgba(94, 200, 191, 0.16);
     --muted: #8b94a5;
     --muted-soft: rgba(139, 148, 165, 0.16);
+
+    /* Sidebar island, dark: a shade apart from --bg rather than the light theme's brand navy. */
+    --sidebar-bg: #0e1528;
+    --sidebar-surface-2: #161f34;
+    --sidebar-surface-3: #1c2740;
+    --sidebar-border: #25304a;
+    --sidebar-accent-soft: #1d2b52;
+    --sidebar-text-strong: #f1f4fb;
+    --sidebar-text: #dfe5f2;
+    --sidebar-text-2: #aab4c8;
+    --sidebar-text-3: #98a2b6;
+    --sidebar-accent: #93b4ff;
+    --sidebar-warn: #e5b454;
+    --sidebar-warn-soft: #2e2a22;
+    --sidebar-info: #7fb2ff;
+    --sidebar-info-soft: #1b2a4c;
+    --sidebar-ok: #4fc38a;
+    --sidebar-ok-soft: #16302a;
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
     --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.3);
