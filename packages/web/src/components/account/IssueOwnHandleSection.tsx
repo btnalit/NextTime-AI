@@ -1,10 +1,9 @@
 import { getCapability } from '@nexttime/shared';
 import { useState } from 'react';
-import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { entryCeilingCapabilities } from '../../lib/entry-ceiling.js';
-import type { GatekeeperListRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import {
   Dialog,
@@ -103,9 +102,9 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const t = useT();
   const maxTtlHours = Math.floor(issueHandleMaxTtlSeconds() / SECONDS_PER_HOUR);
   const entryCeiling = entryCeilingCapabilities();
-  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
-  const gatekeeperOptions =
-    gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : [];
+  // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
+  // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
+  const gatekeeperOptions = useGatekeeperDirectory(http).rows ?? [];
 
   const [ttlHours, setTtlHours] = useState(String(DEFAULT_TTL_HOURS));
   const [capabilitiesUnrestricted, setCapabilitiesUnrestricted] = useState(true);

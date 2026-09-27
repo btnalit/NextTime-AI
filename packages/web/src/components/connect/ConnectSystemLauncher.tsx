@@ -155,7 +155,13 @@ const KIND_PATH_COPY: Readonly<Record<LauncherKind, { readonly zh: string; reado
  *   3 能力与策略      platform: 启用 (only in `discovered`, B7) + connector → 平台预置 + the announced
  *                     Operations; workspace: 在本工作区启用 (`enable_gate_instance` imports *and*
  *                     publishes) → review classification (`OnboardingWizardReview`, composed, not
- *                     copied) → grant a member (`connect_gatekeeper`).
+ *                     copied). Granting a member happens afterwards, on 系统与授权
+ *                     (`SystemAccessCard`'s own 授权 button → `GrantGateDrawer`/`GrantGateForm` →
+ *                     `grant_capability`) — not a step of this launcher. (Closing wave C6, G5:
+ *                     this step used to name `connect_gatekeeper` as still-planned; that capability
+ *                     is a thin, superseded wrapper around the exact same `grant_capability` call
+ *                     `GrantGateForm` already makes — see `kernel-console-coverage-2026-09-26.md`'s
+ *                     G5 entry for why it was never wired here instead.)
  *   4 握手验证        `test_gate_instance` (platform) and the resulting status / health / Gatekeeper.
  *
  * Whichever plane the mounting page is not on renders as a notice with a link (a non-admin on the
