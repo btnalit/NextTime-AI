@@ -52,11 +52,27 @@ export default defineConfig({
         //   tooltip; more will follow) gets its Radix code split into this chunk instead of
         //   inflating that one page's own chunk, and every later page reusing the same primitive
         //   fetches it once.
-        // - `platform`: the nine `components/platform/*Page` modules share one chunk. They are
-        //   one admin flow a reader moves through page to page (routes.tsx's own doc comment) —
-        //   bundling them together means the *first* `#/platform/*` visit fetches one chunk and
-        //   every later platform page in the same session is already in the module cache, instead
-        //   of a fresh request per click.
+        // - `platform` (removed 2026-09-27, closing wave C4b, leftover 49): used to force all
+        //   eleven `components/platform/*Page` modules into one shared chunk (the admin flow's
+        //   pages, so the *first* `#/platform/*` visit warmed the module cache for every later
+        //   page in the same session). Grown from nine pages at #250 to eleven, that one chunk
+        //   reached 562 kB — over Vite's 500 kB warning. Worse, and unrelated to the warning:
+        //   `zod`/`@nexttime/shared` wire-validation code the eagerly-loaded shell also needs had
+        //   been placed inside that forced chunk too (shared by the eager entry and by every
+        //   platform page), which made Vite mark the whole 562 kB chunk `modulepreload` in
+        //   index.html — fetched on *every* page view, not just `#/platform/*` ones. Each platform
+        //   page already has its own `React.lazy(() => import(...))` boundary in routes.tsx;
+        //   removing this rule just lets Rollup's default per-dynamic-import chunking apply to
+        //   them the same way it already does for every other routed page (TasksPage, AuditPage,
+        //   ...): the eager shell's own copy of the shared zod/wire code now inlines into `index`
+        //   (which needed it regardless), and each platform page becomes its own small chunk
+        //   (largest ~35 kB) fetched only when visited. Net effect verified via the build's
+        //   sourcemaps: total eager+modulepreload bytes on first paint dropped from ~858 kB
+        //   (index 51 kB + vendor-react 142 kB + vendor-radix 102 kB + platform 562 kB, preloaded)
+        //   to ~532 kB (index 288 kB + vendor-react 142 kB + vendor-radix 102 kB, nothing else
+        //   preloaded) — bigger `index` chunk, smaller total. Not reopening this rule to
+        //   hand-split `platform` into smaller groups, since the default splitting already clears
+        //   the 500 kB line with a net byte reduction.
         manualChunks(id) {
           const path = id.replace(/\\/g, '/');
           if (path.includes('/node_modules/')) {
@@ -64,7 +80,6 @@ export default defineConfig({
             if (path.includes('/node_modules/@radix-ui/')) return 'vendor-radix';
             return undefined;
           }
-          if (path.includes('/src/components/platform/')) return 'platform';
           return undefined;
         },
       },
