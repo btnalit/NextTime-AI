@@ -242,6 +242,12 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field-label">{t('可用的门', 'Gatekeepers')}</legend>
+        <p className="text-3 text-small">
+          {t(
+            '只读调用不受这里限制：本工作区启用的系统都能读（每次调用照旧审计）；这里只收窄写操作的授权。',
+            'Reads are not limited here: every system enabled in this workspace can be read (each call is still audited); this only narrows the grant for write operations.',
+          )}
+        </p>
         <label className="checkbox">
           <input
             type="checkbox"

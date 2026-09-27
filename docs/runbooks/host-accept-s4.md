@@ -90,11 +90,32 @@ S4 gate=<门显示名> connector=<连接器技术名> readiness=<direct|via_work
   Operation 手动调一次；或去 **`我的智能体`**（`#/me/agent`，受影响成员）确认这个门本就不在
   该成员 agent 的授权清单里（如果是这样，这个门从一开始就不是这次事故的候选）。
 
+**未授权成员探针**（设计文档 §11"门上的观察"，决定 D4 于 2026-09-27 撤回——"只读调用不需要授权"）：
+owner 那一轮始终持有 Grant，测不出"不授权也能读"这条规则是否真的到了主机。脚本另用运维 CLI
+`issue-service-handle` 铸一个既不是 owner、也没有任何门 Grant 的 member 角色主体（`kind=service`，
+名为 `s4-ungranted-reader`；`issue_handle` 本身要求 owner，脚本铸不出非 owner 的 Handle，
+accept_s3.sh 的采集器走的也是这条 CLI），Handle 只含 `observe_operation` + `list_allowed_operations`、
+无任何 `resources`，有效期约 15 分钟。装配阶段打三行 PASS/FAIL：`member-probe-handle`、
+`member-probe-readiness`（owner 以 `principalId` 读该主体的 `execution_readiness`，并核实它在任何门上
+都没有 Grant）、`member-probe-tools`（该 Handle 的 `list_allowed_operations` 里不得出现任何执行类
+Operation）。随后对 owner 那一轮挑中的每个 Operation 各打一行：
+
+```
+S4 member-probe gate=<门> connector=<连接器> readiness=<该成员的状态>/<原因或-> op=<Operation> call=<HTTP 状态> listed=yes|no verdict=PASS|FAIL
+```
+
+- `verdict=PASS`：`readiness=direct`、`listed=yes`（该 Operation 在该成员 Handle 的工具投射里）、
+  `call=200`；或者一致地拒绝——`readiness=unreachable`、`listed=no`、`call=403` 且 `operation_disabled`
+  （平台禁用名单）。每次调用照旧写审计行（actor = 该主体）。
+- `verdict=FAIL`：三者不一致。`call=403` 且不是 `operation_disabled`、而 `readiness=direct`——主机上的
+  内核还在按旧规则（D4）要求授权范围，先确认主机版本；`readiness=unreachable/not_granted` 而调用成功
+  ——读模型仍按旧规则计算。
+
 最终一行：
 
 ```
-S4 OK (<n> gates pass, <m> skipped)      # 无 FAIL，退出 0
-S4 FAIL (<n> pass, <m> skip, <f> fail)   # 有 FAIL，退出 1
+S4 OK (<n> gates pass, <m> skipped; ungranted-member probe <p> pass)                  # 无 FAIL，退出 0
+S4 FAIL (<n> pass, <m> skip, <f> fail; ungranted-member probe <p> pass, <q> fail)    # 有 FAIL，退出 1
 ```
 
 工作区没有任何平台门实例可测时（罕见——平台管理员还没在 `集成` 页启用任何连接器实例），脚本打印
@@ -109,11 +130,15 @@ S4 FAIL (<n> pass, <m> skip, <f> fail)   # 有 FAIL，退出 1
 | 列出候选 | `list_available_gate_instances` | human（owner） | 平台已启用且 `platform_preset` 的门实例，含本工作区是否已链接 |
 | 启用 | `enable_gate_instance` | human（owner） | 注册/复用 Gatekeeper，导入并**自动发布**其宣告的 Operation |
 | 保险检查 | `list_operations` + `publish_operation` | human（owner） | 极少数情况下补发布——正常情况下 `enable_gate_instance` 已经发布完了，不会有活干 |
-| 授权 | `grant_capability` | human（owner） | 给 owner 自己发一个 `gatekeeper` Grant——不做这一步，就绪读模型会对每个门都报 `not_granted`，把真正的事故信号淹没在自造的假阳性里（脚本自己的头注释有完整推理） |
+| 授权 | `grant_capability` | human（owner） | 给 owner 自己发一个 `gatekeeper` Grant——让 owner 这一轮与已授权成员的入口 agent 同形（门进入入口 Handle 的执行范围）；只读调用本身自 2026-09-27 起不再需要它，未授权的情形由下面的成员探针覆盖 |
 | 铸造 Handle | `issue_handle` | human（owner） | 铸一个 `interactive` 会话的根 Handle——所有授权到位**之后**才铸，`find_operations` 的可达性标注只在"根 Handle（无 `par`）"这个形状下才会附带 |
 | 读就绪 | `execution_readiness` | human（owner） | 一次调用覆盖工作区里注册过的每一个 Gatekeeper |
 | 读可达性 + 挑 Operation | `find_operations` | **handle**（刚铸的 Handle） | 入口 agent 自己会看到的同一份可达性标注；本脚本额外用它挑一个参数 schema 无必填字段的 observe Operation |
 | 真调用 | `observe_operation` | **handle**（刚铸的 Handle） | 与入口 agent 的 `<gate>.<op>` 工具投影调用的是同一个 capability，同一条门禁（连接器禁用名单在这一步生效） |
+| 成员探针：铸 Handle | CLI `bootstrap.js issue-service-handle` | —（运维 CLI） | member 角色、无 Grant、非 owner 的主体；Handle 只含 `observe_operation` + `list_allowed_operations` |
+| 成员探针：读就绪 | `execution_readiness {principalId}` | human（owner） | 该主体的逐门可达性，期望 `direct` |
+| 成员探针：读工具投射 | `list_allowed_operations` | **handle**（成员 Handle） | 期望含 owner 那一轮挑中的 Operation，且不含任何执行类 Operation |
+| 成员探针：真调用 | `observe_operation` | **handle**（成员 Handle） | 期望 200（或与就绪一致的 `operation_disabled`） |
 
 `find_operations`/`observe_operation` 特意不用 owner 的人类身份直接调（虽然内核允许——
 `application/gateway/authorize.ts` 的 channel 准入规则："channel:'handle' 的能力两个通道都能调"）：

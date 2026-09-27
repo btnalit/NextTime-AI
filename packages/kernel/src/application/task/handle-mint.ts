@@ -237,9 +237,17 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
     } else if (wantsExecute) {
       missingExecuteGates.push(gate);
     }
-    // else: an observe-only gate the caller doesn't hold — silently dropped rather than refused
-    // (only execute-class access fails the delegation outright); since D4 (2026-09-26) the child
-    // cannot observe it either — `observe_operation` checks the Handle's own gate scope.
+    // else: an observe-only gate the caller doesn't hold — left out of the child's
+    // `resources.gatekeeper` rather than refused (only execute-class access fails the delegation
+    // outright). The Worker still reaches it: observation needs no gate scope (design doc §11
+    // "门上的观察", D4 revoked 2026-09-27) — `request_action`'s observe branch and
+    // `list_allowed_operations` decide it with `observeRefusal` (application/gates/
+    // observe-access.ts) for the member the Worker acts for. It must NOT be added here:
+    // `resources.gatekeeper` is execute authority — `governance/policy`'s coverage check reads it
+    // for `request_action`, and `delegatedRequestAction` above hands `request_action` to any
+    // grandchild whose declared gates are in it — so an ungranted gate in this list would let a
+    // grandchild Worker propose (and low-blast auto-approve) actions on a gate nobody granted, and
+    // would break the I13 subset check below (child ⊄ parent).
   }
   if (missingExecuteGates.length > 0) {
     throw new InvokeWorkerAttenuationError(

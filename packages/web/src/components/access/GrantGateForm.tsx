@@ -302,8 +302,8 @@ export function GrantGateForm({
             }
             title={t('授予全部门', 'Grant every gate')}
             description={t(
-              '该成员的入口 agent 将能调用工作区里的每一个门，包括以后新接入的门——不限于当前列表。',
-              "This member's entry agent will be able to call every gate in this workspace, including gates connected later — not just the ones listed today.",
+              '该成员将能经 Worker 对工作区里的每一个门提出写操作（仍按审批规则处理），包括以后新接入的门——不限于当前列表。只读操作不需要授权。',
+              'This member will be able to request write operations on every gate in this workspace through a Worker (still subject to approval), including gates connected later — not just the ones listed today. Read operations need no grant.',
             )}
             confirmLabel={t('我确认，授予全部门', 'Confirm — grant every gate')}
             onConfirm={() => {
@@ -322,8 +322,8 @@ export function GrantGateForm({
           </span>
           <p className="field-hint">
             {t(
-              '授权针对整个门：成员的入口 agent 可以请求这个门的全部已发布 Operation（包括以后新发布的）；执行类仍按审批规则处理。',
-              'A grant covers the whole gate: the member’s entry agent may request every published operation of this gate, including ones published later; execute-class ones still follow the approval rules.',
+              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。只读 Operation 不需要授权，工作区里每个成员都能调用。',
+              'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Read operations need no grant — every member of the workspace can call them.',
             )}
           </p>
           {operations.state.status === 'loading' ? (

@@ -9,6 +9,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { entryScope } from '../../governance/capability/index.js';
 import { importManifest, publishOperation } from '../../governance/gatekeepers/manifest.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
+import { NO_OBSERVE_EXCLUSIONS } from '../gates/index.js';
 import {
   deprecateProcedure,
   proposeProcedure,
@@ -162,7 +163,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
 
-      // The caller's scope covers the step's gate (D4: an observe step is usable only then).
+      // A caller whose gate scope covers the step's gate — usable on either channel's rule.
       const matches = await inTx((client) =>
         findProcedures(
           client,
@@ -210,7 +211,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(matches).toEqual([]);
     });
 
-    it('an observe-mode step counts only when the caller scope covers its Gatekeeper (D4)', async () => {
+    it('an observe-mode step is usable by a Handle caller with no gate scope, unless its member excluded the gate (D4 revoked)', async () => {
       const opName = await publishedOperation('observe');
       const unique = uniqueNeed('observe-only');
       const draft = await inTx((client) =>
@@ -222,22 +223,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
 
-      // D4 (2026-09-26): observation skips approval, not authorization scope. A no-gate entry
-      // caller cannot run the step, so the Procedure is not usable for it; a caller whose scope
-      // covers the Gatekeeper can.
-      const noGate = await inTx((client) =>
-        findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
-      );
-      expect(noGate.some((m) => m.procedureId === draft.id)).toBe(false);
-      const covered = await inTx((client) =>
+      // Design doc §11 "门上的观察" (D4 revoked 2026-09-27): a Handle caller's observe step goes
+      // through `observeRefusal` — no Grant / gate scope needed (entryScope() holds none) …
+      const handleNoGate = await inTx((client) =>
         findProcedures(
           client,
           workspaceId,
-          { parentAuthority: entryScope({ resources: { gatekeeper: [gatekeeperId] } }) },
+          { parentAuthority: entryScope(), observeExclusions: NO_OBSERVE_EXCLUSIONS },
           unique,
         ),
       );
-      expect(covered.some((m) => m.procedureId === draft.id)).toBe(true);
+      expect(handleNoGate.some((m) => m.procedureId === draft.id)).toBe(true);
+      // … but the member's own AgentProfile exclusion still makes the step unusable,
+      const excluded = await inTx((client) =>
+        findProcedures(
+          client,
+          workspaceId,
+          {
+            parentAuthority: entryScope(),
+            observeExclusions: {
+              policyAllowedGatekeepers: [],
+              profileExcludedGatekeepers: [gatekeeperId],
+            },
+          },
+          unique,
+        ),
+      );
+      expect(excluded.some((m) => m.procedureId === draft.id)).toBe(false);
+      // … and a non-owner human caller (no Handle, no exclusions passed) keeps the human
+      // channel's unchanged gate-scope rule.
+      const humanNoGate = await inTx((client) =>
+        findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
+      );
+      expect(humanNoGate.some((m) => m.procedureId === draft.id)).toBe(false);
     });
 
     it('excludes a Procedure whose step is an execute-mode Operation, for a caller whose scope does not cover that Gatekeeper', async () => {

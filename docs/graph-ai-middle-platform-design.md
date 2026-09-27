@@ -940,7 +940,7 @@ nexttime explain <turn_activity_id>
 - **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
 - **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。
 - **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
-- **门上的观察与授权范围（决定 D4，2026-09-26）**：门上 observe 类 Operation 免**审批**，不免**授权范围**——调用者须覆盖该门（人：`gatekeeper` Grant，owner 视为全覆盖；Handle：`resources.gatekeeper`，缺省为空）。门持有凭证，观测也是读取受保护的数据；工具投射、Worker 衰减、可达性读模型与执行点都按这一条（`productization-plan-v2-2026-09-26.md` §2）。
+- **门上的观察（决定 D4 撤回，2026-09-27 维护者确认"只读调用不需要授权"）**：observe 类 Operation 对本工作区内任何 Handle 可调，条件是——门已在本工作区启用、Operation 已发布且不在平台连接器禁用清单上、门没有被工作区 AgentPolicy 上限或调用成员自己的 AgentProfile 排除。门 Grant 只管 execute 类。人类通道（控制台）的观察检查不变，待维护者另行决定。每次观察照旧审计。实现上是一个谓词（`application/gates/observe-access.ts` 的 `observeRefusal`）：`observe_operation` / `request_action` 的 observe 分支（Handle 通道）、`list_allowed_operations` 工具投射、可达性读模型与 `find_procedures` 都调它；Handle 的 `resources.gatekeeper` 只表示执行授权（Grant 派生、按 Worker 衰减），不再决定能否观察（`productization-plan-v2-2026-09-26.md` §2 实现说明）。
 - **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。 **用户与平台管理员**：用户是平台级目录，`platform_role` 只分 admin / user；人用用户名 + 密码登录（本地账号即此），API key 留给自动化与 agent；平台管理员只有管理权没有业务数据权；初始化靠一次性令牌（§7.11）。
 
 去掉的东西：入口 agent 的子进程模式、每用户 OS 账号、无出网网络、内置工具白名单。加上的东西：一个出网代理容器和一张默认策略表。

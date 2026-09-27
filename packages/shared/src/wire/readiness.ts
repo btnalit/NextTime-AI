@@ -21,8 +21,8 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
   'no_published_worker',
   /** Published Workers exist but none declares any gate — delegating reaches no system. */
   'no_worker_gate',
-  /** The member's own AgentProfile excludes it (a granted gate, or a published Worker) — fixed on
-   *  我的智能体, not by an owner (console redesign M2). */
+  /** The member's own AgentProfile excludes it (a gate — granted or not, since observation needs
+   *  no Grant — or a published Worker) — fixed on 我的智能体, not by an owner (console redesign M2). */
   'excluded_by_profile',
   /** A granted gate the workspace AgentPolicy's gate cap leaves out — fixed by an owner on 模型与配额. */
   'excluded_by_policy',
@@ -94,11 +94,15 @@ export const ExecutionReadinessGateWireSchema = z
      *  (production incident 2026-09-26) — a subset of the counts above; non-empty even when `status`
      *  is not `disabled_by_platform` (some, not all, published Operations disabled). */
     disabledOperations: z.array(z.string()),
-    /** Granted, but the workspace AgentPolicy's gate cap leaves it out. */
+    /** The workspace AgentPolicy's gate cap leaves it out — granted or not; blocks observation
+     *  and execution alike. */
     excludedByPolicy: z.boolean(),
-    /** Granted, but the member's own AgentProfile excludes it. */
+    /** The member's own AgentProfile excludes it — granted or not; blocks observation and
+     *  execution alike. */
     excludedByProfile: z.boolean(),
-    /** In the entry Handle's gate scope — its observe Operations are callable directly. */
+    /** In the entry Handle's gate scope (Grants ∩ AgentProfile / policy) — execute authority a
+     *  delegated Worker can carry. Not what makes observe Operations callable: since decision D4 was
+     *  revoked (2026-09-27, "只读调用不需要授权") `status: 'direct'` means that, Grant or not. */
     inEntryScope: z.boolean(),
     /** Delegable Workers (not excluded by the profile) whose child scope carries this gate. */
     workerDefinitionIds: z.array(z.string()),
