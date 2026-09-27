@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.28.0](https://github.com/btnalit/NextTime-AI/compare/v0.27.0...v0.28.0) (2026-09-27)
+
+
+### Features
+
+* **web:** approvals as master-detail with a kit decision footer (console redesign P3-4) ([#333](https://github.com/btnalit/NextTime-AI/issues/333)) ([2cca6b5](https://github.com/btnalit/NextTime-AI/commit/2cca6b534051c82785efe610df063d64797d4a4d))
+* **web:** tasks as master-detail, members on kit (console redesign P3-4) ([#336](https://github.com/btnalit/NextTime-AI/issues/336)) ([798e1b5](https://github.com/btnalit/NextTime-AI/commit/798e1b5309e121232e27ac98a3ad61e2ecf9976c))
+
 ## [0.27.0](https://github.com/btnalit/NextTime-AI/compare/v0.26.0...v0.27.0) (2026-09-26)
 
 
