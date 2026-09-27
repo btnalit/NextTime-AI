@@ -44,9 +44,11 @@
 | Pressed / table head | `--surface-3` | `#edf1f7` | `#1c2740` |
 | Border | `--border` | `#e1e6ef` | `#25304a` |
 | Strong border / input | `--border-strong` | `#c8d0dc` | `#35425f` |
-| Text | `--text` | `#111a2e` | `#e6ebf5` (off-white, never `#fff`) |
-| Secondary text | `--text-2` | `#465167` | `#aab4c8` |
-| Caption | `--text-3` | `#5f6672` | `#98a2b6` |
+| Headings / emphasis | `--text-strong` | `#172a5a` (deep brand navy) | `#f1f4fb` |
+| Text | `--text` | `#28344f` (slate-navy, not near-black) | `#dfe5f2` (off-white, never `#fff`) |
+| Secondary text | `--text-2` | `#4a5672` | `#aab4c8` |
+| Caption | `--text-3` | `#5a6580` | `#98a2b6` |
+| Eyebrow / section label | `--text-accent` | `#1a40b0` (brand-700) | `#93b4ff` |
 | Primary action | `--primary` / hover / press | `#1f4fd6` / `#1a40b0` / `#1b378e` | `#7aa2ff` / `#93b4ff` / `#a9c3ff` |
 | Text on primary | `--text-on-primary` | `#ffffff` | `#0b1020` |
 | Link / selection / focus | `--accent`, `--accent-soft` | `#1f4fd6`, `#e8eefc` | `#7aa2ff`, 16% tint |
@@ -76,7 +78,12 @@ primary states.
   unicode-range sliced. Not Plus Jakarta Sans / Fira (generator output) — Chinese-first UI.
 - **Scale (six stops, 12px floor):** 24/700 page title · 19/600 section · 16/600 dialog title ·
   14/400 body and chat (line-height 1.6) · 13/400 dense tables and forms · 12/400 caption.
-- **Weights:** 400 / 500 / 600 / 700. Tabular numbers in data views.
+- **Weights:** 400 / 500 / 600 / 700, all real faces (v2.1 added Plex 700 and Noto Sans SC 700;
+  CJK 600 resolves to the 700 face — never a browser-synthesised bold). Tabular numbers in data
+  views.
+- **Ink (v2.1, 2026-09-27):** no near-black anywhere. Headings, card / dialog / sheet / empty-state
+  titles and `<strong>` take `--text-strong`; body `--text`; section labels (`.section-title`,
+  drawer-section titles) take `--text-accent`. No negative letter-spacing on CJK titles.
 
 ### Spacing
 

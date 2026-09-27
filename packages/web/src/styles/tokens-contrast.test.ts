@@ -156,7 +156,13 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 const WCAG_AA_NORMAL_TEXT_MIN = 4.5;
 
 /** General-purpose text — checked against every neutral surface and every semantic `-soft`. */
-const GENERAL_TEXT_TOKENS = ['--text', '--text-2', '--text-3'] as const;
+const GENERAL_TEXT_TOKENS = [
+  '--text-strong',
+  '--text',
+  '--text-2',
+  '--text-3',
+  '--text-accent',
+] as const;
 const ALL_BACKGROUND_TOKENS = [
   '--bg',
   '--surface-1',

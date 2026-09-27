@@ -98,7 +98,7 @@ export const SheetTitle = forwardRef<
   return (
     <DialogPrimitive.Title
       ref={ref}
-      className={cn('text-16 font-semibold text-text', className)}
+      className={cn('text-16 font-semibold text-text-strong', className)}
       {...rest}
     />
   );

@@ -51,7 +51,7 @@ export function EmptyState({
       >
         {icon !== undefined ? <span className="shrink-0 text-text-3">{icon}</span> : null}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <p className="m-0 truncate text-13 font-semibold text-text">{title}</p>
+          <p className="m-0 truncate text-13 font-semibold text-text-strong">{title}</p>
           {body !== undefined ? <p className="m-0 text-12 text-text-3">{body}</p> : null}
         </div>
         {action !== undefined ? <div className="shrink-0">{action}</div> : null}
@@ -69,7 +69,7 @@ export function EmptyState({
       data-state="empty"
     >
       {icon !== undefined ? <span className="mb-1 text-text-3">{icon}</span> : null}
-      <p className="m-0 text-14 font-semibold text-text">{title}</p>
+      <p className="m-0 text-14 font-semibold text-text-strong">{title}</p>
       {body !== undefined ? <p className="m-0 max-w-96 text-13 text-text-3">{body}</p> : null}
       {action !== undefined ? <div className="mt-1">{action}</div> : null}
     </div>
