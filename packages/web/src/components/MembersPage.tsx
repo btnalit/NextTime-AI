@@ -24,6 +24,7 @@ import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
 import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
+import { DashboardCard } from './kit/section.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './kit/sheet.js';
 import { SkeletonRows } from './kit/skeleton.js';
 import { StatusChip } from './kit/status-chip.js';
@@ -215,45 +216,45 @@ export function MembersPage({ http }: MembersPageProps) {
           testId="members-empty"
         />
       ) : (
-        <List ariaLabel="Members" testId="members-list">
-          {rows.map((row) => (
-            <ListRow
-              key={row.id}
-              testId="member-row"
-              onSelect={() => setDrawer({ kind: 'detail', principal: row })}
-            >
-              {/* Row rhythm (console redesign P3-4 part B): role chip / name + 「你」 tag / kind ·
-               *  id · key state — the id is plain text, never a `kit/ref-chip` (a row is itself a
-               *  `<button>`; a chip's own copy control would be a second, nested interactive
-               *  element, the exact bug part A found and fixed for the approvals row). */}
-              <span className="row-wrap">
-                <StatusChip machine="role" status={row.role} size="s" />
-              </span>
-              <span className="row-wrap">
-                <span className="truncate">{row.displayName}</span>
-                {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
-                 *  principal id, once `get_workspace` resolves it. */}
-                {ownPrincipalId !== null && row.id === ownPrincipalId ? (
-                  <span className="tag" data-testid="member-row-you">
-                    {t('你', 'You')}
-                  </span>
-                ) : null}
-                {row.disabledAt ? (
-                  <span className="tag text-danger">{t('已停用', 'disabled')}</span>
-                ) : null}
-              </span>
-              <span className="row-wrap text-3">
-                <span>{principalKindLabel(row.kind, t)}</span>
-                <span className="meta-sep" />
-                <span className="mono">{shortId(row.id)}</span>
-                <span className="meta-sep" />
-                <span>
-                  {row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}
+        <DashboardCard padded={false}>
+          <List ariaLabel="Members" testId="members-list">
+            {rows.map((row) => (
+              <ListRow
+                key={row.id}
+                testId="member-row"
+                onSelect={() => setDrawer({ kind: 'detail', principal: row })}
+                leading={<StatusChip machine="role" status={row.role} size="s" />}
+              >
+                {/* Row rhythm (console redesign P3-4): role chip leading, then name + 「你」 tag /
+                 *  kind · id · key state — the id is plain text, never a `kit/ref-chip` (a row is
+                 *  itself a `<button>`; a chip's own copy control would be a second, nested
+                 *  interactive element, the exact bug part A found and fixed for the approvals row). */}
+                <span className="row-wrap">
+                  <span className="truncate">{row.displayName}</span>
+                  {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
+                   *  principal id, once `get_workspace` resolves it. */}
+                  {ownPrincipalId !== null && row.id === ownPrincipalId ? (
+                    <span className="tag" data-testid="member-row-you">
+                      {t('你', 'You')}
+                    </span>
+                  ) : null}
+                  {row.disabledAt ? (
+                    <span className="tag text-danger">{t('已停用', 'disabled')}</span>
+                  ) : null}
                 </span>
-              </span>
-            </ListRow>
-          ))}
-        </List>
+                <span className="row-wrap text-3">
+                  <span>{principalKindLabel(row.kind, t)}</span>
+                  <span className="meta-sep" />
+                  <span className="mono">{shortId(row.id)}</span>
+                  <span className="meta-sep" />
+                  <span>
+                    {row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}
+                  </span>
+                </span>
+              </ListRow>
+            ))}
+          </List>
+        </DashboardCard>
       )}
       {canManage &&
       principals.state.status === 'ready' &&

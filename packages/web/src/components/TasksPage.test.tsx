@@ -319,6 +319,17 @@ describe('TasksPage master-detail (P3-4 part B)', () => {
     expect(within(pane).queryByTestId('task-detail')).toBeNull();
   });
 
+  it('with no tasks at all, the wide layout shows only the list card (no contradictory empty detail)', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [] }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, SILENT_PUSH_SOURCE);
+    await screen.findByTestId('tasks-empty');
+    expect(screen.queryByTestId('task-drawer')).toBeNull();
+  });
+
   it('selecting a task row calls onSelect with its id', async () => {
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task({ id: 'task-2' })] }),

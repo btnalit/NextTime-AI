@@ -212,7 +212,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             onSelect={onSelect}
           />
         }
-        detail={detailContent}
+        detail={
+          tasks.state.status === 'ready' && rows.length === 0 && selectedId === undefined
+            ? null
+            : detailContent
+        }
         open={selectedId !== undefined}
         onClose={() => onSelect(null)}
         // Generic on purpose (P3-4 screenshot review precedent, ApprovalQueuePage): the detail's

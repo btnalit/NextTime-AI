@@ -17,7 +17,8 @@ export interface MasterDetailProps {
   readonly list: ReactNode;
   /** The selected item's detail — rendered once, reused as both the wide pane's body and the
    *  narrow sheet's content, so a page's own detail-vs-placeholder branching runs once regardless
-   *  of layout. */
+   *  of layout. `null` means there is nothing to pick yet (an empty list, nothing selected): the
+   *  wide layout then shows the list card alone instead of a second, contradictory empty card. */
   readonly detail: ReactNode;
   /** An optional sibling of the list pane's body (not wrapped further) — the approvals queue's own
    *  expiry note is the first example; the caller supplies its own `.md-pane-footer`-classed
@@ -60,13 +61,13 @@ export function MasterDetail({
 
   return (
     <>
-      <div className={`md-layout md-layout--${isNarrow ? 'narrow' : 'wide'}`}>
+      <div className={`md-layout md-layout--${isNarrow || detail === null ? 'narrow' : 'wide'}`}>
         <div className="md-pane md-list-pane">
           <div className="md-pane-body">{list}</div>
           {footer}
         </div>
 
-        {!isNarrow ? (
+        {!isNarrow && detail !== null ? (
           <div className="md-pane md-detail-pane" data-testid={detailTestId}>
             <div className="md-pane-body">{detail}</div>
           </div>

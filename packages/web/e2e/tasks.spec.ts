@@ -49,6 +49,8 @@ test.describe('CI smoke: tasks page', () => {
     await expect(page.getByTestId('task-drawer')).toBeVisible({ timeout: 15_000 });
     await page.goto('/#/work/tasks');
     await expect(page.getByTestId('tasks-empty').or(page.getByTestId('tasks-list'))).toBeVisible();
-    await expect(page.getByTestId('task-drawer-empty')).toBeVisible();
+    // Wide layout: with tasks, the detail pane falls back to its placeholder; with none (this
+    // CI workspace), there is no detail pane at all — either way no task detail is shown.
+    await expect(page.getByTestId('task-detail')).toHaveCount(0);
   });
 });

@@ -43,6 +43,22 @@ describe('kit/MasterDetail', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('shows the list card alone on wide when there is nothing to pick (detail === null)', () => {
+    mockMatchMedia(false);
+    render(
+      <MasterDetail
+        list={<div data-testid="the-list">list</div>}
+        detail={null}
+        open={false}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    expect(screen.getByTestId('the-list')).toBeTruthy();
+    expect(screen.queryByTestId('md-detail')).toBeNull();
+  });
+
   it('renders the list only at narrow widths, with the detail in a kit/sheet that opens with `open`', () => {
     mockMatchMedia(true);
     const onClose = vi.fn();

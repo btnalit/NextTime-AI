@@ -162,7 +162,14 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
             </div>
           ) : undefined
         }
-        detail={detailContent}
+        detail={
+          filter === 'pending' &&
+          pending.state.status === 'ready' &&
+          rows.length === 0 &&
+          selectedId === undefined
+            ? null
+            : detailContent
+        }
         open={selectedId !== undefined}
         onClose={() => onSelect(null)}
         // Generic on purpose: the detail's own h2 already names the action and target, so a
