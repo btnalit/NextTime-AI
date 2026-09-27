@@ -386,6 +386,28 @@ const ontologyCapabilities: readonly Capability[] = [
     description:
       'Validate a candidate Link’s linkType/sourceType/targetType against every visible LinkType signature’s domain/range (I2).',
   },
+  {
+    // Closing wave C5b (coverage gap G1 part 2 — the console-facing half of "review and publish an
+    // agent's ontology proposal"): `publish_ontology_version` has existed since S3.1, but nothing
+    // let a person find a draft's id/version to publish — `get_type`/`list_types` return the merged
+    // *current-state* type view only (no id/version/proposedBy fields), scoped to published rows
+    // plus only the caller's own drafts. Mirrors `list_worker_definitions`/`list_skills` (worker/
+    // meta groups) exactly for visibility and channel — published rows + the caller's own drafts
+    // (I16 read half), same `channel:'handle'`/`minRole:'member'` as those two siblings — rather
+    // than inventing a new cross-principal visibility rule; `loadVisibleOntology` (the read path
+    // `get_type`/`list_types`/`validate` already share) is untouched.
+    name: 'list_ontology_versions',
+    group: 'ontology',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ limit: z.number().int().positive().optional(), cursor: z.string().optional() })
+      .strict(),
+    resultSchema: listEnvelope(wire.OntologyVersionListItemWireSchema),
+    description:
+      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish.',
+  },
 ];
 
 // -------------------------------------------------------------------------------------------

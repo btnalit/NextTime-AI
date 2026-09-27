@@ -10,6 +10,7 @@ import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   getType,
+  listOntologyVersions,
   listTypes,
   proposeOntologyChange,
   publishOntologyDraft,
@@ -302,6 +303,85 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
           }),
         ),
       ).rejects.toThrow(OntologyChangeValidationError);
+    });
+  });
+
+  // Closing wave C5b (coverage gap G1 part 2): `list_ontology_versions`'s logic — mirrors
+  // `listWorkerDefinitionsPage`/`listSkills`'s own I16 read-privacy predicate (published rows,
+  // workspace-wide, plus the caller's own drafts), proven the same way this file already proves it
+  // for `get_type`/`list_types` above.
+  describe('listOntologyVersions', () => {
+    it('shows every published row plus the caller’s own drafts, never another principal’s draft', async () => {
+      const alicesDraft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        proposeOntologyChange(client, workspaceId, {
+          change: MINIMAL_DEFINITION,
+          proposedBy: alice,
+        }),
+      );
+
+      const aliceOwnList = await withWorkspace(
+        pool,
+        { workspaceId, principalId: alice },
+        (client) => listOntologyVersions(client, workspaceId, alice),
+      );
+      const aliceOwnRow = aliceOwnList.items.find(
+        (item) => item.id === alicesDraft.id && item.version === alicesDraft.version,
+      );
+      expect(aliceOwnRow?.status).toBe('draft');
+      expect(aliceOwnRow?.proposedBy).toEqual({ id: alice, kind: 'human', displayName: 'alice' });
+
+      // Bob does not see Alice's still-private draft (I16) — same "absent, not a 403" convention
+      // `get_type`/`list_types` already use for a draft the caller does not own.
+      const bobList = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        listOntologyVersions(client, workspaceId, bob),
+      );
+      expect(
+        bobList.items.some(
+          (item) => item.id === alicesDraft.id && item.version === alicesDraft.version,
+        ),
+      ).toBe(false);
+
+      // Every already-published row (e.g. the ops-assets-v1 domain pack published earlier in this
+      // file) is visible workspace-wide, to both Alice and Bob.
+      const opsAssetsId = deriveOntologyPackId('ops-assets');
+      expect(aliceOwnList.items.some((item) => item.id === opsAssetsId)).toBe(true);
+      expect(bobList.items.some((item) => item.id === opsAssetsId)).toBe(true);
+
+      // Once published, Bob sees the exact same row.
+      await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyDraft(client, workspaceId, {
+          id: alicesDraft.id,
+          version: alicesDraft.version,
+          publishedBy: alice,
+        }),
+      );
+      const bobListAfterPublish = await withWorkspace(
+        pool,
+        { workspaceId, principalId: bob },
+        (client) => listOntologyVersions(client, workspaceId, bob),
+      );
+      const bobSeesPublished = bobListAfterPublish.items.find(
+        (item) => item.id === alicesDraft.id && item.version === alicesDraft.version,
+      );
+      expect(bobSeesPublished?.status).toBe('published');
+      expect(bobSeesPublished?.definition).toEqual(MINIMAL_DEFINITION);
+    });
+
+    it('keyset-paginates newest created_at first', async () => {
+      const page = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        listOntologyVersions(client, workspaceId, alice, { limit: 1 }),
+      );
+      expect(page.items.length).toBe(1);
+      expect(page.nextCursor).toBeDefined();
+      const nextPage = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        listOntologyVersions(client, workspaceId, alice, { limit: 1, cursor: page.nextCursor }),
+      );
+      expect(nextPage.items.length).toBe(1);
+      // The second page is a different (id, version) row than the first — the cursor actually
+      // advances rather than repeating page one.
+      expect(`${nextPage.items[0]?.id}:${nextPage.items[0]?.version}`).not.toBe(
+        `${page.items[0]?.id}:${page.items[0]?.version}`,
+      );
     });
   });
 });

@@ -69,6 +69,7 @@ export {
   OntologyDraftNotFoundError,
   evaluateLink,
   getType,
+  listOntologyVersions,
   listTypes,
   loadPublishedLinkTypes,
   loadVisibleOntology,
@@ -79,7 +80,10 @@ export {
 export type {
   LinkEvaluation,
   LinkTypeSignature,
+  ListOntologyVersionsFilter,
   OntologyTypeEntry,
+  OntologyVersionListItem,
+  OntologyVersionsPage,
   ProposeOntologyChangeInput,
   PublishOntologyDraftInput,
   ValidateLinkInput,

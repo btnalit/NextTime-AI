@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { BlastRadiusSchema, OperationModeSchema, PublishableStatusSchema } from '../enums.js';
+import {
+  BlastRadiusSchema,
+  OperationModeSchema,
+  PrincipalKindSchema,
+  PublishableStatusSchema,
+} from '../enums.js';
+import { OntologyDefinitionSchema } from '../ontology-definition.js';
 
 /**
  * wire/ontology: OntologyVersion resource shape, plus the type-lookup projections `get_type` /
@@ -47,6 +53,35 @@ export const OntologyPublishResultWireSchema = OntologyVersionWireSchema.pick({
   publishedBy: true,
   publishedAt: true,
 });
+
+/**
+ * `list_ontology_versions`'s item shape (coverage gap G1 part 2, closing wave C5b): unlike
+ * `OntologyVersionWireSchema` above (whose `proposedBy`/`publishedBy` stay bare principal ids, the
+ * same shape `wire/worker.ts`'s `WorkerDefinitionWireSchema` uses for its own siblings
+ * `list_worker_definitions`/`list_skills`), this capability's own `proposedBy` is a resolved
+ * `{id, kind, displayName}` — the console's proposal-review list shows who proposed each draft
+ * without a second `resolve_refs` round trip for what is meant to be a small review queue.
+ * `definition` reuses `OntologyDefinitionSchema` (not the loose `z.record` the sibling
+ * `OntologyVersionWireSchema.definition` uses) so the console can diff a draft's own declared
+ * object/link/action types structurally, not just render an opaque blob.
+ */
+export const OntologyVersionListItemWireSchema = z
+  .object({
+    id: z.string(),
+    version: z.number().int().positive(),
+    status: PublishableStatusSchema,
+    proposedBy: z
+      .object({
+        id: z.string(),
+        kind: PrincipalKindSchema,
+        displayName: z.string().nullable(),
+      })
+      .strict(),
+    createdAt: z.string(),
+    definition: OntologyDefinitionSchema,
+  })
+  .strict();
+export type OntologyVersionListItemWire = z.infer<typeof OntologyVersionListItemWireSchema>;
 
 // -------------------------------------------------------------------------------------------
 // get_type / list_types — one item shape per `kind` (ObjectType / LinkType / ActionType),
