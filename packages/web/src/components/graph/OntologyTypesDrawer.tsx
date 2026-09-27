@@ -8,7 +8,7 @@ import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
 import { List, ListRow } from '../kit/list-row.js';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../kit/sheet.js';
+import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Tabs } from '../kit/tabs.js';
@@ -83,8 +83,15 @@ export function OntologyTypesDrawer({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent size="wide" data-testid="graph-types-drawer">
-        <SheetHeader>
+        <SheetHeader className="flex-row items-center justify-between">
           <SheetTitle>{t('本体类型', 'Ontology types')}</SheetTitle>
+          {/* A read-only browser has no Cancel of its own, and a wide sheet can leave no overlay to
+           *  tap on a phone — so an explicit close, not only Esc / outside click. */}
+          <SheetClose asChild>
+            <Button variant="ghost" size="s" data-testid="graph-types-close">
+              {t('关闭', 'Close')}
+            </Button>
+          </SheetClose>
         </SheetHeader>
         {open ? (
           selectedTypeName === undefined ? (

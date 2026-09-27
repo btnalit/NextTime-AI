@@ -78,6 +78,12 @@ describe('OntologyTypesDrawer — closed', () => {
     render(<Harness http={typesHttp()} startOpen={false} />);
     expect(screen.queryByTestId('graph-types-drawer')).toBeNull();
   });
+
+  it('closes from its own 关闭 button (no Cancel of its own; a phone may have no overlay to tap)', async () => {
+    render(<Harness http={typesHttp()} />);
+    fireEvent.click(await screen.findByTestId('graph-types-close'));
+    await waitFor(() => expect(screen.queryByTestId('graph-types-drawer')).toBeNull());
+  });
 });
 
 describe('OntologyTypesDrawer — list view', () => {
