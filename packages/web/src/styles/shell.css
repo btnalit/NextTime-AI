@@ -16,41 +16,12 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--surface-1);
+  /* Design system v3: the navigation sits on the page itself (the ambient wash shows through) and
+   * only the active item carries colour — the primary pill below — with cards alone being white. */
+  background: transparent;
   border-right: 1px solid var(--border);
   padding: var(--space-4) var(--space-3);
   gap: var(--space-4);
-}
-
-/* Design system v2.1 — the navigation as a brand-navy island (tokens.css "Sidebar island"). The
- * general tokens are re-pointed here, on the panel itself, so the nav items, workspace block, role
- * badges, pending-count badge, connection line, user row and language switch — legacy classes and
- * kit utilities alike — all resolve to the island values with no per-control override. The mobile
- * `NavDrawer` carries `.nav-drawer` on its sheet content, so it is the same island. */
-.sidebar,
-.nav-drawer {
-  --surface-1: var(--sidebar-bg);
-  --surface-2: var(--sidebar-surface-2);
-  --surface-3: var(--sidebar-surface-3);
-  --border: var(--sidebar-border);
-  --border-strong: var(--sidebar-border);
-  --text-strong: var(--sidebar-text-strong);
-  --text: var(--sidebar-text);
-  --text-2: var(--sidebar-text-2);
-  --text-3: var(--sidebar-text-3);
-  --accent: var(--sidebar-accent);
-  --accent-hover: var(--sidebar-text-strong);
-  --accent-soft: var(--sidebar-accent-soft);
-  --warn: var(--sidebar-warn);
-  --warn-soft: var(--sidebar-warn-soft);
-  --info: var(--sidebar-info);
-  --info-soft: var(--sidebar-info-soft);
-  --ok: var(--sidebar-ok);
-  --ok-soft: var(--sidebar-ok-soft);
-  background: var(--sidebar-bg);
-  /* `color` is inherited as a computed value from `body`, not re-resolved from the remapped
-   * `--text` — so the island has to restate it, or unstyled text stays page ink on navy. */
-  color: var(--text);
 }
 
 .sidebar-brand {
@@ -68,8 +39,10 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-m);
-  /* Design system v2: the product mark carries the brand colour. */
-  background: var(--primary);
+  /* Design system v3: the product mark carries the brand gradient and the primary glow. */
+  background-color: var(--primary);
+  background-image: var(--gradient-primary);
+  box-shadow: inset 0 1px 0 var(--highlight-inset), var(--shadow-primary);
   color: var(--text-on-primary);
   display: grid;
   place-items: center;
@@ -79,9 +52,15 @@
 }
 
 .sidebar-product {
-  font-weight: 600;
-  font-size: var(--fs-14);
+  font-weight: 700;
+  font-size: var(--fs-16);
   min-width: 0;
+  /* Signature layer: the wordmark carries the brand sweep (light stops 5.2:1 on the page; dark
+   * uses its own lighter `--gradient-text`). */
+  background-image: var(--gradient-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* P3-1 (V1): a bordered block distinct from the brand row — was a plain text row
@@ -96,7 +75,8 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
-  background: var(--surface-2);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-card);
   min-width: 0;
 }
 
@@ -108,7 +88,7 @@
 .sidebar-workspace-name {
   font-size: var(--fs-13);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -177,6 +157,23 @@
   gap: var(--space-3);
   flex: 1;
   overflow-y: auto;
+  /* Signature layer: when the platform group makes the list scroll, items fade out at the edges
+   * instead of being cut by the workspace card / footer. */
+  padding: var(--space-2) 0;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 12px,
+    black calc(100% - 12px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 12px,
+    black calc(100% - 12px),
+    transparent 100%
+  );
 }
 
 .nav-section {
@@ -250,26 +247,30 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 30px;
-  padding: 6px 8px;
-  border-radius: 7px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: var(--radius-m);
   color: var(--text-2);
   font-weight: 500;
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
   line-height: var(--lh-tight);
   border: 1px solid transparent;
-  transition: background var(--transition), color var(--transition);
+  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
 }
 
 .nav-item:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--text);
   text-decoration: none;
 }
 
+/* Design system v3: the active section is a solid primary pill with a soft glow — the one place
+ * the navigation carries colour. */
 .nav-item[aria-current="page"] {
-  background: var(--accent-soft);
-  color: var(--text);
+  background-color: var(--primary);
+  background-image: var(--gradient-primary);
+  color: var(--text-on-primary);
+  box-shadow: inset 0 1px 0 var(--highlight-inset), var(--shadow-primary);
 }
 
 .nav-item .icon {
@@ -278,7 +279,7 @@
 }
 
 .nav-item[aria-current="page"] .icon {
-  color: var(--accent);
+  color: var(--text-on-primary);
 }
 
 .nav-label {
@@ -523,7 +524,7 @@
 
 .tab[aria-selected="true"] {
   background: var(--surface-1);
-  color: var(--text);
+  color: var(--accent);
   box-shadow: 0 0 0 1px var(--border-strong);
 }
 
@@ -630,7 +631,10 @@
   gap: var(--space-3);
   height: 52px;
   padding: 0 var(--space-3);
-  background: var(--surface-1);
+  /* Signature layer: frosted over the scrolling page instead of a flat white bar. */
+  background: var(--surface-glass);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -645,7 +649,7 @@
 .mobile-topbar-title {
   font-size: var(--fs-14);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text);
 }
 
 .mobile-topbar-sub {

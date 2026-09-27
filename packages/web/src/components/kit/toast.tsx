@@ -136,7 +136,7 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
             >
               <ToneIcon tone={tone} />
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <p className="m-0 text-13 font-semibold text-text-strong">{toast.title}</p>
+                <p className="m-0 text-13 font-semibold text-text">{toast.title}</p>
                 {toast.description ? (
                   <p className="m-0 text-13 text-text-3">{toast.description}</p>
                 ) : null}

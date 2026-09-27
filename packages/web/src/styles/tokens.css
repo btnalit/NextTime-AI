@@ -24,60 +24,64 @@
 :root {
   color-scheme: light;
 
-  /* Design system v2 (2026-09-26, `design-system/nexttime-ai-console/MASTER.md`): the §5.9
-   * structure and semantics stay; the look moves off "black, white and a 1px border" — one brand
-   * scale, neutrals tinted toward the brand hue, three surface levels separated by tone and a soft
-   * shadow, and short ease-out motion. */
+  /* Design system v3 (2026-09-27, `design-system/nexttime-ai-console/MASTER.md`). The maintainer
+   * rejected v2.1's navy-tinted ink ("好难看") and pointed at the MihomoOrbit console: colour comes
+   * from a vivid primary, the active-navigation pill, soft multi-hue ambience and data accents —
+   * never from tinting body text. Ink is clean neutral; the §5.9 governance semantics are unchanged. */
 
-  /* Brand scale around the §5.9 accent (#1f4fd6 = 600). */
-  --brand-50: #eef3fe;
-  --brand-100: #dce6fd;
-  --brand-200: #bccffb;
-  --brand-300: #8fb0f7;
-  --brand-400: #5b86f0;
-  --brand-500: #3563e6;
-  --brand-600: #1f4fd6;
-  --brand-700: #1a40b0;
-  --brand-800: #1b378e;
-  --brand-900: #1c3271;
-  --brand-950: #152046;
+  /* Brand scale around a vivid indigo-blue (600 = the primary). */
+  --brand-50: #eef1ff;
+  --brand-100: #dfe4ff;
+  --brand-200: #c3ccff;
+  --brand-300: #9aa8fd;
+  --brand-400: #6d80fb;
+  --brand-500: #4d67fa;
+  --brand-600: #3551f9;
+  --brand-700: #2b44e6;
+  --brand-800: #2338c9;
+  --brand-900: #1f309f;
+  --brand-950: #151e5e;
 
-  /* Neutrals (§5.9), tinted toward the brand hue: page < card < popover. */
-  --bg: #f3f5fa;
+  /* Neutrals: a cool light-grey page, white cards, two quiet fills. */
+  --bg: #f4f6f9;
   --surface-1: #ffffff;
-  --surface-2: #f7f9fc;
-  --surface-3: #edf1f7;
-  --border: #e1e6ef;
-  --border-strong: #c8d0dc;
+  --surface-2: #f7f8fb;
+  --surface-3: #eef1f5;
+  --border: #e3e7ee;
+  --border-strong: #cfd5df;
 
-  /* Design system v2.1 (2026-09-27, maintainer: "字体基本就是单纯黑色，非常不好看"): the ink moves
-   * off near-black onto the brand hue — headings in a deep brand navy (`--text-strong`), body in a
-   * softer slate-navy, secondary and caption tinted the same way, and a brand-700 eyebrow colour
-   * (`--text-accent`) for section labels. Minimum contrast over every background below:
-   * strong 11.79:1, text 10.54:1, text-2 6.23:1, text-3 4.95:1, accent 7.43:1 (all on
-   * --danger-soft). */
-  --text-strong: #172a5a;
-  --text: #28344f;
-  --text-2: #4a5672;
-  /* S8 W1-A8 (audit S5): darkened from #6b7280 (4.43:1 on --bg, 4.16:1 on --accent-soft — both
-   * under 4.5:1) to clear 4.5:1 on every surface; v2.1 tints it toward the brand hue. */
-  --text-3: #5a6580;
-  --text-accent: #1a40b0;
-  /* Text on a filled control — the ink primary button (`--text` background), the accent, and the
-   * filled danger hover all take this. */
+  /* Ink: neutral, not tinted (v2.1's navy ink is an anti-pattern now). Minimum contrast over every
+   * background below: text 13.43:1, text-2 6.94:1, text-3 4.86:1 (all on --danger-soft). */
+  --text: #1f2230;
+  --text-2: #4b4f5c;
+  --text-3: #626674;
+  /* Text on a filled control — the accent and the filled danger hover take this. */
   --text-on-accent: #ffffff;
 
-  /* Accent: links, selection, focus. 6.3:1 on white. */
-  --accent: #1f4fd6;
-  --accent-hover: #1a40b0;
-  --accent-soft: #e8eefc;
+  /* Accent: links, selection, focus — the primary hue (min 4.83:1 over every background). */
+  --accent: #3551f9;
+  --accent-hover: #2b44e6;
+  --accent-soft: #eef1ff;
 
-  /* Primary action (design system v2): the page's one main button is brand, not ink — blue still
-   * means "you can click this"; the ink look read as unfinished. */
-  --primary: #1f4fd6;
-  --primary-hover: #1a40b0;
-  --primary-press: #1b378e;
+  /* Primary action and the active navigation pill: vivid, white label (5.68:1 / 6.84:1 / 8.47:1). */
+  --primary: #3551f9;
+  --primary-hover: #2b44e6;
+  --primary-press: #2338c9;
   --text-on-primary: #ffffff;
+  /* Signature layer (v3): the primary as an indigo-to-violet sweep on the few surfaces that carry
+   * the brand — the primary button, the active nav pill, the product mark and wordmark. Every stop
+   * keeps a white label ≥ 5.68:1 (hover ≥ 6.44:1, press ≥ 7.04:1). Decorative, not a governance
+   * meaning; running text never uses it. */
+  --gradient-primary: linear-gradient(135deg, #3551f9 0%, #6d42f0 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #2b44e6 0%, #6139e8 100%);
+  --gradient-primary-press: linear-gradient(135deg, #2338c9 0%, #5436e0 100%);
+  --gradient-text: linear-gradient(135deg, #3551f9 0%, #6d42f0 100%);
+  --highlight-inset: rgba(255, 255, 255, 0.18);
+  /* The control-plane dot grid behind every page (faded out towards the bottom in base.css), the
+   * frosted mobile top bar, and text selection. */
+  --grid-dot: rgba(31, 34, 48, 0.07);
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --selection: rgba(53, 81, 249, 0.18);
 
   /* Governance semantics (§5.9 principle 2). */
   --ok: #157347;
@@ -86,36 +90,14 @@
   --warn-soft: #fdf1e3;
   --danger: #b42318;
   --danger-soft: #fde8e6;
-  --info: #1f4fd6;
-  --info-soft: #e8eefc;
+  --info: #3551f9;
+  --info-soft: #eef1ff;
   --observe: #0f766e;
   --observe-soft: #e0f2f1;
   /* §5.9 lists `--muted #6b7280`; that is 4.28:1 on `--muted-soft`, under principle 6's 4.5:1
    * floor for the chip text it colours, so the grey is one step darker here (4.75:1). */
   --muted: #626b7b;
   --muted-soft: #f0f1f3;
-
-  /* Sidebar island (design system v2.1): the navigation is a deep brand-navy panel. shell.css
-   * remaps the general tokens (`--text*`, `--surface-*`, `--border*`, `--accent*`, the semantics
-   * the sidebar uses) onto these inside `.sidebar` / `.nav-drawer`, so every nested control picks
-   * them up without its own override; floating content (menus, popovers) portals out and keeps
-   * the page theme. Contrast is checked as its own pair matrix in tokens-contrast.test.ts. */
-  --sidebar-bg: #152046;
-  --sidebar-surface-2: #1d2c5c;
-  --sidebar-surface-3: #22336a;
-  --sidebar-border: #26386e;
-  --sidebar-accent-soft: #26397a;
-  --sidebar-text-strong: #f4f7fe;
-  --sidebar-text: #eef2fb;
-  --sidebar-text-2: #c5d0ea;
-  --sidebar-text-3: #9aa9cf;
-  --sidebar-accent: #93b4ff;
-  --sidebar-warn: #f5c46b;
-  --sidebar-warn-soft: #3a3424;
-  --sidebar-info: #a9c3ff;
-  --sidebar-info-soft: #22336a;
-  --sidebar-ok: #7fd9a8;
-  --sidebar-ok-soft: #1f3a3a;
 
   /* Type scale (C24; S8 W1-A8 dropped the `--fs-11` stop, audit S8: 11px text below the 12px
    * accessible floor — every former `var(--fs-11)` use now reads `var(--fs-12)`, and the
@@ -129,10 +111,10 @@
   --lh-tight: 1.3;
   --lh-body: 1.6;
 
-  /* Radii 6 (chip) / 8 (control) / 12 (card); spacing 4 / 8 / 12 / 16 / 24 / 32. */
+  /* Radii 6 (chip) / 8 (control) / 14 (card, v3: a softer card corner); spacing 4 … 32. */
   --radius-s: 6px;
   --radius-m: 8px;
-  --radius-l: 12px;
+  --radius-l: 14px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -141,23 +123,31 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* Depth (design system v2): three surface levels — page (`--bg`), card (`--surface-1` +
+  /* Depth: three surface levels — page (`--bg` + `--bg-ambient`), card (`--surface-1` +
    * `--shadow-card`), floating (`--shadow-1`: drawer, popover, toast, dialog). `--shadow-raised` is
-   * the hover lift of an interactive card or row group. Shadows are tinted with the ink hue. */
-  --shadow-card: 0 1px 2px rgba(17, 26, 46, 0.04), 0 1px 3px rgba(17, 26, 46, 0.06);
-  --shadow-raised: 0 2px 4px rgba(17, 26, 46, 0.05), 0 6px 16px rgba(17, 26, 46, 0.08);
-  --shadow-1: 0 4px 12px rgba(17, 26, 46, 0.1), 0 16px 40px rgba(17, 26, 46, 0.14);
-  --ring: 0 0 0 3px rgba(31, 79, 214, 0.22);
-  --overlay: rgba(17, 26, 46, 0.4);
+   * the hover lift of an interactive card; `--shadow-primary` is the soft glow under the primary
+   * button and the active navigation pill. */
+  --shadow-card: 0 1px 2px rgba(31, 34, 48, 0.04), 0 1px 3px rgba(31, 34, 48, 0.06);
+  --shadow-raised: 0 2px 4px rgba(31, 34, 48, 0.05), 0 8px 20px rgba(31, 34, 48, 0.08);
+  --shadow-1: 0 4px 12px rgba(31, 34, 48, 0.1), 0 16px 40px rgba(31, 34, 48, 0.14);
+  --shadow-primary: 0 2px 4px rgba(53, 81, 249, 0.18), 0 6px 16px rgba(53, 81, 249, 0.28);
+  --ring: 0 0 0 3px rgba(53, 81, 249, 0.25);
+  --overlay: rgba(31, 34, 48, 0.4);
   --skeleton-a: var(--surface-2);
   --skeleton-b: var(--surface-3);
+
+  /* Page ambience (v3): three faint washes — primary blue top-left, violet top-right, cyan
+   * bottom-right — fixed behind the whole viewport; the colour a page has without tinting its ink. */
+  --bg-ambient: radial-gradient(ellipse at 0% 0%, rgba(53, 81, 249, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 0%, rgba(156, 59, 255, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 100%, rgba(0, 199, 255, 0.05) 0%, transparent 50%);
 
   /* Self-hosted (styles/fonts.css → @fontsource, bundled by Vite; nothing loads from an external
    * origin — C21's `font-src 'self'`). Noto Sans SC is unicode-range sliced, so a page only pulls
    * the CJK slices it renders. */
-  --font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", Roboto,
+  --font-sans: "Geist Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", Roboto,
     "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
     "Noto Sans Mono", monospace;
 
   --sidebar-w: 240px;
@@ -167,8 +157,8 @@
   --thread-max: 820px;
   --drawer-w: 480px;
 
-  /* Motion (design system v2): 150–200ms ease-out for hover / press / open; base.css drops it
-   * under prefers-reduced-motion. */
+  /* Motion: 150–200ms ease-out for hover / press / open; base.css drops it under
+   * prefers-reduced-motion. */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --dur-fast: 150ms;
   --dur: 200ms;
@@ -181,33 +171,37 @@
   :root {
     color-scheme: dark;
 
-    /* Design system v2: a deep tinted navy, not black; off-white body text, not #fff. */
-    --bg: #0b1020;
-    --surface-1: #111829;
-    --surface-2: #161f34;
-    --surface-3: #1c2740;
-    --border: #25304a;
-    --border-strong: #35425f;
+    /* Design system v3: a deep neutral with a hint of blue, not black; off-white text, not #fff. */
+    --bg: #0f1018;
+    --surface-1: #161823;
+    --surface-2: #1b1d29;
+    --surface-3: #20222c;
+    --border: #292a34;
+    --border-strong: #3a3c48;
 
-    --text-strong: #f1f4fb;
-    --text: #dfe5f2;
-    --text-2: #aab4c8;
-    /* S8 W1-A8 (audit S5): lightened from #8b94a5 — that passed --surface-1 (5.98:1) but fell to
-     * 4.16:1 / 4.48:1 / 4.40:1 on --warn-soft / --info-soft / --observe-soft respectively (each
-     * -soft composited over --surface-1, its usual mounting surface). Now min 4.85:1, on
-     * --warn-soft. */
-    --text-3: #98a2b6;
-    --text-accent: #93b4ff;
-    --text-on-accent: #0b1020;
+    --text: #e4e6ee;
+    --text-2: #aab0c0;
+    --text-3: #98a1b5;
+    --text-on-accent: #0f1018;
 
-    --accent: #7aa2ff;
-    --accent-hover: #93b4ff;
-    --accent-soft: rgba(122, 162, 255, 0.16);
+    --accent: #8aa2ff;
+    --accent-hover: #a3b6ff;
+    --accent-soft: rgba(77, 113, 239, 0.18);
 
-    --primary: #7aa2ff;
-    --primary-hover: #93b4ff;
-    --primary-press: #a9c3ff;
-    --text-on-primary: #0b1020;
+    /* The pill and the primary button keep a saturated fill with a white label in dark too
+     * (4.79:1 / 5.19:1 / 5.62:1) — a pale fill with dark text read washed-out. */
+    --primary: #4466ee;
+    --primary-hover: #3f60e8;
+    --primary-press: #3858e0;
+    --text-on-primary: #ffffff;
+    --gradient-primary: linear-gradient(135deg, #4466ee 0%, #6a4ff0 100%);
+    --gradient-primary-hover: linear-gradient(135deg, #3f60e8 0%, #6139e8 100%);
+    --gradient-primary-press: linear-gradient(135deg, #3858e0 0%, #5436e0 100%);
+    --gradient-text: linear-gradient(135deg, #8aa2ff 0%, #b197fc 100%);
+    --highlight-inset: rgba(255, 255, 255, 0.14);
+    --grid-dot: rgba(255, 255, 255, 0.05);
+    --surface-glass: rgba(22, 24, 35, 0.72);
+    --selection: rgba(138, 162, 255, 0.28);
 
     --ok: #4fc38a;
     --ok-soft: rgba(79, 195, 138, 0.16);
@@ -215,35 +209,21 @@
     --warn-soft: rgba(229, 180, 84, 0.18);
     --danger: #f0716a;
     --danger-soft: rgba(240, 113, 106, 0.18);
-    --info: #7fb2ff;
-    --info-soft: rgba(127, 178, 255, 0.16);
+    --info: #8aa2ff;
+    --info-soft: rgba(77, 113, 239, 0.18);
     --observe: #5ec8bf;
     --observe-soft: rgba(94, 200, 191, 0.16);
     --muted: #8b94a5;
     --muted-soft: rgba(139, 148, 165, 0.16);
 
-    /* Sidebar island, dark: a shade apart from --bg rather than the light theme's brand navy. */
-    --sidebar-bg: #0e1528;
-    --sidebar-surface-2: #161f34;
-    --sidebar-surface-3: #1c2740;
-    --sidebar-border: #25304a;
-    --sidebar-accent-soft: #1d2b52;
-    --sidebar-text-strong: #f1f4fb;
-    --sidebar-text: #dfe5f2;
-    --sidebar-text-2: #aab4c8;
-    --sidebar-text-3: #98a2b6;
-    --sidebar-accent: #93b4ff;
-    --sidebar-warn: #e5b454;
-    --sidebar-warn-soft: #2e2a22;
-    --sidebar-info: #7fb2ff;
-    --sidebar-info-soft: #1b2a4c;
-    --sidebar-ok: #4fc38a;
-    --sidebar-ok-soft: #16302a;
-
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
-    --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.3);
+    --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 20px rgba(0, 0, 0, 0.35);
     --shadow-1: 0 4px 12px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.45);
-    --ring: 0 0 0 3px rgba(122, 162, 255, 0.3);
-    --overlay: rgba(4, 7, 16, 0.65);
+    --shadow-primary: 0 2px 4px rgba(68, 102, 238, 0.25), 0 6px 18px rgba(68, 102, 238, 0.35);
+    --ring: 0 0 0 3px rgba(138, 162, 255, 0.35);
+    --overlay: rgba(4, 5, 10, 0.65);
+    --bg-ambient: radial-gradient(ellipse at 0% 0%, rgba(68, 102, 238, 0.1) 0%, transparent 50%),
+      radial-gradient(ellipse at 100% 0%, rgba(156, 59, 255, 0.07) 0%, transparent 50%),
+      radial-gradient(ellipse at 100% 100%, rgba(0, 199, 255, 0.05) 0%, transparent 50%);
   }
 }

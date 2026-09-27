@@ -283,7 +283,7 @@ function MediumTier({
               'z-50 flex w-80 flex-col gap-3 rounded-m border border-border bg-surface-1 p-4 shadow-1',
             )}
           >
-            <div id={titleId} className="text-14 font-semibold text-text-strong">
+            <div id={titleId} className="text-14 font-semibold text-text">
               {title}
             </div>
             {description !== undefined ? (
@@ -376,10 +376,7 @@ function IrreversibleTier({
               'flex-col gap-3 rounded-l border border-border bg-surface-1 p-5 shadow-1',
             )}
           >
-            <AlertDialogPrimitive.Title
-              id={titleId}
-              className="text-16 font-semibold text-text-strong"
-            >
+            <AlertDialogPrimitive.Title id={titleId} className="text-16 font-semibold text-text">
               {title}
             </AlertDialogPrimitive.Title>
             <AlertDialogPrimitive.Description id={descriptionId} className="text-13 text-text-2">

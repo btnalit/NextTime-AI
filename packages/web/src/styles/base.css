@@ -15,6 +15,9 @@ body {
   margin: 0;
   min-height: 100%;
   background: var(--bg);
+  /* Design system v3: the faint blue / violet / cyan washes stay put while content scrolls. */
+  background-image: var(--bg-ambient);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--fs-14);
@@ -25,6 +28,47 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+/* Design system v3 signature layer — a faint control-plane dot grid behind every page, fixed like
+ * the ambient wash and faded out towards the bottom so it frames the header area without ever
+ * competing with content (cards are opaque). Purely decorative: no pointer events, below content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 65%);
+  mask-image: linear-gradient(to bottom, black 0%, transparent 65%);
+}
+
+::selection {
+  background: var(--selection);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* The brand sweep on a primary control (kit/button's primary variant, legacy `.btn-primary`, the
+ * active nav pill). Sets only `background-image` + the glow, so a kit utility's
+ * `background-color` stays underneath as the fallback and never fights it; a thin top highlight
+ * gives the fill a lit edge. */
+.nt-gradient-primary {
+  background-image: var(--gradient-primary);
+  box-shadow: inset 0 1px 0 var(--highlight-inset), var(--shadow-primary);
+}
+
+.nt-gradient-primary:hover:not(:disabled) {
+  background-image: var(--gradient-primary-hover);
+}
+
+.nt-gradient-primary:active:not(:disabled) {
+  background-image: var(--gradient-primary-press);
 }
 
 h1,
@@ -55,17 +99,6 @@ h3 {
   font-size: var(--fs-14);
   font-weight: 600;
   line-height: var(--lh-tight);
-}
-
-/* Design system v2.1: headings and emphasised text take the deep brand ink, so a page reads as
- * navy headings over slate body text instead of one flat near-black. */
-h1,
-h2,
-h3,
-h4,
-strong,
-b {
-  color: var(--text-strong);
 }
 
 a {
@@ -242,9 +275,9 @@ button:disabled {
 .section-title {
   font-size: var(--fs-12);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-accent);
+  color: var(--text-3);
 }
 
 .definition-list {

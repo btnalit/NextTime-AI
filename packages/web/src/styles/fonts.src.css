@@ -4,12 +4,13 @@
  * loads from an external origin, which is what the strict `font-src 'self'` in
  * deploy/caddy/Caddyfile and the no-internet host both require.
  *
- * Weights: IBM Plex Sans 400 / 500 / 600 / 700 (body, labels, headings, page titles), IBM Plex
- * Mono 400 / 500 (ids, code), Noto Sans SC 400 / 500 / 700 (CJK). Plex is imported as its latin
- * subset only; Noto Sans SC is the unicode-range-sliced build (102 slices per weight, ~35 KB each)
- * — the browser fetches only the slices whose characters a page renders, which is how the
- * ≤ ~600 KB first-paint budget of §12 item 7 is met without hand-subsetting. CJK 600 resolves to
- * the 700 face (design system v2.1; before it the browser synthesised bold from the 500 face).
+ * Weights (design system v3, 2026-09-27): Geist Sans 400 / 500 / 600 / 700 (Latin UI — the
+ * reference console the maintainer pointed at uses Geist), Geist Mono 400 / 500 (ids, code),
+ * Noto Sans SC 400 / 500 / 700 (CJK). Geist is imported as its latin subset only; Noto Sans SC is
+ * the unicode-range-sliced build (102 slices per weight, ~35 KB each) — the browser fetches only
+ * the slices whose characters a page renders, which is how the ≤ ~600 KB first-paint budget of
+ * §12 item 7 is met without hand-subsetting. CJK 600 resolves to the real 700 face, never a
+ * browser-synthesised bold.
  *
  * S8 W3 F1 (leftover 49): this file is no longer imported directly (`base.css` still
  * `@import`s the sibling `fonts.css`, unchanged) — it is now only the *list* of which
@@ -21,15 +22,12 @@
  * on the next `vite build` / `vite dev` start. See that plugin's own doc comment for why
  * generating a file on disk, rather than intercepting the import in Vite's own plugin pipeline,
  * is what actually works for a file reached only through a nested CSS `@import` chain. */
-@import "@fontsource/ibm-plex-sans/latin-400.css";
-@import "@fontsource/ibm-plex-sans/latin-500.css";
-@import "@fontsource/ibm-plex-sans/latin-600.css";
-@import "@fontsource/ibm-plex-sans/latin-700.css";
-@import "@fontsource/ibm-plex-mono/latin-400.css";
-@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/geist-sans/latin-400.css";
+@import "@fontsource/geist-sans/latin-500.css";
+@import "@fontsource/geist-sans/latin-600.css";
+@import "@fontsource/geist-sans/latin-700.css";
+@import "@fontsource/geist-mono/latin-400.css";
+@import "@fontsource/geist-mono/latin-500.css";
 @import "@fontsource/noto-sans-sc/400.css";
 @import "@fontsource/noto-sans-sc/500.css";
-/* Design system v2.1: a real 700 CJK face. Before it, every 600/700 Chinese heading was the 500
- * face synthetically emboldened by the browser (smeared strokes); CSS font matching now resolves
- * CJK 600 and 700 to this face. Still unicode-range sliced — fetched per rendered character. */
 @import "@fontsource/noto-sans-sc/700.css";
