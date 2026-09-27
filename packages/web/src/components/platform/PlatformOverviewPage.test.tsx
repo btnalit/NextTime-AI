@@ -367,7 +367,7 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
     expect(counts.textContent).toContain('资源');
 
     const tiles: readonly [string, string, string | number][] = [
-      ['platform-count-pending-action-requests', '待处理', 0],
+      ['platform-count-pending-action-requests', '待审批', 0],
       ['platform-count-running-tasks', '运行中', 0],
       ['platform-count-users', '用户', 3],
       ['platform-count-workspaces', '工作区', 0],
@@ -431,7 +431,7 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
     expect(screen.getByTestId('platform-checklist')).toBeTruthy();
   });
 
-  it('S8 W4-C: 待处理 / 运行中 render the kernel’s cross-workspace counts', async () => {
+  it('S8 W4-C: 待审批 / 运行中 render the kernel’s cross-workspace counts', async () => {
     const http = scriptedHttp({
       platform_overview: () =>
         overview({

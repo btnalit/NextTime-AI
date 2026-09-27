@@ -320,7 +320,7 @@ function PlatformOverviewBody({
               testId="platform-count-pending-action-requests"
               icon="approvals"
               deco="violet"
-              label={t('待处理', 'Pending approvals')}
+              label={t('待审批', 'Pending approvals')}
               value={data.counts.pendingActionRequests}
             />
             <CountTile
