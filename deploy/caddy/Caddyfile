@@ -152,7 +152,11 @@ https://:8443 {
 	# kernel never sees the credential. `handle_path` strips `/gate-host`, so
 	# `/gate-host/i/<gateId>/gate/connected-accounts` reaches the host as `/i/<gateId>/gate/...`;
 	# every other `/i/*` route there still demands gate_token, which no browser has.
+	# Leftover 87: the host's `/internal/metrics` (gate_token-guarded too) is never published —
+	# `/gate-host/internal/*` answers 404 here, like every other service's `/internal/*`.
 	handle_path /gate-host/* {
+		@gate_host_internal path /internal/*
+		respond @gate_host_internal 404
 		reverse_proxy gate-host:8083
 	}
 

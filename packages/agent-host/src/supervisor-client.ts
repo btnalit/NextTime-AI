@@ -21,9 +21,20 @@
  * `@nexttime/shared`, the same value `index.ts`'s `main()` already computes for the kernel
  * WebSocket link — is sent on every request below; never logged, matching this client's existing
  * rule for the Capability Handle in the body.
+ *
+ * Leftover 87: `spawn` and `touch` take an optional per-call `correlationId` (host.ts passes the
+ * Turn id) sent as `x-correlation-id` — a header, since `/resident/spawn`'s body schema is strict.
  */
 
+import { correlationHeaders } from '@nexttime/shared';
+
 export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
+
+/** Per-call options for {@link SupervisorClientPort.spawn} / `touch` (leftover 87). */
+export interface SupervisorCallOptions {
+  /** Sent as `x-correlation-id` (the Turn id) — never part of the request body. */
+  readonly correlationId?: string;
+}
 
 export interface SupervisorClientOptions {
   /** Base URL of worker-supervisor, e.g. `http://worker-supervisor:8081` — no trailing slash
@@ -169,10 +180,10 @@ async function requestJson(
  *  requiring the concrete class) so tests can exercise `host.ts`'s orchestration with a fake, no
  *  network involved. Same convention as `packages/kernel/src/adapters/db/pool.ts`'s `PoolLike`. */
 export interface SupervisorClientPort {
-  spawn(input: SpawnInput): Promise<SpawnResult>;
+  spawn(input: SpawnInput, options?: SupervisorCallOptions): Promise<SpawnResult>;
   stop(principalId: string): Promise<void>;
   status(principalId: string): Promise<ResidentStatus | undefined>;
-  touch(principalId: string): Promise<boolean>;
+  touch(principalId: string, options?: SupervisorCallOptions): Promise<boolean>;
 }
 
 export class SupervisorClient implements SupervisorClientPort {
@@ -196,14 +207,18 @@ export class SupervisorClient implements SupervisorClientPort {
    *  for the crash case) — see resident-service.ts's own doc comment. This is what makes calling
    *  `spawn` on every `startTurn` correct rather than wasteful: the common case is a cheap
    *  reuse-and-return. */
-  async spawn(input: SpawnInput): Promise<SpawnResult> {
+  async spawn(input: SpawnInput, options: SupervisorCallOptions = {}): Promise<SpawnResult> {
     const { status, body } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/resident/spawn`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        headers: {
+          'content-type': 'application/json',
+          ...this.authHeaders,
+          ...correlationHeaders(options.correlationId),
+        },
         body: JSON.stringify(input),
       },
     );
@@ -250,12 +265,15 @@ export class SupervisorClient implements SupervisorClientPort {
   /** Refreshes the idle-timeout clock. Returns `false` when worker-supervisor has never heard of
    *  this principal (404 — see resident-service.ts's own `touch` doc comment for the recovery
    *  case this still tolerates). */
-  async touch(principalId: string): Promise<boolean> {
+  async touch(principalId: string, options: SupervisorCallOptions = {}): Promise<boolean> {
     const { status } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}/touch`,
-      { method: 'POST', headers: { ...this.authHeaders } },
+      {
+        method: 'POST',
+        headers: { ...this.authHeaders, ...correlationHeaders(options.correlationId) },
+      },
     );
     if (status === 404) return false;
     if (status !== 204) {

@@ -50,6 +50,18 @@ files modified.
    `publish_ontology_version` have zero console callers. An owner/builder cannot review a type,
    dry-run a change, or publish an ontology version from the console despite the capability, role
    and mode being fully modeled in `packages/shared`. Ontology changes today are API/CLI-only.
+   **2026-09-27 (G1, closing wave C5, `feat/ontology-ui`):** `get_type`/`validate` now have a
+   console caller — the graph page's new 「类型 Types」 drawer (`graph/OntologyTypesDrawer.tsx`,
+   `list_types`/`get_type` for a searchable, kind-filterable browse + detail view; `validate`'s own
+   semantics is a candidate-link domain/range check, not a change dry-run, so its console surface
+   is a small "校验一个候选关系" tool under a LinkType's own detail, not a proposal-review step).
+   `propose_ontology_change`/`publish_ontology_version` are **not** covered — there is no kernel
+   capability that lists or reads a pending `ontology_versions` draft row (id/version/status/
+   proposedBy) by any filter (`get_type`/`list_types` return the merged current-state type view,
+   with no such fields, scoped to published rows plus only the caller's own drafts); building a
+   review queue would need a new kernel read capability (e.g. a `list_ontology_versions`/
+   `get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list
+   pattern) — a separate decision, out of scope for a console-only PR.
 2. **No manual fact-correction UI beyond conflict resolution** — `assert_fact`, `supersede_fact`,
    `invalidate_fact` are unused. The only human-facing fact actions are `verify_fact` (mark
    verified) and `resolve_conflict` (pick a winner among existing candidates); there is no way for
@@ -245,11 +257,11 @@ platform-human-only by design).
 | `set_agent_profile` | agent_profile | human | W | AgentProfileForm.tsx; chat/ModelSwitcher.tsx | - |  |
 | `get_agent_policy` | agent_profile | human | R | AgentProfilePage.tsx; chat/ModelSwitcher.tsx; ModelsPage.tsx | - |  |
 | `set_agent_policy` | agent_profile | human | W | AgentPolicyForm.tsx (ModelsPage) | - |  |
-| `get_type` | ontology | handle | R | (none) | - | No console caller anywhere. GraphPage's type filter uses list_types only; there is no single-type detail view and no ontology admin page at all. |
-| `list_types` | ontology | handle | R | graph/GraphPage.tsx | - |  |
-| `validate` | ontology | handle | R | (none) | - | No console caller anywhere. No dry-run/validate UI for ontology changes. |
-| `propose_ontology_change` | ontology | handle | W | (none) | entry | No console caller anywhere. Zero ontology-authoring UI exists in the console despite the capability, minRole and mode being fully modeled in packages/shared. |
-| `publish_ontology_version` | ontology | human | W | (none) | - | No console caller anywhere. Same gap -- no ontology publish UI; likely CLI/API-only today. |
+| `get_type` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: the graph page's 「类型 Types」 drawer re-reads a selected row's canonical definition. Was: no console caller anywhere; GraphPage's type filter used list_types only, no single-type detail view. |
+| `list_types` | ontology | handle | R | graph/GraphPage.tsx; graph/OntologyTypesDrawer.tsx | - | The drawer's own list view (all kinds, unfiltered params) is a second, independent caller alongside the existing object-type filter. |
+| `validate` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: a LinkType's detail view offers "校验一个候选关系" — one candidate sourceType/targetType pair against that LinkType's own declared signatures (I2). Its real semantics is a link domain/range check, not a dry-run of a proposed ontology *change*; no console surface exists for the latter (see propose_ontology_change/publish_ontology_version below). Was: no console caller anywhere. |
+| `propose_ontology_change` | ontology | handle | W | (none) | entry | Still no console caller. **Investigated 2026-09-27 (G1, wave C5) and deliberately left undone**: there is no kernel capability that lists or reads a pending `ontology_versions` draft row (id/version/status/proposedBy) by any filter — `get_type`/`list_types` return the merged current-state type view only, scoped to published rows plus the caller's own drafts, with no id/version/proposedBy fields at all. A "review this proposal" UI needs a new read capability first (a `list_ontology_versions`/`get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list pattern) — a separate decision, out of scope for a console-only PR. |
+| `publish_ontology_version` | ontology | human | W | (none) | - | Still no console caller — same gap and same 2026-09-27 investigation as propose_ontology_change above. If a review UI is ever built here, `publish_ontology_version` is a one-way `draft -> published` transition (I12: the DB trigger blocks any further update to `definition` once published, and no unpublish/deprecate capability exists for `ontology_versions`) — its confirm should be `tier="irreversible"`, not `medium`. |
 | `export_prov` | audit | human | R | audit/ExplainSection.tsx (AuditPage) | - |  |
 | `register_source` | ingest | handle | W | (none) | - | No console caller. Ingest is pipeline/collector-only (API key), which is plausibly correct -- flagged for confirmation rather than as a clear defect. |
 | `submit_observations` | ingest | handle | W | (none) | - | No console caller. Same as register_source -- plausibly pipeline-only by design. |
@@ -352,6 +364,11 @@ component or its direct children found during this pass — shared sub-component
   `packages/shared/src/capabilities.ts` L~ (group `ontology`) fully models these (role, mode,
   paramsSchema) but no page/component in `packages/web/src` calls any of them. `GraphPage.tsx`
   only reads `list_types` for its filter. Ontology governance is console-invisible today.
+  **2026-09-27 (G1, closing wave C5):** `get_type`/`validate` now have a console caller
+  (`graph/OntologyTypesDrawer.tsx` — see the Top-10 list above for the exact shape).
+  `propose_ontology_change`/`publish_ontology_version` still have none — no kernel capability
+  lists or reads a pending `ontology_versions` draft row by any filter, so there is nothing to
+  build a review queue against without first adding one (out of scope here).
 - `assert_fact`, `supersede_fact`, `invalidate_fact` — `packages/kernel/src/application/gateway/
   fact-handlers.ts`'s three write handlers have no console caller; only `verify_fact`
   (`graph/FactRow.tsx`) and `resolve_conflict` (`graph/ConflictsPanel.tsx`) exist as human fact

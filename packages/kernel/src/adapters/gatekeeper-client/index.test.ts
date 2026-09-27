@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { runWithCorrelationId } from '../../substrate/correlation/index.js';
 import { GatekeeperClientError, GatekeeperTimeoutError, HttpGatekeeperClient } from './index.js';
 
 /**
@@ -154,5 +155,22 @@ describe('HttpGatekeeperClient', () => {
       env: { NEXTTIME_GATE_TOKEN_FILE: '/no/such/file/gate.token' },
     });
     await client.health('https://example.test');
+  });
+});
+
+// Leftover 87: a gate call made while serving a correlated kernel call carries its id.
+describe('HttpGatekeeperClient — x-correlation-id', () => {
+  it('forwards the current call id, and sends none outside a call', async () => {
+    const seen: Array<string | null> = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get('x-correlation-id'));
+      return jsonResponse({ ok: true, result: { data: {} } });
+    });
+    const client = new HttpGatekeeperClient({ fetchImpl, token: 'gate-token-for-tests' });
+    await runWithCorrelationId('turn-5555-6666', () =>
+      client.observe('https://example.test', { operation: 'stock.get' }),
+    );
+    await client.observe('https://example.test', { operation: 'stock.get' });
+    expect(seen).toEqual(['turn-5555-6666', null]);
   });
 });

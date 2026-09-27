@@ -90,6 +90,15 @@ export const SURFACES: readonly Surface[] = [
     role: 'owner',
     ready: (page) => heading(page, '图谱'), // graph/GraphPage.tsx
   },
+  // 收尾波次 C5 (coverage gap G1): the 「类型 Types」 drawer, deep-linked open via `?types=1`
+  // (`lib/graph-route.ts`) rather than a separate route — `graph/OntologyTypesDrawer.tsx`.
+  {
+    id: 'graph-types',
+    labelZh: '图谱 · 类型',
+    hash: '#/work/graph?types=1',
+    role: 'owner',
+    ready: (page) => page.getByTestId('graph-types-drawer'),
+  },
   {
     id: 'agent',
     labelZh: '我的智能体',

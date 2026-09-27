@@ -14,6 +14,7 @@ import {
   parsePositiveIntEnvVar,
   startBackgroundServicesOrExit,
 } from './index.js';
+import { currentCorrelationId } from './substrate/correlation/index.js';
 
 /** The internal-plane shared secret every `/internal/*` test below presents (or deliberately
  *  withholds). Generated per run — never a literal that could look like a real credential. */
@@ -27,6 +28,51 @@ const unusedPool: PoolLike = {
     throw new Error('unusedPool: connect() should not have been called');
   },
 };
+
+// Leftover 87: `createServer`'s request id is the correlation id, and from `preHandler` on it is
+// the async context every handler (and what it awaits — audit, gate / supervisor clients) sees.
+describe('createServer — correlation context (leftover 87)', () => {
+  function serverWithProbe() {
+    const app = createServer({ pool: unusedPool });
+    app.post('/probe-correlation', async (request) => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return { id: request.id, context: currentCorrelationId(), body: request.body };
+    });
+    return app;
+  }
+
+  it('a POST handler (body parsed) sees the inbound id as its async context, after an await', async () => {
+    const response = await serverWithProbe().inject({
+      method: 'POST',
+      url: '/probe-correlation',
+      headers: { 'x-correlation-id': 'turn-aaaa-bbbb-cccc' },
+      payload: { hello: 'world' },
+    });
+    expect(response.json()).toEqual({
+      id: 'turn-aaaa-bbbb-cccc',
+      context: 'turn-aaaa-bbbb-cccc',
+      body: { hello: 'world' },
+    });
+    expect(response.headers['x-correlation-id']).toBe('turn-aaaa-bbbb-cccc');
+  });
+
+  it('an invalid inbound id is replaced by a minted one, which is also the context', async () => {
+    const response = await serverWithProbe().inject({
+      method: 'POST',
+      url: '/probe-correlation',
+      headers: { 'x-correlation-id': 'has spaces' },
+      payload: {},
+    });
+    const body = response.json() as { id: string; context: string };
+    expect(body.id).not.toBe('has spaces');
+    expect(body.context).toBe(body.id);
+    expect(response.headers['x-correlation-id']).toBe(body.id);
+  });
+
+  it('no context leaks outside a request', () => {
+    expect(currentCorrelationId()).toBeUndefined();
+  });
+});
 
 describe('GET /api/health', () => {
   it('responds with status ok, with no database access', async () => {

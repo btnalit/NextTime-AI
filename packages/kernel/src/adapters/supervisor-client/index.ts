@@ -28,7 +28,15 @@
  * loads via `loadInternalToken()` for the kernel's own `/internal/*` guard — no second env var, no
  * second file read. This client's own other secret is the `capabilityHandle` string it forwards in
  * `spawn`'s body, which — like the internal-plane token — it never logs.
+ *
+ * Leftover 87: every request also carries an `x-correlation-id` header — the current call's id
+ * (substrate/correlation), or for `spawn` the caller's explicit `options.correlationId` (the
+ * Worker's inherited id, which `/task/spawn` puts into the container's `NEXTTIME_CORRELATION_ID`).
+ * A header, not a body field: `/task/spawn`'s body schema is strict and unchanged.
  */
+
+import { correlationHeaders } from '@nexttime/shared';
+import { currentCorrelationId } from '../../substrate/correlation/index.js';
 
 export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
 
@@ -229,8 +237,15 @@ function errorCodeFromBody(body: unknown): string | undefined {
  *  `invoke.ts`/`reaper.ts`'s orchestration with a fake, no network involved. Same convention as
  *  `packages/agent-host/src/supervisor-client.ts`'s `SupervisorClientPort` and
  *  `packages/kernel/src/adapters/db/pool.ts`'s `PoolLike`. */
+/** Per-call options for {@link TaskSupervisorClientPort.spawn} (leftover 87). */
+export interface TaskSpawnCallOptions {
+  /** Sent as `x-correlation-id` instead of the current call context's id — the Worker's own
+   *  inherited id (`application/task/spawn.ts` resolves it). Never part of the request body. */
+  readonly correlationId?: string;
+}
+
 export interface TaskSupervisorClientPort {
-  spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome>;
+  spawn(input: TaskSpawnInput, options?: TaskSpawnCallOptions): Promise<TaskSpawnOutcome>;
   /** `false` when worker-supervisor has never heard of this `workerRunId` (404) — idempotent:
    *  terminating an already-finished/unknown Task is a safe no-op from the caller's point of
    *  view. */
@@ -284,14 +299,26 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
         : {};
   }
 
-  async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+  /** Auth + correlation headers for one request — the correlation id defaults to the current
+   *  call context's (leftover 87). */
+  private headers(correlationId = currentCorrelationId()): Record<string, string> {
+    return { ...correlationHeaders(correlationId), ...this.authHeaders };
+  }
+
+  async spawn(
+    input: TaskSpawnInput,
+    options: TaskSpawnCallOptions = {},
+  ): Promise<TaskSpawnOutcome> {
     const { status, body } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/task/spawn`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        headers: {
+          'content-type': 'application/json',
+          ...this.headers(options.correlationId),
+        },
         body: JSON.stringify(input),
       },
     );
@@ -326,7 +353,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       `${this.supervisorUrl}/resident/stop`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        headers: { 'content-type': 'application/json', ...this.headers() },
         body: JSON.stringify({ principalId }),
       },
     );
@@ -344,7 +371,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       `${this.supervisorUrl}/resident/reclaim`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        headers: { 'content-type': 'application/json', ...this.headers() },
         body: JSON.stringify({ principalId }),
       },
     );
@@ -360,7 +387,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/images`,
-      { method: 'GET', headers: { ...this.authHeaders } },
+      { method: 'GET', headers: this.headers() },
     );
     if (status !== 200) {
       throw new TaskSupervisorError('http_error', `GET /images returned ${status}`, { status });
@@ -376,7 +403,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/residents`,
-      { method: 'GET', headers: { ...this.authHeaders } },
+      { method: 'GET', headers: this.headers() },
     );
     if (status !== 200) {
       throw new TaskSupervisorError('http_error', `GET /residents returned ${status}`, { status });
@@ -389,7 +416,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/task/${encodeURIComponent(workerRunId)}/terminate`,
-      { method: 'POST', headers: { ...this.authHeaders } },
+      { method: 'POST', headers: this.headers() },
     );
     if (status === 404) return false;
     if (status !== 204) {
@@ -407,7 +434,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/task/${encodeURIComponent(workerRunId)}`,
-      { method: 'GET', headers: { ...this.authHeaders } },
+      { method: 'GET', headers: this.headers() },
     );
     if (status === 404) return undefined;
     if (status !== 200) {

@@ -4,6 +4,7 @@ import { internalAuthorizationHeader } from '@nexttime/shared';
 import { createAdminServer } from './admin.js';
 import type { EgressProxyConfig } from './config.js';
 import { loadConfig, loadInternalToken } from './config.js';
+import { createEgressMetrics } from './metrics.js';
 import { createProxyServer } from './proxy.js';
 import { EgressReporter } from './report.js';
 import { createSourceMap } from './source-map.js';
@@ -64,6 +65,7 @@ export async function startEgressProxy(
 
   const sourceMap = createSourceMap(config.sourceMapFile);
   const reporter = new EgressReporter({ kernelUrl: config.kernelUrl, authorizationHeader });
+  const metrics = createEgressMetrics();
 
   const proxyServer = createProxyServer({
     denyHosts: config.denyHosts,
@@ -73,11 +75,12 @@ export async function startEgressProxy(
     denyUnknownSource: config.denyUnknownSource,
     resolveSource: (clientIp) => sourceMap.resolveSource(clientIp),
     reporter,
+    metrics,
     maxTunnelsPerSource: config.maxTunnelsPerSource,
     idleTimeoutMs: config.idleTimeoutMs,
     connectTimeoutMs: config.connectTimeoutMs,
   });
-  const adminServer = createAdminServer();
+  const adminServer = createAdminServer({ renderMetrics: metrics.render });
 
   // Proxy listens on every interface (agent containers on the `workers` network reach it there);
   // admin/healthz is loopback-only, per the task spec, so it's never reachable from either

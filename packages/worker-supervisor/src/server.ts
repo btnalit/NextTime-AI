@@ -46,6 +46,12 @@
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404
  *   GET  /healthz                 -> 200 {status:"ok"}
+ *   GET  /internal/metrics        -> 200 Prometheus text (metrics.ts)            [guarded]
+ *
+ * Leftover 87 (cross-service correlation id): every request's Fastify `request.id` is its
+ * correlation id — the caller's `x-correlation-id` when valid (the kernel sends the delegating
+ * call's id, agent-host the Turn id), else a minted one — and every request log line carries it as
+ * `correlationId`. `/task/spawn` hands it to the Worker container (`NEXTTIME_CORRELATION_ID`).
  *
  * S7-E (P-C §6.5): `/resident/spawn`'s optional `image` is validated against the exact same
  * `isImageAllowed`/`config.taskImageAllowlist` `/task/spawn` already uses — one allowlist, one
@@ -54,7 +60,12 @@
  * capability — see `resident-service.ts`'s `listImages`/`list` for what each actually returns.
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import {
+  CORRELATION_ID_HEADER,
+  PROMETHEUS_TEXT_CONTENT_TYPE,
+  resolveCorrelationId,
+} from '@nexttime/shared';
+import Fastify, { type FastifyInstance, LogController } from 'fastify';
 import {
   SpawnRequestSchema,
   StopRequestSchema,
@@ -64,6 +75,11 @@ import {
 import { IdClaimSchema, type SupervisorConfig } from './config.js';
 import { dockerErrorStatusCode } from './docker-client.js';
 import { requireInternalToken } from './internal-auth.js';
+import {
+  SUPERVISOR_OPERATION_BY_ROUTE,
+  type SupervisorMetrics,
+  createSupervisorMetrics,
+} from './metrics.js';
 import type { ResidentService } from './resident-service.js';
 import type { TaskService } from './task-service.js';
 
@@ -82,14 +98,39 @@ export interface CreateServerOptions {
    *  without a configured token (see `internal-auth.ts`'s own doc comment). */
   readonly internalToken?: string;
   readonly logger?: boolean;
+  /** Leftover 87: this process's metric set — `index.ts` shares one with `createTaskService`'s
+   *  `onTaskFinished`; omitted (tests) → a fresh one. */
+  readonly metrics?: SupervisorMetrics;
 }
 
 export function createServer(options: CreateServerOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    genReqId: (req) => resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]),
+    logController: new LogController({ requestIdLogLabel: 'correlationId' }),
+  });
   const { residentService, taskService, config } = options;
   const requireInternal = { preHandler: requireInternalToken(options.internalToken) };
+  const metrics = options.metrics ?? createSupervisorMetrics();
+
+  // Leftover 87: echo the id, and count every container-lifecycle call by outcome and latency.
+  app.addHook('onRequest', (request, reply, done) => {
+    reply.header(CORRELATION_ID_HEADER, request.id);
+    done();
+  });
+  app.addHook('onResponse', (request, reply, done) => {
+    const operation =
+      SUPERVISOR_OPERATION_BY_ROUTE[`${request.method} ${request.routeOptions.url}`];
+    if (operation) metrics.recordOperation(operation, reply.statusCode, reply.elapsedTime / 1000);
+    done();
+  });
 
   app.get('/healthz', async () => ({ status: 'ok' }));
+
+  app.get('/internal/metrics', requireInternal, async (_request, reply) => {
+    reply.header('content-type', PROMETHEUS_TEXT_CONTENT_TYPE);
+    return metrics.render();
+  });
 
   app.post('/resident/spawn', requireInternal, async (request, reply) => {
     const parsed = SpawnRequestSchema.safeParse(request.body);
@@ -248,7 +289,8 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return { error: { code: 'image_not_allowed', message: `image not allowlisted: ${image}` } };
     }
     try {
-      const outcome = await taskService.spawn({ ...parsed.data, image });
+      // Leftover 87: the Worker inherits this request's correlation id (the kernel's header).
+      const outcome = await taskService.spawn({ ...parsed.data, image, correlationId: request.id });
       reply.code(200);
       return outcome;
     } catch (err) {

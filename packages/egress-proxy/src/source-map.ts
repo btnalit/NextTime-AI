@@ -17,6 +17,10 @@ const SourceEntrySchema = z.object({
   sourceId: z.string(),
   allow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
+  // Leftover 87: a Worker container's inherited correlation id (worker-supervisor's egress-map.ts
+  // writes it for Task containers) — only ever copied into log lines, and only when it is a valid
+  // id (`isValidCorrelationId`), so a malformed map entry can never inject into a log line.
+  correlationId: z.string().optional(),
 });
 
 const SourceMapFileSchema = z.record(z.string(), SourceEntrySchema);

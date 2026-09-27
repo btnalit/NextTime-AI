@@ -28,7 +28,7 @@ objectTypes:
     description: >-
       A published, versioned "executable" for an entry agent or a Worker: model whitelist,
       system prompt, Skills it uses, required Capabilities, and — for kind=entry — a fixed
-      capability ceiling. draft -> published -> deprecated (I12); a Task permanently pins the
+      capability ceiling. draft -> published -> deprecated (a published version never changes); a Task permanently pins the
       (id, version) it was launched with. Relational identity/lifecycle lives in
       `worker_definitions` (packages/kernel/src/application/worker); this ObjectType is that
       table's graph projection, written once a version is published.
@@ -37,7 +37,7 @@ objectTypes:
     description: >-
       One instance of a connected system's governed access point: a transport kind (http / mcp
       / cli / ssh), an interface manifest (Operations), and a credential the Gatekeeper itself
-      holds (never the kernel or any agent process, I9). Created by `request_connection` /
+      holds (never the kernel or any agent process). Created by `request_connection` /
       `create_connection` (design doc §7.5, §5.1.4 Connection).
 
   - name: Operation
@@ -59,13 +59,13 @@ objectTypes:
       A written procedure (pi skill-format markdown) naming which Operations/ObjectTypes it
       applies to, what to watch for, and what "done" looks like. draft -> published ->
       deprecated; a WorkerDefinition's `uses` edges name the Skills its container loads at
-      startup (S2.14).
+      startup.
 
   - name: Procedure
     description: >-
       A distilled, reusable multi-step business process: an ordered sequence of steps, each
       referencing an Operation or a WorkerDefinition, including approval and verification steps.
-      Proposed from a successful Task (`propose_procedure`), published by a human (S2.14).
+      Proposed from a successful Task (`propose_procedure`), published by a human.
 
 linkTypes:
   - name: exposes
@@ -128,7 +128,7 @@ linkTypes:
     range: Skill
     description: >-
       The published Skills a WorkerDefinition's container loads into its pi skills directory at
-      startup (S2.14).
+      startup.
 
   - name: steps
     domain: Procedure

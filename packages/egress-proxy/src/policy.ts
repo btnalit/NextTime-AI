@@ -14,6 +14,8 @@ export interface SourcePolicy {
   sourceId: string;
   allow?: string[];
   deny?: string[];
+  /** Leftover 87: logged with every observation from this source; never part of any decision. */
+  correlationId?: string;
 }
 
 export interface PolicyConfig {

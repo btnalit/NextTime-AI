@@ -29,6 +29,30 @@ describe('KernelClient', () => {
     expect(kernel.requests[0]?.authorization).toBe('Bearer secret-handle');
   });
 
+  // Leftover 87.
+  it('sends x-correlation-id only when a valid id is set, and follows setCorrelationId', async () => {
+    kernel.setHandler('get_object', () => ({ ok: true, result: {} }));
+    const client = new KernelClient({
+      kernelUrl: kernel.url,
+      capabilityHandle: 'h',
+      correlationId: 'turn-0000-0001',
+    });
+    await client.call('get_object', {});
+    client.setCorrelationId('turn-0000-0002');
+    await client.call('get_object', {});
+    client.setCorrelationId('not valid');
+    await client.call('get_object', {});
+    client.setCorrelationId(undefined);
+    await client.call('get_object', {});
+    expect(kernel.requests.map((r) => r.correlationId)).toEqual([
+      'turn-0000-0001',
+      'turn-0000-0002',
+      undefined,
+      undefined,
+    ]);
+    expect(client.getCorrelationId()).toBeUndefined();
+  });
+
   it('throws a capability_error KernelError carrying code and message on {ok:false}', async () => {
     kernel.setHandler('get_object', () => ({
       ok: false,

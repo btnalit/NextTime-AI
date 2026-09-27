@@ -18,9 +18,16 @@ export interface GraphQuery {
   readonly type?: string;
   /** ISO instant for `state_at{at}`; absent = now (frozen per focus, see `ObjectView`). */
   readonly at?: string;
+  /** `'1'` while the 「类型 Types」 drawer (`OntologyTypesDrawer`, C5/G1) is open — a deep-linkable
+   *  flag alongside `objectId`/`at`, not a boolean (the hash query is text-only). */
+  readonly types?: string;
+  /** The type name focused inside the drawer's detail view (`get_type{typeName}`); absent = the
+   *  drawer's own list view. Meaningless without `types=1`, but kept independent of it (like
+   *  `objectId` is independent of no other flag) so `graphHref`/`parseGraphHash` stay simple. */
+  readonly typeName?: string;
 }
 
-const KEYS = ['objectId', 'q', 'type', 'at'] as const;
+const KEYS = ['objectId', 'q', 'type', 'at', 'types', 'typeName'] as const;
 
 /** `null` when `hash` is not the graph route at all. An empty query is `{}`. */
 export function parseGraphHash(hash: string): GraphQuery | null {
