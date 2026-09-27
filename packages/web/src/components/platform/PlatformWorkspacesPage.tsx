@@ -14,11 +14,11 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
+import { Select } from '../kit/select.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Select } from '../ui/Field.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
@@ -227,28 +227,26 @@ export function PlatformWorkspacesPage({
         onSubmit={(event) => event.preventDefault()}
         data-testid="platform-workspaces-filter-form"
       >
-        <Field id="platform-workspaces-status" label={t('状态', 'Status')}>
-          <Select
-            id="platform-workspaces-status"
-            value={filters.status}
-            onChange={(event) => patchFilters({ status: event.target.value as StatusFilter })}
-          >
-            <option value="active">{t('活跃', 'Active')}</option>
-            <option value="disabled">{t('已停用', 'Disabled')}</option>
-            <option value="all">{t('全部', 'All')}</option>
-          </Select>
-        </Field>
-        <Field id="platform-workspaces-purpose" label={t('用途', 'Purpose')}>
-          <Select
-            id="platform-workspaces-purpose"
-            value={filters.purpose}
-            onChange={(event) => patchFilters({ purpose: event.target.value as PurposeFilter })}
-          >
-            <option value="all">{t('全部', 'All')}</option>
-            <option value="standard">{t('常规', 'standard')}</option>
-            <option value="ephemeral">{t('临时', 'ephemeral')}</option>
-          </Select>
-        </Field>
+        <Select
+          id="platform-workspaces-status"
+          label={t('状态', 'Status')}
+          value={filters.status}
+          onChange={(event) => patchFilters({ status: event.target.value as StatusFilter })}
+        >
+          <option value="active">{t('活跃', 'Active')}</option>
+          <option value="disabled">{t('已停用', 'Disabled')}</option>
+          <option value="all">{t('全部', 'All')}</option>
+        </Select>
+        <Select
+          id="platform-workspaces-purpose"
+          label={t('用途', 'Purpose')}
+          value={filters.purpose}
+          onChange={(event) => patchFilters({ purpose: event.target.value as PurposeFilter })}
+        >
+          <option value="all">{t('全部', 'All')}</option>
+          <option value="standard">{t('常规', 'standard')}</option>
+          <option value="ephemeral">{t('临时', 'ephemeral')}</option>
+        </Select>
         <label className="checkbox">
           <input
             type="checkbox"
