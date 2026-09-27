@@ -8,10 +8,17 @@ import type {
 import { findWorkerRunBySessionId, postWorkerResult } from '../../application/task/index.js';
 import {
   getGatekeeper,
+  listGatekeepers,
   listPublishedOperationsForGatekeepers,
 } from '../../governance/gatekeepers/index.js';
+import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { operationPlatformStatus, readGateLinkPoliciesForWorkspace } from '../gates/index.js';
+import {
+  observeRefusal,
+  operationPlatformStatus,
+  readGateLinkPoliciesForWorkspace,
+  readObserveExclusions,
+} from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -220,41 +227,71 @@ function toWireOperation(
   };
 }
 
-/** `list_allowed_operations` (S2.9 deliverable B seam): every published Operation of every
- *  Gatekeeper in the calling Handle's own `resources.gatekeeper` scope — a pure description of an
- *  already-granted scope, never a grant of its own (see `packages/shared/src/capabilities.ts`'s
- *  registry entry doc comment). Human callers (no Handle, `ctx?.scope` undefined) get an empty
- *  list — there is no `resources.gatekeeper` to describe outside a Handle's own scope.
+/** `list_allowed_operations` (S2.9 deliverable B seam): the Operations the calling Handle may act
+ *  on, one entry per `<gate>.<op>` — a pure description, never a grant of its own (see
+ *  `packages/shared/src/capabilities.ts`'s registry entry doc comment). Two halves:
+ *
+ *   - **observe-class**: every published observe Operation of every Gatekeeper in this workspace
+ *     that `observeRefusal` (application/gates/observe-access.ts — the predicate
+ *     `observe_operation` / `request_action` enforce) accepts for the Handle's member: no Grant
+ *     needed (decision D4 revoked 2026-09-27, "只读调用不需要授权"), but a gate the AgentPolicy cap
+ *     or the member's own AgentProfile excludes, or an Operation on the platform deny list, is not
+ *     listed. This is what makes an ungranted system visible to the entry agent, a Worker and an
+ *     MCP client alike — without it enforcement would allow a call no tool exists for.
+ *   - **execute-class** (unchanged): the published execute Operations of the Gatekeepers in the
+ *     Handle's own `resources.gatekeeper` (Grant-derived, attenuated per Worker), minus the platform
+ *     deny list (`operationPlatformStatus`).
+ *
+ *  Human callers (no Handle, `ctx?.scope` undefined) get an empty list — this describes a Handle.
  *
  * Production incident 2026-09-26: this is the tool list the pi extension projects at session
  * start, so an Operation the platform's connector deny list would refuse on the very next call must
  * not appear here either — it used to, offering a tool whose every call failed with
- * `operation_disabled`. Filtered through `operationPlatformStatus` (application/gates/store.ts), the
- * same shared predicate `assertOperationEnabled` and `computeCapabilityReachability` consult, one
- * batched workspace-wide read rather than one deny-list query per Operation. */
+ * `operation_disabled`. One batched workspace-wide deny-list read, not one query per Operation. */
 export const listAllowedOperationsHandler: CapabilityHandler = async (
   client,
   workspaceId,
   _params,
   ctx,
 ) => {
-  const gatekeeperIds = ctx?.scope?.resources.gatekeeper ?? [];
-  const records = await listPublishedOperationsForGatekeepers(client, workspaceId, gatekeeperIds);
-  const gateLinks = await readGateLinkPoliciesForWorkspace(client, workspaceId);
+  const principalId = ctx?.principalId;
+  if (!ctx?.scope || !principalId) return { result: { items: [] } };
 
-  const gateNames = new Map<string, string>();
+  const executeGatekeepers = new Set(ctx.scope.resources.gatekeeper ?? []);
+  const gates = await listGatekeepers(client, workspaceId);
+  const records = await listPublishedOperationsForGatekeepers(
+    client,
+    workspaceId,
+    gates.map((gate) => gate.gatekeeperId),
+  );
+  const gateLinks = await readGateLinkPoliciesForWorkspace(client, workspaceId);
+  const exclusions = await readObserveExclusions(client, workspaceId, principalId);
+
+  // One `getGatekeeper` per gate (not per Operation): its display name, and — the same lookup
+  // `observe_operation` 404s on — whether the gate counts as enabled for `observeRefusal`.
+  const gateRecords = new Map<string, GatekeeperRecord | null>();
   const operations = [];
   for (const record of records) {
-    if (operationPlatformStatus(gateLinks.get(record.gatekeeperId), record.name).disabled) {
-      continue;
+    let gatekeeper = gateRecords.get(record.gatekeeperId);
+    if (gatekeeper === undefined) {
+      gatekeeper = await getGatekeeper(client, workspaceId, record.gatekeeperId);
+      gateRecords.set(record.gatekeeperId, gatekeeper);
     }
-    let gateName = gateNames.get(record.gatekeeperId);
-    if (gateName === undefined) {
-      const gatekeeper = await getGatekeeper(client, workspaceId, record.gatekeeperId);
-      gateName = gatekeeper?.name ?? record.gatekeeperId;
-      gateNames.set(record.gatekeeperId, gateName);
-    }
-    operations.push(toWireOperation(record, gateName));
+    const gateLink = gateLinks.get(record.gatekeeperId);
+    const mode = (record.operation as { mode?: string }).mode;
+    const listed =
+      mode === 'execute'
+        ? executeGatekeepers.has(record.gatekeeperId) &&
+          !operationPlatformStatus(gateLink, record.name).disabled
+        : observeRefusal(exclusions, {
+            gatekeeperId: record.gatekeeperId,
+            gateEnabled: gatekeeper !== null,
+            operationName: record.name,
+            publishedMode: mode,
+            gateLink,
+          }) === undefined;
+    if (!listed) continue;
+    operations.push(toWireOperation(record, gatekeeper?.name ?? record.gatekeeperId));
   }
 
   return { result: { items: operations } };

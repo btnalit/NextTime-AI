@@ -213,9 +213,11 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
     pi.registerTool(buildCapabilityTool(name, options.kernelClient));
   }
 
-  // Gate observe tools (§7.4 "同 entry"): one pi tool per published, observe-class Operation of
-  // every Gatekeeper this Handle carries in `resources.gatekeeper` — identical mechanism to
-  // `entry.ts`'s own `session_start` handler, reusing `gate-tools.ts`'s shared naming helpers.
+  // Gate observe tools (§7.4 "同 entry"): one pi tool per published, observe-class Operation
+  // `list_allowed_operations` returns — every gate enabled in this workspace that the Handle's
+  // member has not excluded (no Grant needed since design doc §11 "门上的观察", D4 revoked
+  // 2026-09-27) — identical mechanism to `entry.ts`'s own `session_start` handler, reusing
+  // `gate-tools.ts`'s shared naming helpers.
   pi.on('session_start', async () => {
     const usedNames = new Set<string>();
     let operations: AllowedOperationWire[];

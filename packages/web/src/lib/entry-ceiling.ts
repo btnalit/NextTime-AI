@@ -18,8 +18,9 @@ import { CAPABILITY_REGISTRY, type Capability } from '@nexttime/shared';
  *
  * Deliberately omits kernel's `ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME` placeholder
  * (`'<gate>.<op>'`) — that is not a capability name `issue_handle`'s `scope.capabilities` accepts
- * (observe-mode gate access is structural, granted through `scope.resources.gatekeeper` instead,
- * which the console offers as a separate gate picker).
+ * (gate access is structural: observe-class Operations need no gate scope at all since decision D4
+ * was revoked on 2026-09-27 — "只读调用不需要授权" — and `scope.resources.gatekeeper`, which the
+ * console offers as a separate gate picker, narrows only the execute-side grant).
  */
 const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly string[] = [
   'get_task',

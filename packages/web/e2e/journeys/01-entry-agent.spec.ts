@@ -288,9 +288,10 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.getByTestId('execution-readiness-missing')).toHaveCount(0);
 
     // 系统与授权: the card's own "reachability for me" chip is the strongest honest signal here
-    // now — it went from "用不了"（not_granted, before step 2）to "可直接调用" once granted and
-    // published, console redesign P2's own acceptance criterion (docs/console-redesign-plan-
-    // 2026-09-25.md §6 P2: "授权后能力视图从「不可用」变「可直接调用」"). Console redesign P3-3
+    // now — "可直接调用" once the gate's observe Operations are published (since decision D4 was
+    // revoked on 2026-09-27 — "只读调用不需要授权" — reads no longer wait for the grant in step 2;
+    // console redesign P2's own acceptance criterion was docs/console-redesign-plan-2026-09-25.md
+    // §6 P2: "授权后能力视图从「不可用」变「可直接调用」"). Console redesign P3-3
     // (V5) moved this chip onto the row itself (`gatekeeper-reachability`, driven straight by the
     // baseline `execution_readiness` gate's own `status`) — no drawer needed to see it.
     await goToByLabel(page, '系统与授权');

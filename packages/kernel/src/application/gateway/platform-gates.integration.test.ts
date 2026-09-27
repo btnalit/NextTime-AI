@@ -45,6 +45,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
+import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { upsertAnnouncement } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
@@ -55,6 +56,7 @@ import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
+import type { CapabilityReachability } from './capability-reachability.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 import {
   ConnectionEndpointIsPlatformGateError,
@@ -1416,22 +1418,95 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
-      it('grant revoked: reachability says not_granted; enforcement refuses via the human-channel gatekeeper-access check', async () => {
+      // -------------------------------------------------------------------------------------
+      // Design doc §11 "门上的观察" (decision D4 revoked 2026-09-27 — "只读调用不需要授权"): the
+      // entry agent's reachability and Handle-channel enforcement must agree for a member with no
+      // Grant at all. Enforcement is exercised through the member's own entry Handle — its scope is
+      // exactly `reach.parentAuthority`, the scope `ensureEntryHandle` would mint right now — and a
+      // Worker-shaped Handle (`request_action`, gate scope naming some other gate). The human
+      // channel's own Grant check is unchanged and pinned alongside.
+      // -------------------------------------------------------------------------------------
+
+      function handleCaller(scope: CapabilityScope): ResolvedCaller {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: cWorkspaceId,
+            sid: randomUUID(),
+            obo: cMemberId,
+            scope,
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      }
+
+      const workerShapedScope = (): CapabilityScope => ({
+        capabilities: ['request_action', 'list_allowed_operations'],
+        resources: { gatekeeper: [randomUUID()] },
+      });
+
+      function observeViaEntryHandle(
+        reach: CapabilityReachability,
+        operationName: string,
+      ): Promise<unknown> {
+        return dispatchCapability(
+          { pool },
+          handleCaller(reach.parentAuthority),
+          'observe_operation',
+          {
+            gatekeeperId: cGatekeeperId,
+            operation: operationName,
+            params: {},
+          },
+        );
+      }
+
+      function observeViaWorkerHandle(operationName: string): Promise<unknown> {
+        return dispatchCapability({ pool }, handleCaller(workerShapedScope()), 'request_action', {
+          gatekeeperId: cGatekeeperId,
+          operation: operationName,
+          params: {},
+        });
+      }
+
+      async function projectedOperationNames(reach: CapabilityReachability): Promise<string[]> {
+        const result = (await dispatchCapability(
+          { pool },
+          handleCaller(reach.parentAuthority),
+          'list_allowed_operations',
+          {},
+        )) as { items: { gatekeeperId: string; name: string }[] };
+        return result.items
+          .filter((item) => item.gatekeeperId === cGatekeeperId)
+          .map((item) => item.name)
+          .sort();
+      }
+
+      async function memberObserveAuditCount(): Promise<number> {
+        const rows = await withWorkspace(
+          pool,
+          { workspaceId: cWorkspaceId, principalId: cOwnerId },
+          (client) =>
+            queryAudit(client, cWorkspaceId, {
+              actorPrincipalId: cMemberId,
+              action: 'observe_operation',
+              resourceType: 'gatekeeper',
+              resourceId: cGatekeeperId,
+              limit: 1000,
+            }),
+        );
+        return rows.length;
+      }
+
+      async function withGrantRevoked(fn: () => Promise<void>): Promise<void> {
         await withWorkspace(pool, { workspaceId: cWorkspaceId, principalId: cOwnerId }, (client) =>
           revokeCapabilityGrant(client, cWorkspaceId, cGrantId),
         );
         try {
-          const reach = await reachForMember();
-          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
-          expect(gate?.granted).toBe(false);
-          expect(gate?.status).toBe('unreachable');
-          expect(gate?.reason).toBe('not_granted');
-          expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
-            status: 'unreachable',
-            reason: 'not_granted',
-          });
-
-          await expect(observeAsMember(OP_A.name)).rejects.toBeInstanceOf(ForbiddenError);
+          await fn();
         } finally {
           const restored = await withWorkspace(
             pool,
@@ -1446,44 +1521,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
           cGrantId = restored.id;
         }
-      });
+      }
 
-      // AgentPolicy's gate cap is enforced when the entry Handle is *minted* (`resolveEffectiveAgentProfile`
-      // narrows the scope `ensureEntryHandle` issues), not per call inside `observe_operation`'s own
-      // handler — `assertHumanGatekeeperAccess` only checks the Grant (request-action-handler.ts).
-      // There is therefore no second `observe_operation` refusal to assert here; the entry-scope
-      // computation itself (`reach.entryGatekeeperIds`, the same computation `ensureEntryHandle`
-      // reproduces) *is* what "enforcement" reduces to for this layer, matching this task's own
-      // dispatch note for exactly this case.
-      it('AgentPolicy cap excludes the gate: reachability says excluded_by_policy, and the entry scope this member’s next Handle would carry drops it', async () => {
-        await dispatchCapability(
-          { pool },
-          humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
-          'set_agent_policy',
-          { allowedGatekeepers: [randomUUID()] },
-        );
-        try {
-          const reach = await reachForMember();
-          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
-          expect(gate?.granted).toBe(true);
-          expect(gate?.excludedByPolicy).toBe(true);
-          expect(gate?.status).toBe('unreachable');
-          expect(gate?.reason).toBe('excluded_by_policy');
-          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
-        } finally {
-          await dispatchCapability(
-            { pool },
-            humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
-            'set_agent_policy',
-            { allowedGatekeepers: [] },
-          );
-        }
-      });
-
-      // Same Handle-issuance-time enforcement as the AgentPolicy cap above (`resolveEffectiveAgentProfile`
-      // also folds in the member's own AgentProfile exclusions) — no separate `observe_operation`
-      // refusal to assert for this layer either.
-      it('AgentProfile exclusion: reachability says excluded_by_profile, and the entry scope drops it', async () => {
+      async function withProfileExclusion(fn: () => Promise<void>): Promise<void> {
         await dispatchCapability(
           { pool },
           humanCallerFor(cWorkspaceId, cMemberId, 'member'),
@@ -1491,13 +1531,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { excludedGatekeepers: [cGatekeeperId] },
         );
         try {
-          const reach = await reachForMember();
-          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
-          expect(gate?.granted).toBe(true);
-          expect(gate?.excludedByProfile).toBe(true);
-          expect(gate?.status).toBe('unreachable');
-          expect(gate?.reason).toBe('excluded_by_profile');
-          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
+          await fn();
         } finally {
           await dispatchCapability(
             { pool },
@@ -1506,6 +1540,150 @@ describe.runIf(DATABASE_URL !== undefined)(
             { excludedGatekeepers: [] },
           );
         }
+      }
+
+      async function withPolicyCap(fn: () => Promise<void>): Promise<void> {
+        await dispatchCapability(
+          { pool },
+          humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+          'set_agent_policy',
+          { allowedGatekeepers: [randomUUID()] },
+        );
+        try {
+          await fn();
+        } finally {
+          await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+            'set_agent_policy',
+            { allowedGatekeepers: [] },
+          );
+        }
+      }
+
+      it('no Grant: reachability says direct, and the member’s entry Handle and a Worker-shaped Handle both observe (audited); the human channel still refuses', async () => {
+        await withGrantRevoked(async () => {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(false);
+          expect(gate?.inEntryScope).toBe(false);
+          expect(gate?.status).toBe('direct');
+          expect(gate?.reason).toBeUndefined();
+          expect(reach.parentAuthority.resources.gatekeeper ?? []).not.toContain(cGatekeeperId);
+          for (const op of [OP_A.name, OP_B.name]) {
+            expect(operationReachability(reach, cGatekeeperId, 'observe', op)).toEqual({
+              status: 'direct',
+            });
+          }
+
+          const before = await memberObserveAuditCount();
+          await expect(observeViaEntryHandle(reach, OP_A.name)).resolves.toMatchObject({
+            status: 'ok',
+          });
+          expect(await memberObserveAuditCount()).toBe(before + 1);
+          await expect(observeViaWorkerHandle(OP_B.name)).resolves.toMatchObject({
+            status: 'ok',
+          });
+          expect(await projectedOperationNames(reach)).toEqual([OP_A.name, OP_B.name].sort());
+
+          // Human channel (console) — unchanged, pending the maintainer's own decision.
+          await expect(observeAsMember(OP_A.name)).rejects.toBeInstanceOf(ForbiddenError);
+        });
+      });
+
+      it('no Grant + excluded on My Agent: reachability says excluded_by_profile, and both Handle paths refuse and project nothing', async () => {
+        await withGrantRevoked(() =>
+          withProfileExclusion(async () => {
+            const reach = await reachForMember();
+            const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+            expect(gate?.granted).toBe(false);
+            expect(gate?.excludedByProfile).toBe(true);
+            expect(gate?.status).toBe('unreachable');
+            expect(gate?.reason).toBe('excluded_by_profile');
+            expect(operationReachability(reach, cGatekeeperId, 'observe', OP_A.name)).toEqual({
+              status: 'unreachable',
+              reason: 'excluded_by_profile',
+            });
+
+            await expect(observeViaEntryHandle(reach, OP_A.name)).rejects.toThrow(
+              /excluded_by_profile/,
+            );
+            await expect(observeViaWorkerHandle(OP_A.name)).rejects.toThrow(/excluded_by_profile/);
+            expect(await projectedOperationNames(reach)).toEqual([]);
+          }),
+        );
+      });
+
+      it('no Grant + outside the AgentPolicy cap: reachability says excluded_by_policy, and both Handle paths refuse and project nothing', async () => {
+        await withGrantRevoked(() =>
+          withPolicyCap(async () => {
+            const reach = await reachForMember();
+            const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+            expect(gate?.granted).toBe(false);
+            expect(gate?.excludedByPolicy).toBe(true);
+            expect(gate?.status).toBe('unreachable');
+            expect(gate?.reason).toBe('excluded_by_policy');
+            expect(operationReachability(reach, cGatekeeperId, 'observe', OP_B.name)).toEqual({
+              status: 'unreachable',
+              reason: 'excluded_by_policy',
+            });
+
+            await expect(observeViaEntryHandle(reach, OP_B.name)).rejects.toThrow(
+              /excluded_by_policy/,
+            );
+            await expect(observeViaWorkerHandle(OP_B.name)).rejects.toThrow(/excluded_by_policy/);
+            expect(await projectedOperationNames(reach)).toEqual([]);
+          }),
+        );
+      });
+
+      // With the Grant in place: the same two exclusion layers also drop the gate from the entry
+      // scope this member's next Handle would carry (execute authority), and are now refused per
+      // call on the Handle channel too (the observe predicate reads them on every call).
+      it('AgentPolicy cap excludes a granted gate: reachability says excluded_by_policy, the entry scope drops it, and a Handle observe is refused', async () => {
+        await withPolicyCap(async () => {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(true);
+          expect(gate?.excludedByPolicy).toBe(true);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('excluded_by_policy');
+          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
+          await expect(
+            dispatchCapability(
+              { pool },
+              handleCaller({
+                capabilities: ['observe_operation'],
+                resources: { gatekeeper: [cGatekeeperId] },
+              }),
+              'observe_operation',
+              { gatekeeperId: cGatekeeperId, operation: OP_A.name, params: {} },
+            ),
+          ).rejects.toThrow(/excluded_by_policy/);
+        });
+      });
+
+      it('AgentProfile exclusion of a granted gate: reachability says excluded_by_profile, the entry scope drops it, and a Handle observe is refused', async () => {
+        await withProfileExclusion(async () => {
+          const reach = await reachForMember();
+          const gate = reach.gates.find((g) => g.gateId === cGatekeeperId);
+          expect(gate?.granted).toBe(true);
+          expect(gate?.excludedByProfile).toBe(true);
+          expect(gate?.status).toBe('unreachable');
+          expect(gate?.reason).toBe('excluded_by_profile');
+          expect(reach.entryGatekeeperIds).not.toContain(cGatekeeperId);
+          await expect(
+            dispatchCapability(
+              { pool },
+              handleCaller({
+                capabilities: ['observe_operation'],
+                resources: { gatekeeper: [cGatekeeperId] },
+              }),
+              'observe_operation',
+              { gatekeeperId: cGatekeeperId, operation: OP_A.name, params: {} },
+            ),
+          ).rejects.toThrow(/excluded_by_profile/);
+        });
       });
     });
   },
