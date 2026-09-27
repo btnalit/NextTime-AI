@@ -113,7 +113,7 @@ fi
 require_driver
 
 # The run-private collector token file (collector_fixtures_step sets it; see the header
-# comment). Removed by the traps below on every exit path — `fail` exits the shell directly, so
+# comment). Removed by on_exit below on every exit path — `fail` exits the shell directly, so
 # cleanup_step alone would leave the credential behind on a failed run.
 ACCEPT_COLLECTOR_TOKEN_FILE=""
 accept_s3_cleanup_token() {
@@ -123,21 +123,50 @@ accept_s3_cleanup_token() {
   fi
 }
 
+# `set -u` is active from the top of this script — pre-set every variable cleanup_step/on_exit
+# read so they are always safe to call from the EXIT trap below, even when preflight_step itself
+# is what failed and bootstrap_step (which normally assigns these) never ran. Same convention
+# accept_s1.sh/accept_s2.sh's own on_exit already established (STATUS leftover 76 /
+# "验收残留自动清理").
+WORKSPACE_ID=""
+OWNER_ID=""
+CLEANUP_DONE=0
+
+# Routes every exit path — success, a `fail()` (== exit 1), or a signal — through cleanup_step
+# exactly once, then the token cleanup, then (fake-provider mode only) the provider restore.
+# `cleanup_step` used to run only at the bottom of the "Run" section (success path) — a `fail()`
+# anywhere before that skipped it entirely and left the owner's entry container running
+# (STATUS.md leftover "验收残留自动清理"). `cleanup_step`'s definition (below, well before "Run")
+# is registered with the shell long before this trap can ever fire, so referencing it here by name
+# is safe even though its body sits later in the file — the same forward-reference
+# accept_s2.sh's own on_exit already relies on.
+on_exit() {
+  rc=$?
+  if [ "$CLEANUP_DONE" -eq 0 ]; then
+    CLEANUP_DONE=1
+    cleanup_step
+  fi
+  accept_s3_cleanup_token
+  if [ "$REAL" -eq 0 ]; then
+    accept_provider_restore
+  fi
+  exit "$rc"
+}
+
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
-# Both modes install the token cleanup; only the fake-provider mode has a provider to restore.
 if [ "$REAL" -eq 0 ]; then
-  trap 'accept_s3_cleanup_token; accept_provider_restore' EXIT
-  trap 'accept_s3_cleanup_token; accept_provider_restore; exit 130' INT TERM HUP PIPE
+  trap on_exit EXIT
+  trap 'exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
   pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
   # W7 real-model mode (same contract as accept_s2.sh --real): deployed provider untouched, the
   # entry agent pinned to $REAL_MODEL, the dependency chat repeated --runs times and judged on
   # its outcome only.
-  trap accept_s3_cleanup_token EXIT
-  trap 'accept_s3_cleanup_token; exit 130' INT TERM HUP PIPE
+  trap on_exit EXIT
+  trap 'exit 130' INT TERM HUP PIPE
   ACCEPT_S3_MODEL=$REAL_MODEL
   export ACCEPT_S3_MODEL
   pass "preflight-real-provider" "real provider left as deployed; entry agent pinned to model=$REAL_MODEL, runs=$RUNS"
@@ -173,6 +202,20 @@ resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
 const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+  body: JSON.stringify({ principalId: '$1' }),
+}).then((r) => console.log('STATUS=' + r.status));
+" </dev/null 2>&1
+}
+
+# POST /resident/reclaim <principalId> — same call, one route over: force-removes the container
+# (not just stops it) and its `${NEXTTIME_DATA}/workspaces/<principalId>` data directory
+# (STATUS.md leftover "验收残留自动清理"). Used only by cleanup_step below.
+resident_reclaim() {
+  docker compose run --rm --no-deps -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
   body: JSON.stringify({ principalId: '$1' }),
@@ -744,16 +787,17 @@ cleanup_step() {
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving the owner's entry container running"
   else
-    resident_stop "$OWNER_ID" >/dev/null 2>&1
-    echo "cleanup: stopped the owner's entry container via the supervisor API"
+    resident_reclaim "$OWNER_ID" >/dev/null 2>&1
+    echo "cleanup: reclaimed the owner's entry container via the supervisor API"
   fi
-  # The run-private collector token is a credential, not a fixture — deleted regardless of --keep
-  # (the EXIT trap covers the failure paths; this is the success path's explicit step).
-  accept_s3_cleanup_token
+  # The run-private collector token is a credential, not a fixture — on_exit (above) deletes it
+  # regardless of --keep, right after this function returns, on every exit path.
   # Workspace/principal/graph/chat/audit rows are the audit trail (design doc §12) — left in place
-  # on purpose, same precedent as accept_s1.sh/accept_s2.sh's own cleanup_step. The workspace is
-  # ephemeral with a 7-day TTL: `sh scripts/delete-workspaces-matching.sh --expired --yes` purges
-  # it (and its never-activated users) once expired; the regex form still works before then.
+  # on purpose, same precedent as accept_s1.sh/accept_s2.sh's own cleanup_step. The entry container
+  # itself is not part of that audit trail — reclaimed (removed, not just stopped) above. The
+  # workspace is ephemeral with a 7-day TTL: `sh scripts/delete-workspaces-matching.sh --expired
+  # --yes` purges it (and its never-activated users) once expired; the regex form still works
+  # before then.
   pass "cleanup" "workspace retained: $WORKSPACE_ID (purged by: sh scripts/delete-workspaces-matching.sh --expired --yes once its 7-day TTL passes)"
 }
 

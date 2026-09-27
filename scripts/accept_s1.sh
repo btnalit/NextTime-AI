@@ -86,12 +86,38 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+# `set -u` is active from the top of this script — pre-set every variable cleanup_step/on_exit
+# read so they are always safe to call from the EXIT trap below, even when preflight_step itself
+# is what failed and bootstrap_step (which normally assigns these) never ran. Same convention
+# accept_s2.sh's own on_exit already established (STATUS leftover 76).
+WORKSPACE_ID=""
+ALICE_PRINCIPAL_ID=""
+BOB_PRINCIPAL_ID=""
+CLEANUP_DONE=0
+
+# Routes every exit path — success, a `fail()` (== exit 1), or a signal — through cleanup_step
+# exactly once before restoring the provider (STATUS.md leftover "验收残留自动清理": a run that
+# fails half-way used to skip cleanup_step entirely and leave alice/bob's entry containers
+# running). `cleanup_step`'s definition (below, well before the "Run" section that actually calls
+# any step) is registered with the shell long before this trap can ever fire, so referencing it
+# here by name is safe even though its body sits later in the file — the same forward-reference
+# accept_s2.sh's own on_exit already relies on.
+on_exit() {
+  rc=$?
+  if [ "$CLEANUP_DONE" -eq 0 ]; then
+    CLEANUP_DONE=1
+    cleanup_step
+  fi
+  accept_provider_restore
+  exit "$rc"
+}
+
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
 if [ "$LITE" -eq 0 ]; then
-  trap accept_provider_restore EXIT
-  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+  trap on_exit EXIT
+  trap 'exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
   pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
@@ -124,6 +150,26 @@ resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
 const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+  body: JSON.stringify({ principalId: '$1' }),
+}).then((r) => console.log('STATUS=' + r.status));
+" </dev/null 2>&1
+}
+
+# POST /resident/reclaim <principalId> — same worker-supervisor internal-plane call as
+# resident_stop above, one route over: force-removes the container (not just stops it) and its
+# `${NEXTTIME_DATA}/workspaces/<principalId>` data directory (STATUS.md leftover "验收残留自动
+# 清理"). This is the exact call the kernel's own `purge_workspace` capability already makes for
+# every purged Principal (application/gateway/platform-handlers.ts's `reclaimEntryContainers`,
+# STATUS.md leftover 77) — using it here at the end of every run, not only once the workspace
+# itself is later purged, is what actually keeps `docker ps -a` free of this run's own stopped
+# `nexttime-entry-*` container instead of leaving it sit there until the ephemeral workspace's
+# 7-day TTL is swept. Tolerates "not found" as a no-op, same as resident_stop.
+resident_reclaim() {
+  docker compose run --rm --no-deps -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
   body: JSON.stringify({ principalId: '$1' }),
@@ -470,11 +516,13 @@ cleanup_step() {
     echo "cleanup: --keep set, leaving alice/bob entry containers running"
     return
   fi
-  resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
-  resident_stop "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
+  resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
+  resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
   # Workspace/principal/chat/activity rows are the audit trail (design doc §12) — left in place on
-  # purpose, per the task brief ("leave the workspace rows ... but print the workspace id").
-  pass "cleanup" "stopped alice/bob entry containers via the supervisor API; workspace retained: $WORKSPACE_ID"
+  # purpose, per the task brief ("leave the workspace rows ... but print the workspace id"). The
+  # entry containers themselves are not part of that audit trail (STATUS.md leftover "验收残留自动
+  # 清理") — reclaimed (removed, not just stopped) via the supervisor API above.
+  pass "cleanup" "reclaimed alice/bob entry containers via the supervisor API; workspace retained: $WORKSPACE_ID"
 }
 
 # --------------------------------------------------------------------------------------------
