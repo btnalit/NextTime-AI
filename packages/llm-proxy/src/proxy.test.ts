@@ -5,6 +5,7 @@ import { SignJWT, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderConfig } from './config.js';
+import { createLlmProxyMetrics } from './metrics.js';
 import { createProxyServer } from './proxy.js';
 import { LlmUsageReporter } from './report.js';
 import type { LlmUsageRecord } from './report.js';
@@ -978,5 +979,139 @@ describe('createProxyServer — S7-A console-key resolution order', () => {
     const body = JSON.parse(res.body.toString('utf8'));
     expect(body.error.code).toBe('upstream_not_configured');
     expect(logLines.some((line) => line.includes('no provider key resolved'))).toBe(true);
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// Leftover 87: correlation id + /internal/metrics
+// -------------------------------------------------------------------------------------------
+
+describe('createProxyServer — correlation id and metrics (leftover 87)', () => {
+  async function setUp() {
+    const upstreamSaw: Array<string | undefined> = [];
+    const upstream = http.createServer((req, res) => {
+      upstreamSaw.push(req.headers['x-correlation-id'] as string | undefined);
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(OPENAI_SSE_BODY);
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const lines: string[] = [];
+    const records: Array<{ record: LlmUsageRecord; correlationId?: string }> = [];
+    const proxy = createProxyServer({
+      providers: { openai: openAiProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: {
+        record: (record, context) =>
+          records.push({ record, correlationId: context?.correlationId }),
+      },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: (line) => lines.push(line),
+      metrics: createLlmProxyMetrics(),
+      internalAuthorizationHeader: 'Bearer internal-token-for-tests',
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    const handle = await signHandle(privateKey);
+    const chat = (headers: Record<string, string> = {}) =>
+      rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: '/openai/v1/chat/completions',
+        headers: {
+          authorization: `Bearer ${handle}`,
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify({ model: 'gpt-example', stream: true }),
+      });
+    return { proxyPort, upstreamSaw, lines, records, chat };
+  }
+
+  it('adopts a valid inbound id: echoed, in the usage record context — and never forwarded upstream', async () => {
+    const { upstreamSaw, records, chat } = await setUp();
+    const res = await chat({ 'x-correlation-id': 'turn-abcd-0001' });
+    expect(res.status).toBe(200);
+    expect(res.headers['x-correlation-id']).toBe('turn-abcd-0001');
+    expect(upstreamSaw).toEqual([undefined]);
+    expect(records[0]?.correlationId).toBe('turn-abcd-0001');
+    expect(records[0]?.record).not.toHaveProperty('correlationId');
+  });
+
+  it('replaces an invalid inbound id with a minted one, logged on refusals too', async () => {
+    const { proxyPort, lines } = await setUp();
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { 'x-correlation-id': 'bad id', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(res.status).toBe(401);
+    const minted = res.headers['x-correlation-id'] as string;
+    expect(minted).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(lines.map((l) => JSON.parse(l).correlationId)).toContain(minted);
+  });
+
+  it('GET /internal/metrics: 401 without the internal token; counters after real traffic', async () => {
+    const { proxyPort, chat } = await setUp();
+    await chat();
+    await rawRequest({ port: proxyPort, method: 'POST', path: '/nope/v1/chat/completions' });
+
+    const denied = await rawRequest({ port: proxyPort, method: 'GET', path: '/internal/metrics' });
+    expect(denied.status).toBe(401);
+
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'GET',
+      path: '/internal/metrics',
+      headers: { authorization: 'Bearer internal-token-for-tests' },
+    });
+    expect(res.status).toBe(200);
+    const text = res.body.toString('utf8');
+    expect(text).toContain(
+      'nexttime_llm_proxy_requests_total{provider="openai",model="gpt-example",status="200"} 1',
+    );
+    expect(text).toContain(
+      'nexttime_llm_proxy_requests_total{provider="unknown",model="",status="404"} 1',
+    );
+    expect(text).toContain(
+      'nexttime_llm_proxy_upstream_duration_seconds_count{provider="openai",model="gpt-example",outcome="completed"} 1',
+    );
+    expect(text).toContain(
+      'nexttime_llm_proxy_tokens_total{provider="openai",model="gpt-example",direction="input"} 10',
+    );
+    expect(text).toContain(
+      'nexttime_llm_proxy_tokens_total{provider="openai",model="gpt-example",direction="output"} 3',
+    );
+  });
+
+  it('GET /internal/metrics fails closed when no internal token is configured', async () => {
+    const { publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: {},
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      log: () => {},
+    });
+    const port = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    const res = await rawRequest({
+      port,
+      method: 'GET',
+      path: '/internal/metrics',
+      headers: { authorization: 'Bearer anything' },
+    });
+    expect(res.status).toBe(401);
   });
 });

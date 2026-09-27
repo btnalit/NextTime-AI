@@ -32,6 +32,13 @@ export interface LlmUsageRecord {
   readonly status: string;
 }
 
+/** Per-record context that is logged but never sent to the kernel (leftover 87). */
+export interface LlmUsageRecordContext {
+  /** The request's correlation id — in the usage log line only; `/internal/llm-usage`'s wire
+   *  shape is unchanged. */
+  readonly correlationId?: string;
+}
+
 export interface LlmUsageReporterOptions {
   /** `KERNEL_URL`; when unset the reporter only logs to stdout and never queues/POSTs. */
   kernelUrl?: string;
@@ -83,8 +90,14 @@ export class LlmUsageReporter {
     this.log = options.log ?? ((line) => console.log(line));
   }
 
-  record(record: LlmUsageRecord): void {
-    this.log(JSON.stringify(record));
+  record(record: LlmUsageRecord, context: LlmUsageRecordContext = {}): void {
+    this.log(
+      JSON.stringify(
+        context.correlationId !== undefined
+          ? { ...record, correlationId: context.correlationId }
+          : record,
+      ),
+    );
     if (!this.kernelUrl) return;
     if (this.queue.length >= this.maxQueueSize) {
       this.queue.shift();

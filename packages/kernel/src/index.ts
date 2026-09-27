@@ -1,6 +1,11 @@
 import { fileURLToPath } from 'node:url';
-import { IllegalTransition, internalAuthorizationHeader } from '@nexttime/shared';
-import Fastify, { type FastifyInstance } from 'fastify';
+import {
+  CORRELATION_ID_HEADER,
+  IllegalTransition,
+  internalAuthorizationHeader,
+  resolveCorrelationId,
+} from '@nexttime/shared';
+import Fastify, { type FastifyInstance, LogController } from 'fastify';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { createPool, logIdleClientErrorToStderr, withWorkspace } from './adapters/db/pool.js';
@@ -20,6 +25,7 @@ import {
   createGatekeeperActionExecutor,
   reapStaleExecutingActionRequests,
   registerActionRequestDrainConsumer,
+  runWithCorrelationId,
   setConnectionHandlerDeps,
   setRequestActionDeps,
 } from './application/gateway/index.js';
@@ -120,7 +126,28 @@ export function createServer(
   deps: KernelServerDeps,
   options: CreateServerOptions = {},
 ): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
+  // Leftover 87 (cross-service correlation id, `@nexttime/shared` correlation.ts): every request's
+  // Fastify `request.id` *is* its correlation id — the caller's `x-correlation-id` when valid
+  // (the platform extension sends its Turn id / inherited Worker id), otherwise a minted one — and
+  // every request log line carries it as `correlationId` (the label replaces Fastify's `reqId`).
+  const app = Fastify({
+    logger: options.logger ?? false,
+    genReqId: (req) => resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]),
+    logController: new LogController({ requestIdLogLabel: 'correlationId' }),
+  });
+  // Echoed on every response so a caller (console, script, operator) can quote it.
+  app.addHook('onRequest', (request, reply, done) => {
+    reply.header(CORRELATION_ID_HEADER, request.id);
+    done();
+  });
+  // The id becomes the call's async context (substrate/correlation) from `preHandler` on — after
+  // body parsing, which can leave the request's own async context (same reason
+  // @fastify/request-context re-enters there), so the handler and everything it awaits (audit
+  // rows, gate and supervisor calls) see it. `done` runs inside the context: Fastify invokes the
+  // route handler synchronously from it.
+  app.addHook('preHandler', (request, _reply, done) => {
+    runWithCorrelationId(request.id, done);
+  });
 
   // S2.4: wired here (not createBackgroundServices) so `request_action` is servable as soon as
   // the port opens, not only once the async AgentRuntime bootstrap below finishes — building a

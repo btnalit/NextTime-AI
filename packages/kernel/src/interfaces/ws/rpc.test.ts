@@ -14,7 +14,7 @@ import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
-import { WS_ERROR_CODES, mapDispatchError } from './rpc.js';
+import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
 /**
  * interfaces/ws/rpc.test: unit coverage for `mapDispatchError` (pure — no IO, no DB), mirroring
@@ -113,5 +113,30 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('FactHasNoEvidenceError (verify_fact, I3.6) maps to ILLEGAL_TRANSITION (-32011), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new FactHasNoEvidenceError('fact-1'));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+});
+
+// Leftover 87: a WS frame may carry its own correlation id — additive and optional; the server
+// validates the value itself (invalid → minted), so the schema never rejects a frame over it.
+describe('JsonRpcRequestSchema — optional correlationId (leftover 87)', () => {
+  const base = { jsonrpc: '2.0', id: 1, method: 'send_chat_message', params: {} };
+
+  it('still accepts a frame without one', () => {
+    expect(JsonRpcRequestSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('accepts a frame with one', () => {
+    const parsed = JsonRpcRequestSchema.parse({ ...base, correlationId: 'turn-1234-5678' });
+    expect(parsed.correlationId).toBe('turn-1234-5678');
+  });
+
+  it('never rejects a frame over a malformed one (the call gets a minted id instead)', () => {
+    for (const correlationId of [42, null, { nested: true }, 'has spaces']) {
+      expect(JsonRpcRequestSchema.safeParse({ ...base, correlationId }).success).toBe(true);
+    }
+  });
+
+  it('still rejects any other unknown top-level field (strict)', () => {
+    expect(JsonRpcRequestSchema.safeParse({ ...base, somethingElse: 1 }).success).toBe(false);
   });
 });

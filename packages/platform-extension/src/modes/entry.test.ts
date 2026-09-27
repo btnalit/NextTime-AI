@@ -377,6 +377,39 @@ describe('registerEntryMode', () => {
     ]);
   });
 
+  // Leftover 87: the entry agent's kernel calls carry the current Turn id as their correlation id.
+  it('every kernel call after a turn marker carries that Turn id as x-correlation-id', async () => {
+    kernel.setHandler('get_entry_context', () => ({ ok: true, result: {} }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    kernel.setHandler('get_object', () => ({ ok: true, result: {} }));
+    const inputHandler = fake.handlers.get('input');
+    const contextHandler = fake.handlers.get('context');
+    const agentSettledHandler = fake.handlers.get('agent_settled');
+    if (!inputHandler || !contextHandler || !agentSettledHandler)
+      throw new Error('handlers not registered');
+
+    const turnId = '7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2';
+    inputHandler(
+      {
+        text: `<!--nexttime:turn_id=${turnId}-->
+Hi`,
+        source: 'rpc',
+      },
+      fakeCtx(),
+    );
+    await contextHandler({ messages: [] }, fakeCtx());
+    await fake.tools
+      .get('get_object')
+      ?.execute('call-1', { objectId: 'o-1' }, undefined, undefined, fakeCtx());
+    await agentSettledHandler({}, fakeCtx());
+
+    expect(kernel.requests.map((r) => [r.capability, r.correlationId])).toEqual([
+      ['get_entry_context', turnId],
+      ['get_object', turnId],
+      ['report_turn', turnId],
+    ]);
+  });
+
   it('agent_settled POSTs report_turn with the turn id and the last assistant text as summary', async () => {
     kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
     const inputHandler = fake.handlers.get('input');

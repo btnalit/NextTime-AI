@@ -10,6 +10,8 @@ export interface FakeKernelRequest {
   capability: string;
   params: unknown;
   authorization: string | undefined;
+  /** The request's `x-correlation-id` header (leftover 87), when sent. */
+  correlationId: string | undefined;
 }
 
 export type FakeKernelOutcome =
@@ -65,6 +67,10 @@ export async function startFakeKernel(): Promise<FakeKernel> {
         capability,
         params,
         authorization: req.headers.authorization,
+        correlationId:
+          typeof req.headers['x-correlation-id'] === 'string'
+            ? req.headers['x-correlation-id']
+            : undefined,
       };
       requests.push(record);
 

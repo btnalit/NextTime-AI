@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { currentCorrelationId } from '../correlation/index.js';
 
 /**
  * substrate/audit/writer: append-only writes to and filtered reads of `audit_records`
@@ -31,7 +32,9 @@ export interface AuditRecordInput {
   readonly action: string;
   readonly resourceType?: string;
   readonly resourceId?: string;
-  /** Arbitrary JSON context (e.g. channel, on_behalf_of, session id, call params). Never a credential. */
+  /** Arbitrary JSON context (e.g. channel, on_behalf_of, session id, call params). Never a credential.
+   *  `writeAudit` adds `correlationId` (leftover 87) when the row is written inside a correlated
+   *  call and the payload does not already carry one — see {@link writeAudit}. */
   readonly payload?: Record<string, unknown>;
 }
 
@@ -73,6 +76,19 @@ function mapAuditRecordRow(row: AuditRecordDbRow): AuditRecordRow {
   };
 }
 
+/**
+ * `record.payload` plus the current call's correlation id (substrate/correlation, leftover 87) —
+ * additive only: a payload that already names a `correlationId` keeps its own, and a row written
+ * outside any call (outbox consumers, the reaper, CLI bootstrap) is unchanged. The id is a
+ * validated opaque token (`@nexttime/shared` `isValidCorrelationId`), never a credential.
+ */
+function withCorrelationId(payload: Record<string, unknown> | undefined): Record<string, unknown> {
+  const base = payload ?? {};
+  const correlationId = currentCorrelationId();
+  if (correlationId === undefined || 'correlationId' in base) return base;
+  return { ...base, correlationId };
+}
+
 /** Appends one AuditRecord. Throws (and, per the caller's transaction, rolls it back) on failure. */
 export async function writeAudit(
   client: PoolClient,
@@ -89,7 +105,7 @@ export async function writeAudit(
       record.action,
       record.resourceType ?? null,
       record.resourceId ?? null,
-      JSON.stringify(record.payload ?? {}),
+      JSON.stringify(withCorrelationId(record.payload)),
     ],
   );
   const row = result.rows[0];

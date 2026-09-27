@@ -89,7 +89,12 @@ class WsRpcClient {
     return new WsRpcClient(ws);
   }
 
-  call<T = unknown>(method: string, params?: unknown, timeoutMs = 5000): Promise<T> {
+  call<T = unknown>(
+    method: string,
+    params?: unknown,
+    timeoutMs = 5000,
+    frameExtras: Record<string, unknown> = {},
+  ): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -106,7 +111,9 @@ class WsRpcClient {
           reject(e);
         },
       });
-      this.ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }));
+      this.ws.send(
+        JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {}, ...frameExtras }),
+      );
     });
   }
 
@@ -256,6 +263,34 @@ describe.runIf(DATABASE_URL !== undefined)(
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
       const chats = await client.call<{ items: unknown[] }>('list_chats', {});
       expect(Array.isArray(chats.items)).toBe(true);
+      client.close();
+    });
+
+    // Leftover 87: each WS call runs in its own correlation context — the frame's own
+    // `correlationId` when valid, else a fresh one — and its audit row carries that id.
+    it('audits each WS call with its frame correlationId (or a minted, per-call one)', async () => {
+      const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+      const latestNewChatPayload = async () =>
+        withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (c) =>
+            c.query<{ payload: Record<string, unknown> }>(
+              `select payload from audit_records
+               where workspace_id = $1 and action = 'new_chat' order by created_at desc limit 1`,
+              [workspaceId],
+            ),
+          { skipRoleSwitch: true },
+        );
+
+      const frameId = `ws-frame-${randomUUID()}`;
+      await client.call('new_chat', {}, 5000, { correlationId: frameId });
+      expect((await latestNewChatPayload()).rows[0]?.payload.correlationId).toBe(frameId);
+
+      await client.call('new_chat', {}, 5000, { correlationId: 'not valid!' });
+      const minted = (await latestNewChatPayload()).rows[0]?.payload.correlationId;
+      expect(minted).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+      expect(minted).not.toBe(frameId);
       client.close();
     });
 

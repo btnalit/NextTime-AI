@@ -25,6 +25,8 @@ export * from './procedure.js';
 export * from './ontology-definition.js';
 export * from './worker-result.js';
 export * from './image-ref.js';
+export * from './correlation.js';
+export * from './metrics.js';
 export * from './wire/index.js';
 
 export const VERSION = '0.1.0';

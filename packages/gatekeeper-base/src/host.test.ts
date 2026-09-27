@@ -239,6 +239,80 @@ describe('createGateHost (P-B2a)', () => {
     expect(healthz.statusCode).toBe(200);
   });
 
+  // Leftover 87 (review B1): the gate label is bounded by this host's own instance table — an
+  // unauthenticated caller naming arbitrary gate ids must not mint a new series per request.
+  it('calls naming a gate this host does not serve never become a gate label value', async () => {
+    host = await createGateHost({
+      env,
+      fetchImpl: makeFetch(state),
+      listen: false,
+      log: () => {},
+    });
+    await host.tick();
+
+    for (const id of ['attacker-1', 'attacker-2', 'demo-mcp']) {
+      await host.app.inject({ method: 'POST', url: `/i/${id}/gate/observe`, payload: {} });
+    }
+    await host.app.inject({
+      method: 'GET',
+      url: '/i/attacker-3/gate/health',
+      headers: { authorization: `Bearer ${GATE_TOKEN}` },
+    });
+
+    const metrics = await host.app.inject({
+      method: 'GET',
+      url: '/internal/metrics',
+      headers: { authorization: `Bearer ${GATE_TOKEN}` },
+    });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.body).not.toContain('attacker');
+    const gateLabels = new Set([...metrics.body.matchAll(/gate="([^"]*)"/g)].map((m) => m[1]));
+    expect([...gateLabels].every((g) => g === '' || g === 'demo-mcp')).toBe(true);
+  });
+
+  // Leftover 87.
+  it('GET /internal/metrics needs the gate token; each /gate/* call is logged with its correlation id and counted', async () => {
+    const lines: string[] = [];
+    host = await createGateHost({
+      env,
+      fetchImpl: makeFetch(state),
+      listen: false,
+      log: (line) => lines.push(line),
+    });
+    await host.tick();
+
+    await host.app.inject({
+      method: 'GET',
+      url: '/i/demo-mcp/gate/describe_operations',
+      headers: { authorization: `Bearer ${GATE_TOKEN}`, 'x-correlation-id': 'turn-abcd-0001' },
+    });
+
+    expect((await host.app.inject({ method: 'GET', url: '/internal/metrics' })).statusCode).toBe(
+      401,
+    );
+    const metrics = await host.app.inject({
+      method: 'GET',
+      url: '/internal/metrics',
+      headers: { authorization: `Bearer ${GATE_TOKEN}` },
+    });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.body).toContain(
+      'nexttime_gate_calls_total{gate="demo-mcp",route="describe_operations",operation="",status="200"} 1',
+    );
+
+    const callLines = lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((l) => l.msg === 'gate call');
+    expect(callLines).toEqual([
+      expect.objectContaining({
+        correlationId: 'turn-abcd-0001',
+        gateRoute: 'describe_operations',
+        gateId: 'demo-mcp',
+        status: 200,
+      }),
+    ]);
+  });
+
   it('a platform token stores the credential under its own obo slot, ignoring the body, and the credential reaches the target', async () => {
     host = await createGateHost({ env, fetchImpl: recordingFetch(state, calls), listen: false });
     await host.tick();

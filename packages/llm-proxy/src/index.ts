@@ -198,6 +198,9 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
     upstreamIdleTimeoutMs: config.upstreamIdleTimeoutMs,
     resolveConsoleKey: (providerId: string) => keyStore.get(providerId),
+    // Leftover 87: `GET /internal/metrics` requires the same internal-plane token this process
+    // presents to the kernel (none configured → the route always 401s).
+    internalAuthorizationHeader: authorizationHeader,
   });
 
   await listen(server, config.port, '0.0.0.0');
