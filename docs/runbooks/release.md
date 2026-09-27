@@ -164,6 +164,73 @@ worker-supervisor 的服务定义变了（新 env + 新网络）而重建它—�
 `docker-socket-proxy-images`/`dockerapi-images` 不再被任何 compose 文件引用，`docker compose up -d`
 会自然不再拉起它（旧容器需要的话手动 `docker compose down docker-socket-proxy-images` 清理，非必须）。
 
+### 3.4 依赖安装层缓存：manifest-first 顺序 + BuildKit 缓存挂载（STATUS 遗留 93）
+
+**问题**：每个 `@nexttime/*` 镜像的 build 阶段此前是 `COPY . .` 再 `pnpm install --frozen-lockfile`
+——依赖安装层的 Docker 缓存 key 是整棵源码树的内容，任何一处源码改动（哪怕跟依赖无关）都让这一层
+失效，于是每次发版全部服务都要把全量 npm 依赖重新下载一遍。这台主机的出网经上游网关，并发下载量大时
+连接被掐断（`UND_ERR_SOCKET`）——v0.23.0 应用前两次都卡在 `pnpm install`、第三次才过。
+
+**改法**（十一个 Dockerfile 的 `build` 阶段：`packages/{kernel,agent-host,egress-proxy,
+gatekeeper-base,llm-proxy,worker-supervisor}/Dockerfile`、`gatekeepers/{docker,ragflow}/Dockerfile`、
+`collectors/host-inventory/Dockerfile`、`deploy/caddy/Dockerfile` 的 `web-build` 阶段、
+`deploy/worker-runtime/Dockerfile` 的 `build` 阶段——不含 `deploy/accept-s2/*`、`deploy/fake-llm`
+这几个没有 `pnpm install` 的裸 fixture 镜像，也不含 caddy 的 `explorer-build` 阶段，它是
+`EXPLORER_BUILD=1` 才跑的另一个仓库的 npm 构建，与本仓库工作区无关）：
+
+1. **依赖层只依赖 manifest**：先 `COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./`，再逐个
+   `COPY <pkg>/package.json <pkg>/package.json` 补全全部 12 个工作区成员（`pnpm install` 解析的是
+   整个工作区依赖图——`workspace:*` 互相引用——不是某个包自己的依赖，所以任何一个 Dockerfile 都要
+   全部 12 份 manifest，不能只拷自己 `--filter` 的那个包）。
+2. **`pnpm fetch --frozen-lockfile --network-concurrency=4 --store-dir=/pnpm/store`**：`pnpm fetch`
+   只读 `pnpm-lock.yaml`（`pnpm fetch --help`："package manifest is ignored"），把内容寻址存储填满，
+   完全不需要上一步拷的 package.json 内容本身——拷 package.json 只是为了让这一层的缓存 key 与依赖
+   实际状态一致（哪个包的哪个依赖变了，只影响这一层，源码改动不影响）。`network-concurrency=4`
+   （pnpm 默认 16）：把并发下载连接数压低,用换取网关不掐断连接的稳定性，与 `scripts/build-images.sh`
+   自己的 `COMPOSE_PARALLEL_LIMIT=1`（不同镜像的构建之间不并发）是同一个问题在两个层面的对应处理。
+3. **`RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store`**：BuildKit 缓存挂载,内容持久化在
+   宿主机的 buildx 构建缓存里，跨越单次 `docker compose build` 的多个镜像、也跨越不同的发版。所有
+   十一个 Dockerfile 用的是**同一个** `id=pnpm-store`——`build-images.sh` 序列构建每个镜像时,第一个
+   镜像（如 kernel）下载的公共依赖（`typescript`/`zod`/`@biomejs/biome` 等）会被后面每一个镜像的
+   `pnpm fetch` 直接命中,不必逐个镜像各自下载一遍。`pnpm-lock.yaml` 变了（依赖升级）也只是让新增的
+   那部分包重新下载,旧包的 tarball 仍在缓存里可复用。
+4. **`COPY . .` 挪到 fetch 之后**，再 `pnpm install --offline --frozen-lockfile --store-dir=/pnpm/store`
+   ——`--offline` 强制不联网,只从上一步已经填好的 store 里链接 `node_modules`（pnpm 自己文档："pair
+   with --offline --frozen-lockfile"）。挂载缓存的内容对 BuildKit 是临时挂载,不会进最终镜像层——
+   pnpm 在跨设备场景会自动从 hardlink 回退为 copy,把内容真正复制进这层普通文件系统,镜像内容因此不变。
+5. **`deploy/worker-runtime/Dockerfile` 的 pi 全局安装层**（`npm install -g … @earendil-works/pi-
+   coding-agent@${PI_VERSION}`）本来就已经只 keyed 在 `pi.version`（`COPY pi.version` 是这一层唯一
+   的输入,在稳定的 apt/useradd 层之上）,这次只加一个 `RUN --mount=type=cache,id=npm-cache,
+   target=/npm-cache` + `npm install -g --cache=/npm-cache …`：pi 升版本时,新版本依赖树里没变的那部分
+   包仍能复用缓存,不必整树重新下载。
+
+**主机怎么核对生效**：
+
+- 同一份代码第二次构建同一个镜像（比如改一行 `README.md` 后重跑 `sh scripts/build-images.sh
+  kernel`），build 日志里 `pnpm fetch` 那一行应显示 `CACHED`（BuildKit 对完全相同输入的层直接跳过,
+  不重新执行）；改一行源码但不改依赖同理。
+- 故意改一下某个包的 `dependencies`（比如加一个版本号不同的依赖）重新构建,能看到新增的那一个包在
+  下载,其余包不重新下载（构建输出里 `pnpm fetch` 自己的 `Progress: resolved N, reused M, downloaded
+  K` 行,`reused` 应接近 `N`）。
+- `docker buildx du`：查看 `pnpm-store` / `npm-cache` 这两个 cache mount 各占多少磁盘,确认确实在
+  持久化增长而不是每次从空构建。
+- CI 的证明面（本机没有 Docker,以上两条本机都做不了）：`.github/workflows/image-scan.yml`
+  （每周 + 手动触发）用 `docker/build-push-action` 对全部十个真实服务镜像跑一遍完整 build（`cache-
+  from`/`cache-to: type=gha`）,是这次改动在没有本机 Docker 的情况下唯一能跑通"这些 Dockerfile 语法
+  正确、多阶段引用正确"的地方；`.github/workflows/e2e.yml` 的"Build kernel/caddy/llm-proxy images"
+  步骤额外覆盖 kernel/caddy/llm-proxy/gate-host（`packages/gatekeeper-base/Dockerfile`）四个。这两个
+  workflow 的 runner 都是全新 VM,不会体现"跨发版复用宿主机缓存"这个效果本身（GHA 的 `type=gha`
+  缓存是另一套独立的远端缓存,不代表主机 BuildKit 本地缓存的行为）,但足以证明每个 Dockerfile 改完之后
+  仍然能从头构建成功、镜像内容不变。真正验证"缓存挂载在主机上确实跨发版复用"要在主机上做上面两条。
+
+**风险**：BuildKit 缓存挂载需要 BuildKit 后端,而不是旧的 legacy builder——`docker-preflight.md`
+要求的"Docker Engine / Compose v2"这一前提下,`docker compose build` 默认经 buildx/BuildKit 实现,
+本身已经在用 `# syntax=docker/dockerfile:1.7`（每个 Dockerfile 早已声明,这次没有改动这一行,说明
+BuildKit frontend 早就在被使用,主机第一次用到 `--mount=type=cache` 之前不需要单独"预拉"这个
+frontend 镜像）。如果主机的 Docker 版本异常老旧、`docker compose build` 落回 legacy builder,
+`--mount=type=cache` 会直接报语法错误而不是静默忽略——下次主机应用前先跑一次
+`docker compose build kernel`确认不报错,再跑全量 `sh scripts/build-images.sh`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
