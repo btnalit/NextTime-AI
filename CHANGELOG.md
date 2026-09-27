@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.29.0](https://github.com/btnalit/NextTime-AI/compare/v0.28.0...v0.29.0) (2026-09-27)
+
+
+### Features
+
+* **pi:** activate every built-in tool the runtime image can run (leftover 95) ([#339](https://github.com/btnalit/NextTime-AI/issues/339)) ([72fd076](https://github.com/btnalit/NextTime-AI/commit/72fd0769b3206659d661e4644c7356758729763a))
+* **web:** design system v2.1 — brand-navy ink and real bold weights ([#338](https://github.com/btnalit/NextTime-AI/issues/338)) ([cbea864](https://github.com/btnalit/NextTime-AI/commit/cbea8647fef295919b99b02130070583ada6b719))
+* **web:** navigation as a brand-navy island (design system v2.1) ([#341](https://github.com/btnalit/NextTime-AI/issues/341)) ([5f3f888](https://github.com/btnalit/NextTime-AI/commit/5f3f888b514612eff2e2f08f4cbd12e08800afe2))
+
 ## [0.28.0](https://github.com/btnalit/NextTime-AI/compare/v0.27.0...v0.28.0) (2026-09-27)
 
 
