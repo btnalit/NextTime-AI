@@ -114,8 +114,25 @@ describe('ApprovalQueuePage state machine', () => {
     fireEvent.click(screen.getByRole('button', { name: /刷新/ }));
     const rowEl = await screen.findByTestId('approval-row');
     expect(rowEl.textContent).toContain('docker container restart');
-    expect(rowEl.querySelector('.chip')?.getAttribute('data-status')).toBe('pending_approval');
+    // The row's leading chip is blast radius (§5.9 P3-4 V6 row spec) — a pending row's own status
+    // is always `pending_approval`, so no status chip renders on it at all (only history rows,
+    // whose status varies, carry one; `approval-row-status` distinguishes it from this chip).
+    expect(within(rowEl).getByTestId('approval-row-impact').getAttribute('data-status')).toBe(
+      'medium',
+    );
     expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(3);
+  });
+
+  it('P3-4 V6: the wide layout (no matchMedia mock — jsdom defaults to wide, per the hook\'s own degrade behaviour) shows a detail pane with a "pick one" placeholder when nothing is selected', async () => {
+    const http = scriptedHttp([() => Promise.resolve([row()])]);
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approval-row');
+    // The wide layout's detail pane is always mounted (`data-testid="approval-drawer"`), even with
+    // no selection — unlike the pre-redesign `ui/Drawer`, which only existed while `open`.
+    const pane = screen.getByTestId('approval-drawer');
+    const empty = within(pane).getByTestId('approval-drawer-empty');
+    expect(empty.textContent).toContain('选择左侧一条审批请求，查看动作、目标与策略。');
+    expect(within(pane).queryByTestId('approval-detail')).toBeNull();
   });
 
   it('shows an operator-role explanation (not a generic error) on 403 forbidden', async () => {
@@ -156,7 +173,9 @@ describe('ApprovalQueuePage state machine', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     const historyRow = await screen.findByTestId('approval-history-row');
-    expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
+    expect(within(historyRow).getByTestId('approval-row-status').getAttribute('data-status')).toBe(
+      'approved',
+    );
     view.unmount();
 
     // failure path: the kernel rejects (409 illegal_transition) → the row comes back, error shown
@@ -194,7 +213,9 @@ describe('ApprovalQueuePage state machine', () => {
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
     fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     const historyRow = await screen.findByTestId('approval-history-row');
-    expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('rejected');
+    expect(within(historyRow).getByTestId('approval-row-status').getAttribute('data-status')).toBe(
+      'rejected',
+    );
   });
 
   it('C7: an action.updated push costs exactly one get_action — no full list_pending reload — and the drawer keeps the decided row (C3)', async () => {
@@ -243,6 +264,21 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'approved' } });
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1]).toMatchObject({ limit: 50, status: 'approved' });
+  });
+
+  it('P3-4 V6/V8: the status select renders human labels, never the raw wire value, while the option value itself stays the wire status', async () => {
+    const http = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: () => Promise.resolve({ items: [] }),
+    });
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approvals-empty');
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
+    const select = (await screen.findByLabelText(/状态/)) as HTMLSelectElement;
+    const approvedOption = Array.from(select.options).find((option) => option.value === 'approved');
+    expect(approvedOption?.textContent).toBe('已批准');
+    expect(approvedOption?.textContent).not.toBe('approved');
+    const rejectedOption = Array.from(select.options).find((option) => option.value === 'rejected');
+    expect(rejectedOption?.textContent).toBe('已拒绝');
   });
 
   it('shows an operator-role explanation on 403, and "Load more" appends the next page via cursor', async () => {

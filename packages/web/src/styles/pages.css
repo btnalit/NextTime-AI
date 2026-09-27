@@ -1021,3 +1021,78 @@
 .systems-list .data-row-trailing {
   flex-wrap: wrap;
 }
+
+/* ---- Approvals master-detail (console redesign P3-4, V6 "待我审批") ----------------------------
+ * Which of the two structures below renders — the two-pane grid or the list-only page — is decided
+ * in JS (`ApprovalQueuePage`'s own `useMediaQuery`, `(max-width: 1179px)`), not by a CSS media
+ * query: the narrow layout swaps the always-inline detail pane for a `kit/sheet` (a different
+ * mount, not just a different width), so there is nothing here for a breakpoint to switch between.
+ * `.approvals-page` gets its own bounded height (the chat page's own pattern, `.chat-page` above)
+ * so the list/detail panes scroll internally instead of the whole document. */
+.approvals-page {
+  height: 100vh;
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .approvals-page {
+    height: calc(100vh - 52px);
+  }
+}
+
+.approvals-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.approvals-layout--wide {
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+}
+
+.approvals-layout--narrow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.approvals-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.approvals-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.approvals-detail-pane .approvals-pane-body {
+  padding: var(--space-4);
+}
+
+.approvals-pane-footer {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+.approval-detail-title {
+  font-size: var(--fs-19);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+
+/* §5.9 principle 6: a select sizes to its content, never the full card width. */
+.select.approvals-status-select {
+  width: auto;
+  max-width: 200px;
+}

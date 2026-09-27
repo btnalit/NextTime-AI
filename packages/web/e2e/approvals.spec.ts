@@ -74,11 +74,13 @@ function queueRowByMarker(page: import('@playwright/test').Page, marker: string)
 }
 
 async function openQueueRow(page: import('@playwright/test').Page, marker: string) {
-  // Click the row's title, not its geometric centre: `DataRow` deliberately ignores clicks that
-  // land on a button, and the meta line's copy buttons (36 px invisible hit area since S8 W1-A8)
-  // can sit under the centre once the copy is shorter (S8 W1-A10) — a centre click then copies
-  // an id instead of opening the drawer.
-  await queueRowByMarker(page, marker).locator('.data-row-title').click();
+  // A plain centre click: console redesign P3-4 (V6) made the whole row a `kit/list-row` button
+  // with no nested interactive element (the old `DataRow`'s meta-line `RefChip` copy button — the
+  // reason a click here used to have to target `.data-row-title` specifically — is gone; the row
+  // shows plain text, not chips). `data-testid="approval-drawer"` is the detail pane on a wide
+  // viewport (≥1180px, this suite's default) or the sheet's content on a narrower one — either
+  // way it opens on selection.
+  await queueRowByMarker(page, marker).click();
   const drawer = page.getByTestId('approval-drawer');
   await expect(drawer).toBeVisible();
   return drawer;

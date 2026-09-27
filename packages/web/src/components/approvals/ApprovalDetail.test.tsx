@@ -58,16 +58,16 @@ function renderDetail(
 }
 
 describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
-  it('renders the shared ApprovalCard with named gatekeeper / on-behalf-of chips, redacted params and the blocking notice', () => {
+  it('renders the kit/key-value action section with named gatekeeper / on-behalf-of chips, redacted params and the blocking notice', () => {
     renderDetail();
-    const card = screen.getByTestId('approval-card');
-    expect(card.getAttribute('data-blast-radius')).toBe('medium');
+    const detail = screen.getByTestId('approval-detail');
+    expect(screen.getByTestId('approval-blast-radius').getAttribute('data-status')).toBe('medium');
     expect(screen.getByTestId('approval-status').getAttribute('data-status')).toBe(
       'pending_approval',
     );
     expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
     expect(screen.getByTestId('approval-on-behalf-of').textContent).toContain('Alice');
-    expect(card.querySelector('[data-ref-kind="gatekeeper"]')?.textContent).toContain(
+    expect(detail.querySelector('[data-ref-kind="gatekeeper"]')?.textContent).toContain(
       'docker-prod',
     );
     expect(screen.getByTestId('approval-params').textContent).toContain('[redacted]');
