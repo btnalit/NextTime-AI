@@ -48,9 +48,36 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
   内的门）、可达性读模型（`execution_readiness` / `find_operations` 标注；`not_granted` 只剩执行类原因，未授权的门也可以被排除）、
   `find_procedures` 的 observe 步骤。L10 子 Handle 衰减不变：`resources.gatekeeper` 仍只装已授权的门——它是执行授权，
   放进未授权门会让孙 Worker 经 `delegatedRequestAction` 拿到 `request_action`；Worker 读未声明 / 未授权的门靠谓词，不靠范围。
-- 人类通道（控制台 `assertHumanGatekeeperAccess`）不变，待维护者另行决定。
+- 人类通道（控制台 `assertHumanGatekeeperAccess`）不变，待维护者另行决定。（已于同日放开，见下"后续"。）
 - 验收：一致性测试（`platform-gates.integration.test.ts` 未授权成员：可达性 `direct` ⇔ 入口 Handle 与 Worker 形 Handle 调用成功且记审计；
   AgentProfile / AgentPolicy 排除 ⇔ 拒绝且不投射）；主机 S4 新增未授权成员探针。
+
+**后续（STATUS 遗留 97 / 98，2026-09-27，实现说明）**：
+
+- 遗留 97 人类通道（维护者"也放开吧"）：`observe_operation` 的人类通道不再调 `assertHumanGatekeeperAccess`，只留角色规则
+  （`assertRoleMayReachGatekeeper`：`auditor` 不碰门），再以 `NO_OBSERVE_EXCLUSIONS` 调 `observeRefusal`——AgentPolicy / AgentProfile
+  是成员智能体的配置（S3.13，`AgentPolicyForm` 的"每个 AgentProfile 据此收窄的工作区上限"），不限制成员本人的读取。
+  `assertHumanGatekeeperAccess` 的调用点：`observeOperationHandler`（去掉，改为只调角色规则）；`requestActionHandler`（保留——
+  人类通道的 `request_action` 不论 observe / execute / 未发布都要 Grant，人读系统走 `observe_operation`）。控制台没有"人自己调门"
+  的按钮，现有文案（系统与授权、我的智能体、可达性原因）说的都是智能体的读写，已是"读不需要授权、写需要"，无需改。
+- 遗留 98 (a)「我的智能体」：`get_agent_profile` / `set_agent_profile` 结果加 `availableGatekeepers: [{gatekeeperId, granted, inUse}]`
+  （加法，契约快照随之更新）——已授权的门加上本工作区里有 `observeRefusal`（无排除项）接受的 Operation 的门（`observableGatekeeperIds`）；
+  `inUse` = `observeGateExclusion` 未命中（未被本人排除、在 AgentPolicy 上限内）。`effective.enabledGatekeepers` 不变，仍是已授权 ∩ 未排除
+  ∩ 上限，入口 Handle 的 `resources.gatekeeper` 由它铸造——未授权的门永不进执行授权。表单按 `availableGatekeepers` 列出，标 读写（已授权）
+  / 只读（未授权），勾选对两者都写 `excludedGatekeepers`；"当前生效"的系统一栏按 `inUse` 列出，未授权的标"只读"。
+- 遗留 98 (b) Worker 读：worker 模式按 Operation 的 `mode` 分流——observe 类调 `observe_operation`、execute 类（及无 `mode` 的行）调
+  `request_action`，与入口 / interactive 模式、MCP 投射一致。`observe_operation` 加进 Worker 能力上限，并列入
+  `WORKER_INFRASTRUCTURE_CAPABILITY_NAMES`（强制并入，而非只进默认能力：此前发布、显式声明 `capabilities` 的定义——包括主机上按
+  ops-runner 模板建的——不含它，只进默认会让它们失去全部读取）。仍经父 Handle 求交（入口 Handle 本就有它），不带任何门范围；
+  `observe_operation` 对 Worker 调用同样按 `sid` 记 WorkerRun 的门观察（S8 W5-A），审计动作名从 `request_action` 变为
+  `observe_operation`（`get_operation_stats` 的 `observeCalls` 因此开始计入 Worker 的读取）。
+- 遗留 98 (c)：删除 P3-5 后无引用的 `ExecutionPrerequisiteBar` 及其测试。
+- 验收：`request-action.integration.test.ts`（人类通道：未授权成员 `observe_operation` 200 且记审计、不受本人 AgentProfile / AgentPolicy
+  限制；`request_action` 观察 / 执行类仍 403 且不建 ActionRequest；`auditor` 两者都 403）、`platform-gates.integration.test.ts`
+  （未授权成员人类通道读 200 + 审计；入口 agent 委派的 Worker 以 `computeChildHandleScope` 得出的范围读 200 + 审计、`request_action`
+  403、声明 `request_action` 的委派被拒；「我的智能体」对未授权门给 `granted:false`，排除后 `inUse:false` 且调用拒绝、不投射、可达性
+  `excluded_by_profile`）、`gate-observation.integration.test.ts`（Worker 经 `observe_operation` 记 WorkerRun 观察）；S4 新增人类通道探针
+  与排除探针。
 
 ## 3. 内核能力 × 前端覆盖
 

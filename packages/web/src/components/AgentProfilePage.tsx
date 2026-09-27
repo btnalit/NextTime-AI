@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
@@ -248,11 +248,14 @@ function EffectiveRefs({
   kind,
   names,
   href,
+  readOnlyIds,
 }: {
   readonly ids: readonly string[];
   readonly kind: 'object' | 'gatekeeper' | 'workerDefinition';
   readonly names: ReadonlyMap<string, string>;
   readonly href: (id: string) => string;
+  /** Systems the agent reads without a Grant (leftover 98) — each chip gets a 只读 tag. */
+  readonly readOnlyIds?: ReadonlySet<string>;
 }) {
   const t = useT();
   if (ids.length === 0) {
@@ -265,14 +268,10 @@ function EffectiveRefs({
   return (
     <span className="row-wrap">
       {ids.map((id) => (
-        <RefChip
-          key={id}
-          kind={kind}
-          id={id}
-          name={names.get(id) ?? null}
-          href={href(id)}
-          size="s"
-        />
+        <Fragment key={id}>
+          <RefChip kind={kind} id={id} name={names.get(id) ?? null} href={href(id)} size="s" />
+          {readOnlyIds?.has(id) ? <span className="tag">{t('只读', 'Read only')}</span> : null}
+        </Fragment>
       ))}
     </span>
   );
@@ -306,6 +305,10 @@ function EffectivePanel({
 }) {
   const t = useT();
   const effective = profile.effective;
+  // Leftover 98: the systems the agent uses now, as the kernel decides it (`inUse`) — granted
+  // ones (read + write; the same set as `effective.enabledGatekeepers`) and the ones it reads
+  // without a Grant, tagged 只读.
+  const systemsInUse = profile.availableGatekeepers.filter((g) => g.inUse);
   return (
     <DashboardCard
       title={t('当前生效', 'Currently effective')}
@@ -335,10 +338,13 @@ function EffectivePanel({
             label: t('系统接入', 'Systems'),
             value: (
               <EffectiveRefs
-                ids={effective.enabledGatekeepers}
+                ids={systemsInUse.map((g) => g.gatekeeperId)}
                 kind="gatekeeper"
                 names={gatekeeperNames}
                 href={(id) => hrefs.gatekeeper(id)}
+                readOnlyIds={
+                  new Set(systemsInUse.filter((g) => !g.granted).map((g) => g.gatekeeperId))
+                }
               />
             ),
           },

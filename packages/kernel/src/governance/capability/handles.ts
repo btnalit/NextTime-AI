@@ -201,6 +201,12 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
   // S2.9 — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's own doc comment below.
   'list_allowed_operations',
   'report_task_result',
+  // Leftover 98: worker mode calls observe-class gate tools through `observe_operation` (as entry
+  // and interactive modes do) and only execute-class ones through `request_action`. Mode
+  // `observe`, approval-exempt by design (§11 "观察免审"); who may observe is decided per call by
+  // `observeRefusal` (application/gates/observe-access.ts), never by a gate scope — so a Worker of a
+  // member holding no Grant can still read. Also infrastructure — see below.
+  'observe_operation',
 ] as const;
 
 const WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME = '<gate>.<op>:execute';
@@ -235,9 +241,11 @@ export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeiling
  * `declaredCapabilities` before narrowing, so no WorkerDefinition author can omit them by
  * declaring an explicit `capabilities` list that leaves them out.
  *
- * Neither name is execute-class and neither is a privilege escalation on its own:
- * `list_allowed_operations` only ever echoes Operations already inside the same Handle's own
- * `resources.gatekeeper` scope (§9.3 "结果带 epistemic_status" — a description, not a grant); and
+ * No name here is execute-class and none is a privilege escalation on its own:
+ * `list_allowed_operations` only describes what the same Handle may already call (execute-class
+ * Operations inside its own `resources.gatekeeper`, observe-class ones `observeRefusal` accepts —
+ * §9.3 "结果带 epistemic_status", a description, not a grant); `observe_operation` is decided per
+ * call by that same predicate (see its own comment in the list below); and
  * `report_task_result`'s handler independently authenticates by checking the calling Handle's own
  * `claims.sid` against the addressed Task's own WorkerRun `session_id` (never trusts a
  * caller-supplied `taskId`/`workerRunId`), so holding the capability name alone lets a Worker
@@ -251,6 +259,15 @@ export const WORKER_INFRASTRUCTURE_CAPABILITY_NAMES: readonly string[] = Object.
   // `capabilities` list without it produced a Worker that 403'd on its very first kernel call and
   // ran with no task input. Reading your own Task is infrastructure, not a declared need.
   'get_task',
+  // Leftover 98: worker mode's observe-class gate tools call it. Force-unioned (not just defaulted
+  // via `defaultWorkerCapabilities`) because WorkerDefinitions published before this — the
+  // ops-runner template's explicit list among them — declare `capabilities` without it, and would
+  // otherwise lose every read the moment worker mode stopped routing reads through
+  // `request_action`. Not a widening: since D4 was revoked (2026-09-27) any Handle in the
+  // workspace may observe; `observeRefusal` still applies the member's AgentProfile / the
+  // AgentPolicy cap per call, and every call is audited. Still parent-intersected like the rest
+  // (an entry Handle holds it — ENTRY_CEILING_EXTRA_CAPABILITY_NAMES).
+  'observe_operation',
 ]);
 
 /** Names in `WORKER_CEILING_CAPABILITIES` that are execute-class (design doc §5.3 item 11 "入口

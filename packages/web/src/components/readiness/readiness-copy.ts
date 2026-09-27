@@ -4,11 +4,11 @@ import { type CatalogTab, hrefs } from '../../lib/router.js';
 
 /**
  * components/readiness/readiness-copy: the one place `ExecutionReadinessMissingWire.code` (and,
- * for `no_grant`, its `gateId`) turns into console copy — shared by `ExecutionReadinessCard` (J1's
- * "开始使用" card, now mounted on both 对话 and, since console redesign P3-5, 能力目录) and
- * `ExecutionPrerequisiteBar` (J1's original hint bar, unmounted from every page as of P3-5 but
- * kept for its own test coverage), so the two never drift on wording or on which page a code sends
- * the reader to.
+ * for `no_grant`, its `gateId`) turns into console copy — used by `ExecutionReadinessCard` (J1's
+ * "开始使用" card, mounted on both 对话 and, since console redesign P3-5, 能力目录) and, for the
+ * per-gate reasons, `systems/SystemAccessCard`, so they never drift on wording or on which page a
+ * code sends the reader to. (J1's original hint bar, `ExecutionPrerequisiteBar`, was unmounted by
+ * P3-5 and deleted with leftover 98.)
  * `missing.code` itself is never rendered — every caller goes through `missingCauseText` /
  * `missingLinkHref` / `missingLinkLabel` below (ui-audit S14 "内部术语外泄").
  *

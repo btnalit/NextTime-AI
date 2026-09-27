@@ -75,6 +75,21 @@ const EffectiveAgentProfileWireSchema = z
   })
   .strict();
 
+/** One gate the My Agent checklist offers (leftover 98, `agent-profile-handlers.ts`'s
+ *  `resolveAvailableGatekeepers`): granted to the member (`granted: true` — read and write), or
+ *  readable without a Grant (`granted: false` — design doc §11 "门上的观察": registered, with a
+ *  published observe-class Operation not on the platform deny list). `inUse`: the member's agent
+ *  uses it now — not in `excludedGatekeepers` and inside the AgentPolicy gate cap (the check every
+ *  observe call makes); for a granted gate it equals membership of `effective.enabledGatekeepers`. */
+export const AvailableGatekeeperWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    granted: z.boolean(),
+    inUse: z.boolean(),
+  })
+  .strict();
+export type AvailableGatekeeperWire = z.infer<typeof AvailableGatekeeperWireSchema>;
+
 export const AgentProfileWireSchema = z
   .object({
     principalId: z.string(),
@@ -88,6 +103,10 @@ export const AgentProfileWireSchema = z
     autoApproveLow: z.boolean().nullable(),
     updatedAt: z.string().nullable(),
     updatedBy: z.string().nullable(),
+    // Additive (leftover 98): the gates on offer before exclusions — granted ones plus every gate
+    // readable without a Grant. `effective.enabledGatekeepers` stays the execute set (granted ∩ not
+    // excluded ∩ policy cap), the entry Handle's `resources.gatekeeper`.
+    availableGatekeepers: z.array(AvailableGatekeeperWireSchema),
     effective: EffectiveAgentProfileWireSchema,
   })
   .strict();
