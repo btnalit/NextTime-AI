@@ -151,7 +151,7 @@ describe('registerWorkerMode', () => {
     errorSpy.mockRestore();
   });
 
-  it('a gate tool execute() calls request_action with {gatekeeperId, operation, params}', async () => {
+  it('leftover 98: an observe-class gate tool calls observe_operation, an execute-class one calls request_action — each with {gatekeeperId, operation, params}', async () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
@@ -162,28 +162,63 @@ describe('registerWorkerMode', () => {
             name: 'stock.get',
             operation: { params_schema: { type: 'object' }, mode: 'observe' },
           },
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'stock.adjust',
+            operation: { params_schema: { type: 'object' }, mode: 'execute' },
+          },
         ],
       },
     }));
-    kernel.setHandler('request_action', () => ({
+    kernel.setHandler('observe_operation', () => ({
       ok: true,
       result: { status: 'ok', data: { quantity: 3 } },
+    }));
+    kernel.setHandler('request_action', () => ({
+      ok: true,
+      result: { id: 'ar-1', status: 'executed' },
     }));
     const sessionStart = fake.handlers.get('session_start');
     if (!sessionStart) throw new Error('session_start handler not registered');
     await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
 
-    const tool = fake.tools.get('inventory_stock_get');
-    if (!tool) throw new Error('gate tool not registered');
-    const result = await tool.execute('call-1', { sku: 'X' }, undefined, undefined, fakeCtx());
-
-    const requestActionCall = kernel.requests.find((r) => r.capability === 'request_action');
-    expect(requestActionCall?.params).toEqual({
+    const observeTool = fake.tools.get('inventory_stock_get');
+    if (!observeTool) throw new Error('observe gate tool not registered');
+    const observed = await observeTool.execute(
+      'call-1',
+      { sku: 'X' },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+    expect(kernel.requests.filter((r) => r.capability === 'observe_operation')).toHaveLength(1);
+    expect(kernel.requests.find((r) => r.capability === 'observe_operation')?.params).toEqual({
       gatekeeperId: 'gk-1',
       operation: 'stock.get',
       params: { sku: 'X' },
     });
-    expect(result.details).toEqual({ status: 'ok', data: { quantity: 3 } });
+    // A read never goes through request_action (the Worker of an ungranted member has none).
+    expect(kernel.requests.some((r) => r.capability === 'request_action')).toBe(false);
+    expect(observed.details).toEqual({ status: 'ok', data: { quantity: 3 } });
+
+    const executeTool = fake.tools.get('inventory_stock_adjust');
+    if (!executeTool) throw new Error('execute gate tool not registered');
+    const executed = await executeTool.execute(
+      'call-2',
+      { sku: 'X', delta: 1 },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+    expect(kernel.requests.filter((r) => r.capability === 'request_action')).toHaveLength(1);
+    expect(kernel.requests.find((r) => r.capability === 'request_action')?.params).toEqual({
+      gatekeeperId: 'gk-1',
+      operation: 'stock.adjust',
+      params: { sku: 'X', delta: 1 },
+    });
+    expect(kernel.requests.filter((r) => r.capability === 'observe_operation')).toHaveLength(1);
+    expect(executed.details).toEqual({ id: 'ar-1', status: 'executed' });
   });
 
   it('a gate tool truncates a result larger than the cap (S8 W3-K1, leftover 75 first half)', async () => {
@@ -205,7 +240,7 @@ describe('registerWorkerMode', () => {
       status: 'ok',
       items: Array.from({ length: 2000 }, (_, i) => ({ sku: `SKU-${i}`, qty: i })),
     };
-    kernel.setHandler('request_action', () => ({ ok: true, result: hugeResult }));
+    kernel.setHandler('observe_operation', () => ({ ok: true, result: hugeResult }));
     const sessionStart = fake.handlers.get('session_start');
     if (!sessionStart) throw new Error('session_start handler not registered');
     await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());

@@ -66,13 +66,18 @@ function buildGateTool(
     // hand-written YAML, `@nexttime/shared`'s OperationSchema) — no zod-to-json-schema
     // conversion, only the W7 object-schema normalization (tool-schema.ts `gateToolParameters`).
     parameters: gateToolParameters(op.operation.params_schema) as ToolDefinition['parameters'],
-    // Both observe- and execute-class Operations call request_action uniformly (task brief: "the
-    // kernel runs the gate's observe directly" for observe-class); the kernel resolves mode from
-    // the published Operation itself (application/gateway/request-action-handler.ts), so this tool
-    // never branches on op.operation.mode. Deliberately does not catch KernelError — a thrown
-    // execute() becomes isError:true, same convention modes/entry.ts's observe tools use.
+    // Leftover 98: an observe-class Operation calls `observe_operation` (as entry / interactive
+    // modes and the MCP projection do — a read needs no gate scope, so a Worker of a member with
+    // no Grant can still read; worker infrastructure, governance/capability/handles.ts), an
+    // execute-class one calls `request_action` (unchanged: an ActionRequest, approval-routed; so
+    // does a row with no `mode`, which `request_action` resolves server-side as before). Before
+    // this every tool went through `request_action`, which the Worker of an ungranted member never
+    // holds. The kernel re-checks the published mode on either path. Deliberately does not catch
+    // KernelError — a thrown execute() becomes isError:true, same convention modes/entry.ts's
+    // observe tools use.
     async execute(_toolCallId, params) {
-      const result = await kernelClient.call<Record<string, unknown>>('request_action', {
+      const capability = op.operation.mode === 'observe' ? 'observe_operation' : 'request_action';
+      const result = await kernelClient.call<Record<string, unknown>>(capability, {
         gatekeeperId: op.gatekeeperId,
         operation: op.name,
         params,
