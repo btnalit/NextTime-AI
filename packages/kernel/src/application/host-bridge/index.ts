@@ -30,8 +30,8 @@ export type {
   TurnEndStatus,
 } from './agent-runtime.js';
 
-export { FakeAgentRuntime } from './fake-runtime.js';
-export type { FakeAgentRuntimeOptions } from './fake-runtime.js';
+export { FAKE_DELEGATE_MARKER, FakeAgentRuntime } from './fake-runtime.js';
+export type { FakeAgentRuntimeOptions, FakeDelegateOutcome } from './fake-runtime.js';
 
 export { AgentHostRuntime } from './agent-host-runtime.js';
 export type { AgentHostLink, AgentHostRuntimeDeps } from './agent-host-runtime.js';
