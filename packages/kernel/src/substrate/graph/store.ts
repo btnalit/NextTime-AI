@@ -517,6 +517,12 @@ export interface GraphStore {
     input: VerifyFactInput,
   ): Promise<Fact>;
 
+  /** STATUS leftover 89 (`attest_fact`): one Fact by id, row-locked for the rest of the caller's
+   *  transaction — the same `for update` read `verifyFact`/`invalidateFact` start with, so an
+   *  attestation cannot interleave with a concurrent supersede/invalidate of the same Fact.
+   *  RLS-visible rows only; throws `FactNotFoundError` otherwise. */
+  getFactForUpdate(client: PoolClient, workspaceId: string, factId: string): Promise<Fact>;
+
   neighbors(
     client: PoolClient,
     workspaceId: string,

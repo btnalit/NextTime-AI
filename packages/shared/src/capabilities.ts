@@ -158,6 +158,10 @@ const jsonRecord = z.record(z.string(), z.unknown());
 const noParams = z.object({}).strict();
 /** P-B1 `issue_service_handle`: one year, the CLI's own default and ceiling. */
 const SERVICE_HANDLE_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
+/** STATUS leftover 89 `attest_fact`: bounds on the attestation's note and optional link — exported
+ *  so the console's dialog enforces the same limits the kernel validates. */
+export const ATTEST_FACT_NOTE_MAX_LENGTH = 2000;
+export const ATTEST_FACT_LINK_MAX_LENGTH = 2048;
 
 /** The shape `application/gateway/request-action-handler.ts`'s `runObserve` produces —
  *  `observe_operation`'s own result, and (fixed after this task's first CI run caught the
@@ -1208,7 +1212,9 @@ const epistemicCapabilities: readonly Capability[] = [
       'Observations and their Sources — narrowed to just the Fact’s own Observation when it ' +
       'recorded one (e.g. `submit_observations`), otherwise every Observation the Activity ' +
       'recorded (a bulk collector run or an ad-hoc `assert_fact`/Worker result can mean hundreds ' +
-      'of entries).',
+      'of entries). For a Fact, `fact.humanAttestations` lists every human attestation ' +
+      '(kind `human_attestation`: a person’s own confirmation — who, when, note, link), which is ' +
+      'a person’s word, not machine evidence.',
   },
   {
     name: 'record_decision',
@@ -1349,9 +1355,9 @@ const epistemicCapabilities: readonly Capability[] = [
     // S3.2: `application/gateway/epistemic-handlers.ts`'s `verifyFactHandler`. `channel: 'human'`
     // (same deviation/reasoning as `resolve_conflict` above — the S3.2 dispatch text marks this one
     // "(human)" too); `paramsSchema` narrowed from the placeholder's `{factId, evidenceIds}` to
-    // just `{factId}` — Evidence is attached separately (the existing, unrelated `attach_evidence`
-    // capability written path); `verify_fact` only checks Evidence already exists (I3.6) and
-    // promotes, it does not itself attach any.
+    // just `{factId}` — Evidence is attached separately (a Worker result contract's `evidence[]`,
+    // or a person's own `attest_fact` below); `verify_fact` only checks Evidence already exists
+    // (I3.6) and promotes, it does not itself attach any.
     name: 'verify_fact',
     group: 'epistemic',
     mode: 'write',
@@ -1359,7 +1365,37 @@ const epistemicCapabilities: readonly Capability[] = [
     minRole: 'member',
     paramsSchema: z.object({ factId: id }).strict(),
     resultSchema: wire.FactWireSchema,
-    description: 'Promote a Fact to epistemic_status=verified with Evidence (I3.6).',
+    description:
+      'Promote a Fact to epistemic_status=verified with Evidence (I3.6) — machine evidence or a human attestation (attest_fact) both count; a Fact with neither is refused (409).',
+  },
+  {
+    // STATUS leftover 89 (maintainer decision 2026-09-27): a person attaches Evidence of the
+    // reserved kind `human_attestation` (HUMAN_ATTESTATION_EVIDENCE_KIND) — who (the calling human
+    // Principal, never a request field), when, a required note, an optional http(s) link.
+    // Human-channel only (HUMAN_ONLY_CAPABILITY_NAMES below; `governance/capability/handles.ts`'s
+    // `assertValidScope` keeps it out of every Handle scope) and the same `minRole` as
+    // `verify_fact`, whose Evidence precondition it exists to satisfy. The handler additionally
+    // refuses a non-human Principal (a service Principal's API key also reaches the human channel).
+    name: 'attest_fact',
+    group: 'epistemic',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        factId: id,
+        note: z.string().trim().min(1).max(ATTEST_FACT_NOTE_MAX_LENGTH),
+        link: z
+          .string()
+          .trim()
+          .max(ATTEST_FACT_LINK_MAX_LENGTH)
+          .regex(/^https?:\/\/\S+$/i, 'link must be an http(s) URL')
+          .optional(),
+      })
+      .strict(),
+    resultSchema: wire.HumanAttestationWireSchema,
+    description:
+      'Attach a human attestation to an active Fact: Evidence of kind "human_attestation" recorded as the calling person’s own confirmation (note required, optional http(s) link), under an epistemic.human_attestation Activity, audited. Shown apart from machine evidence by explain (fact.humanAttestations); counts as Evidence for verify_fact. Human channel only.',
   },
 ];
 
@@ -3281,6 +3317,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'publish_operation',
   'deprecate_operation',
   'update_operation_description',
+  // STATUS leftover 89: a human attestation is a person's own word — never reachable by a Handle.
+  'attest_fact',
   'approve',
   'reject',
   'list_pending',

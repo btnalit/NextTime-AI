@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   HandleIssuanceError,
   WORKER_CEILING_CAPABILITIES,
+  WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
+  entryScope,
   generateEphemeralHandleKeyPair,
+  isExecuteClassCapability,
   verifyHandle,
 } from '../../governance/capability/index.js';
 import {
@@ -13,6 +16,7 @@ import {
   EMPTY_CAPABILITY_SCOPE,
   type MintWorkerRunHandleInput,
   computeChildHandleScope,
+  defaultWorkerCapabilities,
   mintWorkerRunHandle,
   resolveRequestedGateIds,
 } from './handle-mint.js';
@@ -40,7 +44,84 @@ describe('computeChildHandleScope', () => {
       'report_task_result',
       // S2.12 host run: a Worker reads its own Task on `context` — infrastructure, not a need.
       'get_task',
+      // Leftover 98: worker mode's observe-class gate tools call it.
+      'observe_operation',
     ]);
+  });
+
+  // Leftover 98: worker mode routes observe-class gate tools through `observe_operation` (entry /
+  // interactive modes already did), so the Worker capability ceiling carries it — read-only,
+  // approval-exempt — and every child Handle gets it whenever its parent holds it (I13), even from
+  // a definition whose explicit `capabilities` list predates it. It never brings gate scope along.
+  describe('observe_operation for Workers (leftover 98)', () => {
+    it('is in the Worker ceiling and in the non-execute default, never execute-class', () => {
+      expect(WORKER_CEILING_CAPABILITIES).toContain('observe_operation');
+      expect(defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES)).toContain('observe_operation');
+      expect(isExecuteClassCapability('observe_operation')).toBe(false);
+      expect(WORKER_INFRASTRUCTURE_CAPABILITY_NAMES).toContain('observe_operation');
+    });
+
+    it('an ungranted member’s entry Handle (the real entry ceiling, no gate) passes it to a default Worker — with no gate scope and no request_action', () => {
+      const entryNoGrant = entryScope({}, { role: 'member' });
+      expect(entryNoGrant.capabilities).toContain('observe_operation');
+      const child = computeChildHandleScope({
+        parentAuthority: entryNoGrant,
+        declaredCapabilities: defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+        declaredGates: ['gk-ungranted'],
+      });
+      expect(child.capabilities).toContain('observe_operation');
+      expect(child.capabilities).not.toContain('request_action');
+      expect(child.resources.gatekeeper).toBeUndefined();
+      // I13: every child capability is one the parent holds.
+      for (const capability of child.capabilities) {
+        expect(entryNoGrant.capabilities).toContain(capability);
+      }
+    });
+
+    it('a definition whose explicit list omits it (published before leftover 98) still gets it', () => {
+      const child = computeChildHandleScope({
+        parentAuthority: entryScope(
+          { resources: { gatekeeper: ['gk-granted'] } },
+          { role: 'member' },
+        ),
+        declaredCapabilities: ['get_object', 'request_action'],
+        declaredGates: ['gk-granted'],
+      });
+      expect(child.capabilities).toContain('observe_operation');
+      expect(child.capabilities).toContain('request_action');
+      expect(child.resources.gatekeeper).toEqual(['gk-granted']);
+    });
+
+    it('is only passed on when the parent holds it — a parent scope without it yields a child without it', () => {
+      const child = computeChildHandleScope({
+        parentAuthority: { capabilities: ['get_object', 'invoke_worker'], resources: {} },
+        declaredCapabilities: ['get_object', 'observe_operation'],
+        declaredGates: [],
+      });
+      expect(child.capabilities).not.toContain('observe_operation');
+    });
+
+    it('a Worker holding it passes it to a grandchild; an ungranted member’s execute need is still refused', () => {
+      const child = computeChildHandleScope({
+        parentAuthority: entryScope({}, { role: 'member' }),
+        declaredCapabilities: defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+        declaredGates: ['gk-ungranted'],
+      });
+      const grandchild = computeChildHandleScope({
+        parentAuthority: child,
+        declaredCapabilities: ['get_object'],
+        declaredGates: ['gk-ungranted'],
+      });
+      expect(grandchild.capabilities).toContain('observe_operation');
+      expect(grandchild.resources.gatekeeper).toBeUndefined();
+      expect(() =>
+        computeChildHandleScope({
+          parentAuthority: entryScope({}, { role: 'member' }),
+          declaredCapabilities: ['request_action'],
+          declaredGates: ['gk-ungranted'],
+        }),
+      ).toThrow(InvokeWorkerAttenuationError);
+    });
   });
 
   it('entry Handle (no execute-class capability in scope) requesting an execute-class capability is rejected — S2.7 acceptance', () => {

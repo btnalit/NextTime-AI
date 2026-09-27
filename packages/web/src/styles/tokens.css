@@ -100,6 +100,24 @@
   --muted: #626b7b;
   --muted-soft: #f0f1f3;
 
+  /* Decorative multi-hue (console redesign P3-6, V10): icon-tile pairs for the platform overview's
+   * stat tiles and similar data accents — never a governance meaning (§5.9 principle 2 forbids
+   * reusing one of those hues decoratively), so this is a separate five-hue set (blue / violet /
+   * pink / cyan / indigo), sampled from the MihomoOrbit reference console the maintainer pointed
+   * at. Each `-soft` is the tile's tinted background; the bare colour is the icon drawn on it —
+   * `tokens-contrast.test.ts` checks every pair clears 3:1 (WCAG non-text/UI-component contrast,
+   * an icon glyph rather than running text) in both themes. */
+  --deco-blue: #4d71ef;
+  --deco-blue-soft: #f0f3fe;
+  --deco-violet: #7e4eef;
+  --deco-violet-soft: #f4f0fe;
+  --deco-pink: #d64a8e;
+  --deco-pink-soft: #fcf0f6;
+  --deco-cyan: #0c7f90;
+  --deco-cyan-soft: #e7f7fa;
+  --deco-indigo: #5b52e0;
+  --deco-indigo-soft: #efeefe;
+
   /* Type scale (C24; S8 W1-A8 dropped the `--fs-11` stop, audit S8: 11px text below the 12px
    * accessible floor — every former `var(--fs-11)` use now reads `var(--fs-12)`, and the
    * Tailwind `text-11` alias in tailwind.css is gone with it). Six stops, 12px minimum. */
@@ -216,6 +234,20 @@
     --observe-soft: rgba(94, 200, 191, 0.16);
     --muted: #8b94a5;
     --muted-soft: rgba(139, 148, 165, 0.16);
+
+    /* Decorative multi-hue (P3-6, V10) — dark: lighter icon colours, translucent soft tiles (every
+     * dark `-soft` chip/tile background in this file is `rgba()` over whatever surface it sits on;
+     * see tokens-contrast.test.ts's own doc comment for why `--surface-1` is the composite base). */
+    --deco-blue: #86a2ff;
+    --deco-blue-soft: rgba(77, 113, 239, 0.2);
+    --deco-violet: #b49aff;
+    --deco-violet-soft: rgba(126, 78, 239, 0.2);
+    --deco-pink: #f0a0c8;
+    --deco-pink-soft: rgba(214, 74, 142, 0.2);
+    --deco-cyan: #6fd6e0;
+    --deco-cyan-soft: rgba(14, 147, 166, 0.22);
+    --deco-indigo: #a29bff;
+    --deco-indigo-soft: rgba(91, 82, 224, 0.22);
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
     --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 20px rgba(0, 0, 0, 0.35);

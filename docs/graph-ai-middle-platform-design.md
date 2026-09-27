@@ -237,6 +237,7 @@ graph LR
 ### 5.6 认知状态与可见性
 
 - `epistemic_status`：`observed`（系统 API 直接读取，采集器）/ `extracted`（NLP / LLM 抽取）/ `inferred`（agent 推理）/ `asserted`（人工）/ `verified` / `contradicted`；`confidence` 是独立的连续值。检索给 agent 的上下文必须带状态；高影响 ActionType 可要求依赖 Fact 为 `verified`。
+- **证据与人工确认**（2026-09-27 维护者决定，遗留 89）：`verify_fact` 要求 Fact 已有 Evidence（§5.3 第 6 条）。Evidence 有两类，按 `kind` 区分、永不混用：**机器证据**（Worker 结果契约的 `evidence[]`：命令输出、文档摘录、门结果，`kind` 由写入方命名）与 **人工确认**（保留 `kind = human_attestation`）。人工确认只能由人在 human 通道经 `attest_fact` 写入——谁（调用者本人的 human Principal，不取自请求体）、何时、必填说明、可选 http(s) 链接——记在它自己的 `epistemic.human_attestation` Activity 下并审计；Handle 通道、service Principal 与 Worker 结果契约都写不出这个 kind。`explain` 把它单列为 `fact.humanAttestations`，控制台溯源标「人工确认」。只有人工确认的 Fact 也可以被验证：验证记录的是"某人凭自己的确认把它提升为已验证"，溯源链如实显示这一点，而不是把人的话当成观测。
 - **可见性**：Source 带 `visibility`，Fact 与 Decision 继承。会话派生内容（Chat、Turn、Worker 会话转录）默认 `private` 给 `on_behalf_of` 的用户；Worker 经结果契约写回的 Fact 是工作区知识，默认 `workspace`（2026-09-10 产品决定：转录另作私有 Source，挂在自己的 Activity 上，不影响结果 Fact 的可见性）；晋升为 `workspace` 是 human 通道的受治理转移，产生 Decision。两个死角的规则：私有 Fact 与工作区 Fact 冲突时，Conflict 只对私有一方可见；agent 提议的本体 / WorkerDefinition 草稿对提议者私有，发布后可见。
 
 ### 5.7 三模型分离
@@ -363,7 +364,7 @@ flowchart TB
 | 模式 | 运行处 | 注册的工具 | `context` 注入 | 会话回传 |
 |------|--------|-----------|---------------|---------|
 | `entry` | 每用户入口容器 | 图的 observe 组（含 `get_task`）、Handle 内各门的 **observe 类 Operation**（投影为 `<gate>.<op>` 工具）、`find_operations` / `find_workers` / `find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；与 §5.1.4 能力上限一致；S1 只注册图的 observe 组 | 该用户的待审批、进行中 Task 及其结果、相关 Fact、先例、可用的门与 Procedure 摘要 | 每轮回传 Turn 与决策 |
-| `worker` | Worker 容器 | Handle 内各门的 Operation（observe 直接调、execute 经 `request_action`）、图的 observe 与 `assert_fact`、`propose_*` | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
+| `worker` | Worker 容器 | 门的 Operation（observe 经 `observe_operation` 直接调、不看门范围，§11"门上的观察"；execute 经 `request_action`、限 Handle 内的门）、图的 observe 与 `assert_fact`、`propose_*` | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
 | `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry` | 默认不回传 |
 
 **接口注入的机制**：扩展启动时向内核请求 Handle 内允许的 Operation 列表（含参数 schema 与说明），逐个注册为 pi 工具 `<gate>.<op>`；工具调用 → observe 类直接经内核转门；execute 类由 `tool_call` 拦截转 `request_action`。Worker 从头到尾只看到工具名与参数，看不到传输、地址、凭证。拦截是便利闸门，安全边界在 gateway。
@@ -720,6 +721,7 @@ create table worker_definitions (
 | | `publish_skill` / `publish_procedure` / `deprecate_*` | human | |
 | | `assert_fact` / `supersede_fact` / `invalidate_fact` | propose | 状态由调用方类型决定 |
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
+| | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |
 | governance | `request_action` | execute | Worker |
 | | `approve` / `reject` / `list_pending` / `get_action` / `set_auto_approved_action_kind` | human | I14 |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
@@ -940,7 +942,7 @@ nexttime explain <turn_activity_id>
 - **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
 - **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。
 - **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
-- **门上的观察（决定 D4 撤回，2026-09-27 维护者确认"只读调用不需要授权"）**：observe 类 Operation 对本工作区内任何 Handle 可调，条件是——门已在本工作区启用、Operation 已发布且不在平台连接器禁用清单上、门没有被工作区 AgentPolicy 上限或调用成员自己的 AgentProfile 排除。门 Grant 只管 execute 类。人类通道（控制台）的观察检查不变，待维护者另行决定。每次观察照旧审计。实现上是一个谓词（`application/gates/observe-access.ts` 的 `observeRefusal`）：`observe_operation` / `request_action` 的 observe 分支（Handle 通道）、`list_allowed_operations` 工具投射、可达性读模型与 `find_procedures` 都调它；Handle 的 `resources.gatekeeper` 只表示执行授权（Grant 派生、按 Worker 衰减），不再决定能否观察（`productization-plan-v2-2026-09-26.md` §2 实现说明）。
+- **门上的观察（决定 D4 撤回，2026-09-27 维护者确认"只读调用不需要授权"；人类通道同日一并放开——"也放开吧"）**：observe 类 Operation 对本工作区内任何 Handle（入口 agent、Worker、外部 Claude Code / pi 的凭证）和任何成员本人（人类通道，控制台 / API key）都可调，条件是——门已在本工作区启用、Operation 已发布且不在平台连接器禁用清单上；Handle 通道另加：门没有被工作区 AgentPolicy 上限或调用成员自己的 AgentProfile 排除（这两项是成员**智能体**的配置，不限制成员本人的读取）。`auditor` 角色仍不碰门（§5.1.1）。门 Grant 只管 execute 类：`request_action` 的执行类与未分类路径（含人类通道）照旧要 Grant + 审批，它读 observe 类 Operation 时与 `observe_operation` 同规则。每次观察照旧审计。实现上是一个谓词（`application/gates/observe-access.ts` 的 `observeRefusal`）：`observe_operation`（两个通道；人类通道以"无排除项"调用）/ `request_action` 的 observe 分支（两个通道）、`list_allowed_operations` 工具投射、可达性读模型、`find_procedures` 与「我的智能体」的可选系统清单都调它；Worker 的观察类工具走 `observe_operation`（Worker 基础能力，不随门范围衰减），执行类走 `request_action`；Handle 的 `resources.gatekeeper` 只表示执行授权（Grant 派生、按 Worker 衰减），不再决定能否观察（`productization-plan-v2-2026-09-26.md` §2 实现说明）。
 - **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。 **用户与平台管理员**：用户是平台级目录，`platform_role` 只分 admin / user；人用用户名 + 密码登录（本地账号即此），API key 留给自动化与 agent；平台管理员只有管理权没有业务数据权；初始化靠一次性令牌（§7.11）。
 
 去掉的东西：入口 agent 的子进程模式、每用户 OS 账号、无出网网络、内置工具白名单。加上的东西：一个出网代理容器和一张默认策略表。

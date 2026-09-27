@@ -241,6 +241,23 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() => expect(select.value).toBe('platform_preset'));
   });
 
+  it('P3-6 V8 (390px overflow): the connectors table scrolls inside its own box, never the page', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector()] }),
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    // `.table-scroll` (styles/pages.css) is the box with `overflow-x: auto` + `min-width: 0` — the
+    // second is what actually lets the first take effect instead of the table's own
+    // `min-width: 720px` growing every flex-column ancestor up to `.page` and scrolling the whole
+    // viewport (the same chain `.code-block`'s own comment documents). jsdom does not compute real
+    // layout, so this asserts the containment box is the table's immediate scroll ancestor rather
+    // than measuring pixels.
+    expect(table.parentElement?.className).toBe('table-scroll');
+    expect(table.closest('.page')?.querySelector('.table-scroll')).toBe(table.parentElement);
+  });
+
   it('cancelling the mode confirm restores the previous value without calling set_connector_mode', async () => {
     const http = scriptedHttp({
       list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),

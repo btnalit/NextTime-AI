@@ -41,6 +41,23 @@ function handleCaller(
   };
 }
 
+function humanCaller(workspaceId: string, principalId: string): ResolvedCaller {
+  return {
+    channel: 'human',
+    principal: { workspaceId, id: principalId, kind: 'human', role: 'member', displayName: null },
+    session: {
+      workspaceId,
+      id: randomUUID(),
+      principalId,
+      kind: 'web',
+      onBehalfOf: principalId,
+      status: 'active',
+      createdAt: new Date(),
+      expiresAt: null,
+    },
+  };
+}
+
 const graphStore = new SqlGraphStore();
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -167,6 +184,127 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(invalidated.invalidatedAt).not.toBeNull();
       expect(invalidated.invalidationReason).toBe('no longer true');
+    });
+
+    // Coverage gap G2 (docs/kernel-console-coverage-2026-09-26.md): the console's Fact-row menu
+    // calls these two on the human channel — `channel: 'handle'` admits a human caller as well
+    // (authorize.ts), gated by `minRole: 'member'`; every call is audited by the dispatcher (I11).
+    async function auditRow(action: string, resourceId: string) {
+      return withWorkspace(pool, { workspaceId, principalId: memberId }, async (client) => {
+        const result = await client.query<{
+          actor_principal_id: string;
+          resource_type: string;
+          payload: { channel: string; params: Record<string, unknown> };
+        }>(
+          `select actor_principal_id, resource_type, payload from audit_records
+           where workspace_id = $1 and action = $2 and resource_id = $3`,
+          [workspaceId, action, resourceId],
+        );
+        return result.rows;
+      });
+    }
+
+    it('invalidate_fact from the console (human channel) is audited with its reason', async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const fact = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, memberId, ['assert_fact']),
+        'assert_fact',
+        { sourceObjectId, targetObjectId, linkType: 'has_note', properties: { note: 'v1' } },
+      )) as { id: string };
+
+      const invalidated = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, memberId),
+        'invalidate_fact',
+        { factId: fact.id, reason: 'decommissioned last week' },
+      )) as { invalidatedAt: string | null; invalidationReason: string | null };
+      expect(invalidated.invalidatedAt).not.toBeNull();
+      expect(invalidated.invalidationReason).toBe('decommissioned last week');
+
+      const audit = await auditRow('invalidate_fact', fact.id);
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.actor_principal_id).toBe(memberId);
+      expect(audit[0]?.resource_type).toBe('fact');
+      expect(audit[0]?.payload.channel).toBe('human');
+      expect(audit[0]?.payload.params.reason).toBe('decommissioned last week');
+
+      // Invalidated is terminal — a second attempt is an illegal transition, not a silent no-op.
+      await expect(
+        dispatchCapability({ pool }, humanCaller(workspaceId, memberId), 'invalidate_fact', {
+          factId: fact.id,
+          reason: 'again',
+        }),
+      ).rejects.toMatchObject({ name: 'IllegalTransition' });
+    });
+
+    it('supersede_fact from the console writes a replacement asserted by the person, audited', async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const original = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, memberId, ['assert_fact']),
+        'assert_fact',
+        { sourceObjectId, targetObjectId, linkType: 'has_note', properties: { note: 'v1' } },
+      )) as { id: string };
+
+      const replacement = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, memberId),
+        'supersede_fact',
+        {
+          factId: original.id,
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: 'v2' },
+        },
+      )) as {
+        id: string;
+        supersedesId: string | null;
+        assertedBy: string;
+        epistemicStatus: string;
+        properties: Record<string, unknown>;
+      };
+      expect(replacement.supersedesId).toBe(original.id);
+      expect(replacement.assertedBy).toBe(memberId);
+      // A person's replacement value is `asserted` (§5.5, derived from the principals row), never
+      // passed off as an observation.
+      expect(replacement.epistemicStatus).toBe('asserted');
+      expect(replacement.properties).toEqual({ note: 'v2' });
+
+      const audit = await auditRow('supersede_fact', replacement.id);
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.actor_principal_id).toBe(memberId);
+      expect(audit[0]?.payload.channel).toBe('human');
+      expect(audit[0]?.payload.params.factId).toBe(original.id);
+    });
+
+    it('a Handle without invalidate_fact / supersede_fact in scope is refused (403) and nothing changes', async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const caller = handleCaller(workspaceId, memberId, ['assert_fact']);
+      const fact = (await dispatchCapability({ pool }, caller, 'assert_fact', {
+        sourceObjectId,
+        targetObjectId,
+        linkType: 'has_note',
+        properties: { note: 'v1' },
+      })) as { id: string };
+
+      await expect(
+        dispatchCapability({ pool }, caller, 'invalidate_fact', { factId: fact.id, reason: 'x' }),
+      ).rejects.toThrow(/not in the calling handle's scope/);
+      await expect(
+        dispatchCapability({ pool }, caller, 'supersede_fact', {
+          factId: fact.id,
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: 'v2' },
+        }),
+      ).rejects.toThrow(/not in the calling handle's scope/);
+      expect(await auditRow('invalidate_fact', fact.id)).toEqual([]);
     });
   },
 );

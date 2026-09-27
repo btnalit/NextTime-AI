@@ -111,11 +111,39 @@ S4 member-probe gate=<门> connector=<连接器> readiness=<该成员的状态>/
   内核还在按旧规则（D4）要求授权范围，先确认主机版本；`readiness=unreachable/not_granted` 而调用成功
   ——读模型仍按旧规则计算。
 
+**人类通道探针**（遗留 97，维护者 2026-09-27"也放开吧"：成员本人在控制台读系统也不需要授权）：owner 用
+`create_principal` 铸一把 member 角色、无任何门 Grant、非 owner 的 API key（`kind=service`——人加入工作区走
+`add_member`，不发 key；内核把 API key 解析为**人类通道**，与控制台会话同一通道，`observe_operation` 的
+人类分支只看角色），装配阶段一行 `human-probe-key`（并核实它在任何门上都没有 Grant）。随后对 owner 那一轮
+挑中的每个 Operation 各打一行：
+
+```
+S4 human-probe gate=<门> connector=<连接器> op=<Operation> call=<HTTP 状态> verdict=PASS|FAIL
+```
+
+- `verdict=PASS`：`call=200`，或 `call=403` 且 `operation_disabled`（平台禁用名单对所有通道都生效）。
+- `verdict=FAIL`：其它——尤其是 403 `holds no active "gatekeeper" grant`：主机内核的人类通道还在要求
+  Grant，先确认主机版本。
+
+**排除探针**（遗留 98：「我的智能体」能把"可读但未授权"的系统排除掉）：取未授权成员探针第一个 200 的门，
+以 owner 身份用控制台同一组能力（`get_agent_profile` / `set_agent_profile` 带 `principalId`）操作该成员：
+①「我的智能体」把这个门列为 `granted:false`（可读未授权）、`inUse:true`；② 排除它，结果里变 `inUse:false`；
+③ 该成员 Handle 的 `observe_operation` 被拒 403 `excluded_by_profile`；④ `list_allowed_operations` 不再投射它的
+任何 Operation；⑤ 该成员的就绪读模型说 `unreachable/excluded_by_profile`；⑥ 恢复 `excludedGatekeepers:[]`，
+工具重新投射。一行：
+
+```
+S4 exclusion-probe gate=<门> connector=<连接器> op=<Operation> offered=granted:false,inUse:true call=403 listed=no readiness=unreachable/excluded_by_profile restored=yes verdict=PASS|FAIL
+```
+
+任何一项不符即 `verdict=FAIL`（stderr 的 `FAIL exclusion-probe:<gatekeeperId>` 行列出每一步的实际值）；没有任何门被
+未授权成员读成 200 时记 `SKIP exclusion-probe`（无可排除的门），不算失败。
+
 最终一行：
 
 ```
-S4 OK (<n> gates pass, <m> skipped; ungranted-member probe <p> pass)                  # 无 FAIL，退出 0
-S4 FAIL (<n> pass, <m> skip, <f> fail; ungranted-member probe <p> pass, <q> fail)    # 有 FAIL，退出 1
+S4 OK (<n> gates pass, <m> skipped; ungranted-member probe <p> pass; human-channel probe <h> pass; exclusion probe <x> pass)      # 无 FAIL，退出 0
+S4 FAIL (<n> pass, <m> skip, <f> fail; ungranted-member probe <p> pass, <q> fail; human-channel probe <h> pass, <i> fail; exclusion probe <x> pass, <y> fail)    # 有 FAIL，退出 1
 ```
 
 工作区没有任何平台门实例可测时（罕见——平台管理员还没在 `集成` 页启用任何连接器实例），脚本打印
@@ -139,6 +167,10 @@ S4 FAIL (<n> pass, <m> skip, <f> fail; ungranted-member probe <p> pass, <q> fail
 | 成员探针：读就绪 | `execution_readiness {principalId}` | human（owner） | 该主体的逐门可达性，期望 `direct` |
 | 成员探针：读工具投射 | `list_allowed_operations` | **handle**（成员 Handle） | 期望含 owner 那一轮挑中的 Operation，且不含任何执行类 Operation |
 | 成员探针：真调用 | `observe_operation` | **handle**（成员 Handle） | 期望 200（或与就绪一致的 `operation_disabled`） |
+| 人类通道探针：铸 key | `create_principal` + `execution_readiness {principalId}` | human（owner） | member 角色、无 Grant、非 owner 的 API key |
+| 人类通道探针：真调用 | `observe_operation` | **human**（该 API key） | 期望 200（或 `operation_disabled`），不需要 Grant |
+| 排除探针 | `get_agent_profile` / `set_agent_profile {principalId}` | human（owner） | 「我的智能体」列出该门 `granted:false`；排除后 `inUse:false`；最后恢复 |
+| 排除探针：核对 | `observe_operation` / `list_allowed_operations`（成员 Handle）+ `execution_readiness {principalId}` | handle / human | 403 `excluded_by_profile`、不投射、`unreachable/excluded_by_profile` |
 
 `find_operations`/`observe_operation` 特意不用 owner 的人类身份直接调（虽然内核允许——
 `application/gateway/authorize.ts` 的 channel 准入规则："channel:'handle' 的能力两个通道都能调"）：
@@ -159,7 +191,8 @@ sh scripts/delete-workspaces-matching.sh '^accept-s4' --yes
 
 ## 6. 已知限制
 
-- **入口 agent 在 `session_start` 时的真实工具投影不受本脚本验证**：`find_operations`/
+- **入口 agent 在 `session_start`（及此后每轮 `before_agent_start`，C3）时的真实工具投影不受本脚本
+  验证**（逐轮投射的人工核对见 `pi-upgrade.md` §2.3）：`find_operations`/
   `observe_operation` 走的是同一条 capability 与同一条门禁，但入口 agent 自己在会话开始时把
   `<gate>.<op>` 投影成具体工具名的那一步（`packages/platform-extension` 的 `modes/entry.ts`）不在
   本脚本覆盖范围——如果未来那一层自己引入了额外的过滤逻辑（例如按 AgentProfile 清单二次过滤工具

@@ -23,6 +23,7 @@ import {
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
+  FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
@@ -317,6 +318,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // (well-formed request, current state — no Evidence on file — forbids it), same 409-family
   // bucket as PrincipalOperationRefusedError/OperationIdentityConflictError above.
   if (err instanceof FactHasNoEvidenceError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // STATUS leftover 89 `attest_fact` on a superseded / invalidated Fact — same bucket.
+  if (err instanceof FactNotActiveError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof PrincipalNotFoundError) {

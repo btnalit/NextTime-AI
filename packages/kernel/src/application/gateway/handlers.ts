@@ -113,6 +113,7 @@ import {
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
 import { discardDraftHandler } from './discard-draft-handler.js';
 import {
+  attestFactHandler,
   causalChainHandler,
   decisionImpactHandler,
   findPrecedentsHandler,
@@ -1563,6 +1564,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_conflicts', listConflictsHandler],
   ['resolve_conflict', resolveConflictHandler],
   ['verify_fact', verifyFactHandler],
+  // STATUS leftover 89 — a person's own confirmation as Evidence (epistemic-handlers.ts).
+  ['attest_fact', attestFactHandler],
   ['query_decisions', queryDecisionsHandler],
   ['causal_chain', causalChainHandler],
   ['decision_impact', decisionImpactHandler],

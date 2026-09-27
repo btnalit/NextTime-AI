@@ -91,7 +91,7 @@ export {
 // class): defined in the handler file itself, not a substrate module, so no six-layer workaround
 // is needed — re-exported here purely to keep every capability-reachable error class importable
 // from this one curated surface, matching every sibling error re-export above.
-export { FactHasNoEvidenceError } from './epistemic-handlers.js';
+export { FactHasNoEvidenceError, FactNotActiveError } from './epistemic-handlers.js';
 
 export {
   dispatchCapability,
