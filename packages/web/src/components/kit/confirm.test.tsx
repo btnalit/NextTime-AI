@@ -119,6 +119,38 @@ describe('kit/Confirm — medium', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('confirm-button')));
   });
 
+  it('positions the popover against the trigger itself, not the box-less `contents` wrapper', async () => {
+    renderTier('medium');
+    const trigger = screen.getByTestId('trigger');
+    const rect = {
+      x: 600,
+      y: 400,
+      top: 400,
+      left: 600,
+      right: 700,
+      bottom: 430,
+      width: 100,
+      height: 30,
+    };
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+      ...rect,
+      toJSON: () => rect,
+    } as DOMRect);
+    fireEvent.click(trigger);
+    const popover = await screen.findByTestId('confirm');
+    const wrapper = popover.closest<HTMLElement>('[data-radix-popper-content-wrapper]');
+    // jsdom measures the viewport (and the popover) as 0×0, so flip/shift pick the side — assert
+    // only that it sits on the trigger's box (within the 8px offset), never pinned to 0,0.
+    await waitFor(() => {
+      const m = /translate\((-?\d+)px, (-?\d+)px\)/.exec(wrapper?.style.transform ?? '');
+      const [x, y] = [Number(m?.[1]), Number(m?.[2])];
+      expect(x).toBeGreaterThanOrEqual(rect.left);
+      expect(x).toBeLessThanOrEqual(rect.right);
+      expect(y).toBeGreaterThanOrEqual(rect.top - 8);
+      expect(y).toBeLessThanOrEqual(rect.bottom + 8);
+    });
+  });
+
   it('confirms, calls onConfirm, and closes; the trigger regains focus', async () => {
     let resolve: () => void = () => undefined;
     const onConfirm = vi.fn(
@@ -142,6 +174,31 @@ describe('kit/Confirm — medium', () => {
     resolve();
     await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('keeps confirm disabled while the caller says its own field is incomplete', async () => {
+    const onConfirm = vi.fn(async () => undefined);
+    const { rerender } = renderTier('medium', { onConfirm, confirmDisabled: true });
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByTestId('confirm');
+    const confirmButton = screen.getByTestId('confirm-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.click(confirmButton);
+    expect(onConfirm).not.toHaveBeenCalled();
+    rerender(
+      <Harness
+        tier="medium"
+        title="批准"
+        target="docker.container_stop"
+        confirmLabel="确认"
+        testId="confirm"
+        onConfirm={onConfirm}
+        confirmDisabled={false}
+      />,
+    );
+    await waitFor(() =>
+      expect((screen.getByTestId('confirm-button') as HTMLButtonElement).disabled).toBe(false),
+    );
   });
 
   it('cancel closes without calling onConfirm', async () => {

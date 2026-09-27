@@ -15,7 +15,7 @@ export interface NeighbourListProps {
   readonly onProvenance: (fact: FactWire) => void;
   /** Threaded straight through to each `FactRow` — see its own doc comment. */
   readonly http?: CapabilityCaller;
-  readonly onVerified?: () => void;
+  readonly onFactChanged?: () => void;
 }
 
 /** Rows shown per group before "显示全部 Show all" — a Host's `runs_on` group can be hundreds of
@@ -50,7 +50,7 @@ export function NeighbourList({
   onExpand,
   onProvenance,
   http,
-  onVerified,
+  onFactChanged,
 }: NeighbourListProps) {
   const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -93,7 +93,7 @@ export function NeighbourList({
                   onExpand={onExpand}
                   onProvenance={onProvenance}
                   http={http}
-                  onVerified={onVerified}
+                  onFactChanged={onFactChanged}
                 />
               ))}
             </ul>
