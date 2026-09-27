@@ -159,11 +159,36 @@ else
   pass "preflight-real-provider" "real provider left as deployed; entry agent and ops-runner pinned to model=$REAL_MODEL, runs=$RUNS per scenario"
 fi
 
+# `/resident/*` is gated on the internal-plane token (F6/PR #78, same as accept_s1.sh's own
+# resident_status/resident_stop) — the kernel container has the same token at
+# /run/secrets/internal_token, so every call below sends it as a Bearer. Bug fix in passing
+# (STATUS.md leftover "验收残留自动清理"): this function used to send no Authorization header at
+# all, so every call here always 401'd and never actually stopped anything — both the "defensive:
+# force a fresh Handle" call sites below (step2_docker_restart/real_docker_restart_run, where a
+# stale-Handle rerun was silently unguarded) and cleanup_step's own end-of-run stop silently
+# no-op'd, leaving alice/bob's entry containers running (not merely stopped) after every S2 run.
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+  body: JSON.stringify({ principalId: '$1' }),
+}).then((r) => console.log('STATUS=' + r.status));
+" </dev/null 2>&1
+}
+
+# POST /resident/reclaim <principalId> — same call, one route over: force-removes the container
+# (not just stops it) and its `${NEXTTIME_DATA}/workspaces/<principalId>` data directory. Used only
+# by cleanup_step below (end of run) — step2_docker_restart/real_docker_restart_run's own
+# "defensive: force a fresh Handle" calls stay on resident_stop, since they need the container
+# gone-but-respawnable for the *same* principal later in this same run, not permanently reclaimed.
+resident_reclaim() {
+  docker compose run --rm --no-deps -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+fetch('http://worker-supervisor:8081/resident/reclaim', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
   body: JSON.stringify({ principalId: '$1' }),
 }).then((r) => console.log('STATUS=' + r.status));
 " </dev/null 2>&1
@@ -1053,8 +1078,8 @@ cleanup_step() {
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
   fi
-  resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
-  resident_stop "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
+  resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
+  resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
   # `down` on a profile also stops every default-profile service (postgres/kernel/…), which broke
   # running accept_s3.sh right after this script (STATUS leftover 26) — `rm -sf` the six accept-s2
   # fixture/gate containers by name instead, leaving the rest of the stack untouched.
@@ -1064,8 +1089,9 @@ cleanup_step() {
     echo "cleanup: docker compose --profile accept-s2 rm -sf failed: $down_out" >&2
   fi
   # Workspace/principal/chat/activity/graph rows are the audit trail (design doc §12) — left in
-  # place on purpose, same precedent as accept_s1.sh's own cleanup_step.
-  pass "cleanup" "stopped alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: $WORKSPACE_ID"
+  # place on purpose, same precedent as accept_s1.sh's own cleanup_step. The entry containers
+  # themselves are not part of that audit trail — reclaimed (removed, not just stopped) above.
+  pass "cleanup" "reclaimed alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: $WORKSPACE_ID"
 }
 
 # --------------------------------------------------------------------------------------------

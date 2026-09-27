@@ -93,8 +93,9 @@ PASS mcp-issue-handle interactive Handle minted: eyJhbGc...(redacted)
 PASS mcp-tools-list tools=explain,get_object,get_task,search,state_at,traverse,...
 PASS mcp-traverse MCP traverse sees the same graph: {"isError":false,"edges":1}
 PASS mcp-no-handle no Handle -> 401
-cleanup: deleted the run-private collector token (${NEXTTIME_DATA}/accept/collector-s3-<ts>-<pid>.token) — the production collector's own secret was never touched
+cleanup: reclaimed the owner's entry container via the supervisor API
 PASS cleanup workspace retained: <uuid> (purged by: sh scripts/delete-workspaces-matching.sh --expired --yes once its 7-day TTL passes)
+cleanup: deleted the run-private collector token (${NEXTTIME_DATA}/accept/collector-s3-<ts>-<pid>.token) — the production collector's own secret was never touched
 S3 OK
 ```
 
@@ -150,12 +151,22 @@ S3 OK
 
 ## 6. 清理
 
-`--keep` 不传时，`cleanup_step` 经 `worker-supervisor` 的 `/resident/stop` 停 owner 的入口容器。
+`--keep` 不传时，`cleanup_step` 现在经 `worker-supervisor` 的 `POST /resident/reclaim`（收尾波次
+C9："验收残留自动清理"；不是旧的 `/resident/stop`）**回收**（强制删容器 + 删数据目录）owner 的
+入口容器，而不只是停掉——`docker ps -a` 里不会再留一个 `Exited` 的 `nexttime-entry-<uuid>`。清理
+（含运行私有采集器 token 的删除）现在也统一挂在 `on_exit` EXIT trap 上：脚本中途 `fail()`、或 ssh
+会话中断触发的 INT/TERM/HUP/PIPE，都会先跑一次 `cleanup_step` 才恢复 provider（`--real` 模式没有
+provider 要恢复，但 token 与容器回收同样会跑）——此前只有成功路径末尾会跑
+`cleanup_step`，失败路径把 owner 的入口容器整个留在运行状态。
 workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕原则保留，不清理——批量清理：
 
 ```
 sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 ```
+
+早于本次改动的历史残留（停在 `Exited` 的 `nexttime-entry-*`）：
+`sh scripts/sweep-accept-entry-containers.sh [--yes]`（默认 dry run，见
+`docs/runbooks/accept-s1.md` §7）。
 
 验收工作区自 S5.3 起以 `--purpose ephemeral --ttl 7d` 创建，到期后 `sh scripts/delete-workspaces-matching.sh
 --expired --yes` 按策略清掉（S6 起走受治理的 `purge-workspace`：级联删除、从未激活的 owner / alice / bob
