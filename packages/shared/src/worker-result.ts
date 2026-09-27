@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OperationSchema } from './action-description.js';
+import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
 import { ProposeSkillContentSchema } from './skill.js';
 
 /**
@@ -64,7 +65,15 @@ export type WorkerResultFact = z.infer<typeof WorkerResultFactSchema>;
  *  cannot represent an Activity-level attachment. */
 export const WorkerResultEvidenceSchema = z
   .object({
-    kind: z.string().min(1),
+    // STATUS leftover 89: `human_attestation` is reserved for a person's own confirmation
+    // (`attest_fact`, human channel only) — a Worker naming it would pass machine output off as a
+    // human's word, so the whole contract is refused (400) rather than the entry silently kept.
+    kind: z
+      .string()
+      .min(1)
+      .refine((kind) => kind !== HUMAN_ATTESTATION_EVIDENCE_KIND, {
+        message: `evidence kind "${HUMAN_ATTESTATION_EVIDENCE_KIND}" is reserved for a person's own confirmation (attest_fact) — name the machine evidence's own kind instead`,
+      }),
     content: jsonRecord,
     factIndex: z.number().int().nonnegative().optional(),
   })

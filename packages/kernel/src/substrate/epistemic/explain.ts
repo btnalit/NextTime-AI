@@ -1,4 +1,6 @@
+import { HUMAN_ATTESTATION_EVIDENCE_KIND } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { listHumanAttestations } from './evidence.js';
 
 /**
  * substrate/epistemic/explain: the PROV-O provenance walk — Fact / Decision / Turn (an Activity)
@@ -75,12 +77,27 @@ export interface ExplainActivityRef {
   readonly onBehalfOfPrincipal: ExplainPrincipalRef | null;
 }
 
+/** STATUS leftover 89: one human attestation on the Fact (`evidence.kind = 'human_attestation'`,
+ *  written only by `attest_fact`) — a person's own confirmation, listed apart from machine
+ *  evidence so neither the console nor an agent reading `explain` can take one for the other. */
+export interface ExplainHumanAttestationRef {
+  readonly id: string;
+  readonly kind: typeof HUMAN_ATTESTATION_EVIDENCE_KIND;
+  readonly note: string;
+  readonly link: string | null;
+  readonly activityId: string | null;
+  readonly attestedByPrincipal: ExplainPrincipalRef | null;
+  readonly createdAt: string;
+}
+
 export interface ExplainFactRef {
   readonly id: string;
   readonly linkType: string;
   readonly epistemicStatus: string;
   readonly assertedByPrincipal: ExplainPrincipalRef | null;
   readonly verifiedByPrincipal: ExplainPrincipalRef | null;
+  /** STATUS leftover 89: every human attestation on this Fact, oldest first; `[]` when none. */
+  readonly humanAttestations: readonly ExplainHumanAttestationRef[];
   /**
    * W5 (migrations/core/0018, docs/retrospective-2026-09-09.md §5.1): the single Observation that
    * fed this Fact when its writer named one (`submit_observations` does, one per submitted item).
@@ -328,6 +345,19 @@ async function explainFact(
   const activity = await fetchActivityRef(client, workspaceId, row.activity_id, row.observation_id);
   // S5.2: the latest same-origin re-confirmation (see `ExplainFactRef.lastObservation`).
   const lastObservation = await fetchObservationRef(client, workspaceId, row.last_observation_id);
+  // Leftover 89: the Fact's human attestations, each resolved to the person who gave it.
+  const humanAttestations: ExplainHumanAttestationRef[] = [];
+  for (const attestation of await listHumanAttestations(client, workspaceId, row.id)) {
+    humanAttestations.push({
+      id: attestation.id,
+      kind: HUMAN_ATTESTATION_EVIDENCE_KIND,
+      note: attestation.note,
+      link: attestation.link,
+      activityId: attestation.activityId,
+      attestedByPrincipal: await fetchPrincipalRef(client, workspaceId, attestation.attestedBy),
+      createdAt: attestation.createdAt.toISOString(),
+    });
+  }
 
   return {
     nodeType: 'fact',
@@ -337,6 +367,7 @@ async function explainFact(
       epistemicStatus: row.epistemic_status,
       assertedByPrincipal,
       verifiedByPrincipal,
+      humanAttestations,
       observationId: row.observation_id,
       invalidatedAt: row.invalidated_at ? row.invalidated_at.toISOString() : null,
       invalidationReason: row.invalidation_reason,

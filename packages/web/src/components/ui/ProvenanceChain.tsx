@@ -42,6 +42,16 @@ export interface ProvenanceActivity {
   readonly onBehalfOfPrincipal?: ProvenancePrincipal | null;
 }
 
+/** STATUS leftover 89: one human attestation on the Fact (`explain`'s `fact.humanAttestations`) —
+ *  a person's own confirmation, never machine evidence. */
+export interface ProvenanceHumanAttestation {
+  readonly id: string;
+  readonly note: string;
+  readonly link?: string | null;
+  readonly attestedByPrincipal?: ProvenancePrincipal | null;
+  readonly createdAt?: string;
+}
+
 export interface ProvenanceFact {
   readonly id: string;
   readonly linkType?: string;
@@ -51,6 +61,7 @@ export interface ProvenanceFact {
   readonly invalidatedAt?: string | null;
   readonly invalidationReason?: string | null;
   readonly lastObservation?: ProvenanceObservation | null;
+  readonly humanAttestations?: readonly ProvenanceHumanAttestation[];
 }
 
 export interface ProvenanceChainProps {
@@ -86,6 +97,84 @@ function when(iso: string | null | undefined): ReactNode {
   return <time title={formatDateTime(iso)}>{formatRelative(iso)}</time>;
 }
 
+/** Only an http(s) link is ever rendered as an anchor — the kernel already refuses any other
+ *  scheme (`attest_fact`'s paramsSchema); this keeps an older or foreign row from becoming a
+ *  `javascript:` href all the same. */
+function safeHttpLink(link: string | null | undefined): string | null {
+  return link && /^https?:\/\//i.test(link) ? link : null;
+}
+
+/**
+ * STATUS leftover 89: the Fact's human attestations as their own labelled block under the three
+ * lineage segments — a 人工确认 chip, who and when, the note, the optional link — so a person's
+ * word is never read as part of the machine lineage (Fact → Activity → Source) above it, and the
+ * "who" has the full width rather than a squeezed segment column.
+ */
+function HumanAttestations({
+  attestations,
+  hrefFor,
+}: {
+  readonly attestations: readonly ProvenanceHumanAttestation[];
+  readonly hrefFor: ProvenanceChainProps['hrefFor'];
+}) {
+  const t = useT();
+  return (
+    <section className="prov-attestations" data-testid="prov-human-attestations">
+      <div className="prov-attestations-head">
+        <span className="section-title">
+          {t('人工确认', 'Human attestations')} · {attestations.length}
+        </span>
+        <span className="text-3 text-small">
+          {t(
+            '附在该事实上的本人确认，不是机器证据',
+            'People’s own confirmations of this Fact — not machine evidence',
+          )}
+        </span>
+      </div>
+      <ul className="prov-attestation-list">
+        {attestations.map((attestation) => {
+          const link = safeHttpLink(attestation.link);
+          return (
+            <li
+              key={attestation.id}
+              className="prov-attestation"
+              data-testid="prov-human-attestation"
+              data-kind="human_attestation"
+            >
+              <div className="row-wrap">
+                <span
+                  className="chip chip-accent chip-s"
+                  title={t(
+                    '本人确认，不是机器证据',
+                    'A person’s own confirmation, not machine evidence',
+                  )}
+                >
+                  {t('人工确认', 'Human attestation')}
+                </span>
+                {principalChip(attestation.attestedByPrincipal, hrefFor)}
+                <span className="text-3 text-small">{when(attestation.createdAt)}</span>
+              </div>
+              <p className="prov-attestation-note">{attestation.note}</p>
+              {link ? (
+                <a
+                  className="prov-attestation-link"
+                  href={link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="prov-human-attestation-link"
+                >
+                  <Icon name="link" size="s" />
+                  <span className="truncate">{link}</span>
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 /**
  * components/ui/ProvenanceChain (S6-A0, §5.5 / §5.9 "ProvenanceChain"): the Fact → Activity →
  * Source lineage as a three-segment timeline, each segment a labelled block with its RefChip and
@@ -103,6 +192,7 @@ export function ProvenanceChain({
 }: ProvenanceChainProps) {
   const t = useT();
   const resolvedSource = source ?? fact?.lastObservation?.source ?? null;
+  const attestationCount = fact?.humanAttestations?.length ?? 0;
   return (
     <div className="prov-chain" data-testid={testId}>
       <ol className="prov-segments">
@@ -145,6 +235,14 @@ export function ProvenanceChain({
                       {fact.invalidationReason ? (
                         <span className="text-2"> — {fact.invalidationReason}</span>
                       ) : null}
+                    </dd>
+                  </>
+                ) : null}
+                {attestationCount > 0 ? (
+                  <>
+                    <dt>{t('人工确认', 'Attested')}</dt>
+                    <dd data-testid="prov-fact-attestation-count">
+                      {t(`${attestationCount} 条`, `${attestationCount}`)}
                     </dd>
                   </>
                 ) : null}
@@ -225,6 +323,9 @@ export function ProvenanceChain({
           ) : null}
         </Segment>
       </ol>
+      {fact?.humanAttestations && attestationCount > 0 ? (
+        <HumanAttestations attestations={fact.humanAttestations} hrefFor={hrefFor} />
+      ) : null}
       {raw !== undefined ? (
         <details className="disclosure" data-testid="prov-raw">
           <summary>

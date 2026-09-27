@@ -137,6 +137,7 @@ export const EXPLAIN_F1: ExplainResultWire = {
       displayName: 'collector',
     },
     verifiedByPrincipal: null,
+    humanAttestations: [],
     observationId: 'obs-1',
     invalidatedAt: null,
     invalidationReason: null,

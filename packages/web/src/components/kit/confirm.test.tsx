@@ -144,6 +144,31 @@ describe('kit/Confirm — medium', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it('keeps confirm disabled while the caller says its own field is incomplete', async () => {
+    const onConfirm = vi.fn(async () => undefined);
+    const { rerender } = renderTier('medium', { onConfirm, confirmDisabled: true });
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByTestId('confirm');
+    const confirmButton = screen.getByTestId('confirm-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.click(confirmButton);
+    expect(onConfirm).not.toHaveBeenCalled();
+    rerender(
+      <Harness
+        tier="medium"
+        title="批准"
+        target="docker.container_stop"
+        confirmLabel="确认"
+        testId="confirm"
+        onConfirm={onConfirm}
+        confirmDisabled={false}
+      />,
+    );
+    await waitFor(() =>
+      expect((screen.getByTestId('confirm-button') as HTMLButtonElement).disabled).toBe(false),
+    );
+  });
+
   it('cancel closes without calling onConfirm', async () => {
     const onConfirm = vi.fn(async () => undefined);
     renderTier('medium', { onConfirm });

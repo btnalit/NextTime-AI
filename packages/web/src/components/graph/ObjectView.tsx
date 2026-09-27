@@ -298,7 +298,7 @@ export function ObjectView({
                   onExpand={onFocus}
                   onProvenance={onProvenance}
                   http={http}
-                  onVerified={() => void state.reload()}
+                  onFactChanged={() => void state.reload()}
                 />
               </>
             )}
