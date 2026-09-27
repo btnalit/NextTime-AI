@@ -5,7 +5,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
-import { formatRelative, prettyJson } from '../lib/format.js';
+import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
   type CapabilityNameRow,
   type OperationCatalogRow,
@@ -1486,6 +1486,15 @@ function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string
   return `${row.id}@${row.version}`;
 }
 
+/** A Worker definition's display name: its own name, else 「未命名 · <short id>」. Rows are one
+ *  `<button>` now, so the pre-P3-5 `RefChip` fallback (greyed short id) is gone — and a raw UUID
+ *  in a title is exactly what the copy guard rejects (an unnamed entry definition tripped it). */
+function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
+  return (
+    definitionName([row], row.id, row.version) ?? `${t('未命名', 'Unnamed')} · ${shortId(row.id)}`
+  );
+}
+
 /** Workers tab local editor state — a superset of the shared `EditorState<Row>` used by the
  *  Skills/Procedures tabs above: adds `'template'` for J7/CW1 "从模板创建（ops-runner）", which
  *  prefills a brand-new draft rather than starting blank or copying a published row. */
@@ -1521,7 +1530,7 @@ function WorkerDetailView({
   readonly onDiscard: () => Promise<void>;
 }) {
   const t = useT();
-  const name = definitionName([row], row.id, row.version) ?? row.id;
+  const name = workerLabel(row, t);
   return (
     <div className="stack" data-testid="worker-detail" data-worker-key={workerKey(row)}>
       <header className="stack-s">
@@ -1652,7 +1661,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call('publish_worker_definition', { definitionId: row.id, version: row.version });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已发布', 'published')}`,
+        title: `${workerLabel(row, t)} ${t('已发布', 'published')}`,
       });
       refresh();
     } catch (err) {
@@ -1676,10 +1685,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: t(
-          `${definitionName([row], row.id, row.version) ?? row.id} 已弃用`,
-          `${definitionName([row], row.id, row.version) ?? row.id} deprecated`,
-        ),
+        title: t(`${workerLabel(row, t)} 已弃用`, `${workerLabel(row, t)} deprecated`),
       });
       refresh();
     } catch (err) {
@@ -1707,7 +1713,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已丢弃', 'discarded')}`,
+        title: `${workerLabel(row, t)} ${t('已丢弃', 'discarded')}`,
       });
       selectRow(null);
       refresh();
@@ -1837,9 +1843,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                   <span className="row-wrap">
-                    <span className="truncate">
-                      {definitionName([row], row.id, row.version) ?? row.id}
-                    </span>
+                    <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
@@ -1871,9 +1875,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                   <span className="row-wrap">
-                    <span className="truncate">
-                      {definitionName([row], row.id, row.version) ?? row.id}
-                    </span>
+                    <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
@@ -1907,9 +1909,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                   <span className="row-wrap">
-                    <span className="truncate">
-                      {definitionName([row], row.id, row.version) ?? row.id}
-                    </span>
+                    <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />

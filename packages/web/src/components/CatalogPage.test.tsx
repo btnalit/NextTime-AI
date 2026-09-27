@@ -430,6 +430,22 @@ describe('CatalogPage', () => {
     expect(within(workerDetail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
+  // P3-5 copy-guard regression: an entry definition with no name used to title its row with the
+  // raw UUID; it now reads 「未命名 · <short id>」.
+  it('Workers tab: an unnamed definition is labelled with a short id, never the raw UUID', async () => {
+    const uuid = 'f96d762e-6111-4a10-a699-66b8ae46c622';
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [{ id: uuid, version: 1, kind: 'entry', status: 'published', definition: {} }],
+      }),
+    });
+    renderPage(http, 'workers');
+    const entrySection = await screen.findByTestId('workers-entry-section');
+    const row = within(entrySection).getByTestId('catalog-row');
+    expect(row.textContent).toMatch(/未命名/);
+    expect(row.textContent).not.toContain(uuid);
+  });
+
   // S8 W2-U2b (audit R6 "保存草稿后找不回它"): the Workers tab makes a second
   // `list_worker_definitions{includeOwnDrafts: true}` call for "我的草稿" — these three tests
   // script that second call by branching on `params.includeOwnDrafts` the same way the kernel's
