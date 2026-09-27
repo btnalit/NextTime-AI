@@ -22,7 +22,11 @@ export interface ListProps {
  */
 export function List({ ariaLabel, children, testId, className }: ListProps) {
   return (
-    <ul aria-label={ariaLabel} data-testid={testId} className={cn('flex flex-col', className)}>
+    <ul
+      aria-label={ariaLabel}
+      data-testid={testId}
+      className={cn('m-0 flex list-none flex-col p-0', className)}
+    >
       {children}
     </ul>
   );

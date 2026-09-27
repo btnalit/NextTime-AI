@@ -189,11 +189,9 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         >
           <SheetContent data-testid="approval-drawer">
             <SheetHeader>
-              <SheetTitle>
-                {selectedRow
-                  ? humanizeKind(selectedRow.actionKindTag)
-                  : t('审批请求', 'Approval request')}
-              </SheetTitle>
+              {/* Generic on purpose: the detail's own h2 already names the action and target, so a
+                  specific sheet title would repeat it one line above (P3-4 screenshot review). */}
+              <SheetTitle>{t('审批详情', 'Approval detail')}</SheetTitle>
             </SheetHeader>
             {detailContent}
           </SheetContent>
