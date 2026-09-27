@@ -30,7 +30,12 @@ import {
   setRequestActionDeps,
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
-import type { AgentRuntime, ResolveTurnPrompt } from './application/host-bridge/index.js';
+import type {
+  AgentRuntime,
+  FakeDelegateOutcome,
+  ResolveTurnPrompt,
+  StartTurnInput,
+} from './application/host-bridge/index.js';
 import {
   AgentHostRuntime,
   FakeAgentRuntime,
@@ -47,6 +52,7 @@ import {
   runTaskReaper,
 } from './application/task/index.js';
 import { DEFAULT_DRAFT_EXPIRY_DAYS, expireDraftsOnce } from './application/worker/index.js';
+import { FakeTaskSupervisorClient, createFakeDelegateHandler } from './fake-invoke-worker.js';
 import {
   ApprovalDrainer,
   expireOverduePendingApprovals,
@@ -399,8 +405,18 @@ export interface CreateBackgroundServicesOptions {
    * second file read. Ignored when `taskSupervisorClient` is given directly (tests).
    */
   readonly supervisorAuthorizationHeader?: string;
-  /** Overrides the constructed `TaskSupervisorClientPort` — for tests (a fake, no network). */
+  /** Overrides the constructed `TaskSupervisorClientPort` — for tests (a fake, no network), and
+   *  (STATUS leftover 83) `main()`'s own CI-only `FAKE_INVOKE_WORKER=1` wiring
+   *  (`fake-invoke-worker.ts`'s `FakeTaskSupervisorClient`). */
   readonly taskSupervisorClient?: TaskSupervisorClientPort;
+  /** STATUS leftover 83 (CI `invoke_worker` path, test-only): wired straight through to
+   *  `FakeAgentRuntime`'s own `onDelegate` when `kind === 'fake'` — see that option's own doc
+   *  comment (`application/host-bridge/fake-runtime.ts`). `undefined` (the default, and always in
+   *  production — `AGENT_RUNTIME` defaults to `agent-host` there, and `main()` only ever builds
+   *  this under its own additive `FAKE_INVOKE_WORKER=1` flag) keeps `buildDefaultRuntime`'s
+   *  `FakeAgentRuntime` construction exactly as it was before this option existed. Ignored when
+   *  `kind === 'agent-host'`, and ignored entirely when `options.runtime` is given directly. */
+  readonly fakeAgentRuntimeOnDelegate?: (input: StartTurnInput) => Promise<FakeDelegateOutcome>;
   /** How often the S2.7 task reaper polls (duration-limit enforcement + supervisor-status
    *  reconciliation). Default `DEFAULT_TASK_REAPER_INTERVAL_MS` (30s — much tighter than the
    *  approval reaper's 5 minutes, matching `worker-supervisor`'s own 30s `reap()` cadence). */
@@ -502,7 +518,9 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
   const kind = options.kind ?? resolveAgentRuntimeKind();
   const sink = createChatEventSink({ pool: options.pool });
 
-  if (kind === 'fake') return new FakeAgentRuntime({ sink });
+  if (kind === 'fake') {
+    return new FakeAgentRuntime({ sink, onDelegate: options.fakeAgentRuntimeOnDelegate });
+  }
 
   if (!options.handleKeyPair) {
     throw new Error(
@@ -1251,12 +1269,41 @@ export function main(): void {
       process.env.INVARIANT_CHECK_INTERVAL_MS,
     );
 
+    // STATUS leftover 83 (CI `invoke_worker` path, test-only): `FAKE_INVOKE_WORKER=1` — set only
+    // in deploy/ci/env.ci.template, never a real deployment's `.env` — swaps the real HTTP
+    // `TaskSupervisorClient` for `FakeTaskSupervisorClient` and wires `FakeAgentRuntime`'s own
+    // `onDelegate` (fake-invoke-worker.ts's own doc comment has the full design). Double-gated on
+    // `kind === 'fake'` and a Handle keypair actually being configured — the flag alone does
+    // nothing under `AGENT_RUNTIME=agent-host` (a real entry Handle already makes `invoke_worker`
+    // reachable there, `scripts/accept_s2.sh`'s own job) or with no Handle keys at all (same
+    // "invoke_worker unavailable" fallback every other kernel process without one already has).
+    let fakeTaskSupervisorClient: FakeTaskSupervisorClient | undefined;
+    let fakeAgentRuntimeOnDelegate:
+      | ((input: StartTurnInput) => Promise<FakeDelegateOutcome>)
+      | undefined;
+    if (process.env.FAKE_INVOKE_WORKER === '1' && kind === 'fake' && handleKeyPair) {
+      fakeTaskSupervisorClient = new FakeTaskSupervisorClient({
+        pool,
+        onReportError: (err: unknown) => app.log.error(err),
+      });
+      fakeAgentRuntimeOnDelegate = createFakeDelegateHandler({
+        pool,
+        privateKey: handleKeyPair.privateKey,
+        supervisorClient: fakeTaskSupervisorClient,
+      });
+      app.log.warn(
+        'FAKE_INVOKE_WORKER=1: invoke_worker is scripted (no real worker-supervisor spawn) — never set this outside CI',
+      );
+    }
+
     background = createBackgroundServices({
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
       // Reuses the exact token already loaded above for the kernel's own /internal/* guard
       // (`internalAuth.token`) — same file, same loader, no second read (lane-6 review follow-up).
       supervisorAuthorizationHeader: internalAuthorizationHeader(internalAuth.token),
+      taskSupervisorClient: fakeTaskSupervisorClient,
+      fakeAgentRuntimeOnDelegate,
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       kind,
