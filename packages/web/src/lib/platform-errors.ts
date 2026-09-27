@@ -134,6 +134,14 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '工作区里有不止一个门与该实例端点相同，无法确定关联哪一个；先在已注册系统里合并或清理重复的注册',
     en: 'More than one Gatekeeper in this workspace shares that endpoint — merge or clean up the duplicates in Registered systems first',
   },
+  // S8 W3-K1 (leftover 79, closing wave C6, G3): `refresh_operation_governance`'s target Gatekeeper
+  // has no linked platform gate instance — the console only renders the "对齐" action when
+  // `healthInfo.linked`, so this is defense-in-depth for the race (the link is removed between
+  // page load and the confirm), not the ordinary path.
+  no_announced_manifest: {
+    zh: '这个门没有关联的平台实例，没有可对齐的公告清单',
+    en: 'This Gatekeeper has no linked platform gate instance — there is no announced manifest to align with',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of

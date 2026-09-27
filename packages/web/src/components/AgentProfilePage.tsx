@@ -4,12 +4,13 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
+import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
+import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
@@ -59,7 +60,10 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
   const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
-  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  // G7 (closing wave C6): the shared name/row directory — was its own
+  // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')` (see `useDirectoryNames.tsx`'s
+  // own doc comment on why this is one of the seven call sites it consolidates).
+  const gatekeepers = useGatekeeperDirectory(http);
   // S8 W4 (audit M1 "把入口定义当 Worker 展示"): `kind: 'worker'` excludes the workspace's own
   // `kind: 'entry'` definition — `enabledWorkerDefinitions` narrows which Workers a principal may
   // `invoke_worker`, never the entry definition itself, and an entry row typically has no
@@ -91,10 +95,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     skills.state.status === 'ready' ? skills.state.data.items : undefined,
     (s) => s.name,
   );
-  const gatekeeperNames = nameMap(
-    gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined,
-    (g) => g.name,
-  );
+  const gatekeeperNames = gatekeepers.names;
   const workerDefinitionNames = nameMap(
     workerDefinitions.state.status === 'ready' ? workerDefinitions.state.data.items : undefined,
     (w) => {
@@ -196,9 +197,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 policy={policy.state.status === 'ready' ? policy.state.data : undefined}
                 models={models.state.status === 'ready' ? models.state.data.items : []}
                 skills={skills.state.status === 'ready' ? skills.state.data.items : []}
-                gatekeepers={
-                  gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : []
-                }
+                gatekeepers={gatekeepers.rows ?? []}
                 workerDefinitions={
                   workerDefinitions.state.status === 'ready'
                     ? workerDefinitions.state.data.items
