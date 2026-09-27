@@ -508,6 +508,9 @@ env_step() {
 }
 
 cleanup_step() {
+  # Set here, not only in on_exit: the explicit end-of-run call must also disarm the EXIT trap,
+  # or cleanup runs (and reports PASS) a second time on the normal exit.
+  CLEANUP_DONE=1
   if [ "$LITE" -eq 1 ]; then
     skip "cleanup" "--lite: nothing to stop; workspace retained: $WORKSPACE_ID"
     return
