@@ -734,17 +734,14 @@
   color: var(--warn);
 }
 
-/* ---- Tasks / governance tables (S3.14: `.data-table` is the generic name — `.worker-run-table`
- * is kept as an alias so the pre-existing Tasks markup is untouched) --------------------------- */
-.worker-run-table,
+/* ---- Governance tables (S3.14: `.data-table`; the Tasks page's old `.worker-run-table` alias went
+ * with P3-4, whose worker-run table is `kit/table` now) -------------------------------------- */
 .data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-13);
 }
 
-.worker-run-table th,
-.worker-run-table td,
 .data-table th,
 .data-table td {
   text-align: left;
@@ -753,7 +750,6 @@
   vertical-align: middle;
 }
 
-.worker-run-table th,
 .data-table th {
   color: var(--text-3);
   font-weight: 500;
@@ -762,7 +758,6 @@
   letter-spacing: 0.04em;
 }
 
-.worker-run-table tr:last-child td,
 .data-table tr:last-child td {
   border-bottom: 0;
 }
