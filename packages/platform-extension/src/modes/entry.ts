@@ -6,22 +6,24 @@ import type {
 import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS, getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
+import { createGateToolProjector } from './gate-tool-projection.js';
 import {
   type AllowedOperationWire,
   gateToolDescription,
-  gateToolName,
   truncateToolResult,
 } from './gate-tools.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
  *  which an entry Handle does not hold) and returns the observed data verbatim (truncated — S8
- *  W3-K1, leftover 75 first half, `gate-tools.ts`'s own `truncateToolResult` doc comment). */
+ *  W3-K1, leftover 75 first half, `gate-tools.ts`'s own `truncateToolResult` doc comment). The
+ *  `name`/`label` come from the projector (`gate-tool-projection.ts`), which keeps them stable for
+ *  the session (same `gateToolName` naming as worker mode). */
 function buildGateObserveTool(
   op: AllowedOperationWire,
+  name: string,
+  label: string,
   kernelClient: KernelClient,
-  usedNames: Set<string>,
 ): ToolDefinition {
-  const { name, label } = gateToolName(op, usedNames);
   return {
     name,
     label,
@@ -61,8 +63,8 @@ const ENTRY_TOOL_CAPABILITY_NAMES = [
   'get_task',
   // S2 (S2.12 fix): the rest of ontology/entry-agent.yaml's `capabilities`, minus the two the
   // extension calls itself (`get_entry_context` on `context`, `report_turn` on `agent_settled`)
-  // and `observe_operation`, which is reached through the projected `<gate>.<op>` tools registered
-  // on `session_start` below rather than exposed raw. Every name must be on
+  // and `observe_operation`, which is reached through the projected `<gate>.<op>` tools (projected
+  // on `session_start` and refreshed every turn below) rather than exposed raw. Every name must be on
   // governance/capability/handles.ts's entry ceiling — a Handle-scope 403 on a registered tool
   // is a bug on that side, not something to hide here.
   'state_at',
@@ -84,6 +86,9 @@ export interface EntryModeOptions {
   workspaceId: string;
   /** Seed value for the turn correlating the *next* `agent_start`, before any `input` event updates it. */
   initialTurnId?: string;
+  /** Per-refresh budget for the gate tool projection's `list_allowed_operations` read
+   *  (`GATE_TOOL_REFRESH_TIMEOUT_MS` by default; overridden in tests). */
+  toolRefreshTimeoutMs?: number;
 }
 
 /**
@@ -252,26 +257,26 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
   // D4 revoked 2026-09-27; the kernel applies the same predicate `observe_operation` enforces). Same
   // naming as worker mode (gate-tools.ts) so tool names are predictable from `<gateName>.<op>`;
   // execute-class Operations are never projected here — an entry agent delegates those through
-  // `invoke_worker`. Registered on `session_start`, so a gate enabled (or re-ticked on 我的智能体)
-  // after this container started becomes a tool only after the resident container is restarted
-  // (same latency bound as the Handle reissue itself).
+  // `invoke_worker`.
+  //
+  // 收尾波次 C3 (per-turn projection): projected on `session_start` and refreshed at every turn
+  // start (`before_agent_start`, one `list_allowed_operations` read with a short timeout), so a gate
+  // enabled / an Operation published or deprecated after this container started shows up — or
+  // disappears — on the next user message, without a restart. A failed or slow read keeps the
+  // previous set. pi's built-ins and the static capability tools above are never touched. Changes
+  // that rotate the entry Handle (Grant, AgentProfile / AgentPolicy, connector deny list) still
+  // recreate the container on the next Turn (worker-supervisor jti rotation) — that is authority
+  // delivery, not projection, and is unchanged here.
+  const gateTools = createGateToolProjector(pi, {
+    kernelClient: options.kernelClient,
+    component: 'entry',
+    include: (op) => op.operation.mode === 'observe',
+    buildTool: (op, name, label) => buildGateObserveTool(op, name, label, options.kernelClient),
+    timeoutMs: options.toolRefreshTimeoutMs,
+  });
+
   pi.on('session_start', async () => {
-    const usedNames = new Set<string>();
-    let operations: AllowedOperationWire[];
-    try {
-      const response = await options.kernelClient.call<{ items?: AllowedOperationWire[] }>(
-        'list_allowed_operations',
-        {},
-      );
-      operations = response.items ?? [];
-    } catch (error) {
-      logKernelError(error, 'list_allowed_operations');
-      return;
-    }
-    for (const op of operations) {
-      if (op.operation.mode !== 'observe') continue;
-      pi.registerTool(buildGateObserveTool(op, options.kernelClient, usedNames));
-    }
+    await gateTools.refresh({ reason: 'session_start', turnId: currentTurnId });
   });
 
   pi.on('input', (event) => {
@@ -279,6 +284,15 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     if (!match) return undefined;
     currentTurnId = match[1];
     return { action: 'transform' as const, text: event.text.slice(match[0].length) };
+  });
+
+  // Runs after `input` (so `currentTurnId` is this prompt's Turn) and before pi builds the run's
+  // first request — pi then takes the live loadout set here for the tool declarations it sends.
+  // Once per prompt, not per LLM call: a queued follow-up / steer joins the running loop without
+  // a new `before_agent_start`, and so keeps the set this run started with.
+  pi.on('before_agent_start', async () => {
+    await gateTools.refresh({ reason: 'turn', turnId: currentTurnId });
+    return undefined;
   });
 
   pi.on('context', async (event) => {

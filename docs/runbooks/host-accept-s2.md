@@ -194,7 +194,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   结果，而不是脚本预先猜的 id）`invoke_worker({definitionId, version, input, wait:false})` → 提到
   `taskId` 的收尾文本；`accept_s2_api_stock_get({})` →回显它的**真实**返回数据的收尾文本。
 
-  gate 工具的注册时机是 `session_start`，只读一次 `list_allowed_operations`——它的执行类部分只列出
+  gate 工具在 `session_start` 首次投射，此后每条用户消息开始时（`before_agent_start`）重读一次
+  `list_allowed_operations`（收尾波次 C3，`pi-upgrade.md` §2.3）——它的执行类部分只列出
   entry Handle **签发那一刻**的 `resources.gatekeeper` 已经覆盖的门（来自 `connect_gatekeeper` Grant）；
   观察类部分自 2026-09-27 起不看授权（设计文档 §11"门上的观察"），本工作区启用的门都会列出。
   本脚本的 `connections_step`（三个 `connect_gatekeeper` 调用）本来就排在 `step2_docker_restart`
