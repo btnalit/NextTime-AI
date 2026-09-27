@@ -997,7 +997,7 @@
 .checklist-group-title {
   font-size: var(--fs-13);
   font-weight: 600;
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .checklist-group-hint {

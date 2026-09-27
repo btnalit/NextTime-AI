@@ -280,7 +280,7 @@
 }
 
 .empty-state-title {
-  color: var(--text);
+  color: var(--text-strong);
   font-weight: 600;
 }
 

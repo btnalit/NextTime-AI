@@ -57,6 +57,17 @@ h3 {
   line-height: var(--lh-tight);
 }
 
+/* Design system v2.1: headings and emphasised text take the deep brand ink, so a page reads as
+ * navy headings over slate body text instead of one flat near-black. */
+h1,
+h2,
+h3,
+h4,
+strong,
+b {
+  color: var(--text-strong);
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
@@ -233,7 +244,7 @@ button:disabled {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--text-accent);
 }
 
 .definition-list {

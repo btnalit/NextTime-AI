@@ -50,11 +50,19 @@
   --border: #e1e6ef;
   --border-strong: #c8d0dc;
 
-  --text: #111a2e;
-  --text-2: #465167;
+  /* Design system v2.1 (2026-09-27, maintainer: "字体基本就是单纯黑色，非常不好看"): the ink moves
+   * off near-black onto the brand hue — headings in a deep brand navy (`--text-strong`), body in a
+   * softer slate-navy, secondary and caption tinted the same way, and a brand-700 eyebrow colour
+   * (`--text-accent`) for section labels. Minimum contrast over every background below:
+   * strong 11.79:1, text 10.54:1, text-2 6.23:1, text-3 4.95:1, accent 7.43:1 (all on
+   * --danger-soft). */
+  --text-strong: #172a5a;
+  --text: #28344f;
+  --text-2: #4a5672;
   /* S8 W1-A8 (audit S5): darkened from #6b7280 (4.43:1 on --bg, 4.16:1 on --accent-soft — both
-   * under 4.5:1) to clear 4.5:1 on every surface (min 4.92:1, on --danger-soft). */
-  --text-3: #5f6672;
+   * under 4.5:1) to clear 4.5:1 on every surface; v2.1 tints it toward the brand hue. */
+  --text-3: #5a6580;
+  --text-accent: #1a40b0;
   /* Text on a filled control — the ink primary button (`--text` background), the accent, and the
    * filled danger hover all take this. */
   --text-on-accent: #ffffff;
@@ -159,13 +167,15 @@
     --border: #25304a;
     --border-strong: #35425f;
 
-    --text: #e6ebf5;
+    --text-strong: #f1f4fb;
+    --text: #dfe5f2;
     --text-2: #aab4c8;
     /* S8 W1-A8 (audit S5): lightened from #8b94a5 — that passed --surface-1 (5.98:1) but fell to
      * 4.16:1 / 4.48:1 / 4.40:1 on --warn-soft / --info-soft / --observe-soft respectively (each
      * -soft composited over --surface-1, its usual mounting surface). Now min 4.85:1, on
      * --warn-soft. */
     --text-3: #98a2b6;
+    --text-accent: #93b4ff;
     --text-on-accent: #0b1020;
 
     --accent: #7aa2ff;

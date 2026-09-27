@@ -77,7 +77,7 @@
 .sidebar-workspace-name {
   font-size: var(--fs-13);
   font-weight: 600;
-  color: var(--text);
+  color: var(--text-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -614,7 +614,7 @@
 .mobile-topbar-title {
   font-size: var(--fs-14);
   font-weight: 600;
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .mobile-topbar-sub {
