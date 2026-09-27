@@ -189,6 +189,15 @@ sh scripts/delete-workspaces-matching.sh '^accept-s4' --yes
 验收工作区以 `--purpose ephemeral --ttl 7d` 创建，到期后
 `sh scripts/delete-workspaces-matching.sh --expired --yes` 按策略清掉，不必再靠名字正则。
 
+**未授权成员探针主体不需要单独清理**（收尾波次 C9："验收残留自动清理"复核结论）：
+`member_probe_setup_step` 铸的 `s4-ungranted-reader` service Principal 只存在于本次运行自己的
+`accept-s4-<ts>` 工作区内（`issue-service-handle --workspace "$WORKSPACE_ID" ...`），Handle 本身
+15 分钟后即过期；这一行与同一工作区里的 owner Principal、启用的 Gatekeeper、Grant 一样，都是
+`purge_workspace` 的级联删除范围——上面 `--expired --yes` 到期清除时会连它一起撤销 Handle、删行，
+不需要额外的能力或脚本。本脚本从不启动常驻入口容器（§3 顶部已说明），因此也不落入
+`sh scripts/sweep-accept-entry-containers.sh`（accept_s1.sh/accept_s2.sh/accept_s3.sh 专用，见
+`docs/runbooks/accept-s1.md` §7）的范围。
+
 ## 6. 已知限制
 
 - **入口 agent 在 `session_start`（及此后每轮 `before_agent_start`，C3）时的真实工具投影不受本脚本

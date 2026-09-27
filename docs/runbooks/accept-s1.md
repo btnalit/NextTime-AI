@@ -13,7 +13,9 @@
   worker-supervisor / fake-llm 切到 fake provider，并在退出时用 EXIT trap 恢复生产配置——
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
-  `make gen-models`。
+  `make gen-models`。同一个 EXIT trap（`on_exit`）现在也在恢复 provider 之前先跑一次
+  `cleanup_step`——不止是脚本跑完时，任何一步 `fail()` 提前退出、或收到 INT/TERM/HUP/PIPE，都会
+  经它回收 alice/bob 的入口容器（见 §7"验收残留自动清理"）。
 - 迁移已跑到最新（`make migrate` 或已随 `kernel` 容器启动流程跑过）。
 - 主机上有 `docker`、`curl`；**没有** `node`/`corepack`（`scripts/accept_s1.sh` 因此把每一次
   JSON-RPC 交互都放进一次性的 kernel 镜像容器里跑，见脚本头注释）。
@@ -78,7 +80,7 @@ PASS egress-internal-denied http://postgres:5432 -> denied (curl rc=..., http_co
 PASS egress-domain-recorded example.com recorded in metadata.egress for turn <uuid>
 PASS env-no-api-keys 0 *_API_KEY= vars in entry container env
 PASS env-capability-handle CAPABILITY_HANDLE present exactly once (value never printed)
-PASS cleanup stopped alice/bob entry containers via the supervisor API; workspace retained: <uuid>
+PASS cleanup reclaimed alice/bob entry containers via the supervisor API; workspace retained: <uuid>
 S1 OK
 ```
 
@@ -150,3 +152,27 @@ S1 OK
   200 条）、发一条 `EgressObserved` 领域事件到 outbox。
 - `docs/development-tasks.md` S1.11 的验收文字（"Activity 记录含 example.com"）此前一直没有内核
   侧实现能兑现；本任务补上后，`scripts/accept_s1.sh` 才第一次真正验证这一条。
+
+## 7. 验收残留自动清理（收尾波次 C9）
+
+`--keep` 不传时，`cleanup_step` 现在经 `worker-supervisor` 的 `POST /resident/reclaim`（不是旧的
+`/resident/stop`）**回收**（强制删容器 + 删 `${NEXTTIME_DATA}/workspaces/<principalId>` 目录）
+alice/bob 的入口容器，而不只是停掉——`docker ps -a` 里不会再留一个 `Exited` 的
+`nexttime-entry-<uuid>`。这一步现在也挂在统一的 `on_exit` EXIT trap 上：脚本中途 `fail()`、或
+ssh 会话中断触发的 INT/TERM/HUP/PIPE，都会先跑一次 `cleanup_step` 再恢复 provider——此前只有
+成功路径末尾会跑，失败路径把两个入口容器整个留在运行状态。workspace/principal/chat/activity 行
+仍按设计文档 §12 的审计留痕原则保留，不受影响；到期后仍是
+`sh scripts/delete-workspaces-matching.sh --expired --yes`。
+
+早于本次改动的历史残留（`docker ps -a` 里已经停在 `Exited` 的 `nexttime-entry-*`，属于某次没有
+本节这个 trap 的旧跑法）：
+
+```
+sh scripts/sweep-accept-entry-containers.sh          # 先看会删什么，默认 dry run
+sh scripts/sweep-accept-entry-containers.sh --yes    # 确认后真删
+```
+
+只按两个既有标记识别，不新增标记：容器的 `nexttime.workspace` 标签指向的 Workspace 名字匹配
+`^accept-s[1-4]-`（每个 `accept_s*.sh` 自己 `bootstrap_step` 用的命名），且该容器当前不在运行。
+只回收容器本身，不碰任何数据库行——workspace/principal/审计行的删除仍然只经
+`delete-workspaces-matching.sh --expired --yes` 那条路径，两者互不重复。

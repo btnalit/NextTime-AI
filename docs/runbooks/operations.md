@@ -308,6 +308,13 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 - 从未激活且已无活跃成员资格的残留用户（例如已 `remove_membership` 的），控制台用户页的"清理待激活用户"
   批量入口（`purge_user`）处理；每个 id 各自给出 `purged` / `skipped` 与原因。
 - 备份里的旧 dump 不受影响（`docs/runbooks/backup-restore.md`）。
+- **一个已停但还没到期的验收工作区，它的入口容器不必等 7 天**（收尾波次 C9："验收残留自动清理"）：
+  `accept_s1.sh`/`accept_s2.sh`/`accept_s3.sh` 自 STATUS 收尾波次起在自己的 `cleanup_step`（挂在
+  统一的 `on_exit` EXIT trap 上，跑失败也会触发）里经 `POST /resident/reclaim` 立即回收
+  （不是停）自己的入口容器；早于这次改动的历史残留用
+  `sh scripts/sweep-accept-entry-containers.sh [--yes]`（默认 dry run，按 `nexttime.workspace`
+  标签 + 工作区名 `^accept-s[1-4]-` 识别，只删容器不动数据库行）——见
+  `docs/runbooks/accept-s1.md` §7。
 
 ## 11. 常见问题
 
