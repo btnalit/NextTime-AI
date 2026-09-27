@@ -130,6 +130,12 @@ describe('JsonRpcRequestSchema — optional correlationId (leftover 87)', () => 
     expect(parsed.correlationId).toBe('turn-1234-5678');
   });
 
+  it('never rejects a frame over a malformed one (the call gets a minted id instead)', () => {
+    for (const correlationId of [42, null, { nested: true }, 'has spaces']) {
+      expect(JsonRpcRequestSchema.safeParse({ ...base, correlationId }).success).toBe(true);
+    }
+  });
+
   it('still rejects any other unknown top-level field (strict)', () => {
     expect(JsonRpcRequestSchema.safeParse({ ...base, somethingElse: 1 }).success).toBe(false);
   });

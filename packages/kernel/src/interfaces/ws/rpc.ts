@@ -114,8 +114,9 @@ export const JsonRpcRequestSchema = z
     /** Leftover 87, additive and optional: this call's correlation id — the WebSocket analogue of
      *  the HTTP `x-correlation-id` header (all frames share one upgrade request, so a header
      *  cannot carry a per-call id). Invalid or absent → the kernel mints one for the call
-     *  (`@nexttime/shared` `isValidCorrelationId`); never a reason to reject the frame. */
-    correlationId: z.string().optional(),
+     *  (`@nexttime/shared` `isValidCorrelationId`); never a reason to reject the frame — hence
+     *  `unknown`, not `string`: a number or null here must not turn the frame into PARSE_ERROR. */
+    correlationId: z.unknown().optional(),
   })
   .strict();
 export type JsonRpcRequest = z.infer<typeof JsonRpcRequestSchema>;

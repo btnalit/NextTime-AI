@@ -162,20 +162,25 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
     ((request: FastifyRequest, fields: GateCallLogFields) => request.log.info(fields, 'gate call'));
 
   // Leftover 87: one metrics sample and one log line per `/gate/*` call, after the response —
-  // the operation label only when this gate actually publishes that Operation (bounded labels).
+  // the operation label only when this gate actually publishes that Operation, the gate label
+  // only when the path names an instance this host actually serves (bounded labels: an
+  // unauthenticated `/i/<anything>/gate/…` must not mint a new series per request).
   const gateRoutePrefix = `${prefix}/gate/`;
   app.addHook('onResponse', (request, reply, done) => {
     const url = request.routeOptions.url;
     if (typeof url === 'string' && url.startsWith(gateRoutePrefix)) {
       const gateRoute = url.slice(gateRoutePrefix.length);
       const requested = (request.body as { operation?: unknown } | undefined)?.operation;
-      const gate = resolve(request)?.gate;
+      const resolved = resolve(request);
+      const gate = resolved?.gate;
       const operation =
         typeof requested === 'string' &&
         gate?.describeOperations().some((o) => o.name === requested)
           ? requested
           : '';
-      const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
+      const gateId = resolved
+        ? (request.params as { gateId?: string } | undefined)?.gateId
+        : undefined;
       options.metrics?.recordCall({
         gate: gateId ?? '',
         route: gateRoute,

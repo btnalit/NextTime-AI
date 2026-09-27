@@ -49,6 +49,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
+import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { DockerClient } from './docker-client.js';
@@ -452,6 +453,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         const workerRunId = state.labels[WORKER_RUN_ID_LABEL];
         const workspaceId = state.labels[TASK_WORKSPACE_LABEL];
         if (!taskId || !workerRunId || !workspaceId || registry.has(workerRunId)) continue;
+        // A label is only as trustworthy as whoever set it: re-check the charset before this id
+        // reaches a log line or the egress source map again (it was validated at spawn).
+        const labelCorrelationId = state.labels[TASK_CORRELATION_ID_LABEL];
+        const restoredCorrelationId = isValidCorrelationId(labelCorrelationId)
+          ? labelCorrelationId
+          : undefined;
 
         registry.set(workerRunId, {
           taskId,
@@ -468,7 +475,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           finishedAt: state.running ? undefined : new Date(now()).toISOString(),
           reason: undefined,
           terminating: false,
-          correlationId: state.labels[TASK_CORRELATION_ID_LABEL],
+          correlationId: restoredCorrelationId,
         });
         // Restores the egress deny list this container was spawned with (TASK_EGRESS_DENY_LABEL)
         // — without this, a supervisor restart would re-register a still-running Task's source-map
@@ -480,7 +487,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
             workerRunId,
             state.ip,
             splitEgressDenyLabel(state.labels[TASK_EGRESS_DENY_LABEL]),
-            state.labels[TASK_CORRELATION_ID_LABEL],
+            restoredCorrelationId,
           );
         }
       }

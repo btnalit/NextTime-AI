@@ -49,13 +49,23 @@ docker compose logs --since 6h --no-color \
 docker ps -a --filter "label=nexttime.correlation-id=$ID"
 ```
 
-**串审计**（该 ID 下所有受治理的写，按时间）：
+**串审计**（该 ID 下该工作区的审计行，按时间）：
 
 ```sh
+WS=<workspace-id>
 docker compose exec -T postgres psql -U nexttime -d nexttime -c \
-  "select created_at, action, resource_type, resource_id from audit_records
-   where payload->>'correlationId' = '$ID' order by created_at"
+  "select created_at, actor_principal_id, action, resource_type, resource_id from audit_records
+   where workspace_id = '$WS' and payload->>'correlationId' = '$ID' order by created_at"
 ```
+
+`payload.correlationId` 是**调用方自报**的追踪线索，不是权威溯源：任何调用方都能在请求头里填任意合法 ID
+（包括别人的 Turn ID），所以查询一定按工作区过滤、并同时看 `actor_principal_id`；它不证明因果——"谁做的、
+凭什么"仍以审计行本身的主体、ActionRequest / Task 关联与 `explain` 为准。
+
+覆盖缺口（按 ID 查会漏的，属已知、非缺陷）：控制台发起一轮对话时，`send_chat_message` 那条审计行带的是这次
+请求 / WS 帧自己的 ID，不是随后建立的 Turn ID（按 Turn ID 查从下一跳开始）；WS 响应不回显实际采用的 ID；
+agent-host 经 `/internal/agent-host` WS 上报的事件、以及在 preHandler 之前就写入的审计行不带 ID。审批触发的
+门 `apply` 记的是批准人那次调用的 ID——经 ActionRequest ID 连回委派。
 
 ## 2. 各服务 `/internal/metrics`
 
