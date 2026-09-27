@@ -241,6 +241,16 @@ function MediumTier({
   useRestoreFocusOnClose(open);
   const titleId = useId();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  // `display: contents` keeps every caller's layout untouched, but it also leaves the wrapper
+  // with no box — Popper measuring it gets a zero rect and pins the popover to the viewport's
+  // top-left. Popper measures the wrapped trigger instead (Radix's `virtualRef`).
+  const anchorWrapRef = useRef<HTMLDivElement>(null);
+  const virtualAnchor = useRef({
+    getBoundingClientRect: (): DOMRect => {
+      const wrap = anchorWrapRef.current;
+      return (wrap?.firstElementChild ?? wrap)?.getBoundingClientRect() ?? new DOMRect();
+    },
+  });
   return (
     <PopoverPrimitive.Root
       open={open}
@@ -249,7 +259,10 @@ function MediumTier({
       }}
       modal
     >
-      <PopoverPrimitive.Anchor className="contents">{anchor}</PopoverPrimitive.Anchor>
+      <div ref={anchorWrapRef} className="contents">
+        {anchor}
+      </div>
+      <PopoverPrimitive.Anchor virtualRef={virtualAnchor} />
       {open ? (
         <PopoverPrimitive.Portal>
           <PopoverPrimitive.Content
