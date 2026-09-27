@@ -42,3 +42,16 @@ export {
   updateGateInstance,
   upsertAnnouncement,
 } from './store.js';
+export type {
+  ObserveExclusions,
+  ObserveGateExclusion,
+  ObserveRefusal,
+  ObserveTarget,
+} from './observe-access.js';
+export {
+  NO_OBSERVE_EXCLUSIONS,
+  observeExclusionsOf,
+  observeGateExclusion,
+  observeRefusal,
+  readObserveExclusions,
+} from './observe-access.js';

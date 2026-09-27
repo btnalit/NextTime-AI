@@ -42,8 +42,9 @@ capabilities:
   - find_workers
   - find_procedures
   # The capability behind every projected `<gate>.<op>` observe tool (packages/shared
-  # capabilities.ts `observe_operation`; entry.ts registers one tool per observe-class Operation of
-  # each Gatekeeper this user has been granted via `connect_gatekeeper`).
+  # capabilities.ts `observe_operation`; entry.ts registers one tool per observe-class Operation
+  # `list_allowed_operations` returns — every gate enabled in this workspace that this user has not
+  # excluded; no Grant needed since decision D4 was revoked on 2026-09-27).
   - observe_operation
   - get_task
   - get_entry_context

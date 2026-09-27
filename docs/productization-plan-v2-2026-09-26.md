@@ -37,6 +37,21 @@
 「隔离与审计只增不减」；门持有凭证（如知识库），观测也是读取受保护数据；其余各层（人类通道、投射、可达性、子 Handle
 衰减）早已按此语义实现，只有 handle 通道执行点例外。
 
+**D4 撤回（2026-09-27，实现说明）**：维护者回复"只读调用不需要授权"，并在被告知后果（工作区里任何 Handle——入口 agent、
+Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的所有系统；审计照记；写 / 执行仍经 Grant + 审批）后明确确认。
+新规则见设计文档 §11"门上的观察"。落地：
+
+- 一个谓词 `observeRefusal`（`packages/kernel/src/application/gates/observe-access.ts`）：门已启用 → 不在平台禁用清单 →
+  已发布且为 observe 类 → 未被工作区 AgentPolicy 上限 / 调用成员自己的 AgentProfile 排除。没有 Grant 参数。
+- 调用方：L4 执行点（`observe_operation`、`request_action` 的 observe 分支；Handle 通道逐次读排除项并执行，不只在签发 Handle
+  时收窄）、L8 工具投射（`list_allowed_operations`：observe 类按谓词列出本工作区所有门，execute 类仍只列 `resources.gatekeeper`
+  内的门）、可达性读模型（`execution_readiness` / `find_operations` 标注；`not_granted` 只剩执行类原因，未授权的门也可以被排除）、
+  `find_procedures` 的 observe 步骤。L10 子 Handle 衰减不变：`resources.gatekeeper` 仍只装已授权的门——它是执行授权，
+  放进未授权门会让孙 Worker 经 `delegatedRequestAction` 拿到 `request_action`；Worker 读未声明 / 未授权的门靠谓词，不靠范围。
+- 人类通道（控制台 `assertHumanGatekeeperAccess`）不变，待维护者另行决定。
+- 验收：一致性测试（`platform-gates.integration.test.ts` 未授权成员：可达性 `direct` ⇔ 入口 Handle 与 Worker 形 Handle 调用成功且记审计；
+  AgentProfile / AgentPolicy 排除 ⇔ 拒绝且不投射）；主机 S4 新增未授权成员探针。
+
 ## 3. 内核能力 × 前端覆盖
 
 盘点结果（全表见 `kernel-console-coverage-2026-09-26.md`：161 个 capability，逐个列通道、读写、控制台调用处、智能体暴露）：

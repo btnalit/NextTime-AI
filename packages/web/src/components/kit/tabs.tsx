@@ -91,7 +91,7 @@ export function Tabs<V extends string>({
             className={cn(
               'inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-s px-3 text-13 font-medium transition-colors',
               selected
-                ? 'bg-surface-1 text-text shadow-card'
+                ? 'bg-surface-1 text-accent shadow-card'
                 : 'bg-transparent text-text-2 hover:text-text',
             )}
             data-value={option.value}

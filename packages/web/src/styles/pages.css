@@ -907,7 +907,7 @@
 
 .platform-tile-value {
   font-size: var(--fs-24);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -997,7 +997,7 @@
 .checklist-group-title {
   font-size: var(--fs-13);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text);
 }
 
 .checklist-group-hint {

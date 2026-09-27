@@ -91,11 +91,11 @@ function whoCanUseSummary(
   t: Translate,
 ): string {
   if (!directory) return t('你', 'You');
-  if (rows.length === 0) return t('还没有人可用', 'No one yet');
+  if (rows.length === 0) return t('还没有人被授权', 'No one granted yet');
   const names = rows.map((row) => row.principalName).filter((name): name is string => !!name);
   const preview = names.slice(0, 2);
   const rest = rows.length - preview.length;
-  if (preview.length === 0) return t(`${rows.length} 人可用`, `${rows.length} people`);
+  if (preview.length === 0) return t(`${rows.length} 人已授权`, `${rows.length} people`);
   return rest > 0
     ? t(`${preview.join('、')} 等 ${rows.length} 人`, `${preview.join(', ')} +${rest} more`)
     : preview.join('、');
@@ -353,7 +353,12 @@ export function SystemAccessCard({
             </div>
 
             <div className="stack-s" data-testid="system-access-list">
-              <span className="field-label">{t('谁能用', 'Who can use it')}</span>
+              <span className="field-label">
+                {t(
+                  '谁被授权（写操作；只读不需要授权）',
+                  'Who is granted (writes; reads need no grant)',
+                )}
+              </span>
               {rows.length === 0 ? (
                 <EmptyState
                   variant="inline"
@@ -485,8 +490,8 @@ function GranteeRow({
           }
           title={t('撤销授权', 'Revoke this grant')}
           description={t(
-            '该成员的入口 agent 将不再能调用这个系统。',
-            "This member's entry agent will no longer be able to call this system.",
+            '该成员将不能再经 Worker 对这个系统执行写操作；只读操作不需要授权，不受影响。',
+            'This member will no longer be able to act on this system through a Worker; read operations need no grant and are unaffected.',
           )}
           danger
           confirmLabel={t('撤销', 'Revoke')}
