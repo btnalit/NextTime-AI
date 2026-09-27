@@ -1074,6 +1074,9 @@ step8_mcp_connect() {
 }
 
 cleanup_step() {
+  # Set here, not only in on_exit: the explicit end-of-run call must also disarm the EXIT trap,
+  # or cleanup runs (and reports PASS) a second time on the normal exit.
+  CLEANUP_DONE=1
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
