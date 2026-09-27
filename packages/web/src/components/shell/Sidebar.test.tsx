@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { WorkspaceRole } from '../../lib/role.js';
 import { MobileTopBar, NavDrawer, Sidebar } from './Sidebar.js';
@@ -283,7 +284,7 @@ describe('Sidebar', () => {
    *  already stubs `window.matchMedia` (`AppShell.test.tsx`) for the same gap. */
   describe('scrolls the active nav item into view (design review follow-up)', () => {
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-    let scrollIntoView: ReturnType<typeof vi.fn>;
+    let scrollIntoView: Mock<typeof HTMLElement.prototype.scrollIntoView>;
 
     beforeEach(() => {
       scrollIntoView = vi.fn();
