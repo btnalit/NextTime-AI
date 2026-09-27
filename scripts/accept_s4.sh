@@ -23,7 +23,13 @@
 # enforcement agree, and if not, which layer is lying. (d) Since decision D4 was revoked
 # (2026-09-27, "只读调用不需要授权"), it repeats the same observe call through a member-role
 # principal holding no Grant at all and asserts readiness `direct` + the tool projected + HTTP 200
-# (member_probe_setup_step / member_probe).
+# (member_probe_setup_step / member_probe). (e) Leftover 97 (maintainer 2026-09-27 "也放开吧"): the
+# same call on the *human channel* — an API key held by a member-role principal with no Grant —
+# must also return 200 (human_probe_setup_step / human_probe). (f) Leftover 98: the ungranted
+# member excludes one readable gate on My Agent (`set_agent_profile`, the capability the console
+# uses) — My Agent must offer it as `granted:false`, its observe call must then be refused
+# `excluded_by_profile`, its tools must drop out of the projection and readiness must say
+# `unreachable/excluded_by_profile`; the exclusion is then restored (exclusion_probe_step).
 #
 # Usage:
 #   sh scripts/accept_s4.sh [--keep] [--connector <name>]
@@ -169,6 +175,13 @@ GATE_FAIL=0
 GATE_SKIP=0
 MEMBER_PASS=0
 MEMBER_FAIL=0
+HUMAN_PASS=0
+HUMAN_FAIL=0
+EXCL_PASS=0
+EXCL_FAIL=0
+# gatekeeperId<US>op<US>display<US>connector for every gate the ungranted member read with 200 —
+# the exclusion probe picks its gate from here.
+MEMBER_OK_RECORDS=""
 ENABLED_RECORDS=""
 
 # --------------------------------------------------------------------------------------------
@@ -435,6 +448,76 @@ member_probe_setup_step() {
   pass "member-probe-tools" "$listed_n observe-class Operation(s) projected, 0 execute-class"
 }
 
+# --------------------------------------------------------------------------------------------
+# Human-channel probe (leftover 97, maintainer 2026-09-27 "也放开吧"): a person observing a gate
+# from the console needs no Grant either. The kernel resolves an API key to the *human* channel
+# (application/gateway/resolve-caller.ts: "Tries the human channel (API key) first") — the channel
+# a console session uses; `observe_operation`'s human branch looks only at the caller's role. The
+# owner mints that credential with `create_principal` (owner-only, returns the plaintext key once;
+# the same capability automation credentials are made with — a `kind=service` Principal, since
+# people join through `add_member`, which issues no key): role `member`, no gate Grant, not an
+# owner. The key lives only in a shell variable and is printed only via redact().
+# --------------------------------------------------------------------------------------------
+human_probe_setup_step() {
+  out=$(cap "$OWNER_KEY" create_principal '{"role":"member","displayName":"s4-human-reader"}' \
+    "[d.result.principal.id, d.result.apiKey].join('\u001f')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "human-probe-key" "create_principal HTTP $status: $(parse_kv "$out" BODY)"
+  rec=$(parse_kv "$out" EXTRACTED)
+  HUMAN_ID=$(field "$rec" 1)
+  HUMAN_KEY=$(field "$rec" 2)
+  if [ -z "$HUMAN_ID" ] || [ -z "$HUMAN_KEY" ]; then
+    fail "human-probe-key" "could not parse the principal / API key from create_principal"
+  fi
+
+  out=$(cap "$OWNER_KEY" execution_readiness "{\"principalId\":\"$HUMAN_ID\"}" \
+    "d.result.gates.filter(g=>g.granted).length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "human-probe-key" "execution_readiness(principalId=$HUMAN_ID) HTTP $status: $(parse_kv "$out" BODY)"
+  granted_n=$(parse_kv "$out" EXTRACTED)
+  [ "$granted_n" = "0" ] || fail "human-probe-key" "the human-channel probe principal unexpectedly holds a gate Grant on $granted_n gate(s) — the probe would not test the ungranted case"
+  pass "human-probe-key" "member-role principal=$HUMAN_ID (no gate Grant, not an owner) API key=$(redact "$HUMAN_KEY")"
+}
+
+# human_probe <gateId> <connector> <display> <gatekeeperId> <op> — one verdict line per gate:
+#   S4 human-probe gate=... connector=... op=... call=... verdict=PASS|FAIL
+# PASS: 200 (read without a Grant), or 403 operation_disabled (the platform deny list applies on
+# every channel). Anything else — notably 403 "holds no active gatekeeper grant" — is FAIL: the
+# host's kernel still requires a Grant on the human channel.
+human_probe() {
+  h_gate_id=$1
+  h_connector=$2
+  h_display=$3
+  h_gk_id=$4
+  h_op=$5
+
+  h_out=$(cap "$HUMAN_KEY" observe_operation "{\"gatekeeperId\":\"$h_gk_id\",\"operation\":\"$(json_escape "$h_op")\",\"params\":{}}" \
+    "d.result&&d.result.status")
+  h_status=$(parse_kv "$h_out" HTTP_STATUS)
+  h_body=$(parse_kv "$h_out" BODY)
+  [ -n "$h_status" ] || h_status="no-response"
+
+  h_verdict=FAIL
+  case "$h_status" in
+    200) h_verdict=PASS ;;
+    403)
+      case "$h_body" in
+        *operation_disabled*) h_verdict=PASS ;;
+      esac
+      ;;
+  esac
+
+  printf 'S4 human-probe gate=%s connector=%s op=%s call=%s verdict=%s\n' \
+    "$h_display" "$h_connector" "$h_op" "$h_status" "$h_verdict"
+  if [ "$h_verdict" = "PASS" ]; then
+    HUMAN_PASS=$((HUMAN_PASS + 1))
+    pass "human-probe:$h_gate_id" "ungranted member on the human channel observe_operation($h_op) -> $h_status"
+  else
+    HUMAN_FAIL=$((HUMAN_FAIL + 1))
+    warn_fail "human-probe:$h_gate_id" "observe_operation($h_op) on the human channel -> HTTP $h_status $(diag_of "$h_out")"
+  fi
+}
+
 # member_probe <gateId> <connector> <display> <gatekeeperId> <op> — one verdict line per gate:
 #   S4 member-probe gate=... connector=... readiness=<status>/<reason> op=... call=... listed=yes|no verdict=PASS|FAIL
 member_probe() {
@@ -479,6 +562,9 @@ member_probe() {
   if [ "$p_verdict" = "PASS" ]; then
     MEMBER_PASS=$((MEMBER_PASS + 1))
     pass "member-probe:$p_gate_id" "ungranted member observe_operation($p_op) -> $p_status, readiness=$p_r_status, listed=$p_listed"
+    if [ "$p_status" = "200" ]; then
+      MEMBER_OK_RECORDS="${MEMBER_OK_RECORDS}${MEMBER_OK_RECORDS:+$RS}$(printf '%s%s%s%s%s%s%s' "$p_gk_id" "$US" "$p_op" "$US" "$p_display" "$US" "$p_connector")"
+    fi
   else
     MEMBER_FAIL=$((MEMBER_FAIL + 1))
     warn_fail "member-probe:$p_gate_id" "$p_detail"
@@ -625,9 +711,95 @@ verify_step() {
         ;;
     esac
 
-    # Same gate, same Operation, through the ungranted member's Handle (see member_probe_setup_step).
+    # Same gate, same Operation, through the ungranted member's Handle (see member_probe_setup_step),
+    # then on the human channel (see human_probe_setup_step).
     member_probe "$e_gate_id" "$e_connector" "$e_display" "$e_gk_id" "$op_name"
+    human_probe "$e_gate_id" "$e_connector" "$e_display" "$e_gk_id" "$op_name"
   done
+}
+
+# --------------------------------------------------------------------------------------------
+# Exclusion probe (leftover 98): My Agent lets a member exclude a system their agent may read
+# without a Grant. Takes the first gate the ungranted member probe read with 200 and, as the owner
+# (`get_agent_profile` / `set_agent_profile` with `principalId` — the capabilities the console's
+# My Agent page calls; an owner may edit anyone's profile):
+#   1. My Agent offers the gate as readable-but-ungranted: `availableGatekeepers` has it with
+#      `granted:false` (the checklist's data source).
+#   2. excludes it (`excludedGatekeepers:[gate]`) — the result's entry must turn `inUse:false`;
+#   3. the member Handle's `observe_operation` on it is refused 403 `excluded_by_profile`;
+#   4. `list_allowed_operations` no longer projects any of its Operations;
+#   5. readiness for the member says `unreachable/excluded_by_profile`;
+#   6. restores `excludedGatekeepers:[]` and checks the gate is projected again.
+# One verdict line:
+#   S4 exclusion-probe gate=... connector=... op=... offered=<granted:false|…> call=<status> listed=yes|no readiness=<s>/<r> restored=yes|no verdict=PASS|FAIL
+# No gate read with 200 (nothing to exclude): SKIP, not FAIL.
+# --------------------------------------------------------------------------------------------
+exclusion_probe_step() {
+  first=$(printf '%s' "$MEMBER_OK_RECORDS" | tr "$RS" '\n' | head -n 1)
+  if [ -z "$first" ]; then
+    skip "exclusion-probe" "no gate was read with 200 by the ungranted member — nothing to exclude"
+    return 0
+  fi
+  x_gk_id=$(field "$first" 1)
+  x_op=$(field "$first" 2)
+  x_display=$(field "$first" 3)
+  x_connector=$(field "$first" 4)
+  entry_expr="(()=>{const g=((d.result&&d.result.availableGatekeepers)||[]).find(x=>x.gatekeeperId==='$x_gk_id');return g?'granted:'+g.granted+',inUse:'+g.inUse:'absent'})()"
+
+  out=$(cap "$OWNER_KEY" get_agent_profile "{\"principalId\":\"$MEMBER_ID\"}" "$entry_expr")
+  x_offered=$(parse_kv "$out" EXTRACTED)
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || x_offered="get_agent_profile-HTTP-$(parse_kv "$out" HTTP_STATUS)"
+
+  out=$(cap "$OWNER_KEY" set_agent_profile "{\"principalId\":\"$MEMBER_ID\",\"excludedGatekeepers\":[\"$x_gk_id\"]}" "$entry_expr")
+  x_set_status=$(parse_kv "$out" HTTP_STATUS)
+  x_after_set=$(parse_kv "$out" EXTRACTED)
+
+  out=$(cap "$MEMBER_HANDLE" observe_operation "{\"gatekeeperId\":\"$x_gk_id\",\"operation\":\"$(json_escape "$x_op")\",\"params\":{}}" "")
+  x_call=$(parse_kv "$out" HTTP_STATUS)
+  x_body=$(parse_kv "$out" BODY)
+  [ -n "$x_call" ] || x_call="no-response"
+  x_refused=no
+  if [ "$x_call" = "403" ]; then
+    case "$x_body" in
+      *excluded_by_profile*) x_refused=yes ;;
+    esac
+  fi
+
+  out=$(cap "$MEMBER_HANDLE" list_allowed_operations '{}' \
+    "d.result.items.filter(i=>i.gatekeeperId==='$x_gk_id').length")
+  x_listed_n=$(parse_kv "$out" EXTRACTED)
+  if [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] && [ "$x_listed_n" = "0" ]; then x_listed=no; else x_listed=yes; fi
+
+  out=$(cap "$OWNER_KEY" execution_readiness "{\"principalId\":\"$MEMBER_ID\"}" \
+    "d.result.gates.map(g=>[g.gateId,g.status,g.reason||'',g.granted].map(x=>String(x).replace(/[\u0000-\u001f]/g,' ')).join('\u001f')).join('\u001e')")
+  x_rr=$(readiness_lookup "$x_gk_id" "$(parse_kv "$out" EXTRACTED)")
+  x_r_status=${x_rr%%|*}
+  x_r_reason=${x_rr#*|}
+
+  out=$(cap "$OWNER_KEY" set_agent_profile "{\"principalId\":\"$MEMBER_ID\",\"excludedGatekeepers\":[]}" "$entry_expr")
+  x_restore_status=$(parse_kv "$out" HTTP_STATUS)
+  out=$(cap "$MEMBER_HANDLE" list_allowed_operations '{}' \
+    "d.result.items.filter(i=>i.gatekeeperId==='$x_gk_id').length")
+  x_relisted_n=$(parse_kv "$out" EXTRACTED)
+  if [ "$x_restore_status" = "200" ] && [ -n "$x_relisted_n" ] && [ "$x_relisted_n" != "0" ]; then x_restored=yes; else x_restored=no; fi
+
+  x_verdict=FAIL
+  if [ "$x_offered" = "granted:false,inUse:true" ] && [ "$x_set_status" = "200" ] \
+    && [ "$x_after_set" = "granted:false,inUse:false" ] && [ "$x_refused" = "yes" ] \
+    && [ "$x_listed" = "no" ] && [ "$x_r_status" = "unreachable" ] \
+    && [ "$x_r_reason" = "excluded_by_profile" ] && [ "$x_restored" = "yes" ]; then
+    x_verdict=PASS
+  fi
+
+  printf 'S4 exclusion-probe gate=%s connector=%s op=%s offered=%s call=%s listed=%s readiness=%s/%s restored=%s verdict=%s\n' \
+    "$x_display" "$x_connector" "$x_op" "$x_offered" "$x_call" "$x_listed" "$x_r_status" "$x_r_reason" "$x_restored" "$x_verdict"
+  if [ "$x_verdict" = "PASS" ]; then
+    EXCL_PASS=$((EXCL_PASS + 1))
+    pass "exclusion-probe:$x_gk_id" "excluded on My Agent -> observe 403 excluded_by_profile, not projected, readiness unreachable/excluded_by_profile; restored"
+  else
+    EXCL_FAIL=$((EXCL_FAIL + 1))
+    warn_fail "exclusion-probe:$x_gk_id" "offered=$x_offered set=$x_set_status after_set=$x_after_set call=$x_call $(printf '%s' "$x_body" | cut -c1-160) listed=$x_listed readiness=$x_r_status($x_r_reason) restore=$x_restore_status relisted=$x_relisted_n"
+  fi
 }
 
 cleanup_step() {
@@ -670,12 +842,14 @@ fi
 issue_handle_step
 readiness_step
 member_probe_setup_step
+human_probe_setup_step
 verify_step
+exclusion_probe_step
 cleanup_step
 
-if [ "$GATE_FAIL" -gt 0 ] || [ "$MEMBER_FAIL" -gt 0 ]; then
-  echo "S4 FAIL ($GATE_PASS pass, $GATE_SKIP skip, $GATE_FAIL fail; ungranted-member probe $MEMBER_PASS pass, $MEMBER_FAIL fail)"
+if [ "$GATE_FAIL" -gt 0 ] || [ "$MEMBER_FAIL" -gt 0 ] || [ "$HUMAN_FAIL" -gt 0 ] || [ "$EXCL_FAIL" -gt 0 ]; then
+  echo "S4 FAIL ($GATE_PASS pass, $GATE_SKIP skip, $GATE_FAIL fail; ungranted-member probe $MEMBER_PASS pass, $MEMBER_FAIL fail; human-channel probe $HUMAN_PASS pass, $HUMAN_FAIL fail; exclusion probe $EXCL_PASS pass, $EXCL_FAIL fail)"
   exit 1
 fi
-echo "S4 OK ($GATE_PASS gates pass, $GATE_SKIP skipped; ungranted-member probe $MEMBER_PASS pass)"
+echo "S4 OK ($GATE_PASS gates pass, $GATE_SKIP skipped; ungranted-member probe $MEMBER_PASS pass; human-channel probe $HUMAN_PASS pass; exclusion probe $EXCL_PASS pass)"
 exit 0

@@ -50,6 +50,7 @@ export type {
 } from './observe-access.js';
 export {
   NO_OBSERVE_EXCLUSIONS,
+  observableGatekeeperIds,
   observeExclusionsOf,
   observeGateExclusion,
   observeRefusal,
