@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { isDecidable } from '../../lib/action-card.js';
 import { auditHref } from '../../lib/audit.js';
 import {
@@ -11,11 +11,15 @@ import {
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
+import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
-import { ApprovalCard } from '../ui/ApprovalCard.js';
-import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Notice } from '../ui/Notice.js';
-import { RefChip } from '../ui/RefChip.js';
+import { ErrorBanner } from '../kit/error-banner.js';
+import { Field, describedBy } from '../kit/field.js';
+import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
+import { Notice } from '../kit/notice.js';
+import { RefChip } from '../kit/ref-chip.js';
+import { StatusChip } from '../kit/status-chip.js';
+import { Textarea } from '../kit/textarea.js';
 import { nameOf } from './useDirectoryNames.js';
 
 export interface ApprovalDecisionInput {
@@ -34,7 +38,7 @@ export interface ApprovalDetailProps {
    *  already been told 403 for it (hooks/usePermissions). */
   readonly canAlwaysAllow: boolean;
   /** The confirmed decision — throws so the confirm stays open with the kernel's error (awaited
-   *  so the card's own button shows busy for a low/medium Approve, which calls this directly). */
+   *  so the direct low/medium Approve's own button shows busy while it is in flight). */
   readonly onApprove: (input: ApprovalDecisionInput) => Promise<void>;
   readonly onReject: (input: Omit<ApprovalDecisionInput, 'alwaysAllow'>) => Promise<void>;
   /** The most recent error from a *direct* (no-confirm, low/medium blast radius) decision on this
@@ -58,27 +62,21 @@ export type PendingConfirm =
   | { readonly kind: 'reject'; readonly reason: string | undefined };
 
 /**
- * components/approvals/ApprovalDetail (S6-A B2 / C25, S8 W1-A7 — docs/console-completion-plan.md
- * §5.8 "确认态", §5.9 "待我审批"; audit S13): the approvals page's rendering of one ActionRequest
- * on the shared `ui/ApprovalCard` (the same card the chat thread is moving to). Governance fields
- * are the card's own (kind, blast radius, status, target, gatekeeper / on-behalf-of as `RefChip`s
- * with names from the directory hooks); this component adds what the card leaves to its body: the
- * redacted parameters, the timestamps, the human decision (`decisionReason` / `decidedBy` /
- * `decidedAt`, S6-A wire fields — absent or `null` when no human decided), the "总是允许"
- * checkbox, and the "查看溯源" link into the audit page (§5.5).
+ * components/approvals/ApprovalDetail (console redesign P3-4 V6 "待我审批"; S6-A B2 / C25, S8
+ * W1-A7 — docs/console-completion-plan.md §5.8 "确认态"; audit S13): one ActionRequest's detail,
+ * on `components/kit/*` only — the shared `ui/ApprovalCard` (still used by the chat thread's
+ * inline card) is gone from this file; this rewrite owns its own header, `kit/key-value` "动作"
+ * section, "决定" read-only section and decision footer instead of delegating to that card's body
+ * slots. Rendered as the wide layout's detail pane content and, unchanged, as the narrow layout's
+ * `kit/sheet` content (`ApprovalQueuePage` decides which).
  *
- * A high-blast-radius Approve and every Reject go through `kit/confirm` (`medium`, listing the
- * impact, rendered here) before the call — low/medium Approve is the card's one click (§5.9
- * principle 4). The confirm's `anchor` is the whole `ApprovalCard`, not just its Approve/Reject
- * button: the card is a plain function component with no forwarded ref to its own buttons (also
- * used by the chat thread's inline card), so anchoring to the card itself (the popover aligns to
- * its bottom-right, where the buttons render) keeps the confirm next to the action without
- * widening this lane to `ui/ApprovalCard.tsx`. `pending`/`onPendingChange` are controlled from the
- * page rather than local state — see the prop's own doc comment for why. `approve{reason?}` /
- * `reject{reason?}` carry the reason the card collected (mandatory for high, validated by the card
- * in front of the kernel's own 400 `reason_required`). Replaces `ActionRequestDetail` for this
- * page only — the chat's inline card (`ActionRequestCard.tsx`, chat lane) keeps
- * `ActionRequestDetail` until it migrates.
+ * Decision semantics are unchanged from the pre-redesign card (§5.9 principle 4): low/medium
+ * Approve calls `onApprove` directly; a high-blast-radius Approve and every Reject set `pending`
+ * via `onPendingChange` and go through `kit/confirm` (`medium` tier, never `irreversible` — that
+ * tier is an open maintainer decision, not part of this slice) anchored to the decision footer.
+ * `approve{reason?}` / `reject{reason?}` payloads are unchanged. The reason is mandatory (and
+ * validated in place, mirroring the kernel's own 400 `reason_required`) only for a high-impact
+ * Approve — Reject and low/medium Approve both accept an empty reason.
  */
 export function ApprovalDetail({
   row,
@@ -92,32 +90,58 @@ export function ApprovalDetail({
   onPendingChange,
 }: ApprovalDetailProps) {
   const t = useT();
+  const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
+  const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const reasonId = useId();
+
   const decidable = isDecidable(row.status);
   const blocking = row.awaitDecision && decidable;
   const decided = row.decidedBy !== undefined && row.decidedBy !== null;
   const decisionReason = row.decisionReason ?? null;
+  const reasonRequired = row.blastRadius === 'high';
   const provenance = auditHref({
     actionRequestId: row.id,
     ...(row.approvalDecisionId ? { nodeId: row.approvalDecisionId } : {}),
   });
 
-  /** From the card: low / medium → straight to the call (§5.9 principle 4 "中 · 可逆 → 一键批准");
-   *  high → the confirm first. Resolves immediately either way so the card's own busy indicator
-   *  never sits spinning for however long the confirm stays open. The direct path's own rejection
-   *  is swallowed here (never awaited by the card either) — the page-owned `error` prop is the
-   *  one channel for it; a confirmed call instead lets `runConfirm` below re-throw into `Confirm`,
-   *  which shows the error inline and keeps the popover open. */
-  function requestApprove(reason: string | undefined): void {
+  /** low / medium → straight to the call (§5.9 principle 4 "中 · 可逆 → 一键批准"); high → the
+   *  confirm first. Resolves immediately either way (never awaits the real call) so `decide`'s own
+   *  busy flag never sits spinning for however long the confirm stays open — the page-owned
+   *  `error` prop is the one channel for a direct call's rejection; a confirmed call instead lets
+   *  `runConfirm` re-throw into `Confirm`, which shows the error inline and keeps the popover
+   *  open. */
+  function requestApprove(reasonValue: string | undefined): void {
     if (row.blastRadius === 'high') {
-      onPendingChange({ kind: 'approve', reason, alwaysAllow });
+      onPendingChange({ kind: 'approve', reason: reasonValue, alwaysAllow });
       return;
     }
-    onApprove({ actionRequestId: row.id, reason, alwaysAllow }).catch(() => {});
+    onApprove({ actionRequestId: row.id, reason: reasonValue, alwaysAllow }).catch(() => {});
   }
 
-  function requestReject(reason: string | undefined): void {
-    onPendingChange({ kind: 'reject', reason });
+  function requestReject(reasonValue: string | undefined): void {
+    onPendingChange({ kind: 'reject', reason: reasonValue });
+  }
+
+  async function decide(kind: 'approve' | 'reject'): Promise<void> {
+    const trimmed = reason.trim();
+    if (kind === 'approve' && reasonRequired && trimmed === '') {
+      setReasonError(
+        t('高影响动作必须填写批准理由', 'A reason is required for a high-impact action'),
+      );
+      reasonRef.current?.focus();
+      return;
+    }
+    setReasonError(null);
+    setBusy(kind);
+    try {
+      if (kind === 'approve') await requestApprove(trimmed === '' ? undefined : trimmed);
+      else await requestReject(trimmed === '' ? undefined : trimmed);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function runConfirm(): Promise<void> {
@@ -133,14 +157,210 @@ export function ApprovalDetail({
     }
   }
 
+  const actionItems: KeyValueItem[] = [
+    { key: 'kind', label: t('能力', 'Capability'), value: row.actionKindTag, mono: true },
+    {
+      key: 'target',
+      label: t('目标', 'Target'),
+      value: row.resourceScope ? (
+        <span className="mono" data-testid="approval-target">
+          {row.resourceScope}
+        </span>
+      ) : (
+        <span className="text-3" data-testid="approval-target">
+          {t('未限定资源', 'No resource scope')}
+        </span>
+      ),
+    },
+    {
+      key: 'gatekeeper',
+      label: t('门', 'Gatekeeper'),
+      value: (
+        <RefChip
+          kind="gatekeeper"
+          id={row.gatekeeperId}
+          name={nameOf(gatekeeperNames, row.gatekeeperId)}
+          size="s"
+        />
+      ),
+    },
+  ];
+  if (row.onBehalfOf !== undefined) {
+    actionItems.push({
+      key: 'onBehalfOf',
+      label: t('代表', 'On behalf of'),
+      value: (
+        <RefChip
+          kind="principal"
+          id={row.onBehalfOf}
+          name={nameOf(principalNames, row.onBehalfOf)}
+          size="s"
+          testId="approval-on-behalf-of"
+        />
+      ),
+    });
+  }
+  if (row.policyDecision) {
+    actionItems.push({
+      key: 'policy',
+      label: t('策略', 'Policy'),
+      value: (
+        <span className="mono" data-testid="approval-policy">
+          {row.policyDecision}
+        </span>
+      ),
+    });
+  }
+  actionItems.push({
+    key: 'requestedAt',
+    label: t('请求于', 'Requested'),
+    value: (
+      <>
+        <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+        <span className="text-3"> · {formatDateTime(row.requestedAt)}</span>
+      </>
+    ),
+  });
+  if (row.executedAt) {
+    actionItems.push({
+      key: 'executedAt',
+      label: t('执行于', 'Executed'),
+      value: formatDateTime(row.executedAt),
+    });
+  }
+  if (row.failedAt) {
+    actionItems.push({
+      key: 'failedAt',
+      label: <span className="text-danger">{t('失败于', 'Failed')}</span>,
+      value: <span className="text-danger">{formatDateTime(row.failedAt)}</span>,
+    });
+  }
+
   return (
     <div className="stack" data-testid="approval-detail" data-action-request-id={row.id}>
+      <header className="stack-s approval-detail-header">
+        <div className="row-wrap">
+          <StatusChip
+            machine="blastRadius"
+            status={row.blastRadius}
+            size="s"
+            testId="approval-blast-radius"
+          />
+          <StatusChip
+            machine="actionRequest"
+            status={row.status}
+            size="s"
+            testId="approval-status"
+          />
+          <RefChip kind="actionRequest" id={row.id} name={null} size="s" />
+        </div>
+        <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+          <h2 className="approval-detail-title">
+            {humanizeKind(row.actionKindTag)}
+            {row.resourceScope ? <span className="mono text-2"> · {row.resourceScope}</span> : null}
+          </h2>
+          <Button variant="secondary" size="s" asChild>
+            <a href={provenance} data-testid="approval-provenance-link">
+              {t('查看溯源', 'View provenance')}
+            </a>
+          </Button>
+        </div>
+        <div className="row-wrap text-3">
+          <span>{t('由', 'Proposed by')}</span>
+          {row.actorRuntime ? (
+            <span className="tag">{row.actorRuntime}</span>
+          ) : (
+            <span>{t('未知来源', 'an unknown source')}</span>
+          )}
+          {row.onBehalfOf !== undefined ? (
+            <>
+              <span className="meta-sep" />
+              <span>{t('代表', 'on behalf of')}</span>
+              <RefChip
+                kind="principal"
+                id={row.onBehalfOf}
+                name={nameOf(principalNames, row.onBehalfOf)}
+                size="s"
+              />
+            </>
+          ) : null}
+          <span className="meta-sep" />
+          <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+          {row.parentWorkerRunId ? (
+            <>
+              <span className="meta-sep" />
+              <span>{t('Worker 运行', 'Worker run')}</span>
+              <RefChip kind="object" id={row.parentWorkerRunId} name={null} size="s" />
+            </>
+          ) : null}
+        </div>
+      </header>
+
       {blocking ? (
         <Notice tone="warn" testId="approval-blocking">
           {t('Worker 已暂停，等待你的决定。', 'The Worker is blocked until you decide.')}
         </Notice>
       ) : null}
 
+      <section className="stack-s">
+        <span className="section-title">{t('动作', 'Action')}</span>
+        <KeyValue items={actionItems} />
+      </section>
+
+      {row.params && Object.keys(row.params).length > 0 ? (
+        <section className="stack-s">
+          <span className="section-title">{t('参数', 'Parameters')}</span>
+          <pre className="code-block params-block" data-testid="approval-params">
+            {prettyJson(redactSensitive(row.params))}
+          </pre>
+        </section>
+      ) : null}
+
+      {!decidable ? (
+        <section className="stack-s">
+          <span className="section-title">{t('决定', 'Decision')}</span>
+          <div className="stack-s" data-testid="approval-decision">
+            {decided ? (
+              <span className="row-wrap">
+                <RefChip
+                  kind="principal"
+                  id={row.decidedBy as string}
+                  name={nameOf(principalNames, row.decidedBy as string)}
+                  size="s"
+                  testId="approval-decided-by"
+                />
+                {row.decidedAt ? (
+                  <time className="text-3" title={formatDateTime(row.decidedAt)}>
+                    {formatRelative(row.decidedAt)}
+                  </time>
+                ) : null}
+              </span>
+            ) : (
+              <span className="text-3">
+                {t(
+                  '无人工决定（自动 / 策略 / 过期）',
+                  'No human decision (auto / policy / expiry)',
+                )}
+              </span>
+            )}
+            {decisionReason ? (
+              <span className="pre-wrap" data-testid="approval-decision-reason">
+                {decisionReason}
+              </span>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Always mounted — unlike the read-only "决定" section above, this is never wrapped in
+          `{decidable ? ... : null}`: the optimistic decision (`moveToDecided` in
+          `useApprovalQueue`) flips `row.status` (and so `decidable`) to a decided value the
+          instant the confirmed call starts, *before* it settles — an approve/reject already in
+          flight through this very `Confirm`. Unmounting `Confirm` at that moment would discard its
+          own in-flight `busy`/`error` state (`kit/confirm`'s `useConfirmRun`) a render before the
+          kernel's rejection ever reaches it, silently dropping the inline error and reopening the
+          popover empty. Only `anchor`'s content (the footer) is conditional on `decidable`; the
+          popover itself, and whichever `pending` decision opened it, are unaffected by that flip. */}
       <Confirm
         tier="medium"
         open={pending !== null}
@@ -148,140 +368,84 @@ export function ApprovalDetail({
           if (!open) onPendingChange(null);
         }}
         anchor={
-          <ApprovalCard
-            actionRequestId={row.id}
-            actionKind={row.actionKindTag}
-            blastRadius={row.blastRadius}
-            status={row.status}
-            target={
-              row.resourceScope ? (
-                <span className="mono">{row.resourceScope}</span>
-              ) : (
-                <span className="text-3">{t('未限定资源', 'No resource scope')}</span>
-              )
-            }
-            gatekeeper={{ id: row.gatekeeperId, name: nameOf(gatekeeperNames, row.gatekeeperId) }}
-            onBehalfOf={
-              row.onBehalfOf !== undefined
-                ? { id: row.onBehalfOf, name: nameOf(principalNames, row.onBehalfOf) }
-                : undefined
-            }
-            policySummary={
-              row.policyDecision ? (
-                <span className="mono">
-                  {row.policyDecision}
-                  {row.actorRuntime ? (
-                    <span className="text-3">
-                      {' '}
-                      {t('· 发起自', 'from')}
-                      <span className="tag">{row.actorRuntime}</span>
-                    </span>
-                  ) : null}
-                </span>
-              ) : undefined
-            }
-            readOnly={!decidable}
-            onApprove={decidable ? (reason) => requestApprove(reason) : undefined}
-            onReject={decidable ? (reason) => requestReject(reason) : undefined}
-            testId="approval-card"
-          >
-            {row.params && Object.keys(row.params).length > 0 ? (
-              <div className="stack-s">
-                <span className="section-title">{t('参数', 'Parameters')}</span>
-                <pre className="code-block params-block" data-testid="approval-params">
-                  {prettyJson(redactSensitive(row.params))}
-                </pre>
-              </div>
-            ) : null}
-
-            <dl className="definition-list">
-              <dt>{t('请求于', 'Requested')}</dt>
-              <dd>
-                <time title={formatDateTime(row.requestedAt)}>
-                  {formatRelative(row.requestedAt)}
-                </time>
-                <span className="text-3"> · {formatDateTime(row.requestedAt)}</span>
-              </dd>
-              {row.executedAt ? (
-                <>
-                  <dt>{t('执行于', 'Executed')}</dt>
-                  <dd>{formatDateTime(row.executedAt)}</dd>
-                </>
-              ) : null}
-              {row.failedAt ? (
-                <>
-                  <dt className="text-danger">{t('失败于', 'Failed')}</dt>
-                  <dd className="text-danger">{formatDateTime(row.failedAt)}</dd>
-                </>
-              ) : null}
-              {!decidable ? (
-                <>
-                  <dt>{t('决定', 'Decision')}</dt>
-                  <dd className="stack-s" data-testid="approval-decision">
-                    {decided ? (
-                      <span className="row-wrap">
-                        <RefChip
-                          kind="principal"
-                          id={row.decidedBy as string}
-                          name={nameOf(principalNames, row.decidedBy as string)}
-                          size="s"
-                          testId="approval-decided-by"
-                        />
-                        {row.decidedAt ? (
-                          <time className="text-3" title={formatDateTime(row.decidedAt)}>
-                            {formatRelative(row.decidedAt)}
-                          </time>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <span className="text-3">
-                        {t(
-                          '无人工决定（自动 / 策略 / 过期）',
-                          'No human decision (auto / policy / expiry)',
-                        )}
-                      </span>
-                    )}
-                    {decisionReason ? (
-                      <span className="pre-wrap" data-testid="approval-decision-reason">
-                        {decisionReason}
-                      </span>
-                    ) : null}
-                  </dd>
-                </>
-              ) : null}
-              {row.parentWorkerRunId ? (
-                <>
-                  <dt>{t('Worker 运行', 'Worker run')}</dt>
-                  <dd>
-                    <RefChip kind="object" id={row.parentWorkerRunId} name={null} size="s" />
-                  </dd>
-                </>
-              ) : null}
-            </dl>
-
-            {decidable && canAlwaysAllow ? (
-              <label className="checkbox" data-testid="approval-always-allow-option">
-                <input
-                  type="checkbox"
-                  checked={alwaysAllow}
-                  onChange={(event) => setAlwaysAllow(event.target.checked)}
+          decidable ? (
+            <div className="stack-s approval-decision-footer">
+              <Field
+                id={reasonId}
+                label={t('理由', 'Reason')}
+                required={reasonRequired}
+                hint={
+                  reasonError
+                    ? undefined
+                    : reasonRequired
+                      ? t(
+                          '高影响：批准必须写理由，理由写入审计。',
+                          'High impact: approving requires a reason; it is written to the audit log.',
+                        )
+                      : t('可选；随决定一并写入审计。', 'Optional; recorded with the decision.')
+                }
+                error={reasonError}
+              >
+                <Textarea
+                  id={reasonId}
+                  ref={reasonRef}
+                  aria-label={t('理由', 'Reason')}
+                  value={reason}
+                  onChange={(event) => {
+                    setReason(event.target.value);
+                    if (reasonError) setReasonError(null);
+                  }}
+                  invalid={reasonError !== null}
+                  aria-describedby={describedBy(reasonId, !reasonError, reasonError !== null)}
+                  data-testid="approval-reason"
                 />
-                <span>
-                  {t('总是允许', 'Always allow')}
-                  <code>{row.actionKindTag}</code>（批准时一并写入自动批准规则 — approving also
-                  writes the auto-approval rule）
-                </span>
-              </label>
-            ) : null}
+              </Field>
 
-            <a
-              className="approval-card-link"
-              href={provenance}
-              data-testid="approval-provenance-link"
-            >
-              {t('查看溯源', 'View provenance')} · {humanizeKind(row.actionKindTag)}
-            </a>
-          </ApprovalCard>
+              {canAlwaysAllow ? (
+                <label className="checkbox" data-testid="approval-always-allow-option">
+                  <input
+                    type="checkbox"
+                    checked={alwaysAllow}
+                    onChange={(event) => setAlwaysAllow(event.target.checked)}
+                  />
+                  <span>
+                    {t(
+                      `总是允许 ${row.actionKindTag}：批准时一并写入自动批准规则。`,
+                      `Always allow ${row.actionKindTag}: approving also writes the auto-approval rule.`,
+                    )}
+                  </span>
+                </label>
+              ) : null}
+
+              <div className="row-wrap">
+                <Button
+                  variant="primary"
+                  aria-busy={busy === 'approve'}
+                  disabled={busy !== null}
+                  onClick={() => void decide('approve')}
+                  data-testid="approval-approve"
+                >
+                  {t('批准', 'Approve')}
+                </Button>
+                <Button
+                  variant="danger"
+                  aria-busy={busy === 'reject'}
+                  disabled={busy !== null}
+                  onClick={() => void decide('reject')}
+                  data-testid="approval-reject"
+                >
+                  {t('拒绝…', 'Reject…')}
+                </Button>
+              </div>
+
+              <p className="text-3 text-small">
+                {t(
+                  '批准即写入审计：操作者、代表者、目标、参数与理由。',
+                  'Approving writes to the audit log: the actor, on-behalf-of principal, target, parameters and reason.',
+                )}
+              </p>
+            </div>
+          ) : null
         }
         title={
           pending?.kind === 'reject'
@@ -317,24 +481,38 @@ export function ApprovalDetail({
         testId="approval-confirm"
       >
         {pending ? (
-          <dl className="definition-list">
-            <dt>{t('请求', 'Request')}</dt>
-            <dd>
-              <RefChip kind="actionRequest" id={row.id} name={null} size="s" />
-            </dd>
-            <dt>{t('理由', 'Reason')}</dt>
-            <dd className="pre-wrap" data-testid="approval-confirm-reason">
-              {pending.reason ?? <span className="text-3">（无 none）</span>}
-            </dd>
-            {pending.kind === 'approve' && pending.alwaysAllow ? (
-              <>
-                <dt>{t('总是允许', 'Always allow')}</dt>
-                <dd>
-                  <code>{row.actionKindTag}</code> {t('今后自动批准', 'will be auto-approved')}
-                </dd>
-              </>
-            ) : null}
-          </dl>
+          <KeyValue
+            items={[
+              {
+                key: 'request',
+                label: t('请求', 'Request'),
+                value: <RefChip kind="actionRequest" id={row.id} name={null} size="s" />,
+              },
+              {
+                key: 'reason',
+                label: t('理由', 'Reason'),
+                value: (
+                  <span className="pre-wrap" data-testid="approval-confirm-reason">
+                    {pending.reason ?? <span className="text-3">{t('（无）', '(none)')}</span>}
+                  </span>
+                ),
+              },
+              ...(pending.kind === 'approve' && pending.alwaysAllow
+                ? [
+                    {
+                      key: 'alwaysAllow',
+                      label: t('总是允许', 'Always allow'),
+                      value: (
+                        <span>
+                          <code>{row.actionKindTag}</code>{' '}
+                          {t('今后自动批准', 'will be auto-approved')}
+                        </span>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
         ) : null}
       </Confirm>
 
@@ -346,9 +524,7 @@ export function ApprovalDetail({
 }
 
 /** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). A pure helper, not a
- *  component — takes `t` from its caller (S8 W1-A10 i18n remainder: every line used to be a
- *  combined "中文 English" literal, ignoring the language switch; `blastRadius` reuses
- *  `lib/status-tone.ts`'s machine instead of a second hand-maintained low/medium/high map). */
+ *  component — takes `t` from its caller. */
 function confirmImpact(
   pending: PendingConfirm,
   row: ActionRequestRow,

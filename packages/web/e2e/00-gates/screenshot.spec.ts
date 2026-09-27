@@ -110,9 +110,13 @@ test.describe('S8 W1-B screenshot gate', () => {
       .filter({ hasText: E2E_GATE_PENDING_SCOPE })
       .first();
     await expect(row).toBeVisible({ timeout: 15_000 });
-    // `.press('Enter')`, not `.click()` — see journeys/03-approve-action.spec.ts's own comment on
-    // this exact row type: `DataRow`'s onClick bails when the click lands on the row's own
-    // `RefChip` copy button, which a narrow capture width can put under the default click point.
+    // `.press('Enter')`, not `.click()`: the row is a real, focusable `kit/list-row` button —
+    // pressing Enter after Playwright's own auto-focus is the same keyboard-activation path a
+    // real user has (console redesign P3-4/V6). Selection is URL-driven and stays put as
+    // `captureWidths` below resizes the viewport, so it is made once here at whatever width the
+    // test starts at (this suite's default, 1280px — the two-pane wide layout) rather than once
+    // per captured width; at 768px the same selection instead opens the narrow layout's
+    // `kit/sheet`, still under the same `data-testid="approval-drawer"`.
     await row.press('Enter');
     await expect(page.getByTestId('approval-drawer')).toBeVisible();
 

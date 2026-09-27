@@ -56,13 +56,12 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await asOwner(page);
 
   // Step 1+2: navigate by the sidebar's own visible label, not the hash, then open the row.
-  // `.press('Enter')`, not `.click()`: `DataRow`'s onClick (components/ui/DataList.tsx) bails out
-  // when the click target is inside a `<button>` — this row's `meta` includes a `RefChip`, which
-  // renders a copy `<button>` (`components/ui/CopyId.tsx`). At 768px that button can sit under
-  // Playwright's default click point (the row's bounding-box centre), silently swallowing the
-  // click; the row is a real, focusable, keyboard-activatable list item (`tabIndex`, Enter/Space
-  // handling), so pressing Enter after Playwright's own auto-focus sidesteps the ambiguity
-  // entirely instead of guessing a click position that dodges the button.
+  // `.press('Enter')`, not `.click()`: the row is a real, focusable, keyboard-activatable
+  // `kit/list-row` button — pressing Enter after Playwright's own auto-focus is the same
+  // keyboard-activation path a real user has, and needs no click-position workaround (console
+  // redesign P3-4/V6's row has no nested interactive element to dodge — the pre-redesign
+  // `DataRow`'s meta-line `RefChip` copy button this comment used to warn about is gone; the row
+  // shows plain text).
   await goToByLabel(page, '待我审批');
   const row = page.getByTestId('approval-row').filter({ hasText: scope }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
@@ -74,11 +73,14 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   // Step 3: approve.
   await drawer.getByRole('button', { name: '批准' }).click();
 
-  // Step 4: the row leaves the pending queue (still page-local — DataRow's own removal, not proof
-  // by itself that the kernel's own approve() persisted); the same page's own 历史 History tab is
-  // where the durable, authoritative state lives (`list_action_requests`, unrelated to which Chat
-  // any card ended up in — see this file's own doc comment).
+  // Step 4: the row leaves the pending queue (still page-local — the list's own removal, not
+  // proof by itself that the kernel's own approve() persisted); the same page's own 历史 History
+  // tab is where the durable, authoritative state lives (`list_action_requests`, unrelated to
+  // which Chat any card ended up in — see this file's own doc comment).
   await expect(row).toHaveCount(0, { timeout: 15_000 });
+  // Escape: a no-op on the desktop test (≥1180px — the detail is an always-inline pane, nothing
+  // modal to dismiss) and closes the narrow test's `kit/sheet` (≤1179px — a real dialog over the
+  // list) so the 历史 tab below is reachable either way.
   await page.keyboard.press('Escape');
 
   await page.getByRole('tab', { name: '历史' }).click();
@@ -89,14 +91,19 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   const count = await historyRows.count();
   let found = false;
   for (let i = 0; i < count; i++) {
+    // No `toBeHidden()` check between rows any more: on the desktop (wide) layout the detail is
+    // one always-mounted pane, never hidden between selections (only ever re-rendered — P3-4/V6),
+    // unlike the pre-redesign `ui/Drawer` this loop used to close between attempts. Escape still
+    // runs first so the narrow layout's `kit/sheet` (which *is* modal — it covers the list with an
+    // overlay) releases the next row underneath it; on the wide layout it is again a harmless
+    // no-op, since the list was never covered to begin with.
+    await page.keyboard.press('Escape');
     await historyRows.nth(i).press('Enter');
     await expect(detail).toBeVisible({ timeout: 15_000 });
     if ((await detail.getByText(scope, { exact: true }).count()) > 0) {
       found = true;
       break;
     }
-    await page.keyboard.press('Escape');
-    await expect(detail).toBeHidden();
   }
   expect(found, `no History row's detail shows resourceScope "${scope}"`).toBe(true);
   await expect(status).toHaveAttribute('data-status', /^(approved|executing|executed|failed)$/, {

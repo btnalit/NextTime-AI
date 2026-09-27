@@ -35,7 +35,6 @@
   "packages/web/src/components/TasksPage.test.tsx",
   "packages/web/src/components/TasksPage.tsx",
   "packages/web/src/components/ToolCallRowView.tsx",
-  "packages/web/src/components/approvals/ApprovalDetail.tsx",
   "packages/web/src/components/approvals/LinkedApprovals.tsx",
   "packages/web/src/components/approvals/useDirectoryNames.tsx",
   "packages/web/src/components/audit/ApprovalContext.tsx",
