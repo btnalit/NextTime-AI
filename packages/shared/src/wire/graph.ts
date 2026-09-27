@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EpistemicStatusSchema } from '../enums.js';
+import { EpistemicStatusSchema, HUMAN_ATTESTATION_EVIDENCE_KIND } from '../enums.js';
 
 /**
  * wire/graph: Object / Fact / AuditRecord / Explain wire shapes (docs/wire-contract-conventions.md
@@ -119,6 +119,24 @@ const ExplainActivityRefSchema = z
   .strict()
   .nullable();
 
+/** STATUS leftover 89: one human attestation on the explained Fact — Evidence of the reserved
+ *  kind `human_attestation` (`attest_fact`), returned apart from machine evidence so no reader
+ *  (console or agent) can mistake a person's word for an observation or a Worker's output.
+ *  `attestedByPrincipal` is the person who attested; `activityId` the `epistemic.human_attestation`
+ *  Activity the attestation was recorded under. */
+const ExplainHumanAttestationRefSchema = z
+  .object({
+    id: z.string(),
+    kind: z.literal(HUMAN_ATTESTATION_EVIDENCE_KIND),
+    note: z.string(),
+    link: z.string().nullable(),
+    activityId: z.string().nullable(),
+    attestedByPrincipal: ExplainPrincipalRefSchema,
+    createdAt: z.string(),
+  })
+  .strict();
+export type ExplainHumanAttestationRefWire = z.infer<typeof ExplainHumanAttestationRefSchema>;
+
 const ExplainFactRefSchema = z
   .object({
     id: z.string(),
@@ -126,6 +144,9 @@ const ExplainFactRefSchema = z
     epistemicStatus: z.string(),
     assertedByPrincipal: ExplainPrincipalRefSchema,
     verifiedByPrincipal: ExplainPrincipalRefSchema,
+    /** STATUS leftover 89: every human attestation on this Fact, oldest first (empty when none) —
+     *  never mixed with machine evidence. */
+    humanAttestations: z.array(ExplainHumanAttestationRefSchema),
     /** W5: when non-null, `activity.observations` is narrowed to exactly this Observation. */
     observationId: z.string().nullable(),
     /** S5.2: the Fact's lifecycle end, when it has one — `not_reobserved` is the observation
@@ -159,6 +180,24 @@ export const ExplainResultWireSchema = z
   })
   .strict();
 export type ExplainResultWire = z.infer<typeof ExplainResultWireSchema>;
+
+/** STATUS leftover 89 — `attest_fact`'s result: the Evidence row it created (`evidence` table,
+ *  kind `human_attestation`), projected. `attestedBy` is the attesting person's Principal id (same
+ *  `<verb>edBy` convention as `FactWire.assertedBy`/`verifiedBy`); `activityId` the
+ *  `epistemic.human_attestation` Activity it was recorded under. */
+export const HumanAttestationWireSchema = z
+  .object({
+    id: z.string(),
+    factId: z.string(),
+    kind: z.literal(HUMAN_ATTESTATION_EVIDENCE_KIND),
+    note: z.string(),
+    link: z.string().nullable(),
+    activityId: z.string(),
+    attestedBy: z.string(),
+    createdAt: z.string(),
+  })
+  .strict();
+export type HumanAttestationWire = z.infer<typeof HumanAttestationWireSchema>;
 
 /**
  * S3.2 冲突检测 (docs/development-tasks.md S3.2, `substrate/epistemic/conflicts.ts`'s

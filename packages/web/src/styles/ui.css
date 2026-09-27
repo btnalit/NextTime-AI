@@ -1164,6 +1164,63 @@ a.ref-chip-name {
   overflow-wrap: anywhere;
 }
 
+/* STATUS leftover 89 — the Fact's human attestations: a person's own confirmation, set apart from
+   the machine lineage (its own block under the segments, an accent rule, the 人工确认 chip —
+   §5.9: a chip is never colour alone). */
+.prov-attestations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface-1);
+  min-width: 0;
+}
+
+.prov-attestations-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.prov-attestation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.prov-attestation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.prov-attestation-note {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.prov-attestation-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--fs-12);
+  color: var(--accent);
+}
+
 /* One column from the shell's own narrow breakpoint (960px): three columns at ~768px leave each
    segment under 200px, too narrow for a chip row or an id (journey ④'s 768px check). */
 @media (max-width: 960px) {

@@ -169,6 +169,7 @@ platform-human-only by design).
 | `list_conflicts` | epistemic | handle | R | graph/GraphPage.tsx | - |  |
 | `resolve_conflict` | epistemic | human | W | graph/ConflictsPanel.tsx | - |  |
 | `verify_fact` | epistemic | human | W | graph/FactRow.tsx | - |  |
+| `attest_fact` | epistemic | human | W | graph/FactRow.tsx → graph/AttestFactDialog.tsx | - | Added 2026-09-27 (STATUS leftover 89): a person's own confirmation as Evidence of kind `human_attestation`; shown by `explain` as `fact.humanAttestations` (ui/ProvenanceChain 人工确认 row). |
 | `query_decisions` | epistemic | handle | R | audit/ProvenanceToolsSection.tsx | - |  |
 | `causal_chain` | epistemic | handle | R | audit/ProvenanceToolsSection.tsx | - |  |
 | `decision_impact` | epistemic | handle | R | audit/ProvenanceToolsSection.tsx | - |  |
@@ -179,8 +180,8 @@ platform-human-only by design).
 | `list_worker_definitions` | worker | handle | R | CatalogPage.tsx; AgentProfilePage.tsx; TasksPage.tsx; catalog/ProcedureEditorHost.tsx | - |  |
 | `discard_draft` | worker | human | W | CatalogPage.tsx | - |  |
 | `assert_fact` | meta | handle | W | (none) | - | No console caller. No manual 'assert a fact' UI exists anywhere in the console -- facts are asserted only by ingest/agents. Only verify_fact and resolve_conflict exist as human-facing fact actions. |
-| `supersede_fact` | meta | handle | W | (none) | - | No console caller. Same gap as assert_fact -- no manual fact-correction UI beyond resolve_conflict/verify_fact. |
-| `invalidate_fact` | meta | handle | W | (none) | - | No console caller. Same gap as assert_fact. |
+| `supersede_fact` | meta | handle | W | graph/FactRow.tsx → graph/SupersedeFactDialog.tsx | - | G2 closed 2026-09-27: Fact row menu 取代… (edit the value on the same identity → review the changes → confirm; audited). Was: no console caller. |
+| `invalidate_fact` | meta | handle | W | graph/FactRow.tsx | - | G2 closed 2026-09-27: Fact row menu 作废… (`kit/confirm` medium, reason required; audited). Was: no console caller. |
 | `approve` | governance | human | W | approvals/useApprovalQueue.ts; chat/useActionCards.ts | - |  |
 | `reject` | governance | human | W | approvals/useApprovalQueue.ts; chat/useActionCards.ts | - |  |
 | `list_pending` | governance | human | R | approvals/useApprovalQueue.ts; hooks/usePendingCount.ts | - |  |
@@ -354,7 +355,10 @@ component or its direct children found during this pass — shared sub-component
 - `assert_fact`, `supersede_fact`, `invalidate_fact` — `packages/kernel/src/application/gateway/
   fact-handlers.ts`'s three write handlers have no console caller; only `verify_fact`
   (`graph/FactRow.tsx`) and `resolve_conflict` (`graph/ConflictsPanel.tsx`) exist as human fact
-  actions.
+  actions. **2026-09-27 (G2, closing wave C2):** `supersede_fact` / `invalidate_fact` now have the
+  Fact row menu 取代… / 作废… (both are `channel: 'handle'`, which admits a human caller at
+  `minRole: 'member'` — no channel widened); `attest_fact` (leftover 89) is the same menu's
+  附人工确认. `assert_fact` (a brand-new Fact by hand) stays without a console caller.
 - `connect_gatekeeper` — `packages/kernel/src/application/gateway/connection-handlers.ts`; no
   caller, referenced only as a still-to-build step in `connect/ConnectSystemLauncher.tsx`'s own
   doc comment.

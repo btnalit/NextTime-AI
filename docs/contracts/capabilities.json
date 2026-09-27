@@ -634,6 +634,83 @@
   },
   {
     "channel": "human",
+    "group": "epistemic",
+    "minRole": "member",
+    "mode": "write",
+    "name": "attest_fact",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "factId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "link": {
+          "maxLength": 2048,
+          "pattern": "^https?:\\/\\/\\S+$",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "factId",
+        "note"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activityId": {
+          "type": "string"
+        },
+        "attestedBy": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "factId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "human_attestation",
+          "type": "string"
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "factId",
+        "kind",
+        "note",
+        "link",
+        "activityId",
+        "attestedBy",
+        "createdAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "audit",
     "minRole": "auditor",
     "mode": "observe",
@@ -1277,6 +1354,86 @@
                   "epistemicStatus": {
                     "type": "string"
                   },
+                  "humanAttestations": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "activityId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "attestedByPrincipal": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "displayName": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "role": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "kind",
+                                "role",
+                                "displayName"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "human_attestation",
+                          "type": "string"
+                        },
+                        "link": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "note": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "note",
+                        "link",
+                        "activityId",
+                        "attestedByPrincipal",
+                        "createdAt"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "id": {
                     "type": "string"
                   },
@@ -1441,6 +1598,7 @@
                   "epistemicStatus",
                   "assertedByPrincipal",
                   "verifiedByPrincipal",
+                  "humanAttestations",
                   "observationId",
                   "invalidatedAt",
                   "invalidationReason",
@@ -3766,6 +3924,86 @@
             "epistemicStatus": {
               "type": "string"
             },
+            "humanAttestations": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "activityId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attestedByPrincipal": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "role",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "human_attestation",
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "note",
+                  "link",
+                  "activityId",
+                  "attestedByPrincipal",
+                  "createdAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "id": {
               "type": "string"
             },
@@ -3930,6 +4168,7 @@
             "epistemicStatus",
             "assertedByPrincipal",
             "verifiedByPrincipal",
+            "humanAttestations",
             "observationId",
             "invalidatedAt",
             "invalidationReason",

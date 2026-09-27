@@ -187,6 +187,22 @@
   justify-content: flex-end;
 }
 
+/* Phone width: the row actions (溯源 / 展开 / 验证 / 更多) take their own line under the Fact
+   instead of squeezing the neighbour and meta into a one-word column (same wrap the systems list
+   uses at narrow widths). */
+@media (max-width: 640px) {
+  .graph-fact-row {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+
+  .graph-fact-row .data-row-trailing {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    padding-left: calc(24px + var(--space-3));
+  }
+}
+
 /* Neighbourhood picture (inline SVG, fixed ring layout) */
 .graph-picture {
   margin: 0 0 var(--space-4);
@@ -306,6 +322,49 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+/* Coverage gap G2 — the 取代 dialog's review step: what changes in the Fact's value, and what the
+   replacement does. Added / removed keys carry their governance colour and a +/− glyph (§5.9: never
+   colour alone). */
+.fact-value-changes {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.fact-value-key {
+  color: var(--text);
+}
+
+.fact-value-before {
+  color: var(--text-3);
+}
+
+.fact-value-added {
+  color: var(--ok);
+}
+
+.fact-value-removed {
+  color: var(--danger);
+}
+
+.fact-dialog-impact {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-13);
+  color: var(--text);
 }
 
 @media (max-width: 960px) {

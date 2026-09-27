@@ -237,6 +237,7 @@ graph LR
 ### 5.6 认知状态与可见性
 
 - `epistemic_status`：`observed`（系统 API 直接读取，采集器）/ `extracted`（NLP / LLM 抽取）/ `inferred`（agent 推理）/ `asserted`（人工）/ `verified` / `contradicted`；`confidence` 是独立的连续值。检索给 agent 的上下文必须带状态；高影响 ActionType 可要求依赖 Fact 为 `verified`。
+- **证据与人工确认**（2026-09-27 维护者决定，遗留 89）：`verify_fact` 要求 Fact 已有 Evidence（§5.3 第 6 条）。Evidence 有两类，按 `kind` 区分、永不混用：**机器证据**（Worker 结果契约的 `evidence[]`：命令输出、文档摘录、门结果，`kind` 由写入方命名）与 **人工确认**（保留 `kind = human_attestation`）。人工确认只能由人在 human 通道经 `attest_fact` 写入——谁（调用者本人的 human Principal，不取自请求体）、何时、必填说明、可选 http(s) 链接——记在它自己的 `epistemic.human_attestation` Activity 下并审计；Handle 通道、service Principal 与 Worker 结果契约都写不出这个 kind。`explain` 把它单列为 `fact.humanAttestations`，控制台溯源标「人工确认」。只有人工确认的 Fact 也可以被验证：验证记录的是"某人凭自己的确认把它提升为已验证"，溯源链如实显示这一点，而不是把人的话当成观测。
 - **可见性**：Source 带 `visibility`，Fact 与 Decision 继承。会话派生内容（Chat、Turn、Worker 会话转录）默认 `private` 给 `on_behalf_of` 的用户；Worker 经结果契约写回的 Fact 是工作区知识，默认 `workspace`（2026-09-10 产品决定：转录另作私有 Source，挂在自己的 Activity 上，不影响结果 Fact 的可见性）；晋升为 `workspace` 是 human 通道的受治理转移，产生 Decision。两个死角的规则：私有 Fact 与工作区 Fact 冲突时，Conflict 只对私有一方可见；agent 提议的本体 / WorkerDefinition 草稿对提议者私有，发布后可见。
 
 ### 5.7 三模型分离
@@ -720,6 +721,7 @@ create table worker_definitions (
 | | `publish_skill` / `publish_procedure` / `deprecate_*` | human | |
 | | `assert_fact` / `supersede_fact` / `invalidate_fact` | propose | 状态由调用方类型决定 |
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
+| | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |
 | governance | `request_action` | execute | Worker |
 | | `approve` / `reject` / `list_pending` / `get_action` / `set_auto_approved_action_kind` | human | I14 |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
