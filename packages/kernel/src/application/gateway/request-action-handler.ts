@@ -37,8 +37,14 @@ import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import type { GateLinkPolicyView } from '../gates/index.js';
-import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
+import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
+import {
+  NO_OBSERVE_EXCLUSIONS,
+  observeRefusal,
+  operationPlatformStatus,
+  readGateLinkPolicy,
+  readObserveExclusions,
+} from '../gates/index.js';
 import type { WithTransactionFn } from './action-executor.js';
 import {
   createAdminWithTransaction,
@@ -1000,13 +1006,16 @@ async function resolveRequesterScope(
  *     needs an execute-class effect delegates through `invoke_worker`; a Worker uses
  *     `request_action`.
  *
- * On the **handle** channel the Gatekeeper must be in the Handle's own `resources.gatekeeper`
- * (`assertHandleGatekeeperScope` below — design decision D4, 2026-09-26: "观察免审" exempts an
- * observation from *approval*, not from *authorization scope*; this closes the S2.4 known gap where
- * `authorize.ts` checked the capability name but not which Gatekeeper, so an `mcp_session` Handle
- * could observe any gate in the workspace). On the **human** channel (item 1 fix, review job
- * 652a4abc), a non-owner caller must hold an active `'gatekeeper'` Grant for `gatekeeperId` —
- * `assertHumanGatekeeperAccess` below, same gate `request_action` now applies.
+ * Who may observe is decided by one predicate, `observeRefusal` (application/gates/
+ * observe-access.ts — design doc §11 "门上的观察", decision D4 revoked 2026-09-27: "只读调用不需要授权").
+ * On the **handle** channel no gate Grant / `resources.gatekeeper` is involved: any Handle in the
+ * workspace may observe a registered gate's published, not-platform-disabled observe-class
+ * Operation unless the workspace AgentPolicy gate cap or the calling member's own AgentProfile
+ * excludes the gate. On the **human** channel (item 1 fix, review job 652a4abc — unchanged, the
+ * maintainer has not decided that channel), a non-owner caller must still hold an active
+ * `'gatekeeper'` Grant for `gatekeeperId` (`assertHumanGatekeeperAccess` below, same gate
+ * `request_action` applies); the predicate runs with no exclusions there, so its checks are
+ * exactly the ones this handler always made. Either way the call is audited by `dispatch.ts`.
  */
 export const observeOperationHandler: CapabilityHandler = async (
   client,
@@ -1024,29 +1033,28 @@ export const observeOperationHandler: CapabilityHandler = async (
     throw new Error('observe_operation: caller context is required (dispatch.ts must supply it)');
   }
 
-  if ((ctx?.channel ?? 'handle') === 'human') {
+  const channel: CapabilityChannel = ctx?.channel ?? 'handle';
+  if (channel === 'human') {
     const role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
     await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
-  } else {
-    assertHandleGatekeeperScope(ctx?.scope, gatekeeperId);
   }
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
-  if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
-
-  assertOperationEnabled(
-    await readGateLinkPolicy(client, workspaceId, gatekeeperId),
-    gatekeeperId,
-    operationName,
-  );
+  const gateLink = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
-  if (!published) throw new OperationNotFoundError(gatekeeperId, operationName);
-  if (published.operation.mode !== 'observe') {
-    const mode = published.operation.mode;
-    throw new ForbiddenError(
-      `observe_operation: "${operationName}" on gatekeeper ${gatekeeperId} is ${mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
-    );
-  }
+  const exclusions =
+    channel === 'handle'
+      ? await readObserveExclusions(client, workspaceId, onBehalfOf)
+      : NO_OBSERVE_EXCLUSIONS;
+  const refusal = observeRefusal(exclusions, {
+    gatekeeperId,
+    gateEnabled: gatekeeper !== null,
+    operationName,
+    publishedMode: published?.operation.mode,
+    gateLink,
+  });
+  if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
+  if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId); // narrowing only — refused above
 
   return runObserve(
     client,
@@ -1136,9 +1144,23 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
 
   if (published && published.operation.mode === 'observe') {
-    // D4: the observe branch never reaches `governance/policy`'s coverage check (that only runs
-    // for the governed execute path below), so a Handle caller's gate scope is checked here.
-    if (channel === 'handle') assertHandleGatekeeperScope(ctx?.scope, gatekeeperId);
+    // The observe branch never reaches `governance/policy`'s coverage check (that only runs for the
+    // governed execute path below), and needs none: observation is decided by `observeRefusal`
+    // (application/gates/observe-access.ts; D4 revoked 2026-09-27), the same predicate
+    // `observe_operation` and `list_allowed_operations` use. Gate enabled, not platform-disabled
+    // and published observe-class are already established above, so for a Handle caller only the
+    // AgentPolicy cap / AgentProfile exclusion can refuse here. The human channel keeps its Grant
+    // check (`assertHumanGatekeeperAccess` above) and nothing more, unchanged.
+    if (channel === 'handle') {
+      const refusal = observeRefusal(await readObserveExclusions(client, workspaceId, onBehalfOf), {
+        gatekeeperId,
+        gateEnabled: true,
+        operationName,
+        publishedMode: published.operation.mode,
+        gateLink,
+      });
+      if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
+    }
     return runObserve(
       client,
       workspaceId,
@@ -1219,23 +1241,46 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   });
 };
 
-/** Design decision D4 (2026-09-26, `docs/productization-plan-v2-2026-09-26.md` §2): a Handle caller
- *  may observe only through a Gatekeeper in its own `resources.gatekeeper` — the same scope
- *  `list_allowed_operations` projects tools from, `computeChildHandleScope` narrows Workers to and
- *  `computeCapabilityReachability` reports as `direct`. An absent list is empty (`entryScope` only
- *  sets the key when the member holds at least one gate Grant), never "unconstrained". Same
- *  `ForbiddenError` shape as the human channel's `assertHumanGatekeeperAccess`, so reachability's
- *  `not_granted` maps to one refusal whichever channel the call came through. */
-function assertHandleGatekeeperScope(
-  scope: CapabilityScope | undefined,
+/** `observeRefusal`'s answer as the error each condition has always surfaced as (404 for an
+ *  unknown gate / unpublished Operation, 403 `operation_disabled` for the platform deny list, 403
+ *  for an execute-class Operation) — plus the two exclusions, 403 naming the reason code the
+ *  reachability read model reports for the same gate (`excluded_by_policy` / `excluded_by_profile`,
+ *  capability-reachability.ts). */
+function observeRefusalError(
+  refusal: ObserveRefusal,
   gatekeeperId: string,
-): void {
-  const covered = scope?.resources[GATEKEEPER_RESOURCE_SCOPE_KEY] ?? [];
-  if (!covered.includes(gatekeeperId)) {
-    throw new ForbiddenError(
-      `request_action/observe_operation: this Handle's scope does not cover "${GATEKEEPER_RESOURCE_SCOPE_KEY}" ${gatekeeperId} — observation needs no approval, but it still needs the gate in scope (a member Grant, narrowed per Worker)`,
-    );
+  operationName: string,
+): Error {
+  switch (refusal.reason) {
+    case 'gate_not_enabled':
+      return new GatekeeperNotFoundError(gatekeeperId);
+    case 'disabled_by_platform':
+      return operationDisabledError(gatekeeperId, operationName, refusal.connector);
+    case 'no_published_operation':
+      return new OperationNotFoundError(gatekeeperId, operationName);
+    case 'not_observe_class':
+      return new ForbiddenError(
+        `observe_operation: "${operationName}" on gatekeeper ${gatekeeperId} is ${refusal.mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
+      );
+    case 'excluded_by_policy':
+      return new ForbiddenError(
+        `excluded_by_policy: gatekeeper ${gatekeeperId} is left out by this workspace's AgentPolicy gate limit — a workspace owner changes it on Models & Quotas`,
+      );
+    case 'excluded_by_profile':
+      return new ForbiddenError(
+        `excluded_by_profile: gatekeeper ${gatekeeperId} is unticked in the calling member's own AgentProfile (My Agent)`,
+      );
   }
+}
+
+function operationDisabledError(
+  gatekeeperId: string,
+  operationName: string,
+  connector: string | undefined,
+): ForbiddenError {
+  return new ForbiddenError(
+    `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${connector}"`,
+  );
 }
 
 /** P-B1: the per-call half of "按 Operation 开关" — `null` link = a gate this workspace connected
@@ -1244,7 +1289,8 @@ function assertHandleGatekeeperScope(
  *  (gatekeeper-read-handlers.ts) and `computeCapabilityReachability` (capability-reachability.ts)
  *  also consult now — the production incident this fixes was exactly the console's own reachability
  *  read model re-deriving this decision on its own and getting it wrong (never consulting the deny
- *  list at all). */
+ *  list at all). `request_action` calls it for every mode (the execute path too); the observe
+ *  path's own check is the same predicate inside `observeRefusal`. */
 function assertOperationEnabled(
   gateLink: GateLinkPolicyView | null,
   gatekeeperId: string,
@@ -1252,8 +1298,6 @@ function assertOperationEnabled(
 ): void {
   const status = operationPlatformStatus(gateLink, operationName);
   if (status.disabled) {
-    throw new ForbiddenError(
-      `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${status.connector}"`,
-    );
+    throw operationDisabledError(gatekeeperId, operationName, status.connector);
   }
 }

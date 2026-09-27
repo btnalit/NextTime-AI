@@ -72,8 +72,10 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
 （`get_object`/`traverse`/`search`/`explain`/`get_task`/`state_at`）、`find_operations`/
 `find_workers`/`find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、
 `propose_worker_definition`/`propose_operation`/`propose_skill`/`propose_procedure`/
-`propose_ontology_change`，外加 `session_start` 时按你 Handle 的 `resources.gatekeeper`
-动态发现的 `<gate>.<op>` 观察类工具（跟 `entry`/`worker` 用同一套 `gate-tools.ts` 命名规则）。
+`propose_ontology_change`，外加 `session_start` 时经 `list_allowed_operations` 动态发现的
+`<gate>.<op>` 观察类工具——本工作区启用、没被工作区策略上限或你自己的「我的智能体」排除的每个门，
+不需要授权（设计文档 §11"门上的观察"，2026-09-27；跟 `entry`/`worker` 用同一套 `gate-tools.ts`
+命名规则）。
 
 **跟 `entry` 模式不同的地方**（design doc §7.4"默认不回传"）：
 

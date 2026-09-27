@@ -51,10 +51,12 @@ curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \
 
 - 不传 `scope` 时，默认拿到"入口 agent 上限 ∩ 你的 Grant"的全集（S3.6 registry-entry 的
   `intersectScope`，`packages/kernel/src/application/gateway/issue-handle-handler.ts`）——即
-  `entry` 模式能看到的观察类能力全集，加上你已 `connect_gatekeeper` 授权的门。
+  `entry` 模式能看到的观察类能力全集，加上你已 `connect_gatekeeper` 授权的门。门上的只读
+  （observe 类）Operation 不需要授权：本工作区启用、没被工作区策略上限或你自己的「我的智能体」排除的
+  门都能读，每次调用照旧审计（设计文档 §11"门上的观察"，2026-09-27）。
 - 想要更窄的范围，显式传 `scope.capabilities`（子集）/`scope.resources.gatekeeper`
   （子集）——请求超出你自己上限的部分会被静默丢弃，返回的 `scope` 字段就是实际拿到的范围，据此核
-  对，不是"发什么就给什么"。
+  对，不是"发什么就给什么"。`scope.resources.gatekeeper` 只收窄执行授权，不限制只读调用。
 - `ttlSeconds` 默认 24 小时，上限 30 天（`ISSUE_HANDLE_MAX_TTL_SECONDS`）；到期后这个 Handle 上的
   一切调用都是 401，需要重新走本步骤拿新 Handle（没有"续期"接口）。
 - 撤销：目前没有单独的"撤销这一个 Handle"能力（任务范围内未新增）——`disable_principal`

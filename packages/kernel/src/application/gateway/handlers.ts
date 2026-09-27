@@ -81,6 +81,7 @@ import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substr
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { MAX_SEARCH_LIMIT, SqlGraphStore, objectDisplayName } from '../../substrate/graph/index.js';
+import { readObserveExclusions } from '../gates/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -1432,7 +1433,19 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
     channel: ctx?.channel ?? 'handle',
     claims: ctx?.claims,
   });
-  const result = await findProcedures(client, workspaceId, { parentAuthority }, need);
+  // A Handle caller's observe steps go through the one observe predicate (its member's AgentPolicy
+  // cap / AgentProfile exclusions, no Grant — application/gates/observe-access.ts); a human caller
+  // keeps the human channel's rule, so it gets none.
+  const observeExclusions =
+    ctx?.claims && ctx.principalId
+      ? await readObserveExclusions(client, workspaceId, ctx.principalId)
+      : undefined;
+  const result = await findProcedures(
+    client,
+    workspaceId,
+    { parentAuthority, ...(observeExclusions ? { observeExclusions } : {}) },
+    need,
+  );
   return { result: { items: result } };
 };
 

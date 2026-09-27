@@ -58,12 +58,12 @@ export function missingCauseText(
       const name = item.gateId ? gateNames.get(item.gateId) : undefined;
       return name
         ? t(
-            `门「${name}」已经授权给你，但在「我的智能体」里被取消了勾选，入口 agent 用不了它。`,
-            `The “${name}” gate is granted to you but unticked on My Agent, so your entry agent cannot use it.`,
+            `门「${name}」在「我的智能体」里被取消了勾选，入口 agent 用不了它。`,
+            `The “${name}” gate is unticked on My Agent, so your entry agent cannot use it.`,
           )
         : t(
-            '有已授权的系统或 Worker 在「我的智能体」里被取消了勾选。',
-            'A granted system or Worker is unticked on My Agent.',
+            '有系统或 Worker 在「我的智能体」里被取消了勾选。',
+            'A system or Worker is unticked on My Agent.',
           );
     }
     case 'excluded_by_policy': {
@@ -146,19 +146,16 @@ export function gateReasonText(reason: GateUnreachableReason | undefined, t: Tra
       return t('这个系统还没有已发布的操作。', 'This system has no published operation yet.');
     case 'not_granted':
       return t(
-        '还没有授权给你——需要工作区所有者授权。',
-        'Not granted to you yet — a workspace owner has to grant it.',
+        '写操作还没有授权给你——需要工作区所有者授权（只读操作不需要授权）。',
+        'Its write operations are not granted to you yet — a workspace owner has to grant them (read operations need no grant).',
       );
     case 'excluded_by_policy':
       return t(
-        '已授权给你，但工作区策略的门上限没有包含它。',
-        'Granted to you, but the workspace policy’s gate limit leaves it out.',
+        '工作区策略的门上限没有包含它。',
+        'The workspace policy’s gate limit leaves it out.',
       );
     case 'excluded_by_profile':
-      return t(
-        '已授权给你，但你在「我的智能体」里取消了勾选。',
-        'Granted to you, but you unticked it on My Agent.',
-      );
+      return t('你在「我的智能体」里取消了勾选。', 'You unticked it on My Agent.');
     case 'no_worker':
       return t(
         '没有能调用它的 Worker——需要发布一个挂了这个系统的 Worker。',

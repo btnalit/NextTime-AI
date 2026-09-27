@@ -502,7 +502,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await definitionIsFindable(memberId, 'member', definitionId)).toBe(true);
     });
 
-    it('console redesign M2: per-gate reachability — callable directly, excluded on My Agent, not granted, nothing published', async () => {
+    it('console redesign M2: per-gate reachability — callable directly (granted or not), excluded on My Agent, nothing published', async () => {
       const fresh = await adminFreshWorkspaceOwner('execution-readiness-reachability-workspace');
       const freshMemberId = randomUUID();
       await withWorkspace(
@@ -603,11 +603,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         excludedByProfile: true,
         inEntryScope: false,
       });
+      // Design doc §11 "门上的观察" (D4 revoked 2026-09-27): observation needs no Grant — an
+      // ungranted gate with a published observe Operation is callable directly, while it stays out
+      // of the entry Handle's (execute) gate scope.
       expect(byId.get(ungranted)).toMatchObject({
-        status: 'unreachable',
-        reason: 'not_granted',
+        status: 'direct',
         granted: false,
+        inEntryScope: false,
       });
+      expect(byId.get(ungranted)?.reason).toBeUndefined();
       expect(byId.get(empty)).toMatchObject({
         status: 'unreachable',
         reason: 'no_published_operation',

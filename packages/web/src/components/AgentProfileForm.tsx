@@ -260,8 +260,8 @@ export function AgentProfileForm({
           empty={
             <>
               {t(
-                '工作区所有者授权后，你的智能体才能调用它。',
-                'A workspace owner has to grant one before your agent can call it.',
+                '只读操作不需要授权；工作区所有者授权后，你的智能体才能经 Worker 执行写操作。',
+                'Read operations need no grant; a workspace owner has to grant a system before your agent can act on it through a Worker.',
               )}{' '}
               <a href={hrefs.access()} className="link-inline">
                 {t('查看授权', 'View grants')}

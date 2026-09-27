@@ -125,6 +125,44 @@ describe('computeChildHandleScope', () => {
     expect(scope.capabilities).toEqual(['get_object']);
   });
 
+  // Design doc §11 "门上的观察" (D4 revoked 2026-09-27): an observe-only Worker that declares a gate
+  // its member was never granted is still delegable and still reaches that gate — by observation,
+  // which `observeRefusal` decides with no gate scope (request_action's observe branch,
+  // list_allowed_operations; pinned in request-action.integration.test.ts). The gate stays OUT of
+  // the child's `resources.gatekeeper`: that list is execute authority, and putting an ungranted
+  // gate in it would let a grandchild obtain `request_action` on it (`delegatedRequestAction`).
+  it('an observe-only Worker declaring an ungranted gate is delegable; the gate never enters the child’s execute scope', () => {
+    const entryScopeWithGate = {
+      capabilities: ['get_object', 'invoke_worker', 'list_allowed_operations', 'get_task'],
+      resources: { gatekeeper: ['gk-granted'] },
+    };
+    const child = computeChildHandleScope({
+      parentAuthority: entryScopeWithGate,
+      declaredCapabilities: ['get_object', 'invoke_worker'],
+      declaredGates: ['gk-granted', 'gk-observe-only'],
+    });
+    expect(child.resources.gatekeeper).toEqual(['gk-granted']);
+    expect(child.capabilities).not.toContain('request_action');
+
+    // No Grant at all: still delegable (observation needs none), and still no execute scope.
+    const noGrant = computeChildHandleScope({
+      parentAuthority: { capabilities: ['get_object', 'invoke_worker'], resources: {} },
+      declaredCapabilities: ['get_object', 'invoke_worker'],
+      declaredGates: ['gk-observe-only'],
+    });
+    expect(noGrant.resources.gatekeeper).toBeUndefined();
+
+    // Escalation guard: that child invoking a grandchild that declares request_action on the
+    // ungranted gate is refused — it never held the gate as execute authority to pass on.
+    expect(() =>
+      computeChildHandleScope({
+        parentAuthority: child,
+        declaredCapabilities: ['request_action'],
+        declaredGates: ['gk-observe-only'],
+      }),
+    ).toThrow(InvokeWorkerAttenuationError);
+  });
+
   it('a Worker Handle that already holds the execute-class capability can pass it to a child', () => {
     const workerScope = {
       capabilities: ['get_object', '<gate>.<op>:execute'],

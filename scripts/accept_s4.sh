@@ -20,7 +20,10 @@
 # model (`execution_readiness`) and the entry agent's own per-Operation reachability
 # (`find_operations`), and (c) makes one real, governed `observe_operation` call through the same
 # Handle-channel path a member's own entry agent would use — then reports whether readiness and
-# enforcement agree, and if not, which layer is lying.
+# enforcement agree, and if not, which layer is lying. (d) Since decision D4 was revoked
+# (2026-09-27, "只读调用不需要授权"), it repeats the same observe call through a member-role
+# principal holding no Grant at all and asserts readiness `direct` + the tool projected + HTTP 200
+# (member_probe_setup_step / member_probe).
 #
 # Usage:
 #   sh scripts/accept_s4.sh [--keep] [--connector <name>]
@@ -164,6 +167,8 @@ print_verdict() {
 GATE_PASS=0
 GATE_FAIL=0
 GATE_SKIP=0
+MEMBER_PASS=0
+MEMBER_FAIL=0
 ENABLED_RECORDS=""
 
 # --------------------------------------------------------------------------------------------
@@ -245,16 +250,13 @@ list_gate_instances_step() {
 # imported.imported) await publishOperation(...)` — this is a defensive re-check, not expected to
 # ever find work on a fresh workspace), then grant the workspace owner a 'gatekeeper' Grant for it.
 #
-# The grant is not cosmetic: `execution_readiness`/`find_operations`' own reachability annotation
-# (application/gateway/capability-reachability.ts) computes `granted`/`inEntryScope` from this
-# Principal's actual CapabilityGrants — without it, every gate would read back `status:'unreachable'
-# reason:'not_granted'` regardless of the platform's real deny-list state, which would manufacture a
-# "readiness says unreachable but the call succeeded" FAIL on every properly-configured gate (the
-# owner's own human-channel `observe_operation` call — and, per request-action-handler.ts's own
-# module doc comment, even a Handle-channel call: "this still does not check resources.gatekeeper
-# (S2.4 known gap)" — would still reach the gate regardless of the grant). Granting first is what
-# makes this script's setup resemble a properly authorized member's own entry agent, so a real
-# readiness/enforcement disagreement (the incident) is not drowned out by a self-inflicted one.
+# The owner's grant keeps this half of the run shaped like a granted member's own entry agent (the
+# gate lands in the entry Handle's execute scope, `inEntryScope`). Since design doc §11 "门上的观察"
+# (decision D4 revoked 2026-09-27, "只读调用不需要授权") observation itself needs no Grant: the
+# reachability read model (application/gateway/capability-reachability.ts) and every observe
+# enforcement point call one predicate (`observeRefusal`, application/gates/observe-access.ts), so
+# readiness is `direct` with or without it. The *ungranted* case is exercised separately by the
+# member probe below (member_probe_setup_step / member_probe).
 setup_one_gate() {
   i_gate_id=$1
   i_connector=$2
@@ -377,12 +379,120 @@ readiness_step() {
   pass "execution-readiness" "read for owner=$OWNER_ID"
 }
 
-# readiness_lookup <gatekeeperId> — prints "<status>|<reason-or-dash>" for one gate, or
+# --------------------------------------------------------------------------------------------
+# Ungranted-member probe (design doc §11 "门上的观察"; decision D4 revoked 2026-09-27 — the
+# maintainer's "只读调用不需要授权"): an observe-class Operation is callable by ANY Handle in the
+# workspace, Grant or not. The owner run above always holds a Grant, so it cannot tell whether
+# that rule actually reached the host. This probe uses a principal that is neither an owner nor
+# granted anything: a `kind='service'`, `role='member'` Principal minted by the operator CLI's
+# `issue-service-handle` (the only non-owner Handle a script can mint — `issue_handle` itself is
+# `minRole:'owner'`; same CLI path accept_s3.sh already uses for its collector), scoped to exactly
+# `observe_operation` + `list_allowed_operations`, no `resources` at all. ~15 minutes of TTL
+# (`--ttl-days 0.0105`; the CLI floors to whole seconds) — same "a short lifetime is the bound"
+# reasoning as issue_handle_step. For every gate the owner run exercised, it asserts:
+#   - the kernel's readiness read model for this member says `direct` (`execution_readiness`,
+#     read by the owner with `principalId`),
+#   - the tool list this member's Handle is projected (`list_allowed_operations`) contains the
+#     Operation, and
+#   - one real governed `observe_operation` through this member's Handle returns 200 (audited like
+#     any other call — dispatch.ts writes the row whatever the Grant state).
+# A gate whose picked Operation is on the platform deny list must instead read `unreachable`, not
+# be listed, and be refused `403 operation_disabled` — consistent refusal, still PASS.
+# --------------------------------------------------------------------------------------------
+member_probe_setup_step() {
+  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
+    --workspace "$WORKSPACE_ID" --name s4-ungranted-reader \
+    --scope observe_operation,list_allowed_operations --ttl-days 0.0105 \
+    </dev/null 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "member-probe-handle" "issue-service-handle exited $rc: $(printf '%s' "$out" | tail -10)"
+  fi
+  MEMBER_ID=$(printf '%s\n' "$out" | sed -n 's/^service principal: //p')
+  MEMBER_HANDLE=$(printf '%s\n' "$out" | tail -n 1)
+  if [ -z "$MEMBER_ID" ] || [ -z "$MEMBER_HANDLE" ]; then
+    fail "member-probe-handle" "could not parse the principal / Handle from issue-service-handle output: $(printf '%s' "$out" | tail -10)"
+  fi
+  pass "member-probe-handle" "ungranted member-role principal=$MEMBER_ID (no gate Grant, not an owner) Handle=$(redact "$MEMBER_HANDLE")"
+
+  out=$(cap "$OWNER_KEY" execution_readiness "{\"principalId\":\"$MEMBER_ID\"}" \
+    "d.result.gates.map(g=>[g.gateId,g.status,g.reason||'',g.granted].map(x=>String(x).replace(/[\u0000-\u001f]/g,' ')).join('\u001f')).join('\u001e')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "member-probe-readiness" "execution_readiness(principalId=$MEMBER_ID) HTTP $status: $(parse_kv "$out" BODY)"
+  MEMBER_READINESS_RECORDS=$(parse_kv "$out" EXTRACTED)
+  granted_n=$(printf '%s' "$MEMBER_READINESS_RECORDS" | tr "$RS" '\n' | awk -F"$US" '$4=="true"' | wc -l | tr -d ' ')
+  [ "$granted_n" = "0" ] || fail "member-probe-readiness" "the probe principal unexpectedly holds a gate Grant on $granted_n gate(s) — the probe would not test the ungranted case"
+  pass "member-probe-readiness" "read for member=$MEMBER_ID (granted on 0 gates)"
+
+  out=$(cap "$MEMBER_HANDLE" list_allowed_operations '{}' \
+    "d.result.items.map(i=>[i.gatekeeperId,i.name,(i.operation&&i.operation.mode)||''].map(x=>String(x).replace(/[\u0000-\u001f]/g,' ')).join('\u001f')).join('\u001e')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "member-probe-tools" "list_allowed_operations HTTP $status: $(parse_kv "$out" BODY)"
+  MEMBER_LISTED_RECORDS=$(parse_kv "$out" EXTRACTED)
+  execute_n=$(printf '%s' "$MEMBER_LISTED_RECORDS" | tr "$RS" '\n' | awk -F"$US" '$3=="execute"' | wc -l | tr -d ' ')
+  [ "$execute_n" = "0" ] || fail "member-probe-tools" "an ungranted Handle was projected $execute_n execute-class Operation(s) — execute projection must stay Grant-scoped"
+  listed_n=$(printf '%s' "$MEMBER_LISTED_RECORDS" | tr "$RS" '\n' | grep -c '.')
+  pass "member-probe-tools" "$listed_n observe-class Operation(s) projected, 0 execute-class"
+}
+
+# member_probe <gateId> <connector> <display> <gatekeeperId> <op> — one verdict line per gate:
+#   S4 member-probe gate=... connector=... readiness=<status>/<reason> op=... call=... listed=yes|no verdict=PASS|FAIL
+member_probe() {
+  p_gate_id=$1
+  p_connector=$2
+  p_display=$3
+  p_gk_id=$4
+  p_op=$5
+
+  p_rr=$(readiness_lookup "$p_gk_id" "$MEMBER_READINESS_RECORDS")
+  p_r_status=${p_rr%%|*}
+  p_r_reason=${p_rr#*|}
+  if printf '%s' "$MEMBER_LISTED_RECORDS" | tr "$RS" '\n' | awk -F"$US" -v id="$p_gk_id" -v op="$p_op" '$1==id && $2==op{found=1} END{exit found?0:1}'; then
+    p_listed=yes
+  else
+    p_listed=no
+  fi
+
+  p_out=$(cap "$MEMBER_HANDLE" observe_operation "{\"gatekeeperId\":\"$p_gk_id\",\"operation\":\"$(json_escape "$p_op")\",\"params\":{}}" \
+    "JSON.stringify({status:d.result&&d.result.status, observedFactCount:d.result&&d.result.observedFactCount})")
+  p_status=$(parse_kv "$p_out" HTTP_STATUS)
+  p_body=$(parse_kv "$p_out" BODY)
+  [ -n "$p_status" ] || p_status="no-response"
+
+  p_verdict=FAIL
+  p_detail="readiness=$p_r_status($p_r_reason) listed=$p_listed but observe_operation($p_op) -> HTTP $p_status $(diag_of "$p_out")"
+  case "$p_status" in
+    200)
+      if [ "$p_r_status" = "direct" ] && [ "$p_listed" = "yes" ]; then p_verdict=PASS; fi
+      ;;
+    403)
+      case "$p_body" in
+        *operation_disabled*)
+          if [ "$p_r_status" = "unreachable" ] && [ "$p_listed" = "no" ]; then p_verdict=PASS; fi
+          ;;
+      esac
+      ;;
+  esac
+
+  printf 'S4 member-probe gate=%s connector=%s readiness=%s/%s op=%s call=%s listed=%s verdict=%s\n' \
+    "$p_display" "$p_connector" "$p_r_status" "$p_r_reason" "$p_op" "$p_status" "$p_listed" "$p_verdict"
+  if [ "$p_verdict" = "PASS" ]; then
+    MEMBER_PASS=$((MEMBER_PASS + 1))
+    pass "member-probe:$p_gate_id" "ungranted member observe_operation($p_op) -> $p_status, readiness=$p_r_status, listed=$p_listed"
+  else
+    MEMBER_FAIL=$((MEMBER_FAIL + 1))
+    warn_fail "member-probe:$p_gate_id" "$p_detail"
+  fi
+}
+
+# readiness_lookup <gatekeeperId> [records] — prints "<status>|<reason-or-dash>" for one gate, or
 # "unknown|not_in_readiness_result" if execution_readiness's own gates[] has no matching row (should
 # never happen for a gate this same script just enabled — surfaced rather than silently defaulted,
-# in case a future readiness-side bug drops a gate from that list entirely).
+# in case a future readiness-side bug drops a gate from that list entirely). [records] defaults to
+# the owner's READINESS_RECORDS; the member probe passes its own MEMBER_READINESS_RECORDS.
 readiness_lookup() {
-  line=$(printf '%s' "$READINESS_RECORDS" | tr "$RS" '\n' | awk -F"$US" -v id="$1" '$1==id{print;exit}')
+  records=${2-$READINESS_RECORDS}
+  line=$(printf '%s' "$records" | tr "$RS" '\n' | awk -F"$US" -v id="$1" '$1==id{print;exit}')
   if [ -z "$line" ]; then
     printf 'unknown|not_in_readiness_result'
     return
@@ -514,6 +624,9 @@ verify_step() {
         warn_fail "verify:$e_gate_id" "observe_operation($op_name) failed: HTTP $call_status $err_code $err_msg"
         ;;
     esac
+
+    # Same gate, same Operation, through the ungranted member's Handle (see member_probe_setup_step).
+    member_probe "$e_gate_id" "$e_connector" "$e_display" "$e_gk_id" "$op_name"
   done
 }
 
@@ -556,12 +669,13 @@ fi
 
 issue_handle_step
 readiness_step
+member_probe_setup_step
 verify_step
 cleanup_step
 
-if [ "$GATE_FAIL" -gt 0 ]; then
-  echo "S4 FAIL ($GATE_PASS pass, $GATE_SKIP skip, $GATE_FAIL fail)"
+if [ "$GATE_FAIL" -gt 0 ] || [ "$MEMBER_FAIL" -gt 0 ]; then
+  echo "S4 FAIL ($GATE_PASS pass, $GATE_SKIP skip, $GATE_FAIL fail; ungranted-member probe $MEMBER_PASS pass, $MEMBER_FAIL fail)"
   exit 1
 fi
-echo "S4 OK ($GATE_PASS gates pass, $GATE_SKIP skipped)"
+echo "S4 OK ($GATE_PASS gates pass, $GATE_SKIP skipped; ungranted-member probe $MEMBER_PASS pass)"
 exit 0

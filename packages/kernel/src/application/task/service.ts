@@ -8,7 +8,7 @@ import {
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
-import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import {
   findOperationCandidates,
   findProcedureCandidates,
@@ -16,6 +16,8 @@ import {
 } from '../../substrate/graph/index.js';
 import type { GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import type { ObserveExclusions } from '../gates/index.js';
+import { observeRefusal, readGateLinkPolicy } from '../gates/index.js';
 import { getProcedure, getWorkerDefinition } from '../worker/index.js';
 import {
   type ParentAuthority,
@@ -440,6 +442,12 @@ export interface FindMeansCaller {
    *  (`governance/agent-profile/resolve.ts`), so "published minus excluded" is already the caller's
    *  final effective set. */
   readonly excludedWorkerDefinitionIds?: readonly string[];
+  /** `findProcedures` only: a Handle caller's `observeRefusal` inputs (its member's AgentPolicy cap
+   *  and AgentProfile exclusions — application/gates/observe-access.ts). Present ⇔ the caller is a
+   *  Handle, whose observe steps are decided by that predicate (no Grant needed, D4 revoked
+   *  2026-09-27); absent for a human caller, whose observe steps keep the human channel's own rule
+   *  (owner `'unconstrained'`, anyone else by gate scope — unchanged). */
+  readonly observeExclusions?: ObserveExclusions;
 }
 
 export interface WorkerDefinitionMatch {
@@ -549,14 +557,15 @@ export async function findWorkers(
  *
  * **The exact rule is per-candidate `mode`, not "every candidate needs `resources.gatekeeper`
  * coverage"**: an `observe`-mode Operation is always *listed* — `'unconstrained'` or not, granted
- * or not — so the agent can discover it and tell the member what is missing; an `execute`-mode
- * Operation additionally requires `identityKey.gatekeeperId` to be in `resources.gatekeeper`
- * (`'unconstrained'` — owner, human channel, no Handle to narrow from — always satisfies this).
- * Listed is not callable: since design decision D4 (2026-09-26) an observation skips *approval*,
- * not *authorization scope* — `observe_operation` refuses a Handle whose scope does not cover the
- * gate, and `find_operations`' per-Operation `reachability` annotation (root Handle callers) says
- * `not_granted` for exactly those. `findProcedures`' `stepUsableByCaller` (same file) answers the
- * different question "can this caller run the step", so it requires coverage for both modes.
+ * or not — since observation needs no Grant (design doc §11 "门上的观察", decision D4 revoked
+ * 2026-09-27); an `execute`-mode Operation additionally requires `identityKey.gatekeeperId` to be
+ * in `resources.gatekeeper` (`'unconstrained'` — owner, human channel, no Handle to narrow from —
+ * always satisfies this). Listed is not always callable: the platform deny list or the member's
+ * AgentPolicy cap / AgentProfile exclusion can still refuse an observation (`observeRefusal`,
+ * application/gates/observe-access.ts), and `find_operations`' per-Operation `reachability`
+ * annotation (root Handle callers) names exactly that refusal. `findProcedures`'
+ * `stepUsableByCaller` (same file) answers "can this caller run the step" and calls the same
+ * predicate for an observe step.
  */
 export async function findOperations(
   client: PoolClient,
@@ -645,11 +654,23 @@ async function stepUsableByCaller(
     );
     if (!operation) return false; // I17: draft/deprecated/unknown is never usable.
     if (operation.operation.mode !== 'execute') {
-      // D4 (2026-09-26): observation skips approval, not authorization scope — an observe step is
-      // usable only when the caller's scope covers its Gatekeeper, the same check
-      // `observe_operation` now enforces for a Handle caller (request-action-handler.ts
-      // `assertHandleGatekeeperScope`).
       if (caller.parentAuthority === 'unconstrained') return true;
+      if (caller.observeExclusions) {
+        // A Handle caller: the step is usable exactly when `observe_operation` would run it — the
+        // one observe predicate (application/gates/observe-access.ts; no Grant needed since D4 was
+        // revoked 2026-09-27), including the platform deny list and the member's exclusions.
+        return (
+          observeRefusal(caller.observeExclusions, {
+            gatekeeperId: step.gatekeeperId,
+            gateEnabled: (await getGatekeeper(client, workspaceId, step.gatekeeperId)) !== null,
+            operationName: step.operationName,
+            publishedMode: operation.operation.mode,
+            gateLink: await readGateLinkPolicy(client, workspaceId, step.gatekeeperId),
+          }) === undefined
+        );
+      }
+      // A non-owner human caller (`EMPTY_CAPABILITY_SCOPE`): the human channel's observe rule is
+      // unchanged — gate scope, which that caller never carries.
       return (caller.parentAuthority.resources.gatekeeper ?? []).includes(step.gatekeeperId);
     }
     try {

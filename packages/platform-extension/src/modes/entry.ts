@@ -247,13 +247,14 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
   }
 
   // Gate observe tools (S2.12 fix; design doc §7.4 "<gate>.<op>"): one pi tool per *published,
-  // observe-class* Operation of every Gatekeeper this user's entry Handle carries in
-  // `resources.gatekeeper` (`connect_gatekeeper` Grants, flowed in at Handle issuance). Same
+  // observe-class* Operation `list_allowed_operations` returns — every gate enabled in this
+  // workspace that this user has not excluded (no Grant needed since design doc §11 "门上的观察",
+  // D4 revoked 2026-09-27; the kernel applies the same predicate `observe_operation` enforces). Same
   // naming as worker mode (gate-tools.ts) so tool names are predictable from `<gateName>.<op>`;
   // execute-class Operations are never projected here — an entry agent delegates those through
-  // `invoke_worker`. Registered on `session_start`, so a Grant made after this container started
-  // becomes a tool only after the resident container is restarted (same latency bound as the
-  // Handle reissue itself).
+  // `invoke_worker`. Registered on `session_start`, so a gate enabled (or re-ticked on 我的智能体)
+  // after this container started becomes a tool only after the resident container is restarted
+  // (same latency bound as the Handle reissue itself).
   pi.on('session_start', async () => {
     const usedNames = new Set<string>();
     let operations: AllowedOperationWire[];

@@ -8,8 +8,10 @@ import { operationReachability } from './capability-reachability.js';
  * `find_operations` hands the entry agent (console redesign M3). The DB-backed half
  * (`computeCapabilityReachability`) is covered through `execution_readiness` in
  * `execution-readiness-handler.integration.test.ts`, and the connector-deny-list /
- * `disabled_by_platform` layer specifically (production incident 2026-09-26) through
- * `platform-gates.integration.test.ts`'s own consistency describe block.
+ * `disabled_by_platform` layer plus the observe-without-Grant rule (design doc §11 "门上的观察", D4
+ * revoked 2026-09-27) through `platform-gates.integration.test.ts`'s own consistency describe block.
+ * `directOperations` below stands for what `observeRefusal` (application/gates/observe-access.ts)
+ * accepted — `computeCapabilityReachability` fills it by calling that predicate.
  */
 
 function gate(
@@ -24,6 +26,7 @@ function gate(
     observeOperationCount: 1,
     executeOperationCount: 1,
     disabledOperations: [],
+    directOperations: ['op'],
     workerDefinitionIds: [],
     executeWorkerDefinitionIds: [],
     status: 'direct',
@@ -43,10 +46,17 @@ function reach(gates: readonly GateReachability[]): CapabilityReachability {
 }
 
 describe('operationReachability', () => {
-  it('an observe Operation on a gate in the entry scope is callable directly', () => {
+  it('an observe Operation the observe predicate accepted is callable directly', () => {
     expect(operationReachability(reach([gate({ gateId: 'g' })]), 'g', 'observe', 'op')).toEqual({
       status: 'direct',
     });
+  });
+
+  // D4 revoked (2026-09-27, "只读调用不需要授权"): observation needs no Grant — an ungranted gate
+  // outside the entry Handle's gate scope is still direct for its observe Operations.
+  it('an observe Operation on an ungranted gate is direct — never not_granted', () => {
+    const r = reach([gate({ gateId: 'g', granted: false, inEntryScope: false })]);
+    expect(operationReachability(r, 'g', 'observe', 'op')).toEqual({ status: 'direct' });
   });
 
   it('an execute Operation is never direct — only via a Worker that may request actions', () => {
@@ -67,23 +77,51 @@ describe('operationReachability', () => {
     });
   });
 
-  it('names the first missing condition for a gate the agent cannot reach', () => {
+  it('names the first missing condition: exclusions refuse observation, a missing Grant only refuses execution', () => {
     const r = reach([
       gate({ gateId: 'not-granted', granted: false, inEntryScope: false }),
-      gate({ gateId: 'excluded', excludedByProfile: true, inEntryScope: false }),
-      gate({ gateId: 'policy', excludedByPolicy: true, inEntryScope: false }),
+      gate({
+        gateId: 'excluded',
+        excludedByProfile: true,
+        inEntryScope: false,
+        directOperations: [],
+      }),
+      gate({ gateId: 'policy', excludedByPolicy: true, inEntryScope: false, directOperations: [] }),
     ]);
-    expect(operationReachability(r, 'not-granted', 'observe', 'op')).toEqual({
+    expect(operationReachability(r, 'not-granted', 'observe', 'op')).toEqual({ status: 'direct' });
+    expect(operationReachability(r, 'not-granted', 'execute', 'op')).toEqual({
       status: 'unreachable',
       reason: 'not_granted',
     });
-    expect(operationReachability(r, 'excluded', 'observe', 'op')).toEqual({
+    for (const mode of ['observe', 'execute']) {
+      expect(operationReachability(r, 'excluded', mode, 'op')).toEqual({
+        status: 'unreachable',
+        reason: 'excluded_by_profile',
+      });
+      expect(operationReachability(r, 'policy', mode, 'op')).toEqual({
+        status: 'unreachable',
+        reason: 'excluded_by_policy',
+      });
+    }
+  });
+
+  it('an ungranted gate can still be excluded: observation reports the exclusion, execution the missing Grant first', () => {
+    const r = reach([
+      gate({
+        gateId: 'g',
+        granted: false,
+        inEntryScope: false,
+        excludedByProfile: true,
+        directOperations: [],
+      }),
+    ]);
+    expect(operationReachability(r, 'g', 'observe', 'op')).toEqual({
       status: 'unreachable',
       reason: 'excluded_by_profile',
     });
-    expect(operationReachability(r, 'policy', 'observe', 'op')).toEqual({
+    expect(operationReachability(r, 'g', 'execute', 'op')).toEqual({
       status: 'unreachable',
-      reason: 'excluded_by_policy',
+      reason: 'not_granted',
     });
   });
 
@@ -98,7 +136,15 @@ describe('operationReachability', () => {
   // gates — a gate with one disabled Operation and one still-enabled one must report each
   // correctly, not just agree/disagree with the gate's own aggregate `status`.
   it('a platform-disabled Operation is unreachable even when the gate itself is still direct (another Operation on it is still enabled)', () => {
-    const r = reach([gate({ gateId: 'g', disabledOperations: ['blocked_op'], status: 'direct' })]);
+    const r = reach([
+      gate({
+        gateId: 'g',
+        observeOperationCount: 2,
+        disabledOperations: ['blocked_op'],
+        directOperations: ['other_op'],
+        status: 'direct',
+      }),
+    ]);
     expect(operationReachability(r, 'g', 'observe', 'blocked_op')).toEqual({
       status: 'unreachable',
       reason: 'disabled_by_platform',
@@ -115,6 +161,7 @@ describe('operationReachability', () => {
         observeOperationCount: 1,
         executeOperationCount: 0,
         disabledOperations: ['only_op'],
+        directOperations: [],
       }),
     ]);
     expect(operationReachability(r, 'g', 'observe', 'only_op')).toEqual({

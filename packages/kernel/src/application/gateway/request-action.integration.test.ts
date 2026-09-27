@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { setAgentProfile } from '../../governance/agent-profile/index.js';
+import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ApprovalDrainer,
   approveActionRequest,
@@ -499,14 +499,17 @@ describe.runIf(DATABASE_URL !== undefined)(
     // `entryScope(...)`, so authorize.ts's Handle-scope check runs for real (the class of gap that
     // let `explain` 403 unnoticed in S2.6: extension tests never enforce Handle scope).
     describe('observe_operation via an entry-scoped Handle caller', () => {
-      function entryHandleCaller(gatekeepers: readonly string[] = [gatekeeperId]): ResolvedCaller {
+      function entryHandleCaller(
+        gatekeepers: readonly string[] = [gatekeeperId],
+        obo: string = ownerId,
+      ): ResolvedCaller {
         const now = Math.floor(Date.now() / 1000);
         return {
           channel: 'handle',
           claims: {
             ws: workspaceId,
             sid: randomUUID(),
-            obo: ownerId,
+            obo,
             scope: entryScope(
               gatekeepers.length > 0 ? { resources: { gatekeeper: [...gatekeepers] } } : {},
             ),
@@ -517,45 +520,151 @@ describe.runIf(DATABASE_URL !== undefined)(
         };
       }
 
-      // Design decision D4 (2026-09-26): observation skips approval, not authorization scope — a
-      // Handle whose `resources.gatekeeper` does not cover the gate is refused, whether the list
-      // names another gate or is absent (a member with no gate Grant at all).
-      it('refuses a Gatekeeper outside the Handle scope (D4), for another gate and for no gate', async () => {
-        for (const caller of [entryHandleCaller([randomUUID()]), entryHandleCaller([])]) {
-          await expect(
-            dispatchCapability({ pool }, caller, 'observe_operation', {
-              gatekeeperId,
-              operation: 'observe.stock',
-              params: {},
-            }),
-          ).rejects.toThrow(/does not cover/);
-        }
-      });
-
-      // D4 on request_action's observe branch: a Worker-shaped Handle (holds request_action) whose
-      // gate scope names a different Gatekeeper cannot observe through this one — the observe path
-      // never reaches governance/policy's coverage check, so the handler checks it itself.
-      it('request_action on an observe-class Operation refuses a Handle whose scope does not cover the gate (D4)', async () => {
+      /** A Worker-shaped Handle: holds `request_action` (and the worker-infrastructure
+       *  `list_allowed_operations`) with a gate scope that does NOT name this test's Gatekeeper. */
+      function workerHandleCaller(obo: string): ResolvedCaller {
         const now = Math.floor(Date.now() / 1000);
-        const uncovered: ResolvedCaller = {
+        return {
           channel: 'handle',
           claims: {
             ws: workspaceId,
             sid: randomUUID(),
-            obo: ownerId,
-            scope: { capabilities: ['request_action'], resources: { gatekeeper: [randomUUID()] } },
+            obo,
+            scope: {
+              capabilities: ['request_action', 'list_allowed_operations'],
+              resources: { gatekeeper: [randomUUID()] },
+            },
             jti: randomUUID(),
             iat: now,
             exp: now + 600,
           },
         };
+      }
+
+      /** How many capability-dispatch audit rows `actor` has for `action` on this Gatekeeper. */
+      async function gateAuditCount(actor: string, action: string): Promise<number> {
+        const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            actorPrincipalId: actor,
+            action,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            limit: 1000,
+          }),
+        );
+        return rows.length;
+      }
+
+      async function listedOperationNames(caller: ResolvedCaller): Promise<string[]> {
+        const result = (await dispatchCapability(
+          { pool },
+          caller,
+          'list_allowed_operations',
+          {},
+        )) as { items: { gatekeeperId: string; name: string }[] };
+        return result.items
+          .filter((item) => item.gatekeeperId === gatekeeperId)
+          .map((item) => item.name)
+          .sort();
+      }
+
+      // Design doc §11 "门上的观察" — decision D4 revoked 2026-09-27 ("只读调用不需要授权"): a Handle
+      // observes a gate its member was never granted, whether its `resources.gatekeeper` names
+      // another gate or is absent. Still audited exactly as before — one `observe_operation` row per
+      // call, actor = the Handle's member.
+      it('observes through a Gatekeeper outside the Handle scope — no Grant needed — and audits it', async () => {
+        for (const caller of [
+          entryHandleCaller([randomUUID()], memberNoGrantId),
+          entryHandleCaller([], memberNoGrantId),
+        ]) {
+          const before = await gateAuditCount(memberNoGrantId, 'observe_operation');
+          const result = (await dispatchCapability({ pool }, caller, 'observe_operation', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          })) as { status: string; observedFactCount: number };
+          expect(result.status).toBe('ok');
+          expect(await gateAuditCount(memberNoGrantId, 'observe_operation')).toBe(before + 1);
+        }
+      });
+
+      // Same rule on request_action's observe branch: a Worker-shaped Handle whose gate scope names
+      // a different Gatekeeper observes through this one (audited as `request_action`) — the
+      // observe path never reaches governance/policy's coverage check and no longer needs it.
+      it('request_action on an observe-class Operation runs for a Handle whose scope does not cover the gate, and is audited', async () => {
+        const before = await gateAuditCount(memberNoGrantId, 'request_action');
+        const result = (await dispatchCapability(
+          { pool },
+          workerHandleCaller(memberNoGrantId),
+          'request_action',
+          { gatekeeperId, operation: 'observe.stock', params: {} },
+        )) as { status: string };
+        expect(result.status).toBe('ok');
+        expect(await gateAuditCount(memberNoGrantId, 'request_action')).toBe(before + 1);
+      });
+
+      // Tool projection agrees with enforcement: the ungranted member's entry Handle is offered the
+      // gate's observe tool (the call above succeeds for it) and none of its execute-class ones; a
+      // Handle whose gate scope carries the Grant still gets the execute ones (unchanged).
+      it('list_allowed_operations projects the ungranted gate’s observe Operations, never its execute ones', async () => {
+        expect(await listedOperationNames(entryHandleCaller([], memberNoGrantId))).toEqual([
+          'observe.stock',
+        ]);
+        expect(await listedOperationNames(workerHandleCaller(memberNoGrantId))).toEqual([
+          'observe.stock',
+        ]);
+        expect(await listedOperationNames(entryHandleCaller([gatekeeperId]))).toEqual(
+          [AUTO_OP.name, OBSERVE_OP.name, PENDING_OP.name].sort(),
+        );
+      });
+
+      // The two conditions that still refuse an observation: the member's own AgentProfile
+      // exclusion and the workspace AgentPolicy gate cap — enforced per call, and the projection
+      // drops the tool for exactly the same member.
+      it('refuses (and does not project) a gate the member excluded on My Agent, on both observe paths', async () => {
+        const excludedMemberId = await adminInsertPrincipal('member-excluded-gate', 'member');
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentProfile(client, workspaceId, excludedMemberId, ownerId, {
+            excludedGatekeepers: [gatekeeperId],
+          }),
+        );
         await expect(
-          dispatchCapability({ pool }, uncovered, 'request_action', {
+          dispatchCapability(
+            { pool },
+            entryHandleCaller([gatekeeperId], excludedMemberId),
+            'observe_operation',
+            { gatekeeperId, operation: 'observe.stock', params: {} },
+          ),
+        ).rejects.toThrow(/excluded_by_profile/);
+        await expect(
+          dispatchCapability({ pool }, workerHandleCaller(excludedMemberId), 'request_action', {
             gatekeeperId,
             operation: 'observe.stock',
             params: {},
           }),
-        ).rejects.toThrow(/does not cover/);
+        ).rejects.toThrow(/excluded_by_profile/);
+        expect(await listedOperationNames(entryHandleCaller([], excludedMemberId))).toEqual([]);
+      });
+
+      it('refuses (and does not project) a gate the workspace AgentPolicy cap leaves out', async () => {
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [randomUUID()] }),
+        );
+        try {
+          await expect(
+            dispatchCapability(
+              { pool },
+              entryHandleCaller([], memberNoGrantId),
+              'observe_operation',
+              { gatekeeperId, operation: 'observe.stock', params: {} },
+            ),
+          ).rejects.toThrow(/excluded_by_policy/);
+          expect(await listedOperationNames(entryHandleCaller([], memberNoGrantId))).toEqual([]);
+        } finally {
+          await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [] }),
+          );
+        }
       });
 
       it('runs a published observe-class Operation and returns its data', async () => {
