@@ -344,8 +344,47 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
       list_workspaces: () => ({ items: [] }),
     });
     renderPage(http);
-    await screen.findByTestId('platform-attention-empty');
+    const empty = await screen.findByTestId('platform-attention-empty');
     expect(screen.queryByTestId('platform-attention-item')).toBeNull();
+    expect(empty.textContent).toContain('没有需要人工处理的事项');
+    // P3-6 V10: one compact line (`kit/empty-state`'s `inline` variant), never the old block/dashed
+    // empty-state card — asserted on the variant's own row layout (no `flex-col`, the block
+    // variant's stacked centred layout) rather than string-matching an implementation class name.
+    expect(empty.className).not.toContain('flex-col');
+    expect(empty.className).not.toContain('text-center');
+  });
+
+  it('P3-6 V10: the seven stat tiles render as grouped Orbit-style icon tiles with labels and values', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const counts = await screen.findByTestId('platform-counts');
+
+    // Grouped under two section labels rather than one flat row of seven equal-weight cards.
+    expect(counts.textContent).toContain('运行');
+    expect(counts.textContent).toContain('资源');
+
+    const tiles: readonly [string, string, string | number][] = [
+      ['platform-count-pending-action-requests', '待处理', 0],
+      ['platform-count-running-tasks', '运行中', 0],
+      ['platform-count-users', '用户', 3],
+      ['platform-count-workspaces', '工作区', 0],
+      ['platform-count-gatekeepers', '门实例', 2],
+      ['platform-count-models', '可用模型', 5],
+    ];
+    for (const [testId, label, value] of tiles) {
+      const tile = screen.getByTestId(testId);
+      expect(tile.textContent).toContain(label);
+      expect(tile.textContent).toContain(String(value));
+      // Every tile carries a small tinted icon (MihomoOrbit reference) — `kit`/`ui` primitives
+      // both render an inline `<svg class="icon">`.
+      expect(tile.querySelector('.platform-tile-icon svg')).not.toBeNull();
+    }
+
+    const freshness = screen.getByTestId('platform-count-graph-freshness');
+    expect(freshness.querySelector('.platform-tile-icon svg')).not.toBeNull();
   });
 
   it('费用（近 30 天）: renders calls, tokens and cost from platform_status', async () => {

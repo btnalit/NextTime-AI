@@ -3,9 +3,10 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import type { WorkspaceOption } from '../../lib/platform-workspaces.js';
+import { Select } from '../kit/select.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
-import { Field, Input, Select } from '../ui/Field.js';
+import { Field, Input, Select as LegacySelect } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -101,24 +102,23 @@ export function UserMembershipsPanel({
 
       <div className="divider" />
 
-      <Field id="um-workspace" label={t('加入工作区', 'Add to a workspace')}>
-        <Select
-          id="um-workspace"
-          value={workspaceChoice}
-          onChange={(event) => setWorkspaceChoice(event.target.value)}
-          disabled={adding}
-        >
-          <option value="">{t('选择工作区', 'Pick a workspace')}</option>
-          {workspaces
-            .filter((workspace) => !held.has(workspace.id))
-            .map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name}
-              </option>
-            ))}
-          <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
-        </Select>
-      </Field>
+      <Select
+        id="um-workspace"
+        label={t('加入工作区', 'Add to a workspace')}
+        value={workspaceChoice}
+        onChange={(event) => setWorkspaceChoice(event.target.value)}
+        disabled={adding}
+      >
+        <option value="">{t('选择工作区', 'Pick a workspace')}</option>
+        {workspaces
+          .filter((workspace) => !held.has(workspace.id))
+          .map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.name}
+            </option>
+          ))}
+        <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
+      </Select>
 
       {workspaceChoice === OTHER_WORKSPACE ? (
         <Field id="um-workspace-id" label={t('工作区 id', 'Workspace id')} required>
@@ -133,7 +133,7 @@ export function UserMembershipsPanel({
       ) : null}
 
       <Field id="um-role" label={t('角色', 'Role')} required>
-        <Select
+        <LegacySelect
           id="um-role"
           value={role}
           onChange={(event) => setRole(event.target.value as Role)}
@@ -144,7 +144,7 @@ export function UserMembershipsPanel({
               {value}
             </option>
           ))}
-        </Select>
+        </LegacySelect>
       </Field>
 
       <PlatformError
@@ -237,7 +237,7 @@ function MembershipRow({
           <label className="field-label" htmlFor={roleFieldId}>
             {t('角色', 'Role')}
           </label>
-          <Select
+          <LegacySelect
             id={roleFieldId}
             value={role}
             onChange={(event) => void saveRole(event.target.value as Role)}
@@ -248,7 +248,7 @@ function MembershipRow({
                 {value}
               </option>
             ))}
-          </Select>
+          </LegacySelect>
           {confirmingRemove ? (
             <>
               <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(false)}>
