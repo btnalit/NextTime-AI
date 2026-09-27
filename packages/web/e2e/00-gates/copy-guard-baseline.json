@@ -8,7 +8,11 @@
   "catalog-operations": {},
   "catalog-procedures": {},
   "catalog-skills": {},
-  "catalog-workers": {},
+  "catalog-workers": {
+    "uuid": {
+      "count": 1
+    }
+  },
   "chats": {},
   "graph": {},
   "login": {},
