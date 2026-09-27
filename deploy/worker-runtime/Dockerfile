@@ -46,12 +46,12 @@
 #     bundled/aliased modules, so it DOES need to resolve from the extension's own
 #     `node_modules`, which `pnpm deploy --prod` (build stage) provides.
 #   - packages/coding-agent/src/core/tools/index.ts: built-in tools are bash/edit/find/grep/ls/
-#     powershell/read/write. entrypoint.sh passes none of `--tools`/`--no-tools`/
-#     `--no-builtin-tools`/`--exclude-tools`, so pi's own default *active* set applies — which is
-#     `read`/`bash`/`edit`/`write` (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4
-#     and 0.87.1, and confirmed by the `toolsAdded` of a real 0.87.1 RPC run), not all eight:
-#     find/grep/ls are reached through `bash` (ripgrep is installed below). Design doc
-#     §7.2/§7.3/§11 "内置工具全开" holds in that sense only.
+#     powershell/read/write; pi's own default *active* set is only `read`/`bash`/`edit`/`write`
+#     (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4 and 0.87.1). Since 2026-09-27
+#     (STATUS leftover 95) entrypoint.sh writes `defaultTools` = read/bash/edit/write/grep/find/ls
+#     into pi's global settings, so every built-in this image can run is active (design doc
+#     §7.2/§7.3/§11 "内置工具全开"); `powershell` stays off (no pwsh here). Never `--tools`: it is
+#     an allowlist over extension tools too and would drop the platform extension's kernel tools.
 #
 # Build context is the repo root: `docker compose build worker-runtime` (docker-compose.yml
 # `worker-runtime` service, profile `build-only` — it exists only to produce the

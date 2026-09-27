@@ -373,7 +373,7 @@
 | 92 | 每日 DB 备份被轮换立刻删除：`backup.sh` 按 `nexttime-*.dump` 的文件名排序保留最新 N 份，发版前手工放进 `backups/db/` 的 `nexttime-pre-<tag>.dump` 排在所有时间戳之后、被当成"最新"，凑满 N 份后每天新 dump 写完即被删；`drill-*.sh` 找"最新 dump"也会拿到这类旧文件。2026-09-25 v0.22.0 应用后核对备份时发现（当时主机 `backups/db/` 里没有任何每日 dump；最近的手工 dump 是几分钟前的全库 dump，无实际数据缺口） | P1 | — | 关闭（2026-09-25：主机手工 dump 移到 `backups/pre-upgrade/`，重跑备份后当日 dump 保留；#301 轮换与演练只认 `nexttime-[0-9]*.dump` / `files-[0-9]*.tgz`，runbook 写明 `backups/db`、`backups/files` 归备份服务） |
 | 93 | 每次发版的镜像构建都不命中依赖安装层的缓存，所有服务全量重新下载 npm 依赖；这台主机的出网经上游网关，并发大量下载时连接被掐断（`UND_ERR_SOCKET`），v0.23.0 应用前两次都卡在 `pnpm install`、第三次才过（单个请求正常）。改法：各 Dockerfile 先只拷 manifest / lockfile 再 `pnpm fetch` / install，源码后拷；或用 BuildKit 的 pnpm store 缓存挂载 | P2 | 控制台重构 P4（原 W7） | 开放 |
 | 94 | web 单测 `ChatPage.test.tsx` 的 W3 自动跟随两例（工具结果原地增长仍滚到底、上翻后 FollowPill 计数）在整套 web 测试高负载时偶发超时，单独跑稳定通过（P3-2 期间两次复现）；与遗留 25 / 40 同型的时序余量问题 | P3 | 控制台重构 P3 余量 | 关闭（2026-09-27：同 #200 的做法——`startRunningTurn` 的两次 `waitFor` 与 `findByText` 给 10s 预算（原为 Testing Library 默认 1s），W3 三例各给 `testTimeout` 15000；断言不变。P3-4 期间整套 web 单测 999/999 通过；若再复现，查 ChatPage 首次渲染本身的耗时） |
-| 95 | pi 默认只激活 read / bash / edit / write 四个内置工具（0.84.4 与 0.87.1 相同，#329 核实），此前文档与镜像注释写的是"内置工具全开"；是否用 `--tools` 打开 grep / find / ls 等其余内置工具是产品决定（影响智能体在容器内查文件的方式与 token 用量） | P3 | 决定 | 待维护者决定 |
+| 95 | pi 默认只激活 read / bash / edit / write 四个内置工具（0.84.4 与 0.87.1 相同，#329 核实），此前文档与镜像注释写的是"内置工具全开"；是否用 `--tools` 打开 grep / find / ls 等其余内置工具是产品决定（影响智能体在容器内查文件的方式与 token 用量） | P3 | 决定 | 已修复，待主机核对（2026-09-27 维护者决定 pi 容器内自身工具不限制、访问其他系统仍经内核治理：入口脚本把 `defaultTools` = read/bash/edit/write/grep/find/ls 合并写入 pi 全局设置；不用 `--tools`——它是覆盖扩展工具的允许清单，会关掉平台扩展的内核工具；powershell 不开，镜像无 pwsh；见 `runbooks/pi-upgrade.md` §2.2） |
 
 ## 5. 更新规则
 

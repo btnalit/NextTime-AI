@@ -23,9 +23,15 @@
 #                                  reads this value as a *file's contents* whenever the path
 #                                  exists, so passing a path here does the same thing a `-file`
 #                                  flag would.
-# No --tools/--no-tools/--no-builtin-tools/--exclude-tools: pi's own default active built-in set
-# applies — read/bash/edit/write (find/grep/ls via bash); see the Dockerfile header (design doc
-# §7.2/§7.3/§11 "内置工具全开").
+# Built-in tools (STATUS leftover 95, maintainer 2026-09-27: "pi agent 本身的权限其实不需要限制的，
+# 主要限制是访问其他系统"): every pi built-in the image can actually run is active — read / bash /
+# edit / write / grep / find / ls. pi's own default active set is only read / bash / edit / write
+# (`core/sdk.js` `defaultActiveToolNames`); the wider set is written as `defaultTools` into pi's
+# global settings below. NOT via `--tools`: that option is an allowlist over *every* tool,
+# extension tools included (`agent-session.js` `_refreshToolRegistry` `isAllowedTool`), so it
+# would switch off the platform extension's kernel tools. `powershell` stays off — no pwsh in
+# this Linux image. Access to other systems is untouched: it is the kernel's (Handles,
+# gatekeepers, approvals). See docs/runbooks/pi-upgrade.md §2.2.
 #
 # Any arguments this container was started with (`docker create ... image [CMD...]`) are appended
 # after the flags above — none of the S1.5 resident-mode spawn spec sets a CMD, so ordinarily
@@ -65,6 +71,32 @@ SYSTEM_PROMPT_FILE="/workspace/.nexttime/system-prompt.md"
 EXTENSION_ENTRY="/opt/nexttime/platform-extension/dist/index.js"
 
 mkdir -p "$SESSION_DIR" "$AGENT_DIR" "/workspace/.nexttime" "/workspace/.local"
+
+# pi's global settings live at <agentDir>/settings.json — `/workspace/.pi/agent` for both modes
+# (entry: PI_CODING_AGENT_DIR; task: HOME=/workspace, pi's default). Merged, never overwritten:
+# pi and the agent may keep their own settings there. An unreadable file is left alone (pi then
+# falls back to its default four tools) rather than failing the container.
+node -e '
+const fs = require("fs");
+const file = process.argv[1];
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch (err) {
+  if (err.code !== "ENOENT") {
+    console.log("nexttime-selfcheck check=pi_default_tools result=warn reason=settings_unreadable");
+    process.exit(0);
+  }
+}
+settings.defaultTools = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+try {
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+} catch {
+  console.log("nexttime-selfcheck check=pi_default_tools result=warn reason=settings_unwritable");
+  process.exit(0);
+}
+console.log("nexttime-selfcheck check=pi_default_tools result=ok tools=" + settings.defaultTools.join(","));
+' "$AGENT_DIR/settings.json"
 
 # S1 stopgap default (design doc §7.2: "--system-prompt 来自该用户入口 WorkerDefinition 的已发布
 # 版本" — WorkerDefinition-driven prompts land in S2.6; until then every entry container gets
