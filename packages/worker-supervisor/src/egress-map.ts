@@ -29,6 +29,10 @@ export interface SourceMapEntry {
   readonly sourceId: string;
   readonly allow?: readonly string[];
   readonly deny?: readonly string[];
+  /** Leftover 87, optional: a Worker container's inherited correlation id — egress-proxy writes it
+   *  into its log line for every request from this source (an older egress-proxy strips it). Set
+   *  for Task containers only: a resident entry container serves many Turns, so no one id fits. */
+  readonly correlationId?: string;
 }
 
 export type SourceMapFile = Record<string, SourceMapEntry>;

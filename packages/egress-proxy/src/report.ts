@@ -32,6 +32,13 @@ export interface EgressObservation {
   observedAt: string;
 }
 
+/** Per-observation context that is logged but never sent to the kernel (leftover 87). */
+export interface EgressObservationContext {
+  /** The source's correlation id (a Worker's inherited id) — in the log line only; the
+   *  `/internal/egress` wire shape (`EgressObserved`) is unchanged. */
+  readonly correlationId?: string;
+}
+
 export interface EgressReporterOptions {
   /** `KERNEL_URL`; when unset the reporter only logs to stdout and never queues/POSTs. */
   kernelUrl?: string;
@@ -81,8 +88,14 @@ export class EgressReporter {
     this.log = options.log ?? ((line) => console.log(line));
   }
 
-  record(observation: EgressObservation): void {
-    this.log(JSON.stringify(observation));
+  record(observation: EgressObservation, context: EgressObservationContext = {}): void {
+    this.log(
+      JSON.stringify(
+        context.correlationId !== undefined
+          ? { ...observation, correlationId: context.correlationId }
+          : observation,
+      ),
+    );
     if (!this.kernelUrl) return;
     if (this.queue.length >= this.maxQueueSize) {
       this.queue.shift();

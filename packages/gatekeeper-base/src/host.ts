@@ -5,6 +5,7 @@ import type { GateHostedDefinitionWire, Operation } from '@nexttime/shared';
 import {
   GATE_SHARED_CREDENTIAL_SLOT,
   GateHostedDefinitionWireSchema,
+  PROMETHEUS_TEXT_CONTENT_TYPE,
   importHandlePublicKey,
   internalAuthorizationHeader,
   verifyGateHostToken,
@@ -24,7 +25,8 @@ import { JsonFileIdempotencyStore } from './idempotency-store.js';
 import { HttpTransport, McpTransport, importMcpTools, importOpenApi } from './kinds/index.js';
 import type { OpenApiDocumentLike } from './kinds/index.js';
 import type { Transport } from './kinds/types.js';
-import { type GateRouteContext, registerGateRoutes } from './server.js';
+import { createGateMetrics } from './metrics.js';
+import { type GateRouteContext, gateRequestId, registerGateRoutes } from './server.js';
 import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tls.js';
 
 /**
@@ -199,8 +201,11 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
   const guard = createGateAuthGuard(gateToken);
 
   // ---- server -----------------------------------------------------------------------------
-  const app = Fastify({ logger: false });
+  // Leftover 87: request id = the kernel's correlation id (`gateRequestId`); the Fastify logger
+  // stays off here — each `/gate/*` call is logged through `log` below instead.
+  const app = Fastify({ logger: false, genReqId: gateRequestId });
   const forcedSlot = new WeakMap<FastifyRequest, string>();
+  const metrics = createGateMetrics();
 
   // Route classes are decided by the *registered* route pattern (`routeOptions.url`, fixed at
   // registration), never by anything the request carries. Two classes, two credentials:
@@ -260,6 +265,11 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
 
   registerGateRoutes(app, {
     prefix: HOST_ROUTE_PREFIX,
+    metrics,
+    logCall: (request, fields) =>
+      log(
+        JSON.stringify({ level: 'info', msg: 'gate call', correlationId: request.id, ...fields }),
+      ),
     resolve: (request): GateRouteContext | undefined => {
       const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
       const instance = gateId ? table.get(gateId) : undefined;
@@ -271,6 +281,14 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         ...(forced !== undefined ? { forcedOnBehalfOf: forced } : {}),
       };
     },
+  });
+
+  // Leftover 87: gate_token, like every kernel-facing `/i/*` route. caddy's `/gate-host/*`
+  // passthrough also 404s `/gate-host/internal/*` (deploy/caddy/Caddyfile) — never public.
+  app.get('/internal/metrics', async (request, reply) => {
+    if (!guard.evaluate(request)) return unauthorized(reply);
+    reply.header('content-type', PROMETHEUS_TEXT_CONTENT_TYPE);
+    return metrics.render();
   });
 
   app.get('/healthz', async () => ({

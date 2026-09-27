@@ -124,6 +124,9 @@ function createFakeContainerIoClient() {
 function createFakeSupervisorClient() {
   const spawnCalls: SpawnInput[] = [];
   const touchCalls: string[] = [];
+  /** Leftover 87: the `x-correlation-id` each spawn / touch was made under. */
+  const spawnCorrelationIds: Array<string | undefined> = [];
+  const touchCorrelationIds: Array<string | undefined> = [];
   let spawnResult: SpawnResult = {
     containerId: 'c1',
     ip: '100.64.0.2',
@@ -139,8 +142,9 @@ function createFakeSupervisorClient() {
   let spawnInterceptor: ((input: SpawnInput) => Promise<void> | void) | undefined;
 
   const client: SupervisorClientPort = {
-    async spawn(input: SpawnInput): Promise<SpawnResult> {
+    async spawn(input: SpawnInput, options?: { correlationId?: string }): Promise<SpawnResult> {
       spawnCalls.push(input);
+      spawnCorrelationIds.push(options?.correlationId);
       if (spawnError) throw spawnError;
       if (spawnInterceptor) await spawnInterceptor(input);
       return spawnResult;
@@ -149,8 +153,9 @@ function createFakeSupervisorClient() {
     async status(): Promise<ResidentStatus | undefined> {
       return undefined;
     },
-    async touch(principalId: string): Promise<boolean> {
+    async touch(principalId: string, options?: { correlationId?: string }): Promise<boolean> {
       touchCalls.push(principalId);
+      touchCorrelationIds.push(options?.correlationId);
       if (touchError) throw touchError;
       return true;
     },
@@ -160,6 +165,8 @@ function createFakeSupervisorClient() {
     client,
     spawnCalls,
     touchCalls,
+    spawnCorrelationIds,
+    touchCorrelationIds,
     setSpawnResult: (result: SpawnResult) => {
       spawnResult = result;
     },
@@ -251,6 +258,9 @@ describe('createHost — handleStartTurn happy path', () => {
       },
     ]);
     expect(supervisor.touchCalls).toEqual([cmd.principalId]);
+    // Leftover 87: both supervisor calls are made under the Turn's id as correlation id.
+    expect(supervisor.spawnCorrelationIds).toEqual([cmd.turnId]);
+    expect(supervisor.touchCorrelationIds).toEqual([cmd.turnId]);
     expect(containerIo.attachCalls).toEqual(['c1']);
 
     // The session switch comes first and alone — the prompt waits for pi's answer to it.

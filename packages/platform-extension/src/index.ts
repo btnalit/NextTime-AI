@@ -1,5 +1,10 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { EXTENSION_MODE_VALUES, ExtensionModeSchema } from '@nexttime/shared';
+import {
+  CORRELATION_ID_ENV,
+  CORRELATION_ID_HEADER,
+  EXTENSION_MODE_VALUES,
+  ExtensionModeSchema,
+} from '@nexttime/shared';
 import { KernelClient } from './kernel-client.js';
 import { registerEntryMode } from './modes/entry.js';
 import { registerInteractiveMode } from './modes/interactive.js';
@@ -31,6 +36,21 @@ function readRequiredEnv(name: string): string {
     );
   }
   return value;
+}
+
+/**
+ * Leftover 87: the LLM hop. pi (0.87+) lets an extension add headers to every provider request
+ * (`before_provider_headers`, mutated in place), so the entry / Worker container's model calls to
+ * llm-proxy carry the same `x-correlation-id` as its kernel calls (the current Turn id / the
+ * inherited Worker id). Only in entry and worker mode, whose only providers are the platform's
+ * llm-proxy (models.json); llm-proxy strips the header before anything goes upstream. Never in
+ * interactive mode — there the provider may be a third party.
+ */
+export function forwardCorrelationIdToLlmProxy(pi: ExtensionAPI, kernelClient: KernelClient): void {
+  pi.on('before_provider_headers', (event) => {
+    const correlationId = kernelClient.getCorrelationId();
+    if (correlationId !== undefined) event.headers[CORRELATION_ID_HEADER] = correlationId;
+  });
 }
 
 /** pi extension default export (docs/extensions.md "Quick Start"): `pi -e platform-extension`
@@ -65,6 +85,10 @@ export default function platformExtension(pi: ExtensionAPI): void {
     // alongside KERNEL_URL/CAPABILITY_HANDLE/WORKSPACE_ID — see that package's own env-var
     // contract; this mode never runs without them.
     const taskId = readRequiredEnv('TASK_ID');
+    // Leftover 87: a Worker run inherits its delegating call's correlation id (worker-supervisor
+    // sets NEXTTIME_CORRELATION_ID); optional — an older supervisor sets none and the kernel mints.
+    kernelClient.setCorrelationId(process.env[CORRELATION_ID_ENV]);
+    forwardCorrelationIdToLlmProxy(pi, kernelClient);
     registerWorkerMode(pi, { kernelClient, workspaceId, taskId });
     return;
   }
@@ -74,5 +98,6 @@ export default function platformExtension(pi: ExtensionAPI): void {
   // one via the RPC `prompt` payload's leading marker line.
   const initialTurnId = process.env.NEXTTIME_TURN_ID || undefined;
 
+  forwardCorrelationIdToLlmProxy(pi, kernelClient);
   registerEntryMode(pi, { kernelClient, workspaceId, initialTurnId });
 }

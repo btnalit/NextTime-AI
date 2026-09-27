@@ -86,11 +86,15 @@ services:
     # NEXTTIME_SUBNET_WORKERS（fix/internal-plane-auth）：internal-auth 的 Worker 子网拒绝规则——
     # 即使 token 正确，来自这个子网的 internal 请求也 401（Worker 容器绝不应持有这个 token）；与
     # egress-proxy 拿到的是同一个值（networks 块下方 workers 网络的子网）。
+    # FAKE_INVOKE_WORKER（STATUS leftover 83，测试专用）：为空（默认）时行为与此前完全一致——只有
+    # deploy/ci/env.ci.template 把它设成 "1"，且只在 AGENT_RUNTIME=fake 且已配置 Handle 签名密钥时才
+    # 生效（packages/kernel/src/index.ts main() 的三重门槛）；生产 .env 从不设置这个变量。
     environment:
       {
         AGENT_RUNTIME: "${AGENT_RUNTIME:-agent-host}",
         KERNEL_LLM_URL: http://llm-proxy:8082,
         SUPERVISOR_URL: http://worker-supervisor:8081,
+        FAKE_INVOKE_WORKER: "${FAKE_INVOKE_WORKER:-}",
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
         INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
         # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —

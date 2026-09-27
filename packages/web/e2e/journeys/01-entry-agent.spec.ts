@@ -20,9 +20,10 @@ import {
  *      已经做完，这里只做"本工作区自己的启用"（workspace-scope `enable_gate_instance`）。
  *   2. 在 系统与授权 把这个门授权给自己（新建工作区的 owner——入口 agent 以 owner 的身份委派）。
  *   3. 在 能力目录 · Worker "从模板创建（ops-runner）"，勾选这个门，保存草稿、发布。
- *   4. 在 对话 新建一个对话，给入口 agent 发一条消息。
- *   5. 观察回复；见下方"今天为什么走不到「委派」"——第 5 步在 CI 的 fake 栈上只能观察到入口 agent
- *      的（假）回复本身，不能观察到 invoke_worker 或一个 Task。
+ *   4. 在 对话 新建一个对话，给入口 agent 发一条消息，观察（假）回显回复——证明对话本身是通的。
+ *   5. STATUS 遗留 83（2026-09-27 收口）：再发一条带 CI 专用委派标记的消息，脚本化地代表入口 agent
+ *      "决定调用 invoke_worker"这一步，真正走一次内核的 `invoke_worker` 核心路径；在 任务 页确认
+ *      这次委派创建的 Task 到达 completed 终态。见下方"委派现在为什么能在这里验证"。
  *
  * 状态覆盖:
  *   - 空: 用 `createFreshWorkspace` 建一个全新工作区（不是每个 spec 共用、会不断累积状态的
@@ -55,11 +56,15 @@ import {
  * 成功判据:
  *   - 从一个全新工作区、不碰 SQL/CLI，一个人凭页面上的信息能把"系统与授权（接入 → 授权）→ 发布
  *     Worker"走完，并在 对话 里发出一条消息、看到入口 agent 的回复。
- *   - 这条旅程测的不是"委派真的执行了"（见下），而是"委派的三个前置条件——门已启用、已授权给
- *     会说话的这个 owner、Worker 已发布——全部可以只凭 UI 完成"，加上"对话本身是通的"；发布 Worker
- *     后 `execution_readiness` 自己也认为"已就绪"（`execution-readiness-ready`，`对话` 页）、能力
- *     目录页自己那份 `ExecutionReadinessCard` 的 missing 列表也随之清空——见下方"执行就绪为什么在
- *     这里会变 ready"关于 `computeChildHandleScope` 的说明。
+ *   - "委派的三个前置条件——门已启用、已授权给会说话的这个 owner、Worker 已发布——全部可以只凭 UI
+ *     完成"，加上"对话本身是通的"；发布 Worker 后 `execution_readiness` 自己也认为"已就绪"
+ *     （`execution-readiness-ready`，`对话` 页）、能力目录页自己那份 `ExecutionReadinessCard` 的
+ *     missing 列表也随之清空——见下方"执行就绪为什么在这里会变 ready"关于 `computeChildHandleScope`
+ *     的说明。
+ *   - STATUS 遗留 83 起，进一步验证"委派本身"：一次真实的 `invoke_worker` 调用创建 Task、按
+ *     WorkerDefinition 的声明衰减铸造 Handle、一个（脚本化的）Worker 通过 `report_task_result`
+ *     报告结果契约、Task 到达 completed 终态并在 任务 页可见——见下方"委派现在为什么能在这里验证"
+ *     说清楚这条链路哪一段是真的、哪一段仍然是脚本触发的。
  *
  * 执行就绪为什么在这里会变 ready（读 `packages/kernel/src/application/gateway/
  * execution-readiness-handler.ts` + `application/task/handle-mint.ts` 后的结论）：
@@ -76,25 +81,31 @@ import {
  *   所以观察不到"发布了但没授权仍然 ready"这一半。这是从源码读出的真实结论，不是猜测——旅程的断言
  *   顺序（先授权、后发布）不会因此产生假阳性。
  *
- * 今天为什么走不到"委派"（比"Worker 容器起不来"更早一层的原因，读代码后的结论，不是猜测）：
- *   `.github/workflows/e2e.yml` 给这个 job 的是 `AGENT_RUNTIME=fake`（`deploy/ci/env.ci.
- *   template`）。`packages/kernel/src/application/host-bridge/fake-runtime.ts`
- *   （`FakeAgentRuntime.run`）对每一个 Turn 做的事只是把 prompt 原样回显（`echo: <prompt>`）——
- *   它完全不调用任何 LLM、不产生任何 `tool_calls`，`deploy/fake-llm/server.mjs` 的 S2.12
- *   `SCENARIOS`（`scripts/accept_s2.sh` 用来驱动 `invoke_worker`/`report_result` 的脚本化场景）
- *   在这个 job 里从来不会被触达——这个 job 唯一调用 fake-llm 的地方是一次性的 `llm-proxy
- *   gen-models.js`（生成 `models.json` 给模型选择器用），不是聊天路径。`docker-compose.ci.yml`/
- *   `env.ci.template` 自己的注释也直说：这就是"只需要三个常驻容器"的原因——
- *   agent-host/worker-supervisor/docker-socket-proxy/egress-proxy 在这个 job 里都不存在。也就是
- *   说，不是"Worker 容器起不来"（更下游的一层原因），而是"入口 agent 在这个 CI 栈上永远不会真的
- *   调用任何工具，包括 `invoke_worker`"——`chat.spec.ts` 自己的断言（回复严格等于
- *   `echo: <!--nexttime:turn_id=...-->\n<prompt>`）就是这件事的直接证据。给 fake-llm 加一个
- *   `invoke_worker` 脚本化场景不会让这条路走通（这个 job 从不请求它），所以本旅程没有加——加了是
- *   死代码，会误导下一个读这个文件的人以为"对话"这一步已经在验证委派。真正验证 `invoke_worker` →
- *   Worker → 结果这条链路的是 `scripts/accept_s2.sh`（`AGENT_RUNTIME=agent-host`，真实
- *   agent-host/pi/worker-supervisor），不是这个 Playwright 套件；`docs/runbooks/web-console.md`
- *   "CI（Playwright）"一节记录了同一个事实。要让这一步在这里也能验证，需要的是把这个 job 换成
- *   （或新增一个）`AGENT_RUNTIME=agent-host` 的栈，而不是给 fake-llm 加场景。
+ * 委派现在为什么能在这里验证（STATUS 遗留 83，读代码后的结论，不是猜测）：
+ *   `.github/workflows/e2e.yml` 给这个 job 的仍是 `AGENT_RUNTIME=fake`——入口 agent 的每一轮仍然是
+ *   `packages/kernel/src/application/host-bridge/fake-runtime.ts`（`FakeAgentRuntime.run`）在内核
+ *   进程内原样回显，不调用任何真实 LLM。这一步没有变；变的是 `FakeAgentRuntime` 新增了一个可选的
+ *   `onDelegate` 钩子（`FAKE_DELEGATE_MARKER` 常量，见 fake-runtime.ts 自己的文档注释）：当且仅当
+ *   prompt 里含有这个专用标记时，不再回显，而是脚本化地代表"入口 agent 决定调用 invoke_worker"这
+ *   一个决策点，直接调用内核 `application/task` 的真实 `invokeWorker`（同一份 `invoke.integration.
+ *   test.ts` 已经在用的核心函数）——`packages/kernel/src/fake-invoke-worker.ts`（这个组合根专用的
+ *   胶水文件，不在任何分层目录下，`index.ts` 是唯一的调用方）把它接上，并把 `TaskSupervisorClientPort`
+ *   换成 `FakeTaskSupervisorClient`：它的 `spawn()` 立刻返回一个假容器 id（同真实 spawn 一样快），
+ *   随后异步地代表这个"Worker"，用刚为它铸造的 Capability Handle，真实调用一次
+ *   `report_task_result`——走 `resolveCaller` + `dispatchCapability` 这条内核真实的校验 + 分派管
+ *   线，同一个真实 Worker 的第一次回调会走的代码完全一样。从这一步往后——Task 创建、Handle 按
+ *   WorkerDefinition 的声明衰减铸造、Task 到达 completed 终态、在 任务 页可见——全部是内核的真实生
+ *   产代码路径；唯一被脚本代替的，是"要不要调用 invoke_worker"这一个决策本身（真实场景里由 LLM 的
+ *   工具调用做出）。双重开关，生产环境不受影响：`FAKE_INVOKE_WORKER=1`（只有 `deploy/ci/
+ *   env.ci.template` 设置，真实部署的 `.env` 从不设置；`docker-compose.yml` 默认值为空字符串）且
+ *   `AGENT_RUNTIME=fake`（生产默认 `agent-host`）。
+ *
+ *   仍然验证不到、仍需一个真实 `AGENT_RUNTIME=agent-host` 栈的部分：一个真实模型自己"决定"调用
+ *   invoke_worker（这一步的判断本身，而不是判断之后内核怎么处理），以及一个真实 Worker 容器的完整
+ *   生命周期（起容器、跑 pi、真实产出结果，而不是脚本直接报一个结果契约）。那条链路仍然是
+ *   `scripts/accept_s2.sh`（真实 agent-host/pi/worker-supervisor）与维护者在主机上的手工验收职责，
+ *   `docs/runbooks/web-console.md`"CI（Playwright）"一节同步记录了这个边界——本旅程的这一步不假装
+ *   验证了那两件事。
  */
 
 const GATE_ID = 'ci-fixture-mcp';
@@ -102,6 +113,14 @@ const GATE_DISPLAY_NAME = 'CI fixture MCP';
 const OBSERVE_OP = 'list_things';
 const EXECUTE_OP = 'restart_thing';
 const WORKER_TEMPLATE_NAME = 'ops-runner';
+
+// STATUS leftover 83: the exact literal `packages/kernel/src/application/host-bridge/
+// fake-runtime.ts` matches `input.prompt` against — trigger its scripted `onDelegate` path
+// instead of echoing when found — see that file's own doc comment and this spec's own header
+// comment ("委派现在为什么能在这里验证"). A plain string, not imported cross-package (kernel
+// internals are not this package's dependency) — kept as one named constant so a reader
+// searching this literal finds both sides of the contract.
+const FAKE_DELEGATE_MARKER = '__nexttime_fake_delegate__';
 
 // The exact zh cause text `readiness-copy.ts`'s `missingCauseText` renders for each code — asserted
 // on directly (never the raw `code`, per this lane's own dispatch instruction and the component's
@@ -269,7 +288,7 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
       page.getByTestId('catalog-list').getByText(WORKER_TEMPLATE_NAME, { exact: true }),
     ).toBeVisible();
 
-    // --- 4/5. 对话: 发一条消息，看入口 agent 的回复（不是委派——见本文件顶部说明） --------------
+    // --- 4. 对话: 发一条消息，看入口 agent 的（假）回显回复——证明对话本身是通的 -------------------
     await goToByLabel(page, '对话');
     await page.locator('header').getByRole('button', { name: '新对话' }).click();
     await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
@@ -280,12 +299,34 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,
     });
-    // fake runtime 的回显，不是委派的结果——见本文件顶部"今天为什么走不到「委派」"。
+    // fake runtime 的原样回显——本步骤只证明对话本身是通的，不是委派（下一步才是）。
     const expectedReply = new RegExp(
       `^echo: <!--nexttime:turn_id=[^>]+-->\\n${escapeRegExp(prompt)}$`,
     );
     await expect(page.locator('.message-user .message-text')).toHaveText(prompt);
     await expect(page.locator('.message-assistant .message-text')).toHaveText(expectedReply);
+
+    // --- 5. 对话: 用 CI 专用委派标记，真正跑一次 invoke_worker（STATUS 遗留 83）------------------
+    // 见本文件顶部"委派现在为什么能在这里验证"：这条消息触发 FakeAgentRuntime 的 onDelegate 钩子，
+    // 脚本化地代表入口 agent"决定调用 invoke_worker"，往后 Task 创建/Handle 铸造/report_task_result/
+    // Task 终态全是内核真实生产代码路径。同一个对话里发第二条消息——第一轮已经 completed，不会撞
+    // TurnAlreadyRunningError。
+    const delegatePrompt = `${FAKE_DELEGATE_MARKER} 委派给 ${WORKER_TEMPLATE_NAME} 重启测试容器`;
+    await page.getByPlaceholder('输入消息…').fill(delegatePrompt);
+    await page.getByRole('button', { name: '发送' }).click();
+    await expect(page.locator('.turn-badge[data-status="completed"]').last()).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // --- 任务: 这次委派创建的 Task 在 任务 页可见，且到达 completed 终态 ------------------------
+    await goToByLabel(page, '任务');
+    const taskRow = page.getByTestId('task-row').first();
+    await expect(taskRow).toBeVisible({ timeout: 15_000 });
+    await expect(taskRow.locator('[data-status]').first()).toHaveAttribute(
+      'data-status',
+      'completed',
+      { timeout: 20_000 },
+    );
 
     // --- 最强的诚实收尾: 委派的三个前置条件——启用/授权/已发布 Worker——全部可凭 UI 确认 ---------
     // 回到对话列表（离开当前这个具体对话的详情页）重新挂载一次，读一次新鲜的 execution_readiness——

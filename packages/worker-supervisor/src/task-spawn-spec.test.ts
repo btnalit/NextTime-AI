@@ -219,3 +219,30 @@ describe('buildTaskSpawnSpec', () => {
     expect(custom.image).toBe('some-other-allowlisted-image');
   });
 });
+
+// Leftover 87: the inherited correlation id joins the env allowlist only when given and valid.
+describe('buildTaskSpawnSpec — correlation id', () => {
+  const base = {
+    config,
+    taskId: 'task-1',
+    workerRunId: 'run-1',
+    workspaceId: 'ws-1',
+    capabilityHandle: 'the-worker-handle-jwt',
+    image: 'nexttime-ai-worker-runtime',
+    networkName: 'nexttime-ai_workers',
+  };
+
+  it('adds NEXTTIME_CORRELATION_ID and the correlation label for a valid id', () => {
+    const spec = buildTaskSpawnSpec({ ...base, correlationId: 'turn-0000-1111' });
+    expect(spec.env).toContain('NEXTTIME_CORRELATION_ID=turn-0000-1111');
+    expect(spec.labels['nexttime.correlation-id']).toBe('turn-0000-1111');
+  });
+
+  it('adds neither for a missing or invalid id', () => {
+    for (const correlationId of [undefined, 'x', 'has space in it']) {
+      const spec = buildTaskSpawnSpec({ ...base, correlationId });
+      expect(spec.env.some((e) => e.startsWith('NEXTTIME_CORRELATION_ID='))).toBe(false);
+      expect('nexttime.correlation-id' in spec.labels).toBe(false);
+    }
+  });
+});

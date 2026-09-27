@@ -62,6 +62,7 @@
 | [`host-accept-s4.md`](./host-accept-s4.md) | S4 验收脚本 `scripts/accept_s4.sh`：每个已接入的平台门实例，走真实内核路径做一次只读调用，比对"执行就绪"读模型与实际门禁（连接器 Operation 禁用名单）是否一致——不发聊天 Turn、不需要 LLM |
 | [`host-accept-real-model.md`](./host-accept-real-model.md) | `accept_s2.sh` / `accept_s3.sh --real <provider/model> --runs N`：真实模型自己选工具、按结果判定的五个场景与数字怎么读；每次发版后 `--runs 10` 例行回归七步、`scripts/report-usage.sh` 汇总 token / 费用、`docs/private/real-model-<date>.md` 模板 |
 | [`host-chaos.md`](./host-chaos.md) | 不变量监控（I1–I16 定时校验、`/internal/metrics`）与混沌演练脚本：杀 Worker 容器验证 Task 重试、杀入口容器验证自愈重建 |
+| [`observability.md`](./observability.md) | 跨服务关联 ID（一轮对话 = Turn id，逐跳怎么带、怎么按一个 ID grep 所有服务日志与审计）与各服务 `/internal/metrics` 的读法（遗留 87） |
 
 四份验收脚本 runbook 既是"怎么跑验收"的操作手册，也是理解"平台在这一层应该长什么样"的参照——
 `troubleshoot-task.md` 的诊断流程大量引用它们记录过的真实命令与已知偏离。

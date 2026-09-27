@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import platformExtension, { VERSION } from './index.js';
+import { startFakeKernel } from './test-support/fake-kernel.js';
 
 /**
  * Env-driven activation contract (S1.6 deliverable): `NEXTTIME_MODE` gates everything else. These
@@ -37,6 +38,7 @@ const ENV_KEYS = [
     ...Object.keys(REQUIRED_WORKER_ENV),
     ...Object.keys(REQUIRED_INTERACTIVE_ENV),
     'NEXTTIME_TURN_ID',
+    'NEXTTIME_CORRELATION_ID',
   ]),
 ] as const;
 
@@ -151,6 +153,54 @@ describe('platformExtension() activation', () => {
     expect(subscribedEvents).toEqual(
       expect.arrayContaining(['session_start', 'context', 'agent_end', 'agent_settled']),
     );
+  });
+
+  // Leftover 87: a Worker run's kernel calls carry the id it inherited from its delegating call.
+  it('worker mode sends NEXTTIME_CORRELATION_ID as x-correlation-id on its kernel calls', async () => {
+    const kernel = await startFakeKernel();
+    try {
+      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+      for (const [key, value] of Object.entries(REQUIRED_WORKER_ENV)) process.env[key] = value;
+      process.env.KERNEL_URL = kernel.url;
+      process.env.NEXTTIME_CORRELATION_ID = '7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2';
+      const pi = { ...fakePi(), sendUserMessage: vi.fn() } as unknown as ExtensionAPI;
+      platformExtension(pi);
+      const sessionStart = vi
+        .mocked(pi.on)
+        .mock.calls.find(([event]) => (event as string) === 'session_start')?.[1] as
+        | ((event: unknown, ctx: unknown) => Promise<void>)
+        | undefined;
+      await sessionStart?.({}, { hasUI: false, ui: { notify: vi.fn() } });
+      expect(kernel.requests.map((r) => r.correlationId)).toEqual([
+        '7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2',
+      ]);
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  // Leftover 87: the LLM hop — entry / worker model calls carry the correlation id to llm-proxy;
+  // interactive mode (possibly a third-party provider) never adds it.
+  it('entry mode adds the current Turn id to provider request headers; interactive mode does not subscribe', () => {
+    for (const [key, value] of Object.entries(REQUIRED_ENTRY_ENV)) process.env[key] = value;
+    process.env.NEXTTIME_TURN_ID = '7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2';
+    const pi = fakePi();
+    platformExtension(pi);
+    const handler = vi
+      .mocked(pi.on)
+      .mock.calls.find(([event]) => (event as string) === 'before_provider_headers')?.[1] as
+      | ((event: { headers: Record<string, string | null> }) => void)
+      | undefined;
+    const headers: Record<string, string | null> = { authorization: 'Bearer x' };
+    handler?.({ headers });
+    expect(headers['x-correlation-id']).toBe('7f0c7c1e-8a44-4b6b-9f59-1b7bbcf0a3d2');
+
+    for (const key of ENV_KEYS) delete process.env[key];
+    for (const [key, value] of Object.entries(REQUIRED_INTERACTIVE_ENV)) process.env[key] = value;
+    const interactivePi = fakePi();
+    platformExtension(interactivePi);
+    const events = vi.mocked(interactivePi.on).mock.calls.map(([event]) => event as string);
+    expect(events).not.toContain('before_provider_headers');
   });
 
   for (const missing of ['KERNEL_URL', 'CAPABILITY_HANDLE'] as const) {

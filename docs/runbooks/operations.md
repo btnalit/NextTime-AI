@@ -15,7 +15,9 @@
 用 Fastify 自带的请求日志，`logger: true`；其余服务多数是零散 `console.log`/`console.error`）。
 `invariant-checks.ts` 定时校验（development-tasks.md S3.8）**已实现**（`GET /internal/metrics`，
 Prometheus 文本格式——见 `docs/runbooks/host-chaos.md` §5），是当前唯一产出真正 Prometheus 格式
-指标的模块，规模仅限 I1–I16 违反计数，不覆盖上面这几项业务指标。本文档记录的是**能用的现状**：
+指标的模块，规模仅限 I1–I16 违反计数，不覆盖上面这几项业务指标。（遗留 87 之后：agent-host /
+worker-supervisor / llm-proxy / egress-proxy / 门也各有一个小的 `/internal/metrics`，各服务日志带同一个
+`correlationId`，一次委派可按 Turn id 串起来——读法见 `docs/runbooks/observability.md`。）本文档记录的是**能用的现状**：
 `docker compose logs`、`/internal/metrics`、`audit_records` 表、`tasks`/`worker_runs`/
 `action_requests` 表——不是 §12 描述的目标形态。
 
