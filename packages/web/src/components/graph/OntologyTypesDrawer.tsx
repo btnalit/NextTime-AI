@@ -710,11 +710,7 @@ function ProposalDetailBody({
           {t('与当前已发布类型的差异', 'Diff against currently visible types')}
         </h3>
         {types.state.status === 'loading' ? (
-          <SkeletonRows
-            count={2}
-            label="Loading types"
-            testId="graph-proposal-diff-loading"
-          />
+          <SkeletonRows count={2} label="Loading types" testId="graph-proposal-diff-loading" />
         ) : types.state.status === 'error' ? (
           <ErrorBanner
             error={types.state.error}
