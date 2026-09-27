@@ -21,11 +21,12 @@ import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
+import { Select } from '../kit/select.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Input, Select } from '../ui/Field.js';
+import { Field, Input } from '../ui/Field.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
@@ -206,17 +207,16 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
         onSubmit={handleFilterSubmit}
         data-testid="platform-users-filter-form"
       >
-        <Field id="platform-users-status" label={t('状态', 'Status')}>
-          <Select
-            id="platform-users-status"
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-          >
-            <option value="all">{t('全部', 'All')}</option>
-            <option value="active">{t('活跃', 'Active')}</option>
-            <option value="disabled">{t('已停用', 'Disabled')}</option>
-          </Select>
-        </Field>
+        <Select
+          id="platform-users-status"
+          label={t('状态', 'Status')}
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+        >
+          <option value="all">{t('全部', 'All')}</option>
+          <option value="active">{t('活跃', 'Active')}</option>
+          <option value="disabled">{t('已停用', 'Disabled')}</option>
+        </Select>
         <Field
           id="platform-users-query"
           label={t('搜索', 'Search')}

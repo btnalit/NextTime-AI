@@ -139,7 +139,7 @@ PASS connect-mcp-create gatekeeperId=<uuid> (imported both fixture tools from ma
 PASS connect-mcp-find-operations-pre-publish find_operations('accept_s2_mcp') misses before publish_manifest, as required
 PASS connect-mcp-publish mcp manifest published
 PASS connect-mcp-find-operations-post-publish find_operations('accept_s2_mcp') sees both fixture tools after publish_manifest (2 result(s))
-PASS cleanup stopped alice/bob entry containers, tore down the accept-s2 profile; workspace retained: <uuid>
+PASS cleanup reclaimed alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: <uuid>
 
 S2 OK
 ```
@@ -194,7 +194,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   结果，而不是脚本预先猜的 id）`invoke_worker({definitionId, version, input, wait:false})` → 提到
   `taskId` 的收尾文本；`accept_s2_api_stock_get({})` →回显它的**真实**返回数据的收尾文本。
 
-  gate 工具的注册时机是 `session_start`，只读一次 `list_allowed_operations`——它的执行类部分只列出
+  gate 工具在 `session_start` 首次投射，此后每条用户消息开始时（`before_agent_start`）重读一次
+  `list_allowed_operations`（收尾波次 C3，`pi-upgrade.md` §2.3）——它的执行类部分只列出
   entry Handle **签发那一刻**的 `resources.gatekeeper` 已经覆盖的门（来自 `connect_gatekeeper` Grant）；
   观察类部分自 2026-09-27 起不看授权（设计文档 §11"门上的观察"），本工作区启用的门都会列出。
   本脚本的 `connections_step`（三个 `connect_gatekeeper` 调用）本来就排在 `step2_docker_restart`
@@ -288,10 +289,22 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 
 ## 6. 清理
 
-`--keep` 不传时，`cleanup_step` 会：`docker compose --profile accept-s2 down`（移除
+`--keep` 不传时，`cleanup_step` 会：`docker compose --profile accept-s2 rm -sf`（移除
 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
-`accept-s2-restart-target` 六个容器）、经 `worker-supervisor` 的 `/resident/stop` 停 alice/bob 的
-入口容器。workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕原则保留，不清理。
+`accept-s2-restart-target` 六个容器，只 `rm` 这六个而不是整体 `down`，避免连基础栈一起停掉——
+遗留 26）、经 `worker-supervisor` 的 `POST /resident/reclaim`（收尾波次 C9："验收残留自动清理"；
+不是旧的 `/resident/stop`）**回收**（强制删容器 + 删数据目录）alice/bob 的入口容器，而不只是停掉。
+这一步现在也挂在统一的 `on_exit` EXIT trap 上：脚本中途 `fail()` 或 ssh 会话中断都会先跑一次
+`cleanup_step` 才退出（此前只有成功路径末尾会跑——`on_exit` 是这次一并修的既有缺口，之前遗留 76
+只把这条 trap 接到了本脚本本身的 EXIT 上，没有改成 reclaim）。顺带修的一个 bug：`resident_stop`
+此前从不带 `Authorization: Bearer` 头，对 `/resident/*` 的每次调用都直接 401——`cleanup_step`
+自己的停容器调用和 `step2_docker_restart`/`real_docker_restart_run` 里"强制换一个新 Handle"的
+防御性调用因此从未真正生效过；现在两个函数都补上了内核容器自带的 `/run/secrets/internal_token`
+（同 accept_s1.sh/accept_s3.sh 自己的 `resident_status`/`resident_stop` 一样）。
+workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕原则保留，不清理；到期后仍是
+`sh scripts/delete-workspaces-matching.sh --expired --yes`。历史残留（本次改动之前跑过的、还停在
+`Exited` 的 `nexttime-entry-*`）：`sh scripts/sweep-accept-entry-containers.sh [--yes]`（默认
+dry run，见 `docs/runbooks/accept-s1.md` §7）。
 
 `${NEXTTIME_DATA}/accept-s2/`（生成的 ssh 密钥对、ConnectedAccount store key）**不会**被这次清理
 删除——它不是仓库内容，重复运行脚本时如果这些文件已存在会直接复用（`fixtures_secrets_step` 的

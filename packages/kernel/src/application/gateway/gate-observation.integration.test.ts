@@ -434,6 +434,43 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(observeActivityObservations).toHaveLength(0);
     });
 
+    // Leftover 98: worker mode now calls observe-class gate tools through `observe_operation`. The
+    // WorkerRun minted from a definition whose explicit `capabilities` (`['request_action']`)
+    // predates that still holds it (worker infrastructure, handle-mint.ts), and the call records
+    // the same WorkerRun Observation the `request_action` observe branch does.
+    it('an observe_operation call from a Worker records one Observation on its own WorkerRun Source, like request_action’s observe branch', async () => {
+      const { workerRunId, claims } = await spawnWorkerRun();
+      expect(claims.scope.capabilities).toContain('observe_operation');
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+
+      const result = (await dispatchCapability({ pool }, caller, 'observe_operation', {
+        gatekeeperId,
+        operation: OBSERVE_OP.name,
+        params: {},
+      })) as { status: string; data: unknown };
+      expect(result.status).toBe('ok');
+      expect(result.data).toEqual({ hosts: ['h1', 'h2'] });
+
+      const gateCalls = await gateCallActivities(workerRunId);
+      expect(gateCalls).toHaveLength(1);
+      expect(gateCalls[0]?.metadata).toMatchObject({
+        workerRunId,
+        gatekeeperId,
+        operation: OBSERVE_OP.name,
+        mode: 'observe',
+        status: 'ok',
+      });
+      const observations = await observationForActivity(gateCalls[0]?.id ?? '');
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.source_kind).toBe('worker_run');
+      expect(observations[0]?.content).toMatchObject({
+        operation: OBSERVE_OP.name,
+        mode: 'observe',
+        status: 'ok',
+        payload: { hosts: ['h1', 'h2'] },
+      });
+    });
+
     it('an observe-class call with a result_mapping keeps its own gatekeeper-source Observation, isolated from the WorkerRun write-back', async () => {
       const { workerRunId, claims } = await spawnWorkerRun();
       const caller: ResolvedCaller = { channel: 'handle', claims };

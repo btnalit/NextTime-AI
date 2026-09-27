@@ -32,7 +32,7 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 |---|---|---|---|
 | `packages/platform-extension/package.json` | `dependencies["@earendil-works/pi-coding-agent"]`、`devDependencies["@earendil-works/pi-ai"]` 精确版本号 | 两者不同步会导致类型定义（编译期）与运行时安装的版本（容器内）不一致 | `scripts/check-pi-version-consistency.sh`（`pnpm ci:guards`） |
 | `packages/platform-extension/src/index.ts` | 默认导出签名 `(pi: ExtensionAPI) => void`（pi 扩展加载约定：`pi -e <path>` 对每个扩展模块调用一次其默认导出） | pi 改扩展加载约定（比如改成要求具名导出）会让整个扩展在容器启动时直接报错退出 | `index.test.ts`（假 `ExtensionAPI` 桩）+ `entry.sdk.test.ts`/`worker.sdk.test.ts`（真实 pi SDK 通过 `additionalExtensionPaths` 加载真实模块） |
-| `packages/platform-extension/src/modes/{entry,worker}.ts` | `ExtensionAPI.registerTool`；`pi.on(event, handler)` 的事件名 `session_start`/`input`/`context`/`agent_start`/`agent_end`/`agent_settled` 与各自 payload 形状；`ToolDefinition.execute()` 的返回契约（`{content, details, terminate?}`，抛出即映射为 `isError:true`）；`pi.appendEntry`；`pi.sendUserMessage`；`ExtensionContext.hasUI`/`ui.notify`/`sessionManager.getSessionFile` | 任一 hook 改名/去掉，或 `execute()` 返回契约变化，entry/worker 两种模式的工具注册与生命周期整体失效——这是耦合面里*最大*的一块 | `modes/entry.test.ts`/`modes/worker.test.ts`（假桩）+ `entry.sdk.test.ts`/`worker.sdk.test.ts`（真实 SDK，唯一能证明 pi 真的把 `execute()` 的 throw 映射成 `isError:true`、`context` 消息真的不落盘的测试） |
+| `packages/platform-extension/src/modes/{entry,worker}.ts`、`modes/gate-tool-projection.ts` | `ExtensionAPI.registerTool`（含 `session_start` 之后的注册，见 2.3）；`getActiveTools`/`getAllTools`/`setActiveTools`（入口逐轮工具投射，2.3）；`pi.on(event, handler)` 的事件名 `session_start`/`input`/`before_agent_start`/`context`/`agent_start`/`agent_end`/`agent_settled` 与各自 payload 形状；`ToolDefinition.execute()` 的返回契约（`{content, details, terminate?}`，抛出即映射为 `isError:true`）；`pi.appendEntry`；`pi.sendUserMessage`；`ExtensionContext.hasUI`/`ui.notify`/`sessionManager.getSessionFile` | 任一 hook 改名/去掉，或 `execute()` 返回契约变化，entry/worker 两种模式的工具注册与生命周期整体失效——这是耦合面里*最大*的一块 | `modes/entry.test.ts`/`modes/worker.test.ts`（假桩）+ `entry.sdk.test.ts`/`worker.sdk.test.ts`（真实 SDK，唯一能证明 pi 真的把 `execute()` 的 throw 映射成 `isError:true`、`context` 消息真的不落盘的测试） |
 | `packages/platform-extension/src/tool-schema.ts` | 假设 pi 的 `ToolDefinition.parameters`（typebox `TSchema`）在运行时只是被当 JSON-Schema 形状的普通对象读（`.type`/`.properties`/`.required`），从不针对 typebox 的 `Kind` symbol 做校验；0.86.0 起注册时额外要求 `parameters` 是非 null、非数组的对象（`core/extensions/loader.js` `registerTool`，否则抛错）——`toToolParameters`/`gateToolParameters` 恒产出 object schema | pi 若开始严格校验 typebox schema，每一个用 `zod-to-json-schema` 转换出来、cast 成 `TSchema` 的工具（`report_result` 等）会在注册时报错 | 间接由 `entry.sdk.test.ts`/`worker.sdk.test.ts` 覆盖（真实工具注册+调用会触发真实校验路径） |
 | `packages/platform-extension/src/{entry,worker}.sdk.test.ts` | 直接 import pi SDK 面：`createAgentSession`、`DefaultResourceLoader`、`ModelRuntime`（含 `.create`/`.registerProvider`）、`SessionManager`、`SettingsManager`、`additionalExtensionPaths`/`noExtensions` 选项、`session.subscribe`/`.prompt`/`.messages`/`.agent.state.tools`/`.dispose`、`AgentSessionEvent`（`tool_execution_end` 的 `isError`/`result`/`toolName`）；`@earendil-works/pi-ai` 的 `InMemoryCredentialStore`、`Context` 类型、`pi-ai/compat` 的 `registerFauxProvider`/`fauxAssistantMessage`/`fauxToolCall` | 这两个文件本身**就是**"pi 有没有变"的探针——任何一个具名导出被改名/删除，这两个测试直接编译或运行失败，不会静默通过 | 就是它们自己（`pnpm --filter @nexttime/platform-extension test`，也是 `pi-drift.yml` 每晚对 `@latest` 跑的那两个文件） |
 | `worker.sdk.test.ts` 里记录的一个真实坑 | `createAgentSession()` 本身不触发 pi 的 `session_start` 事件——那是 `AgentSession.bindExtensions(bindings)` 内部才 `emit` 的；worker 模式的自驱动机制（`pi.sendUserMessage` 在 `session_start` 里调用）必须显式 `await session.bindExtensions({mode:'rpc'})` 才会真的跑起来（`docs/development-tasks.md` 行~691 已记录） | pi 若改变 `bindExtensions` 的签名或触发时机，worker 模式在真实 RPC 进程里可能仍然工作（因为真实 CLI 会调 `bindExtensions`），但这个测试可能测不出问题——升级时需要手工确认这条注释是否还成立 | `worker.sdk.test.ts`（部分——见左侧说明，测试本身依赖这个行为，不是独立校验它） |
@@ -101,6 +101,74 @@ Worker 都是 `/workspace/.pi/agent`），日志行 `nexttime-selfcheck check=pi
 `check=pi_default_tools result=ok`；真跑一轮后，会话 JSONL 的 system 消息 `toolsAdded` 同时含
 这 7 个内置工具与平台扩展工具（`find_operations`、`request_action` 等）。
 
+### 2.3 入口逐轮工具投射（2026-09-27，收尾波次 C3，原 P4）
+
+**做什么**：入口 agent 的门工具（`<gate>.<op>` → `observe_operation`）过去只在 `session_start` 读一次
+`list_allowed_operations`，之后在工作区启用的门、发布 / 弃用的 Operation 要等容器重建才进入 / 退出
+智能体的工具列表。现在每轮开始（pi 的 `before_agent_start`，每条用户消息一次）再读一次同一个读模型
+（`modes/gate-tool-projection.ts`，入口模式调用），新出现的注册并激活、不再列出的停用，下一条消息即
+生效、不重启容器。**投射只是展示，不是授权**：内核对每次调用照常执行 `observeRefusal` 等检查，
+工具列表过期只会得到一次被拒的调用，内核侧一处未放宽。
+
+| 事实（0.87.1 已安装包） | 位置 | 本仓库怎么用 |
+|---|---|---|
+| `on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>)`；处理器被逐个 `await`，在 `input` 之后、构建本次运行的第一个请求之前 | `dist/core/extensions/types.d.ts:555,997`；`dist/core/extensions/runner.js` `emitBeforeAgentStart`；`dist/core/agent-session.js:1230,1283` | 刷新点；`input` 先跑，所以日志里的 `turn_id` 是本轮的 |
+| `registerTool(tool)` 在 bind 之后也可调：按名字存入（同名覆盖定义）后 `refreshTools()`；对注册表是新名字的自动激活，原来激活的保持激活 | `dist/core/extensions/loader.js:220-230`；`agent-session.js` `_refreshToolRegistry` | 新允许的 Operation 在刷新时注册；定义变了（描述 / schema / blast radius）同名重注册 |
+| 没有 `unregisterTool`；`setActiveTools(toolNames: string[]): void` **整体替换**激活集（含内置工具），未知名字忽略；`getActiveTools(): string[]`、`getAllTools(): ToolInfo[]` | `types.d.ts:1070-1074`；`agent-session.js` `setActiveToolsByName` | 下一集 = 当前激活集去掉"本投射分配过、这次不再列出"的名字 + 追加新名字；只动自己分配的名字，内置工具与 17 个静态能力工具原样保留、顺序不变 |
+| 处理器调了 `setActiveTools()` 且没改 `event.systemPromptOptions.selectedTools` 时，本次运行用实时装载（工具声明 + 系统提示分节据此重建）；同一运行里后续每个请求也读实时装载 | `agent-session.js:1282-1290`、`_installAgentNextTurnRefresh`（`selectedTools: this.getActiveToolNames()`） | 本扩展只调 `setActiveTools`、不改 `selectedTools`，返回 `undefined`（不覆盖系统提示、不注入消息） |
+| 工具集随 transcript 走：变化记成一条 `role: system` 消息的 `toolsAdded` / `toolsRemoved`；系统提示的工具段只列带 `promptSnippet` 的工具 | pi-ai `dist/types.d.ts` `SystemMessage`、`dist/utils/transcript.d.ts` `getCurrentTools`；`dist/core/system-prompt.js` `buildSystemPromptSections` | 门工具不带 `promptSnippet`，模型经工具声明看到它们；主机上看会话 JSONL 的这条 system 消息即可核对 |
+
+**行为约定**：
+
+- 每轮至多一次内核读：`session_start` 一次 + 每条用户消息一次；同一轮里的多次 LLM 请求、排队的
+  follow-up / steer 不再读（它们没有新的 `before_agent_start`，沿用本轮开始时的工具集）。
+- 读取超时 2 s（`GATE_TOOL_REFRESH_TIMEOUT_MS`）；超时 / 内核报错 / 响应里没有 `items` 数组 →
+  保留上一轮的工具集并记一条警告，不阻塞这一轮、不会因瞬时错误掉到零个门工具。`{items: []}` 才是
+  "什么都不允许"。
+- 名字在一个会话内稳定：同一 `(gatekeeperId, operation)` 始终是同一个工具名，一个名字不会改指另一
+  个 Operation；会撞上别人已注册名字（内置、静态能力工具，例如门 `get` 的 `object` → `get_object`）
+  的 Operation 改用 `gateToolName` 的 `gatekeeperId` 兜底名，不会覆盖或停用别人的工具。
+- 哪些变更**不重启**就在下一条消息生效：在工作区启用门实例（`enable_gate_instance`）、发布 / 弃用
+  观察类 Operation（含智能体 `propose_operation` 经审阅后发布的）——它们不轮换 Handle。哪些变更
+  **仍会重建容器**：授权、
+  「我的智能体」排除（AgentProfile）、AgentPolicy、连接器禁用清单 / 模式、成员角色——它们吊销入口
+  Handle，下一轮 agent-host 拿到新 Handle，worker-supervisor 按 jti 不同重建容器（`resident-service.ts`）；
+  这是授权交付（Handle 经环境变量在容器启动时注入），不是投射，本项未改。要让这些也免重启，需要
+  Handle 可热更新（`productization-plan-v2` §7 已记"另立项"）。
+
+**日志**（入口容器 stderr，`docker logs` 可见；一行一条，`key=value`）：
+
+```text
+nexttime-entry check=tool_projection result=changed trigger=turn turn_id=<turnId> added=<名字,…|-> removed=<名字,…|-> redefined=<名字,…|-> gate_tools=<N>
+nexttime-entry check=tool_projection result=kept_previous trigger=turn turn_id=<turnId> reason=<timeout|network|capability_error|invalid_response> [code=<code>] message="…"
+```
+
+没有变化的轮次不打日志；`trigger=session_start` 那条是容器启动时的首次投射。
+
+**主机核对**（不改主机上项目目录之外的任何东西；结果记 `docs/private/`）。在一个验收用工作区里做
+（S4 探针同款的临时工作区即可）——第 3 步的弃用不可逆（Operation 只有 `draft → published`，弃用后
+不能再发布），**不要在日常使用的工作区里弃用真实 Operation**：
+
+1. 在该工作区用一个成员发第一条消息拉起入口容器，记下身份：
+   `docker inspect -f '{{.Id}} {{.State.StartedAt}}' nexttime-entry-<principalId>`。
+2. **出现**：owner 在控制台给该工作区启用一个它尚未启用的门实例（`enable_gate_instance`，会连带
+   发布该门的 Operation），然后在对话里发一条消息（可以直接问"你现在能读哪些系统"）。期望：
+   `docker logs nexttime-entry-<principalId> 2>&1 | grep 'check=tool_projection' | tail -3` 有一条
+   `result=changed trigger=turn turn_id=<这一轮> added=<gate>_<op>…`；第 1 步的 Id 与 StartedAt 不变
+   （没有重建）；会话 JSONL（容器内 `/workspace/.pi/sessions/`）最新一条带 `toolsAdded` 的 `role: system`
+   消息含这些名字；agent 能真的调用其中一个（审计有一条 `observe_operation`）。
+3. **消失**：在该工作区的能力目录弃用刚才那个门的一个观察类 Operation，再发一条消息。期望：日志
+   `removed=<gate>_<op>`、`toolsRemoved` 含该名字、容器仍未重建；agent 若按旧记忆去调，得到的是
+   pi 的 `Tool <name> not found` 错误结果（`pi-agent-core` `agent-loop.js`），不是一次成功调用。
+4. **对照**（预期仍重建）：在「我的智能体」勾掉一个门再发消息——容器 StartedAt 变化（supervisor
+   `restarts` +1），新容器 `trigger=session_start` 那条日志的工具集已不含该门。这是 Handle 轮换的既有
+   行为，不是回归。
+
+**升级 pi 时核对**：上表五行逐条仍成立（尤其 `before_agent_start` 的"实时装载优先"判定、`registerTool`
+在 bind 后可用且新名字自动激活、`setActiveTools` 整体替换语义）；`entry.sdk.test.ts` 的
+"per-turn projection" 用例用真实 SDK 从每个请求的 transcript 回放出模型实际看到的工具，是这几条
+的自动探针（`pi-drift.yml` 每晚也跑它）。
+
 ## 3. 单一版本源
 
 `pi.version`（仓库根目录，纯文本，一行版本号）是**唯一**手改的地方：
@@ -158,7 +226,7 @@ Worker 都是 `/workspace/.pi/agent`），日志行 `nexttime-selfcheck check=pi
 - `packages/platform-extension/src/index.test.ts` —— 扩展加载与模式分发
 - `packages/platform-extension/src/kernel-client.test.ts` —— 与 pi 无关的对照组（不应该受升级影响，若这个也炸说明改动范围出了这个包）
 - `packages/platform-extension/src/modes/entry.test.ts`、`modes/worker.test.ts` —— 假 `ExtensionAPI` 桩，快、但不接触真实 pi
-- `packages/platform-extension/src/entry.sdk.test.ts`、`worker.sdk.test.ts` —— **真实 pi SDK**，本清单里权重最高的两个文件，也是 `.github/workflows/pi-drift.yml` 每晚对 `@latest` 跑的对象
+- `packages/platform-extension/src/entry.sdk.test.ts`、`worker.sdk.test.ts` —— **真实 pi SDK**，本清单里权重最高的两个文件，也是 `.github/workflows/pi-drift.yml` 每晚对 `@latest` 跑的对象（`entry.sdk.test.ts` 含逐轮工具投射用例，见 2.3）
 - `packages/agent-host/src/bridge.test.ts`、`host.test.ts` —— RPC 事件/命令映射的 fixture 测试（见第 4 节第 4 条的已知缺口说明）
 - `packages/worker-supervisor/src/spawn-spec.test.ts`、`task-spawn-spec.test.ts` —— 容器 env/挂载契约
 - `packages/llm-proxy/src/gen-models-json.test.ts` —— `models.json` schema 形状

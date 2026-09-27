@@ -889,7 +889,13 @@
   min-width: 220px;
 }
 
-/* ---- Platform overview (P-A1) ------------------------------------------------------- */
+/* ---- Platform overview (P-A1; P3-6 V10: Orbit-style icon tiles) --------------------- */
+.platform-tile-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .platform-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -900,8 +906,63 @@
   padding: var(--space-3) var(--space-4);
 }
 
+.platform-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/* The small tinted icon tile (MihomoOrbit reference): a soft-background square with a coloured
+ * icon — decorative multi-hue (`--deco-*`), never a governance colour (§5.9 principle 2). The
+ * icon's `color` sets `currentColor`, which `components/ui/Icon`'s `stroke="currentColor"` picks
+ * up unchanged. */
+.platform-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: var(--radius-m);
+}
+
+.platform-tile-icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.platform-tile-icon-blue {
+  background: var(--deco-blue-soft);
+  color: var(--deco-blue);
+}
+
+.platform-tile-icon-violet {
+  background: var(--deco-violet-soft);
+  color: var(--deco-violet);
+}
+
+.platform-tile-icon-pink {
+  background: var(--deco-pink-soft);
+  color: var(--deco-pink);
+}
+
+.platform-tile-icon-cyan {
+  background: var(--deco-cyan-soft);
+  color: var(--deco-cyan);
+}
+
+.platform-tile-icon-indigo {
+  background: var(--deco-indigo-soft);
+  color: var(--deco-indigo);
+}
+
+/* Same spec as `.section-title` (base.css): 12/600 uppercase, 0.08em tracking, `--text-3`. */
 .platform-tile-label {
   font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--text-3);
 }
 
@@ -925,6 +986,13 @@
  * its own box so the page body never does. ------------------------------------------------- */
 .table-scroll {
   overflow-x: auto;
+  /* P3-6 V8 (platform 集成 at 390px): `.table-scroll` is a flex-column item (`.stack`, which is
+   * itself a flex-column item of `.page`) — same chain `.code-block`'s own comment documents.
+   * Without this, the item's automatic min-width is its content's min-content size, which the
+   * `.data-table`'s own `min-width: 720px` below pushes past the viewport — the *whole page*
+   * scrolled horizontally instead of just this box. `min-width: 0` lets `overflow-x: auto` above
+   * actually take effect at the box it is declared on. */
+  min-width: 0;
 }
 
 .table-scroll > .data-table {

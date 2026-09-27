@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.31.0](https://github.com/btnalit/NextTime-AI/compare/v0.30.0...v0.31.0) (2026-09-27)
+
+
+### Features
+
+* **kernel,web:** human attestation as its own evidence kind; people can invalidate or supersede a Fact (leftover 89, gap G2) ([#354](https://github.com/btnalit/NextTime-AI/issues/354)) ([4701194](https://github.com/btnalit/NextTime-AI/commit/4701194101dc33c6ee4cd85b96e686bb42ce5299))
+* **kernel:** reads need no Grant for people too; My Agent lists every readable system; Workers read through observe_operation (leftovers 97, 98) ([#352](https://github.com/btnalit/NextTime-AI/issues/352)) ([b5d267d](https://github.com/btnalit/NextTime-AI/commit/b5d267d87c684b91d06a35270a21893ff93a3458))
+* **platform-extension:** the entry agent's gate tools follow the kernel every turn, no restart (closing wave C3) ([#356](https://github.com/btnalit/NextTime-AI/issues/356)) ([d8366b8](https://github.com/btnalit/NextTime-AI/commit/d8366b8473b673cb2c53da9a5fda5aeedfa1b4b0))
+* **web:** platform pages — Orbit-style overview tiles, integrations fit phone width, selects on kit (console redesign P3-6) ([#353](https://github.com/btnalit/NextTime-AI/issues/353)) ([5fa2d96](https://github.com/btnalit/NextTime-AI/commit/5fa2d96dfc5cfffcf13ac9f95c2b554a5b710780))
+
+
+### Bug Fixes
+
+* **build:** dependency layers keyed on the lockfile, with a shared pnpm store cache (leftover 93) ([#350](https://github.com/btnalit/NextTime-AI/issues/350)) ([12d8491](https://github.com/btnalit/NextTime-AI/commit/12d84918fce03a7f78d6d815d1c56403095ff5c6))
+* **web:** medium confirm popover sits against its trigger, not the viewport's top-left ([#355](https://github.com/btnalit/NextTime-AI/issues/355)) ([93f0700](https://github.com/btnalit/NextTime-AI/commit/93f07002a820be4cb240103e6391dba896b88671))
+
 ## [0.30.0](https://github.com/btnalit/NextTime-AI/compare/v0.29.0...v0.30.0) (2026-09-27)
 
 

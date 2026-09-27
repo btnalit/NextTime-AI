@@ -53,6 +53,7 @@ function factExplain(): ExplainResultWire {
       epistemicStatus: 'observed',
       assertedByPrincipal: principal,
       verifiedByPrincipal: null,
+      humanAttestations: [],
       observationId: 'obs-1',
       invalidatedAt: null,
       invalidationReason: null,

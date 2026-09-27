@@ -273,6 +273,8 @@ export function explainView(result: ExplainResultWire): ExplainView {
         invalidatedAt: result.fact.invalidatedAt,
         invalidationReason: result.fact.invalidationReason,
         lastObservation: result.fact.lastObservation,
+        // Leftover 89: the Fact's human attestations (`?? []` — an older kernel has none).
+        humanAttestations: result.fact.humanAttestations ?? [],
       }
     : null;
   const source =
