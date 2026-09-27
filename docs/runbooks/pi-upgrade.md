@@ -82,6 +82,25 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 `radius`/`xai` 两项、加了 `meta`——只有平台 provider 恰好叫这几个名字且同时列出新旧默认 id 时，
 初始模型才会变。
 
+### 2.2 内置工具全开（2026-09-27，STATUS 遗留 95）
+
+维护者决定："pi agent 本身的权限其实不需要限制的，主要限制是访问其他系统"。落地在
+`deploy/worker-runtime/entrypoint.sh`：启动前把 `defaultTools` =
+`read,bash,edit,write,grep,find,ls` 合并写入 pi 全局设置 `<agentDir>/settings.json`（入口与
+Worker 都是 `/workspace/.pi/agent`），日志行 `nexttime-selfcheck check=pi_default_tools`。
+
+| 事实（0.87.1 已安装包） | 位置 |
+|---|---|
+| 内置工具全集 read/bash/powershell/edit/write/grep/find/ls；默认只激活 read/bash/edit/write | `dist/core/tools/index.js` `allToolNames`；`dist/core/sdk.js:140` `defaultActiveToolNames` |
+| 设置里的 `defaultTools` 替换默认激活清单，不形成允许清单 | `dist/core/sdk.js:141-145`；`dist/core/settings-manager.js` `getDefaultTools()` |
+| **`--tools` 是覆盖所有工具的允许清单**，扩展注册的工具不在清单里就被过滤掉——用它会关掉平台扩展的内核工具 | `dist/core/agent-session.js:2496-2504`（`isAllowedTool` 同时过滤 `getAllRegisteredTools()`） |
+| 无允许清单时扩展工具全部激活 | `dist/core/agent-session.js:176-177`（`includeAllExtensionTools: true`） |
+
+`powershell` 不开：镜像里没有 pwsh，开了只会多一个用不了的工具。升级 pi 时核对上表各行仍成立
+（尤其 `defaultTools` 的键名与"`--tools` 过滤扩展工具"）。主机核对：入口容器日志有
+`check=pi_default_tools result=ok`；真跑一轮后，会话 JSONL 的 system 消息 `toolsAdded` 同时含
+这 7 个内置工具与平台扩展工具（`find_operations`、`request_action` 等）。
+
 ## 3. 单一版本源
 
 `pi.version`（仓库根目录，纯文本，一行版本号）是**唯一**手改的地方：
