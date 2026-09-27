@@ -4,9 +4,11 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createAdminServer } from './admin.js';
+import { createEgressMetrics } from './metrics.js';
 import type { Resolver, SourcePolicy } from './policy.js';
 import { createProxyServer } from './proxy.js';
-import type { EgressObservation } from './report.js';
+import type { EgressObservation, EgressObservationContext } from './report.js';
 import { createSourceMap } from './source-map.js';
 
 /**
@@ -381,5 +383,87 @@ describe('createProxyServer', () => {
       expect(res.status).toBe(200);
       expect(res.body).toBe('hello-from-unknown-source');
     });
+  });
+});
+
+// Leftover 87: a Worker's egress lines carry its correlation id (from the source map entry
+// worker-supervisor writes) and every decision is counted for /internal/metrics.
+describe('correlation id + metrics (leftover 87)', () => {
+  const closers: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (closers.length > 0) await closers.pop()?.();
+  });
+
+  it('passes a valid source correlation id as log context (never in the observation) and counts the decision', async () => {
+    const contexts: Array<EgressObservationContext | undefined> = [];
+    const recordings: EgressObservation[] = [];
+    const metrics = createEgressMetrics();
+    const server = createProxyServer({
+      denyHosts: DEFAULT_DENY_HOSTS,
+      platformSubnets: [],
+      resolveSource: () => ({
+        sourceId: 'worker:ws-1:run-1',
+        deny: ['blocked.example.test'],
+        correlationId: 'turn-abcd-0001',
+      }),
+      resolveHost: async () => ['127.0.0.1'],
+      reporter: {
+        record: (o, context) => {
+          recordings.push(o);
+          contexts.push(context);
+        },
+      },
+      metrics,
+      connectTimeoutMs: 2000,
+      idleTimeoutMs: 2000,
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    closers.push(() => closeHttpServer(server));
+
+    const res = await httpGetThroughProxy(addressPort(server), 'http://blocked.example.test/');
+    expect(res.status).toBe(403);
+    await vi.waitFor(() => expect(recordings).toHaveLength(1));
+    expect(contexts[0]).toEqual({ correlationId: 'turn-abcd-0001' });
+    expect(recordings[0]).not.toHaveProperty('correlationId');
+
+    const admin = createAdminServer({ renderMetrics: metrics.render });
+    await new Promise<void>((resolve) => admin.listen(0, '127.0.0.1', resolve));
+    closers.push(() => closeHttpServer(admin));
+    const text = await (
+      await fetch(`http://127.0.0.1:${addressPort(admin)}/internal/metrics`)
+    ).text();
+    expect(text).toContain(
+      'nexttime_egress_requests_total{protocol="http",decision="denied",reason="source-deny"} 1',
+    );
+  });
+
+  it('drops an invalid source correlation id instead of logging it', async () => {
+    const contexts: Array<EgressObservationContext | undefined> = [];
+    const server = createProxyServer({
+      denyHosts: DEFAULT_DENY_HOSTS,
+      platformSubnets: [],
+      resolveSource: () => ({
+        sourceId: 'worker:ws-1:run-1',
+        deny: ['blocked.example.test'],
+        correlationId: 'not valid"}',
+      }),
+      resolveHost: async () => ['127.0.0.1'],
+      reporter: { record: (_o, context) => contexts.push(context) },
+      connectTimeoutMs: 2000,
+      idleTimeoutMs: 2000,
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    closers.push(() => closeHttpServer(server));
+    await httpGetThroughProxy(addressPort(server), 'http://blocked.example.test/');
+    await vi.waitFor(() => expect(contexts).toHaveLength(1));
+    expect(contexts[0]).toEqual({});
+  });
+
+  it('the admin server has no metrics route without a renderer (unchanged 404)', async () => {
+    const admin = createAdminServer();
+    await new Promise<void>((resolve) => admin.listen(0, '127.0.0.1', resolve));
+    closers.push(() => closeHttpServer(admin));
+    const res = await fetch(`http://127.0.0.1:${addressPort(admin)}/internal/metrics`);
+    expect(res.status).toBe(404);
   });
 });

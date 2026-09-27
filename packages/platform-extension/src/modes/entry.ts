@@ -241,6 +241,11 @@ function extractAssistantText(content: unknown): string {
 
 export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): void {
   let currentTurnId = options.initialTurnId;
+  // Leftover 87: the entry agent's correlation id is its current Turn id — the id the kernel,
+  // agent-host and worker-supervisor already know this Turn by — so every kernel call made while
+  // serving a Turn (tools, `get_entry_context`, `report_turn`, `invoke_worker`) carries it, and a
+  // Worker it delegates to inherits it. Reused, not invented (see @nexttime/shared correlation.ts).
+  options.kernelClient.setCorrelationId(currentTurnId);
 
   for (const name of ENTRY_TOOL_CAPABILITY_NAMES) {
     pi.registerTool(buildCapabilityTool(name, options.kernelClient));
@@ -278,6 +283,7 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     const match = TURN_ID_MARKER.exec(event.text);
     if (!match) return undefined;
     currentTurnId = match[1];
+    options.kernelClient.setCorrelationId(currentTurnId);
     return { action: 'transform' as const, text: event.text.slice(match[0].length) };
   });
 

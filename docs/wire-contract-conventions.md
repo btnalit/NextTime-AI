@@ -29,6 +29,9 @@
 - 分页参数统一 `limit`（有上限，超出按上限截断并在结果 `truncated: true` 标记，而非静默）、`cursor`。
 - 成功响应：HTTP `200 { ok: true, result }`，WS JSON-RPC `result`；错误：HTTP `{ ok: false, error: { code, message, details? } }` 与 WS `error: { code, message, data? }`，两侧的 `code` 词表一致（F10 已对齐）。`details` 只在该 `code` 有结构化半身时出现（S5.1 `ontology_violation`：`{ reason, linkType, sourceType, targetType, expected }`），永远是对 `{ code, message }` 的加法，客户端不得依赖它存在。
 - 服务端推送事件的 payload 与对应资源对象**同形**（`task.updated` 推的就是 Task 对象或其精确子集，不另造形状）。
+- 关联 ID（遗留 87，加法、可选）：HTTP 请求头 `x-correlation-id`、WS JSON-RPC 请求帧顶层 `correlationId`；8–64 位
+  `[A-Za-z0-9_-]`，不合法即由服务端另铸，从不因它拒绝请求；HTTP 响应头回显实际采用的 ID，审计 `payload.correlationId`
+  记同一个值。它只用于追踪，不是凭证、不进 Handle scope（`packages/shared/src/correlation.ts`，`runbooks/observability.md`）。
 
 ## 4. 版本与兼容
 

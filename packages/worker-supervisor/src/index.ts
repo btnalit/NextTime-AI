@@ -5,6 +5,7 @@ import type { ContainerLifecycleEvent } from './docker-events.js';
 import { subscribeToContainerEvents } from './docker-events.js';
 import { createEgressMapStore } from './egress-map.js';
 import { loadInternalToken } from './internal-auth.js';
+import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
 import { createServer } from './server.js';
 import { createTaskService } from './task-service.js';
@@ -88,7 +89,13 @@ export async function main(): Promise<void> {
   const imagesDocker = createDockerClient({ connection: config.dockerImagesConnection });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
   const residentService = createResidentService({ config, docker, imagesDocker, egressMap });
-  const taskService = createTaskService({ config, docker, egressMap });
+  const metrics = createSupervisorMetrics();
+  const taskService = createTaskService({
+    config,
+    docker,
+    egressMap,
+    onTaskFinished: (event) => metrics.recordTaskFinished(event),
+  });
 
   await residentService.reconcile();
   await taskService.reconcile();
@@ -155,7 +162,14 @@ export async function main(): Promise<void> {
   }, TASK_RETENTION_SWEEP_INTERVAL_MS);
   taskRetentionTimer.unref();
 
-  const app = createServer({ residentService, taskService, config, internalToken, logger: true });
+  const app = createServer({
+    residentService,
+    taskService,
+    config,
+    internalToken,
+    logger: true,
+    metrics,
+  });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
   const shutdown = async (): Promise<void> => {

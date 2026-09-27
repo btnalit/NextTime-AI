@@ -1,6 +1,6 @@
 import fastifyWebsocket from '@fastify/websocket';
-import { CAPABILITY_REGISTRY } from '@nexttime/shared';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { CAPABILITY_REGISTRY, isValidCorrelationId, mintCorrelationId } from '@nexttime/shared';
+import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
 import type { RawData, WebSocket } from 'ws';
 import type { ChatPushEvent, PrincipalPushEvent } from '../../application/chat/index.js';
 import {
@@ -20,6 +20,7 @@ import {
   dispatchCapability,
   resolveCaller,
   resolveRequestCaller,
+  runWithCorrelationId,
 } from '../../application/gateway/index.js';
 import { WORKSPACE_COOKIE, parseCookieHeader } from '../../application/identity/index.js';
 import type {
@@ -129,19 +130,41 @@ function send(socket: WebSocket, message: WsOutgoingMessage): void {
  * `handleFrame` below, and `subscribe_chat`'s own access-check dispatch in `handleSubscribeChat`
  * (its internal `get_chat_history` replay call is an implementation detail of that one client
  * call, not a second one, and is not logged separately).
+ *
+ * Leftover 87: `log` is the per-call logger {@link callLogger} builds — it carries the call's own
+ * `correlationId` (not the upgrade request's, which every frame on the socket shares).
  */
-function logWsCall(request: FastifyRequest, capability: string, err?: unknown): void {
+function logWsCall(log: FastifyBaseLogger, capability: string, err?: unknown): void {
   if (err === undefined) {
-    request.log.info({ capability, outcome: 'success' });
+    log.info({ capability, outcome: 'success' });
     return;
   }
   const mapped = mapDispatchError(err);
-  request.log.error({
+  log.error({
     capability,
     outcome: 'error',
     errorName: err instanceof Error ? err.name : typeof err,
     code: mapped.code,
   });
+}
+
+/**
+ * Leftover 87: one correlation id per WS call — the frame's own optional `correlationId` when
+ * valid, else a minted one — and a logger bound to it. Built from the server's root logger rather
+ * than `request.log`, whose bindings already hold the upgrade request's id under the same key; the
+ * upgrade's id is kept as `wsCorrelationId` so a socket's calls can still be grouped.
+ */
+function callLogger(
+  request: FastifyRequest,
+  frameCorrelationId: unknown,
+): { readonly correlationId: string; readonly log: FastifyBaseLogger } {
+  const correlationId = isValidCorrelationId(frameCorrelationId)
+    ? frameCorrelationId
+    : mintCorrelationId();
+  return {
+    correlationId,
+    log: request.server.log.child({ correlationId, wsCorrelationId: request.id }),
+  };
 }
 
 function parseFrame(raw: RawData): unknown {
@@ -197,7 +220,7 @@ function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
 
 async function handleSubscribeChat(
   socket: WebSocket,
-  request: FastifyRequest,
+  log: FastifyBaseLogger,
   deps: WsRouteDeps,
   caller: ResolvedCaller,
   id: JsonRpcId,
@@ -226,11 +249,11 @@ async function handleSubscribeChat(
   // written").
   try {
     await dispatchCapability(deps, caller, 'subscribe_chat', { chatId, startAfter });
-    logWsCall(request, 'subscribe_chat');
+    logWsCall(log, 'subscribe_chat');
   } catch (err) {
     const mapped = mapDispatchError(err);
     send(socket, errorResponse(id, mapped.code, mapped.message));
-    logWsCall(request, 'subscribe_chat', err);
+    logWsCall(log, 'subscribe_chat', err);
     return;
   }
 
@@ -512,21 +535,30 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
       return;
     }
 
+    // Leftover 87: every dispatched call runs in its own correlation context (audit rows, gate /
+    // supervisor calls) and logs with that id — see `callLogger`.
+    const { correlationId, log } = callLogger(request, req.correlationId);
+    const caller = state.caller;
+
     if (req.method === 'subscribe_chat') {
-      await handleSubscribeChat(socket, request, deps, state.caller, req.id, req.params, state);
+      await runWithCorrelationId(correlationId, () =>
+        handleSubscribeChat(socket, log, deps, caller, req.id, req.params, state),
+      );
       return;
     }
 
-    try {
-      const callResult = await dispatchCapability(deps, state.caller, req.method, req.params ?? {});
-      if (req.method === 'send_chat_message') publishSentMessagePush(req.params, callResult);
-      send(socket, successResponse(req.id, callResult));
-      logWsCall(request, req.method);
-    } catch (err) {
-      const mapped = mapDispatchError(err);
-      send(socket, errorResponse(req.id, mapped.code, mapped.message));
-      logWsCall(request, req.method, err);
-    }
+    await runWithCorrelationId(correlationId, async () => {
+      try {
+        const callResult = await dispatchCapability(deps, caller, req.method, req.params ?? {});
+        if (req.method === 'send_chat_message') publishSentMessagePush(req.params, callResult);
+        send(socket, successResponse(req.id, callResult));
+        logWsCall(log, req.method);
+      } catch (err) {
+        const mapped = mapDispatchError(err);
+        send(socket, errorResponse(req.id, mapped.code, mapped.message));
+        logWsCall(log, req.method, err);
+      }
+    });
   }
 
   async function initAuth(): Promise<void> {

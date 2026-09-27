@@ -286,3 +286,34 @@ describe('SupervisorClient.touch', () => {
     await expect(client.touch('p-1')).resolves.toBe(true);
   });
 });
+
+// Leftover 87: the Turn id rides `x-correlation-id` (a header — the strict body is unchanged).
+describe('SupervisorClient — x-correlation-id', () => {
+  it('spawn and touch send the given id as a header, never in the body; none when omitted', async () => {
+    const seen: Array<{ header: string | null; body: unknown }> = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        header: new Headers(init?.headers).get('x-correlation-id'),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      });
+      return init?.method === 'POST' && init.body
+        ? jsonResponse(200, {
+            containerId: 'c1',
+            ip: undefined,
+            status: 'running',
+            created: false,
+            restarts: 0,
+          })
+        : emptyResponse(204);
+    });
+    const client = new SupervisorClient({ supervisorUrl: 'http://ws:8081', fetchImpl });
+    const input = { workspaceId: 'ws-1', principalId: 'p-1', handle: 'jwt-token' };
+
+    await client.spawn(input, { correlationId: 'turn-0000-0001' });
+    await client.touch('p-1', { correlationId: 'turn-0000-0001' });
+    await client.spawn(input);
+
+    expect(seen.map((s) => s.header)).toEqual(['turn-0000-0001', 'turn-0000-0001', null]);
+    expect(seen[0]?.body).toEqual(input);
+  });
+});

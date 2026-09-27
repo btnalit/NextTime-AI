@@ -1,4 +1,4 @@
-import { capabilityRoute } from '@nexttime/shared';
+import { capabilityRoute, correlationHeaders, isValidCorrelationId } from '@nexttime/shared';
 
 /**
  * Thin fetch client over the HTTP capability-route convention (design doc §9.3, decided in
@@ -9,6 +9,12 @@ import { capabilityRoute } from '@nexttime/shared';
  *
  * The capability Handle is a bearer credential (S1.9): this module never logs it, never includes
  * it in a thrown error's message, and only ever places it in the `authorization` request header.
+ *
+ * Leftover 87: every call also carries the client's current correlation id as `x-correlation-id`
+ * (`@nexttime/shared` correlation.ts) — entry mode keeps it equal to the current Turn id
+ * (`setCorrelationId`, from the prompt's turn marker), worker mode sets it once from the container's
+ * `NEXTTIME_CORRELATION_ID` (the delegating call's id). No id → no header; the kernel mints one.
+ * The id is never derived from the Handle.
  */
 
 /** Default request timeout, in milliseconds, applied to every kernel call unless overridden. */
@@ -23,6 +29,8 @@ export interface KernelClientOptions {
   timeoutMs?: number;
   /** Injectable `fetch` implementation, for tests. Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /** Initial correlation id sent as `x-correlation-id` (leftover 87) — ignored unless valid. */
+  correlationId?: string;
 }
 
 /** Discriminates why a kernel call failed, without ever carrying the capability Handle. */
@@ -91,12 +99,25 @@ export class KernelClient {
   private readonly capabilityHandle: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private correlationId: string | undefined;
 
   constructor(options: KernelClientOptions) {
     this.kernelUrl = options.kernelUrl.replace(/\/+$/, '');
     this.capabilityHandle = options.capabilityHandle;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_KERNEL_CLIENT_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.setCorrelationId(options.correlationId);
+  }
+
+  /** Sets the id every subsequent call carries as `x-correlation-id` (leftover 87); an invalid or
+   *  `undefined` id clears it (the kernel then mints one per call). */
+  setCorrelationId(id: string | undefined): void {
+    this.correlationId = isValidCorrelationId(id) ? id : undefined;
+  }
+
+  /** The id subsequent calls carry, if any. */
+  getCorrelationId(): string | undefined {
+    return this.correlationId;
   }
 
   /**
@@ -129,6 +150,7 @@ export class KernelClient {
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${this.capabilityHandle}`,
+          ...correlationHeaders(this.correlationId),
         },
         body: JSON.stringify(params ?? {}),
         signal: requestSignal,

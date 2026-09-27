@@ -46,6 +46,13 @@ export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from '.
 // layering workaround — see this module's own doc comment ("interfaces/http is the only consumer").
 export { ExplainNodeNotFoundError } from '../../substrate/epistemic/index.js';
 
+// Leftover 87: the per-call correlation context (substrate/correlation) — re-exported for the same
+// reason, so `createServer`'s HTTP hook and `interfaces/ws`'s per-frame dispatch can set it.
+export {
+  currentCorrelationId,
+  runWithCorrelationId,
+} from '../../substrate/correlation/index.js';
+
 // Error-mapping followup (docs/development-tasks.md, "unmapped error classes → 500"): four more
 // substrate error classes reachable through real S3.2/S3.3 handlers that `interfaces/http/
 // capability-route.ts`/`interfaces/ws/rpc.ts` had no mapping for — same re-export shape as

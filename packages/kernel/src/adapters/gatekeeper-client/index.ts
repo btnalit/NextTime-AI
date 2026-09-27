@@ -10,6 +10,8 @@ import {
   gateAuthorizationHeader,
   normalizeGateToken,
 } from '@nexttime/gatekeeper-base';
+import { correlationHeaders } from '@nexttime/shared';
+import { currentCorrelationId } from '../../substrate/correlation/index.js';
 
 /**
  * adapters/gatekeeper-client: HTTP client implementing the gatekeeper protocol port
@@ -34,6 +36,11 @@ import {
  * gate calls — an omitted header simply means every gate call 401s visibly (`GatekeeperClientError`
  * with code `unauthorized`), diagnosable from the same place a real credential/network failure
  * would be.
+ *
+ * Leftover 87: every request also carries the current call's `x-correlation-id`
+ * (substrate/correlation) when there is one, so the gate's own log line for this call has the same
+ * id as the kernel's. A gate call made outside any inbound call (the approval drainer's background
+ * tick, the gate-instance health sweep) carries none and the gate mints its own.
  */
 
 const GATE_TOKEN_FILE_ENV = 'NEXTTIME_GATE_TOKEN_FILE';
@@ -155,7 +162,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...correlationHeaders(currentCorrelationId()) };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.token !== undefined) headers.authorization = gateAuthorizationHeader(this.token);
     let response: Response;

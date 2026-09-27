@@ -185,14 +185,16 @@ export function createHost(options: HostOptions): Host {
   const lastTouchAt = options.lastTouchAtMap ?? new Map<string, number>();
 
   /** Best-effort `supervisorClient.touch` — failures are logged, never thrown, since a missed
-   *  touch only risks a future idle sweep, not this Turn's own correctness. */
-  function performTouch(principalId: string, context: string): void {
-    supervisorClient.touch(principalId).catch((err: unknown) => {
+   *  touch only risks a future idle sweep, not this Turn's own correctness. `turnId` (leftover 87)
+   *  is the Turn this touch is made for, forwarded as the call's correlation id. */
+  function performTouch(principalId: string, context: string, turnId?: string): void {
+    supervisorClient.touch(principalId, { correlationId: turnId }).catch((err: unknown) => {
       log(
         JSON.stringify({
           level: 'warn',
           msg: `agent-host: supervisor touch failed (${context})`,
           principalId,
+          correlationId: turnId,
           error: String(err),
         }),
       );
@@ -208,7 +210,7 @@ export function createHost(options: HostOptions): Host {
     const nowMs = now();
     if (nowMs - last < TOUCH_REFRESH_INTERVAL_MS) return;
     lastTouchAt.set(principalId, nowMs);
-    performTouch(principalId, 'mid-turn idle-clock refresh');
+    performTouch(principalId, 'mid-turn idle-clock refresh', activeTurns.get(principalId)?.turnId);
   }
 
   function handleContainerClosed(
@@ -421,19 +423,25 @@ export function createHost(options: HostOptions): Host {
     egressDeny: readonly string[] | undefined,
     skillsInline: SpawnInput['skillsInline'],
     image: string | undefined,
+    turnId: string,
   ): Promise<AttachmentRecord> {
-    const spawnResult = await supervisorClient.spawn({
-      workspaceId,
-      principalId,
-      handle,
-      kernelUrl,
-      llmUrl,
-      systemPrompt,
-      model,
-      egressDeny,
-      skillsInline,
-      image,
-    });
+    // Leftover 87: the Turn id is this Turn's correlation id on every hop — the kernel sent it,
+    // the prompt's turn marker hands it to pi, and worker-supervisor logs this spawn under it.
+    const spawnResult = await supervisorClient.spawn(
+      {
+        workspaceId,
+        principalId,
+        handle,
+        kernelUrl,
+        llmUrl,
+        systemPrompt,
+        model,
+        egressDeny,
+        skillsInline,
+        image,
+      },
+      { correlationId: turnId },
+    );
 
     // Best-effort — spawn() itself already refreshed worker-supervisor's idle clock for this
     // principal (resident-service.ts's own spawn() sets `lastTouchedAt` on every call, reuse or
@@ -442,7 +450,7 @@ export function createHost(options: HostOptions): Host {
     // sufficed. Also seeds `refreshTouch`'s own throttle window (leftover 46, module doc comment)
     // so the first pi stdout line right after this doesn't immediately re-touch on top of it.
     lastTouchAt.set(principalId, now());
-    performTouch(principalId, 'spawn already refreshed the idle clock');
+    performTouch(principalId, 'spawn already refreshed the idle clock', turnId);
 
     const existing = attachments.get(principalId);
     if (existing && existing.containerId === spawnResult.containerId) return existing;
@@ -510,6 +518,7 @@ export function createHost(options: HostOptions): Host {
           cmd.egressDeny,
           cmd.skillsInline,
           cmd.image,
+          cmd.turnId,
         );
       } catch (err) {
         activeTurns.delete(cmd.principalId); // release the reservation — this turn never started
@@ -519,6 +528,7 @@ export function createHost(options: HostOptions): Host {
             msg: 'agent-host: failed to spawn/attach the entry container',
             principalId: cmd.principalId,
             turnId: cmd.turnId,
+            correlationId: cmd.turnId,
             error: String(err),
           }),
         );

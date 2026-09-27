@@ -1,4 +1,9 @@
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import {
+  CORRELATION_ID_HEADER,
+  PROMETHEUS_TEXT_CONTENT_TYPE,
+  resolveCorrelationId,
+} from '@nexttime/shared';
+import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import type { ConnectedAccountStore } from './credentials/index.js';
 import {
   ApplyRequiresIdempotencyKeyError,
@@ -14,6 +19,7 @@ import {
 } from './errors.js';
 import { registerGateAuthGuard } from './gate-auth.js';
 import type { GatekeeperBase } from './gatekeeper-base.js';
+import { type GateMetrics, createGateMetrics } from './metrics.js';
 import {
   ApplyRequestSchema,
   DeleteConnectedAccountRequestSchema,
@@ -112,11 +118,34 @@ export interface GateRouteContext {
   readonly forcedOnBehalfOf?: string;
 }
 
+/** The fields of one `/gate/*` call's log line (leftover 87). */
+export interface GateCallLogFields {
+  readonly gateRoute: string;
+  readonly operation: string;
+  readonly gateId?: string;
+  readonly status: number;
+  readonly durationMs: number;
+}
+
 export interface RegisterGateRoutesOptions {
   /** Route prefix, `''` for a single-gate server, `'/i/:gateId'` for the gate host (决定 ⑫). */
   readonly prefix: string;
   /** Picks the gate for a request; `undefined` → 404 `gate_not_found`. */
   readonly resolve: (request: FastifyRequest) => GateRouteContext | undefined;
+  /** Leftover 87: one sample per `/gate/*` call (metrics.ts); omitted → not counted. */
+  readonly metrics?: GateMetrics;
+  /** Leftover 87: writes one line per `/gate/*` call. Default: `request.log.info(fields)` — the
+   *  request logger already carries the call's `correlationId` (Fastify's request id, set from
+   *  the kernel's `x-correlation-id`). The gate host, whose Fastify logger is off, passes its own. */
+  readonly logCall?: (request: FastifyRequest, fields: GateCallLogFields) => void;
+}
+
+/** Leftover 87: `genReqId` for every gate Fastify instance — the request id *is* the correlation
+ *  id: the kernel's `x-correlation-id` when valid, else a minted one. */
+export function gateRequestId(req: {
+  headers: Record<string, string | string[] | undefined>;
+}): string {
+  return resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
 }
 
 /**
@@ -128,6 +157,42 @@ export interface RegisterGateRoutesOptions {
  */
 export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRoutesOptions): void {
   const { prefix, resolve } = options;
+  const logCall =
+    options.logCall ??
+    ((request: FastifyRequest, fields: GateCallLogFields) => request.log.info(fields, 'gate call'));
+
+  // Leftover 87: one metrics sample and one log line per `/gate/*` call, after the response —
+  // the operation label only when this gate actually publishes that Operation (bounded labels).
+  const gateRoutePrefix = `${prefix}/gate/`;
+  app.addHook('onResponse', (request, reply, done) => {
+    const url = request.routeOptions.url;
+    if (typeof url === 'string' && url.startsWith(gateRoutePrefix)) {
+      const gateRoute = url.slice(gateRoutePrefix.length);
+      const requested = (request.body as { operation?: unknown } | undefined)?.operation;
+      const gate = resolve(request)?.gate;
+      const operation =
+        typeof requested === 'string' &&
+        gate?.describeOperations().some((o) => o.name === requested)
+          ? requested
+          : '';
+      const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
+      options.metrics?.recordCall({
+        gate: gateId ?? '',
+        route: gateRoute,
+        operation,
+        status: reply.statusCode,
+        durationSeconds: reply.elapsedTime / 1000,
+      });
+      logCall(request, {
+        gateRoute,
+        operation,
+        ...(gateId !== undefined ? { gateId } : {}),
+        status: reply.statusCode,
+        durationMs: Math.round(reply.elapsedTime),
+      });
+    }
+    done();
+  });
 
   function ok(
     reply: { code(status: number): void },
@@ -286,12 +351,23 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
 }
 
 export function createGatekeeperServer(options: CreateGatekeeperServerOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
+  // Leftover 87: the request id is the kernel's correlation id, logged as `correlationId`.
+  const app = Fastify({
+    logger: options.logger ?? false,
+    genReqId: gateRequestId,
+    logController: new LogController({ requestIdLogLabel: 'correlationId' }),
+  });
+  // `/gate/*` and (leftover 87) `/internal/*` — the same gate token, kernel-only.
   registerGateAuthGuard(app, options.token);
   const context: GateRouteContext = {
     gate: options.gate,
     connectedAccountStore: options.connectedAccountStore,
   };
-  registerGateRoutes(app, { prefix: '', resolve: () => context });
+  const metrics = createGateMetrics();
+  registerGateRoutes(app, { prefix: '', resolve: () => context, metrics });
+  app.get('/internal/metrics', async (_request, reply) => {
+    reply.header('content-type', PROMETHEUS_TEXT_CONTENT_TYPE);
+    return metrics.render();
+  });
   return app;
 }

@@ -35,6 +35,24 @@ describe('LlmUsageReporter', () => {
     reporter.close();
   });
 
+  // Leftover 87: the correlation id is in the log line only — the kernel wire shape is unchanged.
+  it('logs the correlation id with the record but never sends it to the kernel', async () => {
+    const lines: string[] = [];
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+    const reporter = new LlmUsageReporter({
+      log: (line) => lines.push(line),
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(record(), { correlationId: 'turn-abcd-0001' });
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ correlationId: 'turn-abcd-0001' });
+    await vi.advanceTimersByTimeAsync(100);
+    const body = String((fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+    expect(body).not.toContain('correlationId');
+    reporter.close();
+  });
+
   it('does not queue or fetch when kernelUrl is unset', async () => {
     const fetchImpl = vi.fn();
     const reporter = new LlmUsageReporter({ log: () => {}, fetchImpl });

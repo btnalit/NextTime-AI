@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { runWithCorrelationId } from '../correlation/index.js';
 import { SqlGraphStore } from '../graph/index.js';
 import {
   MAX_AUDIT_QUERY_LIMIT,
@@ -26,6 +27,60 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+// Leftover 87 — `writeAudit` adds the current call's correlation id to the payload (unit: a fake
+// client captures the INSERT's payload parameter, no DB).
+describe('writeAudit correlationId (unit, no DB)', () => {
+  function captureClient(): { client: PoolClient; payloads: unknown[] } {
+    const payloads: unknown[] = [];
+    const client = {
+      async query(_sql: string, params: unknown[]) {
+        const payload = JSON.parse(String(params[6]));
+        payloads.push(payload);
+        return {
+          rows: [
+            {
+              workspace_id: params[0],
+              id: randomUUID(),
+              actor_principal_id: params[1],
+              actor_user_id: params[2],
+              action: params[3],
+              resource_type: params[4],
+              resource_id: params[5],
+              payload,
+              created_at: new Date(),
+            },
+          ],
+        };
+      },
+    } as unknown as PoolClient;
+    return { client, payloads };
+  }
+
+  const record = {
+    workspaceId: randomUUID(),
+    actorPrincipalId: randomUUID(),
+    action: 'set_quota',
+    payload: { channel: 'human' },
+  };
+
+  it('adds correlationId inside a correlated call', async () => {
+    const { client, payloads } = captureClient();
+    const row = await runWithCorrelationId('turn-1234-abcd', () => writeAudit(client, record));
+    expect(payloads[0]).toEqual({ channel: 'human', correlationId: 'turn-1234-abcd' });
+    expect(row.payload.correlationId).toBe('turn-1234-abcd');
+  });
+
+  it('leaves the payload unchanged outside any call, and never overrides an explicit one', async () => {
+    const { client, payloads } = captureClient();
+    await writeAudit(client, record);
+    await runWithCorrelationId('turn-1234-abcd', () =>
+      writeAudit(client, { ...record, payload: { correlationId: 'explicit-id-0001' } }),
+    );
+    expect(payloads[0]).toEqual({ channel: 'human' });
+    expect(payloads[1]).toEqual({ correlationId: 'explicit-id-0001' });
+  });
+});
 
 // S6-A `audit_query` keyset cursor (docs/console-completion-plan.md §5.5) — pure encode/decode,
 // no DB. Same "malformed reads as no cursor" contract as the other keyset cursors in this repo.

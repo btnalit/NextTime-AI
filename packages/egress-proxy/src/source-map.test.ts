@@ -33,6 +33,22 @@ describe('createSourceMap', () => {
     map.close();
   });
 
+  // Leftover 87: worker-supervisor writes a Task container's correlation id into its entry.
+  it('keeps the optional correlationId of an entry', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        '198.51.100.12': { sourceId: 'worker-2', correlationId: 'turn-abcd-0001' },
+      }),
+    );
+    const map = createSourceMap(file);
+    expect(map.resolveSource('198.51.100.12')).toEqual({
+      sourceId: 'worker-2',
+      correlationId: 'turn-abcd-0001',
+    });
+    map.close();
+  });
+
   it('returns undefined for every client IP when no file is configured', () => {
     const map = createSourceMap(undefined);
     expect(map.resolveSource('198.51.100.10')).toBeUndefined();
