@@ -258,8 +258,14 @@ function mockGeometry(
   };
 }
 
+// Leftover 94: under full-suite load the page's first render plus these waits could take longer
+// than both Testing Library's 1 s default per wait and vitest's 5 s per test, so the W3 cases
+// below failed intermittently (never in isolation). Same remedy as leftovers 25 / 40: explicit
+// budgets here and a per-test 15 s timeout on the three W3 cases — no change to what they assert.
+const TURN_START_WAIT = { timeout: 10_000 };
+
 async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
-  await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+  await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled(), TURN_START_WAIT);
   act(() => fake.caughtUp());
   const el = screen.getByTestId('chat-thread').parentElement;
   if (!el) throw new Error('expected .chat-scroll');
@@ -268,9 +274,9 @@ async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
   // ignored), so the stream is started the way the page starts it.
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web' } });
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
-  await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
+  await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled(), TURN_START_WAIT);
   // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '回复中'.
-  await screen.findByText('回复中');
+  await screen.findByText('回复中', undefined, TURN_START_WAIT);
   return geometry;
 }
 
@@ -306,7 +312,7 @@ describe('W3: auto-follow keeps following during a stream', () => {
     // The reader never scrolled up, so the view follows and no FollowPill appears.
     expect(screen.queryByTestId('follow-pill')).toBeNull();
     expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
-  });
+  }, 15000);
 
   // Mechanism (b): the scroll write is keyed on `contentVersion` =
   // `${messages.length}:${streamingText.length}:${toolCalls.length}`. A tool-call row that is
@@ -342,7 +348,7 @@ describe('W3: auto-follow keeps following during a stream', () => {
     // The view still follows the (now much taller) content.
     expect(screen.queryByTestId('follow-pill')).toBeNull();
     expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
-  });
+  }, 15000);
 
   it('a reader who scrolled up gets the FollowPill counting new messages; clicking it re-follows', async () => {
     const fake = fakeClient();
@@ -390,7 +396,7 @@ describe('W3: auto-follow keeps following during a stream', () => {
     geometry.setScrollHeight(500);
     act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 3\n' }));
     expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
-  });
+  }, 15000);
 });
 
 // ---- S6-A / C22: send + stream, header, model switch, archived read-only ----------------------
