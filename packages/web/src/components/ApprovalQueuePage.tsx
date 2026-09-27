@@ -2,7 +2,6 @@ import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import type { ActionRequestStatus } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
-import { useMediaQuery } from '../hooks/useMediaQuery.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -18,9 +17,9 @@ import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
+import { MasterDetail } from './kit/master-detail.js';
 import { PageHeader } from './kit/page-header.js';
 import { Select } from './kit/select.js';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from './kit/sheet.js';
 import { SkeletonRows } from './kit/skeleton.js';
 import { StatusChip } from './kit/status-chip.js';
 import { Tabs } from './kit/tabs.js';
@@ -42,14 +41,6 @@ type Filter = 'pending' | 'history';
 type HistoryStatusFilter = 'all' | ActionRequestStatus;
 
 const HISTORY_PAGE_SIZE = 50;
-
-/** ≤1179px: list only, the detail opens in a `kit/sheet`; ≥1180px: two-pane master-detail. Chosen
- *  so Playwright's default 1280×720 viewport (journeys) and the 1440px gate screenshot both land
- *  in the wide layout, and the 768px gate screenshot lands in the narrow one — see the existing
- *  1279px/960px checkpoints in `styles/pages.css`. `useMediaQuery` degrades to `false` (not
- *  narrow) where `matchMedia` is unavailable — jsdom in a test with no mock — so the default,
- *  everywhere this hasn't been explicitly mocked to the contrary, is the wide layout. */
-const NARROW_APPROVALS_QUERY = '(max-width: 1179px)';
 
 /** "等待 N 分钟" / "等待 N 小时" / "等待 N 天" — a pending row's own elapsed-wait framing (distinct
  *  from `formatRelative`'s "N 分钟前", which reads as "in the past" rather than "still waiting"). */
@@ -85,7 +76,6 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const [filter, setFilter] = useState<Filter>('pending');
   const queue = useApprovalQueue({ http, pushes, selectedId, permissions, toast, t });
   const { pending, rows, pendingCount, forbidden, selectedRow, detailError } = queue;
-  const isNarrow = useMediaQuery(NARROW_APPROVALS_QUERY);
 
   const detailContent = (
     <ApprovalDetailContent
@@ -139,64 +129,47 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         />
       </div>
 
-      <div className={`approvals-layout approvals-layout--${isNarrow ? 'narrow' : 'wide'}`}>
-        <div className="approvals-pane approvals-list-pane">
-          <div className="approvals-pane-body">
-            {filter === 'pending' ? (
-              <PendingList
-                t={t}
-                pending={pending}
-                rows={rows}
-                forbidden={forbidden}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                principalNames={principalNames}
-                gatekeeperNames={gatekeeperNames}
-              />
-            ) : (
-              <ApprovalHistoryTab
-                http={http}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                principalNames={principalNames}
-                gatekeeperNames={gatekeeperNames}
-              />
-            )}
-          </div>
-          {filter === 'pending' && rows.length > 0 ? (
-            <div className="approvals-pane-footer">
+      <MasterDetail
+        list={
+          filter === 'pending' ? (
+            <PendingList
+              t={t}
+              pending={pending}
+              rows={rows}
+              forbidden={forbidden}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              principalNames={principalNames}
+              gatekeeperNames={gatekeeperNames}
+            />
+          ) : (
+            <ApprovalHistoryTab
+              http={http}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              principalNames={principalNames}
+              gatekeeperNames={gatekeeperNames}
+            />
+          )
+        }
+        footer={
+          filter === 'pending' && rows.length > 0 ? (
+            <div className="md-pane-footer">
               {t(
                 '未处理的请求会在策略规定时间后自动过期，不会被执行。',
                 'Unhandled requests automatically expire after a policy-defined window and are never executed.',
               )}
             </div>
-          ) : null}
-        </div>
-
-        {!isNarrow ? (
-          <div className="approvals-pane approvals-detail-pane" data-testid="approval-drawer">
-            <div className="approvals-pane-body">{detailContent}</div>
-          </div>
-        ) : null}
-      </div>
-
-      {isNarrow ? (
-        <Sheet
-          open={selectedId !== undefined}
-          onOpenChange={(open) => {
-            if (!open) onSelect(null);
-          }}
-        >
-          <SheetContent data-testid="approval-drawer">
-            <SheetHeader>
-              {/* Generic on purpose: the detail's own h2 already names the action and target, so a
-                  specific sheet title would repeat it one line above (P3-4 screenshot review). */}
-              <SheetTitle>{t('审批详情', 'Approval detail')}</SheetTitle>
-            </SheetHeader>
-            {detailContent}
-          </SheetContent>
-        </Sheet>
-      ) : null}
+          ) : undefined
+        }
+        detail={detailContent}
+        open={selectedId !== undefined}
+        onClose={() => onSelect(null)}
+        // Generic on purpose: the detail's own h2 already names the action and target, so a
+        // specific sheet title would repeat it one line above (P3-4 screenshot review).
+        sheetTitle={t('审批详情', 'Approval detail')}
+        detailTestId="approval-drawer"
+      />
     </div>
   );
 }

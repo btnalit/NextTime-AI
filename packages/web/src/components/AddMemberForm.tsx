@@ -5,9 +5,10 @@ import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { platformErrorMessage } from '../lib/platform-errors.js';
-import { Button } from './ui/Button.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input, Select } from './ui/Field.js';
+import { Button } from './kit/button.js';
+import { ErrorBanner } from './kit/error-banner.js';
+import { Field } from './kit/field.js';
+import { Select } from './kit/select.js';
 
 export interface AddMemberFormProps {
   readonly http: CapabilityCaller;
@@ -16,12 +17,13 @@ export interface AddMemberFormProps {
 }
 
 /**
- * components/AddMemberForm: `add_member{login, role}` (P-A1) — a person joins this workspace by
- * their **platform login**, not by having a credential minted for them: the capability creates the
- * membership Principal with no API key at all (`hasApiKey: false`), and the person signs in with
- * the password their platform account already has (design doc §5: "工作区配置里的成员页语义变为
- * 从平台用户中添加（按登录名搜索 → 选角色）"). `create_principal` is now only the service-
- * credential path — see `CreatePrincipalForm`.
+ * components/AddMemberForm (console redesign P3-4 part B, on `components/kit/*` only):
+ * `add_member{login, role}` (P-A1) — a person joins this workspace by their **platform login**,
+ * not by having a credential minted for them: the capability creates the membership Principal
+ * with no API key at all (`hasApiKey: false`), and the person signs in with the password their
+ * platform account already has (design doc §5: "工作区配置里的成员页语义变为从平台用户中添加（按登录
+ * 名搜索 → 选角色）"). `create_principal` is now only the service-credential path — see
+ * `CreatePrincipalForm`.
  *
  * Two kernel refusals get their own bilingual line instead of a banner: `user_not_found` (404 —
  * no such platform login, or it is disabled) and `already_member` (409), the two a typo or a
@@ -67,15 +69,14 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
           "An existing platform user's login — this creates no account and no API key.",
         )}
       >
-        <Input
+        <input
           id="am-login"
+          className="input input-mono"
           value={login}
           onChange={(event) => setLogin(event.target.value)}
           disabled={submitting}
           autoComplete="off"
           spellCheck={false}
-          mono
-          autoFocus
         />
       </Field>
 
@@ -87,6 +88,8 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
       >
         <Select
           id="am-role"
+          aria-label={t('角色', 'Role')}
+          className="select-fit"
           value={role}
           onChange={(event) => setRole(event.target.value as Role)}
           disabled={submitting}
@@ -115,7 +118,7 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        <Button type="submit" variant="primary" loading={submitting} disabled={!login.trim()}>
+        <Button type="submit" variant="primary" aria-busy={submitting} disabled={!login.trim()}>
           {t('添加', 'Add')}
         </Button>
       </div>

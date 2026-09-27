@@ -4,31 +4,33 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { formatDateTime, formatRelative } from '../lib/format.js';
-import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
+import { shortId } from '../lib/format.js';
+import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
+import { Button } from './kit/button.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './kit/dropdown-menu.js';
+import { EmptyState } from './kit/empty-state.js';
+import { ErrorBanner } from './kit/error-banner.js';
+import { List, ListRow } from './kit/list-row.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './kit/sheet.js';
+import { SkeletonRows } from './kit/skeleton.js';
+import { StatusChip } from './kit/status-chip.js';
 import { IssueServiceHandleSection } from './members/IssueServiceHandleSection.js';
-import { Button } from './ui/Button.js';
-import { DataList, DataRow } from './ui/DataList.js';
-import { Drawer } from './ui/Drawer.js';
-import { EmptyState } from './ui/EmptyState.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Icon } from './ui/Icon.js';
-import { Notice } from './ui/Notice.js';
-import { SkeletonRows } from './ui/Skeleton.js';
-import { StatusChip } from './ui/StatusChip.js';
+// `useToast` stays on `components/ui/Toast` — `App.tsx` mounts that provider (not `kit/toast`'s
+// own, separate context), so `kit/toast`'s hook would make this page's own add/create toasts a
+// silent no-op (same reason as `ApprovalQueuePage.tsx`/`TasksPage.tsx`).
 import { useToast } from './ui/Toast.js';
 
 export interface MembersPageProps {
@@ -42,19 +44,41 @@ type DrawerState =
   | { readonly kind: 'issueHandle' }
   | { readonly kind: 'detail'; readonly principal: PrincipalRow };
 
+/** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
+ *  trigger only needs `kit/button`'s bare label slot, not `components/ui/Icon` (which would add a
+ *  fresh `components/ui/*` import this already-migrated page has no other reason to carry — see
+ *  `scripts/guards/legacy-ui-importers.json`). Hand-rolled the same way `kit/ref-chip`/`kit/toast`
+ *  draw their own icons rather than importing the legacy set (the exact precedent
+ *  `systems/SystemAccessCard.tsx`'s own `MoreIcon` set). */
+function MoreIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
 /**
- * components/MembersPage: 成员与授权 Members (`/govern/members`, S3.11) — `list_principals`,
- * `add_member`, `create_principal`, `set_principal_role`, `rotate_api_key`, `disable_principal`.
- * All owner-only per the design doc's own minRole table ("成员/授权/策略 = owner"), except
- * `rotate_api_key` ("owner 或本人" — a non-owner rotating their own key would need a `principalId`
- * they cannot discover from this page anyway, since a member never sees `/govern/*` once role is
- * proven — see `Sidebar`), so this page's write affordances hide behind a single `canManage`
- * flag. C9 (console-completion-plan §2b): that flag reads the *authoritative* role first —
- * `get_workspace.caller.role` via `useWorkspaceIdentity`, owner only, the same read the Sidebar
- * badge already makes — and falls back to the 403 inference only while that read is not ready.
- * The inference alone never hid these buttons from an operator: `list_principals` is
- * operator-readable, so an operator's session never learned a denial and could click straight
- * into a guaranteed 403.
+ * components/MembersPage (console redesign P3-4 part B, on `components/kit/*` only): 成员与授权
+ * Members (`/govern/members`, S3.11) — `list_principals`, `add_member`, `create_principal`,
+ * `set_principal_role`, `rotate_api_key`, `disable_principal`. All owner-only per the design
+ * doc's own minRole table ("成员/授权/策略 = owner"), except `rotate_api_key` ("owner 或本人" — a
+ * non-owner rotating their own key would need a `principalId` they cannot discover from this page
+ * anyway, since a member never sees `/govern/*` once role is proven — see `Sidebar`), so this
+ * page's write affordances hide behind a single `canManage` flag. C9 (console-completion-plan
+ * §2b): that flag reads the *authoritative* role first — `get_workspace.caller.role` via
+ * `useWorkspaceIdentity`, owner only, the same read the Sidebar badge already makes — and falls
+ * back to the 403 inference only while that read is not ready. The inference alone never hid
+ * these buttons from an operator: `list_principals` is operator-readable, so an operator's
+ * session never learned a denial and could click straight into a guaranteed 403.
+ *
+ * This page keeps its own list + four form drawers shape — NOT the `kit/master-detail` layout
+ * `ApprovalQueuePage`/`TasksPage` use (the drawers are forms, not a persistent detail view of the
+ * selected row; the dispatch this migration shipped under is explicit that Members stays as-is
+ * here). Each drawer is a `kit/sheet` now (was `ui/Drawer`); the list is `kit/list-row` (was
+ * `ui/DataList`/`DataRow`).
  *
  * P-A1 splits the two things "add a member" used to mean (design doc §5): a **person** joins by
  * their platform login (`add_member` — a membership Principal with no API key, they sign in with
@@ -73,7 +97,7 @@ type DrawerState =
  *
  * Screenshot review of #305: the full form (principal picker, TTL, the whole capability tree) was
  * too heavy to render inline under the member list, so it moved behind a header button
- * ("签发外部运行时凭证", next to 添加成员/服务凭证) opening in its own `Drawer` — the fourth and last
+ * ("签发外部运行时凭证", next to 添加成员/服务凭证) opening in its own sheet — the fourth and last
  * one this page owns, same `{drawer.kind === '…' ? <Child .../> : null}` shape as the other three.
  */
 export function MembersPage({ http }: MembersPageProps) {
@@ -125,7 +149,7 @@ export function MembersPage({ http }: MembersPageProps) {
         // owner-only writes behind a "更多操作" overflow menu — was three equal-weight buttons.
         primaryAction={
           canManage ? (
-            <Button variant="primary" icon="plus" onClick={() => setDrawer({ kind: 'addMember' })}>
+            <Button variant="primary" onClick={() => setDrawer({ kind: 'addMember' })}>
               {t('添加成员', 'Add member')}
             </Button>
           ) : undefined
@@ -136,11 +160,11 @@ export function MembersPage({ http }: MembersPageProps) {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="secondary"
-                  icon="more"
-                  iconOnly
                   aria-label={t('更多操作', 'More actions')}
                   data-testid="members-header-menu"
-                />
+                >
+                  <MoreIcon />
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
@@ -166,7 +190,6 @@ export function MembersPage({ http }: MembersPageProps) {
       ) : principals.state.status === 'error' ? (
         forbidden ? (
           <EmptyState
-            icon="shield"
             title={t('需要 owner 权限', 'Owner role required')}
             body={t(
               'list_principals 仅工作区 owner 可读。',
@@ -184,7 +207,6 @@ export function MembersPage({ http }: MembersPageProps) {
         )
       ) : rows.length === 0 ? (
         <EmptyState
-          icon="users"
           title={t('还没有成员', 'No members yet')}
           body={t(
             '先添加一个成员，或创建一个服务凭证。',
@@ -193,48 +215,45 @@ export function MembersPage({ http }: MembersPageProps) {
           testId="members-empty"
         />
       ) : (
-        <DataList ariaLabel="Members" testId="members-list">
+        <List ariaLabel="Members" testId="members-list">
           {rows.map((row) => (
-            <DataRow
+            <ListRow
               key={row.id}
               testId="member-row"
               onSelect={() => setDrawer({ kind: 'detail', principal: row })}
-              leading={<StatusChip machine="role" status={row.role} size="s" />}
-              title={
-                <>
-                  <span className="truncate">{row.displayName}</span>
-                  {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
-                   *  principal id, once `get_workspace` resolves it. */}
-                  {ownPrincipalId !== null && row.id === ownPrincipalId ? (
-                    <span className="tag" data-testid="member-row-you">
-                      {t('你', 'You')}
-                    </span>
-                  ) : null}
-                  {row.kind !== 'human' ? (
-                    <span className="tag">{principalKindLabel(row.kind, t)}</span>
-                  ) : null}
-                  {row.disabledAt ? (
-                    <span className="tag text-danger">{t('已停用', 'disabled')}</span>
-                  ) : null}
-                </>
-              }
-              meta={
-                <>
-                  <span className="mono">{principalDisplayRole(row, t)}</span>
-                  <span className="meta-sep" />
-                  <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
-                  {row.hasApiKey ? (
-                    <>
-                      <span className="meta-sep" />
-                      <span>{t('已签发', 'API key issued')}</span>
-                    </>
-                  ) : null}
-                </>
-              }
-              trailing={<Icon name="chevron-right" />}
-            />
+            >
+              {/* Row rhythm (console redesign P3-4 part B): role chip / name + 「你」 tag / kind ·
+               *  id · key state — the id is plain text, never a `kit/ref-chip` (a row is itself a
+               *  `<button>`; a chip's own copy control would be a second, nested interactive
+               *  element, the exact bug part A found and fixed for the approvals row). */}
+              <span className="row-wrap">
+                <StatusChip machine="role" status={row.role} size="s" />
+              </span>
+              <span className="row-wrap">
+                <span className="truncate">{row.displayName}</span>
+                {/* S8 W4 (audit S15 "成员页不标你"): the row matching the signed-in caller's own
+                 *  principal id, once `get_workspace` resolves it. */}
+                {ownPrincipalId !== null && row.id === ownPrincipalId ? (
+                  <span className="tag" data-testid="member-row-you">
+                    {t('你', 'You')}
+                  </span>
+                ) : null}
+                {row.disabledAt ? (
+                  <span className="tag text-danger">{t('已停用', 'disabled')}</span>
+                ) : null}
+              </span>
+              <span className="row-wrap text-3">
+                <span>{principalKindLabel(row.kind, t)}</span>
+                <span className="meta-sep" />
+                <span className="mono">{shortId(row.id)}</span>
+                <span className="meta-sep" />
+                <span>
+                  {row.hasApiKey ? t('已签发', 'API key issued') : t('无 API key', 'No API key')}
+                </span>
+              </span>
+            </ListRow>
           ))}
-        </DataList>
+        </List>
       )}
       {canManage &&
       principals.state.status === 'ready' &&
@@ -254,7 +273,8 @@ export function MembersPage({ http }: MembersPageProps) {
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button
             variant="secondary"
-            loading={principals.loadingMore}
+            aria-busy={principals.loadingMore}
+            disabled={principals.loadingMore}
             onClick={() => void principals.loadMore()}
           >
             {t('加载更多', 'Load more')}
@@ -264,8 +284,8 @@ export function MembersPage({ http }: MembersPageProps) {
       {principals.state.status === 'ready' && principals.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="members-truncated">
           {t(
-            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余成员',
-            'keep loading more to see the rest.',
+            '已达到单次读取上限，继续点「加载更多」查看其余成员',
+            'Reached the per-page limit — keep loading more to see the rest.',
           )}
         </p>
       ) : null}
@@ -277,95 +297,118 @@ export function MembersPage({ http }: MembersPageProps) {
         />
       ) : null}
 
-      <Drawer
+      <Sheet
         open={drawer.kind === 'addMember'}
-        onClose={() => setDrawer({ kind: 'closed' })}
-        title={t('添加成员', 'Add member')}
-        subtitle={t(
-          '按平台登录名添加；这里不创建账户、不签发 API key。',
-          'By platform login — no account is created here and no API key is issued.',
-        )}
-        testId="add-member-drawer"
+        onOpenChange={(open) => {
+          if (!open) setDrawer({ kind: 'closed' });
+        }}
       >
-        {drawer.kind === 'addMember' ? (
-          <AddMemberForm
-            http={http}
-            onCancel={() => setDrawer({ kind: 'closed' })}
-            onDone={(principal) => {
-              setDrawer({ kind: 'closed' });
-              toast.push({
-                tone: 'ok',
-                title: t(`已添加 ${principal.displayName}`, `${principal.displayName} added`),
-              });
-              refreshList();
-            }}
-          />
-        ) : null}
-      </Drawer>
+        <SheetContent data-testid="add-member-drawer">
+          <SheetHeader>
+            <SheetTitle>{t('添加成员', 'Add member')}</SheetTitle>
+            <SheetDescription>
+              {t(
+                '按平台登录名添加；这里不创建账户、不签发 API key。',
+                'By platform login — no account is created here and no API key is issued.',
+              )}
+            </SheetDescription>
+          </SheetHeader>
+          {drawer.kind === 'addMember' ? (
+            <AddMemberForm
+              http={http}
+              onCancel={() => setDrawer({ kind: 'closed' })}
+              onDone={(principal) => {
+                setDrawer({ kind: 'closed' });
+                toast.push({
+                  tone: 'ok',
+                  title: t(`已添加 ${principal.displayName}`, `${principal.displayName} added`),
+                });
+                refreshList();
+              }}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
 
-      <Drawer
+      <Sheet
         open={drawer.kind === 'create'}
-        onClose={() => setDrawer({ kind: 'closed' })}
-        title={t('服务凭证', 'Service credential (API key)')}
-        subtitle={t(
-          "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。",
-          "Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person.",
-        )}
-        testId="create-principal-drawer"
+        onOpenChange={(open) => {
+          if (!open) setDrawer({ kind: 'closed' });
+        }}
       >
-        {drawer.kind === 'create' ? (
-          <CreatePrincipalForm
-            http={http}
-            onCancel={() => setDrawer({ kind: 'closed' })}
-            onDone={(principal) => {
-              setDrawer({ kind: 'closed' });
-              toast.push({
-                tone: 'ok',
-                title: t(`已创建 ${principal.displayName}`, `${principal.displayName} created`),
-              });
-              refreshList();
-            }}
-          />
-        ) : null}
-      </Drawer>
+        <SheetContent data-testid="create-principal-drawer">
+          <SheetHeader>
+            <SheetTitle>{t('服务凭证', 'Service credential (API key)')}</SheetTitle>
+            <SheetDescription>
+              {t(
+                "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。",
+                "Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person.",
+              )}
+            </SheetDescription>
+          </SheetHeader>
+          {drawer.kind === 'create' ? (
+            <CreatePrincipalForm
+              http={http}
+              onCancel={() => setDrawer({ kind: 'closed' })}
+              onDone={(principal) => {
+                setDrawer({ kind: 'closed' });
+                toast.push({
+                  tone: 'ok',
+                  title: t(`已创建 ${principal.displayName}`, `${principal.displayName} created`),
+                });
+                refreshList();
+              }}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
 
       {/* D3 (moved off 访问 Access) / screenshot review of #305 (too heavy inline): owner-only,
        *  same as every other drawer on this page. */}
-      <Drawer
+      <Sheet
         open={drawer.kind === 'issueHandle'}
-        onClose={() => setDrawer({ kind: 'closed' })}
-        title={t('签发外部运行时凭证', 'Issue a service Handle')}
-        testId="issue-service-handle-drawer"
+        onOpenChange={(open) => {
+          if (!open) setDrawer({ kind: 'closed' });
+        }}
       >
-        {drawer.kind === 'issueHandle' ? (
-          <IssueServiceHandleSection
-            http={http}
-            principals={allPrincipals}
-            onDone={() => setDrawer({ kind: 'closed' })}
-          />
-        ) : null}
-      </Drawer>
+        <SheetContent data-testid="issue-service-handle-drawer">
+          <SheetHeader>
+            <SheetTitle>{t('签发外部运行时凭证', 'Issue a service Handle')}</SheetTitle>
+          </SheetHeader>
+          {drawer.kind === 'issueHandle' ? (
+            <IssueServiceHandleSection
+              http={http}
+              principals={allPrincipals}
+              onDone={() => setDrawer({ kind: 'closed' })}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
 
-      <Drawer
+      <Sheet
         open={drawer.kind === 'detail'}
-        onClose={() => setDrawer({ kind: 'closed' })}
-        title={drawer.kind === 'detail' ? drawer.principal.displayName : t('成员', 'Member')}
-        subtitle={
-          drawer.kind === 'detail' ? <span className="mono">{drawer.principal.id}</span> : undefined
-        }
-        testId="principal-drawer"
+        onOpenChange={(open) => {
+          if (!open) setDrawer({ kind: 'closed' });
+        }}
       >
-        {drawer.kind === 'detail' ? (
-          <PrincipalDetail
-            key={drawer.principal.id}
-            http={http}
-            principal={drawer.principal}
-            canManage={canManage}
-            onChanged={handlePrincipalChanged}
-            onForbidden={permissions.markDenied}
-          />
-        ) : null}
-      </Drawer>
+        <SheetContent data-testid="principal-drawer">
+          <SheetHeader>
+            <SheetTitle>
+              {drawer.kind === 'detail' ? drawer.principal.displayName : t('成员', 'Member')}
+            </SheetTitle>
+          </SheetHeader>
+          {drawer.kind === 'detail' ? (
+            <PrincipalDetail
+              key={drawer.principal.id}
+              http={http}
+              principal={drawer.principal}
+              canManage={canManage}
+              onChanged={handlePrincipalChanged}
+              onForbidden={permissions.markDenied}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

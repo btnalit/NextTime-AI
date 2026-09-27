@@ -6,14 +6,16 @@ import { formatDateTime, formatRelative } from '../lib/format.js';
 import type { PrincipalRow, RotateApiKeyResult } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel, roleLabel } from '../lib/labels.js';
+import { Button } from './kit/button.js';
+import { CopyButton } from './kit/copy-button.js';
 import { DrawerSection, DrawerSections } from './kit/drawer-section.js';
+import { ErrorBanner } from './kit/error-banner.js';
+import { Field } from './kit/field.js';
+import { KeyValue, type KeyValueItem } from './kit/key-value.js';
+import { Notice } from './kit/notice.js';
 import { RefChip } from './kit/ref-chip.js';
-import { Button } from './ui/Button.js';
-import { CopyId } from './ui/CopyId.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Select } from './ui/Field.js';
-import { Notice } from './ui/Notice.js';
-import { StatusChip } from './ui/StatusChip.js';
+import { Select } from './kit/select.js';
+import { StatusChip } from './kit/status-chip.js';
 
 export interface PrincipalDetailProps {
   readonly http: CapabilityCaller;
@@ -24,14 +26,16 @@ export interface PrincipalDetailProps {
 }
 
 /**
- * components/PrincipalDetail: one Member's drawer body — `set_principal_role`,
- * `rotate_api_key`, `disable_principal` (S3.11). `disable_principal` keeps its same-drawer confirm
- * step (a two-click local toggle; the drawer-based `ConfirmTier` tiers would open a second focus
- * trap inside this drawer) since it revokes every Handle/session the member holds (S3.11
- * background: "撤销其全部 Handle 与入口会话"). B3 / B4 (S6-A): the Worker-definition reference is a
- * `RefChip` (S8 W1-A6, audit S10: this page loads no `list_worker_definitions` directory, so the
- * kit chip self-resolves its own name through `resolve_refs` instead of degrading to a bare id)
- * and the copy is bilingual.
+ * components/PrincipalDetail (console redesign P3-4 part B, on `components/kit/*` only): one
+ * Member's drawer body — `set_principal_role`, `rotate_api_key`, `disable_principal` (S3.11).
+ * `disable_principal` keeps its same-drawer confirm step (a two-click local toggle; the drawer's
+ * own `kit/confirm` `medium` tier would open a second popover inside an already-open `kit/sheet` —
+ * kept as the existing simple toggle rather than layering another confirm surface) since it
+ * revokes every Handle/session the member holds (S3.11 background: "撤销其全部 Handle 与入口会话").
+ * The metadata section is `kit/key-value`; the Worker-definition reference and the on-drawer
+ * identity are `kit/ref-chip` (S8 W1-A6, audit S10: this page loads no `list_worker_definitions`
+ * directory, so the kit chip self-resolves its own name through `resolve_refs` instead of
+ * degrading to a bare id).
  */
 export function PrincipalDetail({
   http,
@@ -108,75 +112,92 @@ export function PrincipalDetail({
 
   const disabled = Boolean(principal.disabledAt);
 
+  const metadataItems: KeyValueItem[] = [
+    {
+      key: 'id',
+      label: 'Id',
+      value: <RefChip kind="principal" id={principal.id} name={principal.displayName} size="s" />,
+    },
+    { key: 'kind', label: t('类型', 'Kind'), value: principalKindLabel(principal.kind, t) },
+    {
+      key: 'status',
+      label: t('状态', 'Status'),
+      value: (
+        <span
+          className={`chip chip-s ${disabled ? 'chip-neutral' : 'chip-ok'}`}
+          data-status={disabled ? 'disabled' : 'active'}
+          data-testid="principal-status"
+        >
+          {disabled ? t('已停用', 'Disabled') : t('活跃', 'Active')}
+        </span>
+      ),
+    },
+    {
+      key: 'apiKey',
+      label: 'API key',
+      value: principal.hasApiKey ? t('已签发', 'issued') : t('无', 'none'),
+    },
+    {
+      key: 'createdAt',
+      label: t('创建', 'Created'),
+      value: (
+        <time title={formatDateTime(principal.createdAt)}>
+          {formatRelative(principal.createdAt)}
+        </time>
+      ),
+    },
+  ];
+  if (principal.disabledAt) {
+    metadataItems.push({
+      key: 'disabledAt',
+      label: t('停用于', 'Disabled'),
+      value: (
+        <time title={formatDateTime(principal.disabledAt)}>
+          {formatRelative(principal.disabledAt)}
+        </time>
+      ),
+    });
+  }
+
   return (
     <div className="stack" data-testid="principal-detail">
       {/* S8 W1-A11 (audit L8): the drawer's fixed three sections — metadata / related links /
        *  edit form — replacing the old flat stack separated only by `.divider`s. */}
       <DrawerSections>
-        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
-          <dl className="definition-list">
-            <dt>Id</dt>
-            <dd>
-              <CopyId id={principal.id} label="principal" />
-            </dd>
-            <dt>{t('类型', 'Kind')}</dt>
-            <dd>
-              <span className="tag">{principalKindLabel(principal.kind, t)}</span>
-            </dd>
-            <dt>{t('状态', 'Status')}</dt>
-            <dd>
-              <span
-                className={`chip chip-s ${disabled ? 'chip-neutral' : 'chip-ok'}`}
-                data-status={disabled ? 'disabled' : 'active'}
-                data-testid="principal-status"
-              >
-                {disabled ? t('已停用', 'Disabled') : t('活跃', 'Active')}
-              </span>
-            </dd>
-            <dt>API key</dt>
-            <dd>{principal.hasApiKey ? t('已签发', 'issued') : t('无', 'none')}</dd>
-            <dt>{t('创建', 'Created')}</dt>
-            <dd>
-              <time title={formatDateTime(principal.createdAt)}>
-                {formatRelative(principal.createdAt)}
-              </time>
-            </dd>
-            {principal.disabledAt ? (
-              <>
-                <dt>{t('停用于', 'Disabled')}</dt>
-                <dd>
-                  <time title={formatDateTime(principal.disabledAt)}>
-                    {formatRelative(principal.disabledAt)}
-                  </time>
-                </dd>
-              </>
-            ) : null}
-          </dl>
+        <DrawerSection title={t('元数据', 'Metadata')}>
+          <KeyValue items={metadataItems} />
         </DrawerSection>
 
         {principal.workerDefinitionId ? (
-          <DrawerSection title={t('相关链接 Related links', 'Related links')}>
-            <dl className="definition-list">
-              <dt>{t('Worker 定义', 'Worker definition')}</dt>
-              <dd>
-                <RefChip
-                  kind="workerDefinition"
-                  id={principal.workerDefinitionId}
-                  http={http}
-                  size="s"
-                  testId="principal-worker-definition"
-                />
-              </dd>
-            </dl>
+          <DrawerSection title={t('相关链接', 'Related links')}>
+            <KeyValue
+              items={[
+                {
+                  key: 'workerDefinition',
+                  label: t('Worker 定义', 'Worker definition'),
+                  value: (
+                    <RefChip
+                      kind="workerDefinition"
+                      id={principal.workerDefinitionId}
+                      http={http}
+                      size="s"
+                      testId="principal-worker-definition"
+                    />
+                  ),
+                },
+              ]}
+            />
           </DrawerSection>
         ) : null}
 
         {canManage ? (
-          <DrawerSection title={t('编辑 Edit', 'Edit')}>
+          <DrawerSection title={t('编辑', 'Edit')}>
             <Field id="principal-role" label={t('角色', 'Role')}>
               <div className="row">
                 <Select
                   id="principal-role"
+                  aria-label={t('角色', 'Role')}
+                  className="select-fit"
                   value={role}
                   onChange={(event) => setRole(event.target.value as Role)}
                   disabled={savingRole || disabled}
@@ -190,7 +211,7 @@ export function PrincipalDetail({
                 <Button
                   variant="secondary"
                   onClick={() => void saveRole()}
-                  loading={savingRole}
+                  aria-busy={savingRole}
                   disabled={role === principal.role || disabled}
                 >
                   {t('保存', 'Save')}
@@ -210,12 +231,11 @@ export function PrincipalDetail({
                 <Button
                   variant="secondary"
                   size="s"
-                  icon="key"
                   onClick={() => void rotateKey()}
-                  loading={rotating}
+                  aria-busy={rotating}
                   disabled={disabled}
                 >
-                  {t('轮换', 'API key Rotate API key')}
+                  {t('轮换 API key', 'Rotate API key')}
                 </Button>
               )}
             </div>
@@ -232,7 +252,7 @@ export function PrincipalDetail({
                 </Notice>
                 <div className="code-block row" style={{ justifyContent: 'space-between' }}>
                   <span className="mono">{rotated.apiKey}</span>
-                  <CopyId id={rotated.apiKey} label="API key" full />
+                  <CopyButton value={rotated.apiKey} label="API key" />
                 </div>
                 <div className="row" style={{ justifyContent: 'flex-end' }}>
                   <Button variant="secondary" size="s" onClick={() => setRotated(null)}>
@@ -262,7 +282,7 @@ export function PrincipalDetail({
                   <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
                     {t('取消', 'Cancel')}
                   </Button>
-                  <Button variant="danger" onClick={() => void disable()} loading={disabling}>
+                  <Button variant="danger" onClick={() => void disable()} aria-busy={disabling}>
                     {t('确认停用', 'Confirm disable')}
                   </Button>
                 </div>

@@ -41,10 +41,14 @@ test.describe('CI smoke: tasks page', () => {
     await login(page, API_KEY as string);
     await page.goto('/#/work/tasks/00000000-0000-0000-0000-000000000000');
     // `get_task` answers 404 for an unknown id; the drawer stays on its skeleton / the list
-    // reloads — either way the page itself must still be there.
+    // reloads — either way the page itself must still be there. Console redesign P3-4 part B made
+    // Tasks a `kit/master-detail` layout (same as Approvals/V6): at this suite's default
+    // 1280×720 viewport (≥1180px, the wide layout) `task-drawer` is the always-mounted detail
+    // pane, not a modal Escape can dismiss — clearing the id (not Escape) is what returns to the
+    // plain list, and the pane itself stays visible throughout, now showing its own empty state.
     await expect(page.getByTestId('task-drawer')).toBeVisible({ timeout: 15_000 });
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('task-drawer')).toBeHidden();
+    await page.goto('/#/work/tasks');
     await expect(page.getByTestId('tasks-empty').or(page.getByTestId('tasks-list'))).toBeVisible();
+    await expect(page.getByTestId('task-drawer-empty')).toBeVisible();
   });
 });

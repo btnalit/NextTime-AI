@@ -1022,40 +1022,43 @@
   flex-wrap: wrap;
 }
 
-/* ---- Approvals master-detail (console redesign P3-4, V6 "待我审批") ----------------------------
+/* ---- Master-detail (console redesign P3-4): 待我审批 (V6, part A) + 任务 (part B) -----------------
  * Which of the two structures below renders — the two-pane grid or the list-only page — is decided
- * in JS (`ApprovalQueuePage`'s own `useMediaQuery`, `(max-width: 1179px)`), not by a CSS media
+ * in JS (`kit/master-detail`'s own `useMediaQuery`, `(max-width: 1179px)`), not by a CSS media
  * query: the narrow layout swaps the always-inline detail pane for a `kit/sheet` (a different
  * mount, not just a different width), so there is nothing here for a breakpoint to switch between.
- * `.approvals-page` gets its own bounded height (the chat page's own pattern, `.chat-page` above)
- * so the list/detail panes scroll internally instead of the whole document. */
-.approvals-page {
+ * A page using this shell gets its own bounded height (`.approvals-page`/`.tasks-page` below, the
+ * chat page's own pattern, `.chat-page` above) so the list/detail panes scroll internally instead
+ * of the whole document. */
+.approvals-page,
+.tasks-page {
   height: 100vh;
   min-height: 0;
 }
 
 @media (max-width: 960px) {
-  .approvals-page {
+  .approvals-page,
+  .tasks-page {
     height: calc(100vh - 52px);
   }
 }
 
-.approvals-layout {
+.md-layout {
   flex: 1;
   min-height: 0;
   display: grid;
   gap: var(--space-4);
 }
 
-.approvals-layout--wide {
+.md-layout--wide {
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
 }
 
-.approvals-layout--narrow {
+.md-layout--narrow {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.approvals-pane {
+.md-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1066,18 +1069,18 @@
   overflow: hidden;
 }
 
-.approvals-pane-body {
+.md-pane-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-3);
 }
 
-.approvals-detail-pane .approvals-pane-body {
+.md-detail-pane .md-pane-body {
   padding: var(--space-4);
 }
 
-.approvals-pane-footer {
+.md-pane-footer {
   flex-shrink: 0;
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border);
@@ -1085,7 +1088,8 @@
   color: var(--text-3);
 }
 
-.approval-detail-title {
+.approval-detail-title,
+.task-detail-title {
   font-size: var(--fs-19);
   font-weight: 600;
   line-height: var(--lh-tight);
@@ -1095,4 +1099,13 @@
 .select.approvals-status-select {
   width: auto;
   max-width: 200px;
+}
+
+/* ---- Members forms (console redesign P3-4 part B) ----------------------------------------------
+ * A shared select-width utility (the `.ap-model-select`/`.approvals-status-select` pattern above,
+ * generalised): every `kit/select` inside a Members drawer form (role picker, service-principal
+ * picker) sizes to its content instead of filling the drawer's width (§5.9 principle 6). */
+.select-fit {
+  width: auto;
+  max-width: 360px;
 }

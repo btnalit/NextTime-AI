@@ -218,6 +218,10 @@ describe('TaskDetail', () => {
         />
       </PermissionsProvider>,
     );
-    expect(screen.getByTestId('task-definition').className).toContain('ref-chip-bare');
+    // console redesign P3-4 part B: `task-definition` is now a `kit/ref-chip`, not the legacy
+    // `ui/RefChip` (whose bare state carried a `ref-chip-bare` class) — its own degrade state
+    // instead carries a `<testId>-fallback` inner node (kit/ref-chip.tsx).
+    const chip = screen.getByTestId('task-definition');
+    expect(within(chip).getByTestId('task-definition-fallback')).toBeTruthy();
   });
 });
