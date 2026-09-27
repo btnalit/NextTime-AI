@@ -6,12 +6,13 @@ import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
-import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
+import type { ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
+import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { PolicyEditSheet } from './governance/PolicyEditSheet.js';
 import { QuotaEditSheet } from './governance/QuotaEditSheet.js';
 import { Button } from './kit/button.js';
@@ -236,7 +237,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
   // A picker inside AgentPolicyForm, not a browsable list — autoLoadAll (S8 W1-C #243 made
   // list_skills keyset-paginated; a missing Skill past page one would be a correctness bug here).
   const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
-  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
+  // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
+  const gatekeepers = useGatekeeperDirectory(http);
   const agentPolicy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas');
   const policies = useCapabilityList<PolicyWire>(http, 'list_policies');
@@ -319,7 +322,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
             policy={agentPolicy.state.data}
             models={models.state.status === 'ready' ? models.state.data.items : []}
             skills={skills.state.status === 'ready' ? skills.state.data.items : []}
-            gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : []}
+            gatekeepers={gatekeepers.rows ?? []}
             onSaved={(saved) => {
               agentPolicy.mutate(() => saved);
               toast.push({ tone: 'ok', title: t('策略已保存', 'Policy saved') });

@@ -1,4 +1,8 @@
-import type { ExecutionReadinessGateWire, ExecutionReadinessWire } from '@nexttime/shared';
+import type {
+  ExecutionReadinessGateWire,
+  ExecutionReadinessWire,
+  RefreshOperationGovernanceResultWire,
+} from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { shortId } from '../../lib/format.js';
@@ -6,6 +10,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
+import { RefreshOperationGovernanceConfirm } from '../connect/RefreshOperationGovernanceConfirm.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import {
@@ -52,6 +57,11 @@ export interface SystemAccessHealth {
   /** `AvailableGateInstanceWire.transportKind` (`ssh`/`http`/`mcp`/`cli`) — `undefined` for a
    *  legacy (`!linked`) registration, which carries no transport signal either. */
   readonly transportKind?: string;
+  /** `AvailableGateInstanceWire.gateId` — the *platform* gate instance id (distinct from this
+   *  card's own `gate.gateId`, which is the Gatekeeper Object id) — only present when `linked`.
+   *  Closing wave C6 (G3): what `preview_gate_instance_enable`/`RefreshOperationGovernanceConfirm`
+   *  read the announced manifest from. */
+  readonly platformGateId?: string;
 }
 
 export interface SystemAccessCardProps {
@@ -408,6 +418,22 @@ export function SystemAccessCard({
                 </div>
               )}
             </div>
+
+            {canManage && healthInfo.linked && healthInfo.platformGateId !== undefined ? (
+              <div className="stack-s" data-testid="system-governance-align">
+                <span className="field-label">
+                  {t('已部署 Operation 的治理字段', 'Deployed operations’ governance fields')}
+                </span>
+                <RefreshOperationGovernanceConfirm
+                  http={http}
+                  gatekeeperId={gate.gateId}
+                  platformGateId={healthInfo.platformGateId}
+                  gateDisplayName={gate.name}
+                  onRefreshed={() => onPublished()}
+                  testId="system-governance-refresh"
+                />
+              </div>
+            ) : null}
           </div>
         </SheetContent>
       </Sheet>
