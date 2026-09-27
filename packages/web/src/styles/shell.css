@@ -16,41 +16,12 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--surface-1);
+  /* Design system v3: the navigation sits on the page itself (the ambient wash shows through) and
+   * only the active item carries colour — the primary pill below — with cards alone being white. */
+  background: transparent;
   border-right: 1px solid var(--border);
   padding: var(--space-4) var(--space-3);
   gap: var(--space-4);
-}
-
-/* Design system v2.1 — the navigation as a brand-navy island (tokens.css "Sidebar island"). The
- * general tokens are re-pointed here, on the panel itself, so the nav items, workspace block, role
- * badges, pending-count badge, connection line, user row and language switch — legacy classes and
- * kit utilities alike — all resolve to the island values with no per-control override. The mobile
- * `NavDrawer` carries `.nav-drawer` on its sheet content, so it is the same island. */
-.sidebar,
-.nav-drawer {
-  --surface-1: var(--sidebar-bg);
-  --surface-2: var(--sidebar-surface-2);
-  --surface-3: var(--sidebar-surface-3);
-  --border: var(--sidebar-border);
-  --border-strong: var(--sidebar-border);
-  --text-strong: var(--sidebar-text-strong);
-  --text: var(--sidebar-text);
-  --text-2: var(--sidebar-text-2);
-  --text-3: var(--sidebar-text-3);
-  --accent: var(--sidebar-accent);
-  --accent-hover: var(--sidebar-text-strong);
-  --accent-soft: var(--sidebar-accent-soft);
-  --warn: var(--sidebar-warn);
-  --warn-soft: var(--sidebar-warn-soft);
-  --info: var(--sidebar-info);
-  --info-soft: var(--sidebar-info-soft);
-  --ok: var(--sidebar-ok);
-  --ok-soft: var(--sidebar-ok-soft);
-  background: var(--sidebar-bg);
-  /* `color` is inherited as a computed value from `body`, not re-resolved from the remapped
-   * `--text` — so the island has to restate it, or unstyled text stays page ink on navy. */
-  color: var(--text);
 }
 
 .sidebar-brand {
@@ -68,8 +39,9 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-m);
-  /* Design system v2: the product mark carries the brand colour. */
-  background: var(--primary);
+  /* Design system v3: the product mark carries the brand gradient and the primary glow. */
+  background: var(--brand-gradient);
+  box-shadow: var(--shadow-primary);
   color: var(--text-on-primary);
   display: grid;
   place-items: center;
@@ -96,7 +68,8 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
-  background: var(--surface-2);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-card);
   min-width: 0;
 }
 
@@ -108,7 +81,7 @@
 .sidebar-workspace-name {
   font-size: var(--fs-13);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -250,26 +223,29 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 30px;
-  padding: 6px 8px;
-  border-radius: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: var(--radius-m);
   color: var(--text-2);
   font-weight: 500;
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
   line-height: var(--lh-tight);
   border: 1px solid transparent;
-  transition: background var(--transition), color var(--transition);
+  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
 }
 
 .nav-item:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--text);
   text-decoration: none;
 }
 
+/* Design system v3: the active section is a solid primary pill with a soft glow — the one place
+ * the navigation carries colour. */
 .nav-item[aria-current="page"] {
-  background: var(--accent-soft);
-  color: var(--text);
+  background: var(--primary);
+  color: var(--text-on-primary);
+  box-shadow: var(--shadow-primary);
 }
 
 .nav-item .icon {
@@ -278,7 +254,7 @@
 }
 
 .nav-item[aria-current="page"] .icon {
-  color: var(--accent);
+  color: var(--text-on-primary);
 }
 
 .nav-label {
@@ -523,7 +499,7 @@
 
 .tab[aria-selected="true"] {
   background: var(--surface-1);
-  color: var(--text);
+  color: var(--accent);
   box-shadow: 0 0 0 1px var(--border-strong);
 }
 
@@ -645,7 +621,7 @@
 .mobile-topbar-title {
   font-size: var(--fs-14);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--text);
 }
 
 .mobile-topbar-sub {

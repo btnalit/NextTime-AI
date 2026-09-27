@@ -39,7 +39,7 @@ export function DashboardCard({
       {hasHeader ? (
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           {title !== undefined ? (
-            <h2 className="text-14 font-semibold text-text-strong">{title}</h2>
+            <h2 className="text-14 font-semibold text-text">{title}</h2>
           ) : (
             <span />
           )}
@@ -83,7 +83,7 @@ export function FormCardSection({ title, description, children, testId }: FormCa
     <section className="flex flex-col gap-3 p-5" data-testid={testId}>
       {title !== undefined ? (
         <div className="flex flex-col gap-1">
-          <h3 className="text-14 font-semibold text-text-strong">{title}</h3>
+          <h3 className="text-14 font-semibold text-text">{title}</h3>
           {description !== undefined ? <p className="text-13 text-text-3">{description}</p> : null}
         </div>
       ) : null}
