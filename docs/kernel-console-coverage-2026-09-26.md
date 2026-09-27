@@ -9,24 +9,27 @@ files modified.
 
 ## Summary
 
-- **161 capabilities** wired end-to-end (`CAPABILITY_HANDLERS` has exactly 161 entries; every name
+- **162 capabilities** wired end-to-end (`CAPABILITY_HANDLERS` has exactly 162 entries; every name
   matches one row in `packages/shared/src/capabilities.ts`, 1:1, no orphans either direction).
-- Mode split: **72 observe / 58 write / 25 execute / 6 propose**. Channel split: **119 human-only /
-  42 handle-eligible** (channel `handle` means "human or Handle caller", not "agent-only" —
+  **2026-09-27 (closing wave C5b, coverage gap G1 part 2):** +1, `list_ontology_versions`.
+- Mode split: **73 observe / 58 write / 25 execute / 6 propose**. Channel split: **119 human-only /
+  43 handle-eligible** (channel `handle` means "human or Handle caller", not "agent-only" —
   confirmed from `authorize.ts`'s own doc comment).
 - Domain split (`group`): platform 46, governance 17, connection 16, meta 16, chat 9, epistemic 9,
-  members 9, graph 8, task 8, ontology 5, worker 5, agent_profile 4, modules 3, audit 3, ingest 2,
+  members 9, graph 8, task 8, ontology 6, worker 5, agent_profile 4, modules 3, audit 3, ingest 2,
   gate 1.
-- **19 capabilities have zero console caller** (no `http.call('<name>', …)`, no `useCapability*`
+- **15 capabilities have zero console caller** (no `http.call('<name>', …)`, no `useCapability*`
   hook, nowhere in `packages/web/src`, tests included):
   `list_user_memberships`, `get_gate_instance`, `refresh_operation_governance`, `traverse`,
   `assert_fact`, `supersede_fact`, `invalidate_fact`, `request_action`, `find_workers`,
-  `find_operations`, `find_procedures`, `connect_gatekeeper`, `get_type`, `validate`,
-  `propose_ontology_change`, `publish_ontology_version`, `register_source`,
+  `find_operations`, `find_procedures`, `connect_gatekeeper`, `register_source`,
   `submit_observations`, `list_runtime_images`.
+  (Was 19: `get_type`/`validate` gained a console caller in closing wave C5 (part 1, #362);
+  `propose_ontology_change`/`publish_ontology_version` gained one in closing wave C5b (part 2, this
+  wave) — see the Top-10 list and Gap list below.)
   Of these, 9 are legitimately agent-only (entry/worker-mode tools: `traverse`, `request_action`,
   `find_workers`, `find_operations`, `find_procedures`, plus the 7 counted separately below that
-  *do* have a console touchpoint through the `issue_handle` scope picker). The remaining ~10 are
+  *do* have a console touchpoint through the `issue_handle` scope picker). The remaining ~6 are
   real console gaps — see Gap list.
 - **7 more capabilities have no direct `http.call`** but the console does touch them as
   selectable rows in the `issue_handle` / `issue_service_handle` scope-picker form
@@ -55,13 +58,18 @@ files modified.
    `list_types`/`get_type` for a searchable, kind-filterable browse + detail view; `validate`'s own
    semantics is a candidate-link domain/range check, not a change dry-run, so its console surface
    is a small "校验一个候选关系" tool under a LinkType's own detail, not a proposal-review step).
-   `propose_ontology_change`/`publish_ontology_version` are **not** covered — there is no kernel
-   capability that lists or reads a pending `ontology_versions` draft row (id/version/status/
-   proposedBy) by any filter (`get_type`/`list_types` return the merged current-state type view,
-   with no such fields, scoped to published rows plus only the caller's own drafts); building a
-   review queue would need a new kernel read capability (e.g. a `list_ontology_versions`/
-   `get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list
-   pattern) — a separate decision, out of scope for a console-only PR.
+   **2026-09-27 (G1 part 2, closing wave C5b, `feat/ontology-proposals`): fully closed.** A new
+   read capability, `list_ontology_versions` (mode `observe`, `channel:'handle'`,
+   `minRole:'member'` — mirrors `list_worker_definitions`/`list_skills` exactly for visibility:
+   published rows workspace-wide plus the caller's own drafts, I16), gives the drawer a second tab,
+   「提案 Proposals」: lists drafts, opens onto a detail that diffs the draft's own declared
+   object/link/action types against `list_types`'s currently-visible ones
+   (`lib/graph-view.ts`'s `ontologyProposalDiff`, computed client-side — no kernel diff engine was
+   added), and offers `发布 Publish` (`publish_ontology_version`) behind an `irreversible`-tier
+   confirm (a one-way `draft -> published` transition, I12 — no `medium`-tier one-click here, unlike
+   `publish_skill`/`publish_worker_definition`). `propose_ontology_change` remains agent-only by
+   design (no console form proposes an ontology change by hand — an agent's own job, §7.10);
+   nothing in this wave adds one.
 2. **No manual fact-correction UI beyond conflict resolution** — `assert_fact`, `supersede_fact`,
    `invalidate_fact` are unused. The only human-facing fact actions are `verify_fact` (mark
    verified) and `resolve_conflict` (pick a winner among existing candidates); there is no way for
@@ -260,8 +268,9 @@ platform-human-only by design).
 | `get_type` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: the graph page's 「类型 Types」 drawer re-reads a selected row's canonical definition. Was: no console caller anywhere; GraphPage's type filter used list_types only, no single-type detail view. |
 | `list_types` | ontology | handle | R | graph/GraphPage.tsx; graph/OntologyTypesDrawer.tsx | - | The drawer's own list view (all kinds, unfiltered params) is a second, independent caller alongside the existing object-type filter. |
 | `validate` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | G1 closed 2026-09-27: a LinkType's detail view offers "校验一个候选关系" — one candidate sourceType/targetType pair against that LinkType's own declared signatures (I2). Its real semantics is a link domain/range check, not a dry-run of a proposed ontology *change*; no console surface exists for the latter (see propose_ontology_change/publish_ontology_version below). Was: no console caller anywhere. |
-| `propose_ontology_change` | ontology | handle | W | (none) | entry | Still no console caller. **Investigated 2026-09-27 (G1, wave C5) and deliberately left undone**: there is no kernel capability that lists or reads a pending `ontology_versions` draft row (id/version/status/proposedBy) by any filter — `get_type`/`list_types` return the merged current-state type view only, scoped to published rows plus the caller's own drafts, with no id/version/proposedBy fields at all. A "review this proposal" UI needs a new read capability first (a `list_ontology_versions`/`get_ontology_version` alongside `list_skills`/`list_worker_definitions`'s own draft-list pattern) — a separate decision, out of scope for a console-only PR. |
-| `publish_ontology_version` | ontology | human | W | (none) | - | Still no console caller — same gap and same 2026-09-27 investigation as propose_ontology_change above. If a review UI is ever built here, `publish_ontology_version` is a one-way `draft -> published` transition (I12: the DB trigger blocks any further update to `definition` once published, and no unpublish/deprecate capability exists for `ontology_versions`) — its confirm should be `tier="irreversible"`, not `medium`. |
+| `list_ontology_versions` | ontology | handle | R | graph/OntologyTypesDrawer.tsx | - | New capability (closing wave C5b, G1 part 2): mirrors `list_worker_definitions`/`list_skills` for visibility/channel (published rows + own drafts, I16). Backs the drawer's new 「提案 Proposals」 tab — see propose_ontology_change/publish_ontology_version rows below. |
+| `propose_ontology_change` | ontology | handle | W | (none) | entry | Still no console caller — by design, not a gap: proposing an ontology change is an agent's own job (§7.10); no console form is meant to hand-author one. **G1 part 2 closed 2026-09-27 (closing wave C5b)**: what *is* now covered is reviewing/publishing what an agent already proposed — see `list_ontology_versions`/`publish_ontology_version` rows. |
+| `publish_ontology_version` | ontology | human | W | graph/OntologyTypesDrawer.tsx | - | G1 part 2 closed 2026-09-27 (closing wave C5b): the Proposals tab's own 发布 Publish, behind a `tier="irreversible"` confirm as this row itself predicted (a one-way `draft -> published` transition, I12: the DB trigger blocks any further update to `definition` once published, and no unpublish/deprecate exists for `ontology_versions`). Was: no console caller anywhere. **Separate finding, not fixed here**: this capability declares no `minRole` — `roleSatisfiesMinRole` treats an absent `minRole` as satisfied by every human role, so any role (including `member`/`auditor`) can publish, not just `owner`/`builder` (`packages/kernel/src/governance/capability/roles.ts` `roleSatisfiesMinRole`; `packages/shared/src/capabilities.ts`'s `publish_ontology_version` entry). Reported to the maintainer, not changed. |
 | `export_prov` | audit | human | R | audit/ExplainSection.tsx (AuditPage) | - |  |
 | `register_source` | ingest | handle | W | (none) | - | No console caller. Ingest is pipeline/collector-only (API key), which is plausibly correct -- flagged for confirmation rather than as a clear defect. |
 | `submit_observations` | ingest | handle | W | (none) | - | No console caller. Same as register_source -- plausibly pipeline-only by design. |
@@ -366,9 +375,11 @@ component or its direct children found during this pass — shared sub-component
   only reads `list_types` for its filter. Ontology governance is console-invisible today.
   **2026-09-27 (G1, closing wave C5):** `get_type`/`validate` now have a console caller
   (`graph/OntologyTypesDrawer.tsx` — see the Top-10 list above for the exact shape).
-  `propose_ontology_change`/`publish_ontology_version` still have none — no kernel capability
-  lists or reads a pending `ontology_versions` draft row by any filter, so there is nothing to
-  build a review queue against without first adding one (out of scope here).
+  **2026-09-27 (G1 part 2, closing wave C5b): fully closed.** A new read capability
+  (`list_ontology_versions`) plus the drawer's 「提案 Proposals」 tab give `publish_ontology_version`
+  a console caller too — see the Top-10 list and the three ontology table rows above.
+  `propose_ontology_change` still has none, by design (proposing is the agent's own job, §7.10;
+  reviewing/publishing what it proposed is the human's, which is what this wave adds).
 - `assert_fact`, `supersede_fact`, `invalidate_fact` — `packages/kernel/src/application/gateway/
   fact-handlers.ts`'s three write handlers have no console caller; only `verify_fact`
   (`graph/FactRow.tsx`) and `resolve_conflict` (`graph/ConflictsPanel.tsx`) exist as human fact

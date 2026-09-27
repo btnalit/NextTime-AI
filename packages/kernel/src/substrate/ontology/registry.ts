@@ -1,3 +1,4 @@
+import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
@@ -405,5 +406,156 @@ export async function validateLink(
     errors: [
       `LinkType "${input.linkType}" does not permit ${input.sourceType} -> ${input.targetType} (allowed: ${evaluation.expected.join(', ')})`,
     ],
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// listOntologyVersions — closing wave C5b (coverage gap G1 part 2): the read side
+// `list_ontology_versions` needs, distinct from `loadVisibleOntology` above. That function merges
+// every visible family into "the current type namespace" (one row per family, by design — `get_type`
+// /`list_types`/`validate` all just want to know what a type currently means). This one instead
+// returns *raw* `ontology_versions` rows — one per (id, version) — so a person can find a specific
+// draft's own id/version to hand to `publish_ontology_version`; the shape and visibility rule are
+// deliberately borrowed byte-for-byte from `application/worker/definitions.ts`'s
+// `listWorkerDefinitionsPage` (published rows, workspace-wide, plus the caller's own `draft` rows,
+// I16's read half — same predicate `application/worker/skills.ts`'s `listSkills` also uses), not
+// invented fresh for this one capability.
+// -------------------------------------------------------------------------------------------
+
+export interface OntologyVersionListItem {
+  readonly id: string;
+  readonly version: number;
+  readonly status: string;
+  readonly definition: OntologyDefinition;
+  readonly proposedBy: {
+    readonly id: string;
+    readonly kind: PrincipalKind;
+    readonly displayName: string | null;
+  };
+  readonly createdAt: Date;
+}
+
+interface OntologyVersionListDbRow {
+  id: string;
+  version: number;
+  status: string;
+  definition: OntologyDefinition;
+  created_at: Date;
+  proposer_id: string;
+  proposer_kind: PrincipalKind;
+  proposer_display_name: string | null;
+}
+
+function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
+  return {
+    id: row.id,
+    version: row.version,
+    status: row.status,
+    definition: row.definition,
+    proposedBy: {
+      id: row.proposer_id,
+      kind: row.proposer_kind,
+      displayName: row.proposer_display_name,
+    },
+    createdAt: row.created_at,
+  };
+}
+
+export const DEFAULT_LIST_ONTOLOGY_VERSIONS_LIMIT = 100;
+export const MAX_LIST_ONTOLOGY_VERSIONS_LIMIT = 500;
+
+const ONTOLOGY_VERSION_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Same `base64url(createdAt|id)` cursor shape `listWorkerDefinitionsPage`/`listSkills` already
+ *  use — one convention for every keyset-paginated `list_*` capability, not a fourth encoding. */
+function encodeListOntologyVersionsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListOntologyVersionsCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (
+      !createdAt ||
+      Number.isNaN(Date.parse(createdAt)) ||
+      !ONTOLOGY_VERSION_UUID_PATTERN.test(id)
+    ) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListOntologyVersionsFilter {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface OntologyVersionsPage {
+  readonly items: readonly OntologyVersionListItem[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
+/**
+ * `list_ontology_versions`'s logic: every `published` `ontology_versions` row (workspace-wide, any
+ * version — a family may carry more than one row still marked `published`, same as
+ * `worker_definitions`, since nothing here deprecates an older published ontology version) plus
+ * `callerPrincipalId`'s own `draft` rows (I16 — never another principal's), newest `created_at`
+ * first, keyset-paginated. `proposed_by` is joined against `principals` for the wire shape's
+ * resolved `{id, kind, displayName}` — the FK (`ontology_versions.proposed_by references
+ * principals`) guarantees the join always finds a row, so this is a plain `join`, not a `left
+ * join`.
+ */
+export async function listOntologyVersions(
+  client: PoolClient,
+  workspaceId: string,
+  callerPrincipalId: string,
+  filter: ListOntologyVersionsFilter = {},
+): Promise<OntologyVersionsPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_ONTOLOGY_VERSIONS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_ONTOLOGY_VERSIONS_LIMIT);
+  const cursor = decodeListOntologyVersionsCursor(filter.cursor);
+
+  const result = await client.query<OntologyVersionListDbRow>(
+    `select t.id, t.version, t.status, t.definition, t.created_at,
+            p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name
+     from ontology_versions t
+     join principals p on p.workspace_id = t.workspace_id and p.id = t.proposed_by
+     where t.workspace_id = $1
+       and (
+         t.status = 'published'
+         or (t.status = 'draft' and t.proposed_by = $2)
+       )
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', t.created_at), t.id) < ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', t.created_at) desc, t.id desc
+     limit $5`,
+    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+  );
+
+  const rows = result.rows.slice(0, limit).map(mapListRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListOntologyVersionsCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated = requestedLimit > MAX_LIST_ONTOLOGY_VERSIONS_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
   };
 }

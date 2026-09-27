@@ -1,4 +1,10 @@
-import type { ConflictWire, ExplainResultWire, FactWire } from '@nexttime/shared';
+import type {
+  ConflictWire,
+  ExplainResultWire,
+  FactWire,
+  OntologyDefinition,
+  OntologyTypeWire,
+} from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   conflictsByFactId,
@@ -13,6 +19,7 @@ import {
   neighbourIds,
   objectDisplayName,
   objectTypeOptions,
+  ontologyProposalDiff,
 } from './graph-view.js';
 
 const UUID = '0b6a3d7e-8b0f-4d7e-9a11-3f5c2e1d0a99';
@@ -219,5 +226,109 @@ describe('as-of input helpers', () => {
     expect(localInputToIso('')).toBeUndefined();
     expect(localInputToIso('nope')).toBeUndefined();
     expect(isoToLocalInput('nope')).toBe('');
+  });
+});
+
+// Closing wave C5b (coverage gap G1 part 2): a proposal's diff against the currently-visible types.
+describe('ontologyProposalDiff', () => {
+  const currentTypes: readonly OntologyTypeWire[] = [
+    { kind: 'object', name: 'Host', description: 'A machine', identityKey: ['hostname'] },
+    {
+      kind: 'link',
+      name: 'runs_on',
+      signatures: [{ domain: 'Container', range: 'Host', description: 'runs on' }],
+    },
+    {
+      kind: 'action',
+      name: 'docker_restart',
+      description: 'Restart a container',
+      mode: 'execute',
+      blastRadius: 'medium',
+      autoApprovable: false,
+    },
+  ];
+
+  it('flags a brand-new object/link/action type as added', () => {
+    const draft: OntologyDefinition = {
+      objectTypes: [{ name: 'Widget', description: 'A widget.', identityKey: ['widgetId'] }],
+      linkTypes: [{ name: 'connects', domain: 'Widget', range: 'Widget', description: 'd' }],
+      actionTypes: [{ name: 'spin', description: 'Spin it.', mode: 'execute', blastRadius: 'low' }],
+    };
+    const diff = ontologyProposalDiff(draft, currentTypes);
+    // Sorted by kind then name (module doc comment): action < link < object.
+    expect(diff).toEqual([
+      { kind: 'action', name: 'docker_restart', change: 'removed' },
+      { kind: 'action', name: 'spin', change: 'added' },
+      { kind: 'link', name: 'connects', change: 'added' },
+      { kind: 'link', name: 'runs_on', change: 'removed' },
+      { kind: 'object', name: 'Host', change: 'removed' },
+      { kind: 'object', name: 'Widget', change: 'added' },
+    ]);
+  });
+
+  it('flags a same-name type with a different shape as changed, and an identical one as no diff', () => {
+    const draft: OntologyDefinition = {
+      objectTypes: [
+        { name: 'Host', description: 'A machine (updated).', identityKey: ['hostname'] },
+      ],
+      linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'runs on' }],
+    };
+    const diff = ontologyProposalDiff(draft, currentTypes);
+    expect(diff).toEqual([
+      { kind: 'action', name: 'docker_restart', change: 'removed' },
+      { kind: 'object', name: 'Host', change: 'changed' },
+    ]);
+  });
+
+  it('treats a LinkType name as its whole signature set — order-independent, adding a signature is a change', () => {
+    const twoSignatureCurrent: readonly OntologyTypeWire[] = [
+      {
+        kind: 'link',
+        name: 'runs_on',
+        signatures: [
+          { domain: 'Container', range: 'Host', description: 'a' },
+          { domain: 'WorkerRun', range: 'Host', description: 'b' },
+        ],
+      },
+    ];
+    // Same two signatures, reversed order: no diff.
+    const sameSet: OntologyDefinition = {
+      objectTypes: [{ name: 'X', description: 'x' }],
+      linkTypes: [
+        { name: 'runs_on', domain: 'WorkerRun', range: 'Host', description: 'b' },
+        { name: 'runs_on', domain: 'Container', range: 'Host', description: 'a' },
+      ],
+    };
+    expect(
+      ontologyProposalDiff(sameSet, twoSignatureCurrent).some((entry) => entry.name === 'runs_on'),
+    ).toBe(false);
+
+    // Dropping one signature: a change (not silently missed).
+    const droppedSignature: OntologyDefinition = {
+      objectTypes: [{ name: 'X', description: 'x' }],
+      linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'a' }],
+    };
+    expect(ontologyProposalDiff(droppedSignature, twoSignatureCurrent)).toContainEqual({
+      kind: 'link',
+      name: 'runs_on',
+      change: 'changed',
+    });
+  });
+
+  it('omits identical types entirely — a pure diff, not a full listing', () => {
+    const draft: OntologyDefinition = {
+      objectTypes: [{ name: 'Host', description: 'A machine', identityKey: ['hostname'] }],
+      linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'runs on' }],
+      actionTypes: [
+        {
+          name: 'docker_restart',
+          description: 'Restart a container',
+          mode: 'execute',
+          blastRadius: 'medium',
+          autoApprovable: false,
+        },
+      ],
+    };
+    expect(ontologyProposalDiff(draft, currentTypes)).toEqual([]);
   });
 });

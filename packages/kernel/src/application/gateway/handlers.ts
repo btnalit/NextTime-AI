@@ -161,6 +161,7 @@ import {
 import { listModelsHandler } from './models-catalog-handler.js';
 import {
   getTypeHandler,
+  listOntologyVersionsHandler,
   listTypesHandler,
   proposeOntologyChangeHandler,
   publishOntologyVersionHandler,
@@ -1663,6 +1664,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['validate', validateHandler],
   ['propose_ontology_change', proposeOntologyChangeHandler],
   ['publish_ontology_version', publishOntologyVersionHandler],
+  // Closing wave C5b (coverage gap G1 part 2) — ontology-handlers.ts.
+  ['list_ontology_versions', listOntologyVersionsHandler],
   // S3.5 (docs/development-tasks.md §S3.5) — export-prov-handler.ts.
   ['export_prov', exportProvHandler],
   // S3.3 (docs/development-tasks.md S3.3) — ingest-handlers.ts.

@@ -29,4 +29,16 @@ describe('graph-route', () => {
   it('builds the audit deep link on the router’s audit href', () => {
     expect(auditHrefForNode('f/1')).toBe('#/govern/audit?nodeId=f%2F1');
   });
+
+  // Closing wave C5b (coverage gap G1 part 2): the Proposals tab's own deep-link keys.
+  it('round-trips the ontology drawer’s tab/proposal keys', () => {
+    const query = {
+      types: '1',
+      ontologyTab: 'proposals',
+      proposalId: 'v-1',
+      proposalVersion: '2',
+    };
+    const href = graphHref(query);
+    expect(parseGraphHash(href)).toEqual(query);
+  });
 });

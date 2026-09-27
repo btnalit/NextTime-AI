@@ -63,6 +63,20 @@ export function GraphPage({ http }: GraphPageProps) {
   );
   const identityKeys = useMemo(() => identityKeysByType(typeRows ?? []), [typeRows]);
 
+  // Closing wave C5b (coverage gap G1 part 2): the Proposals tab's own deep-linked detail
+  // selection — an OntologyVersion draft is addressed by (id, version) together, never id alone.
+  // An unparseable `?proposalVersion=` (a hand-edited or stale link) degrades to "nothing
+  // selected" — the tab's own list view — rather than passing NaN through.
+  const parsedProposalVersion =
+    query.proposalVersion !== undefined ? Number(query.proposalVersion) : undefined;
+  const selectedProposal =
+    query.proposalId !== undefined &&
+    parsedProposalVersion !== undefined &&
+    Number.isInteger(parsedProposalVersion) &&
+    parsedProposalVersion > 0
+      ? { id: query.proposalId, version: parsedProposalVersion }
+      : undefined;
+
   const conflicts = useCapabilityList<ConflictWire>(http, 'list_conflicts', {
     status: 'open',
     limit: CONFLICT_PAGE,
@@ -181,15 +195,41 @@ export function GraphPage({ http }: GraphPageProps) {
       <OntologyTypesDrawer
         http={http}
         open={query.types === '1'}
+        activeTab={query.ontologyTab === 'proposals' ? 'proposals' : 'types'}
         selectedTypeName={query.typeName}
+        selectedProposal={selectedProposal}
         onOpenChange={(next) =>
           setQuery({
             ...query,
             types: next ? '1' : undefined,
             typeName: next ? query.typeName : undefined,
+            ontologyTab: next ? query.ontologyTab : undefined,
+            proposalId: next ? query.proposalId : undefined,
+            proposalVersion: next ? query.proposalVersion : undefined,
+          })
+        }
+        onTabChange={(tab) =>
+          setQuery({
+            ...query,
+            types: '1',
+            ontologyTab: tab === 'types' ? undefined : tab,
+            // Switching tabs starts at that tab's own list view — a stale detail selection from
+            // the tab just left never leaks into the newly active one.
+            typeName: undefined,
+            proposalId: undefined,
+            proposalVersion: undefined,
           })
         }
         onSelectType={(name) => setQuery({ ...query, types: '1', typeName: name })}
+        onSelectProposal={(proposal) =>
+          setQuery({
+            ...query,
+            types: '1',
+            ontologyTab: 'proposals',
+            proposalId: proposal?.id,
+            proposalVersion: proposal !== undefined ? String(proposal.version) : undefined,
+          })
+        }
       />
     </div>
   );

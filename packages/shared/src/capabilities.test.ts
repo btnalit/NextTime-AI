@@ -31,6 +31,8 @@ const EXPECTED_CAPABILITY_NAMES = [
   'get_type',
   'list_types',
   'validate',
+  // closing wave C5b (coverage gap G1 part 2) — not in §9.3 (added after it).
+  'list_ontology_versions',
   // graph
   'get_object',
   'traverse',
@@ -346,5 +348,32 @@ describe('attest_fact (leftover 89)', () => {
         .success,
     ).toBe(false);
     expect(schema?.safeParse({ factId, note: 'n', kind: 'observation' }).success).toBe(false);
+  });
+});
+
+// Closing wave C5b (coverage gap G1 part 2): mirrors list_worker_definitions/list_skills exactly
+// for visibility and channel — see capabilities.ts's own doc comment on this row.
+describe('list_ontology_versions (closing wave C5b)', () => {
+  const capability = () => getCapability('list_ontology_versions');
+  const sibling = () => getCapability('list_worker_definitions');
+
+  it('is a handle-channel observe read with the same minRole floor as its siblings', () => {
+    const own = capability();
+    expect(own?.channel).toBe('handle');
+    expect(own?.mode).toBe('observe');
+    expect(own?.group).toBe('ontology');
+    expect(own?.minRole).toBe(sibling()?.minRole);
+    expect(own?.minRole).toBe('member');
+    // Never human-only — a Handle (e.g. an entry agent) may call it, same as list_types/get_type.
+    expect(listByChannel('handle').some((c) => c.name === 'list_ontology_versions')).toBe(true);
+  });
+
+  it('accepts empty params and an optional limit/cursor page', () => {
+    const schema = capability()?.paramsSchema;
+    expect(schema?.safeParse({}).success).toBe(true);
+    expect(schema?.safeParse({ limit: 50 }).success).toBe(true);
+    expect(schema?.safeParse({ cursor: 'abc' }).success).toBe(true);
+    expect(schema?.safeParse({ limit: 50, cursor: 'abc' }).success).toBe(true);
+    expect(schema?.safeParse({ unexpected: true }).success).toBe(false);
   });
 });

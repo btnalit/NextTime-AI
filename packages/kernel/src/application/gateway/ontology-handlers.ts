@@ -1,7 +1,9 @@
 import {
   type OntologyTypeEntry,
+  type OntologyVersionListItem,
   type OntologyVersionRow,
   getType,
+  listOntologyVersions,
   listTypes,
   proposeOntologyChange,
   publishOntologyDraft,
@@ -11,23 +13,25 @@ import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
 /**
- * application/gateway/ontology-handlers: the five `ontology`-group capabilities (docs/development-
+ * application/gateway/ontology-handlers: the six `ontology`-group capabilities (docs/development-
  * tasks.md S3.1 — `get_type` / `list_types` / `validate` / `propose_ontology_change` /
- * `publish_ontology_version`) — thin projections over `substrate/ontology/registry.ts`'s actual
- * logic, following the same shape every other `*-handlers.ts` file in this directory already uses
- * (`agent-profile-handlers.ts`'s own module doc comment: "capability-handler projection... over
- * that module's own row/effective-value source of truth").
+ * `publish_ontology_version`; closing wave C5b coverage gap G1 part 2 — `list_ontology_versions`)
+ * — thin projections over `substrate/ontology/registry.ts`'s actual logic, following the same shape
+ * every other `*-handlers.ts` file in this directory already uses (`agent-profile-handlers.ts`'s
+ * own module doc comment: "capability-handler projection... over that module's own row/effective-
+ * value source of truth").
  *
  * `ctx?.principalId ?? (await currentPrincipalId(client))` on every handler mirrors
  * `skill-procedure-handlers.ts`'s own fallback (dispatch.ts always passes `ctx` for a real
  * capability call; the fallback only matters for a unit test invoking a handler function
- * directly). `get_type`/`list_types`/`validate` are `channel:'handle'` with no `minRole` — every
- * authenticated caller may read the currently-visible ontology; `propose_ontology_change` is
- * `channel:'handle'`, `minRole:'builder'` (enforced by `authorizeCapabilityCall` before this file
- * ever runs); `publish_ontology_version` is `channel:'human'`-only (I16, same enforcement point).
- * Neither this file nor `registry.ts` re-checks channel/role — that is `authorize.ts`'s job, not a
- * handler's (same division of responsibility every other handler in this directory already
- * follows).
+ * directly). `get_type`/`list_types`/`validate`/`list_ontology_versions` are `channel:'handle'`
+ * with `minRole:'member'` (the last one, mirroring `list_worker_definitions`/`list_skills` — the
+ * other three carry no `minRole` at all, unchanged by this task) — every authenticated caller may
+ * read the currently-visible ontology; `propose_ontology_change` is `channel:'handle'`,
+ * `minRole:'builder'` (enforced by `authorizeCapabilityCall` before this file ever runs);
+ * `publish_ontology_version` is `channel:'human'`-only (I16, same enforcement point). Neither this
+ * file nor `registry.ts` re-checks channel/role — that is `authorize.ts`'s job, not a handler's
+ * (same division of responsibility every other handler in this directory already follows).
  */
 
 function toWireOntologyType(entry: OntologyTypeEntry) {
@@ -139,5 +143,38 @@ export const publishOntologyVersionHandler: CapabilityHandler = async (
     result: toWireOntologyPublishResult(row),
     resourceType: 'ontology_version',
     resourceId: row.id,
+  };
+};
+
+function toWireOntologyVersionListItem(row: OntologyVersionListItem) {
+  return {
+    id: row.id,
+    version: row.version,
+    status: row.status,
+    proposedBy: row.proposedBy,
+    createdAt: row.createdAt.toISOString(),
+    definition: row.definition,
+  };
+}
+
+/** Closing wave C5b (coverage gap G1 part 2): `list_ontology_versions` — see this file's own
+ *  module doc comment and `registry.ts`'s `listOntologyVersions` for the visibility rule. No
+ *  `resourceType`/`resourceId` — a list read, same as `listTypesHandler` above and
+ *  `listWorkerDefinitionsHandler`/`listSkillsHandler`'s own sibling handlers. */
+export const listOntologyVersionsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  rawParams,
+  ctx,
+) => {
+  const { limit, cursor } = rawParams as { limit?: number; cursor?: string };
+  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  const page = await listOntologyVersions(client, workspaceId, principalId, { limit, cursor });
+  return {
+    result: {
+      items: page.items.map(toWireOntologyVersionListItem),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    },
   };
 };

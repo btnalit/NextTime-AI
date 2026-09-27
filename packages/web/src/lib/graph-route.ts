@@ -25,9 +25,28 @@ export interface GraphQuery {
    *  drawer's own list view. Meaningless without `types=1`, but kept independent of it (like
    *  `objectId` is independent of no other flag) so `graphHref`/`parseGraphHash` stay simple. */
   readonly typeName?: string;
+  /** Closing wave C5b (coverage gap G1 part 2): which of the drawer's two top-level tabs is
+   *  active — `'proposals'` for the 「提案 Proposals」 review tab, absent/anything else = the
+   *  default 「类型 Types」 tab. Meaningless without `types=1`, same convention as `typeName`. */
+  readonly ontologyTab?: string;
+  /** The draft `id` focused inside the Proposals tab's detail view — always paired with
+   *  `proposalVersion` (an `ontology_versions` row is addressed by `(id, version)`, never `id`
+   *  alone). Absent = the Proposals tab's own list view. */
+  readonly proposalId?: string;
+  readonly proposalVersion?: string;
 }
 
-const KEYS = ['objectId', 'q', 'type', 'at', 'types', 'typeName'] as const;
+const KEYS = [
+  'objectId',
+  'q',
+  'type',
+  'at',
+  'types',
+  'typeName',
+  'ontologyTab',
+  'proposalId',
+  'proposalVersion',
+] as const;
 
 /** `null` when `hash` is not the graph route at all. An empty query is `{}`. */
 export function parseGraphHash(hash: string): GraphQuery | null {

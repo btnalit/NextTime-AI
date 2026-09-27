@@ -77,6 +77,8 @@ const ONTOLOGY_HANDLE_CAPABILITIES = [
   'list_types',
   'validate',
   'propose_ontology_change',
+  // Closing wave C5b (coverage gap G1 part 2).
+  'list_ontology_versions',
 ];
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -244,6 +246,96 @@ describe.runIf(DATABASE_URL !== undefined)(
         typeName: 'Gadget',
       });
       expect(bobSeesNow).not.toBeNull();
+    });
+
+    // Closing wave C5b (coverage gap G1 part 2): `list_ontology_versions` end to end through
+    // dispatchCapability — proves the resultSchema (`OntologyVersionListItemWireSchema`) matches
+    // the handler's actual output under `KERNEL_VALIDATE_RESULTS=1`, and that a Handle's own
+    // `obo` (I13) is exactly what `proposedBy` resolves to (the precedent this task's own dispatch
+    // asked to verify end to end: an entry agent's Handle carries `obo` = the human principal it
+    // acts for, and `proposeOntologyChangeHandler` records `proposedBy = ctx.principalId` — the
+    // same `obo` — so the human sees their own agent's proposal via "own drafts", no cross-
+    // principal visibility widening).
+    it('list_ontology_versions (handle) mirrors list_worker_definitions/list_skills: own draft visible, another principal’s draft absent, published visible to all, proposedBy resolves to the Handle’s obo', async () => {
+      const change = {
+        objectTypes: [
+          { name: 'Sprocket', description: 'A sprocket.', identityKey: ['sprocketId'] },
+        ],
+        linkTypes: [
+          { name: 'sprocket_rel', domain: 'Sprocket', range: 'Sprocket', description: 'd' },
+        ],
+      };
+      const aliceCaller = handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES);
+      const proposeResult = (await dispatchCapability(
+        { pool },
+        aliceCaller,
+        'propose_ontology_change',
+        { change },
+      )) as { id: string; version: number; status: string };
+
+      // Alice's own list includes her draft, proposedBy resolved to exactly her Handle's obo.
+      const aliceList = (await dispatchCapability(
+        { pool },
+        aliceCaller,
+        'list_ontology_versions',
+        {},
+      )) as {
+        items: Array<{
+          id: string;
+          version: number;
+          status: string;
+          proposedBy: { id: string; kind: string; displayName: string | null };
+        }>;
+      };
+      const aliceRow = aliceList.items.find(
+        (item) => item.id === proposeResult.id && item.version === proposeResult.version,
+      );
+      expect(aliceRow?.status).toBe('draft');
+      expect(aliceRow?.proposedBy).toEqual({ id: aliceId, kind: 'human', displayName: 'alice' });
+
+      // Bob (a different Handle caller) does not see it — same I16 read-privacy predicate as
+      // get_type/list_types.
+      const bobCaller = handleCaller(workspaceId, bobId, ONTOLOGY_HANDLE_CAPABILITIES);
+      const bobList = (await dispatchCapability(
+        { pool },
+        bobCaller,
+        'list_ontology_versions',
+        {},
+      )) as { items: Array<{ id: string; version: number }> };
+      expect(
+        bobList.items.some(
+          (item) => item.id === proposeResult.id && item.version === proposeResult.version,
+        ),
+      ).toBe(false);
+
+      // A human (owner) publishes it — now Bob sees the same row, published.
+      const ownerCaller = humanCaller(workspaceId, ownerId, 'owner');
+      await dispatchCapability({ pool }, ownerCaller, 'publish_ontology_version', {
+        id: proposeResult.id,
+        version: proposeResult.version,
+      });
+      const bobListAfterPublish = (await dispatchCapability(
+        { pool },
+        bobCaller,
+        'list_ontology_versions',
+        {},
+      )) as { items: Array<{ id: string; version: number; status: string }> };
+      const bobRow = bobListAfterPublish.items.find(
+        (item) => item.id === proposeResult.id && item.version === proposeResult.version,
+      );
+      expect(bobRow?.status).toBe('published');
+    });
+
+    it('list_ontology_versions (human, owner) sees the same rows — channel:"handle" admits a human caller too', async () => {
+      const ownerCaller = humanCaller(workspaceId, ownerId, 'owner');
+      const result = (await dispatchCapability(
+        { pool },
+        ownerCaller,
+        'list_ontology_versions',
+        {},
+      )) as { items: unknown[] };
+      expect(Array.isArray(result.items)).toBe(true);
+      expect(result.items.length).toBeGreaterThan(0);
     });
   },
 );
