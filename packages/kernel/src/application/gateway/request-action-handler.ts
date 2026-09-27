@@ -1163,6 +1163,17 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const workerRun = sid ? await findWorkerRunBySessionId(client, workspaceId, sid) : null;
   const parentWorkerRunId = workerRun?.id;
 
+  // Leftover 97: a human caller reading a *published observe-class* Operation needs no Grant; every
+  // other human call (execute-class, unclassified I17) keeps the Grant check, and keeps it *before*
+  // the Gatekeeper lookup below as it always was — an ungranted person learns nothing about which
+  // gate ids exist from a 403 vs 404 difference.
+  if (channel === 'human' && role !== undefined) {
+    const target = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
+    if (!(target && target.operation.mode === 'observe')) {
+      await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+    }
+  }
+
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
 
@@ -1200,12 +1211,6 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       onBehalfOf,
       workerRun ?? undefined,
     );
-  }
-
-  // Everything past the observe branch acts on (or proposes to act on) the system — a human
-  // caller needs the gate's Grant here, as before leftover 97.
-  if (channel === 'human' && role !== undefined) {
-    await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
   }
 
   // S3.13: `onBehalfOf`'s own *raw* AgentProfile.autoApproveLow — not the resolved

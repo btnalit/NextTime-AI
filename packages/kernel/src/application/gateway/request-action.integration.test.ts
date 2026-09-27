@@ -553,9 +553,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('a grant for a different gatekeeper does not authorize this one', async () => {
-        // The human-caller gate (assertHumanGatekeeperAccess) runs before any Gatekeeper lookup,
-        // so an arbitrary id that names no real Gatekeeper is enough to prove the grant is
-        // scoped, without registering a second real gate.
+        // The human-caller gate (assertHumanGatekeeperAccess) still runs before any Gatekeeper
+        // lookup for anything but a published observe-class Operation (leftover 97), so an
+        // arbitrary id that names no real Gatekeeper is enough to prove the grant is scoped,
+        // without registering a second real gate.
         const otherGate = randomUUID();
         const caller = humanCaller(workspaceId, memberWithGrantId, 'member');
         await expect(
