@@ -299,6 +299,8 @@ export function Routed({
           http={session.http}
           tab={route.tab}
           onTabChange={(tab) => navigate(hrefs.catalog(tab))}
+          itemId={route.itemId}
+          onSelectItem={(id) => navigate(hrefs.catalog(route.tab, id ?? undefined))}
         />
       );
       break;

@@ -1,10 +1,11 @@
+import type { SkillDetailWire } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
-import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
+import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
-import { formatRelative } from '../lib/format.js';
+import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
   type CapabilityNameRow,
   type OperationCatalogRow,
@@ -14,18 +15,21 @@ import {
   operationKey,
   operationStatsKey,
 } from '../lib/governance.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
+import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
+import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
+import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import {
   Dialog,
@@ -36,25 +40,37 @@ import {
   DialogHeader,
   DialogTitle,
 } from './kit/dialog.js';
+import { EmptyState } from './kit/empty-state.js';
+import { ErrorBanner } from './kit/error-banner.js';
+import { Field, describedBy } from './kit/field.js';
+import { KeyValue, type KeyValueItem } from './kit/key-value.js';
+import { List, ListRow } from './kit/list-row.js';
+import { MasterDetail } from './kit/master-detail.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
-import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
-import { Button } from './ui/Button.js';
-import { DataList, DataRow } from './ui/DataList.js';
-import { Drawer } from './ui/Drawer.js';
-import { EmptyState } from './ui/EmptyState.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Textarea, describedBy } from './ui/Field.js';
-import { Notice } from './ui/Notice.js';
-import { RefChip } from './ui/RefChip.js';
-import { SkeletonRows } from './ui/Skeleton.js';
-import { StatusChip } from './ui/StatusChip.js';
-import { Tabs } from './ui/Tabs.js';
+import { RefChip } from './kit/ref-chip.js';
+import { SkeletonRows } from './kit/skeleton.js';
+import { StatusChip } from './kit/status-chip.js';
+import { Tabs } from './kit/tabs.js';
+import { Textarea } from './kit/textarea.js';
+import { ExecutionReadinessCard } from './readiness/ExecutionReadinessCard.js';
+// `useToast` stays on `components/ui/Toast` — `App.tsx` mounts that provider (not `kit/toast`'s
+// own, separate context), so `kit/toast`'s hook would make this page's publish/deprecate/discard
+// toasts a silent no-op (same reason `ApprovalQueuePage.tsx`/`TasksPage.tsx` keep it).
 import { useToast } from './ui/Toast.js';
 
 export interface CatalogPageProps {
   readonly http: CapabilityCaller;
   readonly tab: CatalogTab;
   readonly onTabChange: (tab: CatalogTab) => void;
+  /** The item selected within the active tab (`#/govern/catalog/<tab>/<itemId>`) — an existing
+   *  row's own stable key (`operationKey`/`id`/`id@version`), or the sentinel `'new'` while an
+   *  editor (new draft / copy-as-new-draft / template / new version) is open in the pane. No item
+   *  route exists for Operations (drafts arrive from a connected system's manifest, never a
+   *  console "propose") or Modules (no per-row detail concept — see `ModulesTab`'s own doc
+   *  comment on why it stays outside this master-detail shell). */
+  readonly itemId?: string;
+  readonly onSelectItem: (itemId: string | null) => void;
 }
 
 /** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Procedure`/`Worker` stay English proper nouns
@@ -68,49 +84,41 @@ const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en:
   modules: { zh: '模块', en: 'Modules' },
 };
 
+/** The sentinel item segment while any editor (new / copy / template / new version) is open in
+ *  the detail pane — see the module doc comment on `CatalogPageProps.itemId`. Not a real id: no
+ *  row is ever selected while it is current. */
+const NEW_ITEM_ID = 'new';
+
 /**
  * components/CatalogPage: 能力目录 Catalog (`/govern/catalog`, S3.11 "目录" group — `minRole:
- * 'member'`, open to everyone). Four tabs over the platform's publishable content: Operations
- * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures` — verified wire shape,
- * `lib/governance.ts`'s own doc comment), Workers (`list_worker_definitions`, reuses
- * `lib/tasks.ts`'s `WorkerDefinitionSummary`). Publish/deprecate stay the two-step `propose →
- * publish` capabilities already in the registry (docs/wire-contract-conventions.md: "UI 不得提供
- * '直接改分类'的捷径") — never a shortcut, each write still `channel: 'human'`-gated on its own
- * (no fixed `minRole`, so a 403 denies only that one capability — `hooks/usePermissions.tsx`).
- * 弃用 Deprecate (all four tabs) is a `DeprecateConfirm` — `kit/confirm` `medium`, anchored to its
- * own button (S8 W1-A7, audit S13: previously a plain text button with no confirmation at all,
- * the one catalog-scoped gap that audit named directly). Errors from a confirmed deprecate (like
- * publish) surface as a toast, not the confirm's own inline banner — `act`/`deprecate` already
- * catch and toast rather than re-throw, the same path Publish already used; changing that would
- * also change Publish's error handling, out of this lane's scope.
+ * 'member'`, open to everyone). Five tabs over the platform's publishable content: Operations
+ * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures`), Workers
+ * (`list_worker_definitions`), Modules (`list_workspace_modules`, `ModulesTab` — see its own doc
+ * comment). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
+ * registry (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") — never a shortcut,
+ * each write still `channel: 'human'`-gated on its own (no fixed `minRole`, so a 403 denies only
+ * that one capability — `hooks/usePermissions.tsx`).
  *
- * S6-A A2 (docs/console-completion-plan.md §5.3 "编辑器"): the Skills / Procedures / Workers
- * tabs gain "新建草稿 New draft" and, per row, "编辑为新草稿 Edit as new draft" — the editors in
- * `components/catalog/*` call `propose_skill` / `propose_procedure` /
- * `propose_worker_definition` (drafts are private to the proposer, I16) and then offer the
- * matching `publish_*`. Two kernel facts the page states rather than hides: `propose_skill` /
- * `propose_procedure` address no family, so "edit" of those two is a copy into a *new* draft
- * (new id, v1; a Skill copy re-enters the body — `list_skills` has no `markdown`), whereas
- * `propose_worker_definition{definitionId}` is a real next version. S8 W1-C (#243) made
- * `list_skills` / `list_procedures` / `list_worker_definitions` keyset-paginated (this comment
- * said "noParams … stay single-page, B5 does not apply" until S8 W1-A4); the three browsable tabs
- * below now offer "加载更多" via `useCapabilityList`'s `loadMore`/`nextCursor`/`truncated`.
+ * Console redesign P3-5 (V2/V7/V8/V9, following P3-4's own `kit/master-detail`): Operations,
+ * Skills, Procedures and Workers are each a list pane (`kit/list-row`, plain text — no nested
+ * interactive element) plus a detail pane/`kit/sheet`, selection driven only by the URL
+ * (`#/govern/catalog/<tab>/<itemId>`, `lib/router.ts`) — no auto-select, and an empty list with
+ * nothing selected collapses to the single list pane (`MasterDetail`'s own `detail === null`
+ * rule). A row's own actions (Publish / Deprecate / Edit description / Edit as new draft /
+ * Discard) move from the row itself into the detail pane — the row shows only its name and a
+ * short meta line now, same capability calls and confirm tiers as before, just relocated. Opening
+ * an editor (新建草稿 / 编辑为新草稿 / 从模板创建 / 编辑新版本) selects the `NEW_ITEM_ID` sentinel so
+ * it, too, shows in the pane/sheet rather than a `ui/Drawer`; the editor's own payload (which row
+ * it copies, if any) cannot live in the URL, so it stays local `useState` exactly as before — the
+ * URL only ever needs to know "an editor is open", never which one.
  *
- * `list_worker_definitions` returns *published* rows by default, same as before; the Workers tab
- * also makes one dedicated `list_worker_definitions{includeOwnDrafts: true}` call (S8 W2-U2b,
- * audit R6 "保存草稿后找不回它") and renders its `status === 'draft'` rows as a "我的草稿" section,
- * shown only when non-empty, with the same one-click Publish Skills/Procedures rows already have —
- * a draft is otherwise reachable only from the id the editor's own success screen showed at
- * propose time. The Entry/Worker sections below still filter the *published*-only list, so a
- * draft never appears mixed into either of them.
- *
- * Operations rows also carry a usage summary (调用/批准/拒绝/最近, S3.12 catalog-usage follow-up)
- * fed by its own `get_operation_stats` capability call, joined client-side by `{gatekeeperId,
- * name}` (`lib/governance.ts`'s `operationStatsKey`) — a separate `useCapabilityList` from
- * `list_operations`'s own, so a stats failure degrades one row's usage span to "—" rather than
- * the whole tab.
+ * V2 readiness: swaps the old `ExecutionPrerequisiteBar` (a bordered block enumerating every
+ * missing prerequisite) for the same `ExecutionReadinessCard` the 对话 page already renders
+ * (console redesign P3-3) — one quiet, neutral summary line ("我的智能体能用 n/m 个系统") with the
+ * missing-item detail behind a disclosure, instead of a second, differently-shaped readiness
+ * block. No new readiness computation: same `useExecutionReadiness` read model, same component.
  */
-export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
+export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: CatalogPageProps) {
   const t = useT();
   return (
     <div className="page">
@@ -122,7 +130,7 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
           'Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts.',
         )}
       />
-      <ExecutionPrerequisiteBar http={http} />
+      <ExecutionReadinessCard http={http} />
       <div className="page-toolbar">
         <Tabs<CatalogTab>
           ariaLabel="Catalog section"
@@ -135,18 +143,27 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
         />
       </div>
       {tab === 'operations' ? (
-        <OperationsTab http={http} />
+        <OperationsTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'skills' ? (
-        <SkillsTab http={http} />
+        <SkillsTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'procedures' ? (
-        <ProceduresTab http={http} />
+        <ProceduresTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'workers' ? (
-        <WorkersTab http={http} />
+        <WorkersTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : (
+        // Modules has no per-row detail concept (a plain table, install/upgrade acts in place) —
+        // left outside the master-detail shell rather than force-fit into `detail={null}`, which
+        // would nest `ModulesTab`'s own `DashboardCard` inside the `.md-pane` card for no reason.
         <ModulesTab http={http} />
       )}
     </div>
   );
+}
+
+interface CatalogTabProps {
+  readonly http: CapabilityCaller;
+  readonly itemId: string | undefined;
+  readonly onSelectItem: (itemId: string | null) => void;
 }
 
 function DegradedList({
@@ -199,14 +216,19 @@ function DraftToolbar({
       {canPropose || extra ? (
         <div className="row-wrap">
           {canPropose ? (
-            <Button variant="primary" icon="plus" onClick={onNewDraft} data-testid={testId}>
+            <Button variant="primary" onClick={onNewDraft} data-testid={testId}>
               {t('新建草稿', 'New draft')}
             </Button>
           ) : null}
           {extra}
         </div>
       ) : null}
-      <Button variant="ghost" icon="refresh" onClick={onRefresh} loading={refreshing}>
+      <Button
+        variant="ghost"
+        aria-busy={refreshing || undefined}
+        disabled={refreshing}
+        onClick={onRefresh}
+      >
         {t('刷新', 'Refresh')}
       </Button>
     </div>
@@ -265,11 +287,6 @@ function DeprecateConfirm({
   );
 }
 
-/** S8 W3-K1 (leftover 81): the bound `update_operation_description`'s own `paramsSchema` enforces
- *  (`packages/shared/src/capabilities.ts`) — mirrored here only so the textarea can stop the owner
- *  before a doomed round trip, not as the source of truth. */
-const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
-
 /** S8 W3 K2 (leftover 82): the caller's own private draft's "丢弃" action — a `kit/confirm`
  *  `medium` popover, same tier as `DeprecateConfirm` above (the dispatch's own wording: "kit/confirm
  *  tier medium, consequence '草稿将被删除，无法恢复'"). Unlike Deprecate, this is destructive and
@@ -319,7 +336,233 @@ function DiscardDraftConfirm({
   );
 }
 
-function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
+/** The compact 草稿→已发布→已弃用 lifecycle line (Skill / Procedure / Worker detail headers, spec
+ *  V2/V4 "compact lifecycle stepper"). Three stages, not the artboard's literal four ("草稿→提案→
+ *  发布→被替代"): `propose_*` inserts a `draft` row directly (I16, verified against
+ *  `application/gateway/skill-procedure-handlers.ts` / `application/worker/definitions.ts`) — this
+ *  domain has no distinct "proposed" wire status to visualize, and inventing one here would draw a
+ *  state the kernel does not have. Built from the existing `publishable` machine
+ *  (`lib/status-tone.ts`), not a new one. */
+const PUBLISHABLE_STAGES = ['draft', 'published', 'deprecated'] as const;
+
+function PublishableStepper({
+  status,
+  testId,
+}: {
+  readonly status: string;
+  readonly testId?: string;
+}) {
+  const t = useT();
+  const index = PUBLISHABLE_STAGES.indexOf(status as (typeof PUBLISHABLE_STAGES)[number]);
+  return (
+    <div className="row-wrap text-3" data-testid={testId} aria-label={t('生命周期', 'Lifecycle')}>
+      {PUBLISHABLE_STAGES.map((stage, i) => (
+        <span key={stage} className="row-wrap">
+          {i > 0 ? <span aria-hidden="true">→</span> : null}
+          {i === index ? (
+            <strong aria-current="step">
+              {labelText(statusChipStyle('publishable', stage), t)}
+            </strong>
+          ) : (
+            <span>{labelText(statusChipStyle('publishable', stage), t)}</span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The detail pane's "nothing usable to show" branches, shared by every tab below: nothing
+ *  selected (names the object, V9), a selected id still loading, or a selected id the current
+ *  (ready) rows no longer contain (discarded, filtered out, a stale link). */
+function SelectionPlaceholder({
+  itemId,
+  ready,
+  emptyTitle,
+  emptyBody,
+}: {
+  readonly itemId: string | undefined;
+  readonly ready: boolean;
+  readonly emptyTitle: string;
+  readonly emptyBody?: string;
+}) {
+  const t = useT();
+  if (itemId === undefined) {
+    return <EmptyState title={emptyTitle} body={emptyBody} testId="catalog-detail-empty" />;
+  }
+  if (!ready) {
+    return <SkeletonRows count={2} label="Loading" testId="catalog-detail-loading" />;
+  }
+  return (
+    <EmptyState
+      title={t('未找到', 'Not found')}
+      body={t(
+        '它可能已经被丢弃、重新发布成了新的草稿，或不在当前筛选范围内。',
+        'It may have been discarded, re-proposed as a new draft, or fall outside the current filter.',
+      )}
+      testId="catalog-detail-missing"
+    />
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// Operations
+// -------------------------------------------------------------------------------------------
+
+function OperationDetailView({
+  row,
+  usage,
+  gatekeeperNames,
+  canPublish,
+  canDeprecate,
+  canEditDescription,
+  busy,
+  onPublish,
+  onDeprecate,
+  onEditDescription,
+}: {
+  readonly row: OperationCatalogRow;
+  readonly usage: OperationStatsRow | undefined;
+  readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly canPublish: boolean;
+  readonly canDeprecate: boolean;
+  readonly canEditDescription: boolean;
+  readonly busy: boolean;
+  readonly onPublish: () => Promise<void>;
+  readonly onDeprecate: () => Promise<void>;
+  readonly onEditDescription: () => void;
+}) {
+  const t = useT();
+  const key = operationKey(row);
+  const items: KeyValueItem[] = [
+    {
+      key: 'gatekeeper',
+      label: t('门', 'Gatekeeper'),
+      value: (
+        <RefChip
+          kind="gatekeeper"
+          id={row.gatekeeperId}
+          name={nameOf(gatekeeperNames, row.gatekeeperId)}
+          href={hrefs.gatekeeper(row.gatekeeperId)}
+          size="s"
+        />
+      ),
+    },
+    {
+      key: 'description',
+      label: t('描述', 'Description'),
+      value:
+        row.description && row.description.trim().length > 0 ? (
+          row.description
+        ) : (
+          <span className="text-3">{t('未填写描述', 'No description yet')}</span>
+        ),
+    },
+  ];
+  if (row.mode) {
+    items.push({
+      key: 'mode',
+      label: t('模式', 'Mode'),
+      value: <StatusChip machine="operationMode" status={row.mode} size="s" />,
+    });
+  }
+  items.push({
+    key: 'autoApprovable',
+    label: t('自动批准', 'Auto-approvable'),
+    value: (
+      <StatusChip machine="autoApprovable" status={String(row.autoApprovable ?? false)} size="s" />
+    ),
+  });
+  if (row.blastRadius) {
+    items.push({
+      key: 'blastRadius',
+      label: t('影响范围', 'Blast radius'),
+      value: <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />,
+    });
+  }
+  items.push({
+    key: 'usage',
+    label: t('用量', 'Usage'),
+    value: (
+      <span
+        data-testid="catalog-row-usage"
+        title={
+          usage
+            ? `${usage.calls} calls, ${usage.approved} approved, ${usage.rejected} rejected in the trailing window`
+            : 'No usage data for this Operation (get_operation_stats unavailable, or no calls in the window)'
+        }
+      >
+        {usage
+          ? `${usage.calls} 调用 · ${usage.approved} 批准 · ${usage.rejected} 拒绝 · ${formatRelative(usage.lastCalledAt)}`
+          : '—'}
+      </span>
+    ),
+  });
+
+  return (
+    <div className="stack" data-testid="operation-detail" data-operation-key={key}>
+      <header className="stack-s">
+        <div className="row-wrap">
+          <StatusChip machine="publishable" status={row.status} size="s" />
+          <strong className="catalog-detail-title mono truncate">{row.name}</strong>
+        </div>
+      </header>
+      <KeyValue items={items} />
+      <div className="row-wrap">
+        {canPublish && row.status === 'draft' ? (
+          <Button
+            variant="primary"
+            size="s"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={() => void onPublish()}
+          >
+            {t('发布', 'Publish')}
+          </Button>
+        ) : canDeprecate && row.status === 'published' ? (
+          <DeprecateConfirm
+            busy={busy}
+            target={row.name}
+            impact={
+              usage
+                ? [
+                    t(`${usage.calls} 次调用`, `${usage.calls} calls in the trailing window`),
+                    t(`${usage.approved} 次批准`, `${usage.approved} approved`),
+                  ]
+                : undefined
+            }
+            onConfirm={onDeprecate}
+            testId={`operation-deprecate-confirm-${key}`}
+          />
+        ) : null}
+        {canEditDescription ? (
+          <Button
+            variant="ghost"
+            size="s"
+            onClick={onEditDescription}
+            data-testid={`operation-edit-description-${key}`}
+          >
+            {t('编辑描述', 'Edit description')}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** S8 W3-K1 (leftover 81): the bound `update_operation_description`'s own `paramsSchema` enforces
+ *  (`packages/shared/src/capabilities.ts`) — mirrored here only so the textarea can stop the owner
+ *  before a doomed round trip, not as the source of truth. */
+const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
+
+/**
+ * components/CatalogPage OperationsTab: Operations have no console "propose" flow (they arrive
+ * from a connected system's published manifest or the onboarding wizard, `CatalogPage`'s own doc
+ * comment) — no editor, no `NEW_ITEM_ID` state, `itemId` only ever names an existing row
+ * (`operationKey`). Selecting one shows a read-only detail (`OperationDetailView`) with the same
+ * Publish / Deprecate / Edit description actions the row used to carry inline.
+ */
+function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
@@ -332,12 +575,16 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const [busy, setBusy] = useState<string | null>(null);
   // S8 W3-K1 (leftover 81): the "编辑描述" dialog — one instance shared across rows, controlled by
   // which row (if any) is being edited, same "single shared surface, not one-per-row" convention
-  // `GrantGateDrawer`/`Confirm` already use elsewhere in this codebase.
+  // `GrantGateDrawer`/`Confirm` already use elsewhere in this codebase. Not tied to the URL (an
+  // inline overlay on top of whichever row is selected, not a selection of its own).
   const [editingRow, setEditingRow] = useState<OperationCatalogRow | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
   const [descriptionError, setDescriptionError] = useState<unknown | null>(null);
   const descriptionFieldId = useId();
+
+  const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
+  const selected = itemId ? rows.find((row) => operationKey(row) === itemId) : undefined;
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
@@ -412,21 +659,16 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
-  if (operations.state.status !== 'ready') {
-    return (
+  const list =
+    operations.state.status !== 'ready' ? (
       <DegradedList
         status={operations.state.status === 'loading' ? 'loading' : 'error'}
         error={operations.state.status === 'error' ? operations.state.error : undefined}
         reload={() => void operations.reload()}
         capabilityLabel="list_operations"
       />
-    );
-  }
-  const rows = operations.state.data.items;
-  if (rows.length === 0) {
-    return (
+    ) : rows.length === 0 ? (
       <EmptyState
-        icon="grid"
         title={t('还没有导入任何 Operation', 'No operations imported yet')}
         body={t(
           'Operation 来自已接入系统发布的清单，或接入向导的提议。',
@@ -434,128 +676,75 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
         )}
         testId="catalog-empty"
       />
-    );
-  }
-  return (
-    <>
-      <DataList ariaLabel="Operations" testId="catalog-list">
+    ) : (
+      <List ariaLabel="Operations" testId="catalog-list">
         {rows.map((row) => {
           const key = operationKey(row);
-          const usage = statsFor(row);
           return (
-            <DataRow
+            <ListRow
               key={key}
               testId="catalog-row"
-              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-              title={
-                <>
-                  <div className="row-wrap">
-                    <span className="mono truncate">{row.name}</span>
-                    {row.mode ? (
-                      <StatusChip machine="operationMode" status={row.mode} size="s" />
-                    ) : null}
-                    {/* S8 W1-A11 (audit L3): through the shared StatusChip machine, not a bare tag. */}
-                    {row.autoApprovable ? (
-                      <StatusChip machine="autoApprovable" status="true" size="s" />
-                    ) : null}
-                  </div>
-                  {/* S8 W3-K1 (leftover 81, audit CO1): a blank description reads "未填写描述", not
-                   *  the generic "—" every other missing-value field in this codebase uses — this
-                   *  is a call to action (编辑描述 below), not just an absent fact. */}
-                  <div
-                    className="text-3 text-small truncate"
-                    title={
-                      row.description && row.description.trim().length > 0
-                        ? row.description
-                        : undefined
-                    }
-                    data-testid={`catalog-row-description-${key}`}
-                  >
-                    {row.description && row.description.trim().length > 0
-                      ? row.description
-                      : t('未填写描述', 'No description yet')}
-                  </div>
-                </>
-              }
-              meta={
-                <>
-                  <RefChip
-                    kind="gatekeeper"
-                    id={row.gatekeeperId}
-                    name={nameOf(gatekeeperNames, row.gatekeeperId)}
-                    href={hrefs.gatekeeper(row.gatekeeperId)}
-                    size="s"
-                  />
-                  {row.blastRadius && row.blastRadius !== 'low' ? (
-                    <>
-                      <span className="meta-sep" />
-                      <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
-                    </>
-                  ) : null}
-                  <span className="meta-sep" />
-                  <span
-                    data-testid="catalog-row-usage"
-                    title={
-                      usage
-                        ? `${usage.calls} calls, ${usage.approved} approved, ${usage.rejected} rejected in the trailing window`
-                        : 'No usage data for this Operation (get_operation_stats unavailable, or no calls in the window)'
-                    }
-                  >
-                    {usage
-                      ? `${usage.calls} 调用 · ${usage.approved} 批准 · ${usage.rejected} 拒绝 · ${formatRelative(usage.lastCalledAt)}`
-                      : '—'}
-                  </span>
-                </>
-              }
-              trailing={
-                <div className="row-wrap">
-                  {!permissions.isDenied('publish_operation') && row.status === 'draft' ? (
-                    <Button
-                      variant="primary"
-                      size="s"
-                      loading={busy === key}
-                      onClick={() => void act(row, 'publish_operation')}
-                    >
-                      {t('发布', 'Publish')}
-                    </Button>
-                  ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
-                    <DeprecateConfirm
-                      busy={busy === key}
-                      target={row.name}
-                      impact={
-                        usage
-                          ? [
-                              t(
-                                `${usage.calls} 次调用`,
-                                `${usage.calls} calls in the trailing window`,
-                              ),
-                              t(`${usage.approved} 次批准`, `${usage.approved} approved`),
-                            ]
-                          : undefined
-                      }
-                      onConfirm={() => act(row, 'deprecate_operation')}
-                      testId={`operation-deprecate-confirm-${key}`}
-                    />
-                  ) : null}
-                  {/* S8 W3-K1 (leftover 81): documentation-only, so it is not gated by the
-                   *  publish/deprecate lifecycle above — a draft, published, or deprecated
-                   *  Operation's description can all be edited. */}
-                  {!permissions.isDenied('update_operation_description') ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      onClick={() => openDescriptionEditor(row)}
-                      data-testid={`operation-edit-description-${key}`}
-                    >
-                      {t('编辑描述', 'Edit description')}
-                    </Button>
-                  ) : null}
-                </div>
-              }
-            />
+              selected={key === itemId}
+              onSelect={() => onSelectItem(key)}
+            >
+              <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                <span className="row-wrap">
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                  <span className="mono truncate">{row.name}</span>
+                </span>
+                {row.mode ? (
+                  <StatusChip machine="operationMode" status={row.mode} size="s" />
+                ) : null}
+              </span>
+              <span className="truncate text-3" data-testid={`catalog-row-description-${key}`}>
+                {row.description && row.description.trim().length > 0
+                  ? row.description
+                  : t('未填写描述', 'No description yet')}
+              </span>
+            </ListRow>
           );
         })}
-      </DataList>
+      </List>
+    );
+
+  const detailContent = selected ? (
+    <OperationDetailView
+      row={selected}
+      usage={statsFor(selected)}
+      gatekeeperNames={gatekeeperNames}
+      canPublish={!permissions.isDenied('publish_operation')}
+      canDeprecate={!permissions.isDenied('deprecate_operation')}
+      canEditDescription={!permissions.isDenied('update_operation_description')}
+      busy={busy === operationKey(selected)}
+      onPublish={() => act(selected, 'publish_operation')}
+      onDeprecate={() => act(selected, 'deprecate_operation')}
+      onEditDescription={() => openDescriptionEditor(selected)}
+    />
+  ) : (
+    <SelectionPlaceholder
+      itemId={itemId}
+      ready={operations.state.status === 'ready'}
+      emptyTitle={t(
+        '选择左侧一个 Operation，查看详情',
+        'Select an Operation on the left to see its detail',
+      )}
+    />
+  );
+
+  return (
+    <>
+      <MasterDetail
+        list={list}
+        detail={
+          operations.state.status === 'ready' && rows.length === 0 && itemId === undefined
+            ? null
+            : detailContent
+        }
+        open={itemId !== undefined}
+        onClose={() => onSelectItem(null)}
+        sheetTitle={t('Operation 详情', 'Operation detail')}
+        detailTestId="catalog-detail"
+      />
       <Dialog
         open={editingRow !== null}
         onOpenChange={(open) => {
@@ -578,9 +767,10 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
           >
             <Textarea
               id={descriptionFieldId}
+              aria-label={t('描述', 'Description')}
               value={descriptionDraft}
               onChange={(event) => setDescriptionDraft(event.target.value)}
-              rows={4}
+              minRows={4}
               maxLength={OPERATION_DESCRIPTION_MAX_LENGTH}
               invalid={descriptionError !== null}
               aria-describedby={describedBy(descriptionFieldId, true, descriptionError !== null)}
@@ -591,8 +781,8 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
             <Button
               variant="primary"
               size="s"
-              loading={savingDescription}
-              disabled={descriptionDraft.trim().length === 0}
+              disabled={savingDescription || descriptionDraft.trim().length === 0}
+              aria-busy={savingDescription || undefined}
               onClick={() => void saveDescription()}
               data-testid="operation-description-save"
             >
@@ -610,7 +800,130 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
-function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
+// -------------------------------------------------------------------------------------------
+// Skills
+// -------------------------------------------------------------------------------------------
+
+function SkillDetailView({
+  http,
+  row,
+  canPropose,
+  canPublish,
+  canDeprecate,
+  canDiscard,
+  busy,
+  onEditAsDraft,
+  onPublish,
+  onDeprecate,
+  onDiscard,
+}: {
+  readonly http: CapabilityCaller;
+  readonly row: SkillRow;
+  readonly canPropose: boolean;
+  readonly canPublish: boolean;
+  readonly canDeprecate: boolean;
+  readonly canDiscard: boolean;
+  readonly busy: boolean;
+  readonly onEditAsDraft: () => void;
+  readonly onPublish: () => Promise<void>;
+  readonly onDeprecate: () => Promise<void>;
+  readonly onDiscard: () => Promise<void>;
+}) {
+  const t = useT();
+  // Best-effort read of the current version's full body — degrades to "—" on error/while loading
+  // rather than blocking the rest of the detail (same convention `get_operation_stats` uses on the
+  // Operations tab above). `get_skill` already exists and is already called from this same file
+  // for the copy-prefill flow (`SkillEditor.tsx`); this is a second, read-only call site of it.
+  const skillDetail = useCapability<SkillDetailWire | null>(http, 'get_skill', { skillId: row.id });
+  const items: KeyValueItem[] = [
+    { key: 'description', label: t('描述', 'Description'), value: row.description },
+  ];
+  const gateKinds = row.applicable?.gateKinds as readonly string[] | undefined;
+  const objectTypes = row.applicable?.objectTypes as readonly string[] | undefined;
+  if (gateKinds && gateKinds.length > 0) {
+    items.push({
+      key: 'gateKinds',
+      label: t('适用的门类型', 'applicable.gateKinds'),
+      value: gateKinds.join(', '),
+      mono: true,
+    });
+  }
+  if (objectTypes && objectTypes.length > 0) {
+    items.push({
+      key: 'objectTypes',
+      label: t('适用的对象类型', 'applicable.objectTypes'),
+      value: objectTypes.join(', '),
+      mono: true,
+    });
+  }
+
+  return (
+    <div className="stack" data-testid="skill-detail" data-skill-id={row.id}>
+      <header className="stack-s">
+        <div className="row-wrap">
+          <StatusChip machine="publishable" status={row.status} size="s" />
+          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <span className="text-3 text-small">v{row.version}</span>
+        </div>
+        <PublishableStepper status={row.status} testId="skill-detail-stepper" />
+      </header>
+
+      <KeyValue items={items} />
+
+      <div className="stack-s">
+        <span className="section-title">{t('正文', 'SKILL.md body')}</span>
+        {skillDetail.state.status === 'loading' ? (
+          <SkeletonRows count={2} label="Loading body" testId="skill-detail-body-loading" />
+        ) : skillDetail.state.status === 'ready' && skillDetail.state.data ? (
+          <MarkdownPreview markdown={skillDetail.state.data.markdown} testId="skill-detail-body" />
+        ) : (
+          <span className="text-3">—</span>
+        )}
+      </div>
+
+      <div className="row-wrap">
+        {canPropose ? (
+          <Button
+            variant="ghost"
+            size="s"
+            onClick={onEditAsDraft}
+            data-testid="catalog-edit-as-draft"
+          >
+            {t('编辑为新草稿', 'Edit as new draft')}
+          </Button>
+        ) : null}
+        {canPublish && row.status === 'draft' ? (
+          <Button
+            variant="primary"
+            size="s"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={() => void onPublish()}
+          >
+            {t('发布', 'Publish')}
+          </Button>
+        ) : canDeprecate && row.status === 'published' ? (
+          <DeprecateConfirm
+            busy={busy}
+            target={row.name}
+            onConfirm={onDeprecate}
+            testId={`skill-deprecate-confirm-${row.id}`}
+          />
+        ) : null}
+        {canDiscard && row.status === 'draft' ? (
+          <DiscardDraftConfirm
+            busy={busy}
+            target={row.name}
+            onConfirm={onDiscard}
+            testId={`skill-discard-confirm-${row.id}`}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
@@ -618,9 +931,31 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<SkillRow>>(null);
 
+  const rows = skills.state.status === 'ready' ? skills.state.data.items : [];
+  const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  // The editor only ever shows while `itemId` is the `NEW_ITEM_ID` sentinel — a stale `editor`
+  // left over from a previous open (e.g. the reader picked a different, real row instead of
+  // finishing it) never flashes back in; see `CatalogPage`'s own doc comment.
+  const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+
   function refresh(): void {
     invalidateCapability(http, 'list_skills');
     void skills.reload();
+  }
+
+  function openEditor(next: EditorState<SkillRow>): void {
+    setEditor(next);
+    onSelectItem(NEW_ITEM_ID);
+  }
+
+  function selectRow(id: string | null): void {
+    setEditor(null);
+    onSelectItem(id);
+  }
+
+  function closeEditor(): void {
+    setEditor(null);
+    onSelectItem(null);
   }
 
   async function act(row: SkillRow, action: 'publish_skill' | 'deprecate_skill') {
@@ -652,6 +987,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
     try {
       await http.call('discard_draft', { kind: 'skill', id: row.id, version: row.version });
       toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
+      selectRow(null);
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('discard_draft');
@@ -665,162 +1001,252 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
-  const editorDrawer = (
-    <Drawer
-      open={editor !== null}
-      onClose={() => setEditor(null)}
-      title={
-        editor?.kind === 'copy'
+  const canPropose = !permissions.isDenied('propose_skill');
+  const canPublish = !permissions.isDenied('publish_skill');
+  const canDeprecate = !permissions.isDenied('deprecate_skill');
+  const canDiscard = !permissions.isDenied('discard_draft');
+
+  const editorPane = editor ? (
+    <div className="stack">
+      <h2 className="catalog-detail-title">
+        {editor.kind === 'copy'
           ? t('编辑为新草稿', 'Edit as new draft')
-          : t('新建 Skill 草稿', 'New Skill draft')
-      }
-      subtitle={t(
-        'SKILL.md：frontmatter 字段 + Markdown 正文',
-        'frontmatter fields + Markdown body',
-      )}
-      wide
-      testId="skill-editor-drawer"
-    >
-      {editor ? (
-        <SkillEditor
-          key={editor.kind === 'copy' ? editor.row.id : 'new'}
-          http={http}
-          copyOf={editor.kind === 'copy' ? editor.row : undefined}
-          onProposed={() => void skills.reload()}
-          onDone={() => {
-            setEditor(null);
-            refresh();
-          }}
+          : t('新建 Skill 草稿', 'New Skill draft')}
+      </h2>
+      <p className="text-3 text-small">
+        {t('SKILL.md：frontmatter 字段 + Markdown 正文', 'frontmatter fields + Markdown body')}
+      </p>
+      <SkillEditor
+        key={editor.kind === 'copy' ? editor.row.id : 'new'}
+        http={http}
+        copyOf={editor.kind === 'copy' ? editor.row : undefined}
+        onProposed={() => void skills.reload()}
+        onDone={() => {
+          closeEditor();
+          refresh();
+        }}
+      />
+    </div>
+  ) : null;
+
+  const list =
+    skills.state.status !== 'ready' ? (
+      <DegradedList
+        status={skills.state.status === 'loading' ? 'loading' : 'error'}
+        error={skills.state.status === 'error' ? skills.state.error : undefined}
+        reload={() => void skills.reload()}
+        capabilityLabel="list_skills"
+      />
+    ) : (
+      <div className="stack-s">
+        <DraftToolbar
+          canPropose={canPropose}
+          onNewDraft={() => openEditor({ kind: 'new' })}
+          onRefresh={refresh}
+          refreshing={skills.state.refreshing}
+          testId="skills-new-draft"
         />
-      ) : null}
-    </Drawer>
+        <DraftExpiryNote testId="skills-draft-expiry-note" />
+        {rows.length === 0 ? (
+          <EmptyState
+            title={t('还没有 Skill', 'No Skills yet')}
+            body={t(
+              '用「新建草稿」写第一个 SKILL.md，或让 Worker 在结果里提议。',
+              'Write the first SKILL.md with New draft, or let a Worker propose one in its result.',
+            )}
+            testId="catalog-empty"
+          />
+        ) : (
+          <List ariaLabel="Skills" testId="catalog-list">
+            {rows.map((row) => (
+              <ListRow
+                key={row.id}
+                testId="catalog-row"
+                selected={row.id === itemId}
+                onSelect={() => selectRow(row.id)}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                  <span className="truncate">{row.name}</span>
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                </span>
+                <span className="truncate text-3">
+                  v{row.version} · {row.description}
+                </span>
+              </ListRow>
+            ))}
+          </List>
+        )}
+        {skills.state.data.nextCursor !== undefined ? (
+          <div className="row" style={{ justifyContent: 'center' }}>
+            <Button
+              variant="secondary"
+              aria-busy={skills.loadingMore || undefined}
+              disabled={skills.loadingMore}
+              onClick={() => void skills.loadMore()}
+            >
+              {t('加载更多', 'Load more')}
+            </Button>
+          </div>
+        ) : null}
+        {skills.state.data.truncated === true ? (
+          <p className="text-3 text-small" data-testid="skills-truncated">
+            {t(
+              '已达到单次读取上限，继续点“加载更多”查看其余 Skill。',
+              'Reached the per-page limit — keep loading more to see the rest.',
+            )}
+          </p>
+        ) : null}
+        {skills.loadMoreError !== null ? (
+          <ErrorBanner
+            error={skills.loadMoreError}
+            title={t('无法加载更多 Skill', 'Could not load more skills')}
+            testId="skills-load-more-error"
+          />
+        ) : null}
+      </div>
+    );
+
+  const detailContent = showEditor ? (
+    editorPane
+  ) : selected ? (
+    <SkillDetailView
+      http={http}
+      row={selected}
+      canPropose={canPropose}
+      canPublish={canPublish}
+      canDeprecate={canDeprecate}
+      canDiscard={canDiscard}
+      busy={busy === selected.id}
+      onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
+      onPublish={() => act(selected, 'publish_skill')}
+      onDeprecate={() => act(selected, 'deprecate_skill')}
+      onDiscard={() => discardSkillDraft(selected)}
+    />
+  ) : (
+    <SelectionPlaceholder
+      itemId={itemId}
+      ready={skills.state.status === 'ready'}
+      emptyTitle={t(
+        '选择左侧一个 Skill，查看与编辑它的 SKILL.md 正文',
+        'Select a Skill on the left to view and edit its SKILL.md',
+      )}
+    />
   );
 
-  // The editor drawer is rendered in every state (below) so a reload that passes through
-  // `loading` never unmounts an editor mid-flight and loses its "draft proposed" state.
-  if (skills.state.status !== 'ready') {
-    return (
-      <>
-        <DegradedList
-          status={skills.state.status === 'loading' ? 'loading' : 'error'}
-          error={skills.state.status === 'error' ? skills.state.error : undefined}
-          reload={() => void skills.reload()}
-          capabilityLabel="list_skills"
-        />
-        {editorDrawer}
-      </>
-    );
-  }
-  const rows = skills.state.data.items;
   return (
-    <>
-      <DraftToolbar
-        canPropose={!permissions.isDenied('propose_skill')}
-        onNewDraft={() => setEditor({ kind: 'new' })}
-        onRefresh={refresh}
-        refreshing={skills.state.refreshing}
-        testId="skills-new-draft"
-      />
-      <DraftExpiryNote testId="skills-draft-expiry-note" />
-      {rows.length === 0 ? (
-        <EmptyState
-          icon="grid"
-          title={t('还没有', 'Skill No skills proposed yet')}
-          body={t(
-            '用「新建草稿」写第一个 SKILL.md，或让 Worker 在结果里提议。',
-            'Write the first SKILL.md with New draft, or let a Worker propose one in its result.',
-          )}
-          testId="catalog-empty"
-        />
-      ) : (
-        <DataList ariaLabel="Skills" testId="catalog-list">
-          {rows.map((row) => (
-            <DataRow
-              key={row.id}
-              testId="catalog-row"
-              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-              title={
-                <>
-                  <span className="truncate">{row.name}</span>
-                  <span className="text-3 text-small">v{row.version}</span>
-                </>
-              }
-              meta={<span className="truncate">{row.description}</span>}
-              trailing={
-                <span className="row-wrap">
-                  {!permissions.isDenied('propose_skill') ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      onClick={() => setEditor({ kind: 'copy', row })}
-                      data-testid="catalog-edit-as-draft"
-                    >
-                      {t('编辑为新草稿', 'Edit as new draft')}
-                    </Button>
-                  ) : null}
-                  {!permissions.isDenied('publish_skill') && row.status === 'draft' ? (
-                    <Button
-                      variant="primary"
-                      size="s"
-                      loading={busy === row.id}
-                      onClick={() => void act(row, 'publish_skill')}
-                    >
-                      {t('发布', 'Publish')}
-                    </Button>
-                  ) : !permissions.isDenied('deprecate_skill') && row.status === 'published' ? (
-                    <DeprecateConfirm
-                      busy={busy === row.id}
-                      target={row.name}
-                      onConfirm={() => act(row, 'deprecate_skill')}
-                      testId={`skill-deprecate-confirm-${row.id}`}
-                    />
-                  ) : null}
-                  {!permissions.isDenied('discard_draft') && row.status === 'draft' ? (
-                    <DiscardDraftConfirm
-                      busy={busy === row.id}
-                      target={row.name}
-                      onConfirm={() => discardSkillDraft(row)}
-                      testId={`skill-discard-confirm-${row.id}`}
-                    />
-                  ) : null}
-                </span>
-              }
-            />
-          ))}
-        </DataList>
-      )}
-      {skills.state.status === 'ready' && skills.state.data.nextCursor !== undefined ? (
-        <div className="row" style={{ justifyContent: 'center' }}>
-          <Button
-            variant="secondary"
-            loading={skills.loadingMore}
-            onClick={() => void skills.loadMore()}
-          >
-            {t('加载更多', 'Load more')}
-          </Button>
-        </div>
-      ) : null}
-      {skills.state.status === 'ready' && skills.state.data.truncated === true ? (
-        <p className="text-3 text-small" data-testid="skills-truncated">
-          {t(
-            '已达到单次读取上限，继续点“加载更多”查看其余 Skill。',
-            'Reached the per-page limit — keep loading more to see the rest.',
-          )}
-        </p>
-      ) : null}
-      {skills.loadMoreError !== null ? (
-        <ErrorBanner
-          error={skills.loadMoreError}
-          title={t('无法加载更多 Skill', 'Could not load more skills')}
-          testId="skills-load-more-error"
-        />
-      ) : null}
-      {editorDrawer}
-    </>
+    <MasterDetail
+      list={list}
+      detail={
+        skills.state.status === 'ready' && rows.length === 0 && itemId === undefined
+          ? null
+          : detailContent
+      }
+      open={itemId !== undefined}
+      onClose={closeEditor}
+      sheetTitle={t('Skill 详情', 'Skill detail')}
+      detailTestId={showEditor ? 'skill-editor-drawer' : 'catalog-detail'}
+    />
   );
 }
 
-function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
+// -------------------------------------------------------------------------------------------
+// Procedures
+// -------------------------------------------------------------------------------------------
+
+function ProcedureDetailView({
+  row,
+  canPropose,
+  canPublish,
+  canDeprecate,
+  canDiscard,
+  busy,
+  onEditAsDraft,
+  onPublish,
+  onDeprecate,
+  onDiscard,
+}: {
+  readonly row: ProcedureRow;
+  readonly canPropose: boolean;
+  readonly canPublish: boolean;
+  readonly canDeprecate: boolean;
+  readonly canDiscard: boolean;
+  readonly busy: boolean;
+  readonly onEditAsDraft: () => void;
+  readonly onPublish: () => Promise<void>;
+  readonly onDeprecate: () => Promise<void>;
+  readonly onDiscard: () => Promise<void>;
+}) {
+  const t = useT();
+  return (
+    <div className="stack" data-testid="procedure-detail" data-procedure-id={row.id}>
+      <header className="stack-s">
+        <div className="row-wrap">
+          <StatusChip machine="publishable" status={row.status} size="s" />
+          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <span className="text-3 text-small">v{row.version}</span>
+          {row.steps ? (
+            <span className="tag">
+              {row.steps.length} {t('步', 'steps')}
+            </span>
+          ) : null}
+        </div>
+        <PublishableStepper status={row.status} testId="procedure-detail-stepper" />
+      </header>
+
+      <KeyValue
+        items={[{ key: 'description', label: t('描述', 'Description'), value: row.description }]}
+      />
+
+      <div className="stack-s">
+        <span className="section-title">{t('步骤', 'Steps')}</span>
+        <pre className="code-block" data-testid="procedure-detail-steps">
+          {prettyJson(row.steps ?? [])}
+        </pre>
+      </div>
+
+      <div className="row-wrap">
+        {canPropose ? (
+          <Button
+            variant="ghost"
+            size="s"
+            onClick={onEditAsDraft}
+            data-testid="catalog-edit-as-draft"
+          >
+            {t('编辑为新草稿', 'Edit as new draft')}
+          </Button>
+        ) : null}
+        {canPublish && row.status === 'draft' ? (
+          <Button
+            variant="primary"
+            size="s"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={() => void onPublish()}
+          >
+            {t('发布', 'Publish')}
+          </Button>
+        ) : canDeprecate && row.status === 'published' ? (
+          <DeprecateConfirm
+            busy={busy}
+            target={row.name}
+            onConfirm={onDeprecate}
+            testId={`procedure-deprecate-confirm-${row.id}`}
+          />
+        ) : null}
+        {canDiscard && row.status === 'draft' ? (
+          <DiscardDraftConfirm
+            busy={busy}
+            target={row.name}
+            onConfirm={onDiscard}
+            testId={`procedure-discard-confirm-${row.id}`}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
@@ -828,9 +1254,28 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
 
+  const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
+  const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+
   function refresh(): void {
     invalidateCapability(http, 'list_procedures');
     void procedures.reload();
+  }
+
+  function openEditor(next: EditorState<ProcedureRow>): void {
+    setEditor(next);
+    onSelectItem(NEW_ITEM_ID);
+  }
+
+  function selectRow(id: string | null): void {
+    setEditor(null);
+    onSelectItem(id);
+  }
+
+  function closeEditor(): void {
+    setEditor(null);
+    onSelectItem(null);
   }
 
   async function act(row: ProcedureRow, action: 'publish_procedure' | 'deprecate_procedure') {
@@ -862,6 +1307,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
     try {
       await http.call('discard_draft', { kind: 'procedure', id: row.id, version: row.version });
       toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
+      selectRow(null);
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('discard_draft');
@@ -875,158 +1321,177 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
-  const editorDrawer = (
-    <Drawer
-      open={editor !== null}
-      onClose={() => setEditor(null)}
-      title={
-        editor?.kind === 'copy'
+  const canPropose = !permissions.isDenied('propose_procedure');
+  const canPublish = !permissions.isDenied('publish_procedure');
+  const canDeprecate = !permissions.isDenied('deprecate_procedure');
+  const canDiscard = !permissions.isDenied('discard_draft');
+
+  const editorPane = editor ? (
+    <div className="stack">
+      <h2 className="catalog-detail-title">
+        {editor.kind === 'copy'
           ? t('编辑为新草稿', 'Edit as new draft')
-          : t('新建 Procedure 草稿', 'New Procedure draft')
-      }
-      subtitle={t('名称、描述与有序步骤', 'name, description and ordered steps')}
-      wide
-      testId="procedure-editor-drawer"
-    >
-      {editor ? (
-        <ProcedureEditorHost
-          key={editor.kind === 'copy' ? editor.row.id : 'new'}
-          http={http}
-          copyOf={editor.kind === 'copy' ? editor.row : undefined}
-          onProposed={() => void procedures.reload()}
-          onDone={() => {
-            setEditor(null);
-            refresh();
-          }}
+          : t('新建 Procedure 草稿', 'New Procedure draft')}
+      </h2>
+      <p className="text-3 text-small">
+        {t('名称、描述与有序步骤', 'name, description and ordered steps')}
+      </p>
+      <ProcedureEditorHost
+        key={editor.kind === 'copy' ? editor.row.id : 'new'}
+        http={http}
+        copyOf={editor.kind === 'copy' ? editor.row : undefined}
+        onProposed={() => void procedures.reload()}
+        onDone={() => {
+          closeEditor();
+          refresh();
+        }}
+      />
+    </div>
+  ) : null;
+
+  const list =
+    procedures.state.status !== 'ready' ? (
+      <DegradedList
+        status={procedures.state.status === 'loading' ? 'loading' : 'error'}
+        error={procedures.state.status === 'error' ? procedures.state.error : undefined}
+        reload={() => void procedures.reload()}
+        capabilityLabel="list_procedures"
+      />
+    ) : (
+      <div className="stack-s">
+        <DraftToolbar
+          canPropose={canPropose}
+          onNewDraft={() => openEditor({ kind: 'new' })}
+          onRefresh={refresh}
+          refreshing={procedures.state.refreshing}
+          testId="procedures-new-draft"
         />
-      ) : null}
-    </Drawer>
+        <DraftExpiryNote testId="procedures-draft-expiry-note" />
+        {rows.length === 0 ? (
+          <EmptyState
+            title={t('还没有 Procedure', 'No Procedures yet')}
+            body={t(
+              '用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。',
+              'Write the first one with New draft, or let a Worker distil one from a successful Task.',
+            )}
+            testId="catalog-empty"
+          />
+        ) : (
+          <List ariaLabel="Procedures" testId="catalog-list">
+            {rows.map((row) => (
+              <ListRow
+                key={row.id}
+                testId="catalog-row"
+                selected={row.id === itemId}
+                onSelect={() => selectRow(row.id)}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                  <span className="row-wrap">
+                    <span className="truncate">{row.name}</span>
+                    {row.steps ? (
+                      <span className="tag">
+                        {row.steps.length} {t('步', 'steps')}
+                      </span>
+                    ) : null}
+                  </span>
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                </span>
+                <span className="truncate text-3">
+                  v{row.version} · {row.description}
+                </span>
+              </ListRow>
+            ))}
+          </List>
+        )}
+        {procedures.state.data.nextCursor !== undefined ? (
+          <div className="row" style={{ justifyContent: 'center' }}>
+            <Button
+              variant="secondary"
+              aria-busy={procedures.loadingMore || undefined}
+              disabled={procedures.loadingMore}
+              onClick={() => void procedures.loadMore()}
+            >
+              {t('加载更多', 'Load more')}
+            </Button>
+          </div>
+        ) : null}
+        {procedures.state.data.truncated === true ? (
+          <p className="text-3 text-small" data-testid="procedures-truncated">
+            {t(
+              '已达到单次读取上限，继续点“加载更多”查看其余 Procedure。',
+              'Reached the per-page limit — keep loading more to see the rest.',
+            )}
+          </p>
+        ) : null}
+        {procedures.loadMoreError !== null ? (
+          <ErrorBanner
+            error={procedures.loadMoreError}
+            title={t('无法加载更多 Procedure', 'Could not load more procedures')}
+            testId="procedures-load-more-error"
+          />
+        ) : null}
+      </div>
+    );
+
+  const detailContent = showEditor ? (
+    editorPane
+  ) : selected ? (
+    <ProcedureDetailView
+      row={selected}
+      canPropose={canPropose}
+      canPublish={canPublish}
+      canDeprecate={canDeprecate}
+      canDiscard={canDiscard}
+      busy={busy === selected.id}
+      onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
+      onPublish={() => act(selected, 'publish_procedure')}
+      onDeprecate={() => act(selected, 'deprecate_procedure')}
+      onDiscard={() => discardProcedureDraft(selected)}
+    />
+  ) : (
+    <SelectionPlaceholder
+      itemId={itemId}
+      ready={procedures.state.status === 'ready'}
+      emptyTitle={t(
+        '选择左侧一个 Procedure，查看步骤',
+        'Select a Procedure on the left to see its steps',
+      )}
+    />
   );
 
-  if (procedures.state.status !== 'ready') {
-    return (
-      <>
-        <DegradedList
-          status={procedures.state.status === 'loading' ? 'loading' : 'error'}
-          error={procedures.state.status === 'error' ? procedures.state.error : undefined}
-          reload={() => void procedures.reload()}
-          capabilityLabel="list_procedures"
-        />
-        {editorDrawer}
-      </>
-    );
-  }
-  const rows = procedures.state.data.items;
   return (
-    <>
-      <DraftToolbar
-        canPropose={!permissions.isDenied('propose_procedure')}
-        onNewDraft={() => setEditor({ kind: 'new' })}
-        onRefresh={refresh}
-        refreshing={procedures.state.refreshing}
-        testId="procedures-new-draft"
-      />
-      <DraftExpiryNote testId="procedures-draft-expiry-note" />
-      {rows.length === 0 ? (
-        <EmptyState
-          icon="grid"
-          title={t('还没有', 'Procedure No procedures proposed yet')}
-          body={t(
-            '用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。',
-            'Write the first one with New draft, or let a Worker distil one from a successful Task.',
-          )}
-          testId="catalog-empty"
-        />
-      ) : (
-        <DataList ariaLabel="Procedures" testId="catalog-list">
-          {rows.map((row) => (
-            <DataRow
-              key={row.id}
-              testId="catalog-row"
-              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-              title={
-                <>
-                  <span className="truncate">{row.name}</span>
-                  <span className="text-3 text-small">v{row.version}</span>
-                  {row.steps ? (
-                    <span className="tag">
-                      {row.steps.length} {t('步', 'steps')}
-                    </span>
-                  ) : null}
-                </>
-              }
-              meta={<span className="truncate">{row.description}</span>}
-              trailing={
-                <span className="row-wrap">
-                  {!permissions.isDenied('propose_procedure') ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      onClick={() => setEditor({ kind: 'copy', row })}
-                      data-testid="catalog-edit-as-draft"
-                    >
-                      {t('编辑为新草稿', 'Edit as new draft')}
-                    </Button>
-                  ) : null}
-                  {!permissions.isDenied('publish_procedure') && row.status === 'draft' ? (
-                    <Button
-                      variant="primary"
-                      size="s"
-                      loading={busy === row.id}
-                      onClick={() => void act(row, 'publish_procedure')}
-                    >
-                      {t('发布', 'Publish')}
-                    </Button>
-                  ) : !permissions.isDenied('deprecate_procedure') && row.status === 'published' ? (
-                    <DeprecateConfirm
-                      busy={busy === row.id}
-                      target={row.name}
-                      onConfirm={() => act(row, 'deprecate_procedure')}
-                      testId={`procedure-deprecate-confirm-${row.id}`}
-                    />
-                  ) : null}
-                  {!permissions.isDenied('discard_draft') && row.status === 'draft' ? (
-                    <DiscardDraftConfirm
-                      busy={busy === row.id}
-                      target={row.name}
-                      onConfirm={() => discardProcedureDraft(row)}
-                      testId={`procedure-discard-confirm-${row.id}`}
-                    />
-                  ) : null}
-                </span>
-              }
-            />
-          ))}
-        </DataList>
-      )}
-      {procedures.state.status === 'ready' && procedures.state.data.nextCursor !== undefined ? (
-        <div className="row" style={{ justifyContent: 'center' }}>
-          <Button
-            variant="secondary"
-            loading={procedures.loadingMore}
-            onClick={() => void procedures.loadMore()}
-          >
-            {t('加载更多', 'Load more')}
-          </Button>
-        </div>
-      ) : null}
-      {procedures.state.status === 'ready' && procedures.state.data.truncated === true ? (
-        <p className="text-3 text-small" data-testid="procedures-truncated">
-          {t(
-            '已达到单次读取上限，继续点“加载更多”查看其余 Procedure。',
-            'Reached the per-page limit — keep loading more to see the rest.',
-          )}
-        </p>
-      ) : null}
-      {procedures.loadMoreError !== null ? (
-        <ErrorBanner
-          error={procedures.loadMoreError}
-          title={t('无法加载更多 Procedure', 'Could not load more procedures')}
-          testId="procedures-load-more-error"
-        />
-      ) : null}
-      {editorDrawer}
-    </>
+    <MasterDetail
+      list={list}
+      detail={
+        procedures.state.status === 'ready' && rows.length === 0 && itemId === undefined
+          ? null
+          : detailContent
+      }
+      open={itemId !== undefined}
+      onClose={closeEditor}
+      sheetTitle={t('Procedure 详情', 'Procedure detail')}
+      detailTestId={showEditor ? 'procedure-editor-drawer' : 'catalog-detail'}
+    />
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// Workers
+// -------------------------------------------------------------------------------------------
+
+/** Workers has no dedicated id column of its own family/version pair — same `${id}@${version}`
+ *  shape already used as this tab's React `key` before this lane, now doubling as the item's URL
+ *  segment. */
+function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string {
+  return `${row.id}@${row.version}`;
+}
+
+/** A Worker definition's display name: its own name, else 「未命名 · <short id>」. Rows are one
+ *  `<button>` now, so the pre-P3-5 `RefChip` fallback (greyed short id) is gone — and a raw UUID
+ *  in a title is exactly what the copy guard rejects (an unnamed entry definition tripped it). */
+function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
+  return (
+    definitionName([row], row.id, row.version) ?? `${t('未命名', 'Unnamed')} · ${shortId(row.id)}`
   );
 }
 
@@ -1039,176 +1504,122 @@ type WorkerEditorState =
   | { readonly kind: 'template' }
   | null;
 
-/** CW1 (audit "唯一一行是入口定义（v1 entry），还提供'弃用'——弃用它会让本工作区入口 agent 失效"):
- *  the entry-kind row(s) — shown separately from the delegable Worker rows, with **no** Deprecate
- *  action at all (not even behind a confirm — the kernel's own `deprecateWorkerDefinition` has no
- *  entry-kind special case, docs/development-tasks.md §5e F1: this page is the only guard, and
- *  omitting the action entirely is simpler than an `irreversible`-tier confirm for an action this
- *  page has no real reason to expose). "编辑（新版本草稿）" still proposes the next version, same
- *  as a Worker row — an entry family is still meant to evolve, just never be deprecated from here.
- */
-function EntrySection({
-  rows,
+function WorkerDetailView({
+  row,
+  isMyDraft,
   canPropose,
-  onEdit,
-}: {
-  readonly rows: readonly WorkerDefinitionSummary[];
-  readonly canPropose: boolean;
-  readonly onEdit: (row: WorkerDefinitionSummary) => void;
-}) {
-  const t = useT();
-  return (
-    <div className="stack-s" data-testid="workers-entry-section">
-      <span className="section-title">{t('入口定义', 'Entry definition')}</span>
-      {rows.length === 0 ? (
-        <p className="text-3 text-small">
-          {t(
-            '本工作区还没有已发布的入口定义。',
-            'No published entry definition in this workspace yet.',
-          )}
-        </p>
-      ) : (
-        <DataList ariaLabel="Entry definition" testId="workers-entry-list">
-          {rows.map((row) => (
-            <DataRow
-              key={`${row.id}@${row.version}`}
-              testId="catalog-row"
-              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-              title={
-                <>
-                  <RefChip
-                    kind="workerDefinition"
-                    id={row.id}
-                    name={definitionName([row], row.id, row.version)}
-                    size="s"
-                  />
-                  <span className="text-3 text-small">v{row.version}</span>
-                  <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
-                </>
-              }
-              meta={
-                typeof row.definition.description === 'string' ? (
-                  <span className="truncate">{row.definition.description}</span>
-                ) : undefined
-              }
-              trailing={
-                canPropose ? (
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    onClick={() => onEdit(row)}
-                    data-testid="catalog-edit-as-draft"
-                  >
-                    {t('编辑（新版本草稿）', 'Edit as new draft version')}
-                  </Button>
-                ) : undefined
-              }
-            />
-          ))}
-        </DataList>
-      )}
-    </div>
-  );
-}
-
-/** S8 W2-U2b (audit R6 "保存草稿后找不回它"): the caller's own draft Worker definitions — shown
- *  only when non-empty (unlike `EntrySection` above, which always renders with an empty-state
- *  line; an empty "我的草稿" would just be clutter for the common case of no outstanding drafts).
- *  Publish is a plain button with no confirm (same tier Skills/Procedures rows already use for
- *  `publish_skill`/`publish_procedure` — publish only ever *adds* visibility, it does not remove or
- *  overwrite anything, so this tab's own `DeprecateConfirm` convention does not apply here). No
- *  "继续编辑"/edit action: the only mechanism that exists (`propose_worker_definition{definitionId}`)
- *  always inserts the *next* version rather than updating this draft row in place
- *  (`application/worker/definitions.ts`'s own doc comment — I16: "propose 总是插入新行").
- *
- *  S8 W3 K2 (leftover 82): a still-draft version used to have no way to be cleared afterwards
- *  (`deprecate_worker_definition` only transitions out of `published`) — `discard_draft` now closes
- *  that gap, so "丢弃" (a `DiscardDraftConfirm`, tier `medium`) sits next to "发布"; the one-line
- *  `DraftExpiryNote` covers the drafts a caller simply forgets about. */
-function MyDraftsSection({
-  rows,
-  busy,
   canPublish,
+  canDeprecate,
   canDiscard,
+  busy,
+  onEditAsNewVersion,
   onPublish,
+  onDeprecate,
   onDiscard,
 }: {
-  readonly rows: readonly WorkerDefinitionSummary[];
-  readonly busy: string | null;
+  readonly row: WorkerDefinitionSummary;
+  readonly isMyDraft: boolean;
+  readonly canPropose: boolean;
   readonly canPublish: boolean;
+  readonly canDeprecate: boolean;
   readonly canDiscard: boolean;
-  readonly onPublish: (row: WorkerDefinitionSummary) => void;
-  readonly onDiscard: (row: WorkerDefinitionSummary) => Promise<void>;
+  readonly busy: boolean;
+  readonly onEditAsNewVersion: () => void;
+  readonly onPublish: () => Promise<void>;
+  readonly onDeprecate: () => Promise<void>;
+  readonly onDiscard: () => Promise<void>;
 }) {
   const t = useT();
-  if (rows.length === 0) return null;
+  const name = workerLabel(row, t);
   return (
-    <div className="stack-s" data-testid="workers-my-drafts-section">
-      <span className="section-title">{t('我的草稿', 'My drafts')}</span>
-      <DraftExpiryNote testId="workers-my-drafts-expiry-note" />
-      <DataList ariaLabel="My drafts" testId="workers-my-drafts-list">
-        {rows.map((row) => (
-          <DataRow
-            key={`${row.id}@${row.version}`}
-            testId="workers-my-draft-row"
-            leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-            title={
-              <>
-                <RefChip
-                  kind="workerDefinition"
-                  id={row.id}
-                  name={definitionName([row], row.id, row.version)}
-                  size="s"
-                />
-                <span className="text-3 text-small">v{row.version}</span>
-                <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
-              </>
-            }
-            meta={
-              typeof row.definition.description === 'string' ? (
-                <span className="truncate">{row.definition.description}</span>
-              ) : undefined
-            }
-            trailing={
-              <span className="row-wrap">
-                {canPublish ? (
-                  <Button
-                    variant="primary"
-                    size="s"
-                    loading={busy === row.id}
-                    onClick={() => onPublish(row)}
-                    data-testid="worker-draft-publish"
-                  >
-                    {t('发布', 'Publish')}
-                  </Button>
-                ) : null}
-                {canDiscard ? (
-                  <DiscardDraftConfirm
-                    busy={busy === row.id}
-                    target={definitionName([row], row.id, row.version) ?? row.id}
-                    onConfirm={() => onDiscard(row)}
-                    testId={`worker-draft-discard-${row.id}@${row.version}`}
-                  />
-                ) : null}
-              </span>
-            }
-          />
-        ))}
-      </DataList>
+    <div className="stack" data-testid="worker-detail" data-worker-key={workerKey(row)}>
+      <header className="stack-s">
+        <div className="row-wrap">
+          <StatusChip machine="publishable" status={row.status} size="s" />
+          <strong className="catalog-detail-title truncate">{name}</strong>
+          <span className="text-3 text-small">v{row.version}</span>
+          <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+        </div>
+        <PublishableStepper status={row.status} testId="worker-detail-stepper" />
+      </header>
+
+      {typeof row.definition.description === 'string' ? (
+        <KeyValue
+          items={[
+            {
+              key: 'description',
+              label: t('描述', 'Description'),
+              value: row.definition.description,
+            },
+          ]}
+        />
+      ) : null}
+
+      <div className="stack-s">
+        <span className="section-title">{t('定义', 'Definition')}</span>
+        <pre className="code-block" data-testid="worker-detail-definition">
+          {prettyJson(row.definition)}
+        </pre>
+      </div>
+
+      <div className="row-wrap">
+        {isMyDraft ? (
+          <>
+            {canPublish ? (
+              <Button
+                variant="primary"
+                size="s"
+                disabled={busy}
+                aria-busy={busy || undefined}
+                onClick={() => void onPublish()}
+                data-testid="worker-draft-publish"
+              >
+                {t('发布', 'Publish')}
+              </Button>
+            ) : null}
+            {canDiscard ? (
+              <DiscardDraftConfirm
+                busy={busy}
+                target={name}
+                onConfirm={onDiscard}
+                testId={`worker-draft-discard-${workerKey(row)}`}
+              />
+            ) : null}
+          </>
+        ) : (
+          <>
+            {canPropose ? (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={onEditAsNewVersion}
+                data-testid="catalog-edit-as-draft"
+              >
+                {t('编辑（新版本草稿）', 'Edit as new draft version')}
+              </Button>
+            ) : null}
+            {row.kind !== 'entry' && canDeprecate && row.status === 'published' ? (
+              <DeprecateConfirm
+                busy={busy}
+                target={name}
+                onConfirm={onDeprecate}
+                testId={`worker-deprecate-confirm-${workerKey(row)}`}
+              />
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
+function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
   // S8 W2-U2b (audit R6): a dedicated own-drafts read — `includeOwnDrafts` is additive (published
-  // rows come back too, same as `workers` above), so this is filtered to `status === 'draft'`
-  // below rather than treated as the tab's real list; `autoLoadAll` so a caller with drafts past
-  // the first page still sees every one of them under "我的草稿" (own-drafts counts are small in
-  // practice, same reasoning `WorkerEditorHost`'s own `list_skills` picker call below uses).
+  // rows come back too, S8 W2-U2b) — only the caller's own draft rows are this section's concern.
   const myDrafts = useCapabilityList<WorkerDefinitionSummary>(
     http,
     'list_worker_definitions',
@@ -1229,13 +1640,28 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     void myDrafts.reload();
   }
 
+  function openEditor(next: WorkerEditorState): void {
+    setEditor(next);
+    onSelectItem(NEW_ITEM_ID);
+  }
+
+  function selectRow(id: string | null): void {
+    setEditor(null);
+    onSelectItem(id);
+  }
+
+  function closeEditor(): void {
+    setEditor(null);
+    onSelectItem(null);
+  }
+
   async function publishDraft(row: WorkerDefinitionSummary): Promise<void> {
-    setBusy(row.id);
+    setBusy(workerKey(row));
     try {
       await http.call('publish_worker_definition', { definitionId: row.id, version: row.version });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已发布', 'published')}`,
+        title: `${workerLabel(row, t)} ${t('已发布', 'published')}`,
       });
       refresh();
     } catch (err) {
@@ -1251,7 +1677,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   }
 
   async function deprecate(row: WorkerDefinitionSummary): Promise<void> {
-    setBusy(row.id);
+    setBusy(workerKey(row));
     try {
       await http.call('deprecate_worker_definition', {
         definitionId: row.id,
@@ -1259,10 +1685,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       });
       toast.push({
         tone: 'ok',
-        title: t(
-          `${definitionName([row], row.id, row.version) ?? row.id} 已弃用`,
-          `${definitionName([row], row.id, row.version) ?? row.id} deprecated`,
-        ),
+        title: t(`${workerLabel(row, t)} 已弃用`, `${workerLabel(row, t)} deprecated`),
       });
       refresh();
     } catch (err) {
@@ -1281,7 +1704,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   // same catch-and-toast convention every other write in this tab already uses (never re-throws
   // into `Confirm`'s own inline error state, matching `deprecate`/`publishDraft` above).
   async function discardWorkerDraft(row: WorkerDefinitionSummary): Promise<void> {
-    setBusy(row.id);
+    setBusy(workerKey(row));
     try {
       await http.call('discard_draft', {
         kind: 'worker_definition',
@@ -1290,8 +1713,9 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} ${t('已丢弃', 'discarded')}`,
+        title: `${workerLabel(row, t)} ${t('已丢弃', 'discarded')}`,
       });
+      selectRow(null);
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('discard_draft');
@@ -1308,61 +1732,64 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   const canPropose = !permissions.isDenied('propose_worker_definition');
   const canPublish = !permissions.isDenied('publish_worker_definition');
   const canDiscard = !permissions.isDenied('discard_draft');
+  const canDeprecate = !permissions.isDenied('deprecate_worker_definition');
 
-  const editorDrawer = (
-    <Drawer
-      open={editor !== null}
-      onClose={() => setEditor(null)}
-      title={
-        editor?.kind === 'copy'
+  const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+
+  const editorPane = editor ? (
+    <div className="stack">
+      <h2 className="catalog-detail-title">
+        {editor.kind === 'copy'
           ? t('提议新版本', 'Propose a new version')
-          : editor?.kind === 'template'
+          : editor.kind === 'template'
             ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
-            : t('新建 Worker 定义草稿', 'New Worker definition draft')
-      }
-      subtitle="kind + definition（systemPrompt、model、capabilities…）"
-      wide
-      testId="worker-editor-drawer"
-    >
-      {editor ? (
-        <WorkerEditorHost
-          key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
-          http={http}
-          newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
-          initialForm={
-            editor.kind === 'template' && capabilityNames.state.status === 'ready'
-              ? opsRunnerTemplateForm(capabilityNames.state.data.items)
-              : undefined
-          }
-          capabilityNames={
-            capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
-          }
-          onProposed={() => {
-            void workers.reload();
-            void myDrafts.reload();
-          }}
-          onDone={() => {
-            setEditor(null);
-            refresh();
-          }}
-        />
-      ) : null}
-    </Drawer>
-  );
+            : t('新建 Worker 定义草稿', 'New Worker definition draft')}
+      </h2>
+      <p className="text-3 text-small">kind + definition（systemPrompt、model、capabilities…）</p>
+      <WorkerEditorHost
+        key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
+        http={http}
+        newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
+        initialForm={
+          editor.kind === 'template' && capabilityNames.state.status === 'ready'
+            ? opsRunnerTemplateForm(capabilityNames.state.data.items)
+            : undefined
+        }
+        capabilityNames={
+          capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
+        }
+        onProposed={() => {
+          void workers.reload();
+          void myDrafts.reload();
+        }}
+        onDone={() => {
+          closeEditor();
+          refresh();
+        }}
+      />
+    </div>
+  ) : null;
 
   if (workers.state.status !== 'ready') {
     return (
-      <>
-        <DegradedList
-          status={workers.state.status === 'loading' ? 'loading' : 'error'}
-          error={workers.state.status === 'error' ? workers.state.error : undefined}
-          reload={() => void workers.reload()}
-          capabilityLabel="list_worker_definitions"
-        />
-        {editorDrawer}
-      </>
+      <MasterDetail
+        list={
+          <DegradedList
+            status={workers.state.status === 'loading' ? 'loading' : 'error'}
+            error={workers.state.status === 'error' ? workers.state.error : undefined}
+            reload={() => void workers.reload()}
+            capabilityLabel="list_worker_definitions"
+          />
+        }
+        detail={showEditor ? editorPane : null}
+        open={itemId !== undefined}
+        onClose={closeEditor}
+        sheetTitle={t('Worker 详情', 'Worker detail')}
+        detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
+      />
     );
   }
+
   const rows = workers.state.data.items;
   const entryRows = rows.filter((row) => row.kind === 'entry');
   const workerRows = rows.filter((row) => row.kind !== 'entry');
@@ -1372,11 +1799,14 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     myDrafts.state.status === 'ready'
       ? myDrafts.state.data.items.filter((row) => row.status === 'draft')
       : [];
-  return (
-    <>
+  const allRows = [...myDraftRows, ...entryRows, ...workerRows];
+  const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
+
+  const list = (
+    <div className="stack-s">
       <DraftToolbar
         canPropose={canPropose}
-        onNewDraft={() => setEditor({ kind: 'new' })}
+        onNewDraft={() => openEditor({ kind: 'new' })}
         onRefresh={refresh}
         refreshing={workers.state.refreshing}
         testId="workers-new-draft"
@@ -1384,7 +1814,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           canPropose ? (
             <Button
               variant="secondary"
-              onClick={() => setEditor({ kind: 'template' })}
+              onClick={() => openEditor({ kind: 'template' })}
               disabled={capabilityNames.state.status !== 'ready'}
               title={
                 capabilityNames.state.status !== 'ready'
@@ -1399,27 +1829,69 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
         }
       />
 
-      <MyDraftsSection
-        rows={myDraftRows}
-        busy={busy}
-        canPublish={canPublish}
-        canDiscard={canDiscard}
-        onPublish={(row) => void publishDraft(row)}
-        onDiscard={discardWorkerDraft}
-      />
+      {myDraftRows.length > 0 ? (
+        <div className="stack-s" data-testid="workers-my-drafts-section">
+          <span className="section-title">{t('我的草稿', 'My drafts')}</span>
+          <DraftExpiryNote testId="workers-my-drafts-expiry-note" />
+          <List ariaLabel="My drafts" testId="workers-my-drafts-list">
+            {myDraftRows.map((row) => (
+              <ListRow
+                key={workerKey(row)}
+                testId="workers-my-draft-row"
+                selected={workerKey(row) === itemId}
+                onSelect={() => selectRow(workerKey(row))}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                  <span className="row-wrap">
+                    <span className="truncate">{workerLabel(row, t)}</span>
+                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                  </span>
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                </span>
+                <span className="truncate text-3">v{row.version}</span>
+              </ListRow>
+            ))}
+          </List>
+        </div>
+      ) : null}
 
-      <EntrySection
-        rows={entryRows}
-        canPropose={canPropose}
-        onEdit={(row) => setEditor({ kind: 'copy', row })}
-      />
+      <div className="stack-s" data-testid="workers-entry-section">
+        <span className="section-title">{t('入口定义', 'Entry definition')}</span>
+        {entryRows.length === 0 ? (
+          <p className="text-3 text-small">
+            {t(
+              '本工作区还没有已发布的入口定义。',
+              'No published entry definition in this workspace yet.',
+            )}
+          </p>
+        ) : (
+          <List ariaLabel="Entry definition" testId="workers-entry-list">
+            {entryRows.map((row) => (
+              <ListRow
+                key={workerKey(row)}
+                testId="catalog-row"
+                selected={workerKey(row) === itemId}
+                onSelect={() => selectRow(workerKey(row))}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                  <span className="row-wrap">
+                    <span className="truncate">{workerLabel(row, t)}</span>
+                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                  </span>
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                </span>
+                <span className="truncate text-3">v{row.version}</span>
+              </ListRow>
+            ))}
+          </List>
+        )}
+      </div>
 
       <div className="stack-s" data-testid="workers-worker-section">
         <span className="section-title">{t('Worker 定义', 'Worker definitions')}</span>
         {workerRows.length === 0 ? (
           <EmptyState
-            icon="grid"
-            title={t('本工作区还没有已发布的 Worker', 'No published Workers in this workspace yet')}
+            title={t('还没有 Worker', 'No Workers yet')}
             body={t(
               '入口 agent 委派任务时找不到可用的 Worker——发布至少一个 Worker 定义，委派才能成功。可以用上面的「从模板创建（ops-runner）」快速开始。',
               'The entry agent has nothing to delegate to — publish at least one Worker definition so delegation can succeed. Use “Create from template (ops-runner)” above to get started quickly.',
@@ -1427,61 +1899,27 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
             testId="catalog-empty"
           />
         ) : (
-          <DataList ariaLabel="Worker definitions" testId="catalog-list">
+          <List ariaLabel="Worker definitions" testId="catalog-list">
             {workerRows.map((row) => (
-              <DataRow
-                key={`${row.id}@${row.version}`}
+              <ListRow
+                key={workerKey(row)}
                 testId="catalog-row"
-                leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-                title={
-                  <>
-                    <RefChip
-                      kind="workerDefinition"
-                      id={row.id}
-                      name={definitionName([row], row.id, row.version)}
-                      size="s"
-                    />
-                    <span className="text-3 text-small">v{row.version}</span>
-                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
-                  </>
-                }
-                meta={
-                  typeof row.definition.description === 'string' ? (
-                    <span className="truncate">{row.definition.description}</span>
-                  ) : undefined
-                }
-                trailing={
-                  // CW2 (768px row actions overlapping the title's "v1 entry"-shaped chips):
-                  // `row-wrap` instead of `row` so two actions stack instead of crowding the title
-                  // out of the row at narrow widths.
+                selected={workerKey(row) === itemId}
+                onSelect={() => selectRow(workerKey(row))}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                   <span className="row-wrap">
-                    {canPropose ? (
-                      <Button
-                        variant="ghost"
-                        size="s"
-                        onClick={() => setEditor({ kind: 'copy', row })}
-                        data-testid="catalog-edit-as-draft"
-                      >
-                        {t('编辑（新版本草稿）', 'Edit as new draft version')}
-                      </Button>
-                    ) : null}
-                    {!permissions.isDenied('deprecate_worker_definition') &&
-                    row.status === 'published' ? (
-                      <DeprecateConfirm
-                        busy={busy === row.id}
-                        target={definitionName([row], row.id, row.version) ?? row.id}
-                        onConfirm={() => deprecate(row)}
-                        testId={`worker-deprecate-confirm-${row.id}@${row.version}`}
-                      />
-                    ) : null}
+                    <span className="truncate">{workerLabel(row, t)}</span>
+                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                   </span>
-                }
-              />
+                  <StatusChip machine="publishable" status={row.status} size="s" />
+                </span>
+                <span className="truncate text-3">v{row.version}</span>
+              </ListRow>
             ))}
-          </DataList>
+          </List>
         )}
         {canPropose &&
-        workers.state.status === 'ready' &&
         workers.state.data.nextCursor === undefined &&
         workerRows.length > 0 &&
         workerRows.length <= 2 ? (
@@ -1496,18 +1934,19 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           </Notice>
         ) : null}
       </div>
-      {workers.state.status === 'ready' && workers.state.data.nextCursor !== undefined ? (
+      {workers.state.data.nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button
             variant="secondary"
-            loading={workers.loadingMore}
+            aria-busy={workers.loadingMore || undefined}
+            disabled={workers.loadingMore}
             onClick={() => void workers.loadMore()}
           >
             {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
-      {workers.state.status === 'ready' && workers.state.data.truncated === true ? (
+      {workers.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="workers-truncated">
           {t(
             '已达到单次读取上限，继续点“加载更多”查看其余 Worker 定义。',
@@ -1522,7 +1961,44 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           testId="workers-load-more-error"
         />
       ) : null}
-      {editorDrawer}
-    </>
+    </div>
+  );
+
+  const detailContent = showEditor ? (
+    editorPane
+  ) : selected ? (
+    <WorkerDetailView
+      row={selected}
+      isMyDraft={selected.status === 'draft'}
+      canPropose={canPropose}
+      canPublish={canPublish}
+      canDeprecate={canDeprecate}
+      canDiscard={canDiscard}
+      busy={busy === workerKey(selected)}
+      onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
+      onPublish={() => publishDraft(selected)}
+      onDeprecate={() => deprecate(selected)}
+      onDiscard={() => discardWorkerDraft(selected)}
+    />
+  ) : (
+    <SelectionPlaceholder
+      itemId={itemId}
+      ready={workers.state.status === 'ready'}
+      emptyTitle={t(
+        '选择左侧一个 Worker，查看定义',
+        'Select a Worker on the left to see its definition',
+      )}
+    />
+  );
+
+  return (
+    <MasterDetail
+      list={list}
+      detail={allRows.length === 0 && itemId === undefined ? null : detailContent}
+      open={itemId !== undefined}
+      onClose={closeEditor}
+      sheetTitle={t('Worker 详情', 'Worker detail')}
+      detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
+    />
   );
 }

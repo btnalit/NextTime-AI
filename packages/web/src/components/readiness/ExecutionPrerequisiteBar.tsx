@@ -15,22 +15,21 @@ export interface ExecutionPrerequisiteBarProps {
 }
 
 /**
- * components/readiness/ExecutionPrerequisiteBar: J1's shared "执行前提" hint bar (ui-audit
- * -2026-09-23 J1, console-completion-plan §5.9 控制塔; docs/development-tasks.md §5e F6
- * `execution_readiness`) — mounted at the top of 系统接入 / 能力目录 / 访问 (the three pages J1's
- * own audit row names) so a reader mid-setup sees the *same* "what's still missing" summary no
- * matter which of the three pages they landed on.
+ * components/readiness/ExecutionPrerequisiteBar: J1's original shared "执行前提" hint bar
+ * (ui-audit-2026-09-23 J1, console-completion-plan §5.9 控制塔; docs/development-tasks.md §5e F6
+ * `execution_readiness`) — one line per `missing[]` item, cause text plus a link to the page that
+ * fixes it (`readiness-copy.ts`), gate ids resolved to names from this same response's own
+ * `gates[]` (never a raw id, never the bare `code` — ui-audit S14).
+ *
+ * Console redesign P3-3 (V2 "就绪提示条") first made it calm (a neutral `Notice`, no
+ * `tone="warn"`); P3-5 finished the move by swapping its last mount point (能力目录) over to the
+ * one-line `ExecutionReadinessCard` the 对话 page already used, so no page renders this component
+ * any more — kept only for its own test coverage rather than deleted outright (not requested by
+ * that lane's dispatch); a future cleanup can remove both files together once confirmed unused.
  *
  * Reads the signed-in caller's own readiness only (`useExecutionReadiness`, no `principalId`) and
  * renders nothing while loading, on a read error (this is a supplementary hint, not the page's own
- * content — a transient failure here must never block or clutter the host page), or once
- * `ready`. Only the not-ready case renders, one line per `missing[]` item — cause text plus a link
- * to the page that fixes it (`readiness-copy.ts`), gate ids resolved to names from this same
- * response's own `gates[]` (never a raw id, never the bare `code` — ui-audit S14).
- *
- * Console redesign P3-3 (V2 "就绪提示条"): stays a calm, neutral `Notice` (no `tone="warn"`) —
- * this is proactive setup guidance, not a report of something this member just tried and got
- * blocked on, so it never reads as an alarm even on a brand-new workspace's first prerequisite.
+ * content — a transient failure here must never block or clutter the host page), or once `ready`.
  */
 export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps) {
   const t = useT();

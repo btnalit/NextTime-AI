@@ -24,6 +24,18 @@ describe('routeFromHash', () => {
     });
     expect(routeFromHash('#/govern/catalog')).toEqual({ kind: 'catalog', tab: 'operations' });
     expect(routeFromHash('#/govern/catalog/skills')).toEqual({ kind: 'catalog', tab: 'skills' });
+    // console redesign P3-5: an optional trailing item segment — old tab-only URLs (just above)
+    // keep parsing with no `itemId` at all.
+    expect(routeFromHash('#/govern/catalog/skills/skill-1')).toEqual({
+      kind: 'catalog',
+      tab: 'skills',
+      itemId: 'skill-1',
+    });
+    expect(routeFromHash('#/govern/catalog/workers/new')).toEqual({
+      kind: 'catalog',
+      tab: 'workers',
+      itemId: 'new',
+    });
     expect(routeFromHash('#/govern/models')).toEqual({ kind: 'models' });
     expect(routeFromHash('#/govern/audit')).toEqual({ kind: 'audit' });
     expect(routeFromHash('#/platform/overview')).toEqual({ kind: 'platformOverview' });
@@ -48,6 +60,11 @@ describe('routeFromHash', () => {
       kind: 'chat',
       chatId: 'c/1',
     });
+    // console redesign P3-5: an Operation's own composite key (`gk-1::docker.restart`, `::` and
+    // `.` both percent-encoded by `hrefs.catalog`) round-trips through the item segment too.
+    expect(
+      routeFromHash(`#/govern/catalog/operations/${encodeURIComponent('gk-1::docker.restart')}`),
+    ).toEqual({ kind: 'catalog', tab: 'operations', itemId: 'gk-1::docker.restart' });
   });
 
   it('S6: a page-owned ?query after the path never changes the route', () => {
@@ -106,6 +123,8 @@ describe('hrefs', () => {
       { kind: 'systems', gatekeeperId: 'gk-1' },
       { kind: 'catalog', tab: 'operations' },
       { kind: 'catalog', tab: 'workers' },
+      { kind: 'catalog', tab: 'skills', itemId: 'skill-1' },
+      { kind: 'catalog', tab: 'workers', itemId: 'new' },
       { kind: 'models' },
       { kind: 'audit' },
       { kind: 'graph' },
@@ -151,7 +170,7 @@ function hrefFor(route: Route): string {
     case 'systems':
       return route.gatekeeperId ? hrefs.gatekeeper(route.gatekeeperId) : hrefs.systems();
     case 'catalog':
-      return hrefs.catalog(route.tab);
+      return hrefs.catalog(route.tab, route.itemId);
     case 'models':
       return hrefs.models();
     case 'audit':
