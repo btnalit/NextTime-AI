@@ -298,3 +298,58 @@ describe('TasksPage cancel confirmation (S6-A B2)', () => {
     );
   });
 });
+
+/** Console redesign P3-4 part B: 任务 as the second consumer of `kit/master-detail` (the
+ *  mechanics `ApprovalQueuePage`/V6 first shipped). No `matchMedia` mock — same degrade-to-wide
+ *  default `ApprovalQueuePage.test.tsx` documents and relies on. */
+describe('TasksPage master-detail (P3-4 part B)', () => {
+  it('the wide layout shows a detail pane with a "pick one" placeholder when nothing is selected', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [task()] }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, SILENT_PUSH_SOURCE);
+    await screen.findByTestId('task-row');
+    // The wide layout's detail pane is always mounted (`data-testid="task-drawer"`), even with no
+    // selection — same pattern as `ApprovalQueuePage`'s own `approval-drawer`.
+    const pane = screen.getByTestId('task-drawer');
+    const empty = within(pane).getByTestId('task-drawer-empty');
+    expect(empty.textContent).toContain('选择左侧一个任务，查看运行、结果与关联审批。');
+    expect(within(pane).queryByTestId('task-detail')).toBeNull();
+  });
+
+  it('with no tasks at all, the wide layout shows only the list card (no contradictory empty detail)', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [] }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, SILENT_PUSH_SOURCE);
+    await screen.findByTestId('tasks-empty');
+    expect(screen.queryByTestId('task-drawer')).toBeNull();
+  });
+
+  it('selecting a task row calls onSelect with its id', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [task({ id: 'task-2' })] }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    const onSelect = vi.fn();
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <TasksPage
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            onSelect={onSelect}
+            onOpenApproval={vi.fn()}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('task-row'));
+    expect(onSelect).toHaveBeenCalledWith('task-2');
+  });
+});

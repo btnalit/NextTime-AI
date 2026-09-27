@@ -3,17 +3,15 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatDateTime, formatRelative, humanizeKind } from '../../lib/format.js';
+import { formatDateTime, formatRelative, humanizeKind, shortId } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { Button } from '../ui/Button.js';
-import { DataList, DataRow } from '../ui/DataList.js';
-import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Icon } from '../ui/Icon.js';
-import { Notice } from '../ui/Notice.js';
-import { RefChip } from '../ui/RefChip.js';
-import { SkeletonRows } from '../ui/Skeleton.js';
-import { StatusChip } from '../ui/StatusChip.js';
+import { Button } from '../kit/button.js';
+import { ErrorBanner } from '../kit/error-banner.js';
+import { List, ListRow } from '../kit/list-row.js';
+import { Notice } from '../kit/notice.js';
+import { SkeletonRows } from '../kit/skeleton.js';
+import { StatusChip } from '../kit/status-chip.js';
 import { nameOf } from './useDirectoryNames.js';
 
 export interface LinkedApprovalsProps {
@@ -27,14 +25,14 @@ export interface LinkedApprovalsProps {
 const PAGE_SIZE = 20;
 
 /**
- * components/approvals/LinkedApprovals (S6-A C28 — docs/console-completion-plan.md §5.5, §6;
- * runbook web-console.md 已知缺口 6): the Task detail's "关联审批" over
- * `list_action_requests{taskId}` — every ActionRequest any of the Task's WorkerRuns raised,
- * decided ones included (the handler resolves `taskId` to the Task's `parent_worker_run_id`s;
- * an unknown Task is an empty page, not a 404). Replaces the `list_pending` reverse lookup that
- * could only ever show still-pending rows. Keyset "加载更多" via `useCapabilityList`; the
- * `action.pending` / `action.updated` pushes reload this one Task's list (C7: a task-scoped
- * refetch, never a workspace-wide one).
+ * components/approvals/LinkedApprovals (console redesign P3-4 part B, on `components/kit/*` only;
+ * S6-A C28 — docs/console-completion-plan.md §5.5, §6; runbook web-console.md 已知缺口 6): the Task
+ * detail's "关联审批" over `list_action_requests{taskId}` — every ActionRequest any of the Task's
+ * WorkerRuns raised, decided ones included (the handler resolves `taskId` to the Task's
+ * `parent_worker_run_id`s; an unknown Task is an empty page, not a 404). Replaces the
+ * `list_pending` reverse lookup that could only ever show still-pending rows. Keyset "加载更多" via
+ * `useCapabilityList`; the `action.pending` / `action.updated` pushes reload this one Task's list
+ * (C7: a task-scoped refetch, never a workspace-wide one).
  *
  * `list_action_requests` is `minRole: 'operator'` (same as `list_pending`): a member session
  * that has already learned the 403 gets the explanation without another request; the first 403
@@ -111,68 +109,61 @@ function LinkedApprovalsList({
       {linked.state.refreshError ? (
         <ErrorBanner error={linked.state.refreshError} onRetry={() => void linked.reload()} />
       ) : null}
-      <DataList ariaLabel="Linked approvals" testId="linked-approvals-list">
+      <List ariaLabel="Linked approvals" testId="linked-approvals-list">
         {rows.map((row) => {
           const decidedBy = row.decidedBy ?? null;
           return (
-            <DataRow
+            <ListRow
               key={row.id}
               testId="linked-approval-row"
               onSelect={() => onOpenApproval(row.id)}
-              leading={<StatusChip machine="actionRequest" status={row.status} size="s" />}
-              title={
-                <>
-                  <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
-                  <span className="tag">{row.actionKindTag}</span>
-                  {row.blastRadius !== 'low' ? (
-                    <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
-                  ) : null}
-                </>
-              }
-              meta={
-                <>
-                  {row.resourceScope ? (
-                    <>
-                      <span className="mono truncate">{row.resourceScope}</span>
-                      <span className="meta-sep" />
-                    </>
-                  ) : null}
-                  <time title={formatDateTime(row.requestedAt)}>
-                    {t('请求', 'requested')} {formatRelative(row.requestedAt)}
-                  </time>
-                  {decidedBy ? (
-                    <>
-                      <span className="meta-sep" />
-                      <span className="text-3">{t('决定', 'decided by')}</span>
-                      <RefChip
-                        kind="principal"
-                        id={decidedBy}
-                        name={nameOf(principalNames, decidedBy)}
-                        size="s"
-                      />
-                    </>
-                  ) : null}
-                  {row.decisionReason ? (
-                    <>
-                      <span className="meta-sep" />
-                      <span className="truncate" title={row.decisionReason}>
-                        “{row.decisionReason}”
-                      </span>
-                    </>
-                  ) : null}
-                </>
-              }
-              trailing={<Icon name="chevron-right" />}
-            />
+            >
+              <span className="row-wrap">
+                <StatusChip machine="actionRequest" status={row.status} size="s" />
+                <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
+                {row.blastRadius !== 'low' ? (
+                  <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
+                ) : null}
+              </span>
+              <span className="row-wrap text-3">
+                {row.resourceScope ? (
+                  <>
+                    <span className="mono truncate">{row.resourceScope}</span>
+                    <span className="meta-sep" />
+                  </>
+                ) : null}
+                <time title={formatDateTime(row.requestedAt)}>
+                  {t('请求', 'requested')} {formatRelative(row.requestedAt)}
+                </time>
+                {decidedBy ? (
+                  <>
+                    <span className="meta-sep" />
+                    <span>{t('决定', 'decided by')}</span>
+                    <span className="truncate">
+                      {nameOf(principalNames, decidedBy) ?? shortId(decidedBy)}
+                    </span>
+                  </>
+                ) : null}
+                {row.decisionReason ? (
+                  <>
+                    <span className="meta-sep" />
+                    <span className="truncate" title={row.decisionReason}>
+                      “{row.decisionReason}”
+                    </span>
+                  </>
+                ) : null}
+              </span>
+            </ListRow>
           );
         })}
-      </DataList>
+      </List>
       {nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button
             variant="secondary"
             size="s"
-            loading={linked.loadingMore}
+            aria-busy={linked.loadingMore}
+            disabled={linked.loadingMore}
             onClick={() => void linked.loadMore()}
           >
             {t('加载更多', 'Load more')}

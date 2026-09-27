@@ -281,6 +281,18 @@ describe('MembersPage', () => {
     await waitFor(() => expect(within(drawer).getByText('操作员', { exact: false })).toBeTruthy());
   });
 
+  it('console redesign P3-4 part B: the add-member sheet opens from the header button and closes on Cancel', async () => {
+    const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+    expect(screen.queryByTestId('add-member-drawer')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /添加成员/ }));
+    const drawer = await screen.findByTestId('add-member-drawer');
+    fireEvent.click(within(drawer).getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByTestId('add-member-drawer')).toBeNull());
+  });
+
   it('添加成员 →', async () => {
     let listCallCount = 0;
     const added = principal({ id: 'p-3', displayName: 'Dana', hasApiKey: false });

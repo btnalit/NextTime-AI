@@ -3,11 +3,12 @@ import { useMemo, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { Button } from '../kit/button.js';
+import { CopyButton } from '../kit/copy-button.js';
+import { Field } from '../kit/field.js';
+import { Notice } from '../kit/notice.js';
+import { Select } from '../kit/select.js';
 import { PlatformError } from '../platform/PlatformError.js';
-import { Button } from '../ui/Button.js';
-import { CopyId } from '../ui/CopyId.js';
-import { Field, Input, Select } from '../ui/Field.js';
-import { Notice } from '../ui/Notice.js';
 
 const SECONDS_PER_DAY = 86400;
 /** The registry's own ceiling (`issue_service_handle.ttlSeconds` `.max(...)`, one year) read
@@ -67,14 +68,15 @@ function parseNames(raw: string): readonly string[] {
 }
 
 /**
- * components/members/IssueServiceHandleSection: "签发外部运行时凭证 Issue a service Handle"
- * (`MembersPage`, P-B1, design §6.3 "外部运行时") — `issue_service_handle{principalId, scope,
- * ttlSeconds?}`, the console-side alternative to the `issue-service-handle` CLI. Screenshot review
- * of #305 (D3) moved this behind a header button + `Drawer` — the full form (principal picker, TTL,
- * the whole capability tree) was too heavy to render inline under the member list. `MembersPage`
- * owns the one `Drawer`; this component renders only its body and swaps between the form and the
+ * components/members/IssueServiceHandleSection (console redesign P3-4 part B, on
+ * `components/kit/*` only): "签发外部运行时凭证 Issue a service Handle" (`MembersPage`, P-B1,
+ * design §6.3 "外部运行时") — `issue_service_handle{principalId, scope, ttlSeconds?}`, the
+ * console-side alternative to the `issue-service-handle` CLI. Screenshot review of #305 (D3) moved
+ * this behind a header button + `kit/sheet` — the full form (principal picker, TTL, the whole
+ * capability tree) was too heavy to render inline under the member list. `MembersPage` owns the
+ * one `Sheet`; this component renders only its body and swaps between the form and the
  * issued-result view itself (the `CreatePrincipalForm`/`created` precedent, right below it in
- * `MembersPage`'s own drawer stack) rather than opening a second, nested `Drawer` for the result —
+ * `MembersPage`'s own drawer stack) rather than opening a second, nested sheet for the result —
  * two open focus traps would fight each other, the same reasoning `TemporaryPasswordDialog`'s own
  * doc comment gives for never showing two one-time-secret dialogs at once.
  *
@@ -153,7 +155,7 @@ export function IssueServiceHandleSection({
   }
 
   // The result view replaces the form entirely (the `CreatePrincipalForm`/`created` precedent) —
-  // no second, nested `Drawer`: `MembersPage`'s one `Drawer` around this component is the only one.
+  // no second, nested sheet: `MembersPage`'s one `Sheet` around this component is the only one.
   if (issued) {
     return (
       <div className="stack" data-testid="issued-handle-dialog">
@@ -165,15 +167,15 @@ export function IssueServiceHandleSection({
         </p>
         <Notice tone="warn">
           {t(
-            '只显示这一次，控制台不会保存它；复制后交给要用它的运行时。 Shown once —',
-            'the console never stores it; copy it now and hand it to the runtime that will use it.',
+            '只显示这一次，控制台不会保存它；复制后交给要用它的运行时。',
+            'Shown once — the console never stores it; copy it now and hand it to the runtime that will use it.',
           )}
         </Notice>
         <div className="code-block row" style={{ justifyContent: 'space-between' }}>
           <span className="mono" data-testid="issued-handle-token">
             {issued.handle}
           </span>
-          <CopyId id={issued.handle} label="Handle" full />
+          <CopyButton value={issued.handle} label="Handle" />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onDone}>
@@ -206,6 +208,8 @@ export function IssueServiceHandleSection({
         <Field id="ish-principal" label={t('服务主体', 'Service principal')} required>
           <Select
             id="ish-principal"
+            aria-label={t('服务主体', 'Service principal')}
+            className="select-fit"
             value={principalId}
             onChange={(event) => setPrincipalId(event.target.value)}
             disabled={submitting || servicePrincipals.length === 0}
@@ -232,14 +236,14 @@ export function IssueServiceHandleSection({
               : t(`必须是 1 到 ${maxTtlDays} 的整数`, `Must be an integer from 1 to ${maxTtlDays}`)
           }
         >
-          <Input
+          <input
             id="ish-ttl"
+            className="input input-mono"
             value={ttlDays}
             onChange={(event) => setTtlDays(event.target.value)}
             disabled={submitting}
-            invalid={!ttlValid}
+            aria-invalid={!ttlValid || undefined}
             inputMode="numeric"
-            mono
           />
         </Field>
 
@@ -309,26 +313,28 @@ export function IssueServiceHandleSection({
               : null
           }
         >
-          <Input
+          <input
             id="ish-scope"
+            className="input input-mono"
             value={pastedText}
             onChange={(event) => setPastedText(event.target.value)}
             disabled={submitting}
-            invalid={unknownPasted.length > 0}
+            aria-invalid={unknownPasted.length > 0 || undefined}
             placeholder="get_task report_task_result"
-            mono
           />
         </Field>
 
         <p className="text-3 text-small" data-testid="ish-scope-summary">
-          将签发 {scope.length} 个能力 {scope.length} capabilities in scope
-          {scope.length > 0 ? `: ${scope.join(', ')}` : ''}
+          {t(
+            `将签发 ${scope.length} 个能力${scope.length > 0 ? `：${scope.join(', ')}` : ''}`,
+            `${scope.length} capabilities in scope${scope.length > 0 ? `: ${scope.join(', ')}` : ''}`,
+          )}
         </p>
 
         <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
+          <Button type="submit" variant="primary" aria-busy={submitting} disabled={!canSubmit}>
             {t('签发', 'Issue')}
           </Button>
         </div>

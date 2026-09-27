@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { auditHref } from '../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
-import { formatDateTime, formatDuration, formatRelative, prettyJson } from '../lib/format.js';
+import {
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+  prettyJson,
+  shortId,
+} from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import {
@@ -13,11 +19,12 @@ import {
 } from '../lib/tasks.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
+import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
-import { Button } from './ui/Button.js';
-import { CopyId } from './ui/CopyId.js';
-import { RefChip } from './ui/RefChip.js';
-import { StatusChip } from './ui/StatusChip.js';
+import { KeyValue, type KeyValueItem } from './kit/key-value.js';
+import { RefChip } from './kit/ref-chip.js';
+import { StatusChip } from './kit/status-chip.js';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './kit/table.js';
 
 export interface TaskDetailProps {
   readonly task: TaskSummary;
@@ -32,19 +39,23 @@ export interface TaskDetailProps {
 }
 
 /**
- * components/TaskDetail: one Task — identity and budget, the result contract (S2.9 shape when it
- * matches, raw JSON otherwise), WorkerRuns, linked approvals, and Cancel while the shared Task
- * transition table allows it (`lib/tasks.ts` `isCancellable`).
+ * components/TaskDetail (console redesign P3-4 part B, on `components/kit/*` only — no more
+ * `components/ui/*` imports, following `approvals/ApprovalDetail`'s own P3-4 part A rewrite):
+ * one Task — identity (`kit/ref-chip`), budget, the result contract (S2.9 shape when it matches,
+ * raw JSON otherwise), WorkerRuns (`kit/table`), linked approvals, and Cancel while the shared
+ * Task transition table allows it (`lib/tasks.ts` `isCancellable`). Rendered as the master-detail
+ * pane's (wide layout) / `kit/sheet`'s (narrow layout) detail content — `TasksPage` decides which.
  *
  * S6-A (C28 / B3 / B4 / §5.5): "关联审批" is `approvals/LinkedApprovals` over
  * `list_action_requests{taskId}` (decided rows included, paged); the on-behalf-of principal and
- * the WorkerDefinition are `RefChip`s (names from the directory hooks / `list_worker_definitions`);
- * "查看溯源" links open the audit page pre-filtered on this Task (`resourceType: 'task'`) or on
- * one WorkerRun (`resourceType: 'worker_run'` — `application/task/transition-log.ts` writes both);
- * Cancel is a `kit/confirm` `medium` popover (S8 W1-A7, audit S13) anchored to the Cancel button
- * itself, owned locally — the confirmation used to be a page-level sibling of the detail drawer
- * (tier `high`); now that `medium` is a Popover anchored to its own trigger there is no separate
- * surface to route Escape/focus through, so the confirm lives exactly where its button does.
+ * the WorkerDefinition are `kit/ref-chip`s (names from the directory hooks / `list_worker_
+ * definitions`); "查看溯源" links open the audit page pre-filtered on this Task (`resourceType:
+ * 'task'`) or on one WorkerRun (`resourceType: 'worker_run'` — `application/task/
+ * transition-log.ts` writes both); Cancel is a `kit/confirm` `medium` popover (S8 W1-A7, audit
+ * S13) anchored to the Cancel button itself, owned locally — the confirmation used to be a
+ * page-level sibling of the detail drawer (tier `high`); now that `medium` is a Popover anchored
+ * to its own trigger there is no separate surface to route Escape/focus through, so the confirm
+ * lives exactly where its button does.
  */
 export function TaskDetail({
   task,
@@ -66,11 +77,13 @@ export function TaskDetail({
       : null;
   const runningRuns = task.workerRuns.filter((run) => run.terminatedAt === null).length;
   const tokensUsedText = task.tokensUsed.toLocaleString();
+  const provenance = auditHref({ resourceType: 'task', resourceId: task.id });
 
-  return (
-    <div className="stack" data-testid="task-detail" data-task-id={task.id}>
-      <div className="row-wrap">
-        <StatusChip machine="task" status={task.status} />
+  const overviewItems: KeyValueItem[] = [
+    {
+      key: 'definition',
+      label: t('定义', 'Definition'),
+      value: (
         <RefChip
           kind="workerDefinition"
           id={task.workerDefinitionId}
@@ -79,79 +92,36 @@ export function TaskDetail({
           size="s"
           testId="task-definition"
         />
-        {isCancellable(task.status) ? (
-          <Confirm
-            tier="medium"
-            open={confirmOpen}
-            onOpenChange={setConfirmOpen}
-            anchor={
-              <Button
-                variant="danger"
-                size="s"
-                icon="stop"
-                onClick={() => setConfirmOpen(true)}
-                className="grow-0"
-                style={{ marginLeft: 'auto' }}
-                data-testid="task-cancel"
-              >
-                {t('取消任务', 'Cancel task')}
-              </Button>
-            }
-            title={t('取消任务', 'Cancel task')}
-            description={t(
-              '取消后任务进入 cancelled，正在运行的 WorkerRun 会被终止；已写入的事实与审计不受影响。',
-              'The Task becomes cancelled and its running WorkerRuns are terminated; facts already written and the audit trail stay.',
-            )}
-            target={definitionName ?? task.id}
-            impact={[
-              t(`任务 ${task.id}`, `Task: ${task.id}`),
-              t(`运行中的 WorkerRun ${runningRuns}`, `Running runs: ${runningRuns}`),
-              t(`已用 Token ${tokensUsedText}`, `Tokens used: ${tokensUsedText}`),
-              t('取消后不能恢复；需要时重新委派', 'Cannot be resumed — delegate again if needed'),
-            ]}
-            confirmLabel={t('确认取消', 'Cancel task')}
-            danger
-            onConfirm={() => onCancel(task)}
-            testId="task-cancel-confirm"
-          />
-        ) : null}
-      </div>
-
-      {need ? <p className="pre-wrap">{need}</p> : null}
-
-      <dl className="definition-list">
-        <dt>{t('任务', 'Task')}</dt>
-        <dd className="row-wrap">
-          <CopyId id={task.id} label="task" />
-          <a
-            href={auditHref({ resourceType: 'task', resourceId: task.id })}
-            data-testid="task-provenance-link"
-          >
-            {t('查看溯源', 'View provenance')}
-          </a>
-        </dd>
-        <dt>{t('定义', 'Definition')}</dt>
-        <dd className="row-wrap">
-          <CopyId id={task.workerDefinitionId} label="worker definition" />
-          <span className="text-3">v{task.workerDefinitionVersion}</span>
-        </dd>
-        <dt>{t('代表', 'On behalf of')}</dt>
-        <dd>
-          <RefChip
-            kind="principal"
-            id={task.onBehalfOf}
-            name={nameOf(principalNames, task.onBehalfOf)}
-            size="s"
-            testId="task-on-behalf-of"
-          />
-        </dd>
-        <dt>{t('创建', 'Created')}</dt>
-        <dd>
+      ),
+    },
+    {
+      key: 'onBehalfOf',
+      label: t('代表', 'On behalf of'),
+      value: (
+        <RefChip
+          kind="principal"
+          id={task.onBehalfOf}
+          name={nameOf(principalNames, task.onBehalfOf)}
+          size="s"
+          testId="task-on-behalf-of"
+        />
+      ),
+    },
+    {
+      key: 'createdAt',
+      label: t('创建', 'Created'),
+      value: (
+        <>
           <time title={formatDateTime(task.createdAt)}>{formatRelative(task.createdAt)}</time>
           <span className="text-3"> · {formatDateTime(task.createdAt)}</span>
-        </dd>
-        <dt>{finished ? t('结束', 'Finished') : t('已用时', 'Elapsed')}</dt>
-        <dd>
+        </>
+      ),
+    },
+    {
+      key: 'elapsed',
+      label: finished ? t('结束', 'Finished') : t('已用时', 'Elapsed'),
+      value: (
+        <>
           {finished ? `${formatDateTime(finished)} · ` : ''}
           {formatDuration(task.createdAt, finished)}
           {task.durationLimitSec ? (
@@ -160,9 +130,14 @@ export function TaskDetail({
               {t('/ 上限', 'limit')} {task.durationLimitSec}s
             </span>
           ) : null}
-        </dd>
-        <dt>Token</dt>
-        <dd className="stack-s">
+        </>
+      ),
+    },
+    {
+      key: 'tokens',
+      label: 'Token',
+      value: (
+        <div className="stack-s">
           <span className="tabular">
             {task.tokensUsed.toLocaleString()}
             {task.tokenBudget ? ` / ${task.tokenBudget.toLocaleString()}` : ` ${t('已用', 'used')}`}
@@ -172,14 +147,74 @@ export function TaskDetail({
               <span style={{ width: `${budgetPct}%` }} />
             </span>
           ) : null}
-        </dd>
-        {task.failureReason ? (
-          <>
-            <dt>{t('失败原因', 'Failure')}</dt>
-            <dd className="text-danger">{task.failureReason}</dd>
-          </>
-        ) : null}
-      </dl>
+        </div>
+      ),
+    },
+  ];
+  if (task.failureReason) {
+    overviewItems.push({
+      key: 'failure',
+      label: <span className="text-danger">{t('失败原因', 'Failure')}</span>,
+      value: <span className="text-danger">{task.failureReason}</span>,
+    });
+  }
+
+  return (
+    <div className="stack" data-testid="task-detail" data-task-id={task.id}>
+      <header className="stack-s">
+        <div className="row-wrap">
+          <StatusChip machine="task" status={task.status} size="s" />
+          <RefChip kind="task" id={task.id} name={null} size="s" />
+          {isCancellable(task.status) ? (
+            <Confirm
+              tier="medium"
+              open={confirmOpen}
+              onOpenChange={setConfirmOpen}
+              anchor={
+                <Button
+                  variant="danger"
+                  size="s"
+                  onClick={() => setConfirmOpen(true)}
+                  style={{ marginLeft: 'auto' }}
+                  data-testid="task-cancel"
+                >
+                  {t('取消任务', 'Cancel task')}
+                </Button>
+              }
+              title={t('取消任务', 'Cancel task')}
+              description={t(
+                '取消后任务进入 cancelled，正在运行的 WorkerRun 会被终止；已写入的事实与审计不受影响。',
+                'The Task becomes cancelled and its running WorkerRuns are terminated; facts already written and the audit trail stay.',
+              )}
+              target={definitionName ?? task.id}
+              impact={[
+                t(`任务 ${task.id}`, `Task: ${task.id}`),
+                t(`运行中的 WorkerRun ${runningRuns}`, `Running runs: ${runningRuns}`),
+                t(`已用 Token ${tokensUsedText}`, `Tokens used: ${tokensUsedText}`),
+                t('取消后不能恢复；需要时重新委派', 'Cannot be resumed — delegate again if needed'),
+              ]}
+              confirmLabel={t('确认取消', 'Cancel task')}
+              danger
+              onConfirm={() => onCancel(task)}
+              testId="task-cancel-confirm"
+            />
+          ) : null}
+        </div>
+        <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+          <h2 className="task-detail-title">{definitionName ?? t('任务', 'Task')}</h2>
+          <Button variant="secondary" size="s" asChild>
+            <a href={provenance} data-testid="task-provenance-link">
+              {t('查看溯源', 'View provenance')}
+            </a>
+          </Button>
+        </div>
+        {need ? <p className="pre-wrap">{need}</p> : null}
+      </header>
+
+      <section className="stack-s">
+        <span className="section-title">{t('概览', 'Overview')}</span>
+        <KeyValue items={overviewItems} />
+      </section>
 
       {contract ? (
         <div className="stack-s">
@@ -284,47 +319,51 @@ export function TaskDetail({
             {t('尚未分配 WorkerRun。', 'No WorkerRun has been provisioned yet.')}
           </span>
         ) : (
-          <table className="worker-run-table">
-            <thead>
-              <tr>
-                <th>{t('运行', 'Run')}</th>
-                <th>{t('状态', 'Status')}</th>
-                <th>{t('深度', 'Depth')}</th>
-                <th>{t('尝试', 'Attempt')}</th>
-                <th>{t('开始', 'Started')}</th>
-                <th>{t('用时', 'Duration')}</th>
-                <th>{t('溯源', 'Provenance')}</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('运行', 'Run')}</TableHead>
+                <TableHead>{t('状态', 'Status')}</TableHead>
+                <TableHead>{t('深度', 'Depth')}</TableHead>
+                <TableHead>{t('尝试', 'Attempt')}</TableHead>
+                <TableHead>{t('开始', 'Started')}</TableHead>
+                <TableHead>{t('用时', 'Duration')}</TableHead>
+                <TableHead>{t('溯源', 'Provenance')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {task.workerRuns.map((run) => (
-                <tr key={run.id} data-testid="worker-run-row">
-                  <td>
-                    <CopyId id={run.id} label="worker run" />
-                  </td>
-                  <td>
+                <TableRow key={run.id} data-testid="worker-run-row">
+                  <TableCell>
+                    <span className="mono" title={run.id}>
+                      {shortId(run.id)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
                     <StatusChip machine="workerRun" status={run.status} size="s" />
-                  </td>
-                  <td className="tabular">{run.depth}</td>
-                  <td className="tabular">{run.attempt}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell className="tabular">{run.depth}</TableCell>
+                  <TableCell className="tabular">{run.attempt}</TableCell>
+                  <TableCell>
                     <time title={formatDateTime(run.startedAt)}>
                       {formatRelative(run.startedAt)}
                     </time>
-                  </td>
-                  <td className="tabular">{formatDuration(run.startedAt, run.terminatedAt)}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell className="tabular">
+                    {formatDuration(run.startedAt, run.terminatedAt)}
+                  </TableCell>
+                  <TableCell>
                     <a
                       href={auditHref({ resourceType: 'worker_run', resourceId: run.id })}
                       data-testid="worker-run-provenance-link"
                     >
                       {t('查看', 'View')}
                     </a>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </div>
 
