@@ -29,6 +29,7 @@ function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
     autoApproveLow: null,
     updatedAt: '2026-09-01T00:00:00Z',
     updatedBy: 'p-1',
+    availableGatekeepers: [],
     effective: {
       model: 'anthropic/claude',
       enabledSkills: [],
@@ -97,6 +98,7 @@ describe('AgentProfilePage', () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         profile({
+          availableGatekeepers: [{ gatekeeperId: 'gk-1', granted: true, inUse: true }],
           effective: {
             model: 'anthropic/claude',
             enabledSkills: [],
@@ -229,6 +231,10 @@ describe('AgentProfilePage', () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         profile({
+          availableGatekeepers: [
+            { gatekeeperId: 'gk-docker', granted: true, inUse: true },
+            { gatekeeperId: 'gk-ragflow', granted: true, inUse: true },
+          ],
           effective: {
             model: 'anthropic/claude',
             enabledSkills: [],
@@ -254,17 +260,70 @@ describe('AgentProfilePage', () => {
     });
     renderPage(http);
     const gates = await screen.findByTestId('agent-profile-gatekeepers');
-    const ragflow = await within(gates).findByRole('checkbox', { name: 'ragflow' });
-    const docker = within(gates).getByRole('checkbox', { name: 'docker' });
+    const ragflow = await within(gates).findByRole('checkbox', { name: /^ragflow/ });
+    const docker = within(gates).getByRole('checkbox', { name: /^docker/ });
     expect(ragflow).toHaveProperty('checked', true);
     expect(docker).toHaveProperty('checked', true);
-    // A workspace system nobody granted this member is not offered as "in use".
-    expect(within(gates).queryByRole('checkbox', { name: 'not-granted' })).toBeNull();
+    // Only what the kernel offers (`availableGatekeepers`) is listed — a workspace system that is
+    // neither granted nor readable (e.g. every Operation platform-disabled) is not.
+    expect(within(gates).queryByRole('checkbox', { name: /^not-granted/ })).toBeNull();
 
     fireEvent.click(docker);
     const form = screen.getByTestId('agent-profile-form');
     fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+  });
+
+  it('leftover 98: a system readable without a Grant is listed as 只读（未授权）, a granted one as 读写（已授权）; unticking the ungranted one excludes it', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          availableGatekeepers: [
+            { gatekeeperId: 'gk-docker', granted: true, inUse: true },
+            { gatekeeperId: 'gk-ragflow', granted: false, inUse: true },
+          ],
+          effective: {
+            model: 'anthropic/claude',
+            enabledSkills: [],
+            enabledGatekeepers: ['gk-docker'],
+            enabledWorkerDefinitions: [],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+      list_gatekeepers: () => ({
+        items: [
+          { id: 'gk-docker', name: 'docker', kind: 'http', status: 'active' },
+          { id: 'gk-ragflow', name: 'ragflow', kind: 'http', status: 'active' },
+        ],
+      }),
+      set_agent_profile: () => profile(),
+    });
+    renderPage(http);
+    const gates = await screen.findByTestId('agent-profile-gatekeepers');
+    const ragflow = await within(gates).findByRole('checkbox', { name: /^ragflow/ });
+    const docker = within(gates).getByRole('checkbox', { name: /^docker/ });
+    expect(ragflow.closest('label')?.textContent).toContain('只读（未授权）');
+    expect(docker.closest('label')?.textContent).toContain('读写（已授权）');
+    expect(ragflow).toHaveProperty('checked', true);
+
+    // The effective panel lists both systems in use, the ungranted one tagged 只读.
+    const effective = screen.getByTestId('agent-profile-effective');
+    const chips = effective.querySelectorAll('[data-ref-kind="gatekeeper"]');
+    expect([...chips].map((chip) => chip.getAttribute('data-ref-id'))).toEqual([
+      'gk-docker',
+      'gk-ragflow',
+    ]);
+    expect(within(effective).getAllByText('只读')).toHaveLength(1);
+
+    fireEvent.click(ragflow);
+    const form = screen.getByTestId('agent-profile-form');
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+    const saved = http.calls.find((c) => c.name === 'set_agent_profile')?.params as {
+      excludedGatekeepers: string[];
+    };
+    expect(saved.excludedGatekeepers).toEqual(['gk-ragflow']);
   });
 
   it('with no system granted, the systems field says who has to grant one instead of an empty checklist', async () => {

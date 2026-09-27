@@ -690,6 +690,14 @@ export class SqlGraphStore implements GraphStore {
     );
   }
 
+  async getFactForUpdate(client: PoolClient, workspaceId: string, factId: string): Promise<Fact> {
+    const query = buildGetFactForUpdateQuery(workspaceId, factId);
+    const result = await client.query<FactRow>(query.text, query.values as unknown[]);
+    return mapFactRow(
+      firstRowOrThrow(result.rows, () => new FactNotFoundError(workspaceId, factId)),
+    );
+  }
+
   async neighbors(
     client: PoolClient,
     workspaceId: string,

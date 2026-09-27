@@ -54,6 +54,9 @@ export interface ConfirmProps {
   readonly onConfirm: () => void | Promise<void>;
   /** Extra body content (parameters, a RefChip, a typed field the caller collects). */
   readonly children?: ReactNode;
+  /** `medium`/`irreversible`: keeps the confirm button disabled while a field the caller collects
+   *  in `children` is still incomplete (e.g. a required, audited reason). */
+  readonly confirmDisabled?: boolean;
   readonly testId?: string;
   /** `low` only: pushes the after-the-fact toast. `kit/confirm` carries no toast system of its
    *  own (S8 risk ① — a new `components/kit/*` file may not import `components/ui/*`); the caller
@@ -228,6 +231,7 @@ function MediumTier({
   danger = false,
   onConfirm,
   children,
+  confirmDisabled = false,
   testId,
 }: ConfirmProps) {
   const t = useT();
@@ -237,6 +241,16 @@ function MediumTier({
   useRestoreFocusOnClose(open);
   const titleId = useId();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  // `display: contents` keeps every caller's layout untouched, but it also leaves the wrapper
+  // with no box — Popper measuring it gets a zero rect and pins the popover to the viewport's
+  // top-left. Popper measures the wrapped trigger instead (Radix's `virtualRef`).
+  const anchorWrapRef = useRef<HTMLDivElement>(null);
+  const virtualAnchor = useRef({
+    getBoundingClientRect: (): DOMRect => {
+      const wrap = anchorWrapRef.current;
+      return (wrap?.firstElementChild ?? wrap)?.getBoundingClientRect() ?? new DOMRect();
+    },
+  });
   return (
     <PopoverPrimitive.Root
       open={open}
@@ -245,7 +259,10 @@ function MediumTier({
       }}
       modal
     >
-      <PopoverPrimitive.Anchor className="contents">{anchor}</PopoverPrimitive.Anchor>
+      <div ref={anchorWrapRef} className="contents">
+        {anchor}
+      </div>
+      <PopoverPrimitive.Anchor virtualRef={virtualAnchor} />
       {open ? (
         <PopoverPrimitive.Portal>
           <PopoverPrimitive.Content
@@ -299,7 +316,7 @@ function MediumTier({
                 variant={danger ? 'danger' : 'primary'}
                 size="s"
                 aria-busy={busy}
-                disabled={busy}
+                disabled={busy || confirmDisabled}
                 onClick={() => void run()}
                 data-testid="confirm-button"
               >
@@ -334,6 +351,7 @@ function IrreversibleTier({
   cancelLabel,
   onConfirm,
   children,
+  confirmDisabled = false,
   testId,
 }: ConfirmProps) {
   const t = useT();
@@ -347,7 +365,7 @@ function IrreversibleTier({
   const titleId = useId();
   const descriptionId = useId();
   const nameMatches = target === undefined ? true : typed.trim() === target;
-  const ready = nameMatches && acknowledged;
+  const ready = nameMatches && acknowledged && !confirmDisabled;
 
   return (
     <AlertDialogPrimitive.Root

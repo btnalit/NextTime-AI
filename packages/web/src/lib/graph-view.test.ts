@@ -168,6 +168,7 @@ describe('explainToProvenance', () => {
       epistemicStatus: 'observed',
       assertedByPrincipal: { id: 'p-1', kind: 'service', role: 'member', displayName: 'collector' },
       verifiedByPrincipal: null,
+      humanAttestations: [],
       observationId: 'obs-1',
       invalidatedAt: null,
       invalidationReason: null,

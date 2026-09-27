@@ -436,7 +436,8 @@ async function checkIS51(client: PoolClient): Promise<InvariantCheckResult> {
  * legitimate way to produce it, and such rows are meant to show up here. Scoped to rows
  * `recorded_at` after migration core 0026 (history is not backfilled — pre-S5.2 gate Facts have
  * no Observation by construction); the `epistemic_status` column is written once at insert, so
- * later `verify_fact` promotion cannot hide a row from this check.
+ * later `verify_fact` promotion cannot hide a row from this check. Newest first, so the capped
+ * sample shows the most recent bypass rather than whichever rows the heap returns first.
  */
 async function checkIS52(client: PoolClient): Promise<InvariantCheckResult> {
   const result = await client.query<{
@@ -452,7 +453,8 @@ async function checkIS52(client: PoolClient): Promise<InvariantCheckResult> {
      from links
      where epistemic_status = 'observed'
        and observation_id is null
-       and recorded_at > (select at from since)`,
+       and recorded_at > (select at from since)
+     order by recorded_at desc`,
   );
   return {
     invariant: 'I-S5-2',

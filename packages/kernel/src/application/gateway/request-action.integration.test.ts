@@ -395,31 +395,146 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     // Authority-tightening fix (review job 652a4abc lane3 P1-5 / lane2 P1, item 1): a non-owner
-    // human caller of request_action/observe_operation must hold an active
-    // capability='gatekeeper' Grant for the target gate; auditor is excluded outright.
-    describe('human-channel gate on request_action/observe_operation (item 1)', () => {
-      it('403s a member with no grant at all', async () => {
+    // human caller of request_action must hold an active capability='gatekeeper' Grant for the
+    // target gate; auditor is excluded outright. Leftover 97 (maintainer 2026-09-27 "也放开吧"):
+    // observe_operation on the human channel needs no Grant any more — only the auditor rule stays.
+    describe('human-channel gate on request_action/observe_operation (item 1, leftover 97)', () => {
+      /** Capability-dispatch audit rows `actor` has for `action` on this Gatekeeper. */
+      async function humanGateAuditCount(actor: string, action: string): Promise<number> {
+        const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            actorPrincipalId: actor,
+            action,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            limit: 1000,
+          }),
+        );
+        return rows.length;
+      }
+
+      it('leftover 97: request_action reading an observe-class Operation needs no grant on the human channel either, audited once', async () => {
         const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        const before = await humanGateAuditCount(memberNoGrantId, 'request_action');
         await expect(
           dispatchCapability({ pool }, caller, 'request_action', {
             gatekeeperId,
             operation: 'observe.stock',
             params: {},
           }),
+        ).resolves.toMatchObject({ status: 'ok' });
+        expect(await humanGateAuditCount(memberNoGrantId, 'request_action')).toBe(before + 1);
+      });
+
+      it('request_action for an unpublished (unclassified, I17) Operation still needs the grant on the human channel', async () => {
+        const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        await expect(
+          dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: DRAFT_OP.name,
+            params: {},
+          }),
         ).rejects.toThrow(/holds no active|forbidden/i);
+      });
+
+      it('leftover 97: a member with no grant observes through observe_operation on the human channel, audited once per call', async () => {
+        const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        const before = await humanGateAuditCount(memberNoGrantId, 'observe_operation');
+        const result = (await dispatchCapability({ pool }, caller, 'observe_operation', {
+          gatekeeperId,
+          operation: 'observe.stock',
+          params: {},
+        })) as { status: string; observedFactCount: number };
+        expect(result.status).toBe('ok');
+        expect(await humanGateAuditCount(memberNoGrantId, 'observe_operation')).toBe(before + 1);
+      });
+
+      it('leftover 97: the predicate still applies on the human channel — an execute-class or unpublished Operation is refused by observe_operation', async () => {
+        const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        await expect(
+          dispatchCapability({ pool }, caller, 'observe_operation', {
+            gatekeeperId,
+            operation: PENDING_OP.name,
+            params: {},
+          }),
+        ).rejects.toThrow(/execute-class/);
+        await expect(
+          dispatchCapability({ pool }, caller, 'observe_operation', {
+            gatekeeperId,
+            operation: DRAFT_OP.name,
+            params: {},
+          }),
+        ).rejects.toThrow(/not found|Operation/);
+      });
+
+      // AgentProfile / AgentPolicy configure the member's *agent* (S3.13), not the person's own
+      // console reads — the human channel runs `observeRefusal` with no exclusions.
+      it('leftover 97: a member’s own My Agent exclusion and the AgentPolicy gate cap do not restrict their own console reads', async () => {
+        const excludingMemberId = await adminInsertPrincipal('member-human-excluding', 'member');
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentProfile(client, workspaceId, excludingMemberId, ownerId, {
+            excludedGatekeepers: [gatekeeperId],
+          }),
+        );
+        const caller = humanCaller(workspaceId, excludingMemberId, 'member');
         await expect(
           dispatchCapability({ pool }, caller, 'observe_operation', {
             gatekeeperId,
             operation: 'observe.stock',
             params: {},
           }),
-        ).rejects.toThrow(/holds no active|forbidden/i);
+        ).resolves.toMatchObject({ status: 'ok' });
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [randomUUID()] }),
+        );
+        try {
+          await expect(
+            dispatchCapability({ pool }, caller, 'observe_operation', {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: {},
+            }),
+          ).resolves.toMatchObject({ status: 'ok' });
+        } finally {
+          await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [] }),
+          );
+        }
       });
 
-      it('403s an auditor even though they hold no grant to begin with', async () => {
+      it('an execute-class request_action on the human channel without a Grant is still refused, and creates no ActionRequest', async () => {
+        const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        const countPending = () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            const rows = await client.query<{ n: number }>(
+              'select count(*)::int as n from action_requests where workspace_id = $1 and action_kind = $2',
+              [workspaceId, PENDING_OP.name],
+            );
+            return rows.rows[0]?.n ?? 0;
+          });
+        const before = await countPending();
+        await expect(
+          dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: PENDING_OP.name,
+            params: { qty: 1 },
+          }),
+        ).rejects.toThrow(/holds no active|forbidden/i);
+        expect(await countPending()).toBe(before);
+      });
+
+      it('403s an auditor even though they hold no grant to begin with — on request_action and on observe_operation', async () => {
         const caller = humanCaller(workspaceId, auditorId, 'auditor');
         await expect(
           dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/auditor/i);
+        await expect(
+          dispatchCapability({ pool }, caller, 'observe_operation', {
             gatekeeperId,
             operation: 'observe.stock',
             params: {},
@@ -438,9 +553,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('a grant for a different gatekeeper does not authorize this one', async () => {
-        // The human-caller gate (assertHumanGatekeeperAccess) runs before any Gatekeeper lookup,
-        // so an arbitrary id that names no real Gatekeeper is enough to prove the grant is
-        // scoped, without registering a second real gate.
+        // The human-caller gate (assertHumanGatekeeperAccess) still runs before any Gatekeeper
+        // lookup for anything but a published observe-class Operation (leftover 97), so an
+        // arbitrary id that names no real Gatekeeper is enough to prove the grant is scoped,
+        // without registering a second real gate.
         const otherGate = randomUUID();
         const caller = humanCaller(workspaceId, memberWithGrantId, 'member');
         await expect(

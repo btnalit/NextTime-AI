@@ -1,8 +1,14 @@
-import { CONFLICT_TRANSITIONS, DECISION_TRANSITIONS, transition } from '@nexttime/shared';
+import {
+  CONFLICT_TRANSITIONS,
+  DECISION_TRANSITIONS,
+  HUMAN_ATTESTATION_EVIDENCE_KIND,
+  transition,
+} from '@nexttime/shared';
 import type { ConflictStatus } from '@nexttime/shared';
 import {
   type ConflictRow,
   type DecisionRow,
+  attachHumanAttestation,
   causalChain,
   decisionImpact,
   endActivity,
@@ -14,8 +20,9 @@ import {
   queryDecisions,
   startActivity,
 } from '../../substrate/epistemic/index.js';
-import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { SqlGraphStore, factLifecycleState } from '../../substrate/graph/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { toWireFact } from './resource-wire.js';
 
@@ -223,6 +230,84 @@ export const verifyFactHandler: CapabilityHandler = async (client, workspaceId, 
 
   const fact = await graphStore.verifyFact(client, workspaceId, { id: principalId }, { factId });
   return { result: toWireFact(fact), resourceType: 'fact', resourceId: factId };
+};
+
+// -------------------------------------------------------------------------------------------
+// attest_fact (STATUS leftover 89)
+// -------------------------------------------------------------------------------------------
+
+/** `attest_fact` on a Fact that is no longer active (superseded or invalidated) — a person
+ *  confirms what the graph currently holds, never a retired row. Same 409 "well-formed request,
+ *  the row's current state forbids it" family as `FactHasNoEvidenceError`; mapped in
+ *  `interfaces/http/capability-route.ts` / `interfaces/ws/rpc.ts`. */
+export class FactNotActiveError extends Error {
+  constructor(factId: string, state: string) {
+    super(`attest_fact: Fact ${factId} is ${state}, not active — attest the Fact that replaced it`);
+    this.name = 'FactNotActiveError';
+  }
+}
+
+/**
+ * STATUS leftover 89 (maintainer decision 2026-09-27, "放开，做成单独标注的'人工确认'证据"): a
+ * person attaches Evidence of the reserved kind `human_attestation` to an active Fact — the
+ * existing Evidence concept `verify_fact` already requires (I3.6), told apart from machine
+ * evidence by its kind and attributed to the person by `created_by`. Recorded under its own
+ * `epistemic.human_attestation` Activity started by that person (PROV-O: the act of attesting is
+ * an Activity, the same shape `resolve_conflict` records its own human judgment under); the
+ * dispatcher's own audit row (I11) is written in the same transaction.
+ *
+ * Who may attest: a human Principal on the human channel. The registry already makes the
+ * capability human-channel only (a Handle never reaches this handler); the Principal check below
+ * closes the one remaining path — a *service* Principal's API key also authenticates on the human
+ * channel (resolve-caller.ts), and a service is not a person. The attester is always the caller,
+ * never a request field (`paramsSchema` is strict).
+ */
+export const attestFactHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { factId, note, link } = params as { factId: string; note: string; link?: string };
+  if (ctx?.channel !== 'human' || ctx.principal?.kind !== 'human') {
+    throw new ForbiddenError(
+      'attest_fact: only a person (a human Principal on the human channel) can attest a Fact',
+    );
+  }
+  const principalId = ctx.principalId;
+
+  const fact = await graphStore.getFactForUpdate(client, workspaceId, factId);
+  const state = factLifecycleState(fact);
+  if (state !== 'recorded') throw new FactNotActiveError(factId, state);
+
+  // One transaction (dispatch.ts's `withWorkspace`): any failure below rolls the Activity back
+  // together with the Evidence row and the audit record, so no half-recorded attestation remains.
+  const activity = await startActivity(client, workspaceId, {
+    kind: 'epistemic.human_attestation',
+    principalId,
+    metadata: { factId },
+  });
+  const attestation = await attachHumanAttestation(client, workspaceId, {
+    factId,
+    attesterPrincipalId: principalId,
+    note,
+    link: link ?? null,
+    activityId: activity.id,
+  });
+  await endActivity(client, workspaceId, activity.id, 'completed');
+
+  return {
+    result: {
+      id: attestation.id,
+      factId: attestation.factId,
+      kind: HUMAN_ATTESTATION_EVIDENCE_KIND,
+      note: attestation.note,
+      link: attestation.link,
+      activityId: activity.id,
+      attestedBy: attestation.attestedBy,
+      createdAt: attestation.createdAt.toISOString(),
+    },
+    // Audited against the Fact (not the Evidence row): the Fact's audit trail then reads
+    // attest → verify → supersede/invalidate in one place; the Evidence id is in the result and
+    // in `explain`'s `fact.humanAttestations`.
+    resourceType: 'fact',
+    resourceId: factId,
+  };
 };
 
 // -------------------------------------------------------------------------------------------

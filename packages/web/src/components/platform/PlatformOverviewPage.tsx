@@ -13,12 +13,14 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
+import { EmptyState as KitEmptyState } from '../kit/empty-state.js';
+import { KeyValue } from '../kit/key-value.js';
 import { PageHeader } from '../kit/page-header.js';
 import { DashboardCard } from '../kit/section.js';
 import { DataList, DataRow } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Icon } from '../ui/Icon.js';
+import { Icon, type IconName } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
@@ -270,11 +272,19 @@ function PlatformOverviewBody({
       {/* S8 W4-C (ui-audit L1 "两段式"): first screen — control-tower metrics, service health,
        *  cost, and 需要人处理. Everything below the `divider` (version / getting-started / recent
        *  audit) is reference material an admin checks less often. */}
-      <DashboardCard title={t('需要人处理', 'Needs attention')} padded={false}>
+      {/* V10 (docs/console-visual-p3-spec-2026-09-26.md): the empty state is one compact line, not
+       *  a full-height block — `kit/empty-state`'s `inline` variant, never `ui/EmptyState`'s block
+       *  card. `padded` follows suit: the empty line takes the card's normal edge padding (there is
+       *  no list of rows managing its own), the populated list keeps `padded={false}` as before. */}
+      <DashboardCard
+        title={t('需要人处理', 'Needs attention')}
+        padded={attentionItems.length === 0}
+      >
         {attentionItems.length === 0 ? (
-          <EmptyState
-            icon="check"
+          <KitEmptyState
+            icon={<Icon name="check" size="s" />}
             title={t('没有需要人工处理的事项', 'Nothing needs attention right now')}
+            variant="inline"
             testId="platform-attention-empty"
           />
         ) : (
@@ -296,42 +306,66 @@ function PlatformOverviewBody({
         )}
       </DashboardCard>
 
-      {/* ui-audit O1: the control tower's own four metrics — 待处理 / 运行中 / 图谱新鲜度 / 费用
-       *  (the latter as `CostCard` below, not a tile: it already carries four figures of its
-       *  own). The scale tiles (用户/工作区/门实例/可用模型) share the same grid — they answer "how
-       *  big is this deployment", a first-screen question too, just a different one. */}
-      <div className="platform-tiles" data-testid="platform-counts">
-        <CountTile
-          testId="platform-count-pending-action-requests"
-          label={t('待处理', 'Pending approvals')}
-          value={data.counts.pendingActionRequests}
-        />
-        <CountTile
-          testId="platform-count-running-tasks"
-          label={t('运行中', 'Running tasks')}
-          value={data.counts.runningTasks}
-        />
-        <GraphFreshnessTile freshness={data.graphFreshness} t={t} />
-        <CountTile
-          testId="platform-count-users"
-          label={t('用户', 'Users')}
-          value={data.counts.users}
-        />
-        <CountTile
-          testId="platform-count-workspaces"
-          label={t('工作区', 'Workspaces')}
-          value={nonResidueWorkspaceCount ?? data.counts.workspaces}
-        />
-        <CountTile
-          testId="platform-count-gatekeepers"
-          label={t('门实例', 'Gatekeepers')}
-          value={data.counts.gatekeepers}
-        />
-        <CountTile
-          testId="platform-count-models"
-          label={t('可用模型', 'Models available')}
-          value={data.counts.modelsAvailable}
-        />
+      {/* ui-audit O1 / P3-6 V10: the control tower's own three activity metrics — 待处理 / 运行中 /
+       *  图谱新鲜度 (费用 is `CostCard` below, a `kit/key-value` block, not a tile: it already
+       *  carries four figures of its own) — and the four scale tiles (用户/工作区/门实例/可用模型),
+       *  which answer "how big is this deployment", a first-screen question too, just a different
+       *  one. Grouped (MihomoOrbit reference: small tinted icon tile, uppercase grey label, 24/600
+       *  value) rather than seven equal-weight cards in one undifferentiated row. */}
+      <div className="stack" data-testid="platform-counts">
+        <div className="platform-tile-group">
+          <div className="section-title">{t('运行', 'Activity')}</div>
+          <div className="platform-tiles">
+            <CountTile
+              testId="platform-count-pending-action-requests"
+              icon="approvals"
+              deco="violet"
+              label={t('待审批', 'Pending approvals')}
+              value={data.counts.pendingActionRequests}
+            />
+            <CountTile
+              testId="platform-count-running-tasks"
+              icon="tasks"
+              deco="blue"
+              label={t('运行中', 'Running tasks')}
+              value={data.counts.runningTasks}
+            />
+            <GraphFreshnessTile freshness={data.graphFreshness} t={t} />
+          </div>
+        </div>
+        <div className="platform-tile-group">
+          <div className="section-title">{t('资源', 'Scale')}</div>
+          <div className="platform-tiles">
+            <CountTile
+              testId="platform-count-users"
+              icon="badge"
+              deco="indigo"
+              label={t('用户', 'Users')}
+              value={data.counts.users}
+            />
+            <CountTile
+              testId="platform-count-workspaces"
+              icon="grid"
+              deco="pink"
+              label={t('工作区', 'Workspaces')}
+              value={nonResidueWorkspaceCount ?? data.counts.workspaces}
+            />
+            <CountTile
+              testId="platform-count-gatekeepers"
+              icon="shield"
+              deco="blue"
+              label={t('门实例', 'Gatekeepers')}
+              value={data.counts.gatekeepers}
+            />
+            <CountTile
+              testId="platform-count-models"
+              icon="cpu"
+              deco="violet"
+              label={t('可用模型', 'Models available')}
+              value={data.counts.modelsAvailable}
+            />
+          </div>
+        </div>
       </div>
 
       <DashboardCard title={t('服务健康', 'Health')}>
@@ -433,7 +467,12 @@ function GraphFreshnessTile({
   const fresh = freshness.staleSourceCount === 0;
   return (
     <div className="card platform-tile" data-testid="platform-count-graph-freshness">
-      <div className="platform-tile-label">{t('图谱新鲜度', 'Graph freshness')}</div>
+      <div className="platform-tile-head">
+        <span className="platform-tile-icon platform-tile-icon-cyan">
+          <Icon name="link" />
+        </span>
+        <span className="platform-tile-label">{t('图谱新鲜度', 'Graph freshness')}</span>
+      </div>
       <div className="platform-tile-value" data-testid="platform-graph-freshness-value">
         {freshness.staleSourceCount}
       </div>
@@ -512,20 +551,37 @@ function CostCard({ status }: { readonly status: Resource<PlatformStatusWire> })
           testId="platform-cost-error"
         />
       ) : (
-        <dl className="definition-list" data-testid="platform-cost">
-          <dt>{t('调用次数', 'Calls')}</dt>
-          <dd>{status.state.data.llmUsage30d.callCount}</dd>
-          <dt>{t('输入 tokens', 'Input tokens')}</dt>
-          <dd>{status.state.data.llmUsage30d.totalInputTokens}</dd>
-          <dt>{t('输出 tokens', 'Output tokens')}</dt>
-          <dd>{status.state.data.llmUsage30d.totalOutputTokens}</dd>
-          <dt>{t('费用', 'Cost')}</dt>
-          <dd data-testid="platform-cost-value">
-            {status.state.data.llmUsage30d.totalCostUsd !== null
-              ? `$${status.state.data.llmUsage30d.totalCostUsd.toFixed(2)}`
-              : t('无费用记录', 'No cost recorded')}
-          </dd>
-        </dl>
+        <KeyValue
+          testId="platform-cost"
+          items={[
+            {
+              key: 'calls',
+              label: t('调用次数', 'Calls'),
+              value: status.state.data.llmUsage30d.callCount,
+            },
+            {
+              key: 'input',
+              label: t('输入 tokens', 'Input tokens'),
+              value: status.state.data.llmUsage30d.totalInputTokens,
+            },
+            {
+              key: 'output',
+              label: t('输出 tokens', 'Output tokens'),
+              value: status.state.data.llmUsage30d.totalOutputTokens,
+            },
+            {
+              key: 'cost',
+              label: t('费用', 'Cost'),
+              value: (
+                <span data-testid="platform-cost-value">
+                  {status.state.data.llmUsage30d.totalCostUsd !== null
+                    ? `$${status.state.data.llmUsage30d.totalCostUsd.toFixed(2)}`
+                    : t('无费用记录', 'No cost recorded')}
+                </span>
+              ),
+            },
+          ]}
+        />
       )}
     </DashboardCard>
   );
@@ -547,18 +603,30 @@ function checklistTrailing(item: ChecklistItem, t: Translate) {
   return undefined;
 }
 
+/** The five decorative (never governance) icon-tile hues P3-6 added — `tokens.css`'s `--deco-*`. */
+type TileDeco = 'blue' | 'violet' | 'pink' | 'cyan' | 'indigo';
+
 function CountTile({
   testId,
+  icon,
+  deco,
   label,
   value,
 }: {
   readonly testId: string;
+  readonly icon: IconName;
+  readonly deco: TileDeco;
   readonly label: string;
   readonly value: number;
 }) {
   return (
     <div className="card platform-tile" data-testid={testId}>
-      <div className="platform-tile-label">{label}</div>
+      <div className="platform-tile-head">
+        <span className={`platform-tile-icon platform-tile-icon-${deco}`}>
+          <Icon name={icon} />
+        </span>
+        <span className="platform-tile-label">{label}</span>
+      </div>
       <div className="platform-tile-value">{value}</div>
     </div>
   );

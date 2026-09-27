@@ -242,6 +242,9 @@ export function explainToProvenance(result: ExplainResultWire): ProvenanceView {
         invalidatedAt: result.fact.invalidatedAt,
         invalidationReason: result.fact.invalidationReason,
         lastObservation: result.fact.lastObservation,
+        // Leftover 89: a person's own confirmations, rendered apart from the machine lineage
+        // (`?? []` — an older kernel's explain has no such field).
+        humanAttestations: result.fact.humanAttestations ?? [],
       }
     : null;
   const activity = result.activity

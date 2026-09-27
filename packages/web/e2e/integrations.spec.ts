@@ -229,6 +229,18 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       await enableButton.click();
       const confirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
       await expect(confirm).toBeVisible({ timeout: 15_000 });
+      // The popover sits against its trigger, 8px below (or above, after a flip) — kit/confirm
+      // measures the trigger, not its box-less `display: contents` wrapper, which pinned the
+      // popover to the viewport's top-left.
+      await expect
+        .poll(async () => {
+          const [a, p] = [await enableButton.boundingBox(), await confirm.boundingBox()];
+          if (!a || !p) return false;
+          const below = Math.abs(p.y - (a.y + a.height) - 8) <= 2;
+          const above = Math.abs(a.y - (p.y + p.height) - 8) <= 2;
+          return below || above;
+        })
+        .toBe(true);
       await confirm.getByTestId('confirm-button').click();
     }
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({

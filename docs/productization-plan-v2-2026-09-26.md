@@ -28,7 +28,7 @@
 | L5 工作区策略上限 | `agent_policies.allowed_gatekeepers` | owner | 入口 Handle 签发时 | 我的智能体（生效摘要） | — |
 | L6 成员排除 | AgentProfile `excluded_*` | 成员本人 | 入口 Handle 签发时 | 我的智能体 | — |
 | L7 入口 Handle | `resources.gatekeeper` = L4 ∩ L5 − L6 | 内核（每轮） | Handle 验证 | — | 授权/Profile/成员变更会吊销；连接器变更不会（Track A 修） |
-| L8 工具投射 | `list_allowed_operations` @ session_start | pi 扩展 | 看不到就不会调 | 智能体工具列表 | 不过滤 L0'（Track A 修）；只在会话开始投射（pi 0.86+ 可每轮更新 → P4） |
+| L8 工具投射 | `list_allowed_operations` @ session_start + 每轮 `before_agent_start`（入口，C3） | pi 扩展 | 看不到就不会调 | 智能体工具列表 | 不过滤 L0'（Track A 修）；~~只在会话开始投射~~ 入口已每轮刷新（C3，§7 实现说明）；interactive 模式仍只在会话开始投射 |
 | L9 执行类 | ActionRequest + 审批 / 策略 | Worker 提出，人审批 | `request_action` → 审批 | 待我审批 | — |
 | L10 委派 | `invoke_worker` 子 Handle 衰减 | 入口 agent | `computeChildHandleScope` | 任务 | 未授权的观测门在子 Handle 里被丢掉，但内核执行不看（同 L4，A2 一并） |
 
@@ -48,9 +48,36 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
   内的门）、可达性读模型（`execution_readiness` / `find_operations` 标注；`not_granted` 只剩执行类原因，未授权的门也可以被排除）、
   `find_procedures` 的 observe 步骤。L10 子 Handle 衰减不变：`resources.gatekeeper` 仍只装已授权的门——它是执行授权，
   放进未授权门会让孙 Worker 经 `delegatedRequestAction` 拿到 `request_action`；Worker 读未声明 / 未授权的门靠谓词，不靠范围。
-- 人类通道（控制台 `assertHumanGatekeeperAccess`）不变，待维护者另行决定。
+- 人类通道（控制台 `assertHumanGatekeeperAccess`）不变，待维护者另行决定。（已于同日放开，见下"后续"。）
 - 验收：一致性测试（`platform-gates.integration.test.ts` 未授权成员：可达性 `direct` ⇔ 入口 Handle 与 Worker 形 Handle 调用成功且记审计；
   AgentProfile / AgentPolicy 排除 ⇔ 拒绝且不投射）；主机 S4 新增未授权成员探针。
+
+**后续（STATUS 遗留 97 / 98，2026-09-27，实现说明）**：
+
+- 遗留 97 人类通道（维护者"也放开吧"）：`observe_operation` 的人类通道不再调 `assertHumanGatekeeperAccess`，只留角色规则
+  （`assertRoleMayReachGatekeeper`：`auditor` 不碰门），再以 `NO_OBSERVE_EXCLUSIONS` 调 `observeRefusal`——AgentPolicy / AgentProfile
+  是成员智能体的配置（S3.13，`AgentPolicyForm` 的"每个 AgentProfile 据此收窄的工作区上限"），不限制成员本人的读取。
+  `assertHumanGatekeeperAccess` 的调用点：`observeOperationHandler`（去掉，改为只调角色规则）；`requestActionHandler`（保留——
+  人类通道的 `request_action` 不论 observe / execute / 未发布都要 Grant，人读系统走 `observe_operation`）。控制台没有"人自己调门"
+  的按钮，现有文案（系统与授权、我的智能体、可达性原因）说的都是智能体的读写，已是"读不需要授权、写需要"，无需改。
+- 遗留 98 (a)「我的智能体」：`get_agent_profile` / `set_agent_profile` 结果加 `availableGatekeepers: [{gatekeeperId, granted, inUse}]`
+  （加法，契约快照随之更新）——已授权的门加上本工作区里有 `observeRefusal`（无排除项）接受的 Operation 的门（`observableGatekeeperIds`）；
+  `inUse` = `observeGateExclusion` 未命中（未被本人排除、在 AgentPolicy 上限内）。`effective.enabledGatekeepers` 不变，仍是已授权 ∩ 未排除
+  ∩ 上限，入口 Handle 的 `resources.gatekeeper` 由它铸造——未授权的门永不进执行授权。表单按 `availableGatekeepers` 列出，标 读写（已授权）
+  / 只读（未授权），勾选对两者都写 `excludedGatekeepers`；"当前生效"的系统一栏按 `inUse` 列出，未授权的标"只读"。
+- 遗留 98 (b) Worker 读：worker 模式按 Operation 的 `mode` 分流——observe 类调 `observe_operation`、execute 类（及无 `mode` 的行）调
+  `request_action`，与入口 / interactive 模式、MCP 投射一致。`observe_operation` 加进 Worker 能力上限，并列入
+  `WORKER_INFRASTRUCTURE_CAPABILITY_NAMES`（强制并入，而非只进默认能力：此前发布、显式声明 `capabilities` 的定义——包括主机上按
+  ops-runner 模板建的——不含它，只进默认会让它们失去全部读取）。仍经父 Handle 求交（入口 Handle 本就有它），不带任何门范围；
+  `observe_operation` 对 Worker 调用同样按 `sid` 记 WorkerRun 的门观察（S8 W5-A），审计动作名从 `request_action` 变为
+  `observe_operation`（`get_operation_stats` 的 `observeCalls` 因此开始计入 Worker 的读取）。
+- 遗留 98 (c)：删除 P3-5 后无引用的 `ExecutionPrerequisiteBar` 及其测试。
+- 验收：`request-action.integration.test.ts`（人类通道：未授权成员 `observe_operation` 200 且记审计、不受本人 AgentProfile / AgentPolicy
+  限制；`request_action` 观察 / 执行类仍 403 且不建 ActionRequest；`auditor` 两者都 403）、`platform-gates.integration.test.ts`
+  （未授权成员人类通道读 200 + 审计；入口 agent 委派的 Worker 以 `computeChildHandleScope` 得出的范围读 200 + 审计、`request_action`
+  403、声明 `request_action` 的委派被拒；「我的智能体」对未授权门给 `granted:false`，排除后 `inUse:false` 且调用拒绝、不投射、可达性
+  `excluded_by_profile`）、`gate-observation.integration.test.ts`（Worker 经 `observe_operation` 记 WorkerRun 观察）；S4 新增人类通道探针
+  与排除探针。
 
 ## 3. 内核能力 × 前端覆盖
 
@@ -63,7 +90,7 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
 | 缺口 | capability | 判断 | 去向 |
 |---|---|---|---|
 | G1 本体治理无界面 | `get_type` `validate` `propose_ontology_change` `publish_ontology_version` | 本体只能由智能体提案，人看不到也批不了 | v2 功能切片 F1：图谱页「类型」抽屉 + 提案审阅（复用审批主从） |
-| G2 人不能改事实 | `assert_fact` `supersede_fact` `invalidate_fact` | 只有「验证」和「冲突裁决」 | F2：事实行菜单「作废 / 取代」（高影响确认 + 审计） |
+| G2 人不能改事实 | `assert_fact` `supersede_fact` `invalidate_fact` | 只有「验证」和「冲突裁决」 | F2：事实行菜单「作废 / 取代」（高影响确认 + 审计）——2026-09-27 收尾波次 C2 已做（`feat/human-attestation`，待主机核对）：「作废…」中档确认、原因必填；「取代…」改值 → 核对变更 → 确认；同一菜单另有遗留 89 的「附人工确认」。`assert_fact`（人手工新建事实）仍无入口 |
 | G3 已部署 Operation 治理字段刷新无入口 | `refresh_operation_governance` | 读半（预览 diff）已接，写半没接 = 遗留 79 的出口 | F3：系统抽屉「与门公告对齐」 |
 | G4 死读 | `get_gate_instance` `list_runtime_images` `list_user_memberships` | 前端在客户端筛列表代替 | 用上（深链直接读单个实例）或删除；先核 `UserMembershipsPanel` 数据来源 |
 | G5 半成品 | `connect_gatekeeper` | 启动器注释里的待办 | 与「接入包契约」一起定：删或并入启用流程 |
@@ -101,6 +128,32 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
 | vitest / vite | vitest 2.1.9、vite 5/6 | vitest 5、vite 8 | 关闭遗留 91 的 9 条告警（开发链） |
 | 关联 ID | 只有内核有指标 | 跨服务 correlation id | 遗留 87 |
 | 镜像构建缓存 | 每次全量下载依赖 | 依赖层缓存 | 遗留 93（主机出网被掐断） |
+
+**实现说明：逐轮工具投射（收尾波次 C3，2026-09-27，已实现，待主机核对）**
+
+- 位置：`packages/platform-extension/src/modes/gate-tool-projection.ts`（`createGateToolProjector`），
+  `modes/entry.ts` 在 `session_start` 与 `before_agent_start` 各调一次 `refresh`。读模型沿用
+  `list_allowed_operations`（内核未改，扩展里没有第二份"能用什么"的计算）。
+- 做法：pi 0.87.1 允许 bind 之后 `registerTool`（新名字自动激活），但没有注销，所以"新允许的注册、
+  不再允许的停用"：下一激活集 = `getActiveTools()` 去掉本投射分配过且这次未列出的名字 + 追加新名字，
+  整体交给 `setActiveTools`。只动自己分配的名字——内置工具与 17 个静态能力工具永远原样；会撞上别人
+  已注册名字的 Operation 用 `gatekeeperId` 兜底名。名字在会话内稳定，定义变了同名重注册。
+- 代价与失败：每条用户消息一次内核读（同一轮内多次 LLM 请求不重读），2 s 超时；超时 / 报错 / 响应
+  无 `items` 数组保留上一轮集合并记警告，不阻塞、不掉到零。
+- 被否决的方案：①注册"全部候选"再逐轮启停——扩展不知道候选全集（它就是读模型的输出），且 pi
+  支持中途注册，没必要；②改写 `event.systemPromptOptions.selectedTools`——能用，但 `registerTool`
+  的自动激活走的是实时装载，两套状态靠 pi"显式编辑优先"的合并规则对齐；pi 文档推荐的是
+  `setActiveTools`，只走这一个入口更好推理；③每个 LLM 请求（`turn_start` / `context`）都刷新——内核读成倍
+  增加，工具集在一次运行中途变化也更难推理；④放宽内核 Handle 轮换以免重建——授权交付不因投射
+  更新而放松，仍按上表"更正"另立项。
+- 仍会重建容器的：授权、AgentProfile / AgentPolicy、连接器禁用清单 / 模式、成员角色（吊销入口
+  Handle → worker-supervisor jti 轮换）。interactive 模式（外部 pi 客户端）仍只在会话开始投射，
+  本项未动。
+- 测试：`modes/entry.test.ts` "per-turn gate tool projection (C3)"（假 pi + 假内核：新增出现、排除 / 门
+  停用消失、再启用同名恢复、每轮一次读、报错 / 超时 / 畸形响应保留、撞名兜底、名字稳定、定义变更
+  重注册、执行类不投射）；`entry.sdk.test.ts` 真实 pi SDK 从每个请求的 transcript 回放模型实际看到
+  的工具，验证中途出现 / 消失、`toolsAdded` / `toolsRemoved` 落进 transcript、失败保留。主机核对步骤
+  与日志行见 `runbooks/pi-upgrade.md` §2.3。
 
 ## 8. 前后端优化
 

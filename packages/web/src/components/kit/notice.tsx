@@ -5,9 +5,8 @@ export interface NoticeProps {
   readonly children: ReactNode;
   /** Optional leading icon — `kit/notice` does not import `components/ui/Icon` (S8 risk ①, the
    *  `components/kit/*` boundary), so the caller passes its own icon element (or omits it). The
-   *  callers this lane wires up (`GrantGateForm`, `EnableGateConfirm`,
-   *  `ExecutionPrerequisiteBar`) render no icon here today — same visual output as the local
-   *  `ui/Notice` replicas they replace. */
+   *  callers this lane wires up (`GrantGateForm`, `EnableGateConfirm`) render no icon here
+   *  today — same visual output as the local `ui/Notice` replicas they replace. */
   readonly icon?: ReactNode;
   readonly testId?: string;
 }
