@@ -191,7 +191,8 @@ sh scripts/delete-workspaces-matching.sh '^accept-s4' --yes
 
 ## 6. 已知限制
 
-- **入口 agent 在 `session_start` 时的真实工具投影不受本脚本验证**：`find_operations`/
+- **入口 agent 在 `session_start`（及此后每轮 `before_agent_start`，C3）时的真实工具投影不受本脚本
+  验证**（逐轮投射的人工核对见 `pi-upgrade.md` §2.3）：`find_operations`/
   `observe_operation` 走的是同一条 capability 与同一条门禁，但入口 agent 自己在会话开始时把
   `<gate>.<op>` 投影成具体工具名的那一步（`packages/platform-extension` 的 `modes/entry.ts`）不在
   本脚本覆盖范围——如果未来那一层自己引入了额外的过滤逻辑（例如按 AgentProfile 清单二次过滤工具

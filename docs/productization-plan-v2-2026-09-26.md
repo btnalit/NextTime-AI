@@ -28,7 +28,7 @@
 | L5 工作区策略上限 | `agent_policies.allowed_gatekeepers` | owner | 入口 Handle 签发时 | 我的智能体（生效摘要） | — |
 | L6 成员排除 | AgentProfile `excluded_*` | 成员本人 | 入口 Handle 签发时 | 我的智能体 | — |
 | L7 入口 Handle | `resources.gatekeeper` = L4 ∩ L5 − L6 | 内核（每轮） | Handle 验证 | — | 授权/Profile/成员变更会吊销；连接器变更不会（Track A 修） |
-| L8 工具投射 | `list_allowed_operations` @ session_start | pi 扩展 | 看不到就不会调 | 智能体工具列表 | 不过滤 L0'（Track A 修）；只在会话开始投射（pi 0.86+ 可每轮更新 → P4） |
+| L8 工具投射 | `list_allowed_operations` @ session_start + 每轮 `before_agent_start`（入口，C3） | pi 扩展 | 看不到就不会调 | 智能体工具列表 | 不过滤 L0'（Track A 修）；~~只在会话开始投射~~ 入口已每轮刷新（C3，§7 实现说明）；interactive 模式仍只在会话开始投射 |
 | L9 执行类 | ActionRequest + 审批 / 策略 | Worker 提出，人审批 | `request_action` → 审批 | 待我审批 | — |
 | L10 委派 | `invoke_worker` 子 Handle 衰减 | 入口 agent | `computeChildHandleScope` | 任务 | 未授权的观测门在子 Handle 里被丢掉，但内核执行不看（同 L4，A2 一并） |
 
@@ -128,6 +128,32 @@ Worker、外部 Claude Code 的 MCP 凭证——都能读本工作区启用的�
 | vitest / vite | vitest 2.1.9、vite 5/6 | vitest 5、vite 8 | 关闭遗留 91 的 9 条告警（开发链） |
 | 关联 ID | 只有内核有指标 | 跨服务 correlation id | 遗留 87 |
 | 镜像构建缓存 | 每次全量下载依赖 | 依赖层缓存 | 遗留 93（主机出网被掐断） |
+
+**实现说明：逐轮工具投射（收尾波次 C3，2026-09-27，已实现，待主机核对）**
+
+- 位置：`packages/platform-extension/src/modes/gate-tool-projection.ts`（`createGateToolProjector`），
+  `modes/entry.ts` 在 `session_start` 与 `before_agent_start` 各调一次 `refresh`。读模型沿用
+  `list_allowed_operations`（内核未改，扩展里没有第二份"能用什么"的计算）。
+- 做法：pi 0.87.1 允许 bind 之后 `registerTool`（新名字自动激活），但没有注销，所以"新允许的注册、
+  不再允许的停用"：下一激活集 = `getActiveTools()` 去掉本投射分配过且这次未列出的名字 + 追加新名字，
+  整体交给 `setActiveTools`。只动自己分配的名字——内置工具与 17 个静态能力工具永远原样；会撞上别人
+  已注册名字的 Operation 用 `gatekeeperId` 兜底名。名字在会话内稳定，定义变了同名重注册。
+- 代价与失败：每条用户消息一次内核读（同一轮内多次 LLM 请求不重读），2 s 超时；超时 / 报错 / 响应
+  无 `items` 数组保留上一轮集合并记警告，不阻塞、不掉到零。
+- 被否决的方案：①注册"全部候选"再逐轮启停——扩展不知道候选全集（它就是读模型的输出），且 pi
+  支持中途注册，没必要；②改写 `event.systemPromptOptions.selectedTools`——能用，但 `registerTool`
+  的自动激活走的是实时装载，两套状态靠 pi"显式编辑优先"的合并规则对齐；pi 文档推荐的是
+  `setActiveTools`，只走这一个入口更好推理；③每个 LLM 请求（`turn_start` / `context`）都刷新——内核读成倍
+  增加，工具集在一次运行中途变化也更难推理；④放宽内核 Handle 轮换以免重建——授权交付不因投射
+  更新而放松，仍按上表"更正"另立项。
+- 仍会重建容器的：授权、AgentProfile / AgentPolicy、连接器禁用清单 / 模式、成员角色（吊销入口
+  Handle → worker-supervisor jti 轮换）。interactive 模式（外部 pi 客户端）仍只在会话开始投射，
+  本项未动。
+- 测试：`modes/entry.test.ts` "per-turn gate tool projection (C3)"（假 pi + 假内核：新增出现、排除 / 门
+  停用消失、再启用同名恢复、每轮一次读、报错 / 超时 / 畸形响应保留、撞名兜底、名字稳定、定义变更
+  重注册、执行类不投射）；`entry.sdk.test.ts` 真实 pi SDK 从每个请求的 transcript 回放模型实际看到
+  的工具，验证中途出现 / 消失、`toolsAdded` / `toolsRemoved` 落进 transcript、失败保留。主机核对步骤
+  与日志行见 `runbooks/pi-upgrade.md` §2.3。
 
 ## 8. 前后端优化
 

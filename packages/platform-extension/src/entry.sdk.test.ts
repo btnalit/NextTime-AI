@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Context } from '@earendil-works/pi-ai';
-import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
+import { InMemoryCredentialStore, getCurrentTools } from '@earendil-works/pi-ai';
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -198,6 +198,164 @@ describe('platform-extension loaded through the real pi SDK (entry mode)', () =>
     );
     expect(reportsAfterTurn2).toHaveLength(2);
     expect(reportsAfterTurn2[1]?.params).toMatchObject({ turnId: 'turn-2' });
+
+    session.dispose();
+    fauxProvider.unregister();
+  });
+
+  /**
+   * 收尾波次 C3: the per-turn projection through pi's *real* tool registry and request builder —
+   * what the fake-`ExtensionAPI` tests in `modes/entry.test.ts` can only assume. Each provider
+   * request's tool declarations are replayed from its transcript (`getCurrentTools`, pi-ai 0.87:
+   * tools travel as `toolsAdded`/`toolsRemoved` on system messages), so this asserts exactly what
+   * the model was offered on each turn. Built-ins are configured the way the entry runtime does it
+   * (`defaultTools` in pi's settings, `deploy/worker-runtime/entrypoint.sh`), and the session is
+   * bound like `pi --mode rpc` binds it, so `session_start` runs too.
+   */
+  it('per-turn projection: a gate tool appears and disappears between prompts in one session, built-ins untouched', async () => {
+    const builtins = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
+    const gateRow = (gatekeeperId: string, gateName: string, name: string) => ({
+      gatekeeperId,
+      gateName,
+      name,
+      operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+    });
+    let items: unknown[] = [gateRow('gk-1', 'accept_s2_api', 'stock.get')];
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items } }));
+    kernel.setHandler('get_entry_context', () => ({ ok: true, result: {} }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    kernel.setHandler('observe_operation', () => ({
+      ok: true,
+      result: { status: 'ok', data: { kbs: ['ops'] } },
+    }));
+
+    const fauxProvider = registerFauxProvider();
+    const model = fauxProvider.getModel();
+    const offered: string[][] = [];
+    const record = (context: { messages: readonly { role: string }[] }) => {
+      offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+    };
+    fauxProvider.setResponses([
+      // turn-1: one request.
+      (context) => {
+        record(context);
+        return fauxAssistantMessage('Hello.');
+      },
+      // turn-2: the model calls the tool that only just appeared, then answers.
+      (context) => {
+        record(context);
+        return fauxAssistantMessage(fauxToolCall('ragflow_kb_list', {}), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context) => {
+        record(context);
+        return fauxAssistantMessage('One knowledge base: ops.');
+      },
+      // turn-3 (kernel failing): one request.
+      (context) => {
+        record(context);
+        return fauxAssistantMessage('Still here.');
+      },
+    ]);
+
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerProvider(model.provider, {
+      baseUrl: model.baseUrl,
+      apiKey: 'faux-key',
+      api: fauxProvider.api,
+      models: fauxProvider.models.map((registeredModel) => ({
+        id: registeredModel.id,
+        name: registeredModel.name,
+        api: registeredModel.api,
+        reasoning: registeredModel.reasoning,
+        input: registeredModel.input,
+        cost: registeredModel.cost,
+        contextWindow: registeredModel.contextWindow,
+        maxTokens: registeredModel.maxTokens,
+        baseUrl: registeredModel.baseUrl,
+      })),
+    });
+
+    const settingsManager = SettingsManager.inMemory({ defaultTools: builtins });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: tmpDir,
+      agentDir: tmpDir,
+      settingsManager,
+      noExtensions: true,
+      additionalExtensionPaths: [EXTENSION_PATH],
+    });
+    await resourceLoader.reload();
+    expect(resourceLoader.getExtensions().errors).toEqual([]);
+
+    const { session } = await createAgentSession({
+      cwd: tmpDir,
+      agentDir: tmpDir,
+      model,
+      modelRuntime,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(tmpDir),
+      settingsManager,
+    });
+    const events: AgentSessionEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.bindExtensions({ mode: 'rpc' });
+
+    // session_start projected the one allowed Operation.
+    expect(session.getActiveToolNames()).toContain('accept_s2_api_stock_get');
+
+    // turn-1: unchanged list — the model is offered built-ins, static tools and the gate tool.
+    await session.prompt('<!--nexttime:turn_id=turn-1-->\nHi');
+    expect(offered[0]).toEqual(
+      expect.arrayContaining([...builtins, 'get_object', 'invoke_worker']),
+    );
+    expect(offered[0]).toContain('accept_s2_api_stock_get');
+
+    // turn-2: gk-1's Operation is no longer allowed, gk-2's is — no restart, no new session.
+    items = [gateRow('gk-2', 'ragflow', 'kb.list')];
+    await session.prompt('<!--nexttime:turn_id=turn-2-->\nWhich knowledge bases exist?');
+    for (const tools of [offered[1], offered[2]]) {
+      expect(tools).toEqual(expect.arrayContaining([...builtins, 'get_object', 'ragflow_kb_list']));
+      expect(tools).not.toContain('accept_s2_api_stock_get');
+    }
+    const kbEnd = events.find(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end' && event.toolName === 'ragflow_kb_list',
+    );
+    expect(kbEnd?.isError).toBe(false);
+    expect(
+      kernel.requests.find((request) => request.capability === 'observe_operation')?.params,
+    ).toEqual({ gatekeeperId: 'gk-2', operation: 'kb.list', params: {} });
+    // The change is recorded in the transcript as a system-message delta (what the host runbook
+    // greps in the session JSONL): the new tool added, the old one removed, nothing else.
+    const deltas = session.messages.filter(
+      (message): message is Extract<typeof message, { role: 'system' }> =>
+        message.role === 'system' &&
+        (message.toolsAdded !== undefined || message.toolsRemoved !== undefined),
+    );
+    const turn2Delta = deltas.find((message) =>
+      message.toolsAdded?.some((tool) => tool.name === 'ragflow_kb_list'),
+    );
+    expect(turn2Delta?.toolsAdded?.map((tool) => tool.name)).toEqual(['ragflow_kb_list']);
+    expect(turn2Delta?.toolsRemoved?.map((tool) => tool.name)).toEqual(['accept_s2_api_stock_get']);
+
+    // turn-3: the kernel read fails — the previous set is kept, not dropped to zero.
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: false,
+      error: { code: 'internal', message: 'db unavailable' },
+    }));
+    await session.prompt('<!--nexttime:turn_id=turn-3-->\nStill there?');
+    expect(offered[3]).toEqual(expect.arrayContaining([...builtins, 'ragflow_kb_list']));
+    expect(offered[3]).not.toContain('accept_s2_api_stock_get');
+
+    // One list_allowed_operations read at session_start plus one per prompt — none per request.
+    expect(
+      kernel.requests.filter((request) => request.capability === 'list_allowed_operations'),
+    ).toHaveLength(4);
 
     session.dispose();
     fauxProvider.unregister();
