@@ -62,6 +62,17 @@ export type EpistemicStatus = (typeof EPISTEMIC_STATUS_VALUES)[number];
 export const EpistemicStatusSchema = asEnum(EPISTEMIC_STATUS_VALUES);
 
 /**
+ * STATUS leftover 89 (maintainer decision 2026-09-27, "做成单独标注的'人工确认'证据"): the one
+ * reserved Evidence kind (`evidence.kind`, §5.1.3 / §5.3 item 6) meaning "a person's own
+ * confirmation" — written only by the human-channel `attest_fact` capability, never by a Worker's
+ * result contract (`WorkerResultEvidenceSchema` refuses it) or any other Evidence writer
+ * (`substrate/epistemic/evidence.ts`'s `attachEvidence` refuses it too). Every other Evidence
+ * kind is machine evidence (command output, a document excerpt, a gate result) the writer names
+ * freely. A human's word must never read as machine evidence, nor machine evidence as a human's.
+ */
+export const HUMAN_ATTESTATION_EVIDENCE_KIND = 'human_attestation' as const;
+
+/**
  * Conflict type. The design doc (§5.1.3, §5.5) carries `Conflict` over from Semantica "as-is"
  * without re-listing its type taxonomy; Semantica's own taxonomy is
  * `VALUE / TYPE / RELATIONSHIP / TEMPORAL / LOGICAL` (docs/reference-projects-and-oss-landscape.md

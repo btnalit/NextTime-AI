@@ -31,6 +31,7 @@ import {
   ExplainNodeNotFoundError,
   ExportProvInputError,
   FactHasNoEvidenceError,
+  FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
@@ -344,6 +345,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // "well-formed request, current state forbids it" family as OperationIdentityConflictError/
   // PrincipalOperationRefusedError above.
   if (err instanceof FactHasNoEvidenceError) {
+    return { status: 409, code: 'conflict', message: err.message };
+  }
+  // STATUS leftover 89 `attest_fact` on a superseded / invalidated Fact — same family.
+  if (err instanceof FactNotActiveError) {
     return { status: 409, code: 'conflict', message: err.message };
   }
   if (err instanceof PrincipalNotFoundError) {

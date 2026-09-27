@@ -21,6 +21,7 @@ export type {
   ExplainActivityRef,
   ExplainDecisionRef,
   ExplainFactRef,
+  ExplainHumanAttestationRef,
   ExplainInput,
   ExplainObservationRef,
   ExplainPrincipalRef,
@@ -28,8 +29,20 @@ export type {
   ExplainSourceRef,
 } from './explain.js';
 
-export { attachEvidence, hasEvidence } from './evidence.js';
-export type { AttachEvidenceInput, EvidenceRow } from './evidence.js';
+export {
+  HumanAttestationRequiresHumanError,
+  ReservedEvidenceKindError,
+  attachEvidence,
+  attachHumanAttestation,
+  hasEvidence,
+  listHumanAttestations,
+} from './evidence.js';
+export type {
+  AttachEvidenceInput,
+  AttachHumanAttestationInput,
+  EvidenceRow,
+  HumanAttestationRow,
+} from './evidence.js';
 
 export {
   findSourceByName,
