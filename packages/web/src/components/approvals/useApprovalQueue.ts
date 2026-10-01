@@ -253,7 +253,10 @@ export function useApprovalQueue({
         await http.call('set_auto_approved_action_kind', { actionKindTag: row.actionKindTag });
         toast.push({
           tone: 'info',
-          title: `今后自动批准 Auto-approved from now on · ${row.actionKindTag}`,
+          title: t(
+            `今后自动批准 · ${row.actionKindTag}`,
+            `Auto-approved from now on · ${row.actionKindTag}`,
+          ),
         });
       } catch (err) {
         if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');

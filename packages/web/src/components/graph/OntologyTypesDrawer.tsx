@@ -772,8 +772,9 @@ function PublishProposalButton({
 
   // Hidden, not merely disabled, once a 403 has proven this caller cannot publish (same
   // `permissions.isDenied` idiom `SystemsPage.tsx`/`CatalogPage.tsx` already use for `publish_*`
-  // buttons) — `publish_ontology_version` declares no `minRole` (any human role satisfies it), so
-  // this only ever fires after a real refusal, not a role guess made ahead of time. `&& !open`:
+  // buttons) — this only ever fires after a real refusal, not a role guess made ahead of time
+  // (`publish_ontology_version` needs `builder` and publishes only the caller's own draft, STATUS
+  // leftover 100 — the same drafts this tab lists, so a non-builder simply has none). `&& !open`:
   // never rip the confirm out from under a caller who already opened it — the failed attempt that
   // just set this denial is itself shown inline, in the still-open confirm's own error banner; the
   // entry point disappears on the *next* visit to this proposal, not mid-flow.

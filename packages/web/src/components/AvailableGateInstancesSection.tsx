@@ -258,10 +258,7 @@ function AvailableGateRow({
         )}
         {publishedCount !== null ? (
           <Notice>
-            {t(
-              `已发布 ${publishedCount} 个 Operation`,
-              `Published ${publishedCount} operation${publishedCount === 1 ? '' : 's'}`,
-            )}
+            {t(`已发布 ${publishedCount} 个 Operation`, `Published ${publishedCount} operation(s)`)}
           </Notice>
         ) : null}
       </td>

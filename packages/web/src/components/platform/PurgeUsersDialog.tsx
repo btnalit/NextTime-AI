@@ -104,7 +104,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
         onOpenChange={(open) => {
           if (!open) setStep('pick');
         }}
-        title={`清理 ${chosen.length} 个待激活用户 Purge ${chosen.length} pending users`}
+        title={t(`清理 ${chosen.length} 个待激活用户`, `Purge ${chosen.length} pending users`)}
         description={t(
           '从未激活且无活跃成员资格的用户会被删除；有密码、登录过、仍有成员资格或被审计引用的会被内核跳过并说明原因。',
           'Never-activated users with no active membership are deleted; the kernel skips (and explains) any with a password, a login, a live membership or an audit reference.',

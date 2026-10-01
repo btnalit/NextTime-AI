@@ -6,7 +6,10 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
+import {
+  OntologyDraftNotFoundError,
+  publishOntologyDomainPack,
+} from '../../substrate/ontology/index.js';
 import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -89,6 +92,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let ownerId: string;
     let aliceId: string;
     let bobId: string;
+    let carolId: string;
+    let daveId: string;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -126,6 +131,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       ownerId = await adminInsertPrincipal('owner', 'owner');
       aliceId = await adminInsertPrincipal('alice', 'builder');
       bobId = await adminInsertPrincipal('bob', 'builder');
+      carolId = await adminInsertPrincipal('carol', 'member');
+      daveId = await adminInsertPrincipal('dave', 'auditor');
 
       // Publish the real ops-assets-v1.yaml domain pack so get_type/list_types have a stable,
       // workspace-visible-to-everyone type catalog to read (deliverable 4: "get_type for every
@@ -202,7 +209,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(/human-channel-only/);
     });
 
-    it("propose_ontology_change creates a draft invisible to another principal's get_type; publish_ontology_version (human) makes it visible", async () => {
+    it("propose_ontology_change creates a draft invisible to another principal's get_type; its proposer's publish_ontology_version (human) makes it visible", async () => {
       const change = {
         objectTypes: [{ name: 'Gadget', description: 'A gadget.', identityKey: ['gadgetId'] }],
         linkTypes: [{ name: 'gadget_rel', domain: 'Gadget', range: 'Gadget', description: 'd' }],
@@ -230,11 +237,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(bobSees).toBeNull();
 
-      // A human (owner) publishes it — publish_ontology_version is channel:'human' only (I16).
-      const ownerCaller = humanCaller(workspaceId, ownerId, 'owner');
+      // Alice herself, in the console (human channel), publishes the draft her Handle proposed —
+      // publish_ontology_version is channel:'human' only (I16) and proposer-only (leftover 100).
+      const aliceHuman = humanCaller(workspaceId, aliceId, 'builder');
       const publishResult = (await dispatchCapability(
         { pool },
-        ownerCaller,
+        aliceHuman,
         'publish_ontology_version',
         { id: proposeResult.id, version: proposeResult.version },
       )) as { id: string; version: number; status: string; publishedAt: string | null };
@@ -246,6 +254,66 @@ describe.runIf(DATABASE_URL !== undefined)(
         typeName: 'Gadget',
       });
       expect(bobSeesNow).not.toBeNull();
+    });
+
+    // STATUS leftover 100 (2026-10-01, maintainer: "builder + 只能发自己的"): a member or auditor is
+    // refused by the role gate before any lookup; any other human — another builder, even the
+    // owner — gets the same not-found as a missing row (they cannot see the draft, so they
+    // cannot have reviewed it). The draft survives all of it and its proposer still publishes.
+    it('publish_ontology_version: member/auditor 403 on minRole; another builder or the owner reads not-found; the proposer still publishes', async () => {
+      const change = {
+        objectTypes: [{ name: 'Flange', description: 'A flange.', identityKey: ['flangeId'] }],
+        linkTypes: [{ name: 'flange_rel', domain: 'Flange', range: 'Flange', description: 'd' }],
+      };
+      const aliceCaller = handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES);
+      const draft = (await dispatchCapability({ pool }, aliceCaller, 'propose_ontology_change', {
+        change,
+      })) as { id: string; version: number };
+      const params = { id: draft.id, version: draft.version };
+
+      for (const [principalId, role] of [
+        [carolId, 'member'],
+        [daveId, 'auditor'],
+      ] as const) {
+        await expect(
+          dispatchCapability(
+            { pool },
+            humanCaller(workspaceId, principalId, role),
+            'publish_ontology_version',
+            params,
+          ),
+        ).rejects.toThrow(/minRole "builder"/);
+      }
+
+      for (const [principalId, role] of [
+        [bobId, 'builder'],
+        [ownerId, 'owner'],
+      ] as const) {
+        await expect(
+          dispatchCapability(
+            { pool },
+            humanCaller(workspaceId, principalId, role),
+            'publish_ontology_version',
+            params,
+          ),
+        ).rejects.toThrow(OntologyDraftNotFoundError);
+      }
+
+      const stillHidden = await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, bobId, ONTOLOGY_HANDLE_CAPABILITIES),
+        'get_type',
+        { typeName: 'Flange' },
+      );
+      expect(stillHidden).toBeNull();
+
+      const published = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, aliceId, 'builder'),
+        'publish_ontology_version',
+        params,
+      )) as { status: string };
+      expect(published.status).toBe('published');
     });
 
     // Closing wave C5b (coverage gap G1 part 2): `list_ontology_versions` end to end through
@@ -308,9 +376,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       ).toBe(false);
 
-      // A human (owner) publishes it — now Bob sees the same row, published.
-      const ownerCaller = humanCaller(workspaceId, ownerId, 'owner');
-      await dispatchCapability({ pool }, ownerCaller, 'publish_ontology_version', {
+      // Alice (human channel) publishes her own draft — now Bob sees the same row, published.
+      const aliceHuman = humanCaller(workspaceId, aliceId, 'builder');
+      await dispatchCapability({ pool }, aliceHuman, 'publish_ontology_version', {
         id: proposeResult.id,
         version: proposeResult.version,
       });

@@ -167,10 +167,28 @@ resolve_dump_step() {
 # so this can never land on the live `nexttime` database), then parses the target database name
 # and table count out of restore.sh's own printed summary line rather than re-deriving either —
 # a single source of truth for "did the restore actually produce tables".
+# A failed run must not leave its throwaway database behind (2026-10-01, closing wave C10: two
+# drills that failed mid-restore each left an empty nexttime_restore_<ts> in pg_database). Only a
+# name matching restore.sh's own default `nexttime_restore_<ts>` — read back from restore.sh's
+# "target db = ..." line — is ever dropped: this script never passes --target-db, so any other
+# name is not this run's. Best effort: the caller still reports the original FAIL.
+drop_failed_target() {
+  [ "$KEEP" -eq 1 ] && return 0
+  failed_db=$(sed -n 's/^restore: target db *= \(nexttime_restore_[0-9A-Z]*\)$/\1/p' "$RESTORE_LOG" | tail -1)
+  [ -n "$failed_db" ] || return 0
+  if docker compose exec -T postgres psql -U nexttime -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS \"$failed_db\";" </dev/null >/dev/null 2>&1; then
+    echo "drill-restore: dropped this failed run's throwaway database $failed_db" >&2
+  else
+    echo "drill-restore: could not drop $failed_db — drop it by hand" >&2
+  fi
+}
+
 restore_step() {
   sh scripts/restore.sh --db "$DB_DUMP" </dev/null >"$RESTORE_LOG" 2>&1
   restore_rc=$?
   if [ "$restore_rc" -ne 0 ]; then
+    drop_failed_target
     fail "restore" "scripts/restore.sh exited $restore_rc: $(tail -30 "$RESTORE_LOG")"
   fi
 
@@ -180,11 +198,13 @@ restore_step() {
   TABLE_COUNT=$(printf '%s\n' "$summary_line" | sed -n 's/.* now has \([0-9][0-9]*\) table(s).*/\1/p')
 
   if [ -z "$TARGET_DB" ] || [ -z "$TABLE_COUNT" ]; then
+    drop_failed_target
     fail "restore" "could not parse target db/table count from restore.sh output: $(tail -30 "$RESTORE_LOG")"
   fi
   pass "restore" "restored into $TARGET_DB from $DB_DUMP"
 
   if [ "$TABLE_COUNT" -le 0 ] 2>/dev/null; then
+    drop_failed_target
     fail "restore-table-count" "$TARGET_DB has $TABLE_COUNT table(s) in schema public — expected > 0 (empty/corrupt restore)"
   fi
   pass "restore-table-count" "$TARGET_DB has $TABLE_COUNT table(s) in schema public"

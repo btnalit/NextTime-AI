@@ -165,7 +165,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 provider.credentialPresent
                   ? undefined
                   : provider.apiKeyEnv
-                    ? `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
+                    ? t(
+                        `${provider.apiKeyEnv} 未配置 — 测试会被拒绝`,
+                        `${provider.apiKeyEnv} not set, the test will be refused`,
+                      )
                     : t(
                         '没有配置任何凭证 — 测试会被拒绝',
                         'no credential configured, the test will be refused',
@@ -209,7 +212,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 )}
                 target={provider.displayName}
                 impact={[
-                  `${provider.models.length} 个模型不再可用 models become unavailable`,
+                  t(
+                    `${provider.models.length} 个模型不再可用`,
+                    `${provider.models.length} model(s) become unavailable`,
+                  ),
                   provider.source === 'file'
                     ? t(
                         '在代理存储里建一条覆盖记录，yaml 不改',
@@ -283,7 +289,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 }
                 target={provider.id}
                 impact={[
-                  `${provider.models.length} 个模型 models`,
+                  t(`${provider.models.length} 个模型`, `${provider.models.length} model(s)`),
                   t('写入平台审计', 'recorded in the platform audit'),
                 ]}
                 confirmLabel={t('删除', 'Delete')}

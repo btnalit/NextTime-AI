@@ -182,11 +182,19 @@ export function PlatformWorkspacesPage({
     }));
     setPanel({ kind: 'closed' });
     const users =
-      result.purgedUsers.length > 0 ? `，随之删除 ${result.purgedUsers.length} 个用户 users` : '';
+      result.purgedUsers.length > 0
+        ? t(
+            `，随之删除 ${result.purgedUsers.length} 个用户`,
+            `; ${result.purgedUsers.length} user(s) deleted`,
+          )
+        : '';
     toast.push({
       tone: 'ok',
-      title: `已清除工作区 Purged ${result.name}`,
-      description: `${result.totalRows} 行 rows · ${result.activeHandles} 个 Handle 已吊销 revoked${users}`,
+      title: t(`已清除工作区 ${result.name}`, `Purged ${result.name}`),
+      description: t(
+        `${result.totalRows} 行 · ${result.activeHandles} 个 Handle 已吊销${users}`,
+        `${result.totalRows} rows · ${result.activeHandles} Handle(s) revoked${users}`,
+      ),
       key: `purge-workspace:${result.workspaceId}`,
     });
   }

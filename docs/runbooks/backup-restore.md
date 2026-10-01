@@ -74,7 +74,8 @@ API key）与 `providers.json` 一并进了 `files-<ts>.tgz`；`tar` 默认保�
 `BACKUP_TIME` 再试；日志走 stdout（`docker compose logs backup`）。
 
 `backups/db/` 与 `backups/files/` 归 backup 服务所有：发版 / 演练前的手工 `pg_dump` 放到别的目录
-（例如 `backups/pre-upgrade/`，不参与轮换，按需手动清理）。2026-09-25 前轮换按文件名匹配
+（`backups/pre-upgrade/`，不参与 backup 服务的轮换；发版应用通过后只保留最新 3 份，维护者 2026-10-01，
+见 `release.md` §3"备份三件事"）。2026-09-25 前轮换按文件名匹配
 `nexttime-*.dump`，手工放进去的 `nexttime-pre-<tag>.dump` 按名字排在所有时间戳之后、被当成"最新"，
 每天新生成的 dump 反而立刻被删；现在轮换与 `drill-*.sh` 找"最新 dump"都只认 `nexttime-<时间戳>.dump`。
 
@@ -84,6 +85,16 @@ docker compose run --rm -e BACKUP_NOW=1 backup
 ls ${NEXTTIME_DATA}/backups/db ${NEXTTIME_DATA}/backups/files
 cat ${NEXTTIME_DATA}/backups/last-success
 ```
+
+## 备份还在跑吗（`scripts/check-backup-freshness.sh`）
+
+每晚失败只记在 `docker compose logs backup` 里，没人看就一直没人知道（收尾波次 C10）。在检出目录跑：
+```
+sh scripts/check-backup-freshness.sh                    # 默认上限 26 小时
+sh scripts/check-backup-freshness.sh --max-age-hours 50 # 例如刚改过 BACKUP_TIME
+```
+三行 `PASS backup-service / last-success / dump-present` 加 `BACKUP-FRESHNESS OK`；任一 `FAIL` 非零退出。
+只读。发版应用时它是第一步（`release.md` §3"备份三件事"）。
 
 ## 恢复演练（`scripts/restore.sh`，在宿主机上跑，不在容器内）
 先 `--dry-run`：只校验 dump 与 tgz，不建库、不解压。
@@ -136,7 +147,15 @@ PASS restore-table-count nexttime_restore_<ts> has <N> table(s) in schema public
 PASS drop-temp-db nexttime_restore_<ts> dropped
 DRILL-RESTORE OK
 ```
-任何一步失败都打印 `FAIL <step> <detail>` 到 stderr 并以非零退出——不会把半失败状态误报成成功。
+任何一步失败都打印 `FAIL <step> <detail>` 到 stderr 并以非零退出——不会把半失败状态误报成成功；
+失败时顺手删掉本次建的 `nexttime_restore_<ts>`（只认这个名字形状，不会碰活库）。
+
+**2026-10-01 演练发现（收尾波次 C10）**：`restore.sh` 自 #188（2026-09-17，postgres 改 `read_only`）
+起一直失败——它用 `docker compose cp` 把 dump 拷进容器，而 Docker 拒绝向只读根文件系统的容器 `cp`
+（`container rootfs is marked read-only`），哪怕目标 `/tmp` 是可写 tmpfs。上一次演练是 09-02，所以没人
+发现；`drill-upgrade.sh` 的回滚也走这条路。已改为经 `exec -T` 流式写进容器 `/tmp`（tmpfs，占一份 dump
+大小的内存直到恢复结束）。备份文件本身一直是好的。改完在主机上用当日 dump 实测：恢复出的库 public
+39 张表与活库一致，关键表行数差异恰好等于 dump 之后清掉的 11 个验收工作区。
 
 指定某一份具体 dump（例如复现某次故障时的状态）：`sh scripts/drill-restore.sh --db
 ${NEXTTIME_DATA}/backups/db/nexttime-<ts>.dump`；想跑完之后手动检查恢复出的库再自己清理，加
