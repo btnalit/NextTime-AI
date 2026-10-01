@@ -77,6 +77,14 @@ Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检
 `scripts/host-checkout.sh`（它会把 detached HEAD 状态覆盖掉，重新 fetch + reset 到
 `origin/main`）即可，无需额外清理。
 
+**备份三件事（收尾波次 C10，2026-10-01 起每次应用都做）**：
+1. 切 tag **之前**先跑 `sh scripts/check-backup-freshness.sh`——验证上次应用以来每晚备份一直在跑
+   （`backup` 服务在、`last-success` 不超过 26 小时、它指向的 dump 还在）。必须先于本次的发版前 dump /
+   `BACKUP_NOW`，否则 `last-success` 总是新的，什么也证明不了。FAIL 先看 `docker compose logs backup`。
+2. 发版前 dump 只放 `${NEXTTIME_DATA}/backups/pre-upgrade/`（绝不进 `backups/db/`，见
+   `backup-restore.md`），应用通过后只保留最新 3 份（维护者 2026-10-01）。
+3. 验收通过后 `docker compose run --rm -e BACKUP_NOW=1 backup`，确认新 dump 留在 `backups/db/` 里没被轮换删掉。
+
 ### 3.1 版本号随镜像走：构建 kernel 前先导出 `KERNEL_VERSION`
 
 控制台概览显示的内核版本（`platform-handlers.ts` 读 `KERNEL_VERSION`）自 B1（`console-completion-plan.md`
