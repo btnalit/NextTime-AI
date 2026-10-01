@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0](https://github.com/btnalit/NextTime-AI/compare/v0.32.0...v0.33.0) (2026-09-27)
+
+
+### Features
+
+* **kernel,web:** review and publish an agent's ontology proposal from the console (closing wave C5 part 2, gap G1) ([#368](https://github.com/btnalit/NextTime-AI/issues/368)) ([b4a8d3c](https://github.com/btnalit/NextTime-AI/commit/b4a8d3c3c8fbaec7a0f4b4a5c5ab310bdc6b2bc5))
+* **web:** align deployed Operations with the gate's announcement; dead reads used or retired; one gatekeeper directory hook (closing wave C6: G3, G4, G5, G7) ([#363](https://github.com/btnalit/NextTime-AI/issues/363)) ([310bc7c](https://github.com/btnalit/NextTime-AI/commit/310bc7c17cdb5752f561cc726514ac7aae2a5cf7))
+
+
+### Bug Fixes
+
+* **build:** vitest 4.1, vite 7.3 — dev-chain advisories closed; the platform pages no longer ride in a preloaded 562 kB chunk (leftovers 91, 49; closing wave C4b) ([#367](https://github.com/btnalit/NextTime-AI/issues/367)) ([cd04681](https://github.com/btnalit/NextTime-AI/commit/cd04681f04c1bbde8e9501ce8f25b2b56e53781a))
+* **scripts:** acceptance cleanup runs once — the end-of-run call disarms the EXIT trap ([#365](https://github.com/btnalit/NextTime-AI/issues/365)) ([4497037](https://github.com/btnalit/NextTime-AI/commit/4497037dc5a4057fb40a4d83a7e81624aef3d31c))
+
 ## [0.32.0](https://github.com/btnalit/NextTime-AI/compare/v0.31.0...v0.32.0) (2026-09-27)
 
 
