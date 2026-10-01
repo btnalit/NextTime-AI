@@ -1,6 +1,6 @@
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,12 +47,12 @@ function createFakePi(): FakePi {
 
 function fakeCtx(
   sessionFile: string | undefined = '/workspace/.pi/sessions/s1.jsonl',
-): ExtensionContext {
+): ExtensionToolContext {
   return {
     hasUI: false,
     ui: { notify: vi.fn() },
     sessionManager: { getSessionFile: () => sessionFile },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 /** Contract fixtures that pass `WorkerResultContractSchema` (packages/shared/src/worker-result.ts)

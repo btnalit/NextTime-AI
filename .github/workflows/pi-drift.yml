@@ -112,12 +112,22 @@ jobs:
           pnpm --filter @nexttime/platform-extension add "@earendil-works/pi-coding-agent@latest"
           pnpm --filter @nexttime/platform-extension add -D "@earendil-works/pi-ai@latest"
 
-      - name: Run pi-SDK-dependent tests against pi@latest
+      # Typecheck as well as vitest (2026-10-01, pi 0.99.2 upgrade): 0.99 changed `execute()`'s
+      # ctx type and broke 34 tsc errors in this package's tests while this job stayed green for
+      # three nights — vitest strips types, so a type-only break is invisible to it. Both run;
+      # either failing fails the step, and the summary says which.
+      - name: Run pi-SDK-dependent typecheck and tests against pi@latest
         id: test
         continue-on-error: true
         run: |
+          set -u
+          tsc_rc=0
+          pnpm --filter @nexttime/platform-extension typecheck || tsc_rc=$?
+          echo "tsc_failed=$([ "$tsc_rc" -ne 0 ] && echo 1 || echo 0)" >>"$GITHUB_OUTPUT"
+          vitest_rc=0
           pnpm --filter @nexttime/platform-extension exec vitest run \
-            --reporter=default --reporter=json --outputFile=/tmp/pi-drift-vitest.json
+            --reporter=default --reporter=json --outputFile=/tmp/pi-drift-vitest.json || vitest_rc=$?
+          [ "$tsc_rc" -eq 0 ] && [ "$vitest_rc" -eq 0 ]
 
       - name: Summarize failures
         if: steps.test.outcome == 'failure'
@@ -133,6 +143,9 @@ jobs:
             # vitest itself crashed before writing the report (e.g. the extension no longer
             # loads under pi@latest at all) — still real drift, just not test-countable.
             FAILED="unknown (test process did not produce a report — see workflow logs)"
+          fi
+          if [ "${{ steps.test.outputs.tsc_failed }}" = "1" ]; then
+            FAILED="$FAILED (+ typecheck errors)"
           fi
           echo "failed_count=$FAILED" >>"$GITHUB_OUTPUT"
           echo "### Result: FAILED ($FAILED test(s) against pi@latest)" >>"$GITHUB_STEP_SUMMARY"

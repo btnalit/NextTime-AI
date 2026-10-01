@@ -65,7 +65,8 @@ kernel → agent-host：
 `agent_start`/`agent_settled` 定义"一个平台 Turn"的先例，本模块照抄同一约定）。升级到 pi 0.87.1
 时已用真实 `pi --mode rpc` 进程复核（`docs/runbooks/pi-upgrade.md` §2.1）：下表每一行不变；0.87.1
 在首轮开头多一对 `role: system` 的 `message_start`/`message_end`（系统提示进 transcript），按
-下表 `message_end` 行"`role` 非 assistant 一律丢弃"处理。
+下表 `message_end` 行"`role` 非 assistant 一律丢弃"处理。升级到 0.99.2 时同样复核（`pi-upgrade.md`
+§2.4）：事件序列与翻译结果逐条不变，只是 `prompt` 的成功响应多了 `data.disposition`，本模块不读。
 
 | pi RPC 事件 | 平台事件 | 备注 |
 |---|---|---|

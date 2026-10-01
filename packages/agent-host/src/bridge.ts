@@ -37,6 +37,13 @@ import type { AgentRuntimeEventWire } from '@nexttime/shared';
  * the RPC stream is still `{message, toolResults}`: 0.87.0's expanded `TurnEndEvent` is the
  * *extension* hook payload, not this stream, and this module ignores `turn_end` regardless.
  *
+ * Re-verified the same way for the pi 0.99.2 upgrade (docs/runbooks/pi-upgrade.md §2.4): real
+ * `pi --mode rpc` runs on 0.87.1 and 0.99.2 (no extension, entry mode with a projected gate-tool
+ * call and a `switch_session`, worker mode) produced identical event-type sequences and identical
+ * `translatePiEvent` output; `dist/modes/rpc/jsonl.js` is byte-identical. The one difference on
+ * the stream is that a successful `prompt` response now carries `data: {disposition}`
+ * (`"started"`/`"queued"`/`"handled"`), which this module never reads.
+ *
  * Scope decisions (see PR body "假设与偏离"):
  *   - Only `assistantMessageEvent.type === 'text_delta'` from `message_update` becomes a
  *     `textDelta` — every other streaming sub-type (`thinking_*`, `toolcall_*`, `text_start`/
