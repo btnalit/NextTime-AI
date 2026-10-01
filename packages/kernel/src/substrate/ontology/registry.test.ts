@@ -294,6 +294,43 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       ).rejects.toThrow(OntologyDraftNotFoundError);
     });
 
+    // STATUS leftover 100: only the proposer may publish. Bob never saw Alice's draft (I16's read
+    // half), so his publish must not land — and must read exactly like a missing row.
+    it('publishOntologyDraft by another principal throws OntologyDraftNotFoundError and leaves the draft untouched', async () => {
+      const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        proposeOntologyChange(client, workspaceId, {
+          change: MINIMAL_DEFINITION,
+          proposedBy: alice,
+        }),
+      );
+
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+          publishOntologyDraft(client, workspaceId, {
+            id: draft.id,
+            version: draft.version,
+            publishedBy: bob,
+          }),
+        ),
+      ).rejects.toThrow(OntologyDraftNotFoundError);
+
+      const stillPrivate = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        listOntologyVersions(client, workspaceId, bob),
+      );
+      expect(
+        stillPrivate.items.some((item) => item.id === draft.id && item.version === draft.version),
+      ).toBe(false);
+
+      const published = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyDraft(client, workspaceId, {
+          id: draft.id,
+          version: draft.version,
+          publishedBy: alice,
+        }),
+      );
+      expect(published.status).toBe('published');
+    });
+
     it('proposeOntologyChange rejects a structurally invalid change', async () => {
       await expect(
         withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
