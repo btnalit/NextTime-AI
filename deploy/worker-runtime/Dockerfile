@@ -14,9 +14,11 @@
 # the published npm package's own `dist/` + `docs/` (the same modules, compiled: `dist/cli/args.js`,
 # `dist/core/resource-loader.js`, `dist/config.js`, `dist/core/extensions/loader.js`,
 # `dist/core/tools/index.js`, `dist/core/sdk.js`) plus a real `pi --mode rpc -e <extension>` run
-# against deploy/fake-llm (docs/runbooks/pi-upgrade.md §2). Every bullet below still holds on
-# 0.87.1; the only CLI change is that `--mode` now rejects a missing/invalid value instead of
-# silently ignoring it (`rpc` is valid):
+# against deploy/fake-llm (docs/runbooks/pi-upgrade.md §2), and again the same way for the 0.99.2
+# upgrade (§2.4). Every bullet below still holds on 0.99.2. 0.87.1's only CLI change was that
+# `--mode` rejects a missing/invalid value instead of silently ignoring it (`rpc` is valid); 0.99's
+# are a new `pi mcp` subcommand and `-e builtin:<name>` / `-ne` now also covering pi's new built-in
+# extensions (codemode, tool-search, mcp) — none of which this image relies on:
 #   - packages/coding-agent/docs/containerization.md "Plain Docker" recipe is the base for the
 #     runtime stage below: `node:24-bookworm-slim`, apt `bash ca-certificates git ripgrep`,
 #     `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`. This Dockerfile adds
@@ -47,7 +49,9 @@
 #     `node_modules`, which `pnpm deploy --prod` (build stage) provides.
 #   - packages/coding-agent/src/core/tools/index.ts: built-in tools are bash/edit/find/grep/ls/
 #     powershell/read/write; pi's own default *active* set is only `read`/`bash`/`edit`/`write`
-#     (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4 and 0.87.1). Since 2026-09-27
+#     (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4 and 0.87.1; 0.99.2 moved it to
+#     `core/settings-manager.js` `DEFAULT_TOOL_NAMES`, same four). 0.99's built-in `codemode` and
+#     `tool_search` tools register with `defaultActive: false`, so they stay off. Since 2026-09-27
 #     (STATUS leftover 95) entrypoint.sh writes `defaultTools` = read/bash/edit/write/grep/find/ls
 #     into pi's global settings, so every built-in this image can run is active (design doc
 #     §7.2/§7.3/§11 "内置工具全开"); `powershell` stays off (no pwsh here). Never `--tools`: it is
@@ -104,8 +108,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
-# agent@<pi.version>", currently 0.87.1). --ignore-scripts matches pi's own containerization.md
-# recipe (header above; unchanged in 0.87.1).
+# agent@<pi.version>", currently 0.99.2). --ignore-scripts matches pi's own containerization.md
+# recipe (header above; unchanged in 0.87.1 and 0.99.2 — 0.99's new pi-mcp/pi-codemode deps have
+# no install scripts either).
 #
 # Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file,
 # read here rather than hardcoded — bumping pi means editing exactly that one file for the image.
@@ -152,8 +157,8 @@ WORKDIR /workspace
 USER nexttime
 ENV NODE_ENV=production
 ENV HOME=/workspace
-# pi (0.84.4; unchanged in 0.87.1, whose `dist/main.js` still skips the RPC-mode catalog refresh
-# under it) performs "startup network operations" of its own — a release check
+# pi (0.84.4; unchanged in 0.87.1 and 0.99.2, whose `dist/main.js` still skips the RPC-mode catalog
+# refresh under it) performs "startup network operations" of its own — a release check
 # (dist/utils/version-check.js → https://pi.dev/api/latest-version) and a remote model-catalog
 # refresh (DEFAULT_CATALOG_BASE_URL = https://pi.dev, written to <agentDir>/models-store.json) —
 # observed on the host as unexplained `pi.dev` entries in Turns' activities.metadata.egress.

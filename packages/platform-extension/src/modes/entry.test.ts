@@ -1,6 +1,6 @@
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,8 +78,8 @@ function createFakePi(): FakePi {
   return { api, tools, handlers, appendEntryCalls, active };
 }
 
-function fakeCtx(hasUI = false): ExtensionContext {
-  return { hasUI, ui: { notify: vi.fn() } } as unknown as ExtensionContext;
+function fakeCtx(hasUI = false): ExtensionToolContext {
+  return { hasUI, ui: { notify: vi.fn() } } as unknown as ExtensionToolContext;
 }
 
 describe('registerEntryMode', () => {

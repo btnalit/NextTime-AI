@@ -11,8 +11,8 @@ modes/worker}.ts`；`deploy/worker-runtime/{Dockerfile,entrypoint.sh}`；
 
 ## 1. 现状：pi 是怎么被锁住的
 
-`@earendil-works/pi-coding-agent`（以及配套的 `@earendil-works/pi-ai`）当前锁定 **0.87.1**（2026-09-26
-从 0.84.4 升上来，逐行核对记录见 2.1），精确版本号（不是 `^0.87.1`），原因见
+`@earendil-works/pi-coding-agent`（以及配套的 `@earendil-works/pi-ai`）当前锁定 **0.99.2**（2026-10-01
+从 0.87.1 升上来，逐行核对记录见 2.4；上一次 0.84.4 → 0.87.1 见 2.1），精确版本号（不是 `^0.99.2`），原因见
 `docs/development-tasks.md` §0.3。这不是随意的保守——pi 没有
 稳定的公开 ABI 承诺，本仓库依赖它的 CLI flag 名字、RPC 事件词表、扩展 hook 名字、`models.json`
 schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，其中一部分是读 pi 自己的源码验证出来
@@ -20,7 +20,7 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 
 "冻结"和"锁定"是两回事：锁定一个精确版本没问题，冻结是指*没有人知道升级要改哪些地方、升级坏了怎么
 知道、升级失败了怎么回退*。S3.10 修的是后者，不改前者——那个 PR 不升级 pi，只交付契约、检测、
-自动化；第一次按本手册走完的升级是 0.84.4 → 0.87.1。
+自动化；第一次按本手册走完的升级是 0.84.4 → 0.87.1，第二次是 0.87.1 → 0.99.2。
 
 ## 2. 耦合面清单
 
@@ -36,14 +36,14 @@ schema、Agent Skills 校验规则等一整套*未版本化的行为契约*，�
 | `packages/platform-extension/src/tool-schema.ts` | 假设 pi 的 `ToolDefinition.parameters`（typebox `TSchema`）在运行时只是被当 JSON-Schema 形状的普通对象读（`.type`/`.properties`/`.required`），从不针对 typebox 的 `Kind` symbol 做校验；0.86.0 起注册时额外要求 `parameters` 是非 null、非数组的对象（`core/extensions/loader.js` `registerTool`，否则抛错）——`toToolParameters`/`gateToolParameters` 恒产出 object schema | pi 若开始严格校验 typebox schema，每一个用 `zod-to-json-schema` 转换出来、cast 成 `TSchema` 的工具（`report_result` 等）会在注册时报错 | 间接由 `entry.sdk.test.ts`/`worker.sdk.test.ts` 覆盖（真实工具注册+调用会触发真实校验路径） |
 | `packages/platform-extension/src/{entry,worker}.sdk.test.ts` | 直接 import pi SDK 面：`createAgentSession`、`DefaultResourceLoader`、`ModelRuntime`（含 `.create`/`.registerProvider`）、`SessionManager`、`SettingsManager`、`additionalExtensionPaths`/`noExtensions` 选项、`session.subscribe`/`.prompt`/`.messages`/`.agent.state.tools`/`.dispose`、`AgentSessionEvent`（`tool_execution_end` 的 `isError`/`result`/`toolName`）；`@earendil-works/pi-ai` 的 `InMemoryCredentialStore`、`Context` 类型、`pi-ai/compat` 的 `registerFauxProvider`/`fauxAssistantMessage`/`fauxToolCall` | 这两个文件本身**就是**"pi 有没有变"的探针——任何一个具名导出被改名/删除，这两个测试直接编译或运行失败，不会静默通过 | 就是它们自己（`pnpm --filter @nexttime/platform-extension test`，也是 `pi-drift.yml` 每晚对 `@latest` 跑的那两个文件） |
 | `worker.sdk.test.ts` 里记录的一个真实坑 | `createAgentSession()` 本身不触发 pi 的 `session_start` 事件——那是 `AgentSession.bindExtensions(bindings)` 内部才 `emit` 的；worker 模式的自驱动机制（`pi.sendUserMessage` 在 `session_start` 里调用）必须显式 `await session.bindExtensions({mode:'rpc'})` 才会真的跑起来（`docs/development-tasks.md` 行~691 已记录） | pi 若改变 `bindExtensions` 的签名或触发时机，worker 模式在真实 RPC 进程里可能仍然工作（因为真实 CLI 会调 `bindExtensions`），但这个测试可能测不出问题——升级时需要手工确认这条注释是否还成立 | `worker.sdk.test.ts`（部分——见左侧说明，测试本身依赖这个行为，不是独立校验它） |
-| `deploy/worker-runtime/Dockerfile` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@<pi.version>`；CLI flags `--mode rpc`/`--session-dir <dir>`/`-e <path>`/`--system-prompt <path-or-text>`（**没有** `--system-prompt-file`，靠 `resolvePromptInput` 在路径存在时按文件内容读取）；`getAgentDir()`/`PI_CODING_AGENT_DIR`/`getModelsPath()` = `<agentDir>/models.json`；内置工具集 bash/edit/find/grep/ls/powershell/read/write，没传任何 `--tools`/`--no-tools`/`--no-builtin-tools`/`--exclude-tools` 时 pi 的默认*激活*集是 `read`/`bash`/`edit`/`write`（`core/sdk.js` `defaultActiveToolNames`，0.84.4 与 0.87.1 相同；find/grep/ls 经 bash 使用——本表此前写"全开"不准确，0.87.1 核对时更正） | pi 改任一 flag 名、去掉 `--system-prompt` 的"路径存在则读文件"回退、改 agent-dir 解析、改默认工具集——容器启动失败或工具集意外变化 | **人工**：`docs/runbooks/host-worker-runtime.md`（`docker run --rm nexttime-ai-worker-runtime pi --version`、容器内工具可用性）；无自动化测试（需要真实 Docker，仅主机验收覆盖） |
+| `deploy/worker-runtime/Dockerfile` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@<pi.version>`；CLI flags `--mode rpc`/`--session-dir <dir>`/`-e <path>`/`--system-prompt <path-or-text>`（**没有** `--system-prompt-file`，靠 `resolvePromptInput` 在路径存在时按文件内容读取）；`getAgentDir()`/`PI_CODING_AGENT_DIR`/`getModelsPath()` = `<agentDir>/models.json`；内置工具集 bash/edit/find/grep/ls/powershell/read/write，没传任何 `--tools`/`--no-tools`/`--no-builtin-tools`/`--exclude-tools` 时 pi 的默认*激活*集是 `read`/`bash`/`edit`/`write`（`core/sdk.js` `defaultActiveToolNames`，0.84.4 与 0.87.1 相同；0.99.2 移到 `core/settings-manager.js` `DEFAULT_TOOL_NAMES`，值不变；find/grep/ls 经 bash 使用——本表此前写"全开"不准确，0.87.1 核对时更正）；0.99 起 CLI 默认加载内置扩展 `codemode`/`tool-search`/`mcp`，它们注册的 `codemode`/`tool_search` 工具 `defaultActive: false`，不写进 `defaultTools` 就不激活（见 2.4） | pi 改任一 flag 名、去掉 `--system-prompt` 的"路径存在则读文件"回退、改 agent-dir 解析、改默认工具集——容器启动失败或工具集意外变化 | **人工**：`docs/runbooks/host-worker-runtime.md`（`docker run --rm nexttime-ai-worker-runtime pi --version`、容器内工具可用性）；无自动化测试（需要真实 Docker，仅主机验收覆盖） |
 | `deploy/worker-runtime/entrypoint.sh` | 同上 CLI flags；额外假设 pi 在 RPC 模式下把事件写到 stdout、别的诊断信息不混进同一个流（否则 `container-io.ts` 的 JSONL 逐行解析会读到非 JSON 行） | flag 改名同上；stdout 混入非 JSONL 内容会让 `agent-host` 的行解析静默丢弃（`JSON.parse` 失败即 `return`，不报错） | **人工**：同上；`scripts/*.sh` 的 shell 语法/权限由 `pnpm ci:guards` 校验，但不校验 pi 自身行为 |
-| `packages/agent-host/src/bridge.ts` | 对照 pi 0.84.4 源码验证、0.87.1 用真实 RPC 进程复核过的 RPC 事件词表：`message_update`（`assistantMessageEvent.type==='text_delta'`）、`tool_execution_start`/`tool_execution_end`（`toolCallId`/`toolName`/`args`/`result`）、`message_end`（`message.role==='assistant'`，`content` 数组的 `text` 段）、`agent_settled`；RPC 命令 `{"type":"prompt","id":<turnId>,"message":...}` 及响应 `{"type":"response","command":"prompt","id":...,"success":bool,"error"?}`；`{"type":"abort"}` | pi 改事件名/字段——`translatePiEvent` 把无法识别的类型**静默**降级为 `{kind:'none'}`（不抛错），后果是对话在平台侧看起来"卡住不动"而不是报错，属于最隐蔽的一类耦合失效 | `bridge.test.ts`（针对字面量 JSON fixture 的单元测试，fixture 是手写的、按 pi 0.84.4 文档/源码构造的，**不是**跑真实 pi 进程产出的——升级时这些 fixture 本身也需要对照新版本复核，见下节步骤 4；0.87.1 已对照真实 `pi --mode rpc` 捕获复核，见 2.1） |
+| `packages/agent-host/src/bridge.ts` | 对照 pi 0.84.4 源码验证、0.87.1 用真实 RPC 进程复核过的 RPC 事件词表：`message_update`（`assistantMessageEvent.type==='text_delta'`）、`tool_execution_start`/`tool_execution_end`（`toolCallId`/`toolName`/`args`/`result`）、`message_end`（`message.role==='assistant'`，`content` 数组的 `text` 段）、`agent_settled`；RPC 命令 `{"type":"prompt","id":<turnId>,"message":...}` 及响应 `{"type":"response","command":"prompt","id":...,"success":bool,"error"?}`；`{"type":"abort"}` | pi 改事件名/字段——`translatePiEvent` 把无法识别的类型**静默**降级为 `{kind:'none'}`（不抛错），后果是对话在平台侧看起来"卡住不动"而不是报错，属于最隐蔽的一类耦合失效 | `bridge.test.ts`（针对字面量 JSON fixture 的单元测试，fixture 是手写的、按 pi 0.84.4 文档/源码构造的，**不是**跑真实 pi 进程产出的——升级时这些 fixture 本身也需要对照新版本复核，见下节步骤 4；0.87.1 已对照真实 `pi --mode rpc` 捕获复核，见 2.1；0.99.2 同样复核，见 2.4） |
 | `packages/agent-host/src/host.ts` | 同一份 prompt/response 关联契约（`record.type==='response' && record.command==='prompt' && record.id===turn.turnId`）；`extension_error` 事件形状（`extensionPath`/`event`/`error`） | 同上，关联失败会导致 `turnAccepted`/`turnRejected` 永远等不到，Turn 挂起直到超时 | `host.test.ts`（同样基于手写 fixture，非真实 pi 进程） |
 | `packages/agent-host/src/container-io.ts` | 假设 pi 的 RPC stdout 是严格 JSONL：LF 分隔、每行一个 JSON 对象、不会因为遇到 U+2028/U+2029 而拆行（`docs/rpc.md` framing 契约，本模块特意不用 `node:readline` 就是因为它不满足这条） | pi 若改变 framing（比如 stdout 混入非 JSONL 诊断行），手写的 buffer+`indexOf('\n')` 分帧逻辑可能拆出坏行，静默被 `JSON.parse` 失败吞掉 | 无专门针对 pi framing 变化的测试；仅有通用的分行单元覆盖 |
 | `packages/worker-supervisor/src/{spawn-spec,task-spawn-spec}.ts` | 入口/Worker 容器 env 契约：`KERNEL_URL`/`KERNEL_LLM_URL`/`CAPABILITY_HANDLE`/`WORKSPACE_ID`/`NEXTTIME_MODE`/`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`（+小写镜像）；常驻模式额外要 `PI_CODING_AGENT_DIR`/`HOME`；`models.json` 只读挂载到 pi 默认 agent dir 下 | pi 改 env var 名字（比如 `PI_CODING_AGENT_DIR`）或 `getAgentDir()`/`getModelsPath()` 解析逻辑，会让容器读不到 `models.json`，模型路由整体失效 | `spawn-spec.test.ts`/`task-spawn-spec.test.ts`（纯 builder 单元测试，断言 env 数组内容，不跑真实 pi 进程） |
-| `packages/llm-proxy/src/gen-models-json.ts` | 生成 pi 的 `models.json`，对照 pi 0.84.4（0.87.1 复核未变）的 `ModelsConfigSchema`/`ProviderConfigSchema`：`{providers:{<id>:{baseUrl,apiKey,api,models:[{id,cost?}]}}}`；`api` 取值 `openai-completions`/`openai-responses`/`anthropic-messages`；`apiKey` 的 `$VAR`/`${VAR}` 模板由 pi 自己的 `resolveConfigValue` 在容器内解析 | pi 改这个 schema（新增必填字段、改 `api` 枚举值、去掉 `$VAR` 模板支持）会让每个 agent 容器拿到内核，但模型请求全部失败 | `gen-models-json.test.ts`（对照固定 fixture 的 schema 形状单元测试，不跑真实 pi 解析 `models.json`） |
-| `packages/shared/src/skill.ts` | Skill 名称/描述校验规则镜像自 pi 0.84.4（0.87.1 复核未变）`core/skills.ts` 的 `validateName`/`validateDescription`（1–64 位小写字母数字+单连字符；描述 ≤1024 字符） | pi 改校验规则，本仓库这边校验通过的 Skill 挂载到真实 pi 容器时可能被拒绝（或反过来，pi 放宽了但这边仍然拒绝合法输入） | `skill.test.ts`（镜像规则的单元测试，不对照 pi 自己的校验器跑） |
+| `packages/llm-proxy/src/gen-models-json.ts` | 生成 pi 的 `models.json`，对照 pi 0.84.4（0.87.1、0.99.2 复核未变）的 `ModelsConfigSchema`/`ProviderConfigSchema`：`{providers:{<id>:{baseUrl,apiKey,api,models:[{id,cost?}]}}}`；`api` 取值 `openai-completions`/`openai-responses`/`anthropic-messages`；`apiKey` 的 `$VAR`/`${VAR}` 模板由 pi 自己的 `resolveConfigValue` 在容器内解析 | pi 改这个 schema（新增必填字段、改 `api` 枚举值、去掉 `$VAR` 模板支持）会让每个 agent 容器拿到内核，但模型请求全部失败 | `gen-models-json.test.ts`（对照固定 fixture 的 schema 形状单元测试，不跑真实 pi 解析 `models.json`） |
+| `packages/shared/src/skill.ts` | Skill 名称/描述校验规则镜像自 pi 0.84.4（0.87.1、0.99.2 复核未变）`core/skills.ts` 的 `validateName`/`validateDescription`（1–64 位小写字母数字+单连字符；描述 ≤1024 字符） | pi 改校验规则，本仓库这边校验通过的 Skill 挂载到真实 pi 容器时可能被拒绝（或反过来，pi 放宽了但这边仍然拒绝合法输入） | `skill.test.ts`（镜像规则的单元测试，不对照 pi 自己的校验器跑） |
 | `deploy/accept/driver.mjs` `transcript-stats`（0.87.1 核对时补入本表） | 直接读 Worker 的 pi 会话 JSONL：`type:"message"` 条目，`message.role` 为 `assistant`（`content[]` 里的 `toolCall` 块、`model`）或 `toolResult`（`toolCallId`/`isError`） | pi 改会话条目格式，验收脚本的 `TOOL_*`/`MODEL` 统计会静默归零（验收误判，不影响运行时） | 无自动测试；升级时拿同一轮真实运行的两版会话文件各跑一次对比 |
 | 文档中写明当前 pi 版本的位置 | `docs/development-tasks.md` §0.3 与风险表、`docs/runbooks/host-agent-host.md`、`docs/runbooks/host-worker-runtime.md`、`docs/graph-ai-middle-platform-design.md`、本手册第 1 节；`deploy/worker-runtime/{Dockerfile,entrypoint.sh}` 与 `bridge.ts` 的头部核对注释（`README.md` 已不写具体版本；`docs/design-review-2026-09-01.md`、`docs/reference-projects-and-oss-landscape.md`、各任务"实现说明"里的 0.84.4 是历史记录，不改） | 纯文档漂移，不影响运行时，但升级后不改会误导下一个读者 | 无自动校验；升级步骤里作为一步手工 `grep` |
 
@@ -97,7 +97,8 @@ Worker 都是 `/workspace/.pi/agent`），日志行 `nexttime-selfcheck check=pi
 | 无允许清单时扩展工具全部激活 | `dist/core/agent-session.js:176-177`（`includeAllExtensionTools: true`） |
 
 `powershell` 不开：镜像里没有 pwsh，开了只会多一个用不了的工具。升级 pi 时核对上表各行仍成立
-（尤其 `defaultTools` 的键名与"`--tools` 过滤扩展工具"）。主机核对：入口容器日志有
+（尤其 `defaultTools` 的键名与"`--tools` 过滤扩展工具"；上表行号是 0.87.1 的，0.99.2 的复核与新位置见
+2.4）。主机核对：入口容器日志有
 `check=pi_default_tools result=ok`；真跑一轮后，会话 JSONL 的 system 消息 `toolsAdded` 同时含
 这 7 个内置工具与平台扩展工具（`find_operations`、`request_action` 等）。
 
@@ -167,7 +168,69 @@ nexttime-entry check=tool_projection result=kept_previous trigger=turn turn_id=<
 **升级 pi 时核对**：上表五行逐条仍成立（尤其 `before_agent_start` 的"实时装载优先"判定、`registerTool`
 在 bind 后可用且新名字自动激活、`setActiveTools` 整体替换语义）；`entry.sdk.test.ts` 的
 "per-turn projection" 用例用真实 SDK 从每个请求的 transcript 回放出模型实际看到的工具，是这几条
-的自动探针（`pi-drift.yml` 每晚也跑它）。
+的自动探针（`pi-drift.yml` 每晚也跑它）。上表行号是 0.87.1 的；0.99.2 逐条复核与新位置见 2.4。
+
+### 2.4 0.87.1 → 0.99.2 核对结果（2026-10-01）
+
+npm 上 0.87.1 之后直接是 0.99.0 / 0.99.1 / 0.99.2（没有 0.88–0.98），变更以 0.99.2 包自带的
+`CHANGELOG.md` 为准。核对方法：把两版 `pi-coding-agent`/`pi-ai`/`pi-agent-core`（0.99.2 另有新依赖
+`pi-mcp`/`pi-codemode`）装进仓库外的临时目录，逐文件 diff `dist/*.js`/`*.d.ts`/`docs/`，跑两版
+`pi --help`、`pi --version`；按 Dockerfile 的方式（`npm install --ignore-scripts`）装两版 CLI，用
+`deploy/fake-llm` 做上游、`packages/platform-extension/src/test-support/fake-kernel.ts` 做内核，按
+entrypoint.sh 的 flag 与环境（`--mode rpc --session-dir -e --system-prompt <文件>`、`PI_OFFLINE=1`、
+`PI_CODING_AGENT_DIR`、`settings.json` 写七个 `defaultTools`、与 `gen-models-json.ts` 同形的
+`models.json`）真实启动 `pi --mode rpc` 三种运行：不带扩展；带真实平台扩展 entry 模式（普通一轮、
+调用一次逐轮投射出的门工具 `accept_s2_api_stock_get`、`switch_session` 后再一轮、`abort`）；worker
+模式（自驱动一轮后退出）。stdout 喂给 `translatePiEvent` 对比，会话文件喂给 `driver.mjs
+transcript-stats` 对比。注意：这些真实进程跑在 Windows 开发机的 node 22.19 上，不是镜像里的
+Linux + node 24；镜像内行为仍需主机验收。结论取值同 2.1，另加 **测试已适配**（只改测试代码）。
+
+| 行 | 结论 | 证据 |
+|---|---|---|
+| `platform-extension/package.json` | 已适配 | 两个字段改为 `0.99.2`，`pnpm-lock.yaml` 随 `pnpm install` 更新；`check-pi-version-consistency.sh` 通过。新依赖 `pi-mcp`/`pi-codemode`（含 `quickjs-wasi` 的 wasm）在 `npm install --ignore-scripts` 下没有 install script |
+| `index.ts` 默认导出 | 未变 | `core/extensions/loader.js` 的加载与默认导出约定未改（diff 只多了 `registerMcpServer`/`registerVirtualModel`/`getSettings` 与 `registerCommand` 参数校验）；SDK 测试与真实 CLI `-e` 均加载成功 |
+| `modes/{entry,worker}.ts` | 未变；测试已适配 | 用到的事件名仍在 `ExtensionEvent`；工具 `execute()` 的 `ctx` 参数类型改为 `ExtensionContext` 的子类型 `ExtensionToolContext`（多 `tools`/`executeTool()`，`core/extensions/types.d.ts:269,492`）——生产代码不受影响，但 `modes/{entry,worker,interactive}.test.ts` 的 `fakeCtx()` 声明为 `ExtensionContext` 再传给 `execute()`，`tsc` 报 34 个 TS2345；本次只把三个桩的类型标注改成 `ExtensionToolContext`。`pi-agent-core` `agent-loop.js:579` 起把 `execute()` 返回值上的顶层 `isError: true` 也当失败——本仓库失败一律 throw、从不在返回值上设 `isError`，不受影响；`terminate`、`context` 消息不落盘（真实运行会话文件无 `nexttime-*-context`）均未变 |
+| `tool-schema.ts` | 未变 | 注册时 object 形状 `parameters` 校验未变（`loader.js:233-235`）；新增的 `exposure`（默认 `direct`）、`defaultActive`、`outputSchema` 均可选，本仓库不设 |
+| `{entry,worker,interactive}.sdk.test.ts` | 未变 | 具名导出仍在；`pnpm --filter @nexttime/platform-extension test` 117/117（与 `pi-drift.yml` 09-29/30、10-01 对 `@latest` 的结果一致）。**此前 `pi-drift.yml` 只跑 vitest、不跑 `tsc`**，上一行的类型破坏它连续三晚都没看见——本次升级 PR 已给它补上 `typecheck`（§6）；升级本身仍以本地 `pnpm -r typecheck` 为准 |
+| `bindExtensions` 的坑 | 未变 | `modes/rpc/rpc-mode.js:230` 仍调 `bindExtensions`，`core/agent-session.js:2536` 起仍在内部 `emit(session_start)`；真实 CLI worker 模式两版都自驱动一轮、`report_task_result` 后 `exit 0` |
+| `Dockerfile` | 未变；需主机验收 | `pi --help` 两版 diff 只有新增的 `pi mcp` 子命令与 `-e`/`-ne` 的说明（`-e` 可加载 `builtin:<name>`；`-ne` 也关内置扩展）；`--mode`/`--session-dir`/`-e`/`--system-prompt` 不变（`dist/cli/args.js`）；`resolvePromptInput` 逐字相同（真实运行 system 消息里有提示文件内容）；`config.js` 的 agent-dir / `PI_CODING_AGENT_DIR` / `models.json` 解析未变（diff 只加了 codemode 的 QuickJS/worker 路径）；`docs/containerization.md` 逐字相同；`engines.node` 仍 `>=22.19.0`；`PI_OFFLINE` 仍关掉版本检查（`utils/version-check.js:37`）与 RPC 模式目录刷新（`main.js:758`）；默认激活四件套搬到 `core/settings-manager.js:35` `DEFAULT_TOOL_NAMES`，值不变 |
+| `entrypoint.sh` | 未变；需主机验收 | flag 同上；真实运行两版 stdout 都是 0 行非 JSON，扩展日志都在 stderr；`defaultTools` 纯名字列表仍整体替换默认集（`settings-manager.js:55` `resolveDefaultTools`；0.99 新增的 `+name`/`-name` 修饰语法本仓库不用）；真实运行首条 system 消息 `toolsAdded` 两版逐项相同：7 个内置 + 17 个静态能力工具 + 投射出的门工具，没有 `codemode`/`tool_search` |
+| `bridge.ts` | 未变 | 真实 RPC 流对比：三种运行的事件类型序列逐条相同，`translatePiEvent` 输出逐条相同，`tool_execution_start`/`_end` 字段集合不变。唯一差异是 prompt 成功响应多了 `data: {disposition: "started"|"queued"|"handled"}`（`rpc-mode.js:298` 起的 `case "prompt"`，0.99.0 "per-input disposition"）——`bridge.ts` 不读响应 |
+| `host.ts` | 未变 | 关联条件（`type`/`command`/`id`/`success`）不变，多出的 `data` 被忽略，三种响应仍回显 `id`；`switch_session`/`abort` 响应与 `extension_error` 形状不变（`rpc-mode.js` diff 只动了 prompt/steer/follow_up）。prompt 失败：0.87.1 先 `preflightResult(false)` 再由 `catch` 回错误响应，0.99.2 直接 throw 进同一个 `catch`，对外仍是 `success:false` + `error`。`disposition: "handled"`（扩展命令或 `input` 处理器吞掉了 prompt，不会有 `agent_settled`）本仓库遇不到：下发的 prompt 以 `<!--nexttime:turn_id=…-->` 开头而不是 `/`，入口扩展的 `input` 处理器只做 `transform` |
+| `container-io.ts` | 未变 | `dist/modes/rpc/jsonl.js` 逐字相同 |
+| `worker-supervisor` spawn spec | 未变 | `PI_CODING_AGENT_DIR`、`getAgentDir`/`getModelsPath`、`<agentDir>/skills` 不变；真实运行从 `PI_CODING_AGENT_DIR` 下的 `models.json` 选中了模型 |
+| `gen-models-json.ts` | 未变 | `core/model-config.js`（`ModelsConfigSchema`）与 `resolve-config-value.js` 逐字相同；`provider-composer.js` 把 `models.json` 里的定义限定为 chat 模型（不写 `type` 即 chat，本仓库不写）；真实运行不传 `--model` 时选中 `platform/fake-echo`，`$CAPABILITY_HANDLE` 模板解析成功（否则 prompt 会因无 key 被拒） |
+| `skill.ts` | 未变 | `core/skills.js` 逐字相同 |
+| `driver.mjs` `transcript-stats` | 未变 | 同一轮真实运行（entry、worker）的两版会话文件输出逐字相同；条目序列相同，0.99.2 的 assistant 消息多一个 `thinkingLevel` 字段（不读）|
+| 2.2 内置工具全开 | 未变 | 见 `entrypoint.sh` 行；`--tools` 仍是覆盖扩展工具的允许清单（`agent-session.js:2753-2761`）；无允许清单时扩展工具注册即激活，条件变为"exposure 是 `direct`/`model-only` 且 `defaultActive !== false`"（`:2814-2818`、`:2835`）——平台扩展工具两个字段都不设，默认 `direct`，行为不变 |
+| 2.3 逐轮工具投射 | 未变 | `before_agent_start`（`types.d.ts:1164`；`runner.js:1115` `emitBeforeAgentStart`）；"处理器没改 `selectedTools` 就用实时装载"判定逐字相同（`agent-session.js:1528-1536`），同一运行后续请求仍读实时装载（`:516-528`）；`registerTool` 在 bind 后可调、新名字自动激活（`loader.js:231-241` → 无参 `_refreshToolRegistry()`，`:2820-2826`）；`setActiveTools` 仍整体替换、未知名字忽略，另外忽略 `hidden` 工具（`:1078` → `_applyToolLoadout`）；transcript 的 `toolsAdded`/`toolsRemoved` 不变（pi-ai `dist/types.d.ts:350`）；`Tool <name> not found`（pi-agent-core `agent-loop.js:486`）。内置 MCP 扩展也挂了 `before_agent_start`（`extensions/mcp/index.js:893`），只改 `systemPromptOptions.sections`、不改 `selectedTools`，不影响上面的判定。`entry.sdk.test.ts` per-turn projection 通过；真实 CLI 里门工具在 `session_start` 投射并被调用一次 |
+| 文档 | 已适配 | 见 2 节表最后一行 |
+
+0.88–0.99 里本仓库不依赖、但值得知道的变化：
+
+- **内置扩展**：0.99.0 起 CLI 默认加载 `llama.cpp`（0.87.1 已有）、`codemode`、`tool-search`、`mcp`
+  四个内置扩展（`dist/extensions/index.js`）。`codemode`/`tool_search` 两个工具 `defaultActive: false`
+  （`extensions/codemode/index.js:26`、`extensions/tool-search/index.js:11`），不写进 `defaultTools`
+  就不激活。MCP 扩展只读 `<agentDir>/mcp.json`（项目级 `.pi/mcp.json` 需项目受信任，
+  `trust-manager.js` 已把它列入 `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES`）；容器里没有这个文件时 `session_start` 直接返回
+  （`extensions/mcp/index.js:848`）——不连接、不激活 codemode、系统提示没有 `mcp_servers` 段。新增
+  斜杠命令 `/mcp`（以前只有 `/llama`）；下发的 prompt 以 turn 标记开头，触发不到。
+- **治理含义**（未改，留给维护者）：智能体能写自己的 `/workspace/.pi/agent/mcp.json`，下次容器启动
+  时 pi 会按它连 MCP 服务器（stdio 子进程或 HTTP）。这不是新能力——它本来就能往
+  `<agentDir>/extensions/` 写扩展让 pi 自动加载，也能直接用 bash 起进程；出网仍只走 egress 代理，
+  内核侧的门与审批不受影响。若要收紧，entrypoint 加 `-ne`（关掉扩展自动发现与内置扩展，`-e`
+  显式加载的平台扩展照常）即可，但这与 2.2 "pi 自身权限不限制"的决定相反，需要另行决定。
+- 会话文件改为首条 user 消息时就落盘（以前是首条 assistant 回复，`session-manager.js`
+  `_hasConversation`）；assistant 消息多 `thinkingLevel`。内核只把 `sessionJsonlPath` 记成 Source URI。
+- `-e` 加载的扩展若在自己 `package.json` 的 `dependencies` 里写了 `@earendil-works/pi-*`，0.99 会出一条
+  "应改为 peerDependencies" 的警告（`resource-loader.js` `collectExtensionPackageWarnings`，只对带包
+  元数据的扩展）；本机真实运行以文件路径 `-e` 加载平台扩展，stderr 没有这条。
+- 未传 `--model` 时的初始模型选择逻辑不变，"已知 provider 的默认模型"表改了 `openai-codex`/`fireworks`/
+  `together`/`opencode-go` 四项（`model-resolver.js`）——同 2.1 的说明，只有平台 provider 恰好叫这些
+  名字时才相关。
+- pnpm 11 的 `minimumReleaseAge`：对发布不满一天的版本，`pnpm install` 会自动往 `pnpm-workspace.yaml`
+  写 `minimumReleaseAgeExclude`。本次升级时 0.99.2 刚发布不到一天，这段自动写入没有保留（锁文件不记录
+  它，`pnpm install --frozen-lockfile` 照常通过）；下次升级若遇到，同样处理或等满一天再装。
 
 ## 3. 单一版本源
 
@@ -240,8 +303,8 @@ nexttime-entry check=tool_projection result=kept_previous trigger=turn turn_id=<
 `.github/workflows/pi-drift.yml`：每晚（UTC 03:17）+ 手动 `workflow_dispatch`，在一次性 checkout
 里把 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 覆盖成 `@latest`（**只在这个
 runner 自己的工作目录里改，从不 `git commit`/`git push`——`pi.version` 与仓库里的 package.json
-版本号完全不受影响**），跑 `packages/platform-extension` 的完整测试套件（含上面两个 `*.sdk.
-test.ts`），打印 pinned/latest 版本 diff 到 job summary。失败时开/更新**同一个**带
+版本号完全不受影响**），跑 `packages/platform-extension` 的 `typecheck`（2026-10-01 起；vitest 剥掉类型，
+只改类型的破坏它看不见）与完整测试套件（含上面两个 `*.sdk.test.ts`），任一失败即算漂移，打印 pinned/latest 版本 diff 到 job summary。失败时开/更新**同一个**带
 `pi-drift` label 的 issue（标题 `pi drift: <latest 版本号> breaks <n> tests`；用 `gh issue
 list --label pi-drift` 查是否已有未关闭的，有就编辑标题/正文+追加评论，没有才新建）；转绿时自动
 关闭该 issue。这个 workflow **没有** `pull_request`/`push` 触发器，永远不会出现在任何 PR 的
@@ -278,7 +341,7 @@ pi 本身没有运行时"回滚"的概念（它不是一个常驻服务，是每
 单位是**镜像 tag**：
 
 1. `deploy/worker-runtime` 镜像每次构建都应该打上包含 `pi.version` 值的 tag（例如
-   `nexttime-ai-worker-runtime:pi-0.87.1`），而不只是浮动的 `nexttime-ai-worker-runtime:latest`
+   `nexttime-ai-worker-runtime:pi-0.99.2`），而不只是浮动的 `nexttime-ai-worker-runtime:latest`
    ——本仓库当前 `docker-compose.yml` 的 `worker-runtime` 服务只打了不带版本号的
    `image: nexttime-ai-worker-runtime`（build-only, 见该服务自己的注释），升级 PR 落地时应该
    在主机验收步骤里手动把新镜像也打一个带版本号的 tag 再切换 `worker-supervisor` 的

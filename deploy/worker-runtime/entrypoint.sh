@@ -7,10 +7,10 @@
 # branched on here — this script's job is only to prepare `/workspace`'s directory layout (which
 # is the same regardless of mode: pi's own session/config dirs, plus this S1 stopgap system
 # prompt) and exec pi with the flags verified against pi 0.84.4's own CLI and re-verified on
-# 0.87.1 (see Dockerfile header for the exact source files/lines cited).
+# 0.87.1 and 0.99.2 (see Dockerfile header for the exact source files/lines cited).
 #
 # Flags, verified against pi 0.84.4 (packages/coding-agent/src/cli/args.ts) and unchanged in
-# 0.87.1 (`dist/cli/args.js`, `pi --help`):
+# 0.87.1 and 0.99.2 (`dist/cli/args.js`, `pi --help`):
 #   --mode rpc                    JSON-RPC over stdio (agent-host's later half attaches to this).
 #                                  0.87.1 exits non-zero on a missing/invalid --mode value
 #                                  instead of silently falling back; `rpc` is valid.
@@ -19,15 +19,18 @@
 #                                  entry/worker/interactive inside it — @nexttime/platform-
 #                                  extension's src/index.ts).
 #   --system-prompt <path>        NOT a `--system-prompt-file` flag (no such flag exists in
-#                                  0.84.4 or 0.87.1) — `resource-loader.ts` `resolvePromptInput`
+#                                  0.84.4, 0.87.1 or 0.99.2) — `resource-loader.ts` `resolvePromptInput`
 #                                  reads this value as a *file's contents* whenever the path
 #                                  exists, so passing a path here does the same thing a `-file`
 #                                  flag would.
 # Built-in tools (STATUS leftover 95, maintainer 2026-09-27: "pi agent 本身的权限其实不需要限制的，
 # 主要限制是访问其他系统"): every pi built-in the image can actually run is active — read / bash /
 # edit / write / grep / find / ls. pi's own default active set is only read / bash / edit / write
-# (`core/sdk.js` `defaultActiveToolNames`); the wider set is written as `defaultTools` into pi's
-# global settings below. NOT via `--tools`: that option is an allowlist over *every* tool,
+# (`core/sdk.js` `defaultActiveToolNames`; 0.99.2: `core/settings-manager.js` `DEFAULT_TOOL_NAMES`);
+# the wider set is written as `defaultTools` into pi's global settings below — a plain-name list,
+# which still replaces the default set on 0.99.2 (its new `+name`/`-name` modifiers are not used).
+# 0.99's built-in `codemode`/`tool_search` tools are `defaultActive: false` and not listed, so they
+# stay off (docs/runbooks/pi-upgrade.md §2.4). NOT via `--tools`: that option is an allowlist over *every* tool,
 # extension tools included (`agent-session.js` `_refreshToolRegistry` `isAllowedTool`), so it
 # would switch off the platform extension's kernel tools. `powershell` stays off — no pwsh in
 # this Linux image. Access to other systems is untouched: it is the kernel's (Handles,
