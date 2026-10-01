@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.33.1](https://github.com/btnalit/NextTime-AI/compare/v0.33.0...v0.33.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deps:** fastify 5.12.5, undici 7.30, and patched transitives — 28 open Dependabot alerts ([#371](https://github.com/btnalit/NextTime-AI/issues/371)) ([e978e68](https://github.com/btnalit/NextTime-AI/commit/e978e68ebed43d39b34054f3cdd83a15eb87d8f4))
+* **kernel:** publish_ontology_version needs builder and publishes only the caller's own draft (leftover 100) ([#370](https://github.com/btnalit/NextTime-AI/issues/370)) ([f5f9aea](https://github.com/btnalit/NextTime-AI/commit/f5f9aeae651341355bf6cdf7ca4cb99b37f4da8b))
+* **scripts:** restore works again on the read-only postgres; backup freshness check; leftover 6 closed (closing wave C10) ([#373](https://github.com/btnalit/NextTime-AI/issues/373)) ([f65caff](https://github.com/btnalit/NextTime-AI/commit/f65caff411d902db99ba982079bdb78828ceb055))
+* **web:** split the last glued 中文 English strings into t(); i18n baseline emptied (leftover 85, closing wave C9 part 2) ([#372](https://github.com/btnalit/NextTime-AI/issues/372)) ([b982c04](https://github.com/btnalit/NextTime-AI/commit/b982c04c0415553a9075313f6c77c6da2d4a9114))
+
 ## [0.33.0](https://github.com/btnalit/NextTime-AI/compare/v0.32.0...v0.33.0) (2026-09-27)
 
 
