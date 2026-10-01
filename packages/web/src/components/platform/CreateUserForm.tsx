@@ -196,7 +196,7 @@ export function CreateUserForm({
         hint={
           defaultWorkspaceId === null
             ? t('平台还没有设置默认工作区。', 'No platform default workspace is set yet.')
-            : `默认工作区 Default workspace: ${defaultWorkspaceId}`
+            : t(`默认工作区：${defaultWorkspaceId}`, `Default workspace: ${defaultWorkspaceId}`)
         }
       >
         <Select

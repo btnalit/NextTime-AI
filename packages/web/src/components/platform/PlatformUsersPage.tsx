@@ -167,9 +167,11 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
     const skipped = result.outcomes.length - result.purgedCount;
     toast.push({
       tone: result.purgedCount > 0 ? 'ok' : 'warn',
-      title: `已清理 ${result.purgedCount} 个用户 Purged ${result.purgedCount} users`,
+      title: t(`已清理 ${result.purgedCount} 个用户`, `Purged ${result.purgedCount} users`),
       description:
-        skipped > 0 ? `${skipped} 个被跳过 skipped — 原因见对话框 see the dialog` : undefined,
+        skipped > 0
+          ? t(`${skipped} 个被跳过 — 原因见对话框`, `${skipped} skipped — see the dialog`)
+          : undefined,
       key: 'purge-users',
     });
     invalidateCapability(http, 'list_users');

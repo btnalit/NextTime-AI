@@ -28,7 +28,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@nexttime/gatekeeper-base": "workspace:*",
     "@nexttime/shared": "workspace:*",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "jose": "^6.2.10",
     "pg": "^8.13.1",
     "ws": "^8.18.0",
