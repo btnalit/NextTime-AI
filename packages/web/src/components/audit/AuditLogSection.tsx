@@ -123,7 +123,7 @@ export function AuditLogSection({
     toast.push({
       tone: saved ? 'ok' : 'warn',
       title: saved
-        ? `已导出 ${visibleRows.length} 条审计记录 Exported ${visibleRows.length} audit rows`
+        ? t(`已导出 ${visibleRows.length} 条审计记录`, `Exported ${visibleRows.length} audit rows`)
         : t('浏览器不支持下载', 'Download not supported in this browser'),
     });
   }

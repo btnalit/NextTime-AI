@@ -94,17 +94,29 @@ export function PurgeWorkspaceDrawer({
 
   if (step === 'confirm' && preview.status === 'ready') {
     const { result } = preview;
+    const tableCount = Object.keys(result.counts).length;
     const impact = [
-      `${result.totalRows} 行数据将被删除 rows deleted across ${Object.keys(result.counts).length} tables`,
-      `${result.activeHandles} 个有效 Handle 将被吊销 live Handles revoked`,
+      t(
+        `${result.totalRows} 行数据将被删除，涉及 ${tableCount} 张表`,
+        `${result.totalRows} rows deleted across ${tableCount} tables`,
+      ),
+      t(
+        `${result.activeHandles} 个有效 Handle 将被吊销`,
+        `${result.activeHandles} live Handle(s) revoked`,
+      ),
       ...(result.purgedUsers.length > 0
         ? [
-            `随之删除 ${result.purgedUsers.length} 个从未激活的用户 never-activated users deleted: ${result.purgedUsers.map((user) => user.login).join(', ')}`,
+            t(
+              `随之删除 ${result.purgedUsers.length} 个从未激活的用户：${result.purgedUsers.map((user) => user.login).join(', ')}`,
+              `${result.purgedUsers.length} never-activated user(s) deleted: ${result.purgedUsers.map((user) => user.login).join(', ')}`,
+            ),
           ]
         : []),
-      ...result.warnings.map(
-        (warning) =>
-          `service Handle 仍在使用 still in use: ${warning.name ?? warning.principalId} (${warning.activeHandles})`,
+      ...result.warnings.map((warning) =>
+        t(
+          `service Handle 仍在使用：${warning.name ?? warning.principalId}（${warning.activeHandles} 个有效）`,
+          `A service Handle is still in use: ${warning.name ?? warning.principalId} (${warning.activeHandles} live)`,
+        ),
       ),
     ];
     return (
