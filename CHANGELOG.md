@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/btnalit/NextTime-AI/compare/v0.33.1...v0.34.0) (2026-10-01)
+
+
+### Features
+
+* **pi:** upgrade pi to 0.99.2; pi-drift now typechecks too ([#374](https://github.com/btnalit/NextTime-AI/issues/374)) ([2c57d25](https://github.com/btnalit/NextTime-AI/commit/2c57d25f66ce414d17cf97ede26841136da68ac1))
+
 ## [0.33.1](https://github.com/btnalit/NextTime-AI/compare/v0.33.0...v0.33.1) (2026-10-01)
 
 
