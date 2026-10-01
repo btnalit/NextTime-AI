@@ -313,13 +313,21 @@ const ontologyCapabilities: readonly Capability[] = [
     // (`substrate/ontology/registry.ts`'s `publishOntologyDraft`). `id`/`version` together address
     // one exact `ontology_versions` row (its primary key, `migrations/core/0002_substrate.sql`) —
     // no separate synthetic id exists to name a row with one field.
+    // STATUS leftover 100 (2026-10-01, maintainer): `minRole: 'builder'`, the same bar as
+    // `propose_ontology_change` — a published version is irreversible (status-lock trigger, no
+    // unpublish) and changes the type namespace for the whole workspace. And only the draft's own
+    // proposer may publish it (`publishOntologyDraft`'s `proposed_by` predicate): drafts are
+    // visible to their proposer only (I16's read half), so nobody else could ever have reviewed
+    // what they would be publishing.
     name: 'publish_ontology_version',
     group: 'ontology',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder',
     paramsSchema: z.object({ id: id, version: z.number().int().positive() }).strict(),
     resultSchema: wire.OntologyPublishResultWireSchema,
-    description: 'Publish a draft OntologyVersion (I16). Human channel only.',
+    description:
+      'Publish your own draft OntologyVersion (I16). Human channel only; another principal’s draft reads as not found.',
   },
   {
     // S3.1: handled by `proposeOntologyChangeHandler` (`registry.ts`'s `proposeOntologyChange`).
