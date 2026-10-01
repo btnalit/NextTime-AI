@@ -249,6 +249,7 @@ function ConnectorRow({
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const mode = useConnectorMode(http, connector, onChanged);
+  const { instanceCount, operationCount } = connector;
 
   return (
     <>
@@ -289,12 +290,15 @@ function ConnectorRow({
                     'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。',
                     'disabled immediately cuts off every workspace that enabled this connector, platform-wide.',
                   )
-                : `新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。 The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.`
+                : t(
+                    '新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。',
+                    "The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.",
+                  )
             }
             target={mode.disablingInUse ? connector.name : undefined}
             impact={[
-              `${connector.instanceCount} 个门实例 gate instances`,
-              `${connector.operationCount} 个 Operation`,
+              t(`${instanceCount} 个门实例`, `${instanceCount} gate instance(s)`),
+              t(`${operationCount} 个 Operation`, `${operationCount} operation(s)`),
             ]}
             confirmLabel={t('切换', 'Switch')}
             danger={mode.pendingMode === 'disabled'}
