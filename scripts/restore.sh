@@ -24,12 +24,19 @@
 #                         database or filesystem changes.
 #
 # The real (non-dry-run) DB restore: creates the target database (unless --target-db nexttime
-# --i-know, where it's assumed to already exist), copies the dump into the running `postgres`
-# container with `docker compose cp` (pg_restore's custom format (-Fc) needs a seekable file,
-# not a pipe, so this is more robust than trying to stream it over `docker compose exec -T`'s
-# stdin), then runs:
+# --i-know, where it's assumed to already exist), writes the dump into the running `postgres`
+# container's /tmp (pg_restore's custom format (-Fc) needs a seekable file, not a pipe, so
+# pg_restore itself never reads stdin), then runs:
 #   docker compose exec -T postgres pg_restore --clean --if-exists -U nexttime -d <target> <path>
 # and removes the copied file from the container afterward.
+#
+# The copy is `docker compose exec -T postgres sh -c 'cat > <path>' < <dump>`, not
+# `docker compose cp`: since leftover 20 (#188, 2026-09-17) the postgres service is
+# `read_only: true`, and the Docker daemon refuses any `cp` into a read-only rootfs ("container
+# rootfs is marked read-only") even when the destination is a writable tmpfs — this script failed
+# that way from #188 until the 2026-10-01 restore drill caught it (closing wave C10). /tmp is that
+# service's own tmpfs (docker-compose.yml), so the copy costs RAM for as long as the restore runs —
+# about one dump's size (tens of MB today).
 #
 # Live restore (--target-db nexttime --i-know) additionally stops kernel/agent-host/
 # worker-supervisor/backup first (lane-7 P2 fix): all four either hold live connections to
@@ -195,7 +202,8 @@ fi
 
 CONTAINER_DUMP_PATH="/tmp/restore-$ts.dump"
 echo "restore: copying dump into the postgres container ($CONTAINER_DUMP_PATH)"
-docker compose cp "$DB_DUMP_ABS" "postgres:$CONTAINER_DUMP_PATH"
+# Not `docker compose cp` — refused for a read_only service (this file's header comment).
+docker compose exec -T postgres sh -c "cat > '$CONTAINER_DUMP_PATH'" <"$DB_DUMP_ABS"
 
 echo "restore: running pg_restore --clean --if-exists -d $TARGET_DB"
 restore_rc=0

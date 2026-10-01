@@ -70,6 +70,18 @@
 
 ### E7 平台备份定时器
 - 暂不做；设计 §13 的库损坏恢复依赖它，S3 完成后重评。届时交付 `deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`。
+- 实现说明（2026-10-01，收尾波次 C10，STATUS 遗留 6 关闭）：不交付 systemd timer——S1.12 的 compose
+  `backup` 服务就是这个定时器（`deploy/backup/backup.sh` 循环睡到 `BACKUP_TIME`，dump + 打包 + 轮换 +
+  写 `last-success`），主机上一直在跑。C10 改补三处缺口：
+  1. **恢复路径**：主机 `drill-restore.sh` 实测 `restore.sh` 失败——#188 起 postgres `read_only: true`，
+     Docker 拒绝向只读 rootfs 容器 `docker compose cp`（即使目标是 tmpfs）。改为
+     `docker compose exec -T postgres sh -c "cat > /tmp/…" < dump`（pg_restore 仍读可寻址文件，不走管道）。
+     主机用当日 dump 恢复：public 39 张表与活库一致，行数差恰为 dump 之后清掉的 11 个验收工作区。
+     `drill-restore.sh` 在恢复失败 / 解析失败 / 表数为 0 时删掉本次的 `nexttime_restore_<ts>`（只认这个名字形状）。
+  2. **新鲜度**：`scripts/check-backup-freshness.sh`（只读；`backup` 服务在跑、`last-success` ≤ 26 h 按分钟
+     比较、它指向的 dump 仍在），发版应用的第一步（`runbooks/release.md` §3"备份三件事"）。
+  3. **发版前 dump**：`backups/pre-upgrade/` 应用通过后只保留最新 3 份（维护者）。
+  未做（待维护者决定，STATUS 遗留 102 / 103）：异地副本；`observations` 无保留策略的增长。
 
 ### E8 caddy TLS 与静态服务
 - 目标：`caddy` 容器是唯一公网面：TLS（内网 CA 或自签）、`/` 服务 `packages/web/dist`、`/explorer` 服务 Explorer 构建、反代 `/api` `/ws` `/mcp` `/llm` 到 kernel。
