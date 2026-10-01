@@ -12714,6 +12714,7 @@
   {
     "channel": "human",
     "group": "ontology",
+    "minRole": "builder",
     "mode": "execute",
     "name": "publish_ontology_version",
     "params": {

@@ -103,7 +103,7 @@ export class OntologyDraftNotFoundError extends Error {
   readonly version: number;
   constructor(ontologyId: string, version: number) {
     super(
-      `publish_ontology_version: no draft ontology_versions row (id=${ontologyId}, version=${version}) — already published/deprecated, or never proposed`,
+      `publish_ontology_version: no draft ontology_versions row (id=${ontologyId}, version=${version}) of yours — already published/deprecated, never proposed, or proposed by someone else`,
     );
     this.name = 'OntologyDraftNotFoundError';
     this.ontologyId = ontologyId;
@@ -122,7 +122,13 @@ export interface PublishOntologyDraftInput {
  *  before this ever runs — this function does not itself check `channel`). The `WHERE status =
  *  'draft'` guard makes this safe under a race (two concurrent publishes of the same row: the
  *  first to commit wins, the second affects zero rows and throws `OntologyDraftNotFoundError` —
- *  never a double-publish). I12 (`definition` immutable once published) is enforced by the
+ *  never a double-publish). `proposed_by = publishedBy` (STATUS leftover 100): only the draft's
+ *  own proposer may publish it — a draft is visible to its proposer alone (`loadVisibleOntology`,
+ *  `listOntologyVersions`), so anyone else would be publishing a definition they never saw; an
+ *  entry agent's proposal is still the person's own (`proposed_by` is the Handle's `obo`).
+ *  Another principal's draft affects zero rows and throws the same `OntologyDraftNotFoundError` as
+ *  a missing one — the read side's "absent, not a 403" convention, so existence never leaks.
+ *  I12 (`definition` immutable once published) is enforced by the
  *  existing DB trigger (`ontology_versions_block_published_definition_update`,
  *  `migrations/core/0011_ontology_versions_status_lock.sql`) — this UPDATE never touches
  *  `definition`, so the trigger's own `old.status = 'published'` branch never applies to it. */
@@ -135,6 +141,7 @@ export async function publishOntologyDraft(
     `update ontology_versions
        set status = 'published', published_by = $4, published_at = now()
      where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'
+       and proposed_by = $4
      returning workspace_id, id, version, status, definition, proposed_by, published_by,
        created_at, published_at`,
     [workspaceId, input.id, input.version, input.publishedBy],
