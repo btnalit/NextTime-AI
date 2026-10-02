@@ -3313,6 +3313,18 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 待维护者决定：GHCR 新包默认私有。主机拉取私有包需要 read:packages 令牌（放主机 `secrets/`）；改为公开与公开
   仓库、"通用底座"一致，但**公开后不可改回私有**。
 
+### D2 实现说明
+
+- `scripts/apply-release.sh` 即 v0.20.0 起每次主机应用实际执行的 `/tmp/nt-apply.sh`（不入库、主机重启即丢），步骤与
+  停止规则不变：新鲜度（只报告）→ 发版前 dump → 切 tag → 镜像 → 迁移 dry-run + 应用 → `up` → S3 / S1 / S2 / S4 →
+  `BACKUP_NOW` → 留 3 份发版前 dump；dump / 切 tag / 镜像 / 迁移失败都在 `up` 之前停下。
+- 相对 `/tmp` 版本的改动：`--pull` 走 `pull-images.sh`（拉取或验签失败退回源码构建并记一行 STEP，拉取成功则
+  `up -d --no-build`）；补上此前每次手工执行的 `delete-workspaces-matching.sh --expired --yes`（`NEXTTIME_DATA` 从
+  `.env` 导出——该脚本缺它会拒绝运行）；日志改到 `${NEXTTIME_DATA}/drills/`（`/tmp` 重启即丢）；验收失败计数，末行
+  `RESULT ok` / `RESULT acceptance-failures=<n>` / `RESULT failed-at=<step>`；启动时自我复制到临时文件再 `exec`
+  （切 tag 会改写脚本自身，同 `drill-upgrade.sh`）。
+- 验收：下一次发版（v0.35.0）主机用入库脚本应用。默认仍是源码构建，GHCR 可见性定下来之后改用 `--pull`。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
