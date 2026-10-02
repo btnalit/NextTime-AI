@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GatekeeperBase, InMemoryIdempotencyStore } from '@nexttime/gatekeeper-base';
+import {
+  GatekeeperBase,
+  InMemoryIdempotencyStore,
+  createGatekeeperServer,
+} from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -208,5 +212,171 @@ describe('docker gate transport (via GatekeeperBase, fake dockerode)', () => {
     if (!first) throw new Error('manifest.json is empty');
     const bogus: Operation = { ...first, name: 'nonexistent.op' };
     await expect(transport.invoke(bogus, {}, {})).rejects.toThrow(/unknown operation/);
+  });
+});
+
+/**
+ * R-04 (decision D-04): the platform's agent containers — worker-supervisor's entry (`nexttime.role
+ * =entry`) and Task (`nexttime.role=worker`) containers, whose stdout is pi RPC — are never listed
+ * and every per-container Operation on one is refused. Service containers are unaffected.
+ */
+describe('docker gate never lists or touches the platform agent containers (R-04)', () => {
+  const PROJECT = 'nexttime';
+  const ENTRY: FakeContainerSeed = {
+    id: 'e1e1e1e1e1e1',
+    name: 'nexttime-entry-p1',
+    image: 'nexttime-worker:latest',
+    running: true,
+    labels: { 'nexttime.role': 'entry', 'nexttime.principal': 'p1' },
+  };
+  const TASK: FakeContainerSeed = {
+    id: 'f2f2f2f2f2f2',
+    name: 'nexttime-task-t1',
+    image: 'nexttime-worker:latest',
+    running: true,
+    labels: { 'nexttime.role': 'worker', 'nexttime.task-id': 't1' },
+  };
+  // Carries the compose project label too, so the compose Operations' own filtering is exercised.
+  const STOPPED_AGENT: FakeContainerSeed = {
+    id: 'a3a3a3a3a3a3',
+    name: 'nexttime-entry-p2',
+    image: 'nexttime-worker:latest',
+    running: false,
+    labels: { 'nexttime.role': 'entry', 'com.docker.compose.project': PROJECT },
+  };
+  const KERNEL: FakeContainerSeed = {
+    id: 'c4c4c4c4c4c4',
+    name: 'nexttime-kernel-1',
+    image: 'nexttime-kernel:latest',
+    running: true,
+    labels: { 'com.docker.compose.project': PROJECT },
+  };
+  const SEEDS = [ENTRY, TASK, STOPPED_AGENT, KERNEL];
+
+  it('containers.list leaves out entry and Task containers and keeps service containers', async () => {
+    const { gate } = buildGate(SEEDS);
+    const result = await gate.observe('containers.list', { all: true });
+    expect((result.data as Array<{ id: string }>).map((c) => c.id)).toEqual([KERNEL.id]);
+    expect(result.observedFacts.map((f) => f.identity)).toEqual([{ id: KERNEL.id }]);
+  });
+
+  it('compose.ls leaves out agent containers even when they carry the project label', async () => {
+    const { gate } = buildGate(SEEDS);
+    const result = await gate.observe('compose.ls', {});
+    expect(result.data).toEqual({
+      projects: [
+        {
+          project: PROJECT,
+          containerCount: 1,
+          containers: [expect.objectContaining({ id: KERNEL.id })],
+        },
+      ],
+    });
+  });
+
+  it('compose.up/compose.down never start or stop an agent container', async () => {
+    const { gate, client } = buildGate(SEEDS);
+    const simulated = await gate.simulate('compose.up', { project: PROJECT });
+    expect(simulated.detail).toEqual({ containers: [] });
+    const up = await gate.apply('compose.up', { project: PROJECT }, 'req-up');
+    expect(client.startCalls).toEqual([]);
+    expect((up.data as { containers: Array<{ id: string }> }).containers.map((c) => c.id)).toEqual([
+      KERNEL.id,
+    ]);
+    await gate.apply('compose.down', { project: PROJECT }, 'req-down');
+    expect(client.stopCalls).toEqual([KERNEL.id]);
+  });
+
+  for (const agent of [ENTRY, TASK]) {
+    const role = agent.labels?.['nexttime.role'];
+
+    it(`refuses every per-container Operation on a ${role} container, observe and execute alike`, async () => {
+      const { gate, client } = buildGate(SEEDS);
+      const refused = { name: 'OperationRefusedError' };
+      await expect(gate.observe('container.inspect', { id: agent.id })).rejects.toMatchObject(
+        refused,
+      );
+      await expect(gate.observe('container.logs_tail', { id: agent.id })).rejects.toMatchObject(
+        refused,
+      );
+      for (const op of ['container.inspect', 'container.logs_tail', 'container.restart']) {
+        await expect(gate.simulate(op, { id: agent.id })).rejects.toMatchObject(refused);
+      }
+      await expect(
+        gate.apply('container.restart', { id: agent.id }, 'req-1'),
+      ).rejects.toMatchObject(refused);
+      expect(client.logsTailCalls).toEqual([]);
+      expect(client.restartCalls).toEqual([]);
+    });
+
+    it(`refuses a ${role} container named by its name or an id prefix, judged by its labels`, async () => {
+      const { gate, client } = buildGate(SEEDS);
+      for (const id of [agent.name, agent.id.slice(0, 4)]) {
+        await expect(gate.observe('container.logs_tail', { id })).rejects.toThrow(
+          /platform agent container/,
+        );
+        await expect(gate.apply('container.restart', { id }, `req-${id}`)).rejects.toMatchObject({
+          name: 'OperationRefusedError',
+        });
+      }
+      expect(client.logsTailCalls).toEqual([]);
+      expect(client.restartCalls).toEqual([]);
+    });
+  }
+
+  it('a refused apply does not pin its idempotency reservation: a retry is refused again, not 409', async () => {
+    const { gate } = buildGate(SEEDS);
+    const refused = { name: 'OperationRefusedError' };
+    await expect(gate.apply('container.restart', { id: ENTRY.id }, 'req-1')).rejects.toMatchObject(
+      refused,
+    );
+    await expect(gate.apply('container.restart', { id: ENTRY.id }, 'req-1')).rejects.toMatchObject(
+      refused,
+    );
+  });
+
+  it('a service container stays visible and operable — by id, name or id prefix', async () => {
+    const { gate, client } = buildGate(SEEDS);
+    const inspected = await gate.observe('container.inspect', { id: KERNEL.name });
+    expect(inspected.observedFacts.map((f) => f.identity)).toEqual([{ id: KERNEL.id }]);
+    const logs = await gate.observe('container.logs_tail', { id: KERNEL.id, tail: 5 });
+    expect(logs.data).toMatchObject({ id: KERNEL.id, tail: 5 });
+    const simulated = await gate.simulate('container.restart', { id: KERNEL.id.slice(0, 4) });
+    expect(simulated.description).toContain(`restart container "${KERNEL.name}"`);
+    await gate.apply('container.restart', { id: KERNEL.id.slice(0, 4) }, 'req-1');
+    // Acts on the resolved full id, never the caller's prefix.
+    expect(client.restartCalls).toEqual([{ id: KERNEL.id, timeoutSeconds: 10 }]);
+    expect(client.logsTailCalls).toEqual([KERNEL.id]);
+  });
+
+  it('over the wire a refusal is 403 operation_refused, on observe and apply', async () => {
+    const { gate } = buildGate(SEEDS);
+    const token = 'r04-test-token-'.padEnd(40, 'x');
+    const app = createGatekeeperServer({ gate, token });
+    try {
+      const headers = { authorization: `Bearer ${token}` };
+      const observe = await app.inject({
+        method: 'POST',
+        url: '/gate/observe',
+        headers,
+        payload: { operation: 'container.logs_tail', params: { id: ENTRY.name } },
+      });
+      expect(observe.statusCode).toBe(403);
+      expect(observe.json()).toMatchObject({ ok: false, error: { code: 'operation_refused' } });
+      const apply = await app.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers,
+        payload: {
+          operation: 'container.restart',
+          params: { id: TASK.id },
+          actionRequestId: 'req-1',
+        },
+      });
+      expect(apply.statusCode).toBe(403);
+      expect(apply.json()).toMatchObject({ ok: false, error: { code: 'operation_refused' } });
+    } finally {
+      await app.close();
+    }
   });
 });

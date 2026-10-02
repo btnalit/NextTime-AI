@@ -52,7 +52,7 @@ import { posix as posixPath } from 'node:path';
 import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
-import type { DockerClient } from './docker-client.js';
+import type { ContainerState, DockerClient } from './docker-client.js';
 import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import {
@@ -408,7 +408,29 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         egressDeny,
         correlationId,
       });
-      const created = await docker.createAndStart(spec);
+      let created: ContainerState;
+      try {
+        created = await docker.createAndStart(spec);
+      } catch (err) {
+        // L6-18 (docs/code-review-2026-10-02.md, R-09): the create can succeed and the start (or
+        // the inspect after it) fail. That leaves a container with `CAPABILITY_HANDLE` in its env
+        // that is never registered below, so nothing here would ever stop or remove it — Task
+        // container names are per-WorkerRun and never reused. Force-remove it (best-effort; a
+        // container that was never created is a no-op) before the spawn error propagates.
+        try {
+          await docker.remove(spec.name);
+        } catch (removeErr) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'task container removal failed after a failed spawn',
+              workerRunId,
+              error: String(removeErr),
+            }),
+          );
+        }
+        throw err;
+      }
       // Only what the spec builder accepted (a valid id) is remembered and registered.
       const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
 

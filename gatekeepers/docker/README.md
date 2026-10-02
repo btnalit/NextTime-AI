@@ -31,7 +31,7 @@ only; it is never executed.
 
 | Operation | mode | blast_radius | auto_approvable | await_decision | notes |
 |---|---|---|---|---|---|
-| `containers.list` | observe | low | true | false | → `Container` facts (all containers, `all:false` filters to running only) |
+| `containers.list` | observe | low | true | false | → `Container` facts (all containers except agent containers, see below; `all:false` filters to running only) |
 | `container.inspect` | observe | low | true | false | → one `Container` fact |
 | `compose.ls` | observe | low | true | false | groups containers by `com.docker.compose.project` label |
 | `container.logs_tail` | observe | low | true | false | de-multiplexed stdout+stderr text |
@@ -41,6 +41,26 @@ only; it is never executed.
 
 `reads`/`writes` on every Operation carry `Container` — the S2.6 meta-ontology `reads`/`writes`
 LinkTypes this Gatekeeper's Operation objects expose.
+
+### Platform agent containers are out of reach (R-04)
+
+This gate never lists or touches the platform's own **agent** containers — the entry and Task
+containers worker-supervisor spawns, labelled `nexttime.role` (`entry` / `worker`). Their stdout
+is pi RPC (prompts, tool calls, tool results) of whichever principal owns them, so tailing one
+would read another user's agent session across workspaces.
+
+- They are filtered out of every enumeration: `containers.list`, `compose.ls`, and
+  `compose.up`/`compose.down`'s targets and results.
+- Every per-container Operation (`container.inspect`, `container.logs_tail`,
+  `container.restart`; `observe`, `simulate` and `apply` alike) first resolves its `id` — a full
+  id, an id prefix or a name — to the container it names, refuses an agent container by that
+  container's own labels with 403 `operation_refused` (`OperationRefusedError` from
+  `@nexttime/gatekeeper-base`), and otherwise acts on the resolved full id.
+- A refused `apply` releases its idempotency reservation: a retry with the same
+  `actionRequestId` is refused again, not 409.
+
+The platform's service containers (kernel, postgres, caddy, …) stay visible and operable;
+`container.inspect` returns only the summary above (no env).
 
 ### `compose.up`/`compose.down` — reduced semantics (known deviation)
 

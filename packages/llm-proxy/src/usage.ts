@@ -12,8 +12,11 @@ import type { ModelCost, ProviderApiKind } from './config.js';
  *
  * Field names/shapes verified against pi 0.84.4's own usage-parsing code (cited per function
  * below) — not guessed from the public API docs — since this proxy must agree with what the
- * entry/Worker agent's own pi client will actually receive and (for the streaming case) already
- * expects `stream_options.include_usage: true` to have been set (proxy.ts's "one body mutation").
+ * entry/Worker agent's own pi client will actually receive and (for the `openai-completions`
+ * streaming case) already expects `stream_options.include_usage: true` to have been set
+ * (proxy.ts's "one body mutation"). `openai-responses` (R-10) has its own usage shape and its own
+ * streaming event, checked against both the official API reference and pi's own Responses client
+ * (`parseOpenAiResponsesUsage` below).
  */
 
 export interface ParsedUsage {
@@ -41,6 +44,19 @@ interface OpenAiRawUsage {
   };
 }
 
+interface OpenAiResponsesRawUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly total_tokens?: number;
+  readonly input_tokens_details?: {
+    readonly cached_tokens?: number;
+    readonly cache_write_tokens?: number;
+  };
+  readonly output_tokens_details?: {
+    readonly reasoning_tokens?: number;
+  };
+}
+
 interface AnthropicRawUsage {
   readonly input_tokens?: number;
   readonly output_tokens?: number;
@@ -49,8 +65,8 @@ interface AnthropicRawUsage {
 }
 
 /**
- * OpenAI-compatible `usage` (both families of `openai-completions`/`openai-responses` share this
- * shape). Verified against pi 0.84.4's own field mapping
+ * OpenAI Chat Completions `usage` (`openai-completions` only — `openai-responses` has a different
+ * shape, see `parseOpenAiResponsesUsage`). Verified against pi 0.84.4's own field mapping
  * (pi-0.84.4/packages/ai/src/api/openai-completions.ts `parseChunkUsage`): providers disagree on
  * where cache-read tokens live (`prompt_tokens_details.cached_tokens` — OpenAI/OpenRouter;
  * `prompt_cache_hit_tokens` — DeepSeek; top-level `cached_tokens` — Kimi), so all three are
@@ -70,6 +86,31 @@ export function parseOpenAiUsage(raw: OpenAiRawUsage): ParsedUsage {
   const cacheWriteTokens = raw.prompt_tokens_details?.cache_write_tokens ?? 0;
   const inputTokens = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
   const outputTokens = raw.completion_tokens ?? 0;
+
+  return {
+    inputTokens,
+    outputTokens,
+    ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens > 0 ? { cacheWriteTokens } : {}),
+  };
+}
+
+/**
+ * OpenAI Responses `usage` (R-10): `input_tokens`, `input_tokens_details.{cached_tokens,
+ * cache_write_tokens}`, `output_tokens`, `output_tokens_details.reasoning_tokens`, `total_tokens`
+ * — the official API reference's `ResponseUsage`
+ * (https://developers.openai.com/api/reference/resources/responses/methods/create) and pi 0.99.2's
+ * own Responses client (`@earendil-works/pi-ai` `dist/api/openai-responses-shared.js`
+ * `finalizeResponse`). Same accounting as `parseOpenAiUsage`: `input_tokens` includes both cache
+ * axes, so `input` is netted against them (pi: "OpenAI includes cached and cache-write tokens in
+ * input_tokens, so subtract both"); `output_tokens` already includes reasoning tokens and is used
+ * as-is.
+ */
+export function parseOpenAiResponsesUsage(raw: OpenAiResponsesRawUsage): ParsedUsage {
+  const cacheReadTokens = raw.input_tokens_details?.cached_tokens ?? 0;
+  const cacheWriteTokens = raw.input_tokens_details?.cache_write_tokens ?? 0;
+  const inputTokens = Math.max(0, (raw.input_tokens ?? 0) - cacheReadTokens - cacheWriteTokens);
+  const outputTokens = raw.output_tokens ?? 0;
 
   return {
     inputTokens,
@@ -110,9 +151,14 @@ export function parseUsageFromJsonBody(
   if (typeof body !== 'object' || body === null || !('usage' in body)) return undefined;
   const usage = (body as { usage?: unknown }).usage;
   if (typeof usage !== 'object' || usage === null) return undefined;
-  return api === 'anthropic-messages'
-    ? parseAnthropicUsage(usage as AnthropicRawUsage)
-    : parseOpenAiUsage(usage as OpenAiRawUsage);
+  switch (api) {
+    case 'anthropic-messages':
+      return parseAnthropicUsage(usage as AnthropicRawUsage);
+    case 'openai-responses':
+      return parseOpenAiResponsesUsage(usage as OpenAiResponsesRawUsage);
+    case 'openai-completions':
+      return parseOpenAiUsage(usage as OpenAiRawUsage);
+  }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -176,8 +222,8 @@ export interface UsageAccumulator {
 }
 
 /**
- * OpenAI-compatible streaming: the server sends the *cumulative* usage object once, on the final
- * chunk (requires `stream_options.include_usage: true` on the request — proxy.ts's one body
+ * OpenAI Chat Completions streaming: the server sends the *cumulative* usage object once, on the
+ * final chunk (requires `stream_options.include_usage: true` on the request — proxy.ts's one body
  * mutation) — not incremental deltas, so the last `usage` object seen simply replaces any earlier
  * one. A `data: [DONE]` sentinel line is not JSON and is skipped.
  */
@@ -193,6 +239,45 @@ function createOpenAiStreamUsageAccumulator(): UsageAccumulator {
         const rawUsage = (parsed as { usage?: unknown } | undefined)?.usage;
         if (rawUsage && typeof rawUsage === 'object') {
           usage = parseOpenAiUsage(rawUsage as OpenAiRawUsage);
+        }
+      }
+    },
+    result: () => usage,
+  };
+}
+
+/** The Responses stream's terminal events — each carries the whole final `Response`, `usage`
+ *  included (official streaming-events reference:
+ *  https://developers.openai.com/api/reference/resources/responses/streaming-events). pi's own
+ *  client reads usage from `response.completed` and `response.incomplete`; `response.failed` is
+ *  read too, so a failed response that still reports usage is still counted. */
+const OPENAI_RESPONSES_TERMINAL_EVENTS = new Set([
+  'response.completed',
+  'response.incomplete',
+  'response.failed',
+]);
+
+/**
+ * OpenAI Responses streaming (R-10): usage arrives only inside the terminal event's
+ * `response.usage` (no request flag needed — the Responses API's `stream_options` has no
+ * `include_usage`, so proxy.ts does not inject one for this kind). The event type is the JSON
+ * `type` field, falling back to the SSE `event:` line.
+ */
+function createOpenAiResponsesStreamUsageAccumulator(): UsageAccumulator {
+  const parser = new SseEventParser();
+  let usage: ParsedUsage | undefined;
+
+  return {
+    push(chunk: string): void {
+      for (const event of parser.push(chunk)) {
+        const parsed = tryParseJson(event.data);
+        if (typeof parsed !== 'object' || parsed === null) continue;
+        const { type, response } = parsed as { type?: unknown; response?: { usage?: unknown } };
+        const eventType = typeof type === 'string' ? type : event.event;
+        if (eventType === undefined || !OPENAI_RESPONSES_TERMINAL_EVENTS.has(eventType)) continue;
+        const rawUsage = response?.usage;
+        if (rawUsage && typeof rawUsage === 'object') {
+          usage = parseOpenAiResponsesUsage(rawUsage as OpenAiResponsesRawUsage);
         }
       }
     },
@@ -257,9 +342,14 @@ function createAnthropicStreamUsageAccumulator(): UsageAccumulator {
 }
 
 export function createStreamUsageAccumulator(api: ProviderApiKind): UsageAccumulator {
-  return api === 'anthropic-messages'
-    ? createAnthropicStreamUsageAccumulator()
-    : createOpenAiStreamUsageAccumulator();
+  switch (api) {
+    case 'anthropic-messages':
+      return createAnthropicStreamUsageAccumulator();
+    case 'openai-responses':
+      return createOpenAiResponsesStreamUsageAccumulator();
+    case 'openai-completions':
+      return createOpenAiStreamUsageAccumulator();
+  }
 }
 
 // -------------------------------------------------------------------------------------------

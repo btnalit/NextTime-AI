@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ActionPendingPush,
   ChatMessage,
@@ -745,6 +745,219 @@ describe('WsClient', () => {
 
       expect(onMessage.mock.calls.map(([m]) => (m as ChatMessage).sequence)).toEqual([1, 2, 3, 4]);
       expect(seenSize(client)).toBe(0);
+    });
+  });
+
+  // R-16 (review 2026-10-02): a revoked or expired session ends for good instead of
+  // re-authenticating every second; every other drop backs off exponentially, with jitter.
+  describe('R-16: session end and reconnect backoff', () => {
+    /** Drops the authenticated socket and lets the (0 ms) reconnect open a new one and send its
+     *  `authenticate` — the caller answers it. */
+    async function dropAndReopen(sockets: FakeWebSocket[]): Promise<FakeWebSocket> {
+      sockets[sockets.length - 1]?.remoteClose();
+      await wait(0);
+      await flush();
+      const socket = sockets[sockets.length - 1];
+      if (!socket) throw new Error('expected a reconnect socket');
+      socket.open();
+      await flush();
+      return socket;
+    }
+
+    it('-32001 on a reconnect’s authenticate: session_invalid, closed, and no reconnect loop', async () => {
+      const { client, sockets } = harness;
+      await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      const socket2 = await dropAndReopen(sockets);
+      expect(sentFrame(socket2, 0).method).toBe('authenticate');
+      respondError(socket2, sentFrame(socket2, 0), { code: -32001, message: 'unauthorized' });
+      await flush();
+      await wait(0);
+      await flush();
+      await wait(0);
+
+      expect(onSessionEnded).toHaveBeenCalledTimes(1);
+      expect(onSessionEnded).toHaveBeenCalledWith('session_invalid');
+      expect(client.getStatus()).toBe('closed');
+      expect(sockets).toHaveLength(2);
+    });
+
+    it('an unsolicited -32001 (the kernel kicked the socket): session_invalid at once, no reconnect', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      socket.receive({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32001, message: 'unauthorized' },
+      });
+      await wait(0);
+      await flush();
+      await wait(0);
+
+      expect(onSessionEnded).toHaveBeenCalledWith('session_invalid');
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+      expect(client.getStatus()).toBe('closed');
+      expect(sockets).toHaveLength(1);
+    });
+
+    it('-32001 answering an ordinary call (the per-call recheck) rejects that call and ends the session', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      const call = client.call('list_chats', {});
+      respondError(socket, sentFrame(socket, 1), { code: -32001, message: 'unauthorized' });
+
+      await expect(call).rejects.toMatchObject({ code: -32001 });
+      expect(onSessionEnded).toHaveBeenCalledWith('session_invalid');
+      await wait(0);
+      expect(sockets).toHaveLength(1);
+    });
+
+    it('an unsolicited -32002: membership_gone, no reconnect', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      socket.receive({ jsonrpc: '2.0', id: null, error: { code: -32002, message: 'gone' } });
+      await wait(0);
+      await flush();
+
+      expect(onSessionEnded).toHaveBeenCalledTimes(1);
+      expect(onSessionEnded).toHaveBeenCalledWith('membership_gone');
+      expect(sockets).toHaveLength(1);
+    });
+
+    it('-32002 on a reconnect’s authenticate: membership_gone, no reconnect loop', async () => {
+      const { client, sockets } = harness;
+      await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      const socket2 = await dropAndReopen(sockets);
+      respondError(socket2, sentFrame(socket2, 0), {
+        code: -32002,
+        message: 'no active membership in the requested workspace',
+      });
+      await flush();
+      await wait(0);
+      await flush();
+      await wait(0);
+
+      expect(onSessionEnded).toHaveBeenCalledWith('membership_gone');
+      expect(client.getStatus()).toBe('closed');
+      expect(sockets).toHaveLength(2);
+    });
+
+    it('-32002 answering an ordinary call is a role refusal, not the end of the session', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+
+      const call = client.call('stop_agent', { chatId: 'c-1' });
+      respondError(socket, sentFrame(socket, 1), { code: -32002, message: 'forbidden' });
+
+      await expect(call).rejects.toMatchObject({ code: -32002 });
+      expect(onSessionEnded).not.toHaveBeenCalled();
+      expect(client.getStatus()).toBe('connected');
+    });
+
+    it('a failed first authenticate() stays the caller’s decision — no session-end event', async () => {
+      const { client, sockets } = harness;
+      const onSessionEnded = vi.fn();
+      client.onSessionEnded(onSessionEnded);
+      const connectPromise = client.connect();
+      const socket = sockets[0];
+      if (!socket) throw new Error('expected a socket');
+      socket.open();
+      await connectPromise;
+
+      const authPromise = client.authenticate({ workspaceId: 'ws-1' });
+      respondError(socket, sentFrame(socket, 0), { code: -32002, message: 'forbidden' });
+      await expect(authPromise).rejects.toBeInstanceOf(RpcError);
+      expect(onSessionEnded).not.toHaveBeenCalled();
+    });
+
+    describe('backoff', () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function backoffClient(random: () => number): {
+        client: WsClient;
+        sockets: FakeWebSocket[];
+      } {
+        const sockets: FakeWebSocket[] = [];
+        const client = new WsClient({
+          url: 'ws://kernel.test/ws',
+          createSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+          },
+          reconnectDelayMs: 100,
+          maxReconnectDelayMs: 400,
+          random,
+          rpcTimeoutMs: 0,
+        });
+        return { client, sockets };
+      }
+
+      /** Advances to just before `ms` (no new socket yet), then to `ms` (exactly one more). */
+      async function expectReconnectAfter(sockets: FakeWebSocket[], ms: number): Promise<void> {
+        const before = sockets.length;
+        await vi.advanceTimersByTimeAsync(ms - 1);
+        expect(sockets).toHaveLength(before);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(sockets).toHaveLength(before + 1);
+      }
+
+      it('doubles per failed attempt up to the ceiling, and starts over after an authenticated reconnect', async () => {
+        vi.useFakeTimers();
+        // random() = 0 → the wait is exactly the lower edge of the jitter window (half of it).
+        const { client, sockets } = backoffClient(() => 0);
+        await connectAndAuth(client, sockets);
+
+        sockets[0]?.remoteClose();
+        await expectReconnectAfter(sockets, 50); // window 100
+        sockets[1]?.remoteClose(); // fails before opening
+        await expectReconnectAfter(sockets, 100); // window 200
+        sockets[2]?.remoteClose();
+        await expectReconnectAfter(sockets, 200); // window 400
+        sockets[3]?.remoteClose();
+        await expectReconnectAfter(sockets, 200); // still 400: the ceiling
+
+        // This attempt opens and authenticates — the backoff starts over.
+        const socket5 = sockets[4];
+        if (!socket5) throw new Error('expected a fifth socket');
+        socket5.open();
+        await vi.advanceTimersByTimeAsync(0);
+        respond(socket5, sentFrame(socket5, 0), { authenticated: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(client.getStatus()).toBe('connected');
+
+        socket5.remoteClose();
+        await expectReconnectAfter(sockets, 50);
+        client.close();
+      });
+
+      it('jitter spreads the wait over the upper half of the window', async () => {
+        vi.useFakeTimers();
+        const { client, sockets } = backoffClient(() => 0.5);
+        await connectAndAuth(client, sockets);
+
+        sockets[0]?.remoteClose();
+        await expectReconnectAfter(sockets, 75); // 100/2 + 0.5 × 100/2
+        client.close();
+      });
     });
   });
 });

@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Operation } from '@nexttime/shared';
 import { IllegalTransition } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runMigrations } from '../../adapters/db/migrate.js';
+import { runMigrations, splitSqlStatements } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 // Test files are exempt from the six-layer dependency-cruiser rule
 // (`kernel-governance-may-not-depend-on-upper-layers`'s `.dependency-cruiser.cjs` exclude on
@@ -14,6 +15,8 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 // `publishOperation` itself) without standing up a full `dispatchCapability` fixture.
 import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
+import { setOperationStatusObject } from '../../substrate/ontology/index.js';
+import type { OperationRecord } from './manifest.js';
 import {
   OperationDescriptionInvalidError,
   OperationDescriptionRequiredError,
@@ -880,6 +883,254 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(stillPublished?.status).toBe('published');
       // testOperation()'s own default ('observe') — the reimport's 'execute' never landed.
       expect(stillPublished?.operation.mode).toBe('observe');
+    });
+  });
+
+  // R-08 (review 2026-10-02): `importManifest` over a pending revision draft dropped `draftOf`, so
+  // publishing it left two `published` rows for one Operation identity and `getPublishedOperation`
+  // (`limit 1`, no ORDER BY) returned either one. migrations/core/0034 heals existing duplicates and
+  // adds the deferred `objects_operation_single_published` constraint.
+  describe('R-08: one published row per Operation identity', () => {
+    async function importAndPublishV1(operation: Operation): Promise<OperationRecord> {
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [operation],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      return inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: operation.name }),
+      );
+    }
+
+    /** A raw Operation row, the shape `registerOperationDraftObject` writes — used to build the
+     *  states the pre-fix code left behind (a revision draft without `draftOf`, duplicates). */
+    async function insertOperationRow(
+      client: PoolClient,
+      operation: Operation,
+      version: number,
+      status: 'draft' | 'published',
+    ): Promise<string> {
+      const result = await client.query<{ id: string }>(
+        `insert into objects (workspace_id, object_type, identity_key, properties)
+         values ($1, 'Operation', $2::jsonb, $3::jsonb)
+         returning id`,
+        [
+          workspaceId,
+          JSON.stringify({ gatekeeperId, name: operation.name, version }),
+          JSON.stringify({
+            ...operation,
+            status,
+            origin: 'import',
+            proposedBy: ownerId,
+            proposedByKind: 'human',
+            version,
+          }),
+        ],
+      );
+      const id = result.rows[0]?.id;
+      if (!id) throw new Error('failed to insert test Operation row');
+      return id;
+    }
+
+    async function publishedRows(name: string): Promise<{ id: string; version: number }[]> {
+      const result = await inTx((client) =>
+        client.query<{ id: string; properties: { version?: number } }>(
+          `select id, properties from objects
+           where workspace_id = $1 and object_type = 'Operation'
+             and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
+             and properties ->> 'status' = 'published'`,
+          [workspaceId, gatekeeperId, name],
+        ),
+      );
+      return result.rows.map((row) => ({ id: row.id, version: row.properties.version ?? 1 }));
+    }
+
+    async function statusOf(objectId: string): Promise<string | undefined> {
+      const result = await inTx((client) =>
+        client.query<{ properties: { status?: string } }>(
+          'select properties from objects where workspace_id = $1 and id = $2',
+          [workspaceId, objectId],
+        ),
+      );
+      return result.rows[0]?.properties.status;
+    }
+
+    it('importManifest over a pending revision draft keeps draftOf; publishing it leaves exactly one published row — the newest — and supersedes v1', async () => {
+      const op = testOperation({
+        name: `r08.import-over-revision.${randomUUID()}`,
+        mode: 'execute',
+        blast_radius: 'high',
+        auto_approvable: false,
+      });
+      const v1 = await importAndPublishV1(op);
+
+      // An agent's v2 revision draft is pending against the published v1.
+      const proposeAct = await newActivity();
+      const revision = await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: { ...op, mode: 'observe' },
+          proposedBy: { id: attackerId, kind: 'agent' },
+          activityId: proposeAct,
+        }),
+      );
+      expect(revision).toMatchObject({ version: 2, draftOf: v1.id });
+
+      // The gate re-declares its manifest (what enable_gate_instance does when it links this
+      // Gatekeeper) — the import replaces the pending draft and must keep it a revision of v1.
+      const importAct = await newActivity();
+      const reimport = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [{ ...op, blast_radius: 'medium' }],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      expect(reimport.imported).toEqual([
+        expect.objectContaining({ id: revision.id, version: 2, draftOf: v1.id, origin: 'import' }),
+      ]);
+      const draft = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(draft).toMatchObject({
+        status: 'draft',
+        version: 2,
+        draftOf: v1.id,
+        origin: 'import',
+      });
+
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: op.name }),
+      );
+      expect(published).toMatchObject({ version: 2, supersedes: v1.id });
+      expect(await publishedRows(op.name)).toEqual([{ id: revision.id, version: 2 }]);
+      expect(await statusOf(v1.id)).toBe('deprecated');
+      const live = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(live).toMatchObject({ id: revision.id, version: 2 });
+      expect(live?.operation.blast_radius).toBe('medium');
+    });
+
+    it('importManifest restores a lost draftOf from the live published row', async () => {
+      const op = testOperation({ name: `r08.lost-draft-of.${randomUUID()}` });
+      const v1 = await importAndPublishV1(op);
+      // A v2 draft without draftOf — what an import over a revision draft wrote before the fix.
+      const strippedId = await inTx((client) => insertOperationRow(client, op, 2, 'draft'));
+
+      const importAct = await newActivity();
+      const reimport = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [op],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      expect(reimport.imported).toEqual([
+        expect.objectContaining({ id: strippedId, version: 2, draftOf: v1.id }),
+      ]);
+      const draft = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(draft).toMatchObject({ id: strippedId, draftOf: v1.id });
+    });
+
+    it('publishOperation deprecates the older published row even when the draft carries no draftOf', async () => {
+      const op = testOperation({ name: `r08.publish-retires.${randomUUID()}` });
+      const v1 = await importAndPublishV1(op);
+      const strippedId = await inTx((client) => insertOperationRow(client, op, 2, 'draft'));
+
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: op.name }),
+      );
+      expect(published).toMatchObject({ id: strippedId, version: 2, supersedes: v1.id });
+      expect(published.draftOf).toBeUndefined();
+      expect(await publishedRows(op.name)).toEqual([{ id: strippedId, version: 2 }]);
+      expect(await statusOf(v1.id)).toBe('deprecated');
+    });
+
+    it("the database refuses a second published row for one identity at commit, yet the previous release's publish-then-deprecate order inside one transaction still commits", async () => {
+      const op = testOperation({ name: `r08.constraint.${randomUUID()}` });
+      const v1 = await importAndPublishV1(op);
+
+      await expect(
+        inTx((client) => insertOperationRow(client, op, 2, 'published')),
+      ).rejects.toMatchObject({ code: '23P01', constraint: 'objects_operation_single_published' });
+      expect(await publishedRows(op.name)).toEqual([{ id: v1.id, version: 1 }]);
+
+      // The v0.35.1 `publishOperation` order — publish the revision, then deprecate the row it
+      // supersedes — briefly holds two published rows inside its transaction. The constraint is
+      // checked at commit, so a code rollback keeps revision publishing working.
+      const proposeAct = await newActivity();
+      const revision = await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: { ...op, mode: 'execute' },
+          proposedBy: { id: ownerId, kind: 'agent' },
+          activityId: proposeAct,
+        }),
+      );
+      await inTx(async (client) => {
+        await setOperationStatusObject(
+          client,
+          workspaceId,
+          { gatekeeperId, name: op.name, version: 2 },
+          'published',
+        );
+        await setOperationStatusObject(
+          client,
+          workspaceId,
+          { gatekeeperId, name: op.name, version: 1 },
+          'deprecated',
+        );
+      });
+      expect(await publishedRows(op.name)).toEqual([{ id: revision.id, version: 2 }]);
+    });
+
+    it("core 0034's self-heal deprecates every published duplicate except the highest version, and reports the count", async () => {
+      const migration = await readFile(
+        path.join(MIGRATIONS_DIR, 'core', '0034_operation_single_published.sql'),
+        'utf8',
+      );
+      const heal = splitSqlStatements(migration).find((statement) => statement.startsWith('do $$'));
+      if (heal === undefined) throw new Error('0034 has no self-heal `do $$` block');
+
+      const op = testOperation({ name: `r08.self-heal.${randomUUID()}` });
+      const lone = testOperation({ name: `r08.self-heal-lone.${randomUUID()}` });
+      const notices: string[] = [];
+      const ids = await inTx(async (client) => {
+        // The constraint is checked at commit, so duplicates can exist inside this transaction —
+        // the state the self-heal meets on a database the R-08 bug already reached. Under RLS the
+        // heal only sees this workspace, whose committed rows hold no duplicates.
+        const v1Id = await insertOperationRow(client, op, 1, 'published');
+        const v2Id = await insertOperationRow(client, op, 2, 'published');
+        const v3Id = await insertOperationRow(client, op, 3, 'published');
+        const loneId = await insertOperationRow(client, lone, 1, 'published');
+        const onNotice = (notice: { message: string | undefined }) => {
+          notices.push(notice.message ?? '');
+        };
+        client.on('notice', onNotice);
+        try {
+          await client.query(heal);
+        } finally {
+          client.removeListener('notice', onNotice);
+        }
+        return { v1Id, v2Id, v3Id, loneId };
+      });
+
+      expect(await statusOf(ids.v1Id)).toBe('deprecated');
+      expect(await statusOf(ids.v2Id)).toBe('deprecated');
+      expect(await statusOf(ids.v3Id)).toBe('published');
+      expect(await statusOf(ids.loneId)).toBe('published');
+      expect(notices).toEqual([
+        expect.stringContaining('deprecated 2 duplicate published Operation row(s)'),
+      ]);
     });
   });
 

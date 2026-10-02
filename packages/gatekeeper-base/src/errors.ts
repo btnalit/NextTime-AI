@@ -42,6 +42,18 @@ export class TransportInvokeError extends Error {
   }
 }
 
+/** R-04: the gate itself refuses the call — its target is outside what this gate serves (the
+ *  docker gate's platform agent containers, `gatekeepers/docker/src/transport.ts`). A transport
+ *  throws it *before* touching the target system, so nothing ran: `GatekeeperBase.apply` releases
+ *  the call's idempotency reservation (a retry gets the same refusal, not 409), and `server.ts`
+ *  maps it to 403 `operation_refused`. */
+export class OperationRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OperationRefusedError';
+  }
+}
+
 export class RevertNotSupportedError extends Error {
   constructor(name: string) {
     super(`operation "${name}" does not support revert`);
