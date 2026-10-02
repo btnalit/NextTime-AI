@@ -125,6 +125,9 @@ jobs:
         with:
           runtime: node@22
           install: false
+          # The checkouts live in head/ and base/; there is no root package.json for the action to
+          # read the pnpm version from. HEAD's pin is used (every tag since v0.13.2 pins the same).
+          package-json-file: head/package.json
 
       - name: Apply HEAD migrations
         if: steps.delta.outputs.has_delta == 'true'
