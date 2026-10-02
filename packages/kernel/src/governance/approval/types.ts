@@ -162,6 +162,33 @@ export class SelfApprovalNotAllowedError extends ApprovalScopeError {
 }
 
 /**
+ * R-17 (maintainer decision D-06, docs/code-review-2026-10-02.md; I8 — `high` is never
+ * auto-approved, so it must not be automated through a service key either): `approve`/`reject`
+ * by a Principal that is not a person (`principals.kind` ≠ `'human'` — in practice a service
+ * Principal's API key, which also authenticates on the human channel) on an ActionRequest only a
+ * person may decide: `blast_radius = 'high'`, or an Operation that is not `auto_approvable` (an
+ * unpublished one counts as not, I17). Thrown by `decide.ts`'s
+ * `assertPersonDecidesWhenRequired`. Extends `ApprovalScopeError` for the same reason
+ * `SelfApprovalNotAllowedError` does: every existing `instanceof ApprovalScopeError` mapping (HTTP
+ * 403 / WS FORBIDDEN, code `forbidden`) already covers it, so the wire vocabulary is unchanged.
+ */
+export class HumanDecisionRequiredError extends ApprovalScopeError {
+  readonly actionRequestId: string;
+  constructor(
+    actionRequestId: string,
+    principalId: string,
+    event: 'approve' | 'reject',
+    why: string,
+  ) {
+    super(
+      `${event}: a person must approve or reject high-impact or non-auto-approvable requests — ActionRequest ${actionRequestId} ${why}, and principal ${principalId} is not a human Principal (I8)`,
+    );
+    this.name = 'HumanDecisionRequiredError';
+    this.actionRequestId = actionRequestId;
+  }
+}
+
+/**
  * I6/I11 concurrency hardening: thrown by `status-transition.ts`'s
  * `updateActionRequestStatusConditional` when its conditional `UPDATE ... WHERE status =
  * $expectedStatus` affects 0 rows — i.e. the row's status was no longer what the caller last read
