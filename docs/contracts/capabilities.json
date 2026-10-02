@@ -6555,12 +6555,14 @@
           "type": "string"
         },
         "resourceType": {
+          "const": "gatekeeper",
           "type": "string"
         }
       },
       "required": [
         "principalId",
-        "resourceType"
+        "resourceType",
+        "resourceId"
       ],
       "type": "object"
     },
