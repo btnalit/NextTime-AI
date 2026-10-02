@@ -123,7 +123,7 @@ fi
 # and ./.env from cwd) --------------------------------------------------------------------------
 if ! docker compose config >/dev/null 2>&1; then
 	echo "restore: 'docker compose config' failed — run this script from the compose project" >&2
-	echo "         directory (the checkout root, e.g. cd /opt/NextTime-AI first)." >&2
+	echo "         directory (the checkout root, e.g. cd <CODE_DIR> first)." >&2
 	exit 1
 fi
 
