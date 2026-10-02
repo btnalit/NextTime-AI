@@ -103,7 +103,7 @@ export class OntologyDraftNotFoundError extends Error {
   readonly version: number;
   constructor(ontologyId: string, version: number) {
     super(
-      `publish_ontology_version: no draft ontology_versions row (id=${ontologyId}, version=${version}) of yours — already published/deprecated, never proposed, or proposed by someone else`,
+      `no draft ontology_versions row (id=${ontologyId}, version=${version}) of yours — already published/deprecated, never proposed, or proposed by someone else`,
     );
     this.name = 'OntologyDraftNotFoundError';
     this.ontologyId = ontologyId;
