@@ -23,7 +23,7 @@ import {
   resolveRequestedGateIds,
 } from './handle-mint.js';
 import type { DeclaredGateRecord, MintWorkerRunHandleInput } from './handle-mint.js';
-import { reactToSupervisorStatus } from './lifecycle.js';
+import { failTaskAndReapWorkerRuns, reactToSupervisorStatus } from './lifecycle.js';
 import { HARD_MAX_DEPTH, resolveQuotas } from './quotas.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
@@ -461,31 +461,13 @@ export async function invokeWorkerCreate(
       image,
     });
   } catch (err) {
-    await withWorkspace(
-      deps.pool,
-      { workspaceId, principalId: caller.principalId },
-      async (client) => {
-        // Status-guarded UPDATE + rowCount (leftover 67, docs/STATUS.md §4 — same race class
-        // `lifecycle.ts`'s `completeTaskWithResult`/`failTaskRow` guard against): the Task this
-        // function just inserted is `queued` at this point — `spawnWorkerRun` above never got the
-        // chance to flip it to `running` before throwing — but a concurrent `cancelTask` call could
-        // have moved it off `queued` in the meantime; guard on that exact status rather than an
-        // unconditional overwrite, and skip the audit row when the guard loses (nothing changed).
-        const updateResult = await client.query(
-          `update tasks set status = 'failed', failed_at = now(), failure_reason = $3
-         where workspace_id = $1 and id = $2 and status = 'queued'`,
-          [workspaceId, task.id, 'spawn_failed'],
-        );
-        if ((updateResult.rowCount ?? 0) === 0) return;
-        await recordTaskTransition(client, workspaceId, {
-          actorPrincipalId: caller.principalId,
-          action: 'task.fail',
-          taskId: task.id,
-          resultingStatus: 'failed',
-          extraAuditPayload: { failureReason: 'spawn_failed' },
-        });
-      },
-    );
+    // R-09: fail the Task *and* reap its WorkerRun — `lifecycle.ts`'s `failTaskAndReapWorkerRuns`,
+    // the same path the `spawn_lost` sweep takes: the run's Handle tree is revoked, and the
+    // container a supervisor that answered too late (client timeout) may still have started is
+    // best-effort stopped. The Task write stays status-guarded (leftover 67, `failTaskRow`): the
+    // Task this function just inserted is `queued` here, but a concurrent `cancelTask` may have
+    // moved it on — that status is left as is, with no `task.fail` audit row.
+    await failTaskAndReapWorkerRuns(deps, workspaceId, caller.principalId, task.id, 'spawn_failed');
     throw err;
   }
 
