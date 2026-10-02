@@ -72,9 +72,13 @@ export class GatekeeperClientError extends Error {
 }
 
 export class GatekeeperTimeoutError extends Error {
-  constructor(message: string) {
+  /** The gate path that timed out (`gate/apply`, `gate/observe`, …) — `action-executor.ts` treats a
+   *  `gate/apply` timeout as "outcome unknown" rather than a failure (the gate may still finish). */
+  readonly path: string;
+  constructor(message: string, path = '') {
     super(message);
     this.name = 'GatekeeperTimeoutError';
+    this.path = path;
   }
 }
 
@@ -122,6 +126,13 @@ export interface GatekeeperClient {
 export interface HttpGatekeeperClientOptions {
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
+  /** Timeout for `gate/apply` only (default `DEFAULT_APPLY_TIMEOUT_MS`). An `apply` performs the
+   *  effect itself — a container restart waits up to the caller's own `timeoutSeconds` for a
+   *  graceful stop, an ssh command runs as long as it runs — so it gets a longer budget than the
+   *  read-side calls (`timeoutMs`). Real-model regression 2026-10-02: a `container.restart` with
+   *  `timeoutSeconds: 30` hit the old shared 15 s budget, the ActionRequest was marked `failed`,
+   *  and the container restarted anyway. */
+  readonly applyTimeoutMs?: number;
   /** Explicit override for the gate auth token (mainly for tests) — takes precedence over
    *  `NEXTTIME_GATE_TOKEN_FILE` and skips reading a file entirely. Omit to use the env-driven
    *  loader; pass `env` (below) to test that loader against a real temp file instead. */
@@ -131,6 +142,7 @@ export interface HttpGatekeeperClientOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_APPLY_TIMEOUT_MS = 60_000;
 
 interface EnvelopeOk {
   readonly ok: true;
@@ -145,11 +157,13 @@ type Envelope = EnvelopeOk | EnvelopeErr;
 export class HttpGatekeeperClient implements GatekeeperClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly applyTimeoutMs: number;
   private readonly token: string | undefined;
 
   constructor(options: HttpGatekeeperClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.applyTimeoutMs = options.applyTimeoutMs ?? DEFAULT_APPLY_TIMEOUT_MS;
     this.token = options.token ?? loadGateToken(options.env ?? process.env);
   }
 
@@ -158,10 +172,11 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     path: string,
     method: 'GET' | 'POST' | 'DELETE',
     body?: unknown,
+    timeoutMs: number = this.timeoutMs,
   ): Promise<unknown> {
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const headers: Record<string, string> = { ...correlationHeaders(currentCorrelationId()) };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.token !== undefined) headers.authorization = gateAuthorizationHeader(this.token);
@@ -176,7 +191,8 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     } catch (err) {
       if ((err as { name?: string }).name === 'AbortError') {
         throw new GatekeeperTimeoutError(
-          `gatekeeper client: ${path} timed out after ${this.timeoutMs}ms`,
+          `gatekeeper client: ${path} timed out after ${timeoutMs}ms`,
+          path,
         );
       }
       throw new GatekeeperClientError(`gatekeeper client: ${path} request failed`, {
@@ -214,7 +230,13 @@ export class HttpGatekeeperClient implements GatekeeperClient {
   }
 
   async apply(endpoint: string, input: GatekeeperApplyInput): Promise<ApplyResponse> {
-    return (await this.request(endpoint, 'gate/apply', 'POST', input)) as ApplyResponse;
+    return (await this.request(
+      endpoint,
+      'gate/apply',
+      'POST',
+      input,
+      this.applyTimeoutMs,
+    )) as ApplyResponse;
   }
 
   async revert(endpoint: string, input: GatekeeperRevertInput): Promise<RevertResponse> {

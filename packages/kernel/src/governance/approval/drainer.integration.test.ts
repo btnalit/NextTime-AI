@@ -223,6 +223,46 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(succeededAfter?.status).toBe('executed');
     });
 
+    // Real-model regression 2026-10-02: a gate `apply` timeout is "outcome unknown", not failure —
+    // the row must stay `executing` (for the stale-executing reaper's idempotent replay), never be
+    // written `failed` while the gate may still be completing the effect.
+    it('an indeterminate executor result writes no terminal state: the row stays executing and the drain continues', async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+
+      const unknown = await createAutoApproved(gatekeeperId, 'test.drain.unknown');
+      const next = await createAutoApproved(gatekeeperId, 'test.drain.after-unknown');
+
+      const calls: string[] = [];
+      const executor = fakeExecutor(
+        {
+          'test.drain.unknown': {
+            ok: false,
+            indeterminate: true,
+            reason: 'outcome unknown: simulated apply timeout',
+          },
+        },
+        calls,
+      );
+      const drainer = new ApprovalDrainer({ executor, withTransaction });
+
+      const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+      expect(result.processed).toBe(2);
+      expect(calls).toEqual(['test.drain.unknown', 'test.drain.after-unknown']);
+
+      const unknownAfter = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) => getActionRequest(client, workspaceId, unknown.id),
+      );
+      expect(unknownAfter?.status).toBe('executing');
+
+      const nextAfter = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, next.id),
+      );
+      expect(nextAfter?.status).toBe('executed');
+    });
+
     it('single-flight: a concurrent drain call for the same gatekeeper is skipped, not queued', async () => {
       const gatekeeperId = await insertGatekeeperObject();
       await createAutoApproved(gatekeeperId, 'test.drain.slow');
