@@ -1373,6 +1373,24 @@ describe.runIf(DATABASE_URL !== undefined)(
     // describe on purpose: the slow apply holds this gatekeeper's single-flight drain, and the
     // test waits for it to finish before returning.
     it('an auto-approved apply slower than the request budget returns executing in time and still completes', async () => {
+      // Earlier tests in this file leave `pending_approval` rows on this gatekeeper (the
+      // unclassified and draft operations); the drain stops at the first one (§8.1 "遇 pending
+      // 停"), so this row would never start. Reject them through the governed path first.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const pending = await client.query<{ id: string }>(
+          `select id from action_requests
+           where workspace_id = $1 and gatekeeper_id = $2 and status = 'pending_approval'`,
+          [workspaceId, gatekeeperId],
+        );
+        for (const row of pending.rows) {
+          await rejectActionRequest(client, workspaceId, {
+            actionRequestId: row.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          });
+        }
+      });
+
       const slowMs = AWAIT_DECISION_TIMEOUT_MS + 1200;
       const caller = humanCaller(workspaceId, ownerId);
       const startedAt = Date.now();
