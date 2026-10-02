@@ -39,6 +39,7 @@ import {
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
+import { isLastActiveHumanOwner } from './auth.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog } from './models-catalog-handler.js';
 import { publishSessionKick } from './session-revocation.js';
@@ -651,20 +652,9 @@ async function loadMembership(
   return found;
 }
 
-async function countOtherActiveOwners(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-): Promise<number> {
-  const result = await client.query<{ n: string }>(
-    `select count(*)::text as n from principals
-      where workspace_id = $1 and kind = 'human' and role = 'owner'
-        and disabled_at is null and id <> $2`,
-    [workspaceId, principalId],
-  );
-  return Number(result.rows[0]?.n ?? '0');
-}
-
+// R-06: "last owner" is the predicate the workspace plane uses too (`isLastActiveHumanOwner`,
+// auth.ts) — one rule for both planes: the last active human owner, a service owner never
+// counting toward it.
 export const setMembershipRoleHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string; role: Role };
   const membership = await loadMembership(client, input.userId, input.workspaceId);
@@ -672,9 +662,12 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
     membership.role === 'owner' &&
     input.role !== 'owner' &&
     !membership.disabled &&
-    (await countOtherActiveOwners(client, input.workspaceId, membership.principalId)) === 0
+    (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
-    throw new PlatformAdminError('last_owner', 'the last owner of a workspace cannot be demoted');
+    throw new PlatformAdminError(
+      'last_owner',
+      'the last human owner of a workspace cannot be demoted',
+    );
   }
   await client.query('update principals set role = $3 where workspace_id = $1 and id = $2', [
     input.workspaceId,
@@ -704,9 +697,12 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
   if (
     membership.role === 'owner' &&
     !membership.disabled &&
-    (await countOtherActiveOwners(client, input.workspaceId, membership.principalId)) === 0
+    (await isLastActiveHumanOwner(client, input.workspaceId, membership.principalId))
   ) {
-    throw new PlatformAdminError('last_owner', 'the last owner of a workspace cannot be removed');
+    throw new PlatformAdminError(
+      'last_owner',
+      'the last human owner of a workspace cannot be removed',
+    );
   }
   await client.query(
     `update principals set disabled_at = coalesce(disabled_at, now())

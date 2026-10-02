@@ -2368,7 +2368,7 @@ const membersCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ principalId: id, role: RoleSchema }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Change a Principal’s role. Refuses to demote the last remaining owner and refuses any non-human (agent/service) Principal.',
+      'Change a human or service Principal’s role. Refuses to demote the workspace’s last active human owner (a service owner never counts) and refuses an agent or internal Principal.',
   },
   {
     name: 'rotate_api_key',
@@ -2394,7 +2394,7 @@ const membersCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ principalId: id }).strict(),
     resultSchema: wire.PrincipalWireSchema,
     description:
-      'Disable a Principal: its API key and entry-session Handles stop working immediately. Refuses the last remaining owner and refuses disabling oneself.',
+      'Disable a human or service Principal: its API key and every Handle issued on its behalf stop working immediately. Refuses the workspace’s last active human owner, an agent or internal Principal, and disabling oneself.',
   },
   {
     name: 'get_workspace',

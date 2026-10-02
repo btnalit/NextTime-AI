@@ -36,6 +36,11 @@ export interface PrincipalDetailProps {
  * identity are `kit/ref-chip` (S8 W1-A6, audit S10: this page loads no `list_worker_definitions`
  * directory, so the kit chip self-resolves its own name through `resolve_refs` instead of
  * degrading to a bare id).
+ *
+ * R-06 (review 2026-10-02, D-05): the edit section shows for a `human` member and a `service`
+ * credential alike — the kernel disables, re-keys and re-roles both — and stays hidden for the
+ * platform's own identities it refuses (`platform_managed`): a Worker's `agent` Principal and an
+ * internal service Principal (`internal`, kernel-derived).
  */
 export function PrincipalDetail({
   http,
@@ -111,6 +116,7 @@ export function PrincipalDetail({
   }
 
   const disabled = Boolean(principal.disabledAt);
+  const platformManaged = principal.kind === 'agent' || principal.internal === true;
 
   const metadataItems: KeyValueItem[] = [
     {
@@ -190,7 +196,7 @@ export function PrincipalDetail({
           </DrawerSection>
         ) : null}
 
-        {canManage ? (
+        {canManage && !platformManaged ? (
           <DrawerSection title={t('编辑', 'Edit')}>
             <Field id="principal-role" label={t('角色', 'Role')}>
               <div className="row">

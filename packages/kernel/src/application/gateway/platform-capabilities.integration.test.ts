@@ -675,6 +675,56 @@ describe.runIf(DATABASE_URL !== undefined)(
           'last_owner',
         );
       });
+
+      it('last_owner counts people only (R-06): a service owner never stands in for the last human owner', async () => {
+        // A bare workspace row is enough — memberships are all these two capabilities touch.
+        const ws = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query('insert into workspaces (id, name) values ($1, $2)', [
+            ws,
+            `last-human-owner-${ws.slice(0, 8)}`,
+          ]),
+        );
+        const person = await createUser(pool, {
+          login: `last-person-${randomUUID().slice(0, 8)}`,
+          displayName: 'Last Person',
+        });
+        await callAsAdmin('add_membership', { userId: person.id, workspaceId: ws, role: 'owner' });
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `insert into principals (workspace_id, kind, role, display_name, api_key_hash)
+             values ($1, 'service', 'owner', 'CI owner', $2)`,
+            [ws, hashApiKey(generateApiKey())],
+          ),
+        );
+
+        await expectPlatformError(
+          () =>
+            callAsAdmin('set_membership_role', {
+              userId: person.id,
+              workspaceId: ws,
+              role: 'member',
+            }),
+          'last_owner',
+        );
+        await expectPlatformError(
+          () => callAsAdmin('remove_membership', { userId: person.id, workspaceId: ws }),
+          'last_owner',
+        );
+
+        // A second person owning the workspace lifts the refusal.
+        const second = await createUser(pool, {
+          login: `second-person-${randomUUID().slice(0, 8)}`,
+          displayName: 'Second Person',
+        });
+        await callAsAdmin('add_membership', { userId: second.id, workspaceId: ws, role: 'owner' });
+        const demoted = await callAsAdmin<UserMembershipWire>('set_membership_role', {
+          userId: person.id,
+          workspaceId: ws,
+          role: 'member',
+        });
+        expect(demoted.role).toBe('member');
+      });
     });
 
     // ---- merge_user ------------------------------------------------------------------------------

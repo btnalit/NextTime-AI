@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role } from '@nexttime/shared';
+import type { PrincipalKind, Role } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -29,6 +29,7 @@ import {
 } from './members-handlers.js';
 import { ModelsCatalogUnavailableError } from './models-catalog-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import { type SessionKick, subscribeToSessionKicks } from './session-revocation.js';
 
 /**
  * application/gateway/members-flow.integration.test: DB-gated (real Postgres; auto-skip without
@@ -42,10 +43,15 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
+function humanCaller(
+  workspaceId: string,
+  principalId: string,
+  role: Role,
+  kind: PrincipalKind = 'human',
+): ResolvedCaller {
   return {
     channel: 'human',
-    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+    principal: { workspaceId, id: principalId, kind, role, displayName: null },
     session: {
       workspaceId,
       id: randomUUID(),
@@ -380,22 +386,185 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await authenticateHuman(pool, key1))?.principal.id).toBe(member1);
     });
 
-    it('rotate_api_key/set_principal_role/disable_principal refuse a non-human principal target', async () => {
+    /** `PrincipalOperationRefusedError` carries its `reason` — assert that, not only the class
+     *  (several refusals share it). */
+    async function expectRefused(call: () => Promise<unknown>, reason: string): Promise<void> {
+      const thrown = await call().then(
+        () => {
+          throw new Error(`expected PrincipalOperationRefusedError("${reason}"), but it resolved`);
+        },
+        (err: unknown) => err,
+      );
+      expect(thrown).toBeInstanceOf(PrincipalOperationRefusedError);
+      expect((thrown as PrincipalOperationRefusedError).reason).toBe(reason);
+    }
+
+    async function readPrincipalState(
+      ws: string,
+      principalId: string,
+    ): Promise<{ role: string; disabled_at: Date | null; api_key_hash: string | null }> {
+      const result = await withWorkspace(
+        pool,
+        { workspaceId: ws, principalId },
+        (client) =>
+          client.query<{ role: string; disabled_at: Date | null; api_key_hash: string | null }>(
+            'select role, disabled_at, api_key_hash from principals where workspace_id = $1 and id = $2',
+            [ws, principalId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error(`readPrincipalState: no principal ${principalId}`);
+      return row;
+    }
+
+    it('rotate_api_key/set_principal_role/disable_principal refuse an agent or an internal service principal (R-06: platform_managed), changing nothing', async () => {
       const agentId = await adminInsertPrincipal(workspaceId, 'member', 'Agent X', 'agent');
+      const internalKey = `key-${randomUUID()}`;
+      const internalId = await adminInsertPrincipal(
+        workspaceId,
+        'member',
+        '__members_flow_internal__',
+        'service',
+        internalKey,
+      );
       const owner = humanCaller(workspaceId, ownerId, 'owner');
 
+      for (const principalId of [agentId, internalId]) {
+        const before = await readPrincipalState(workspaceId, principalId);
+        await expectRefused(
+          () =>
+            dispatchCapability({ pool }, owner, 'set_principal_role', {
+              principalId,
+              role: 'operator',
+            }),
+          'platform_managed',
+        );
+        await expectRefused(
+          () => dispatchCapability({ pool }, owner, 'rotate_api_key', { principalId }),
+          'platform_managed',
+        );
+        await expectRefused(
+          () => dispatchCapability({ pool }, owner, 'disable_principal', { principalId }),
+          'platform_managed',
+        );
+        expect(await readPrincipalState(workspaceId, principalId)).toEqual(before);
+      }
+      // The internal Principal's key is untouched by the refused rotate.
+      expect((await authenticateHuman(pool, internalKey))?.principal.id).toBe(internalId);
+    });
+
+    it('create_principal refuses the reserved internal `__…__` display name (R-06)', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      await expectRefused(
+        () =>
+          dispatchCapability({ pool }, owner, 'create_principal', {
+            role: 'owner',
+            displayName: '__looks_internal__',
+          }),
+        'reserved_name',
+      );
+    });
+
+    it('a service principal can be re-roled, re-keyed and disabled (R-06): role change revokes its role-scoped Handles, rotation cuts the old key, disabling refuses the current key and revokes its service Handles', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const created = (await dispatchCapability({ pool }, owner, 'create_principal', {
+        role: 'owner',
+        displayName: 'CI owner key',
+      })) as { principal: { id: string; kind: string; role: string }; apiKey: string };
+      const serviceId = created.principal.id;
+      expect(created.principal.kind).toBe('service');
+      expect(created.principal.role).toBe('owner');
+      expect((await authenticateHuman(pool, created.apiKey))?.principal.id).toBe(serviceId);
+
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+
+      // set_principal_role: an `issue_handle` (mcp_session) Handle minted under the owner role is
+      // revoked by the demotion, the same way a person's is.
+      const mcp = await issueMcpSessionHandle(workspaceId, serviceId, keyPair);
+      const demoted = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
+        principalId: serviceId,
+        role: 'member',
+      })) as { id: string; kind: string; role: string };
+      expect(demoted).toMatchObject({ id: serviceId, kind: 'service', role: 'member' });
       await expect(
-        dispatchCapability({ pool }, owner, 'set_principal_role', {
-          principalId: agentId,
-          role: 'operator',
-        }),
-      ).rejects.toThrow(PrincipalOperationRefusedError);
+        authenticateHandle(pool, mcp.token, { publicKey: keyPair.publicKey }),
+      ).rejects.toThrow(HandleRevoked);
+
+      // rotate_api_key (by an owner, not the key itself): the old key is refused at once, the
+      // new one authenticates; the credential's open /ws sockets are kicked after commit.
+      const kicks: SessionKick[] = [];
+      const unsubscribe = subscribeToSessionKicks((kick) => {
+        kicks.push(kick);
+      });
+      const rotated = (await dispatchCapability({ pool }, owner, 'rotate_api_key', {
+        principalId: serviceId,
+      }).finally(unsubscribe)) as { principalId: string; apiKey: string };
+      expect(rotated.principalId).toBe(serviceId);
+      expect(await authenticateHuman(pool, created.apiKey)).toBeNull();
+      expect((await authenticateHuman(pool, rotated.apiKey))?.principal.id).toBe(serviceId);
+      expect(kicks.some((kick) => kick.principalIds?.includes(serviceId))).toBe(true);
+
+      // disable_principal: the current key stops authenticating and a service Handle
+      // (`issue_service_handle`'s `kind='service'` session) is revoked.
+      const serviceHandle = await withWorkspace(
+        pool,
+        { workspaceId, principalId: serviceId },
+        async (client) => {
+          const session = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'service', $2, 'active') returning id`,
+            [workspaceId, serviceId],
+          );
+          const sessionId = session.rows[0]?.id;
+          if (!sessionId) throw new Error('failed to insert the service session');
+          return issueHandle(client, {
+            sessionId,
+            scope: { capabilities: ['search'], resources: {} },
+            ttlSeconds: 3600,
+            privateKey: keyPair.privateKey,
+          });
+        },
+        { skipRoleSwitch: true },
+      );
+      const disabled = (await dispatchCapability({ pool }, owner, 'disable_principal', {
+        principalId: serviceId,
+      })) as { id: string; disabledAt: string | null };
+      expect(disabled.disabledAt).not.toBeNull();
+      expect(await authenticateHuman(pool, rotated.apiKey)).toBeNull();
+      const revoked = await pool.query<{ revoked_at: Date | null }>(
+        'select revoked_at from capability_handles where jti = $1',
+        [serviceHandle.jti],
+      );
+      expect(revoked.rows[0]?.revoked_at).not.toBeNull();
       await expect(
-        dispatchCapability({ pool }, owner, 'rotate_api_key', { principalId: agentId }),
-      ).rejects.toThrow(PrincipalOperationRefusedError);
-      await expect(
-        dispatchCapability({ pool }, owner, 'disable_principal', { principalId: agentId }),
-      ).rejects.toThrow(PrincipalOperationRefusedError);
+        authenticateHandle(pool, serviceHandle.token, { publicKey: keyPair.publicKey }),
+      ).rejects.toThrow(HandleRevoked);
+    });
+
+    it('rotate_api_key: a service key rotating itself is not kicked off its own socket (R-06)', async () => {
+      const key = `key-${randomUUID()}`;
+      const serviceId = await adminInsertPrincipal(
+        workspaceId,
+        'member',
+        'Self rotator',
+        'service',
+        key,
+      );
+      const self = humanCaller(workspaceId, serviceId, 'member', 'service');
+      const kicks: SessionKick[] = [];
+      const unsubscribe = subscribeToSessionKicks((kick) => {
+        kicks.push(kick);
+      });
+      const rotated = (await dispatchCapability({ pool }, self, 'rotate_api_key', {
+        principalId: serviceId,
+      }).finally(unsubscribe)) as { apiKey: string };
+      expect(await authenticateHuman(pool, key)).toBeNull();
+      expect((await authenticateHuman(pool, rotated.apiKey))?.principal.id).toBe(serviceId);
+      expect(kicks.some((kick) => kick.principalIds?.includes(serviceId))).toBe(false);
     });
 
     it('a not-found principalId → PrincipalNotFoundError (404 family) for every member-management capability', async () => {
@@ -657,6 +826,70 @@ describe.runIf(DATABASE_URL !== undefined)(
           principalId: secondOwnerId,
         }),
       ).rejects.toThrow(PrincipalOperationRefusedError);
+    });
+
+    it('last-owner protection counts people only (R-06): a service owner never stands in for the last human owner, and is never protected itself', async () => {
+      const ws = await adminInsertWorkspace('members-flow-last-human-owner-workspace');
+      const personId = await adminInsertPrincipal(ws, 'owner', 'Only Person');
+      const serviceOwnerId = await adminInsertPrincipal(
+        ws,
+        'owner',
+        'CI owner',
+        'service',
+        `key-${randomUUID()}`,
+      );
+      const asService = humanCaller(ws, serviceOwnerId, 'owner', 'service');
+      const asPerson = humanCaller(ws, personId, 'owner');
+
+      // The service owner can neither disable nor demote the only person who owns the workspace…
+      await expectRefused(
+        () =>
+          dispatchCapability({ pool }, asService, 'disable_principal', { principalId: personId }),
+        'last_owner',
+      );
+      await expectRefused(
+        () =>
+          dispatchCapability({ pool }, asService, 'set_principal_role', {
+            principalId: personId,
+            role: 'member',
+          }),
+        'last_owner',
+      );
+      // …nor may that person step down while only the service owner would remain.
+      await expectRefused(
+        () =>
+          dispatchCapability({ pool }, asPerson, 'set_principal_role', {
+            principalId: personId,
+            role: 'operator',
+          }),
+        'last_owner',
+      );
+      expect(await readPrincipalState(ws, personId)).toMatchObject({
+        role: 'owner',
+        disabled_at: null,
+      });
+
+      // The service owner itself counts for nothing: demoting and disabling it both go through.
+      const demoted = (await dispatchCapability({ pool }, asPerson, 'set_principal_role', {
+        principalId: serviceOwnerId,
+        role: 'member',
+      })) as { role: string };
+      expect(demoted.role).toBe('member');
+      const disabled = (await dispatchCapability({ pool }, asPerson, 'disable_principal', {
+        principalId: serviceOwnerId,
+      })) as { disabledAt: string | null };
+      expect(disabled.disabledAt).not.toBeNull();
+
+      // A second person owning the workspace lifts the refusal.
+      const secondPersonId = await adminInsertPrincipal(ws, 'owner', 'Second Person');
+      const asSecondPerson = humanCaller(ws, secondPersonId, 'owner');
+      const disabledPerson = (await dispatchCapability(
+        { pool },
+        asSecondPerson,
+        'disable_principal',
+        { principalId: personId },
+      )) as { disabledAt: string | null };
+      expect(disabledPerson.disabledAt).not.toBeNull();
     });
 
     it('list_principals: {items}, includes disabled principals with disabledAt set', async () => {
