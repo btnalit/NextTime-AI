@@ -36,7 +36,8 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 | **codeql.yml** | CodeQL 代码扫描（javascript-typescript，默认规则集 + security-and-quality） | push main / 每个 PR / 每周一 | Security → Code scanning alerts 里看；非必过检查 |
 | **scorecard.yml** | OpenSSF Scorecard 供应链健康度评分，结果发布到 api.scorecard.dev 并上传到 code scanning | push main / 每周六 | Security → Code scanning alerts；README 的 Scorecard 徽章会显示当前分数 |
 | **image-scan.yml** | Trivy 扫描本仓库构建的全部 10 个平台镜像（OS + npm 漏洞，HIGH/CRITICAL） | 每周一 + 手动（`gh workflow run image-scan.yml --ref <分支>`） | Security → Code scanning alerts，按 `image-scan-<镜像名>` 分类查看每个镜像各自的结果；非必过检查，一个镜像扫描失败不影响其它九个（`continue-on-error` + `fail-fast: false`） |
-| **release-please.yml** | 维护一个滚动的 "chore: release X.Y.Z" PR，合并后打 tag、发 GitHub Release | push main | 见 `docs/runbooks/release.md`——合并那个 release PR 前有一步必须手动做的事（补一次 CI 触发） |
+| **release-please.yml** | 维护一个滚动的 "chore: release X.Y.Z" PR，合并后打 tag、发 GitHub Release；发版那次随后调用 `publish-images.yml` | push main | 见 `docs/runbooks/release.md`——合并那个 release PR 前有一步必须手动做的事（补一次 CI 触发） |
+| **publish-images.yml**（S9 D1） | 构建并推送十一个平台镜像到 GHCR（`vX.Y.Z` + `sha-<短提交>`），SBOM / provenance，cosign keyless 签名，Trivy 扫描已推送镜像（只报告） | 由 release-please.yml 在发版时调用；也可手动 `workflow_dispatch` 输入已有 tag 补发 | 主机用 `scripts/pull-images.sh vX.Y.Z` 拉取（`release.md` §3）；某个镜像失败就重跑该 tag 的 `publish-images`，主机期间退回 `build-images.sh` |
 | **pr-title.yml** | PR 标题按 conventional commits 校验 | 每个 PR 的 open/edit/reopen | 非必过检查；标题不合规范改标题重新触发就行 |
 
 ## 常见问题
