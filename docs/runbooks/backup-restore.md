@@ -109,11 +109,24 @@ sh scripts/restore.sh --db ${NEXTTIME_DATA}/backups/db/nexttime-<ts>.dump
 docker compose exec -T postgres psql -U nexttime -d nexttime_restore_<ts> -c '\dt'
 docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "nexttime_restore_<ts>";'
 ```
-要恢复到活库 `nexttime`（危险，仅故障恢复时用）：加 `--target-db nexttime --i-know`。这条路径下
-`restore.sh` 会先 `docker compose stop kernel agent-host worker-supervisor backup`（它们持有到
-`nexttime` 的连接，或写入即将被 `pg_restore --clean` 清空重建的同一份数据），脚本退出时（无论
-成功还是失败）通过 trap 自动 `docker compose start` 把四者拉回来——`postgres` 本身不停，恢复过程
-中始终可达。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
+要恢复到活库 `nexttime`（危险，仅故障恢复时用）：加 `--target-db nexttime --i-know`。这条路径的步骤：
+
+1. `restore.sh` 先 `docker compose stop kernel agent-host worker-supervisor backup`（它们持有到
+   `nexttime` 的连接，或写入即将被替换的数据），等 `nexttime` 上的连接清零。
+2. 把现库**改名**为 `nexttime_pre_restore_<ts>` 留作回退，不删任何东西。
+3. 新建空的 `nexttime`，用 `pg_restore --exit-on-error --single-transaction` 整体恢复：要么全部成功，要么全部回滚。
+4. 核对 public 下的表数是否等于 dump 自己 TOC 里列出的表数。
+
+任何一步失败都会自动把半成品删掉、把 `nexttime_pre_restore_<ts>` 改回 `nexttime`。如果连改名回退也失败了，脚本会打印手工收尾的两条命令。
+
+脚本退出时（无论成功、失败还是被 Ctrl-C / ssh 断开打断）都会通过 trap 自动 `docker compose start` 把四个服务拉回来；`postgres` 本身不停，恢复过程中始终可达。成功后旧库仍以 `nexttime_pre_restore_<ts>` 保留，核对恢复后的栈正常再按 summary 里的命令删掉，它会占用一份库的磁盘空间。
+
+2026-10-02 复审 R-11 之前，这条路径用的是 `pg_restore --clean --if-exists` 直接盖在活库上。这样做有两个问题：
+
+- 新版本建的对象会留下来挡住 DROP，跨版本回滚会得到新旧混杂的库；
+- `pg_restore` 的失败只会让它退出 1，而脚本把退出 1 当成警告，照样报告成功。
+
+只有临时库路径（`drill-restore.sh`）能在主机上实测；活库路径除改名一步外与它完全相同。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
 config/ gatekeepers/ caddy/ llm-proxy/ models/` 任何一个活目录——把 `llm-proxy/keys.json` 之类
 的供应商 key 挪回 `${NEXTTIME_DATA}/llm-proxy/` 前先核对是不是真要覆盖当前值，覆盖前建议先把
 当前 `keys.json` 另存一份；暂存目录本身继承了归档里 `keys.json` 的 `0600`，但目录本身按当前
