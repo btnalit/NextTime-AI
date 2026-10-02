@@ -118,6 +118,7 @@ REAL scenario=<key> ok=<k>/<n> turn_tool_calls=<sum> turn_tool_errors=<sum> work
 | 现象 | 根因 | 排查 |
 |---|---|---|
 | `task=none` | 入口 agent 这一轮根本没有派 Worker（没调 `find_workers`/`invoke_worker`，或调了但没有真的创建 Task） | 用 `get-history` 读这条 chat 的完整历史，看模型这一轮实际调了哪些工具、参数是什么 |
+| `task=none`，回复说"已经重启过、无需重复提交" | 入口 agent 从图谱（`search` / `get_task` / `state_at`）和容器 `StartedAt` 看到上一轮刚重启过，把同一句请求判为重复——判断本身合理，是场景重复下同一句指令造成的（2026-10-02 v0.34.0 两次）。自那以后第 2 轮起的请求带"第 N 次：这是一次新的重启请求"，第 1 轮保持原句以便与历史版本对比 | 读该轮 `report_turn` 摘要；若仍出现，说明模型不认这句说明，记为模型行为而非平台问题 |
 | `action=none` | Worker 起了、但从未真的调用门上的能力（`request_action`） | 检查 Worker 的 pi transcript（§ "worker_tools=?/?" 一行）看它这一轮到底调了什么 |
 | `restarted=0` 但 `action=executed` | 门确实执行了，但 fixture 容器 id 传错/过期 | 核对本次调用里实际传给门的 `CONTAINER_ID` 与 `docker inspect` 里 fixture 容器的真实 id 是否一致 |
 | `TURN_STATUS` 为空 | Turn 在脚本给的超时窗口内没有结算——真实模型比 fake provider 慢，或者卡在某次工具调用上 | 调大调用侧的超时预期，或者查 `llm-proxy` 日志确认是不是这次调用本身卡住/被限流 |

@@ -1166,7 +1166,14 @@ real_docker_restart_run() {
   started_before=$(docker inspect -f '{{.State.StartedAt}}' "$RESTART_TARGET_ID" 2>/dev/null)
   [ "$i" -eq 1 ] && resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
 
-  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "重启测试容器 CONTAINER_ID=$RESTART_TARGET_ID" 240000 "auto-approve=$GATEKEEPER_ID_DOCKER")
+  # Runs 2..N say that this is a new request: the entry agent can see (graph search, get_task,
+  # container StartedAt) that the same container was restarted minutes ago by the previous run,
+  # and on 2026-10-02 it twice declined a "duplicate" restart — sound judgement that this
+  # scenario's success criterion would otherwise count as a platform failure. Run 1 keeps the
+  # original wording so it stays comparable with earlier releases.
+  msg="重启测试容器 CONTAINER_ID=$RESTART_TARGET_ID"
+  [ "$i" -gt 1 ] && msg="$msg（第 $i 次：这是一次新的重启请求，不是重复提交，请照常执行）"
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "$msg" 240000 "auto-approve=$GATEKEEPER_ID_DOCKER")
   turn_status=$(parse_kv "$chat_out" TURN_STATUS)
   tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
   approved=$(parse_kv "$chat_out" APPROVED)
