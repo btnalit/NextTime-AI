@@ -5,11 +5,12 @@ import {
   IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
+  OperationRefusedError,
   RevertNotSupportedError,
 } from './errors.js';
 import { hashIdempotencyParams } from './idempotency-store.js';
 import type { IdempotencyStore } from './idempotency-store.js';
-import type { Transport } from './kinds/types.js';
+import type { Transport, TransportInvokeResult } from './kinds/types.js';
 import { assertParamsValid } from './params-validation.js';
 import type { ObservedFactCandidate } from './protocol.js';
 import { applyResultMapping } from './result-mapping.js';
@@ -167,10 +168,20 @@ export class GatekeeperBase {
     }
 
     const credential = await this.resolveCredential(ctx.onBehalfOf);
-    const result = await this.options.transport.invoke(operation, params, {
-      onBehalfOf: ctx.onBehalfOf,
-      credential,
-    });
+    let result: TransportInvokeResult;
+    try {
+      result = await this.options.transport.invoke(operation, params, {
+        onBehalfOf: ctx.onBehalfOf,
+        credential,
+      });
+    } catch (err) {
+      // R-04: a refusal ran nothing — free the key so a retry is refused again, not 409. Any other
+      // failure keeps the key reserved: the transport may have acted before it failed.
+      if (err instanceof OperationRefusedError) {
+        await this.options.idempotencyStore.release(actionRequestId);
+      }
+      throw err;
+    }
     const observedFacts = this.toObservedFacts(operation, result.data);
     await this.options.idempotencyStore.complete(actionRequestId, {
       data: result.data,

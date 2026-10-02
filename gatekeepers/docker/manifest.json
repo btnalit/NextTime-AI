@@ -1,7 +1,7 @@
 [
   {
     "name": "containers.list",
-    "description": "List every container on this host (running and stopped), with id, name, image, and current state.",
+    "description": "List the containers on this host (running and stopped), with id, name, image, and current state. The platform's own agent containers are never listed.",
     "binding": { "kind": "cli", "command_template": "docker ps --all --format json" },
     "params_schema": {
       "type": "object",
