@@ -6,11 +6,12 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import type {
-  TaskSpawnInput,
-  TaskSpawnOutcome,
-  TaskSupervisorClientPort,
-  TaskSupervisorStatus,
+import {
+  type TaskSpawnInput,
+  type TaskSpawnOutcome,
+  type TaskSupervisorClientPort,
+  TaskSupervisorError,
+  type TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
@@ -25,12 +26,15 @@ import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/inde
 import { invokeWorker } from './invoke.js';
 import {
   completeTaskWithResult,
+  failTaskAndReapWorkerRuns,
   reactToSupervisorStatus,
   readTaskRow,
   readWorkerRunRow,
 } from './lifecycle.js';
+import { runTaskReaper } from './reaper.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
+import { spawnWorkerRun } from './spawn.js';
 import {
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
@@ -799,6 +803,241 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       } finally {
         resetTaskRuntimeForTests();
       }
+    });
+  });
+
+  describe('R-09 — a failed spawn and the spawn_lost sweep reap the WorkerRun (docs/code-review-2026-10-02.md)', () => {
+    /** The kernel's supervisor client gives up (`TaskSupervisorError('timeout')`, its own 30 s
+     *  timeout) while worker-supervisor, which already received the request, still creates and
+     *  starts the container — so the fake records that container as `running` before the client
+     *  throws. The first `successfulSpawns` spawns answer normally (the requeue case). */
+    class TimingOutSupervisorClient extends FakeTaskSupervisorClient {
+      private successfulSpawns: number;
+      constructor(successfulSpawns = 0) {
+        super();
+        this.successfulSpawns = successfulSpawns;
+      }
+      override async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+        const outcome = await super.spawn(input);
+        if (this.successfulSpawns > 0) {
+          this.successfulSpawns -= 1;
+          return outcome;
+        }
+        throw new TaskSupervisorError(
+          'timeout',
+          'worker-supervisor request to /task/spawn timed out (simulated)',
+        );
+      }
+    }
+
+    /** A fresh principal per case: `ownerId` accumulates active Tasks across this file and would
+     *  hit the per-user concurrency quota (5) — see the P-A2 block below. */
+    async function freshPrincipal(displayName: string): Promise<string> {
+      return adminInsertPrincipal('member', displayName);
+    }
+
+    async function handleRevokedAt(principalId: string, workerRunId: string): Promise<unknown> {
+      return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+        const run = await readWorkerRunRow(client, workspaceId, workerRunId);
+        const result = await client.query<{ revoked_at: Date | null }>(
+          'select revoked_at from capability_handles where workspace_id = $1 and session_id = $2',
+          [workspaceId, run?.sessionId],
+        );
+        // `undefined` (no Handle row at all) must fail the callers' assertions, not pass them.
+        return result.rows.length === 1 ? result.rows[0]?.revoked_at : undefined;
+      });
+    }
+
+    /** The state a kernel crash between `spawnWorkerRun` committing the WorkerRun `running` and
+     *  `invokeWorkerCreate`'s own `queued -> running` Task flip leaves behind (L3-4): the Task is
+     *  still `queued` — backdated past the sweep's 60 s threshold — while its WorkerRun is
+     *  `running` with a live Handle and the supervisor reports the container running. Built from
+     *  the real `spawnWorkerRun`, so the run, its Handle and the supervisor call are the ones the
+     *  crashed kernel would have produced. */
+    async function seedSpawnLostTask(
+      principalId: string,
+      runtimeDeps: TaskRuntimeDeps,
+    ): Promise<{ taskId: string; workerRunId: string }> {
+      const taskId = randomUUID();
+      const staleAt = new Date(Date.now() - 90 * 1000);
+      await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        client.query(
+          `insert into tasks (
+             workspace_id, id, status, on_behalf_of, worker_definition_id,
+             worker_definition_version, created_at, updated_at
+           ) values ($1, $2, 'queued', $3, $4, 1, $5, $5)`,
+          [workspaceId, taskId, principalId, workerDefinitionId, staleAt],
+        ),
+      );
+      const task = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readTaskRow(client, workspaceId, taskId),
+      );
+      if (!task) throw new Error('seedSpawnLostTask: the seeded Task was not found');
+      const workerRun = await spawnWorkerRun(runtimeDeps, workspaceId, {
+        task,
+        parentWorkerRunId: null,
+        depth: 1,
+        attempt: 1,
+        onBehalfOf: principalId,
+        parentAuthority: 'unconstrained',
+        parentClaimsForLineage: undefined,
+        declaredCapabilities: [],
+        declaredGates: [],
+        definitionName: 'r09-spawn-lost',
+      });
+      expect(workerRun.status).toBe('running');
+      return { taskId, workerRunId: workerRun.id };
+    }
+
+    it('a spawn whose supervisor call times out leaves the WorkerRun terminated, its Handle revoked, and asks the supervisor to terminate it', async () => {
+      const principalId = await freshPrincipal('r09-spawn-timeout');
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new TimingOutSupervisorClient();
+
+      await expect(
+        invokeWorker(
+          workspaceId,
+          { principalId, channel: 'handle', claims: claimsFromIssued(issued) },
+          { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+          deps(supervisorClient),
+        ),
+      ).rejects.toThrow(TaskSupervisorError);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(1);
+      const taskId = supervisorClient.spawnCalls[0]?.taskId as string;
+      const workerRunId = supervisorClient.spawnCalls[0]?.workerRunId as string;
+
+      const task = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readTaskRow(client, workspaceId, taskId),
+      );
+      expect(task?.status).toBe('failed');
+      expect(task?.failureReason).toBe('spawn_failed');
+
+      const workerRun = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readWorkerRunRow(client, workspaceId, workerRunId),
+      );
+      expect(workerRun?.status).toBe('terminated');
+      // Before the fix: the run was `terminated` but its Handle stayed live until its ttl.
+      expect(await handleRevokedAt(principalId, workerRunId)).toBeInstanceOf(Date);
+      // The container worker-supervisor started after the client gave up is asked to stop.
+      expect(supervisorClient.terminated).toContain(workerRunId);
+      expect((await supervisorClient.status(workerRunId))?.status).toBe('terminated');
+    });
+
+    it('a requeue whose spawn times out reaps the retry WorkerRun the same way (Task failed: worker_failed)', async () => {
+      const principalId = await freshPrincipal('r09-requeue-timeout');
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new TimingOutSupervisorClient(1); // the original spawn answers
+      const runtimeDeps = deps(supervisorClient);
+
+      const spawnResult = await invokeWorker(
+        workspaceId,
+        { principalId, channel: 'handle', claims: claimsFromIssued(issued) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      );
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(2); // original + the timed-out requeue
+      const retryWorkerRunId = supervisorClient.spawnCalls[1]?.workerRunId as string;
+
+      const task = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('failed');
+      expect(task?.failureReason).toBe('worker_failed');
+
+      const retryRun = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readWorkerRunRow(client, workspaceId, retryWorkerRunId),
+      );
+      expect(retryRun?.status).toBe('terminated');
+      expect(await handleRevokedAt(principalId, retryWorkerRunId)).toBeInstanceOf(Date);
+      expect(supervisorClient.terminated).toContain(retryWorkerRunId);
+    });
+
+    it('the spawn_lost sweep reaps the WorkerRun a crashed kernel left running: run terminated, Handle revoked, container terminated', async () => {
+      const principalId = await freshPrincipal('r09-spawn-lost');
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+      const { taskId, workerRunId } = await seedSpawnLostTask(principalId, runtimeDeps);
+      expect(await handleRevokedAt(principalId, workerRunId)).toBeNull(); // live before the sweep
+
+      // Cross-workspace, like production: it may also touch rows other cases left behind — the
+      // assertions below are about this case's own Task and WorkerRun only.
+      const result = await runTaskReaper(runtimeDeps);
+      expect(result.spawnLost).toBeGreaterThanOrEqual(1);
+
+      const task = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readTaskRow(client, workspaceId, taskId),
+      );
+      expect(task?.status).toBe('failed');
+      expect(task?.failureReason).toBe('spawn_lost');
+
+      const workerRun = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        readWorkerRunRow(client, workspaceId, workerRunId),
+      );
+      // Before the fix: still `running` with a live Handle under a `failed: spawn_lost` Task, until
+      // the duration-limit scan reached it (default 3600 s).
+      expect(workerRun?.status).toBe('terminated');
+      expect(await handleRevokedAt(principalId, workerRunId)).toBeInstanceOf(Date);
+      expect(supervisorClient.terminated).toContain(workerRunId);
+      expect((await supervisorClient.status(workerRunId))?.status).toBe('terminated');
+    });
+
+    it('failTaskAndReapWorkerRuns is idempotent: a second call changes nothing, even when the supervisor terminate throws', async () => {
+      const principalId = await freshPrincipal('r09-idempotent');
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+      const { taskId, workerRunId } = await seedSpawnLostTask(principalId, runtimeDeps);
+
+      async function snapshot() {
+        return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+          const task = await readTaskRow(client, workspaceId, taskId);
+          const run = await readWorkerRunRow(client, workspaceId, workerRunId);
+          const handles = await client.query<{ revoked_at: Date | null }>(
+            'select revoked_at from capability_handles where workspace_id = $1 and session_id = $2',
+            [workspaceId, run?.sessionId],
+          );
+          const audit = await client.query<{ resource_type: string; action: string }>(
+            `select resource_type, action from audit_records
+             where workspace_id = $1 and resource_id in ($2, $3)
+             order by resource_type, action`,
+            [workspaceId, taskId, workerRunId],
+          );
+          return {
+            task: {
+              status: task?.status,
+              failureReason: task?.failureReason,
+              failedAt: task?.failedAt?.toISOString(),
+            },
+            run: { status: run?.status, terminatedAt: run?.terminatedAt?.toISOString() },
+            revokedAt: handles.rows.map((row) => row.revoked_at?.toISOString() ?? null),
+            audit: audit.rows,
+          };
+        });
+      }
+
+      await failTaskAndReapWorkerRuns(runtimeDeps, workspaceId, principalId, taskId, 'spawn_lost');
+      const first = await snapshot();
+      expect(first.task).toMatchObject({ status: 'failed', failureReason: 'spawn_lost' });
+      expect(first.run.status).toBe('terminated');
+      expect(first.revokedAt).toHaveLength(1);
+      expect(first.revokedAt[0]).not.toBeNull();
+      expect(supervisorClient.terminated.filter((id) => id === workerRunId)).toHaveLength(1);
+
+      // The best-effort supervisor stop must never surface an error to the caller.
+      supervisorClient.terminate = async () => {
+        throw new Error('worker-supervisor unreachable (simulated)');
+      };
+      await expect(
+        failTaskAndReapWorkerRuns(runtimeDeps, workspaceId, principalId, taskId, 'spawn_lost'),
+      ).resolves.toBeUndefined();
+
+      // No second `task.fail` / `worker_run.terminate` row, no rewritten timestamps.
+      expect(await snapshot()).toEqual(first);
     });
   });
 

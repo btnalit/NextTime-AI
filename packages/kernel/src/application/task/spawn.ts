@@ -1,6 +1,7 @@
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
+import { revokeSession } from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { ensureWorkerAgentPrincipal } from './agent-principal.js';
@@ -83,9 +84,11 @@ export interface SpawnWorkerRunInput {
  *  transaction — calls the supervisor's `/task/spawn` and records the outcome in a second short
  *  transaction. Shared by `invoke.ts`'s initial spawn and `lifecycle.ts`'s requeue-once path.
  *  Returns the final `WorkerRunRow` (already `running` on success). Throws whatever the supervisor
- *  client throws (`TaskSupervisorError`) after marking the WorkerRun `terminated`/Task `failed` on
- *  a spawn failure — the caller decides what "failed to even start" means for the Task (initial
- *  spawn: fail immediately; requeue: no further retry). */
+ *  client throws (`TaskSupervisorError`) after marking the WorkerRun `terminated` and revoking its
+ *  Handle on a spawn failure — the caller decides what "failed to even start" means for the Task
+ *  (initial spawn: `spawn_failed`; requeue: `worker_failed`, no further retry) and fails it through
+ *  `lifecycle.ts`'s `failTaskAndReapWorkerRuns` (R-09), which also best-effort stops a container
+ *  the supervisor may have started after the client gave up. */
 export async function spawnWorkerRun(
   deps: TaskRuntimeDeps,
   workspaceId: string,
@@ -218,6 +221,17 @@ export async function spawnWorkerRun(
          where workspace_id = $1 and id = $2 and status = 'provisioning'`,
           [workspaceId, created.workerRun.id],
         );
+        // R-09 (§5.5 "terminated revokes every Handle"): revoke this run's own Handle in the same
+        // transaction that makes it `terminated` — even when the guarded UPDATE above lost
+        // (revocation is idempotent). A client timeout does not mean the supervisor stopped: it
+        // may still start the container with this Handle in its env. The caller's
+        // `failTaskAndReapWorkerRuns` (lifecycle.ts) then revokes any descendants and best-effort
+        // stops the container; revoking here as well means a kernel crash between the two
+        // transactions cannot leave a terminated run with a live Handle (on the requeue path the
+        // Task is not `queued`, so the `spawn_lost` sweep would never revisit it).
+        if (created.workerRun.sessionId) {
+          await revokeSession(client, created.workerRun.sessionId);
+        }
         if ((updateResult.rowCount ?? 0) === 0) return;
         await recordWorkerRunTransition(client, workspaceId, {
           actorPrincipalId: input.onBehalfOf,
