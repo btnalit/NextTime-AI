@@ -324,6 +324,14 @@ COLUMN/CREATE FUNCTION，所以肯定可逆"这种表面判断——同一句"�
 schema 上跑它自己的 `accept_s1.sh`"）就是把这条判断从"读代码得出的推理"变成"跑出来的证据"的机制；
 下表的"依据"列是这次读代码得到的推理，PROBE 的实测结果作为独立证据附在旁边。
 
+**S9 D4 起的实测方式——CI 可逆性探针（不碰任何线上库）**：`drill-upgrade.sh` 的回滚阶段会用备份覆盖
+活库，只适合维护窗口。`.github/workflows/reversibility-probe.yml` 在 CI 里回答同一个问题：把 v(n) 的迁移
+应用到一个全新的 Postgres，再在它上面跑 v(n-1) 的 kernel 测试套件（kernel 是唯一直接访问数据库的服务）。
+改动 `packages/kernel/migrations/**` 的 PR 自动对"最新发布的 tag"跑一次，合入前就知道回滚是否安全；
+历史版本对用 Actions 里 `workflow_dispatch`（base = 旧 tag，head = 新 tag）补跑。它证明的是**空库上的
+schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) 已经应用过的迁移文件会以校验和不一致失败，
+这本身就是不可逆的信号。失败要分辨"真不兼容"与"旧测试断言了新迁移有意改变的约束"，结论写进下表。
+
 | 版本 | 迁移 | 可逆？ | 依据 | 回退方式 |
 |---|---|---|---|---|
 | v0.10.1 | （无——本版本只有 kernel 的连接池错误处理修复，无 schema 变更） | 可逆（N/A） | 无迁移可回退 | 按 §3 切回上一个 tag 即可，无需 `restore.sh` |
