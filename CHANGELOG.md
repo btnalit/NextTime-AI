@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.35.0](https://github.com/btnalit/NextTime-AI/compare/v0.34.0...v0.35.0) (2026-10-02)
+
+
+### Features
+
+* **kernel,web:** discard your own ontology proposal (leftover 99) ([#380](https://github.com/btnalit/NextTime-AI/issues/380)) ([5fab351](https://github.com/btnalit/NextTime-AI/commit/5fab3511491c47122ce7976b0899f5811edaeda0))
+* **release:** publish signed platform images on release; hosts can pull instead of build (S9 D1) ([#379](https://github.com/btnalit/NextTime-AI/issues/379)) ([4f272c6](https://github.com/btnalit/NextTime-AI/commit/4f272c63ab491f7df01b815e6155b6243c5b03ba))
+* **scripts:** apply-release.sh — the host apply procedure, versioned (S9 D2) ([#384](https://github.com/btnalit/NextTime-AI/issues/384)) ([21d9d62](https://github.com/btnalit/NextTime-AI/commit/21d9d62500d4bea13504100bf7af2d683e64f777))
+
+
+### Bug Fixes
+
+* **kernel:** a gate apply timeout is an unknown outcome, not a failure; apply gets its own 60 s budget (leftover 104) ([#382](https://github.com/btnalit/NextTime-AI/issues/382)) ([6fe3a4a](https://github.com/btnalit/NextTime-AI/commit/6fe3a4a269d6b4eb2a00c2f3f58fa739876e9fb6))
+* **scripts:** real-model scenarios measure the platform, not the harness; S9 D0 results (v0.34.0) ([#383](https://github.com/btnalit/NextTime-AI/issues/383)) ([6886a37](https://github.com/btnalit/NextTime-AI/commit/6886a3766818462623512f12e18e4919056b86a0))
+
 ## [0.34.0](https://github.com/btnalit/NextTime-AI/compare/v0.33.1...v0.34.0) (2026-10-01)
 
 
