@@ -28,8 +28,8 @@
 # (backups/ is forced back to root-owned — see its own step), and the platform's containers run
 # as, chowns pgdata/ and chgrp's secrets/pg_password to the postgres image's own uid:gid
 # (遗留20/S5.5 hardening — see that step's own comment), makes config/ world-readable (it holds no
-# secrets), and chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own
-# comment). Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
+# secrets), and chmod -R o-rwx's caddy/ (root-owned; it holds the internal CA's private key — see
+# that step's own comment). Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
 
@@ -317,15 +317,13 @@ chmod 750 "$NEXTTIME_DATA/backups"
 # root-owned, replacing the whole inode via atomic rename — so any chmod/chown applied ahead of
 # time is overwritten back to root-only on caddy's next cert write (which `on_demand` TLS can
 # trigger for any new SNI, not just periodic renewal), REGARDLESS of which of chmod/chown was
-# used. `chmod -R o+rX` (not `chown -R :10001` + setgid) is applied anyway as a one-time baseline
-# for files that exist right now — it's simpler (no setgid-vs.-certmagic's-own-chmod-0600
-# interaction to reason about) and doesn't claim to survive the next cert write either way. The
-# `backup` service's actual, ongoing correctness for caddy/ comes from its own `cap_add:
-# [DAC_READ_SEARCH]` (docker-compose.yml), not from this chmod — see
-# docs/runbooks/backup-restore.md for the full explanation. Re-run this script (idempotent) after
-# any caddy restart if you want this baseline re-applied, but it is not required for backups to
-# keep working.
-chmod -R o+rX "$NEXTTIME_DATA/caddy"
+# used. The `backup` service reads caddy/ through its own `cap_add: [DAC_READ_SEARCH]`
+# (docker-compose.yml), so nothing needs other-users access here — see
+# docs/runbooks/backup-restore.md. caddy/ holds the internal CA's root private key, so this step
+# takes other-users access AWAY (2026-10-02 review R-32: an earlier version ran `chmod -R o+rX`
+# here, which made that key world-readable on the host). certmagic's own writes are 0600/0700
+# anyway; this only fixes files that already exist, which is exactly what an affected host needs.
+chmod -R o-rwx "$NEXTTIME_DATA/caddy"
 
 # --- config/: left root-owned but made world-readable (it holds no secrets — provider keys ----
 # live in secrets/*.env instead) so any container uid can read it read-only.
@@ -355,7 +353,7 @@ echo "host-env-init: pgdata/ owner -> $(stat -c '%u:%g' "$NEXTTIME_DATA/pgdata" 
 echo "host-env-init: secrets/pg_password -> mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?') (expect 640, group ${POSTGRES_GID})"
 echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"
 echo ""
-echo "host-env-init: caddy/ left root-owned; \`chmod -R o+rX\` applied instead (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy")) — see docs/runbooks/backup-restore.md for why this is only a baseline, not the real fix"
+echo "host-env-init: caddy/ left root-owned; \`chmod -R o-rwx\` applied (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy"); files readable by others: $(find "$NEXTTIME_DATA/caddy" -perm -o=r | wc -l), expect 0) — backups read it via DAC_READ_SEARCH, see docs/runbooks/backup-restore.md"
 echo ""
 echo "host-env-init: left untouched: secrets/ (dir itself, and every secrets/*.token /*.key)"
 echo "host-env-init: done (idempotent — safe to re-run)"

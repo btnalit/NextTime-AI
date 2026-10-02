@@ -23,12 +23,33 @@
 #                         touched) and, if --files given, `tar -tzf` the tarball's listing. No
 #                         database or filesystem changes.
 #
-# The real (non-dry-run) DB restore: creates the target database (unless --target-db nexttime
-# --i-know, where it's assumed to already exist), writes the dump into the running `postgres`
-# container's /tmp (pg_restore's custom format (-Fc) needs a seekable file, not a pipe, so
-# pg_restore itself never reads stdin), then runs:
-#   docker compose exec -T postgres pg_restore --clean --if-exists -U nexttime -d <target> <path>
-# and removes the copied file from the container afterward.
+# The real (non-dry-run) DB restore always restores into a database this run has just CREATED,
+# so there is never anything of a newer schema left behind to block a DROP or collide with a
+# CREATE (2026-10-02 review R-11: the old `pg_restore --clean --if-exists` over the live database
+# left objects only a newer release created in place — a rollback across a release that added an
+# FK into a dumped table ended up half pre-, half post-upgrade — and reported success anyway).
+#
+#   1. Live restore (--target-db nexttime --i-know) only: stop kernel/agent-host/
+#      worker-supervisor/backup (all four either hold connections to `nexttime` or write into the
+#      data this replaces), wait until nothing is connected to `nexttime`, then RENAME it to
+#      nexttime_pre_restore_<ts>. Nothing is dropped: the previous database stays intact under that
+#      name until an operator drops it, so every failure below leaves a known, recoverable state.
+#   2. CREATE DATABASE <target>.
+#   3. Copy the dump into the running `postgres` container's /tmp (pg_restore's custom format (-Fc)
+#      needs a seekable file, not a pipe) and run
+#        pg_restore --exit-on-error --single-transaction -U nexttime -d <target> <path>
+#      — all-or-nothing: any error (an unreadable archive, a failed CREATE, a failed COPY) aborts
+#      and rolls back the whole restore, and any non-zero exit is fatal.
+#   4. Verify that the number of tables in schema public equals the number of `TABLE public`
+#      entries in the dump's own TOC (`pg_restore -l`).
+#   On a failure in 2–4 the target database this run created is dropped again; for a live restore
+#   the kept database is renamed back to `nexttime` before the services restart, so the stack comes
+#   back on exactly the data it had. If that rename-back itself fails, the exact commands to finish
+#   it by hand are printed.
+#
+# Only the throwaway-target path is exercised on the host (scripts/drill-restore.sh); the live
+# path shares every step except the rename, and is otherwise only exercised by drill-upgrade.sh's
+# rollback (docs/runbooks/release.md §6).
 #
 # The copy is `docker compose exec -T postgres sh -c 'cat > <path>' < <dump>`, not
 # `docker compose cp`: since leftover 20 (#188, 2026-09-17) the postgres service is
@@ -38,15 +59,10 @@
 # service's own tmpfs (docker-compose.yml), so the copy costs RAM for as long as the restore runs —
 # about one dump's size (tens of MB today).
 #
-# Live restore (--target-db nexttime --i-know) additionally stops kernel/agent-host/
-# worker-supervisor/backup first (lane-7 P2 fix): all four either hold live connections to
-# `nexttime` (kernel, and transitively agent-host/worker-supervisor's own request paths) or write
-# into the same $NEXTTIME_DATA tree pg_restore --clean is about to tear down and rebuild
-# (backup — running the nightly dump concurrently with a live restore is exactly the kind of race
-# that corrupts both). A throwaway --target-db restore never touches this — nothing else in the
-# stack ever connects to a nexttime_restore_<ts> database, so there is nothing to stop. The stop
-# is undone in a trap (`restart_live_services`, below `set -eu`) so a fatal pg_restore error still
-# leaves the stack running rather than exiting mid-script with core services down.
+# The stopped services are restarted from an EXIT trap (`restart_live_services`), and INT / TERM /
+# HUP / PIPE are trapped to `exit`, because dash does not run the EXIT trap on an untrapped signal —
+# a Ctrl-C or a dropped ssh session mid-restore would otherwise leave the core services down
+# (review L9-8; same pattern as scripts/accept_s1.sh).
 
 set -eu
 
@@ -55,17 +71,64 @@ TARGET_DB=""
 FILES_TGZ=""
 DRY_RUN=0
 I_KNOW=0
+LIVE=0
 LIVE_SERVICES_STOPPED=0
+PRE_DB=""
+TARGET_CREATED=0
+CONTAINER_DUMP_PATH=""
+
+psql_admin() {
+	docker compose exec -T postgres psql -U nexttime -d postgres -v ON_ERROR_STOP=1 -t -A "$@" </dev/null
+}
+
+# Undo whatever this run did to the databases. Called on every failure after the first database
+# change; idempotent. For a live restore it drops the half-made `nexttime` and renames the kept
+# database back, so the services restart on exactly the data they had.
+roll_back_databases() {
+	if [ -n "$CONTAINER_DUMP_PATH" ]; then
+		docker compose exec -T postgres rm -f "$CONTAINER_DUMP_PATH" </dev/null >/dev/null 2>&1 || true
+	fi
+	if [ "$TARGET_CREATED" -eq 1 ]; then
+		if psql_admin -c "DROP DATABASE IF EXISTS \"$TARGET_DB\";" >/dev/null 2>&1; then
+			echo "restore: dropped the database this run created ('$TARGET_DB')" >&2
+			TARGET_CREATED=0
+		else
+			echo "restore: could not drop '$TARGET_DB'" >&2
+		fi
+	fi
+	if [ -n "$PRE_DB" ]; then
+		if [ "$TARGET_CREATED" -eq 0 ] && psql_admin -c "ALTER DATABASE \"$PRE_DB\" RENAME TO nexttime;" >/dev/null 2>&1; then
+			echo "restore: rolled back — the previous database is 'nexttime' again (nothing was restored)" >&2
+			PRE_DB=""
+		else
+			echo "restore: ROLLBACK INCOMPLETE — the previous database is intact as '$PRE_DB'. Finish by hand:" >&2
+			echo "  docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE IF EXISTS nexttime;'" >&2
+			echo "  docker compose exec -T postgres psql -U nexttime -d postgres -c 'ALTER DATABASE \"$PRE_DB\" RENAME TO nexttime;'" >&2
+		fi
+	fi
+}
+
+die() {
+	echo "restore: FAILED — $1" >&2
+	roll_back_databases
+	exit 1
+}
 
 # Restarts kernel/agent-host/worker-supervisor/backup if (and only if) this run stopped them for
 # a live restore — registered as an EXIT trap right after that stop, so it fires whether the
-# script goes on to succeed, hits `exit "$restore_rc"` on a fatal pg_restore error, or dies to an
-# unexpected error under `set -e`. A no-op for a dry-run or a throwaway-target restore.
+# script succeeds, dies through `die`, or is interrupted (the signal traps turn INT/TERM/HUP/PIPE
+# into an `exit`). A no-op for a dry-run or a throwaway-target restore.
 restart_live_services() {
 	if [ "$LIVE_SERVICES_STOPPED" -eq 1 ]; then
 		echo "restore: restarting kernel/agent-host/worker-supervisor/backup"
 		docker compose start kernel agent-host worker-supervisor backup
 	fi
+}
+
+on_signal() {
+	echo "restore: interrupted" >&2
+	roll_back_databases
+	exit 130
 }
 
 usage() {
@@ -137,11 +200,14 @@ if [ "$TARGET_DB" = "nexttime" ] && [ "$I_KNOW" -ne 1 ]; then
 	echo "         pass --target-db nexttime --i-know if you really mean it." >&2
 	exit 1
 fi
+if [ "$TARGET_DB" = "nexttime" ]; then
+	LIVE=1
+fi
 
 DB_DUMP_ABS=$(cd "$(dirname "$DB_DUMP")" && pwd)/$(basename "$DB_DUMP")
 
 echo "restore: dump        = $DB_DUMP_ABS"
-echo "restore: target db   = $TARGET_DB$([ "$TARGET_DB" = nexttime ] && echo ' (LIVE — --i-know)')"
+echo "restore: target db   = $TARGET_DB$([ "$LIVE" -eq 1 ] && echo ' (LIVE — --i-know)')"
 [ -n "$FILES_TGZ" ] && echo "restore: files tgz   = $FILES_TGZ"
 echo "restore: mode        = $([ "$DRY_RUN" -eq 1 ] && echo 'dry-run (validate only)' || echo 'real restore')"
 echo ""
@@ -155,7 +221,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
 		exit 1
 	fi
 	entries=$(wc -l </tmp/restore-toc.$$ | tr -d ' ')
-	echo "restore: [dry-run] OK — $entries TOC entries. First 15:"
+	tables=$(grep -c ' TABLE public ' /tmp/restore-toc.$$ || true)
+	echo "restore: [dry-run] OK — $entries TOC entries, $tables table(s) in schema public. First 15:"
 	head -n 15 /tmp/restore-toc.$$
 	rm -f /tmp/restore-toc.$$
 
@@ -174,58 +241,85 @@ if [ "$DRY_RUN" -eq 1 ]; then
 	fi
 
 	echo ""
-	echo "restore: [dry-run] would restore into database '$TARGET_DB' with:"
-	echo "  docker compose exec -T postgres pg_restore --clean --if-exists -U nexttime -d $TARGET_DB <copied dump>"
+	echo "restore: [dry-run] would restore into a freshly created database '$TARGET_DB' with:"
+	[ "$LIVE" -eq 1 ] && echo "  (live: stop kernel/agent-host/worker-supervisor/backup, rename 'nexttime' to nexttime_pre_restore_<ts>)"
+	echo "  docker compose exec -T postgres pg_restore --exit-on-error --single-transaction -U nexttime -d $TARGET_DB <copied dump>"
 	[ -n "$FILES_TGZ" ] && echo "  extract '$FILES_TGZ' into \$NEXTTIME_DATA/restore/$ts/ (staging, not the live dirs)"
 	echo "restore: [dry-run] no database or filesystem changes made."
 	exit 0
 fi
 
-# --- real restore: DB ----------------------------------------------------------------------
-if [ "$TARGET_DB" = "nexttime" ] && [ "$I_KNOW" -eq 1 ]; then
+trap on_signal INT TERM HUP PIPE
+
+# --- real restore, step 1 (live only): set the live database aside -------------------------
+if [ "$LIVE" -eq 1 ]; then
 	echo "restore: live restore — stopping kernel, agent-host, worker-supervisor, backup first" >&2
-	echo "         (they hold connections to, or write into, the live data this is about to" >&2
-	echo "         --clean and rebuild; restarted automatically when this script exits, success" >&2
-	echo "         or failure)." >&2
+	echo "         (they hold connections to, or write into, the data this replaces; restarted" >&2
+	echo "         automatically when this script exits, success or failure)." >&2
 	docker compose stop kernel agent-host worker-supervisor backup
 	LIVE_SERVICES_STOPPED=1
 	trap restart_live_services EXIT
+
+	# The postgres healthcheck's pg_isready and any connection the stopped services left behind
+	# can briefly hold `nexttime`; ALTER DATABASE … RENAME refuses while anything is connected.
+	waited=0
+	while :; do
+		connected=$(psql_admin -c "select count(*) from pg_stat_activity where datname = 'nexttime';" | tr -d '[:space:]')
+		[ "$connected" = "0" ] && break
+		waited=$((waited + 1))
+		if [ "$waited" -ge 15 ]; then
+			echo "restore: still connected to 'nexttime' after 15 s:" >&2
+			psql_admin -c "select coalesce(nullif(application_name, ''), '?') || ' from ' || coalesce(client_addr::text, 'local') from pg_stat_activity where datname = 'nexttime';" >&2 || true
+			die "could not set the live database aside — nothing was changed"
+		fi
+		sleep 1
+	done
+
+	PRE_DB="nexttime_pre_restore_$ts"
+	if ! psql_admin -c "ALTER DATABASE nexttime RENAME TO \"$PRE_DB\";" >/dev/null; then
+		PRE_DB=""
+		die "ALTER DATABASE nexttime RENAME failed — nothing was changed"
+	fi
+	echo "restore: previous live database kept as '$PRE_DB'"
 fi
 
-if [ "$TARGET_DB" != "nexttime" ] || [ "$I_KNOW" -ne 1 ]; then
-	# Fresh throwaway target: create it now. (The nexttime/--i-know case skips this — that
-	# database is assumed to already exist and --clean --if-exists will handle prior objects.)
-	echo "restore: creating database '$TARGET_DB'"
-	docker compose exec -T postgres psql -U nexttime -d postgres -v ON_ERROR_STOP=1 \
-		-c "CREATE DATABASE \"$TARGET_DB\" OWNER nexttime;"
+# --- step 2: create the target -------------------------------------------------------------
+echo "restore: creating database '$TARGET_DB'"
+if ! psql_admin -c "CREATE DATABASE \"$TARGET_DB\" OWNER nexttime;" >/dev/null; then
+	die "CREATE DATABASE \"$TARGET_DB\" failed"
 fi
+TARGET_CREATED=1
 
+# --- step 3: restore, all or nothing -------------------------------------------------------
 CONTAINER_DUMP_PATH="/tmp/restore-$ts.dump"
 echo "restore: copying dump into the postgres container ($CONTAINER_DUMP_PATH)"
 # Not `docker compose cp` — refused for a read_only service (this file's header comment).
-docker compose exec -T postgres sh -c "cat > '$CONTAINER_DUMP_PATH'" <"$DB_DUMP_ABS"
-
-echo "restore: running pg_restore --clean --if-exists -d $TARGET_DB"
-restore_rc=0
-docker compose exec -T postgres pg_restore --clean --if-exists -U nexttime -d "$TARGET_DB" "$CONTAINER_DUMP_PATH" || restore_rc=$?
-
-echo "restore: removing copied dump from the container"
-docker compose exec -T postgres rm -f "$CONTAINER_DUMP_PATH"
-
-# pg_restore exits 1 on mere warnings (e.g. "role does not exist" for ownership it can't set on
-# a differently-named throwaway db) as well as on real failures — surface it but don't treat
-# exit 1 alone as fatal; only abort on higher/other unexpected codes. Table counts below are the
-# real signal for whether the restore produced usable data.
-if [ "$restore_rc" -gt 1 ]; then
-	echo "restore: pg_restore exited $restore_rc (fatal)" >&2
-	exit "$restore_rc"
-elif [ "$restore_rc" -eq 1 ]; then
-	echo "restore: pg_restore exited 1 (warnings — see output above; verifying table count below)"
+if ! docker compose exec -T postgres sh -c "cat > '$CONTAINER_DUMP_PATH'" <"$DB_DUMP_ABS"; then
+	die "could not copy the dump into the postgres container"
 fi
 
+expected_tables=$(docker compose exec -T postgres pg_restore -l "$CONTAINER_DUMP_PATH" </dev/null | grep -c ' TABLE public ' || true)
+if [ "${expected_tables:-0}" -le 0 ]; then
+	die "the dump's TOC lists no table in schema public — not a usable nexttime dump"
+fi
+
+echo "restore: running pg_restore --exit-on-error --single-transaction -d $TARGET_DB"
+if ! docker compose exec -T postgres pg_restore --exit-on-error --single-transaction -U nexttime -d "$TARGET_DB" "$CONTAINER_DUMP_PATH" </dev/null; then
+	die "pg_restore failed (the single transaction rolled back; see its output above)"
+fi
+
+docker compose exec -T postgres rm -f "$CONTAINER_DUMP_PATH" </dev/null
+CONTAINER_DUMP_PATH=""
+
+# --- step 4: verify against the dump's own TOC ---------------------------------------------
 table_count=$(docker compose exec -T postgres psql -U nexttime -d "$TARGET_DB" -t -A \
-	-c "select count(*) from information_schema.tables where table_schema='public';" | tr -d '[:space:]')
-echo "restore: '$TARGET_DB' now has $table_count table(s) in schema public"
+	-c "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r', 'p');" </dev/null | tr -d '[:space:]')
+echo "restore: '$TARGET_DB' now has $table_count table(s) in schema public (the dump's TOC lists $expected_tables)"
+if [ "$table_count" != "$expected_tables" ]; then
+	die "restored $table_count table(s) but the dump lists $expected_tables"
+fi
+# The restore is complete and verified; from here on a failure no longer rolls the database back.
+TARGET_CREATED=0
 
 # --- real restore: files (optional) ---------------------------------------------------------
 if [ -n "$FILES_TGZ" ]; then
@@ -243,7 +337,13 @@ fi
 echo ""
 echo "restore: summary"
 echo "  dump:       $DB_DUMP_ABS"
-echo "  target db:  $TARGET_DB ($table_count tables)"
+echo "  target db:  $TARGET_DB ($table_count tables, matches the dump)"
 [ -n "$FILES_TGZ" ] && [ -n "${NEXTTIME_DATA:-}" ] && echo "  files:      staged at \$NEXTTIME_DATA/restore/$ts/"
-echo "  cleanup:    drop the throwaway database when done: docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE \"$TARGET_DB\";'"
+if [ "$LIVE" -eq 1 ]; then
+	echo "  previous:   kept as '$PRE_DB' — drop it once the restored stack is verified:"
+	echo "              docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE \"$PRE_DB\";'"
+	PRE_DB=""
+else
+	echo "  cleanup:    drop the throwaway database when done: docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE \"$TARGET_DB\";'"
+fi
 echo "restore: done"

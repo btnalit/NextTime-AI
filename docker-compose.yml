@@ -940,8 +940,8 @@ services:
     # dist/ to /srv/web (/srv/explorer holds the S3.5 Explorer bundle — either built inside the
     # image itself, EXPLORER_BUILD=1 above, or a placeholder/host-built directory copied in as-is;
     # see explorer/README.md). Rebuild the image to deploy a web (or Explorer) change.
-    # ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs (chowned by
-    # scripts/host-env-init.sh).
+    # ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs (other-users access
+    # removed by scripts/host-env-init.sh — it holds the CA's root private key).
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]

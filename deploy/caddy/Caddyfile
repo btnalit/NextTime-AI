@@ -150,14 +150,24 @@ https://:8443 {
 	# browser posts a gate instance's credential straight to the generic gate host, authenticated by
 	# a 5-minute platform JWT the kernel signed (the host verifies it with config/handle.pub). The
 	# kernel never sees the credential. `handle_path` strips `/gate-host`, so
-	# `/gate-host/i/<gateId>/gate/connected-accounts` reaches the host as `/i/<gateId>/gate/...`;
-	# every other `/i/*` route there still demands gate_token, which no browser has.
-	# Leftover 87: the host's `/internal/metrics` (gate_token-guarded too) is never published —
-	# `/gate-host/internal/*` answers 404 here, like every other service's `/internal/*`.
+	# `/gate-host/i/<gateId>/gate/connected-accounts` reaches the host as `/i/<gateId>/gate/...`.
+	# That credential route (POST / DELETE) is the ONLY one published (2026-10-02 review R-01):
+	# every other gate-host route is kernel-only and reached over the compose network. Publishing
+	# `/i/*` wholesale let anyone holding the shared gate_token drive `/i/<id>/gate/apply` with an
+	# instance's credential and no ActionRequest, approval or kernel audit; `/healthz` listed the
+	# instances and their build errors. Everything else under `/gate-host/` answers 404, which
+	# also keeps leftover 87's `/internal/metrics` unpublished.
 	handle_path /gate-host/* {
-		@gate_host_internal path /internal/*
-		respond @gate_host_internal 404
-		reverse_proxy gate-host:8083
+		@gate_host_credential {
+			method POST DELETE
+			path_regexp ^/i/[a-z0-9][a-z0-9-]{1,63}/gate/connected-accounts$
+		}
+		handle @gate_host_credential {
+			reverse_proxy gate-host:8083
+		}
+		handle {
+			respond 404
+		}
 	}
 
 	# Explorer (S3.5) static build — deploy/caddy/explorer-placeholder/, copied into the image at

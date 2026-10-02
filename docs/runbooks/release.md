@@ -115,7 +115,11 @@ docker compose up -d --no-build
    （`backup` 服务在、`last-success` 不超过 26 小时、它指向的 dump 还在）。必须先于本次的发版前 dump /
    `BACKUP_NOW`，否则 `last-success` 总是新的，什么也证明不了。FAIL 先看 `docker compose logs backup`。
 2. 发版前 dump 只放 `${NEXTTIME_DATA}/backups/pre-upgrade/`（绝不进 `backups/db/`，见
-   `backup-restore.md`），应用通过后只保留最新 3 份（维护者 2026-10-01）。
+   `backup-restore.md`），应用通过后只保留最新 3 份（维护者 2026-10-01）。文件名按它**实际**
+   捕获的版本命名，即 `nexttime-pre-<目标 tag>-from-<当前运行版本>-<ts>.dump`。如果检出已经停在
+   目标 tag 上（上一次应用在切 tag 之后失败、这次是重跑），这份 dump 已经不是回退点，改名为
+   `nexttime-rerun-<tag>-<ts>.dump`，单独只留 1 份，不会把真正的发版前 dump 挤出 3 份窗口
+   （2026-10-02 复审 L9-7）。回退时要选 `from-` 写着回退目标版本的那一份。
 3. 验收通过后 `docker compose run --rm -e BACKUP_NOW=1 backup`，确认新 dump 留在 `backups/db/` 里没被轮换删掉。
 
 ### 3.1 版本号随镜像走：构建 kernel 前先导出 `KERNEL_VERSION`
@@ -315,7 +319,8 @@ frontend 镜像）。如果主机的 Docker 版本异常老旧、`docker compose
 release.md` §3 的 `git checkout` 方式），v(n-1) 的代码能在 v(n) 已经应用过这个迁移的 schema 上
 继续正确运行，不需要连数据库也一起回滚。**不可逆** = 回退代码不够，必须额外用升级前的备份
 `scripts/restore.sh --target-db nexttime --i-know`（`docs/runbooks/backup-restore.md`）把数据库
-本身也还原回去。
+本身也还原回去。自 2026-10-02（复审 R-11）起，这条命令先把现库改名留作回退，再恢复到一个新建的
+`nexttime`，并且全有或全无，所以跨版本回滚不会再留下新版本的对象；失败时自动回到原库。
 
 判定方法：**读 SQL 本身，也读 v(n-1) 那个版本里实际调用它的代码**，而不是"这条 SQL 只做了 ADD
 COLUMN/CREATE FUNCTION，所以肯定可逆"这种表面判断——同一句"只是新增"，如果新增的是一个
@@ -347,6 +352,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.20.0 | worker `0003_draft_discard`：给 `nexttime_app` 授 `worker_definitions` / `skills` / `procedures` 的 `DELETE`，并在三张表上加 `BEFORE DELETE` 触发器——应用角色只能删 `draft` 行（工作区清除级联以连接登录角色运行，不受限） | 可逆 | 读了 v0.19.0 的代码：没有任何路径删除这三张表的行（此前 `nexttime_app` 根本没有 `DELETE` 权限，清除级联走登录角色），多出来的授权与触发器对 v0.19.0 代码不可见、不改变其任何读写；本迁移只加不改列、不改约束 | 只需回退代码；如要连迁移一起撤：`revoke delete on worker_definitions, skills, procedures from nexttime_app` 并 `drop trigger … / drop function …` 三组（非必需） |
 | v0.23.0 | governance `0012_agent_profile_exclusions`：`agent_profiles` 加 `excluded_skills` / `excluded_gatekeepers` / `excluded_worker_definitions`（`jsonb not null default '[]'`）；对每个原先存过明确清单的配置写一条审计 `agent_profile.lists_reset_to_follow_grants`（payload 带原清单）。旧的 `enabled_*` 列原样保留、新代码不读不写 | 可逆 | 只加列、只插审计行；v0.22.0 的代码只读写 `enabled_*`，新列对它不可见。注意：回退后旧代码按 `enabled_*` 重新生效，即回到"清单冻结"的旧行为，并且在 v0.23.0 期间对排除清单的修改不会带回去 | 只需回退代码；新列与审计行可留（审计表只追加，不可删） |
 | v0.35.0 | core `0033_ontology_draft_discard`：给 `nexttime_app` 授 `ontology_versions` 的 `DELETE`，并加 `BEFORE DELETE` 触发器——应用角色只能删 `draft` 行（遗留 99：`discard_draft` 新增 `ontology_version` kind，提案者丢弃自己的本体草稿；`current_user = 'nexttime_app'` 限定，工作区清除仍可删全部行） | 可逆 | 旧代码（v0.34.0 及之前）从不对 `ontology_versions` 执行 `DELETE`（`registry.ts` 只有 insert/update/select），新授权与触发器对它们完全透明；写入点本体校验只读 published 行、迁移里没有任何外键引用该表，草稿行被删不会留下孤儿。回退时新增的 `discard_draft{kind:'ontology_version'}` 路径随新代码一并消失；若要连 schema 也回退：`revoke delete on ontology_versions from nexttime_app` + `drop trigger ontology_versions_only_draft_delete on ontology_versions` + `drop function ontology_versions_block_non_draft_delete()`（不回退也无害） | 只需回退代码 |
+| v0.35.1 之后的下一版 | core `0034_operation_single_published`（R-08 / 遗留 113）：先自愈——每个 Operation 身份（`identity_key` 的 `gatekeeperId` + `name`）只保留版本最高的那条 `published`，其余改成 `deprecated`（与内核弃用同一写法：`properties \|\| {status:'deprecated'}`、刷新 `updated_at`；不删行；`raise notice` 报改了几行，migrate CLI 会打印出来）；再加排除约束 `objects_operation_single_published`（三列都用 `=`，语义等同部分唯一索引：每个身份至多一条 `published`），`DEFERRABLE INITIALLY DEFERRED`，提交时检查 | 可逆 | 读了 v0.35.1 的 `publishOperation`：它先把修订草稿置为 `published`，下一条语句才弃用旧版本——约束如果按语句检查，回退后普通的修订发布就会失败，所以定为提交时检查：提交时只剩一条 `published` 即通过（集成测试按这个旧顺序跑过）。v0.35.1 唯一会被拒的写入正是 R-08 本身（在待审修订草稿上导入再发布，留下两条 `published`）：回退后这条路径在提交时报约束冲突、整笔事务回滚，不会再写出重复行。自愈只把重复行的状态从 `published` 改成 `deprecated`，v0.35.1 的读路径照常工作，原本在两条里任取一条，现在稳定是最新版本 | 只需回退代码；若要连 schema 一起撤：`alter table objects drop constraint objects_operation_single_published`（不撤也无害）。自愈改掉的状态不随回退恢复——那些行本来就是重复；合并前用 PR 描述里的 Host pre-check 查询列出将被改动的行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
@@ -358,6 +364,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.19.0 → v0.20.0 | worker 0003 | 140 / 140 通过 | 三张表的提议 / 发布 / 读在共享库套件里；旧代码从不删除这三张表的行 |
 | v0.22.0 → v0.23.0 | governance 0012 | 143 / 143 通过 | `agent_profiles` 的读写（`setAgentProfile` / 请求执行路径）在共享库套件里 |
 | v0.34.0 → v0.35.0 | core 0033 | 149 / 149 通过 | 本体提议 / 发布 / 读在共享库套件里；旧代码从不删除 `ontology_versions` 的行 |
+| v0.35.1 → #400 | core 0034 | 149 / 149 通过（#400 的 PR 自动探针） | 修订发布（v0.35.1 先发布、后弃用的顺序，正是延迟约束要放行的情形）在共享库套件 `manifest.test.ts` 的 S3.12 组里；自建私有库的 platform-* 套件只跑 v0.35.1 自己的迁移，对 0034 无信号 |
 
 结论：以上迁移"可逆"由推理升级为实测（空库上的 schema 兼容性；依赖生产数据的部分不在其内）。此前这里写的
 `drill-upgrade.sh --to v0.15.0 --ack-live-restore` 主机 PROBE 不再需要——它的回滚会覆盖活库，维护者 2026-10-02 选择
