@@ -73,7 +73,24 @@ Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检
 `PI_VERSION` / `PLATFORM_EXTENSION_VERSION` / `BUILT_FROM`，镜像标签因此是真实版本而不是 `dev`；
 运行时镜像另打 `nexttime-ai-worker-runtime:pi-<版本>` 供回滚。之后照常走 `docs/runbooks/operations.md`
 的重启顺序（`docker compose up -d`）；运行层页的「pi 运行时」卡片随后显示还有几个常驻智能体在旧镜像上，
-一键升级即可。下次要跟回 `main` 的最新提交，重新跑一次
+一键升级即可。
+
+**拉取发布镜像（S9 D1，代替上面的构建）**：发版时 `release-please.yml` 的 `publish-images` job 把十一个
+平台镜像推到 GHCR（`ghcr.io/<owner>/nexttime-ai-<service>:vX.Y.Z`，带 SBOM / provenance 与 cosign keyless
+签名；历史版本可在 Actions 手动跑 `publish-images` 补发）。检出切到同一个 tag 后：
+
+```
+sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（身份钉到本仓库 main 上的 publish-images.yml）→ 重打成 compose 的本地名
+docker compose up -d --no-build
+```
+
+验签用钉 digest 的 cosign 容器跑，主机不需要装任何东西；私有包需先 `docker login ghcr.io`（read:packages
+令牌，放主机 `secrets/`，不进仓库）。重打 tag 之后 compose、worker-supervisor 白名单、`activeRuntimeImage`、
+「pi 运行时」卡片看到的名字与标签和源码构建完全一样。`.env` 里 `EXPLORER_BUILD=1` 的主机：发布的 caddy
+不含 Explorer bundle，caddy 仍用 `sh scripts/build-images.sh caddy` 构建。验收夹具（accept-s2 / fake-llm）
+不发布，照旧在主机构建。拉取或验签失败就退回 `build-images.sh`，并记进主机私有记录。
+
+下次要跟回 `main` 的最新提交，重新跑一次
 `scripts/host-checkout.sh`（它会把 detached HEAD 状态覆盖掉，重新 fetch + reset 到
 `origin/main`）即可，无需额外清理。
 
