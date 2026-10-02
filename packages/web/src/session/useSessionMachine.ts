@@ -91,37 +91,73 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
   const attempt = useRef(0);
   const preSessionRef = useRef<PreSessionState>({ kind: 'boot' });
   preSessionRef.current = preSession;
+  const sessionRef = useRef<Session | null>(null);
+  sessionRef.current = session;
 
-  const connectApiKey = useCallback(async (apiKey: string): Promise<void> => {
-    setApiKeyConnecting(true);
-    setApiKeyError(null);
-    const myAttempt = ++attempt.current;
-    const ws = new WsClient({ url: wsUrl() });
-    try {
-      await ws.connect();
-      await ws.authenticate({ token: apiKey });
-      if (attempt.current !== myAttempt) {
-        ws.close();
-        return;
-      }
-      saveApiKey(apiKey);
-      generation.current += 1;
-      setSession({
-        ws,
-        http: new HttpClient({ auth: { kind: 'apiKey', apiKey } }),
-        generation: generation.current,
-        authMode: 'apiKey',
-        apiKey,
-      });
-    } catch (err) {
-      ws.close();
-      if (attempt.current !== myAttempt) return;
-      clearApiKey();
-      setApiKeyError(err);
-    } finally {
-      setApiKeyConnecting(false);
-    }
+  /** The published session numbered `gen`, or `undefined` once another one (or none) replaced it
+   *  — the fence every R-16 transition below checks before acting on a late event. */
+  const currentSession = useCallback((gen: number): Session | undefined => {
+    const current = sessionRef.current;
+    return current && current.generation === gen && generation.current === gen
+      ? current
+      : undefined;
   }, []);
+
+  /** R-16: the kernel says the published session's credential is gone — WS `-32001` or HTTP
+   *  `unauthorized`. Back to login, with no reconnect loop; an API key that no longer
+   *  authenticates is forgotten, so a reload does not try it again. */
+  const sessionInvalid = useCallback(
+    (gen: number): void => {
+      const current = currentSession(gen);
+      if (!current) return;
+      sessionRef.current = null;
+      attempt.current += 1;
+      current.ws.close();
+      setSession(null);
+      if (current.authMode === 'apiKey') clearApiKey();
+      else setWorkspaceCookie(null);
+      setPreSession({ kind: 'login' });
+    },
+    [currentSession],
+  );
+
+  const connectApiKey = useCallback(
+    async (apiKey: string): Promise<void> => {
+      setApiKeyConnecting(true);
+      setApiKeyError(null);
+      const myAttempt = ++attempt.current;
+      const ws = new WsClient({ url: wsUrl() });
+      try {
+        await ws.connect();
+        await ws.authenticate({ token: apiKey });
+        if (attempt.current !== myAttempt) {
+          ws.close();
+          return;
+        }
+        saveApiKey(apiKey);
+        generation.current += 1;
+        const gen = generation.current;
+        setSession({
+          ws,
+          http: new HttpClient({
+            auth: { kind: 'apiKey', apiKey },
+            onUnauthorized: () => sessionInvalid(gen),
+          }),
+          generation: gen,
+          authMode: 'apiKey',
+          apiKey,
+        });
+      } catch (err) {
+        ws.close();
+        if (attempt.current !== myAttempt) return;
+        clearApiKey();
+        setApiKeyError(err);
+      } finally {
+        setApiKeyConnecting(false);
+      }
+    },
+    [sessionInvalid],
+  );
 
   /** Opens a workspace-scoped WS + HTTP session for an already-authenticated cookie user. Sets
    *  the `nexttime_workspace` selector cookie (Explorer, `lib/auth-api.ts`) *before* `setSession`
@@ -149,10 +185,14 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         setWorkspaceCookie(workspaceId);
         saveSelectedWorkspaceId(workspaceId);
         generation.current += 1;
+        const gen = generation.current;
         setSession({
           ws,
-          http: new HttpClient({ auth: { kind: 'cookie', workspaceId } }),
-          generation: generation.current,
+          http: new HttpClient({
+            auth: { kind: 'cookie', workspaceId },
+            onUnauthorized: () => sessionInvalid(gen),
+          }),
+          generation: gen,
           authMode: 'cookie',
           user,
           memberships,
@@ -172,7 +212,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         );
       }
     },
-    [],
+    [sessionInvalid],
   );
 
   /** Opens a session for a cookie-authenticated platform admin with zero workspace memberships —
@@ -192,17 +232,21 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
       replacing?.close();
       setWorkspaceCookie(null);
       generation.current += 1;
+      const gen = generation.current;
       setSession({
         ws: new WsClient({ url: wsUrl() }),
-        http: new HttpClient({ auth: { kind: 'cookie', workspaceId: null } }),
-        generation: generation.current,
+        http: new HttpClient({
+          auth: { kind: 'cookie', workspaceId: null },
+          onUnauthorized: () => sessionInvalid(gen),
+        }),
+        generation: gen,
         authMode: 'cookie',
         user,
         memberships,
         selectedWorkspaceId: undefined,
       });
     },
-    [],
+    [sessionInvalid],
   );
 
   const proceedAfterCookieAuth = useCallback(
@@ -263,6 +307,41 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     },
     [openCookieSession, openPlatformOnlySession, syncRoute],
   );
+
+  /** R-16: the login is fine but its membership in this workspace is gone (WS `-32002`). Re-read
+   *  `/api/auth/me` and choose a workspace again through `proceedAfterCookieAuth` — another
+   *  membership, the no-workspace page, or the platform plane; login only if `/me` itself is now
+   *  refused. An API-key session has no login to fall back on, so it goes to login. */
+  const membershipGone = useCallback(
+    async (gen: number): Promise<void> => {
+      const current = currentSession(gen);
+      if (!current) return;
+      if (current.authMode !== 'cookie') {
+        sessionInvalid(gen);
+        return;
+      }
+      let me: MeResult;
+      try {
+        me = await getMe();
+      } catch {
+        sessionInvalid(gen);
+        return;
+      }
+      if (!currentSession(gen)) return;
+      await proceedAfterCookieAuth(me.user, me.memberships, current.ws);
+    },
+    [currentSession, sessionInvalid, proceedAfterCookieAuth],
+  );
+
+  // R-16: the published session's socket reports the kernel ending it for good.
+  useEffect(() => {
+    if (!session) return;
+    const gen = session.generation;
+    return session.ws.onSessionEnded((reason) => {
+      if (reason === 'membership_gone') void membershipGone(gen);
+      else sessionInvalid(gen);
+    });
+  }, [session, sessionInvalid, membershipGone]);
 
   const bootUnauthenticated = useCallback(async (): Promise<void> => {
     setPreSession({ kind: 'login' });

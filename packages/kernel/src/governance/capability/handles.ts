@@ -772,3 +772,25 @@ export async function revokeRoleScopedSessionHandles(
     await revokeSession(client, row.id);
   }
 }
+
+/**
+ * R-05 (review 2026-10-02): every Handle issued under any session acting on `principalId`'s
+ * behalf — the entry agent's `entry` session(s), `issue_handle`'s `mcp_session`s and every
+ * running Worker's `worker_run` session (`application/task/handle-mint.ts` copies the human's
+ * `on_behalf_of` onto it). `disable_principal` calls this: a disabled member keeps no LLM or
+ * capability access through any of them, including a Worker mid-Task. `revokeSession` writes
+ * `capability_handles.revoked_at`, which llm-proxy picks up through its revocation sync.
+ */
+export async function revokeOnBehalfOfSessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    'select id from sessions where workspace_id = $1 and on_behalf_of = $2',
+    [workspaceId, principalId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}

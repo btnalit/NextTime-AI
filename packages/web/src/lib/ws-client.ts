@@ -28,6 +28,12 @@ import type { ActionRequestStatus, ChatStreamPayload, TaskStatus } from '@nextti
  *     (`WS_ERROR_CODES.TURN_ALREADY_RUNNING`) while a Turn is already running on that Chat —
  *     surfaced here as `TurnAlreadyRunningError` so a caller can `catch` it specifically instead of
  *     string-matching an error message.
+ *   - R-05/R-16 (review 2026-10-02): the kernel re-checks the session on every call and closes the
+ *     socket when it is gone — answering the call, or with an `id: null` error when a logout /
+ *     disable / reset kicks it. `-32001` means the session itself is invalid (sign in again);
+ *     `-32002` on a kick or on a reconnect's `authenticate` means the membership in this workspace
+ *     is gone. Either ends the session for good — see {@link WsClient.onSessionEnded} — instead of
+ *     reconnecting forever; every other drop reconnects with exponential backoff and jitter.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -127,13 +133,20 @@ export type Unsubscribe = () => void;
 
 /** Connection lifecycle as the shell's status indicator sees it: `connecting` (first `connect()`
  *  in flight), `connected` (socket open — authenticated or about to be), `reconnecting` (an
- *  unexpected drop; `WsClient` is retrying on its own), `closed` (never opened, or `close()`). */
+ *  unexpected drop; `WsClient` is retrying on its own), `closed` (never opened, `close()`, or the
+ *  kernel ended the session — {@link WsClient.onSessionEnded}). */
 export type WsConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'closed';
 
 /** The credential `authenticate()` sends as the first frame's `params` (S4.1). `{token}` is the
  *  pre-existing API-key channel; `{workspaceId}` selects the workspace for a cookie-authenticated
  *  browser session — the cookie itself rides on the WS upgrade and is never handled here. */
 export type WsCredential = { readonly token: string } | { readonly workspaceId: string };
+
+/** Why the kernel ended an authenticated session for good (R-16) — never a transient drop:
+ *  `session_invalid` (`-32001`: the console session or API key was revoked or expired, or its
+ *  user or Principal disabled — sign in again) or `membership_gone` (`-32002` on a kick or on a
+ *  reconnect's `authenticate`: the login is fine but its membership in this workspace is not). */
+export type WsSessionEndReason = 'session_invalid' | 'membership_gone';
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -161,6 +174,10 @@ export class TurnAlreadyRunningError extends RpcError {
 }
 
 const TURN_ALREADY_RUNNING_CODE = -32010;
+
+/** `WS_ERROR_CODES.UNAUTHORIZED` / `FORBIDDEN` (interfaces/ws/rpc.ts) — see {@link WsSessionEndReason}. */
+const UNAUTHORIZED_CODE = -32001;
+const FORBIDDEN_CODE = -32002;
 
 /** Client-side code for a request the kernel never answered (C5). JSON-RPC 2.0 reserves
  *  -32000…-32099 for implementation-defined server errors; the kernel's own `WS_ERROR_CODES`
@@ -241,6 +258,8 @@ function isNotificationFrame(
 // -------------------------------------------------------------------------------------------
 
 interface PendingCall {
+  /** The request's method — `handleFrame` needs to know a `-32002` answered `authenticate`. */
+  readonly method: string;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   /** The C5 deadline — cleared on response, on close, and on timeout itself; `undefined` when the
@@ -266,9 +285,12 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
  *  server's own convenience replay already covered. */
 const HISTORY_PAGE_LIMIT = 200;
 
-/** Delay before a reconnect attempt after an unexpected socket close. `0` in tests for
- *  determinism; a real deployment keeps the default so a flapping connection does not spin. */
+/** Base delay before a reconnect attempt after an unexpected socket close; it doubles per failed
+ *  attempt up to {@link DEFAULT_MAX_RECONNECT_DELAY_MS}, with jitter (R-16), and starts over once
+ *  a reconnect authenticates. `0` in tests for determinism; a real deployment keeps the default so
+ *  a flapping connection does not spin. */
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
+const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
 
 interface ActiveSubscription {
   readonly chatId: string;
@@ -287,7 +309,12 @@ interface ActiveSubscription {
 export interface WsClientOptions {
   readonly url: string;
   readonly createSocket?: WebSocketFactory;
+  /** Base reconnect delay (see `DEFAULT_RECONNECT_DELAY_MS`). */
   readonly reconnectDelayMs?: number;
+  /** Ceiling the doubling reconnect delay stops at. Default 30 s. */
+  readonly maxReconnectDelayMs?: number;
+  /** Jitter source in `[0, 1)`; injectable for tests. Default `Math.random`. */
+  readonly random?: () => number;
   /** C5: how long one `call()` waits for its JSON-RPC response before rejecting with
    *  `RpcTimeoutError`. Default 30 s; `0` disables. Per call override: `call(_, _, {timeoutMs})`. */
   readonly rpcTimeoutMs?: number;
@@ -297,6 +324,8 @@ export class WsClient {
   private readonly url: string;
   private readonly createSocket: WebSocketFactory;
   private readonly reconnectDelayMs: number;
+  private readonly maxReconnectDelayMs: number;
+  private readonly random: () => number;
   private readonly rpcTimeoutMs: number;
 
   private socket: WebSocketLike | undefined;
@@ -310,6 +339,11 @@ export class WsClient {
   private manuallyClosed = false;
   private activeSubscription: ActiveSubscription | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Failed reconnect attempts since the last authenticated (re)connect — the backoff exponent. */
+  private reconnectAttempts = 0;
+  /** Set once the kernel ended the session for good (R-16); nothing reconnects after that. */
+  private endReason: WsSessionEndReason | undefined;
+  private readonly sessionEndListeners = new Set<(reason: WsSessionEndReason) => void>();
 
   // S2.10 principal-scoped push listeners — connection-lifetime, not tied to `activeSubscription`
   // or to any particular socket instance, so they survive a reconnect with no extra bookkeeping
@@ -326,6 +360,8 @@ export class WsClient {
     this.url = options.url;
     this.createSocket = options.createSocket ?? defaultWebSocketFactory;
     this.reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS;
+    this.random = options.random ?? Math.random;
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   }
 
@@ -369,6 +405,7 @@ export class WsClient {
     await this.rpc('authenticate', credential);
     this.authenticated = true;
     this.credential = credential;
+    this.endReason = undefined;
   }
 
   /** One JSON-RPC request/response round trip. `method` must be a registered chat capability name
@@ -410,6 +447,7 @@ export class WsClient {
             }, timeoutMs)
           : undefined;
       this.pending.set(id, {
+        method,
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,
@@ -538,6 +576,14 @@ export class WsClient {
     for (const fn of this.statusListeners) fn(next);
   }
 
+  /** R-16: registers a listener for the kernel ending this client's authenticated session for
+   *  good (see {@link WsSessionEndReason}). Fires at most once per session; the client is then
+   *  `closed` and never reconnects on its own. Returns an `Unsubscribe`. */
+  onSessionEnded(handler: (reason: WsSessionEndReason) => void): Unsubscribe {
+    this.sessionEndListeners.add(handler);
+    return () => this.sessionEndListeners.delete(handler);
+  }
+
   private handleFrame(raw: string): void {
     let parsed: JsonRpcResponseFrame | JsonRpcNotificationFrame;
     try {
@@ -552,16 +598,43 @@ export class WsClient {
     }
 
     const id = typeof parsed.id === 'number' ? parsed.id : undefined;
-    if (id === undefined) return;
-    const pending = this.pending.get(id);
-    if (!pending) return;
-    this.pending.delete(id);
-    clearTimeout(pending.timer);
-    if (parsed.error) {
-      pending.reject(toTypedError(parsed.error));
-    } else {
-      pending.resolve(parsed.result);
+    const pending = id === undefined ? undefined : this.pending.get(id);
+    if (id !== undefined && pending) {
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
+      if (parsed.error) {
+        pending.reject(toTypedError(parsed.error));
+      } else {
+        pending.resolve(parsed.result);
+      }
     }
+    if (parsed.error) this.checkSessionEnded(parsed.error.code, id === undefined, pending?.method);
+  }
+
+  /** R-16: whether an error frame means the kernel ended the session (see the module doc comment).
+   *  Only once a session exists (`credential` set): a first `authenticate()` failure stays the
+   *  caller's own decision, as before. `-32002` on an ordinary call is a role refusal, not this. */
+  private checkSessionEnded(code: number, unsolicited: boolean, method: string | undefined): void {
+    if (this.credential === undefined) return;
+    if (code === UNAUTHORIZED_CODE) {
+      this.endSession('session_invalid');
+    } else if (code === FORBIDDEN_CODE && (unsolicited || method === 'authenticate')) {
+      this.endSession('membership_gone');
+    }
+  }
+
+  private endSession(reason: WsSessionEndReason): void {
+    if (this.endReason !== undefined) return;
+    this.endReason = reason;
+    // Nothing is worth reconnecting with any more — `handleClose` reads this as "do not".
+    this.credential = undefined;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    this.socket?.close();
+    this.setStatus('closed');
+    for (const fn of this.sessionEndListeners) fn(reason);
   }
 
   private handleNotification(frame: JsonRpcNotificationFrame): void {
@@ -638,12 +711,26 @@ export class WsClient {
     // Guarded here (not just at each call site) so a `close()` racing an in-flight reconnect
     // attempt — `reconnect()`'s own catch block below also calls this — can never schedule
     // another one: `close()` sets `manuallyClosed` synchronously before anything async happens.
-    if (this.manuallyClosed || this.reconnectTimer) return;
+    // R-16: likewise a session the kernel ended (`endReason`) — a reconnect's `authenticate`
+    // answered -32001/-32002 lands in that same catch block.
+    if (this.manuallyClosed || this.endReason !== undefined || this.reconnectTimer) return;
     this.setStatus('reconnecting');
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.reconnect();
-    }, this.reconnectDelayMs);
+    }, this.nextReconnectDelay());
+  }
+
+  /** R-16: exponential backoff with jitter — the base delay doubles per failed attempt up to
+   *  `maxReconnectDelayMs`, and the wait is a random point in the upper half of that window, so a
+   *  kernel restart does not see every open tab reconnect in the same instant. */
+  private nextReconnectDelay(): number {
+    const ceiling = Math.min(
+      this.maxReconnectDelayMs,
+      this.reconnectDelayMs * 2 ** Math.min(this.reconnectAttempts, 30),
+    );
+    this.reconnectAttempts += 1;
+    return ceiling / 2 + this.random() * (ceiling / 2);
   }
 
   /**
@@ -662,6 +749,7 @@ export class WsClient {
     try {
       await this.connect();
       if (credential) await this.authenticate(credential);
+      this.reconnectAttempts = 0;
       if (subscription) {
         subscription.caughtUp = false;
         subscription.seenSequences = new Set<number>();

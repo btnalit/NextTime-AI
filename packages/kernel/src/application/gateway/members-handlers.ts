@@ -1,7 +1,7 @@
 import type { PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
-  revokeEntrySessionHandles,
+  revokeOnBehalfOfSessionHandles,
   revokeRoleScopedSessionHandles,
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
@@ -9,6 +9,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import { generateApiKey, hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { publishSessionKick } from './session-revocation.js';
 
 /**
  * application/gateway/members-handlers: the S3.11 "成员管理" capabilities (docs/development-
@@ -514,14 +515,25 @@ export const disablePrincipalHandler: CapabilityHandler = async (
   const disabledRow = disabled.rows[0];
   if (!disabledRow) throw new PrincipalNotFoundError(workspaceId, principalId);
 
-  // Existing service path grant changes already use (governance/capability/handles.ts) — revokes
-  // every Handle issued under this principal's own kind='entry' session(s), and (belt/suspenders)
-  // application/gateway/handle-auth.ts additionally rejects any Handle, of any session kind,
-  // whose on_behalf_of principal is disabled — see that module's own doc comment.
-  await revokeEntrySessionHandles(client, workspaceId, principalId);
+  // R-05: revokes every Handle issued under any session on this principal's behalf — entry,
+  // mcp_session and worker_run (governance/capability/handles.ts), so a running Worker loses its
+  // LLM access too — and (belt/suspenders) application/gateway/handle-auth.ts additionally
+  // rejects any Handle whose on_behalf_of principal is disabled — see that module's own doc
+  // comment.
+  await revokeOnBehalfOfSessionHandles(client, workspaceId, principalId);
 
   const wire = toWirePrincipal({ ...target, disabledAt: disabledRow.disabled_at });
-  return { result: wire, resourceType: 'principal', resourceId: principalId };
+  return {
+    result: wire,
+    resourceType: 'principal',
+    resourceId: principalId,
+    // R-05: once committed, the principal's open /ws sockets close and stop receiving pushes
+    // (application/gateway/session-revocation.ts) instead of at their next call.
+    afterCommit: async () => {
+      publishSessionKick({ principalIds: [principalId] });
+      return wire;
+    },
+  };
 };
 
 // -------------------------------------------------------------------------------------------

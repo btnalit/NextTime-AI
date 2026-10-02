@@ -486,6 +486,68 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    /** Mirrors `application/task/handle-mint.ts`'s `mintWorkerRunHandle`: a `kind='worker_run'`
+     *  session carrying the human's `on_behalf_of`, and a Handle under it — what a running Worker
+     *  holds for the LLM. */
+    async function issueWorkerRunHandle(
+      ws: string,
+      principalId: string,
+      keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
+    ): Promise<{ token: string; jti: string }> {
+      return withWorkspace(
+        pool,
+        { workspaceId: ws, principalId },
+        async (client) => {
+          const sessionResult = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $2, 'active') returning id`,
+            [ws, principalId],
+          );
+          const sessionId = sessionResult.rows[0]?.id;
+          if (!sessionId) throw new Error('issueWorkerRunHandle: failed to insert worker_run');
+          const issued = await issueHandle(client, {
+            sessionId,
+            scope: entryScope(),
+            ttlSeconds: 3600,
+            privateKey: keyPair.privateKey,
+          });
+          return { token: issued.token, jti: issued.jti };
+        },
+        { skipRoleSwitch: true },
+      );
+    }
+
+    it('disable_principal revokes every Handle on the principal’s behalf — entry, mcp_session and worker_run — and no other principal’s (R-05)', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Judy');
+      const otherId = await adminInsertPrincipal(workspaceId, 'member', 'Karl');
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const entry = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const mcp = await issueMcpSessionHandle(workspaceId, targetId, keyPair);
+      const workerRun = await issueWorkerRunHandle(workspaceId, targetId, keyPair);
+      const otherWorkerRun = await issueWorkerRunHandle(workspaceId, otherId, keyPair);
+
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      await dispatchCapability({ pool }, owner, 'disable_principal', { principalId: targetId });
+
+      // `capability_handles.revoked_at` itself — what llm-proxy's revocation sync reads — not
+      // only authenticateHandle's disabled-principal check.
+      const rows = await pool.query<{ jti: string; revoked_at: Date | null }>(
+        'select jti, revoked_at from capability_handles where jti = any($1)',
+        [[entry.jti, mcp.jti, workerRun.jti, otherWorkerRun.jti]],
+      );
+      const revokedAt = new Map(rows.rows.map((row) => [row.jti, row.revoked_at]));
+      for (const jti of [entry.jti, mcp.jti, workerRun.jti]) {
+        expect(revokedAt.get(jti), `expected jti ${jti} to be revoked`).not.toBeNull();
+      }
+      expect(revokedAt.get(otherWorkerRun.jti)).toBeNull();
+      await expect(
+        authenticateHandle(pool, otherWorkerRun.token, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: otherId });
+    });
+
     it('set_principal_role: an actual role change revokes both the target’s entry and mcp_session Handles, but not another principal’s (W5.5, STATUS leftover 18)', async () => {
       const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Grace');
       const otherId = await adminInsertPrincipal(workspaceId, 'member', 'Ivan');
