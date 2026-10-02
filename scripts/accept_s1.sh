@@ -129,12 +129,13 @@ fi
 # `node -e "fetch(...)..."` pattern, run from the kernel image here rather than exec'ing into the
 # already-running worker-supervisor container, since the task brief specifically calls out node
 # running "inside the kernel image"). `/resident/*` is gated on the internal-plane token since the
-# runtime hardening (F6 / PR #78) — the kernel container has the same token at
-# /run/secrets/internal_token, so the probe sends it as a Bearer; without it the 401 body used to be
+# runtime hardening (F6 / PR #78) — the kernel container has its own credential for
+# worker-supervisor at /run/secrets/internal_token_worker_supervisor (R-03), so the probe sends it
+# as a Bearer; without it the 401 body used to be
 # misread as "found, but no restarts" (2026-09-08 regression run).
 resident_status() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: 'Bearer ' + token } }).then(async (r) => {
   if (r.status === 404) { console.log('FOUND=0'); return; }
   if (!r.ok) { console.log('FOUND=error status=' + r.status); return; }
@@ -148,7 +149,7 @@ fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: '
 
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
@@ -168,7 +169,7 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 # 7-day TTL is swept. Tolerates "not found" as a no-op, same as resident_stop.
 resident_reclaim() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },

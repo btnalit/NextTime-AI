@@ -267,6 +267,11 @@ step_start "handle-keys"
 if ! $SSH "$TARGET_HOST" "NEXTTIME_DATA='$NEXTTIME_DATA' sh -s" < scripts/gen-handle-keys.sh; then
   step_fail "docs/runbooks/host-checkout.md §E3.3"
 fi
+# R-03: a piped gen-handle-keys.sh cannot run its sibling, so derive the per-service internal-plane
+# credentials explicitly — `docker compose up` refuses a missing secret file.
+if ! $SSH "$TARGET_HOST" "NEXTTIME_DATA='$NEXTTIME_DATA' sh -s" < scripts/derive-internal-tokens.sh; then
+  step_fail "docs/runbooks/host-checkout.md §E3.3 (scripts/derive-internal-tokens.sh)"
+fi
 step_ok
 
 # --------------------------------------------------------------------------------------------

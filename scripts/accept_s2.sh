@@ -160,8 +160,9 @@ else
 fi
 
 # `/resident/*` is gated on the internal-plane token (F6/PR #78, same as accept_s1.sh's own
-# resident_status/resident_stop) — the kernel container has the same token at
-# /run/secrets/internal_token, so every call below sends it as a Bearer. Bug fix in passing
+# resident_status/resident_stop) — the kernel container has its own credential for
+# worker-supervisor at /run/secrets/internal_token_worker_supervisor (R-03), so every call below
+# sends it as a Bearer. Bug fix in passing
 # (STATUS.md leftover "验收残留自动清理"): this function used to send no Authorization header at
 # all, so every call here always 401'd and never actually stopped anything — both the "defensive:
 # force a fresh Handle" call sites below (step2_docker_restart/real_docker_restart_run, where a
@@ -169,7 +170,7 @@ fi
 # no-op'd, leaving alice/bob's entry containers running (not merely stopped) after every S2 run.
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
@@ -185,7 +186,7 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 # gone-but-respawnable for the *same* principal later in this same run, not permanently reclaimed.
 resident_reclaim() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
@@ -483,7 +484,7 @@ connections_step() {
     discovered)
       psql_ws "update gate_instances set status='enabled', updated_at=now() where gate_id='gatekeeper-docker' and status='discovered'" >/dev/null
       pass "connect-docker-platform-enable" "gate instance gatekeeper-docker: discovered -> enabled (administrator step done as SQL)" ;;
-    "") fail "connect-docker-platform-enable" "gatekeeper-docker has not announced itself to the kernel (no gate_instances row) — is the gatekeeper-docker service up with internal_token mounted?" ;;
+    "") fail "connect-docker-platform-enable" "gatekeeper-docker has not announced itself to the kernel (no gate_instances row) — is the gatekeeper-docker service up with internal_gate_to_kernel mounted?" ;;
     *) fail "connect-docker-platform-enable" "gate instance gatekeeper-docker is '$docker_gate_status' — an administrator's decision; re-enable it on the integrations page before running S2" ;;
   esac
   docker_connector_mode=$(psql_ws "select mode from connectors where name='docker'")

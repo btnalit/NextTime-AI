@@ -169,7 +169,7 @@ psql_ws() {
 # Duplicated from scripts/accept_s3.sh's own resident_stop (cleanup_step only).
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },

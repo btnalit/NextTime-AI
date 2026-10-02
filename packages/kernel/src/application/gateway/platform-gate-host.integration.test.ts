@@ -11,6 +11,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
+import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
@@ -210,7 +211,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         url: '/internal/gates/announce',
         headers: {
           'content-type': 'application/json',
-          authorization: internalAuthorizationHeader(INTERNAL_TOKEN),
+          authorization: internalAuthorizationHeader(
+            deriveInternalCredential(INTERNAL_TOKEN, 'gate-host'),
+          ),
         },
         payload: body,
       });
@@ -329,7 +332,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       const withToken = await server.inject({
         method: 'GET',
         url: '/internal/gate-host/instances',
-        headers: { authorization: internalAuthorizationHeader(INTERNAL_TOKEN) },
+        headers: {
+          authorization: internalAuthorizationHeader(
+            deriveInternalCredential(INTERNAL_TOKEN, 'gate-host'),
+          ),
+        },
       });
       expect(withToken.statusCode).toBe(200);
       const items = withToken.json().result.items as Array<{ gateId: string; definition: unknown }>;

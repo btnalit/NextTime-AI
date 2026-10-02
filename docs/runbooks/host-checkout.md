@@ -27,7 +27,7 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/host-env-init.
 
 紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）：私钥落在 `secrets/handle.key`（0640，组 10001，只经 compose secret `handle_key` 挂进 kernel），公钥在 `config/handle.pub`。若 `secrets/kernel.env` 是在此之前生成的，用 `sed -i` 把其中 `HANDLE_PRIVATE_KEY_FILE` 改成 `/run/secrets/handle_key` 并补一行 `HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub`（不要 `cat` 该文件）。
 
-同一次脚本运行也会生成 `secrets/internal.token`（fix/internal-plane-auth，2026-09；幂等，已存在则不动）：32 字节随机数，hex 编码，0640，组 10001——内核整个 internal plane（`/internal/*` HTTP 路由 + `/internal/agent-host` WS）的共享密钥，经 compose secret `internal_token` 挂进四个容器：`kernel`、`agent-host`、`llm-proxy`、`egress-proxy`（默认路径 `/run/secrets/internal_token`，与 `NEXTTIME_INTERNAL_TOKEN_FILE` 的代码内默认值一致，通常不需要在任何 `.env`/`secrets/*.env` 里显式覆盖）。用 `stat` 验证权限，**不要 `cat` 该文件**。
+同一次脚本运行也会生成 `secrets/internal.token`（fix/internal-plane-auth，2026-09；幂等，已存在则不动）：32 字节随机数，hex 编码，0640，组 10001——内核 internal plane（`/internal/*` HTTP 路由 + `/internal/agent-host` WS）的**根**，经 compose secret `internal_token` 只挂进 `kernel`。每个调用方服务只持从根派生的自己那份凭证（R-03）：`scripts/derive-internal-tokens.sh` 写 `secrets/internal-<调用方>-to-<被调方>.token`（0640，组 10001，幂等、每次重新派生），compose 把每份挂进对应服务。本地跑 `sh scripts/gen-handle-keys.sh` 时它会自动接着跑派生；像上面这样经 SSH 管道（`sh -s`）跑时脚本找不到同目录的派生脚本，要再管道跑一次：`ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/derive-internal-tokens.sh`——缺这些文件 `docker compose up` 会直接失败。用 `stat` 验证权限，**不要 `cat` 这些文件**。
 
 ## E3.4 校验 compose
 `cd <CODE_DIR> && docker compose config >/dev/null && echo ok`；失败则回仓库改脚本或 compose

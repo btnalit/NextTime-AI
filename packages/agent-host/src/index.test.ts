@@ -1,9 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { INTERNAL_TOKEN_FILE_ENV, InternalTokenError } from '@nexttime/shared';
+import {
+  INTERNAL_TOKEN_FILE_ENV,
+  InternalTokenError,
+  SUPERVISOR_TOKEN_FILE_ENV,
+} from '@nexttime/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { VERSION, kernelWsUrlFrom, loadInternalToken, main } from './index.js';
+import { VERSION, kernelWsUrlFrom, loadInternalToken, loadSupervisorToken, main } from './index.js';
 
 /** index.test: smoke tests for the process entrypoint — env validation and the kernel URL ->
  *  WebSocket URL derivation. The actual wiring (kernel-link <-> host <-> supervisor-client/
@@ -17,6 +21,7 @@ const ENV_KEYS = [
   'DOCKER_SOCKET_PATH',
   'DOCKER_HOST',
   INTERNAL_TOKEN_FILE_ENV,
+  SUPERVISOR_TOKEN_FILE_ENV,
 ] as const;
 
 function clearAgentHostEnv(): void {
@@ -65,6 +70,38 @@ describe('main()', () => {
       'internal.token',
     );
     expect(() => main()).toThrow(InternalTokenError);
+  });
+
+  it('fails fast on its worker-supervisor credential file too, even with a readable kernel credential (R-03)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexttime-agent-host-main-'));
+    try {
+      const kernelCredential = join(dir, 'internal_token');
+      writeFileSync(kernelCredential, `${'a'.repeat(64)}\n`, 'utf8');
+      process.env.KERNEL_URL = 'http://kernel:8080';
+      process.env.SUPERVISOR_URL = 'http://worker-supervisor:8081';
+      process.env.KERNEL_LLM_URL = 'http://llm-proxy:8082';
+      process.env[INTERNAL_TOKEN_FILE_ENV] = kernelCredential;
+      process.env[SUPERVISOR_TOKEN_FILE_ENV] = join(dir, 'missing');
+      expect(() => main()).toThrow(SUPERVISOR_TOKEN_FILE_ENV);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('loadSupervisorToken', () => {
+  it('reads agent-host’s credential for worker-supervisor from its own file, naming the compose secret when missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexttime-agent-host-supervisor-token-'));
+    try {
+      const file = join(dir, 'internal_token_worker_supervisor');
+      writeFileSync(file, `${'c'.repeat(64)}\n`, 'utf8');
+      expect(loadSupervisorToken({ [SUPERVISOR_TOKEN_FILE_ENV]: file })).toBe('c'.repeat(64));
+      expect(() => loadSupervisorToken({ [SUPERVISOR_TOKEN_FILE_ENV]: join(dir, 'x') })).toThrow(
+        'internal_agent_host_to_worker_supervisor',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -13,7 +13,7 @@ import { type MetricsRoutesDeps, registerMetricsRoute } from './metrics.js';
 /**
  * interfaces/http/internal: the kernel's internal-plane HTTP routes — service-to-service calls from
  * `llm-proxy` and `egress-proxy`, plus operator-facing observability, all authenticated by the
- * shared-secret guard in `interfaces/internal-auth` (installed once by the composition root on the
+ * credential guard in `interfaces/internal-auth` (installed once by the composition root on the
  * `/internal/` route prefix; none of the files here carry auth logic of their own — see
  * llm-usage.ts's doc comment for the trust-boundary history). Self-contained: `packages/kernel/src/
  * index.ts` and every other `interfaces/http/**` file belong to the parallel S1.3 dispatch, not this

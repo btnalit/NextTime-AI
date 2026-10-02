@@ -186,7 +186,7 @@ mcp() {
 # verbatim copy of accept_s1.sh's own resident_status helper.
 resident_status() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: 'Bearer ' + token } }).then(async (r) => {
   if (r.status === 404) { console.log('FOUND=0'); return; }
   if (!r.ok) { console.log('FOUND=error status=' + r.status); return; }
@@ -200,7 +200,7 @@ fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: '
 
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
@@ -214,7 +214,7 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 # (STATUS.md leftover "验收残留自动清理"). Used only by cleanup_step below.
 resident_reclaim() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },

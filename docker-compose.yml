@@ -64,16 +64,23 @@ services:
       }
     env_file: ${NEXTTIME_DATA:?}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     # handle_key：Handle 签名私钥，只进这一个容器：/run/secrets/handle_key。internal_token
-    # （fix/internal-plane-auth）：内核整个 internal plane（/internal/* + /internal/agent-host）的
-    # 共享密钥，默认挂载路径 /run/secrets/internal_token 与 @nexttime/shared 的
-    # DEFAULT_INTERNAL_TOKEN_FILE 一致，kernel 与其三个 internal 客户端（agent-host/llm-proxy/
-    # egress-proxy，见各自服务块）共享同一份文件；scripts/gen-handle-keys.sh 生成。gate_token
+    # （fix/internal-plane-auth；R-03 起是"根"）：内核 internal plane（/internal/* +
+    # /internal/agent-host）的根密钥，只挂进 kernel 这一个服务（/run/secrets/internal_token，
+    # @nexttime/shared 的 DEFAULT_INTERNAL_TOKEN_FILE）；每个调用方只持自己的那份派生凭证
+    # （scripts/derive-internal-tokens.sh 从根派生成 secrets/internal-<调用方>-to-<被调方>.token，
+    # 见文件末尾 secrets: 与各服务块），kernel 从根重新派生来识别调用方，并按路由白名单放行
+    # （interfaces/internal-auth）。internal_kernel_to_worker_supervisor：kernel 调
+    # worker-supervisor 用的自己那份凭证（/run/secrets/internal_token_worker_supervisor）。gate_token
     # （fix/gate-protocol-hardening）：kernel 的 HttpGatekeeperClient 调任何 /gate/* 端点都要带
-    # 的共享密钥——与 internal_token 是两个不同的 secret（两个不同的信任边界，见
+    # 的共享密钥——与 internal-plane 凭证是不同的 secret（两个不同的信任边界，见
     # @nexttime/gatekeeper-base 的 gate-token.ts 模块注释），默认挂载路径同样是
     # /run/secrets/gate_token（DEFAULT_GATE_TOKEN_FILE），kernel 侧读取用的 env 是
     # NEXTTIME_GATE_TOKEN_FILE；四个门服务各自的服务块见它们自己的注释。
-    secrets: [handle_key, internal_token, gate_token]
+    secrets:
+      - handle_key
+      - internal_token
+      - gate_token
+      - { source: internal_kernel_to_worker_supervisor, target: internal_token_worker_supervisor }
     # AGENT_RUNTIME=agent-host 现在是默认值（S1.5 后半：真正的 agent-host 事件桥落地）——仍可在
     # .env 里覆盖回 fake（AGENT_RUNTIME=fake）以跳过整条容器/pi 链路。KERNEL_LLM_URL 是
     # AgentHostRuntime 塞进每个 startTurn 命令里的 llmUrl（packages/kernel/src/index.ts
@@ -301,9 +308,13 @@ services:
         KERNEL_LLM_URL: http://llm-proxy:8082,
         DOCKER_HOST: tcp://docker-socket-proxy:2375,
       }
-    # internal_token（fix/internal-plane-auth）：kernel-link.ts 需要它给 /internal/agent-host 的
-    # WS 握手带 Authorization: Bearer <token>——见 kernel 服务块自己的注释。
-    secrets: [internal_token]
+    # 两份自己的凭证（R-03，见 kernel 服务块注释），都不是根：internal_agent_host_to_kernel 挂在
+    # /run/secrets/internal_token，kernel-link.ts 给 /internal/agent-host 的 WS 握手带它；
+    # internal_agent_host_to_worker_supervisor 挂在 /run/secrets/internal_token_worker_supervisor，
+    # supervisor-client.ts 调 /resident/* 带它。
+    secrets:
+      - { source: internal_agent_host_to_kernel, target: internal_token }
+      - { source: internal_agent_host_to_worker_supervisor, target: internal_token_worker_supervisor }
     # docker.sock (fix/socket-proxy-and-backup-user): this container no longer bind-mounts
     # /var/run/docker.sock at all — packages/agent-host/src/container-io.ts now attaches over
     # DOCKER_HOST=tcp://docker-socket-proxy:2375 on the `dockerapi` network instead (see that
@@ -332,15 +343,17 @@ services:
 
   worker-supervisor:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
-    # internal_token（fix/runtime-hardening, lane-6 review P1-3）：POST /task/spawn 与全部
-    # /resident/* 路由现在都要求这个内部共享密钥（packages/worker-supervisor/src/internal-auth.ts）
-    # ——这个服务只在 control 网络（下面 networks 只有 control，从不在 workers 上），但此前任何其他
-    # control 网络上的服务都能不带凭证直接调用这两组路由；"trusted caller" 只是约定，监听端本身并不
-    # 强制。与 kernel/agent-host 用的是同一份文件（DEFAULT_INTERNAL_TOKEN_FILE，
-    # scripts/gen-handle-keys.sh 生成）。调用方（agent-host 的 supervisor-client.ts；kernel 的
-    # adapters/supervisor-client，同一批修复内已同步更新）必须带上 Authorization: Bearer <token>，
-    # 否则拿到 401。
-    secrets: [internal_token]
+    # fix/runtime-hardening, lane-6 review P1-3：POST /task/spawn 与全部 /resident/* 路由现在都要求
+    # 调用方凭证（packages/worker-supervisor/src/internal-auth.ts）——这个服务只在 control 网络
+    # （下面 networks 只有 control，从不在 workers 上），但此前任何其他 control 网络上的服务都能不带
+    # 凭证直接调用这两组路由；"trusted caller" 只是约定，监听端本身并不强制。R-03：它只有两个调用方，
+    # 只持它们各自给它的那份凭证（不持根，也不持任何能调 kernel 的凭证）——kernel 的
+    # （internal_kernel_to_worker_supervisor，挂在 /run/secrets/internal_token）与 agent-host 的
+    # （internal_agent_host_to_worker_supervisor，挂在 /run/secrets/internal_token_agent_host）；
+    # 每条路由只放行用它的那一方（server.ts 路由表），否则 401。
+    secrets:
+      - { source: internal_kernel_to_worker_supervisor, target: internal_token }
+      - { source: internal_agent_host_to_worker_supervisor, target: internal_token_agent_host }
     # docker.sock (fix/socket-proxy-and-backup-user): this container no longer bind-mounts
     # /var/run/docker.sock at all — packages/worker-supervisor/src/docker-client.ts now talks to
     # the Engine API (still via dockerode, no docker CLI needed in the image) over
@@ -664,11 +677,15 @@ services:
   # (gate-auth.ts).
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
-    # internal_token (P-B1): lets the gate announce itself to the kernel (`POST /internal/gates/
-    # announce`, GATE_ID / GATE_CONNECTOR / KERNEL_URL below) — endpoints and manifest only, never
-    # a credential. Same secret worker-supervisor and agent-host hold; still a separate trust
+    # internal_gate_to_kernel (P-B1; R-03): lets the gate announce itself to the kernel (`POST
+    # /internal/gates/announce`, GATE_ID / GATE_CONNECTOR / KERNEL_URL below) — endpoints and
+    # manifest only, never a credential. The packaged gates' own credential, mounted where the gate
+    # reads it (/run/secrets/internal_token): the kernel admits it on announce and nothing else —
+    # never the root, never what agent-host / llm-proxy / egress-proxy hold. A separate trust
     # boundary from gate_token (kernel → gate).
-    secrets: [gate_token, internal_token]
+    secrets:
+      - gate_token
+      - { source: internal_gate_to_kernel, target: internal_token }
     environment:
       DOCKER_HOST: tcp://docker-socket-proxy-gate:2375
       GATE_ID: gatekeeper-docker
@@ -703,9 +720,11 @@ services:
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
-    # internal_token / GATE_* (P-B1): see gatekeeper-docker. The announced `target` is the gate's
-    # RAGFLOW_BASE_URL from the env_file (a URL, not the API key).
-    secrets: [gate_token, internal_token]
+    # internal_gate_to_kernel / GATE_* (P-B1; R-03): see gatekeeper-docker. The announced `target`
+    # is the gate's RAGFLOW_BASE_URL from the env_file (a URL, not the API key).
+    secrets:
+      - gate_token
+      - { source: internal_gate_to_kernel, target: internal_token }
     environment:
       GATE_ID: gatekeeper-ragflow
       GATE_CONNECTOR: ragflow
@@ -730,8 +749,9 @@ services:
   # gate-host (P-B2a, docs/development-tasks.md P-B 决定 ⑥–⑬; design §6.3 "通用门宿主"): ONE
   # gatekeeper-base container in `GATE_MODE=host`, serving every generic http / mcp gate instance an
   # administrator creates on the integrations page. It pulls the instance definitions from the
-  # kernel's internal plane (`GET /internal/gate-host/instances`, internal_token — the same gate →
-  # kernel direction as announce, no kernel → host credential exists), announces each instance as
+  # kernel's internal plane (`GET /internal/gate-host/instances`, its own internal_gate_host_to_kernel
+  # credential, R-03 — the same gate → kernel direction as announce, and the only caller the kernel
+  # admits on that route; no kernel → host credential exists), announces each instance as
   # `http://gate-host:8083/i/<gateId>`, and answers the `/gate/*` protocol under that prefix with
   # gate_token exactly like a packaged gate.
   #
@@ -741,10 +761,14 @@ services:
   # mounts (GATE_HOST_PUBLIC_KEY_FILE). The kernel never sees a credential. At rest they are
   # AES-256-GCM under gate_host_store_key (scripts/gen-handle-keys.sh), one directory per instance
   # under ${NEXTTIME_DATA}/gate-host. Three secrets, three trust boundaries: gate_token (kernel →
-  # gates), internal_token (gates → kernel), gate_host_store_key (this container's own data at rest).
+  # gates), internal_gate_host_to_kernel (this host → kernel, mounted where gatekeeper-base reads
+  # it), gate_host_store_key (this container's own data at rest).
   gate-host:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
-    secrets: [gate_token, internal_token, gate_host_store_key]
+    secrets:
+      - gate_token
+      - { source: internal_gate_host_to_kernel, target: internal_token }
+      - gate_host_store_key
     environment:
       GATE_MODE: host
       GATE_PORT: 8083
@@ -1024,11 +1048,13 @@ services:
         MODELS_JSON_OUT_FILE: /data/models/models.json,
         BUDGET_SYNC_INTERVAL_MS: "${BUDGET_SYNC_INTERVAL_MS:-15000}",
       }
-    # internal_token（fix/internal-plane-auth）：revocation sync（GET /internal/handle-revocations）
-    # 与 usage 上报（POST /internal/llm-usage）都要带它——见 kernel 服务块自己的注释。S6-B 再加两条：
-    # 预算耗尽轮询（GET /internal/llm-budget-exhausted）与供应商变更的平台审计行
-    # （POST /internal/llm-admin-audit），同一个 token。
-    secrets: [internal_token]
+    # internal_llm_proxy_to_kernel（fix/internal-plane-auth；R-03 起是它自己的凭证，挂在
+    # /run/secrets/internal_token）：revocation sync（GET /internal/handle-revocations）与 usage 上报
+    # （POST /internal/llm-usage）都要带它——见 kernel 服务块自己的注释。S6-B 再加两条：预算耗尽轮询
+    # （GET /internal/llm-budget-exhausted）与供应商变更的平台审计行（POST /internal/llm-admin-audit），
+    # 同一份凭证；kernel 只在这四条路由上放行它。
+    secrets:
+      - { source: internal_llm_proxy_to_kernel, target: internal_token }
     networks: [control, workers]
     restart: unless-stopped
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/llm-proxy/Dockerfile, uid
@@ -1047,9 +1073,11 @@ services:
     # allow/deny 限制"的来源一样按公网放行处理。只在 SOURCE_MAP_FILE 登记本身不可靠（worker-
     # supervisor 的 resident-service.ts 记录过的 EACCES 一类主机权限问题）时临时设成 0 作为逃生舱。
     environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}", EGRESS_DENY_UNKNOWN_SOURCE: "${EGRESS_DENY_UNKNOWN_SOURCE:-1}" }
-    # internal_token（fix/internal-plane-auth）：egress 上报（POST /internal/egress）要带它——见
-    # kernel 服务块自己的注释。
-    secrets: [internal_token]
+    # internal_egress_proxy_to_kernel（fix/internal-plane-auth；R-03 起是它自己的凭证，挂在
+    # /run/secrets/internal_token）：egress 上报（POST /internal/egress）要带它，kernel 只在这条路由上
+    # 放行它——见 kernel 服务块自己的注释。
+    secrets:
+      - { source: internal_egress_proxy_to_kernel, target: internal_token }
     networks: [control, workers]
     restart: unless-stopped
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/egress-proxy/Dockerfile,
@@ -1332,7 +1360,17 @@ networks:
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001
-  internal_token: { file: "${NEXTTIME_DATA}/secrets/internal.token" } # scripts/gen-handle-keys.sh；0640 组 10001
+  internal_token: { file: "${NEXTTIME_DATA}/secrets/internal.token" } # scripts/gen-handle-keys.sh；0640 组 10001；internal plane 的根，只挂 kernel
+  # R-03: every internal-plane service's own credential, derived from internal.token by
+  # scripts/derive-internal-tokens.sh (gen-handle-keys.sh and apply-release.sh run it) — 0640 组
+  # 10001. Each is mounted into the services on its edge only; none is the root.
+  internal_agent_host_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-agent-host-to-kernel.token" }
+  internal_llm_proxy_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-llm-proxy-to-kernel.token" }
+  internal_egress_proxy_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-egress-proxy-to-kernel.token" }
+  internal_gate_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-gate-to-kernel.token" }
+  internal_gate_host_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-gate-host-to-kernel.token" }
+  internal_kernel_to_worker_supervisor: { file: "${NEXTTIME_DATA}/secrets/internal-kernel-to-worker-supervisor.token" }
+  internal_agent_host_to_worker_supervisor: { file: "${NEXTTIME_DATA}/secrets/internal-agent-host-to-worker-supervisor.token" }
   gate_token: { file: "${NEXTTIME_DATA}/secrets/gate.token" } # scripts/gen-handle-keys.sh；0640 组 10001；fix/gate-protocol-hardening
   gate_host_store_key: { file: "${NEXTTIME_DATA}/secrets/gate-host-store.key" } # scripts/gen-handle-keys.sh；0640 组 10001；P-B2a 门宿主凭证静态加密密钥
   # collector_host_inventory_token (S3.3): the host-inventory collector's own scoped Handle bearer

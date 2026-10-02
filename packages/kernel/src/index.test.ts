@@ -14,12 +14,17 @@ import {
   parsePositiveIntEnvVar,
   startBackgroundServicesOrExit,
 } from './index.js';
+import { deriveInternalCredential } from './interfaces/internal-auth/index.js';
 import { currentCorrelationId } from './substrate/correlation/index.js';
 
-/** The internal-plane shared secret every `/internal/*` test below presents (or deliberately
- *  withholds). Generated per run — never a literal that could look like a real credential. */
+/** The internal-plane root every server below is built with. Generated per run — never a literal
+ *  that could look like a real credential. */
 const INTERNAL_TOKEN = randomBytes(32).toString('hex');
-const internalHeaders = { authorization: `Bearer ${INTERNAL_TOKEN}` };
+/** llm-proxy's credential (R-03): every `/internal/*` route these tests call is one of llm-proxy's,
+ *  and the root itself is refused there. */
+const internalHeaders = {
+  authorization: `Bearer ${deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy')}`,
+};
 const UNAUTHORIZED = { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } };
 
 /** A pool that throws if ever connected to — proves a route never touches the database. */
@@ -294,6 +299,28 @@ describe('the internal plane is behind the shared-secret guard (fix/internal-pla
       remoteAddress: '198.51.100.9',
     });
     expect(fromControl.statusCode).toBe(200);
+  });
+
+  it('R-03: refuses the root and another service’s credential on an llm-proxy route; every registered /internal/ route has an allow-list entry (createServer would not build otherwise)', async () => {
+    const app = createServer(
+      { pool: unusedPool, listRevokedSince },
+      { internalAuth: { token: INTERNAL_TOKEN } },
+    );
+    await app.ready();
+
+    for (const presented of [
+      INTERNAL_TOKEN,
+      deriveInternalCredential(INTERNAL_TOKEN, 'gate'),
+      deriveInternalCredential(INTERNAL_TOKEN, 'agent-host'),
+    ]) {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/internal/handle-revocations',
+        headers: { authorization: `Bearer ${presented}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual(UNAUTHORIZED);
+    }
   });
 
   it('is fail-closed when createServer is given no internalAuth: 401 even with a token', async () => {

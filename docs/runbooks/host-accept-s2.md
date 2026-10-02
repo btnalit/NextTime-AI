@@ -299,8 +299,9 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 只把这条 trap 接到了本脚本本身的 EXIT 上，没有改成 reclaim）。顺带修的一个 bug：`resident_stop`
 此前从不带 `Authorization: Bearer` 头，对 `/resident/*` 的每次调用都直接 401——`cleanup_step`
 自己的停容器调用和 `step2_docker_restart`/`real_docker_restart_run` 里"强制换一个新 Handle"的
-防御性调用因此从未真正生效过；现在两个函数都补上了内核容器自带的 `/run/secrets/internal_token`
-（同 accept_s1.sh/accept_s3.sh 自己的 `resident_status`/`resident_stop` 一样）。
+防御性调用因此从未真正生效过；现在两个函数都补上了内核容器自带的 kernel 给 worker-supervisor 的凭证
+`/run/secrets/internal_token_worker_supervisor`（R-03；同 accept_s1.sh/accept_s3.sh 自己的
+`resident_status`/`resident_stop` 一样）。
 workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕原则保留，不清理；到期后仍是
 `sh scripts/delete-workspaces-matching.sh --expired --yes`。历史残留（本次改动之前跑过的、还停在
 `Exited` 的 `nexttime-entry-*`）：`sh scripts/sweep-accept-entry-containers.sh [--yes]`（默认

@@ -20,9 +20,14 @@ const NOBODY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 // (internal-auth.ts, lane-6 review P1-3: this supervisor is dual-homed on `control`+`workers`,
 // so any agent container could otherwise reach these routes directly). AUTH is the header every
 // test below sends for a guarded route; the dedicated "internal-plane auth" describe block below
-// covers the missing/wrong-token rejection paths themselves.
+// covers the missing/wrong-token rejection paths themselves. R-03: each caller has its own
+// credential and each route admits only its callers — AUTH is the kernel's (task spawn, stop,
+// reclaim, status, inventories, metrics), AGENT_HOST_AUTH agent-host's (resident spawn, stop,
+// status, touch).
 const TEST_INTERNAL_TOKEN = 'test-internal-token-0123456789abcdef';
 const AUTH = { authorization: `Bearer ${TEST_INTERNAL_TOKEN}` };
+const TEST_AGENT_HOST_TOKEN = 'test-agent-host-token-0123456789abcdef';
+const AGENT_HOST_AUTH = { authorization: `Bearer ${TEST_AGENT_HOST_TOKEN}` };
 
 let dir: string;
 
@@ -40,7 +45,7 @@ function setup(
   // lets the fail-closed test below pass `{ internalToken: undefined }` and actually get
   // `undefined` through to `createServer` — a plain `?: string` default couldn't otherwise
   // distinguish "no override passed" from "explicitly asked for no token".
-  serverOptions: { internalToken?: string } = {},
+  serverOptions: { internalToken?: string; agentHostToken?: string } = {},
 ) {
   const config = loadConfig({
     NEXTTIME_DATA: '/host/data',
@@ -54,7 +59,9 @@ function setup(
   const taskService = createTaskService({ config, docker, egressMap });
   const internalToken =
     'internalToken' in serverOptions ? serverOptions.internalToken : TEST_INTERNAL_TOKEN;
-  const app = createServer({ residentService, taskService, config, internalToken });
+  const agentHostToken =
+    'agentHostToken' in serverOptions ? serverOptions.agentHostToken : TEST_AGENT_HOST_TOKEN;
+  const app = createServer({ residentService, taskService, config, internalToken, agentHostToken });
   return { app, residentService, taskService, config, docker };
 }
 
@@ -106,15 +113,72 @@ describe('internal-plane auth — POST /task/spawn and /resident/*', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('fails closed: no configured internalToken rejects every guarded route even with a header', async () => {
-    const { app } = setup({}, { internalToken: undefined });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/resident/spawn',
-      headers: AUTH,
-      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
-    });
-    expect(res.statusCode).toBe(401);
+  it('fails closed: with no credentials configured, every guarded route rejects even with a header', async () => {
+    const { app } = setup({}, { internalToken: undefined, agentHostToken: undefined });
+    for (const headers of [AUTH, AGENT_HOST_AUTH]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/resident/spawn',
+        headers,
+        payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+      });
+      expect(res.statusCode).toBe(401);
+      const stop = await app.inject({
+        method: 'POST',
+        url: '/resident/stop',
+        headers,
+        payload: { principalId: ALICE },
+      });
+      expect(stop.statusCode).toBe(401);
+    }
+  });
+
+  it('R-03: admits each caller only on its own routes — agent-host cannot spawn tasks, reclaim or read inventories; the kernel cannot spawn or touch resident containers', async () => {
+    const { app } = setup();
+    const taskBody = {
+      taskId: '11111111-1111-1111-1111-111111111111',
+      workerRunId: '22222222-2222-2222-2222-222222222222',
+      workspaceId: '33333333-3333-3333-3333-333333333333',
+      onBehalfOf: '44444444-4444-4444-4444-444444444444',
+      capabilityHandle: 'h1',
+    };
+    const kernelOnly = [
+      { method: 'POST' as const, url: '/task/spawn', payload: taskBody },
+      { method: 'POST' as const, url: '/resident/reclaim', payload: { principalId: ALICE } },
+      { method: 'GET' as const, url: '/residents' },
+      { method: 'GET' as const, url: '/images' },
+      { method: 'GET' as const, url: '/internal/metrics' },
+    ];
+    for (const request of kernelOnly) {
+      const res = await app.inject({ ...request, headers: AGENT_HOST_AUTH });
+      expect(res.statusCode, `agent-host on ${request.url}`).toBe(401);
+    }
+    const agentHostOnly = [
+      {
+        method: 'POST' as const,
+        url: '/resident/spawn',
+        payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+      },
+      { method: 'POST' as const, url: `/resident/${ALICE}/touch` },
+    ];
+    for (const request of agentHostOnly) {
+      const res = await app.inject({ ...request, headers: AUTH });
+      expect(res.statusCode, `kernel on ${request.url}`).toBe(401);
+    }
+
+    // Both may stop and read status: agent-host for its entry containers, the kernel (and the
+    // scripts that run in a kernel container) for purge / acceptance clean-up.
+    for (const headers of [AUTH, AGENT_HOST_AUTH]) {
+      const stop = await app.inject({
+        method: 'POST',
+        url: '/resident/stop',
+        headers,
+        payload: { principalId: NOBODY },
+      });
+      expect(stop.statusCode).not.toBe(401);
+      const status = await app.inject({ method: 'GET', url: `/resident/${NOBODY}`, headers });
+      expect(status.statusCode).toBe(404);
+    }
   });
 
   it('does not guard unrelated routes (GET /healthz, GET/POST /task/:workerRunId)', async () => {
@@ -134,7 +198,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     expect(res.statusCode).toBe(200);
@@ -149,7 +213,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R },
     });
     expect(res.statusCode).toBe(400);
@@ -160,7 +224,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', extra: 'x' },
     });
     expect(res.statusCode).toBe(400);
@@ -173,7 +237,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: '../../pgdata', handle: 'h' },
     });
     expect(res.statusCode).toBe(400);
@@ -186,13 +250,13 @@ describe('POST /resident/spawn', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     expect(res.json()).toMatchObject({ created: false });
@@ -205,7 +269,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', image: 'some-random-image' },
     });
     expect(res.statusCode).toBe(403);
@@ -218,7 +282,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: {
         workspaceId: WS_R,
         principalId: ALICE,
@@ -235,7 +299,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     expect(res.statusCode).toBe(200);
@@ -255,7 +319,7 @@ describe('GET /residents (S7-E inventory)', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({ method: 'GET', url: '/residents', headers: AUTH });
@@ -363,7 +427,7 @@ describe('POST /resident/stop', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
@@ -393,7 +457,7 @@ describe('POST /resident/reclaim (S8 W5 leftover 77)', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
@@ -458,7 +522,7 @@ describe('GET /resident/:principalId', () => {
     const touch = await app.inject({
       method: 'POST',
       url: '/resident/not-a-uuid/touch',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
     });
     expect(touch.statusCode).toBe(400);
     expect(touch.json().error.code).toBe('invalid_principal_id');
@@ -469,7 +533,7 @@ describe('GET /resident/:principalId', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({ method: 'GET', url: `/resident/${ALICE}`, headers: AUTH });
@@ -484,7 +548,7 @@ describe('POST /resident/:principalId/touch', () => {
     const res = await app.inject({
       method: 'POST',
       url: `/resident/${NOBODY}/touch`,
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
     });
     expect(res.statusCode).toBe(404);
   });
@@ -494,13 +558,13 @@ describe('POST /resident/:principalId/touch', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
       payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
       method: 'POST',
       url: `/resident/${ALICE}/touch`,
-      headers: AUTH,
+      headers: AGENT_HOST_AUTH,
     });
     expect(res.statusCode).toBe(204);
   });

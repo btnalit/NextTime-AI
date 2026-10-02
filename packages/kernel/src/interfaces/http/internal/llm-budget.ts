@@ -32,7 +32,7 @@ import {
  * clock like handle-revocations.ts. Cost rows come first so a workspace over both budgets is
  * reported by the axis the operator configured deliberately.
  *
- * Trust boundary and query posture: behind `interfaces/internal-auth`'s shared-secret guard like
+ * Trust boundary and query posture: behind `interfaces/internal-auth`'s credential guard like
  * every `/internal/*` route. Cross-workspace by nature — same deliberate, narrow exception
  * handle-revocations.ts documents: a bare `pool.connect()` (superuser login role, no
  * `SET LOCAL ROLE`, so RLS does not scope the reads), and one direct read of the `quotas` table

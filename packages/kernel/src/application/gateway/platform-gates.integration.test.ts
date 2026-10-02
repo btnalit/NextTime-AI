@@ -49,6 +49,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
+import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { upsertAnnouncement } from '../gates/index.js';
@@ -246,7 +247,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         url: '/internal/gates/announce',
         headers: {
           'content-type': 'application/json',
-          authorization: internalAuthorizationHeader(INTERNAL_TOKEN),
+          authorization: internalAuthorizationHeader(
+            deriveInternalCredential(INTERNAL_TOKEN, 'gate'),
+          ),
         },
         payload: body,
       });

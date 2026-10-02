@@ -19,6 +19,10 @@
 #   2. pre-upgrade dump into ${NEXTTIME_DATA}/backups/pre-upgrade/ (never backups/db/, whose
 #      retention would delete the real nightly dumps — STATUS leftover 92)        FAIL → stop
 #   3. checkout the tag                                                           FAIL → stop
+#      then derive the internal-plane credentials with the tag's own
+#      scripts/derive-internal-tokens.sh (R-03; secrets/internal-*-to-*.token only — the
+#      release's compose file mounts them, and compose refuses a missing secret file)
+#                                                                                 FAIL → stop
 #   4. images: pull (--pull) or build                                             FAIL → stop
 #   5. migrations: dry-run listing, then the real apply (the kernel never migrates at startup)
 #                                                                                 FAIL → stop
@@ -89,6 +93,15 @@ git fetch -q origin --tags && git checkout -q "$TAG" || fail checkout
 KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
 export KERNEL_VERSION
 echo "STEP checkout $(git rev-parse --short HEAD) KV=$KERNEL_VERSION"
+
+# 3b. internal-plane credentials (R-03) — before anything below creates a container: compose
+#     refuses to start one whose declared secret file is missing (the migration's `run` included).
+#     Idempotent; touches only secrets/internal-*-to-*.token, never the root or any other file.
+#     A tag that predates per-service credentials has no such script and needs none.
+if [ -f scripts/derive-internal-tokens.sh ]; then
+  sh scripts/derive-internal-tokens.sh </dev/null || fail secrets
+  echo "STEP secrets ok"
+fi
 
 # 4. images
 images_from=build

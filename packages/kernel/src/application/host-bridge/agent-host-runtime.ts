@@ -98,6 +98,11 @@ const HANDLE_REISSUE_THRESHOLD = 0.1;
  *  WebSocket — see this module's own doc comment for why the split exists. */
 export interface AgentHostLink {
   send(frame: KernelToAgentHostFrame): void;
+  /** Asks the transport to confirm this link is still alive and to close it if it is not. Called
+   *  on the registered link when `connect` refuses a second one, so a half-open socket left by a
+   *  crashed agent-host blocks its replacement only until the probe times out. Optional: test
+   *  fakes and a transport with nothing to probe omit it. */
+  probe?(): void;
 }
 
 export interface AgentHostRuntimeDeps {
@@ -265,14 +270,31 @@ export class AgentHostRuntime implements AgentRuntime {
   // interfaces/ws/agent-host.ts calls these — see this module's doc comment for the split.
   // -------------------------------------------------------------------------------------------
 
-  /** Registers the currently-connected agent-host link. A later `startTurn`/`stopTurn` sends
-   *  through whichever link is registered at call time. */
-  connect(link: AgentHostLink): void {
+  /** Registers `link` as the agent-host link and returns `true` — unless another link is still
+   *  registered, in which case `link` is refused (`false`) and the registered one is probed
+   *  (R-03: a second connection used to *replace* the first, so whoever opened it received every
+   *  user's next `startTurn`, prompt and entry Handle included). The legitimate reconnect after an
+   *  agent-host restart still lands: the old socket's `close` has already run `disconnect`, or —
+   *  for a half-open socket — the probe closes it and agent-host's own reconnect loop retries. A
+   *  later `startTurn`/`stopTurn` sends through whichever link is registered at call time. */
+  connect(link: AgentHostLink): boolean {
+    const current = this.link;
+    if (current !== undefined && current !== link) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: refused a second agent-host link while one is registered — probing the registered link',
+        }),
+      );
+      current.probe?.();
+      return false;
+    }
     this.link = link;
+    return true;
   }
 
-  /** Unregisters `link` — a no-op unless `link` is still the current one (guards a stale
-   *  connection's `close` event from clobbering a newer connection that already replaced it). */
+  /** Unregisters `link` — a no-op unless `link` is the registered one (a refused second
+   *  connection's own `close` event must not clear the link it was refused in favour of). */
   disconnect(link: AgentHostLink): void {
     if (this.link === link) this.link = undefined;
   }

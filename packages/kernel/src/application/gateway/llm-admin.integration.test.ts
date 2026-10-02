@@ -17,6 +17,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
+import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
@@ -237,7 +238,11 @@ describe.runIf(DATABASE_URL !== undefined)('S6-B llm admin (integration, real Po
     const ok = await server.inject({
       method: 'POST',
       url: '/internal/llm-admin-audit',
-      headers: { authorization: internalAuthorizationHeader(INTERNAL_TOKEN) },
+      headers: {
+        authorization: internalAuthorizationHeader(
+          deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy'),
+        ),
+      },
       payload: event,
     });
     expect(ok.statusCode).toBe(200);
@@ -260,7 +265,11 @@ describe.runIf(DATABASE_URL !== undefined)('S6-B llm admin (integration, real Po
     const unknownActor = await server.inject({
       method: 'POST',
       url: '/internal/llm-admin-audit',
-      headers: { authorization: internalAuthorizationHeader(INTERNAL_TOKEN) },
+      headers: {
+        authorization: internalAuthorizationHeader(
+          deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy'),
+        ),
+      },
       payload: { ...event, actorUserId: randomUUID() },
     });
     expect(unknownActor.statusCode).toBe(400);
@@ -269,7 +278,11 @@ describe.runIf(DATABASE_URL !== undefined)('S6-B llm admin (integration, real Po
     const badBody = await server.inject({
       method: 'POST',
       url: '/internal/llm-admin-audit',
-      headers: { authorization: internalAuthorizationHeader(INTERNAL_TOKEN) },
+      headers: {
+        authorization: internalAuthorizationHeader(
+          deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy'),
+        ),
+      },
       payload: { ...event, action: 'provider_secret_written' },
     });
     expect(badBody.statusCode).toBe(400);
@@ -278,7 +291,11 @@ describe.runIf(DATABASE_URL !== undefined)('S6-B llm admin (integration, real Po
 
   it('c. GET /internal/llm-budget-exhausted (leftover 19): lists a workspace over its daily cost quota until the next UTC midnight; unlimited quotas never', async () => {
     const server = app();
-    const headers = { authorization: internalAuthorizationHeader(INTERNAL_TOKEN) };
+    const headers = {
+      authorization: internalAuthorizationHeader(
+        deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy'),
+      ),
+    };
 
     expect(
       (await server.inject({ method: 'GET', url: '/internal/llm-budget-exhausted' })).statusCode,

@@ -20,8 +20,8 @@ import {
  * `governance/llm-usage`'s `recordUsage`.
  *
  * Trust boundary: every `/internal/*` route, this one included, sits behind
- * `interfaces/internal-auth`'s shared-secret guard (a root-level `onRequest` hook installed by
- * `packages/kernel/src/index.ts`'s `createServer` — `Authorization: Bearer <internal token>`,
+ * `interfaces/internal-auth`'s credential guard (a root-level `onRequest` hook installed by
+ * `packages/kernel/src/index.ts`'s `createServer` — `Authorization: Bearer <caller credential>`,
  * constant-time compared, plus the `NEXTTIME_SUBNET_WORKERS` peer rule). This file performs no
  * authentication of its own by design: the guard is keyed on the `/internal/` route prefix so no
  * internal route can forget it. The pre-2026-09 assumption that "only `control`-network services

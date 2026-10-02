@@ -23,7 +23,8 @@ export function packagedServiceName(gateId: string): string {
  * launcher shows for an ssh / cli kind instead of a form. It is docs/runbooks/add-gatekeeper.md
  * §4 (the env-driven `gatekeeper-base` compose service) plus the P-B1 announce trio
  * (`packages/gatekeeper-base/src/announce.ts`: `GATE_ID` / `GATE_CONNECTOR` / `KERNEL_URL` and
- * the `internal_token` secret) that §4's sample predates. Every path is a placeholder
+ * the packaged gates' own announce credential `internal_gate_to_kernel`, mounted where the gate
+ * reads it — R-03) that §4's sample predates. Every path is a placeholder
  * (`<NEXTTIME_DATA>`, `<system>`) — the public-repo red line forbids real data directories here,
  * and the reader substitutes their own from `.env`.
  *
@@ -55,7 +56,9 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
   const compose = [
     `  ${service}:`,
     '    build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }',
-    '    secrets: [gate_token, internal_token]',
+    '    secrets:',
+    '      - gate_token',
+    '      - { source: internal_gate_to_kernel, target: internal_token }',
     '    environment:',
     `      GATE_TRANSPORT_KIND: ${kind}`,
     `      GATE_ID: ${id}`,

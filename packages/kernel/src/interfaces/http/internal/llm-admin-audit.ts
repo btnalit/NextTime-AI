@@ -22,10 +22,11 @@ import { recordLlmAdminAudit } from '../../../application/platform/index.js';
  * purged user) fails the `audit_records.actor_user_id` foreign key → 400 `unknown_actor` — a
  * fabricated actor is never recorded.
  *
- * Trust boundary: behind `interfaces/internal-auth`'s shared-secret guard like every `/internal/*`
- * route — only the proxy (holding the internal-plane token) can reach this; a browser cannot
- * write its own audit rows here. `details` is a bounded, schema-checked object and never carries
- * a key: the proxy never sends one for `provider_secret_set`/`provider_secret_cleared` (see its
+ * Trust boundary: behind `interfaces/internal-auth`'s guard like every `/internal/*` route, whose
+ * per-route allow-list admits llm-proxy's own credential here and nothing else (R-03 — before
+ * that, every service holding the shared internal token, the gates included, could forge these
+ * rows); a browser cannot write its own audit rows here. `details` is a bounded, schema-checked
+ * object and never carries a key: the proxy never sends one for `provider_secret_set`/`provider_secret_cleared` (see its
  * admin-api.ts — the `audit()` calls for both pass an empty `details`) and this schema has no
  * field that could carry one either way.
  */

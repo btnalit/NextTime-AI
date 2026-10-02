@@ -1295,7 +1295,35 @@ describe('AgentHostRuntime — runtimeEvent forwarding', () => {
 });
 
 describe('AgentHostRuntime — connect/disconnect', () => {
-  it('a stale link disconnecting does not clear the current link', async () => {
+  it('R-03: a second link is refused (not swapped in) while one is registered, and the registered one is probed', async () => {
+    const { pool } = createFakePool();
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const logs: string[] = [];
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: (line) => logs.push(line),
+    });
+    const registered = createFakeLink();
+    const probe = vi.fn();
+    const intruder = createFakeLink();
+
+    expect(runtime.connect({ ...registered.link, probe })).toBe(true);
+    expect(runtime.connect(intruder.link)).toBe(false);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(logs.some((line) => line.includes('refused a second agent-host link'))).toBe(true);
+    runtime.disconnect(intruder.link); // the refused socket closing must not clear the registered link
+
+    const input = startTurnInput();
+    void runtime.startTurn(input);
+    await vi.waitFor(() => expect(registered.sent).toHaveLength(1));
+    expect(intruder.sent).toHaveLength(0);
+  });
+
+  it('accepts a new link once the registered one has disconnected (the reconnect after an agent-host restart)', async () => {
     const { pool } = createFakePool();
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -1309,9 +1337,9 @@ describe('AgentHostRuntime — connect/disconnect', () => {
     const oldLink = createFakeLink();
     const newLink = createFakeLink();
 
-    runtime.connect(oldLink.link);
-    runtime.connect(newLink.link);
-    runtime.disconnect(oldLink.link); // stale — must not clear newLink
+    expect(runtime.connect(oldLink.link)).toBe(true);
+    runtime.disconnect(oldLink.link);
+    expect(runtime.connect(newLink.link)).toBe(true);
 
     const input = startTurnInput();
     void runtime.startTurn(input);

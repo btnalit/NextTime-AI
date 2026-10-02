@@ -1,7 +1,8 @@
 #!/bin/sh
 # gen-handle-keys.sh — generate the kernel's Handle-signing Ed25519 keypair (design doc §11
-# "EdDSA"; §5.1.4; docs/development-tasks.md S1.9) AND the internal-plane shared-secret token
-# (fix/internal-plane-auth, 2026-09; @nexttime/shared's internal-token.ts). POSIX sh, idempotent,
+# "EdDSA"; §5.1.4; docs/development-tasks.md S1.9) AND the internal-plane root token
+# (fix/internal-plane-auth, 2026-09; @nexttime/shared's internal-token.ts) with every service's
+# credential derived from it (R-03, scripts/derive-internal-tokens.sh). POSIX sh, idempotent,
 # touches nothing outside $NEXTTIME_DATA/secrets and $NEXTTIME_DATA/config.
 #
 # Usage (local):
@@ -34,15 +35,17 @@
 #                           handle.key whenever missing/empty, even on a run that leaves handle.key
 #                           untouched, so the two files can never drift out of sync.
 #   secrets/internal.token — 32 random bytes, hex-encoded (64 chars), mode 0640, group 10001 —
-#                           same convention as handle.key. Reaches the kernel *and* every internal
-#                           client (agent-host/llm-proxy/egress-proxy) as the compose secret
-#                           `internal_token`, mounted at each container's
-#                           NEXTTIME_INTERNAL_TOKEN_FILE (default /run/secrets/internal_token —
-#                           @nexttime/shared's DEFAULT_INTERNAL_TOKEN_FILE). Generated only if
-#                           missing — an existing token is never regenerated (that would 401 every
-#                           already-running client until every one of the four containers restarts
-#                           with the new value; a deliberate rotation should restart all four
-#                           together, not rely on this idempotent script to do it silently).
+#                           same convention as handle.key. The internal plane's ROOT: reaches the
+#                           kernel only, as the compose secret `internal_token` (R-03, 2026-10-02
+#                           review — it used to be shared by seven services). Generated only if
+#                           missing — an existing root is never regenerated (that would 401 every
+#                           internal call until every service restarts with credentials re-derived
+#                           from the new value; a deliberate rotation follows
+#                           docs/runbooks/key-rotation.md §2, not this idempotent script).
+#   secrets/internal-<caller>-to-<callee>.token — every internal-plane service's own credential,
+#                           derived from internal.token by scripts/derive-internal-tokens.sh, which
+#                           this script runs last (see that script for the list and the
+#                           construction). Re-derived on every run, so they always follow the root.
 #   secrets/gate.token     — 32 random bytes, hex-encoded (64 chars), mode 0640, group 10001 — a
 #                           SEPARATE secret from internal.token (fix/gate-protocol-hardening,
 #                           2026-09; @nexttime/gatekeeper-base's gate-token.ts closes the review
@@ -186,4 +189,15 @@ echo "gen-handle-keys: config/handle.pub:     $PUB_STATUS (mode $(stat -c '%a' "
 echo "gen-handle-keys: secrets/internal.token: $TOKEN_STATUS (mode $(stat -c '%a' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: secrets/gate.token:     $GATE_TOKEN_STATUS (mode $(stat -c '%a' "$GATE_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$GATE_TOKEN" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: secrets/gate-host-store.key: $GATE_HOST_STORE_KEY_STATUS (mode $(stat -c '%a' "$GATE_HOST_STORE_KEY" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$GATE_HOST_STORE_KEY" 2>/dev/null || echo '?'))"
+
+# --- per-service internal-plane credentials (R-03) -----------------------------------------
+# Derived from internal.token by the sibling script. A copy of this script piped in over SSH
+# (`sh -s`) has no sibling to run — drill-install.sh pipes derive-internal-tokens.sh right after
+# it; anyone else doing so must too, or `docker compose up` fails on the missing secret files.
+DERIVE_INTERNAL_TOKENS="$(dirname "$0")/derive-internal-tokens.sh"
+if [ -f "$DERIVE_INTERNAL_TOKENS" ]; then
+	sh "$DERIVE_INTERNAL_TOKENS"
+else
+	echo "gen-handle-keys: NOTE: this copy cannot find scripts/derive-internal-tokens.sh — run it next (NEXTTIME_DATA=$NEXTTIME_DATA sh scripts/derive-internal-tokens.sh)" >&2
+fi
 echo "gen-handle-keys: done (idempotent — safe to re-run; private key/token contents never printed)"

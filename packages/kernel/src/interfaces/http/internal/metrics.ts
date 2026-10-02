@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
  * ... reuse `registerInternalRoutes`; the internal plane is token-gated already").
  *
  * Trust boundary: same as every other `/internal/*` route (llm-usage.ts's doc comment has the
- * full history) — sits behind `interfaces/internal-auth`'s shared-secret guard, installed once at
+ * full history) — sits behind `interfaces/internal-auth`'s credential guard, installed once at
  * the composition root on the `/internal/` prefix. This file performs no authentication itself.
  *
  * **Deliberately substrate-agnostic** (dependency-cruiser's `kernel-interfaces-must-not-reach-

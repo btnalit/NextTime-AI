@@ -71,7 +71,11 @@ import {
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
 import type { InternalPlaneAuthConfig } from './interfaces/internal-auth/index.js';
-import { loadInternalToken, registerInternalPlaneGuard } from './interfaces/internal-auth/index.js';
+import {
+  loadInternalToken,
+  loadSupervisorToken,
+  registerInternalPlaneGuard,
+} from './interfaces/internal-auth/index.js';
 import { registerMcpRoute } from './interfaces/mcp/index.js';
 import {
   registerAgentHostWsRoute,
@@ -180,14 +184,15 @@ export function createServer(
     return { status: 'ok' };
   });
 
-  // Internal-plane shared-secret guard (interfaces/internal-auth): one root-level `onRequest`
-  // hook that 401s every route whose pattern starts with `/internal/` — the HTTP routes below
-  // *and* the `/internal/agent-host` WebSocket upgrade — unless `Authorization: Bearer <token>`
-  // matches `options.internalAuth.token` (constant-time) and the TCP peer is outside
-  // `options.internalAuth.workersSubnet`. Installed before the routes purely for readability;
-  // Fastify resolves hook chains at `preReady`. With no `internalAuth` (tests that never touch
-  // the internal plane) the guard is fail-closed, never open — `main()` always supplies one and
-  // refuses to start without the token file (`loadInternalToken`).
+  // Internal-plane credential guard (interfaces/internal-auth): one root-level `onRequest` hook
+  // that 401s every route whose pattern starts with `/internal/` — the HTTP routes below *and*
+  // the `/internal/agent-host` WebSocket upgrade — unless `Authorization: Bearer <token>` is the
+  // credential of a caller that route's allow-list admits (each derived from
+  // `options.internalAuth.token`, the root; constant-time) and the TCP peer is outside
+  // `options.internalAuth.workersSubnet`. Installed before the routes: its `onRoute` hook refuses
+  // an `/internal/` route with no allow-list entry. With no `internalAuth` (tests that never
+  // touch the internal plane) the guard is fail-closed, never open — `main()` always supplies one
+  // and refuses to start without the root file (`loadInternalToken`).
   registerInternalPlaneGuard(app, options.internalAuth);
 
   registerCapabilityRoutes(app, deps);
@@ -239,9 +244,10 @@ export interface CreateServerOptions {
    *  request-action-handler.ts's own `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) — `main()` reads this
    *  from `REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS`. */
   requestActionAwaitDecisionTimeoutMs?: number;
-  /** Shared-secret authentication for the internal plane (`/internal/*` + the agent-host
-   *  WebSocket) — interfaces/internal-auth. `main()` builds it from `NEXTTIME_INTERNAL_TOKEN_FILE`
-   *  (`loadInternalToken`, default `/run/secrets/internal_token`) and `NEXTTIME_SUBNET_WORKERS`.
+  /** Per-caller credential authentication for the internal plane (`/internal/*` + the agent-host
+   *  WebSocket) — interfaces/internal-auth. `main()` builds it from the root in
+   *  `NEXTTIME_INTERNAL_TOKEN_FILE` (`loadInternalToken`, default `/run/secrets/internal_token`)
+   *  and `NEXTTIME_SUBNET_WORKERS`.
    *  Omitted → the internal plane is fail-closed (every request 401), never unauthenticated; a
    *  test that exercises an internal route must pass one. */
   internalAuth?: InternalPlaneAuthConfig;
@@ -400,9 +406,9 @@ export interface CreateBackgroundServicesOptions {
    * `Authorization` header value the constructed `TaskSupervisorClient` sends on every request to
    * worker-supervisor (`POST /task/spawn` requires it — `packages/worker-supervisor/src/
    * internal-auth.ts`; lane-6 review follow-up, 2026-09). `main()` builds this with
-   * `internalAuthorizationHeader(token)` from the *same* token `loadInternalToken()` already loaded
-   * for the kernel's own `/internal/*` guard (`internalAuth.token` above) — no second env var, no
-   * second file read. Ignored when `taskSupervisorClient` is given directly (tests).
+   * `internalAuthorizationHeader(token)` from the kernel's own credential for worker-supervisor
+   * (`loadSupervisorToken()`, R-03 — never the internal-plane root, which no other service may
+   * hold). Ignored when `taskSupervisorClient` is given directly (tests).
    */
   readonly supervisorAuthorizationHeader?: string;
   /** Overrides the constructed `TaskSupervisorClientPort` — for tests (a fake, no network), and
@@ -1085,17 +1091,20 @@ export function main(): void {
   // binding a port).
   const kind = resolveAgentRuntimeKind();
 
-  // Same fail-fast slot for the internal plane's shared secret: a missing / empty / too-short
+  // Same fail-fast slot for the internal plane's root secret: a missing / empty / too-short
   // `NEXTTIME_INTERNAL_TOKEN_FILE` (default `/run/secrets/internal_token`, the compose secret
   // `internal_token`) throws `InternalTokenError` here with the path in the message — the kernel
   // never starts with the internal plane either open or unusable. `NEXTTIME_SUBNET_WORKERS`
   // (the same value the compose file gives `egress-proxy`) enables the peer rule: a request from
-  // inside the Worker subnet is rejected even with the right token (a Worker must never hold it).
+  // inside the Worker subnet is rejected even with the right credential (a Worker must never hold
+  // one). The kernel's own credential for worker-supervisor is a separate file
+  // (`loadSupervisorToken`, R-03), loaded in the same slot.
   const workersSubnet = process.env.NEXTTIME_SUBNET_WORKERS?.trim();
   const internalAuth: InternalPlaneAuthConfig = {
     token: loadInternalToken(),
     workersSubnet: workersSubnet ? workersSubnet : undefined,
   };
+  const supervisorToken = loadSupervisorToken();
 
   // adapters/db/pool: `pg` raises idle-client failures (a Postgres restart / failover, a network
   // partition) on the Pool's 'error' event; `createPool` installs the listener so they can never
@@ -1299,9 +1308,8 @@ export function main(): void {
     background = createBackgroundServices({
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
-      // Reuses the exact token already loaded above for the kernel's own /internal/* guard
-      // (`internalAuth.token`) — same file, same loader, no second read (lane-6 review follow-up).
-      supervisorAuthorizationHeader: internalAuthorizationHeader(internalAuth.token),
+      // The kernel's own credential for worker-supervisor (R-03), loaded above — never the root.
+      supervisorAuthorizationHeader: internalAuthorizationHeader(supervisorToken),
       taskSupervisorClient: fakeTaskSupervisorClient,
       fakeAgentRuntimeOnDelegate,
       taskReaperIntervalMs,
