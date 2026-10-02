@@ -137,6 +137,9 @@ class RecordingTransport implements Transport {
     if (operation.name === 'observe.stock') {
       return { data: { items: [{ sku: 'X1', qty: 7 }] } };
     }
+    // `slowMs` simulates a long-running effect (STATUS leftover 105's inline-wait test).
+    const slowMs = (params as { slowMs?: unknown } | undefined)?.slowMs;
+    if (typeof slowMs === 'number') await sleep(slowMs);
     return { data: { ok: true, operation: operation.name, params } };
   }
 }
@@ -1362,6 +1365,36 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('pending_approval');
       expect(transport.calls[DRAFT_OP.name] ?? 0).toBe(before); // never invoked
+    });
+
+    // STATUS leftover 105: an auto-approved effect slower than the caller's budget must not hold
+    // `request_action` past it (the platform-extension kernel-client gives up at 30 s) — it
+    // returns the row's honest non-terminal status, and the effect still completes. Last in this
+    // describe on purpose: the slow apply holds this gatekeeper's single-flight drain, and the
+    // test waits for it to finish before returning.
+    it('an auto-approved apply slower than the request budget returns executing in time and still completes', async () => {
+      const slowMs = AWAIT_DECISION_TIMEOUT_MS + 1200;
+      const caller = humanCaller(workspaceId, ownerId);
+      const startedAt = Date.now();
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { slowMs, marker: randomUUID() },
+      })) as { status: string; id: string };
+      const elapsed = Date.now() - startedAt;
+
+      expect(result.status).toBe('executing');
+      expect(elapsed).toBeLessThan(slowMs);
+
+      let finalStatus: string | undefined;
+      for (let attempt = 0; attempt < 100 && finalStatus !== 'executed'; attempt += 1) {
+        await sleep(50);
+        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequest(client, workspaceId, result.id),
+        );
+        finalStatus = row?.status;
+      }
+      expect(finalStatus).toBe('executed');
     });
   },
 );

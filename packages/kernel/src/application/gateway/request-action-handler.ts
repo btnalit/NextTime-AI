@@ -402,8 +402,9 @@ async function awaitConcurrentExecution(
   workspaceId: string,
   systemActorId: string,
   actionRequestId: string,
+  callerDeadline: number = Number.POSITIVE_INFINITY,
 ): Promise<ExecutionOutcome> {
-  const deadline = Date.now() + CONCURRENT_EXECUTION_WAIT_TIMEOUT_MS;
+  const deadline = Math.min(Date.now() + CONCURRENT_EXECUTION_WAIT_TIMEOUT_MS, callerDeadline);
   for (;;) {
     const row = await withTransaction(workspaceId, systemActorId, (client) =>
       getActionRequest(client, workspaceId, actionRequestId),
@@ -472,15 +473,31 @@ async function tryExecuteInline(
   systemActorId: string,
   gatekeeperId: string,
   actionRequestId: string,
+  deadline: number,
 ): Promise<ExecutionOutcome> {
+  // STATUS leftover 105: the drain awaits the gate's `apply`, which may take up to the gate
+  // client's apply budget (60 s) — longer than the platform-extension kernel-client's 30 s
+  // per-call timeout. Wait for it only until `deadline` (the caller's own `request_action`
+  // budget); past it, report the row's actual status (`executing`/`approved` — honest since P2-8)
+  // and let the drain finish in the background. Its rejection is captured here, never unhandled.
   let stoppedAtPending = false;
-  try {
-    const drainResult = await drainer.drainGatekeeper(workspaceId, systemActorId, gatekeeperId);
-    stoppedAtPending = drainResult.stoppedAtPending;
-  } catch (err) {
-    if (!(err instanceof IllegalTransition)) throw err;
-    // benign race — see this function's own doc comment; fall through to reading our own row.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const drain = drainer
+    .drainGatekeeper(workspaceId, systemActorId, gatekeeperId)
+    .then((result) => ({ kind: 'done' as const, result }))
+    .catch((err: unknown) => ({ kind: 'error' as const, err }));
+  const budgetExpired = new Promise<{ kind: 'timeout' }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'timeout' }), Math.max(deadline - Date.now(), 0));
+  });
+  const settled = await Promise.race([drain, budgetExpired]);
+  clearTimeout(timer);
+  if (settled.kind === 'done') {
+    stoppedAtPending = settled.result.stoppedAtPending;
+  } else if (settled.kind === 'error' && !(settled.err instanceof IllegalTransition)) {
+    throw settled.err;
   }
+  // 'error' with IllegalTransition: benign race — see this function's own doc comment; 'timeout':
+  // the drain is still running. Either way, fall through to reading our own row.
 
   const row = await withTransaction(workspaceId, systemActorId, (client) =>
     getActionRequest(client, workspaceId, actionRequestId),
@@ -507,7 +524,16 @@ async function tryExecuteInline(
   if ((row?.status === 'approved' || row?.status === 'auto_approved') && stoppedAtPending) {
     return { status: row.status };
   }
-  return awaitConcurrentExecution(withTransaction, workspaceId, systemActorId, actionRequestId);
+  if (Date.now() >= deadline) {
+    return { status: row?.status ?? 'executing' };
+  }
+  return awaitConcurrentExecution(
+    withTransaction,
+    workspaceId,
+    systemActorId,
+    actionRequestId,
+    deadline,
+  );
 }
 
 /**
@@ -564,6 +590,7 @@ async function pollAndExecute(
           systemActorId,
           gatekeeperId,
           actionRequestId,
+          deadline,
         );
       }
       return { status: 'approved' };
@@ -736,7 +763,10 @@ async function runGovernedRequest(
       return {
         ...phase1Result(actionRequest),
         afterCommit: async (pool: PoolLike) => {
-          const { drainer } = requireDeps();
+          const { drainer, awaitDecisionTimeoutMs } = requireDeps();
+          // Same caller-facing budget as the await_decision path (STATUS leftover 105).
+          const deadline =
+            Date.now() + (awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS);
           const withTransaction = createAdminWithTransaction(pool);
           const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
           const outcome = await tryExecuteInline(
@@ -746,6 +776,7 @@ async function runGovernedRequest(
             systemActorId,
             args.gatekeeper.gatekeeperId,
             actionRequest.id,
+            deadline,
           );
           await recordGateExecuteObservationSafely(
             withTransaction,
