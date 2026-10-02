@@ -38,6 +38,15 @@ export type {
   ConsoleUser,
 } from './resolve-caller.js';
 
+// R-05 (review 2026-10-02): the live-socket half of revocation — per-call recheck + kick bus.
+export {
+  publishSessionKick,
+  recheckHumanSession,
+  sessionKickVerdict,
+  subscribeToSessionKicks,
+} from './session-revocation.js';
+export type { HumanCaller, HumanSessionVerdict, SessionKick } from './session-revocation.js';
+
 export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from './authorize.js';
 
 // `explainHandler` (handlers.ts) already depends on `substrate/epistemic` directly (the six-layer

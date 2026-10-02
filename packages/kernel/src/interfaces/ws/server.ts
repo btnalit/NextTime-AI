@@ -11,6 +11,8 @@ import {
 } from '../../application/chat/index.js';
 import type {
   DispatchDeps,
+  HumanCaller,
+  HumanSessionVerdict,
   ResolveCallerDeps,
   ResolvedCaller,
 } from '../../application/gateway/index.js';
@@ -18,9 +20,12 @@ import {
   ForbiddenError,
   UnauthorizedError,
   dispatchCapability,
+  recheckHumanSession,
   resolveCaller,
   resolveRequestCaller,
   runWithCorrelationId,
+  sessionKickVerdict,
+  subscribeToSessionKicks,
 } from '../../application/gateway/index.js';
 import { WORKSPACE_COOKIE, parseCookieHeader } from '../../application/identity/index.js';
 import type {
@@ -98,7 +103,7 @@ function isChatHistoryResult(value: unknown): value is ChatHistoryResult {
 }
 
 interface ConnectionState {
-  caller: ResolvedCaller | undefined;
+  caller: HumanCaller | undefined;
   authFailed: boolean;
   authReady: boolean;
   readonly pendingFrames: RawData[];
@@ -110,6 +115,20 @@ interface ConnectionState {
    *  authenticate's session" (the task brief's own words) rather than a separate
    *  `subscribe_principal` request. */
   principalUnsubscribe: (() => void) | undefined;
+  /** R-05: this connection's kick-bus subscription (application/gateway/session-revocation.ts) —
+   *  set right after `principalUnsubscribe`, torn down with it. */
+  kickUnsubscribe: (() => void) | undefined;
+}
+
+/** Drops every push subscription the connection holds — on close, and immediately when its
+ *  session is revoked (`endRevokedSession`), not only once the close handshake completes. */
+function dropSubscriptions(state: ConnectionState): void {
+  state.subscription?.unsubscribe();
+  state.subscription = undefined;
+  state.principalUnsubscribe?.();
+  state.principalUnsubscribe = undefined;
+  state.kickUnsubscribe?.();
+  state.kickUnsubscribe = undefined;
 }
 
 type WsOutgoingMessage = JsonRpcSuccessResponse | JsonRpcErrorResponse | JsonRpcNotification;
@@ -358,7 +377,7 @@ function callerPrincipalId(caller: ResolvedCaller): string {
  *  can — the human's own conversation is never meant to reach a Worker. Checked at both places a
  *  caller is resolved: `initAuth`'s Authorization-header path and `authenticateFromParams`'s
  *  first-frame `authenticate` RPC path. */
-function isHumanChannel(caller: ResolvedCaller): boolean {
+function isHumanChannel(caller: ResolvedCaller): caller is HumanCaller {
   return caller.channel === 'human';
 }
 
@@ -380,6 +399,45 @@ function subscribeCallerToPrincipalPush(
       send(socket, notification(event.type, event));
     },
   );
+}
+
+/** R-05: the error a revoked session is answered with — what a fresh `authenticate` would get
+ *  right now (application/gateway/session-revocation.ts): UNAUTHORIZED for a credential that is
+ *  gone, FORBIDDEN for a cookie user whose membership here was disabled. */
+function revocationError(verdict: Exclude<HumanSessionVerdict, 'live'>): Error {
+  return verdict === 'session_invalid'
+    ? new UnauthorizedError('session revoked')
+    : new ForbiddenError('no active membership in the requested workspace');
+}
+
+/** R-05: ends a connection whose session the kernel no longer honours. Answers `id` (the call
+ *  that found out, or `null` for a kick nobody asked about), drops every push subscription at
+ *  once, and closes. The console (web `lib/ws-client.ts`) stops reconnecting on UNAUTHORIZED and
+ *  re-picks a workspace on FORBIDDEN. */
+function endRevokedSession(
+  socket: WebSocket,
+  state: ConnectionState,
+  id: JsonRpcId,
+  err: Error,
+): void {
+  const mapped = mapDispatchError(err);
+  send(socket, errorResponse(id, mapped.code, mapped.message));
+  dropSubscriptions(state);
+  socket.close();
+}
+
+/** R-05: subscribes the connection to the kick bus — logout, password reset, user disable and
+ *  `disable_principal` close it at once instead of at its next call. Called next to
+ *  `subscribeCallerToPrincipalPush`, from both places a caller is set. */
+function subscribeCallerToSessionKicks(
+  socket: WebSocket,
+  caller: HumanCaller,
+  state: ConnectionState,
+): void {
+  state.kickUnsubscribe = subscribeToSessionKicks((kick) => {
+    const verdict = sessionKickVerdict(caller, kick);
+    if (verdict) endRevokedSession(socket, state, null, revocationError(verdict));
+  });
 }
 
 /**
@@ -425,13 +483,11 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     pendingFrames: [],
     subscription: undefined,
     principalUnsubscribe: undefined,
+    kickUnsubscribe: undefined,
   };
 
   socket.once('close', () => {
-    state.subscription?.unsubscribe();
-    state.subscription = undefined;
-    state.principalUnsubscribe?.();
-    state.principalUnsubscribe = undefined;
+    dropSubscriptions(state);
   });
 
   socket.on('message', (raw: RawData) => {
@@ -518,6 +574,7 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
       }
       state.caller = caller;
       subscribeCallerToPrincipalPush(socket, caller, state);
+      subscribeCallerToSessionKicks(socket, caller, state);
       send(socket, successResponse(req.id, { authenticated: true }));
       return;
     }
@@ -539,6 +596,26 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     // supervisor calls) and logs with that id — see `callLogger`.
     const { correlationId, log } = callLogger(request, req.correlationId);
     const caller = state.caller;
+
+    // R-05: HTTP re-resolves its caller on every request; this socket authenticated once, so the
+    // session it authenticated with is re-checked before every call (one indexed read). A socket
+    // already closing — its session was just revoked — dispatches nothing more.
+    if (socket.readyState !== 1) return;
+    let verdict: HumanSessionVerdict;
+    try {
+      verdict = await recheckHumanSession(deps.pool, caller);
+    } catch (err) {
+      const mapped = mapDispatchError(err);
+      send(socket, errorResponse(req.id, mapped.code, mapped.message));
+      logWsCall(log, req.method, err);
+      return;
+    }
+    if (verdict !== 'live') {
+      const err = revocationError(verdict);
+      endRevokedSession(socket, state, req.id, err);
+      logWsCall(log, req.method, err);
+      return;
+    }
 
     if (req.method === 'subscribe_chat') {
       await runWithCorrelationId(correlationId, () =>
@@ -575,7 +652,8 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
           state.authFailed = true;
         } else {
           state.caller = caller;
-          subscribeCallerToPrincipalPush(socket, state.caller, state);
+          subscribeCallerToPrincipalPush(socket, caller, state);
+          subscribeCallerToSessionKicks(socket, caller, state);
         }
       } catch {
         send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));

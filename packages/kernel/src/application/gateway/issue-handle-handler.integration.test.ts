@@ -280,12 +280,11 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
       authenticateHandle(pool, issued.handle, { publicKey: handlePublicKey }),
     ).resolves.toMatchObject({ obo: secondOwnerId });
 
-    // The primary owner disables the second owner — governance/capability/handle-auth.ts's own
-    // "belt and suspenders" doc comment: authenticateHandle checks the on_behalf_of principal's
-    // disabled_at on *every* verification, independent of session/Handle kind (the entry-session-
-    // only revokeEntrySessionHandles call inside disable_principal's own handler never reaches a
-    // kind='mcp_session' Handle — this second, independent check is what actually closes it for
-    // an interactive Handle).
+    // The primary owner disables the second owner — disable_principal revokes the Handles of
+    // every session on the principal's behalf, mcp_session included (R-05), and
+    // governance/capability/handle-auth.ts's own "belt and suspenders" doc comment:
+    // authenticateHandle also checks the on_behalf_of principal's disabled_at on *every*
+    // verification, independent of session/Handle kind.
     const primaryOwnerCaller = humanCaller(workspaceId, ownerId, 'owner');
     await dispatchCapability({ pool }, primaryOwnerCaller, 'disable_principal', {
       principalId: secondOwnerId,

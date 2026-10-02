@@ -82,6 +82,28 @@ describe('HttpClient (apiKey auth)', () => {
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).kind).toBe('network');
   });
+
+  it('R-16: an `unauthorized` answer calls onUnauthorized, then still rejects; other errors do not', async () => {
+    const onUnauthorized = vi.fn();
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } }),
+    );
+    const client = new HttpClient({
+      auth: { kind: 'apiKey', apiKey: 'sk-test' },
+      fetchImpl: fetchImpl as typeof fetch,
+      onUnauthorized,
+    });
+
+    const err = await client.call('list_tasks').catch((e: unknown) => e);
+    expect((err as HttpError).code).toBe('unauthorized');
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+
+    fetchImpl.mockImplementationOnce(async () =>
+      jsonResponse(403, { ok: false, error: { code: 'forbidden', message: 'nope' } }),
+    );
+    await client.call('approve').catch(() => undefined);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('HttpClient (cookie auth, S4.1)', () => {
