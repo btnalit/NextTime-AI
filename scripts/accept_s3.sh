@@ -655,7 +655,7 @@ chat_dependency_step() {
   esac
   pass "chat-dependency-reply" "entry agent replied: $last_reply"
 
-  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container","limit":200}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "chat-dependency-search-kernel" "search HTTP $status: $(parse_kv "$out" BODY)"
   KERNEL_CONTAINER_ID=$(parse_kv "$out" EXTRACTED)
@@ -709,7 +709,7 @@ real_chat_dependency_step() {
   pass "real-chat-dependency" "$ok_n/$n dependency chats succeeded under model=$REAL_MODEL"
 
   # The graph-side half of the fake-mode step is model-independent and still asserted once.
-  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container","limit":200}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
   KERNEL_CONTAINER_ID=$(parse_kv "$out" EXTRACTED)
   [ -n "$KERNEL_CONTAINER_ID" ] || fail "chat-dependency-search-kernel" "no Container with identityKey.serviceName='kernel' found: $(parse_kv "$out" BODY)"
   out=$(cap "$OWNER_KEY" traverse "{\"fromId\":\"$KERNEL_CONTAINER_ID\",\"linkType\":\"depends_on\",\"depth\":1}" "d.result.edges[0]&&d.result.edges[0].linkId||''")
