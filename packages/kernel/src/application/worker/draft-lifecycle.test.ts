@@ -41,9 +41,12 @@ const VALID_SKILL = {
   description: 'Find the top talker on the network and the process behind it.',
   markdown: 'Run `ss -tnp` and look for the highest byte count.',
 };
+// OntologyDefinitionSchema needs at least one object type and one link type.
 const VALID_ONTOLOGY_CHANGE = {
   objectTypes: [{ name: 'Widget', description: 'A widget.' }],
-  linkTypes: [],
+  linkTypes: [
+    { name: 'widget_part_of', domain: 'Widget', range: 'Widget', description: 'A widget part.' },
+  ],
 };
 const VALID_PROCEDURE = {
   name: 'restart-and-verify',
