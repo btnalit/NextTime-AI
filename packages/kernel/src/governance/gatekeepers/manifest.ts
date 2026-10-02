@@ -3,6 +3,7 @@ import { IllegalTransition, PUBLISHABLE_TRANSITIONS, transition } from '@nexttim
 import type { PoolClient } from 'pg';
 import type { OperationOrigin } from '../../substrate/ontology/index.js';
 import {
+  deprecatePublishedOperationObjects,
   registerOperationDraftObject,
   setOperationDescriptionObject,
   setOperationGovernanceFieldsObject,
@@ -58,17 +59,22 @@ import {
  *     proposer replaces it in place; anyone else gets `OperationIdentityConflictError` naming the
  *     draft, never its content) — the published row is not re-consulted once a draft exists.
  *   - `publishOperation` on a revision draft publishes it (draft → published, unchanged
- *     transition) **and**, in the same transaction, deprecates the row named by its `draftOf` —
- *     but only if that row is still `published` at the moment of this call (someone may have
- *     deprecated it directly in the meantime; publishing the revision must not then throw trying
- *     to deprecate an already-`deprecated` row — `PUBLISHABLE_TRANSITIONS` has no edge for that,
- *     by design). The now-superseded row's Object id comes back as the published record's own
- *     `supersedes` (only ever set on `publishOperation`'s return value, never persisted) —
+ *     transition) **and**, in the same transaction, deprecates the row it supersedes. Since R-08
+ *     (review 2026-10-02) that is every row of the identity still `published` at the moment of
+ *     the call — normally exactly the row its `draftOf` names — rather than only the `draftOf`
+ *     row: an `importManifest` over a pending revision draft used to drop `draftOf`, and the
+ *     publish that followed left two `published` rows. A superseded row someone already
+ *     deprecated directly is simply not matched (publishing the revision must not throw over it —
+ *     `PUBLISHABLE_TRANSITIONS` has no `deprecated → deprecate` edge, by design). The superseded
+ *     row's Object id comes back as the published record's own `supersedes` (only ever set on
+ *     `publishOperation`'s return value, never persisted) —
  *     `application/gateway/operation-manifest-handlers.ts` records it on the publish Activity's
  *     `metadata` for audit/explain.
  *   - Every read that used to assume "one row per identity" (`getOperation`, `getPublishedOperation`,
  *     the `list*`/`find_*` helpers below) is unaffected in its external contract: at most one row
- *     per identity is ever `draft` and at most one is ever `published` at a time, so "the current
+ *     per identity is ever `draft` and at most one is ever `published` at a time (the published
+ *     half is enforced by the database since R-08: the deferred
+ *     `objects_operation_single_published` constraint, migrations/core/0034), so "the current
  *     draft"/"the current published version" stay well-defined single answers — `getOperation`
  *     picks whichever of those exists (draft first, since a pending revision is what a second
  *     `propose_operation`/`import_manifest` call must react to), falling back to the most recent
@@ -253,7 +259,13 @@ export interface ImportManifestResult {
  *  `getOperation` priority `proposeOperation` below uses, is whichever version currently occupies
  *  it — draft if one exists, else the next fresh version — the conditional write's own
  *  draft-only guard is what actually decides whether the write lands, exactly as before this
- *  version dimension existed). */
+ *  version dimension existed).
+ *
+ *  R-08 (review 2026-10-02): replacing a revision draft keeps it a revision. The conditional
+ *  write replaces `properties` wholesale, so the draft's `draftOf` is passed again — carried
+ *  forward from the draft, or, when the draft has none, taken from the identity's live
+ *  `published` row (a draft an earlier import already stripped). Publishing the imported version
+ *  then supersedes that row instead of leaving it live beside the new one. */
 export async function importManifest(
   client: PoolClient,
   workspaceId: string,
@@ -275,10 +287,19 @@ export async function importManifest(
   for (const operation of input.operations) {
     const existing = await getOperation(client, workspaceId, input.gatekeeperId, operation.name);
     const version = existing?.version ?? 1;
+    // Only a draft can be replaced (a published/deprecated row is skipped below), and only a
+    // draft can be a revision of the live row — see the R-08 note in the doc comment above.
+    let draftOf: string | undefined;
+    if (existing?.status === 'draft') {
+      draftOf =
+        existing.draftOf ??
+        (await getPublishedOperation(client, workspaceId, input.gatekeeperId, operation.name))?.id;
+    }
     const written = await registerOperationDraftObject(client, workspaceId, {
       gatekeeperId: input.gatekeeperId,
       name: operation.name,
       version,
+      draftOf,
       operation,
       proposedBy: input.proposedBy,
       activityId: input.activityId,
@@ -300,6 +321,7 @@ export async function importManifest(
       status: 'draft',
       origin: 'import',
       proposedBy: input.proposedBy,
+      ...(draftOf !== undefined ? { draftOf } : {}),
     });
   }
   return { imported, skipped };
@@ -422,8 +444,9 @@ interface OperationObjectRow {
  * `(gatekeeperId, name)`, "current" is whichever of those exists — `draft` first (a pending
  * revision is what `proposeOperation`/`importManifest` must react to), else `published`, else the
  * most recent `deprecated` row (so a fully-retired identity still names *a* status). At most one
- * `draft` and at most one `published` row ever exist per identity at a time, so this is still a
- * well-defined single answer, not an arbitrary pick among several live rows.
+ * `draft` and at most one `published` row ever exist per identity at a time (the latter enforced
+ * by the database since R-08, migrations/core/0034), so this is still a well-defined single
+ * answer, not an arbitrary pick among several live rows.
  */
 export async function getOperation(
   client: PoolClient,
@@ -453,27 +476,6 @@ export async function getOperation(
   return toOperationRecord(gatekeeperId, name, row.id, row.properties);
 }
 
-/** Reads one Operation Object by its own id (S3.12 — `publishOperation`'s supersede step follows
- *  a revision draft's `draftOf` reference, which names a row by id, not by identity/version). */
-async function getOperationById(
-  client: PoolClient,
-  workspaceId: string,
-  objectId: string,
-): Promise<OperationRecord | null> {
-  const result = await client.query<OperationObjectRow>(
-    `select id, identity_key, properties
-     from objects
-     where workspace_id = $1 and object_type = 'Operation' and id = $2`,
-    [workspaceId, objectId],
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  const gatekeeperId = row.identity_key?.gatekeeperId;
-  const name = row.identity_key?.name;
-  if (!gatekeeperId || !name) return null; // defensive — every Operation Object carries both
-  return toOperationRecord(gatekeeperId, name, row.id, row.properties);
-}
-
 /**
  * Resolves the *live* **published** Operation only — `null` for a draft, deprecated, or unknown
  * one, and (S3.12) never distracted by a pending revision draft against the same identity: a
@@ -483,6 +485,10 @@ async function getOperationById(
  * require_approval, never execute)" — the caller (`request_action`'s handler) is expected to
  * treat `null` here uniformly as "unclassified", not distinguish "no such Operation" from "not
  * published yet".
+ *
+ * R-08: ordered newest version first, so even a database that still held two `published` rows
+ * for one identity (before migrations/core/0034 healed them and made a second one impossible)
+ * resolves to the newest classification, never an arbitrary pick between the two.
  */
 export async function getPublishedOperation(
   client: PoolClient,
@@ -498,6 +504,7 @@ export async function getPublishedOperation(
        and identity_key ->> 'gatekeeperId' = $2
        and identity_key ->> 'name' = $3
        and properties ->> 'status' = 'published'
+     order by coalesce((properties ->> 'version')::int, 1) desc
      limit 1`,
     [workspaceId, gatekeeperId, name],
   );
@@ -695,15 +702,18 @@ export interface PublishOperationInput {
  * verbatim so the owner sees exactly what was just published (an agent's proposal is published
  * only this way, one at a time; see `publishManifest`).
  *
- * S3.12: when the draft being published is a revision (`draftOf` set — module doc comment), this
- * also deprecates the superseded row, in the same transaction (same `client`, no separate commit) —
- * but only if that row is *still* `published` right now (someone may have deprecated it directly
- * via `deprecateOperation` in the meantime; `PUBLISHABLE_TRANSITIONS` has no `deprecated →
- * deprecate` edge, so blindly retrying that transition would throw `IllegalTransition` and abort
- * this publish over a state that already reached exactly where this call wanted it). The returned
- * record's `supersedes` is that row's Object id — set only when this call actually deprecated it —
- * for `operation-manifest-handlers.ts` to record on the publish Activity's `metadata` (audit/
- * explain).
+ * S3.12 / R-08: publishing a draft also deprecates every row of the same identity that is still
+ * `published` right now, in the same transaction (same `client`, no separate commit), and
+ * *before* the draft itself flips — so the identity never holds two live rows, not even between
+ * two statements. That is normally exactly the row a revision draft's `draftOf` names; matching
+ * by status rather than following `draftOf` also covers a draft whose `draftOf` was lost (the
+ * R-08 import path, before its fix) and a superseded row someone already deprecated directly via
+ * `deprecateOperation` (simply not matched — `PUBLISHABLE_TRANSITIONS` has no `deprecated →
+ * deprecate` edge, so retrying that transition would throw `IllegalTransition` and abort this
+ * publish over a state that already reached exactly where this call wanted it). The returned
+ * record's `supersedes` is the deprecated row's Object id — set only when this call actually
+ * deprecated one — for `operation-manifest-handlers.ts` to record on the publish Activity's
+ * `metadata` (audit/explain).
  */
 export async function publishOperation(
   client: PoolClient,
@@ -712,6 +722,12 @@ export async function publishOperation(
 ): Promise<OperationRecord> {
   const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
   transition(PUBLISHABLE_TRANSITIONS, existing.status, 'publish');
+  // `existing` is a draft here (the transition above allows `publish` from `draft` only), so this
+  // never touches the row being published.
+  const superseded = await deprecatePublishedOperationObjects(client, workspaceId, {
+    gatekeeperId: input.gatekeeperId,
+    name: input.name,
+  });
   await setOperationStatusObject(
     client,
     workspaceId,
@@ -719,20 +735,8 @@ export async function publishOperation(
     'published',
   );
 
-  let supersedes: string | undefined;
-  if (existing.draftOf !== undefined) {
-    const superseded = await getOperationById(client, workspaceId, existing.draftOf);
-    if (superseded && superseded.status === 'published') {
-      await setOperationStatusObject(
-        client,
-        workspaceId,
-        { gatekeeperId: input.gatekeeperId, name: input.name, version: superseded.version },
-        'deprecated',
-      );
-      supersedes = existing.draftOf;
-    }
-  }
-
+  // At most one row was live (migrations/core/0034's constraint), so at most one was superseded.
+  const supersedes = superseded[0];
   return { ...existing, status: 'published', ...(supersedes !== undefined ? { supersedes } : {}) };
 }
 
