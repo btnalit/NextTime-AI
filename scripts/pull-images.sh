@@ -70,6 +70,23 @@ case "$SERVICES" in
 esac
 
 PI_VERSION=$(tr -d '[:space:]' <pi.version)
+
+# The local name compose uses for a service's image. `config --images <service>` also prints the
+# images of that service's depends_on chain, in no stable order (kernel → postgres's pgvector
+# image too), so keep only the one compose-built name ending in -<service> — explicit `image:`
+# names (nexttime-ai-caddy, nexttime-ai-worker-runtime) follow the same pattern — and require
+# exactly one.
+local_name_of() {
+  names=$(docker compose --profile build-only config --images "$1" | grep -E "^[a-z0-9][a-z0-9_.-]*-${1}\$" || true)
+  [ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ] || die "cannot resolve one local image name for '$1' (got: $(printf '%s' "$names" | tr '\n' ' '))"
+  printf '%s\n' "$names"
+}
+
+# 0. resolve every local name before touching the network
+for s in $SERVICES; do
+  local_name_of "$s" >/dev/null
+done
+
 echo "pull-images: ${TAG} from ${REGISTRY} (verify=${verify}) — ${SERVICES}"
 
 # 1. pull
@@ -104,8 +121,7 @@ done
 # 3. retag to the names docker compose already uses
 for s in $SERVICES; do
   ref="${REGISTRY}/nexttime-ai-${s}:${TAG}"
-  local_name=$(docker compose --profile build-only config --images "$s" | head -n 1)
-  [ -n "$local_name" ] || die "docker compose did not name an image for service '$s'"
+  local_name=$(local_name_of "$s")
   docker tag "$ref" "$local_name"
   echo "pull-images: ${s} -> ${local_name}"
   if [ "$s" = "worker-runtime" ]; then

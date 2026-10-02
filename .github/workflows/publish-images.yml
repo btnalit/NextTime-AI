@@ -111,6 +111,7 @@ jobs:
             echo "image=${image}"
             echo "tags=${image}:${TAG},${image}:sha-${short}"
             echo "short=${short}"
+            echo "rev=$(git rev-parse HEAD)"
             echo "pi_version=$(tr -d '[:space:]' <pi.version)"
             echo "ext_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' packages/platform-extension/package.json | head -n 1)"
           } >>"$GITHUB_OUTPUT"
@@ -145,7 +146,7 @@ jobs:
             BUILT_FROM=${{ steps.meta.outputs.short }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.rev }}
             org.opencontainers.image.version=${{ inputs.tag }}
           cache-from: type=gha,scope=publish-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=publish-${{ matrix.service }}
