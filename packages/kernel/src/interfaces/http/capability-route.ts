@@ -335,7 +335,8 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // S3.11 (docs/development-tasks.md "中台控制面"): member-management invariant refusals — same
   // 409 "well-formed request, the row's current state forbids it" family as
   // OperationIdentityConflictError/IllegalTransition above (last-owner protection, self-disable,
-  // a non-human target for set_principal_role/rotate_api_key/disable_principal).
+  // an agent or internal target for set_principal_role/rotate_api_key/disable_principal, a
+  // reserved create_principal display name).
   if (err instanceof PrincipalOperationRefusedError) {
     return { status: 409, code: 'conflict', message: err.message };
   }
