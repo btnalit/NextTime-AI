@@ -348,11 +348,20 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.23.0 | governance `0012_agent_profile_exclusions`：`agent_profiles` 加 `excluded_skills` / `excluded_gatekeepers` / `excluded_worker_definitions`（`jsonb not null default '[]'`）；对每个原先存过明确清单的配置写一条审计 `agent_profile.lists_reset_to_follow_grants`（payload 带原清单）。旧的 `enabled_*` 列原样保留、新代码不读不写 | 可逆 | 只加列、只插审计行；v0.22.0 的代码只读写 `enabled_*`，新列对它不可见。注意：回退后旧代码按 `enabled_*` 重新生效，即回到"清单冻结"的旧行为，并且在 v0.23.0 期间对排除清单的修改不会带回去 | 只需回退代码；新列与审计行可留（审计表只追加，不可删） |
 | v0.35.0 | core `0033_ontology_draft_discard`：给 `nexttime_app` 授 `ontology_versions` 的 `DELETE`，并加 `BEFORE DELETE` 触发器——应用角色只能删 `draft` 行（遗留 99：`discard_draft` 新增 `ontology_version` kind，提案者丢弃自己的本体草稿；`current_user = 'nexttime_app'` 限定，工作区清除仍可删全部行） | 可逆 | 旧代码（v0.34.0 及之前）从不对 `ontology_versions` 执行 `DELETE`（`registry.ts` 只有 insert/update/select），新授权与触发器对它们完全透明；写入点本体校验只读 published 行、迁移里没有任何外键引用该表，草稿行被删不会留下孤儿。回退时新增的 `discard_draft{kind:'ontology_version'}` 路径随新代码一并消失；若要连 schema 也回退：`revoke delete on ontology_versions from nexttime_app` + `drop trigger ontology_versions_only_draft_delete on ontology_versions` + `drop function ontology_versions_block_non_draft_delete()`（不回退也无害） | 只需回退代码 |
 
-上面 v0.14.0/v0.15.0 三行的"依据"都还只是读代码得到的推理——这条链路（v0.13.2 主机直接升级到 v0.15.0，跳过
-v0.14.0）的 `drill-upgrade.sh --to v0.15.0 --ack-live-restore` PROBE 实测证据（`PROBE
-old-code-on-new-schema ok|failed`）尚未在主机上跑过，是下一次真实升级前要补的确认证据，不是本次改动
-自带的。`drill-upgrade.sh` 现在已经知道在 PROBE 切回 v0.13.2 时把 `models.json` 挪回 `config/`（§3.2）
-——之前这条 PROBE 会因为目录布局对不上直接在 `accept_s1.sh` 那一步失败，而不是给出真正的可逆性结果。
+**CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
+"依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
+
+| v(n-1) 代码 → v(n) schema | 覆盖的迁移 | 结果 | 覆盖说明 |
+|---|---|---|---|
+| v0.13.2 → v0.14.0 | core 0030、0031 | 123 / 123 测试文件通过 | `workspaces` / `chats` 的读写在共享库套件里都有 |
+| v0.14.0 → v0.15.0 | core 0032 | 131 / 131 通过 | 普通审计行的写入在共享库套件里；`workspace_id is null` 的平台审计行只在自建私有库的 platform-* 套件里写——那部分对 0032 无信号，但 0032 只放宽约束，旧代码合法的写入在新约束下必然合法 |
+| v0.19.0 → v0.20.0 | worker 0003 | 140 / 140 通过 | 三张表的提议 / 发布 / 读在共享库套件里；旧代码从不删除这三张表的行 |
+| v0.22.0 → v0.23.0 | governance 0012 | 143 / 143 通过 | `agent_profiles` 的读写（`setAgentProfile` / 请求执行路径）在共享库套件里 |
+| v0.34.0 → v0.35.0 | core 0033 | 149 / 149 通过 | 本体提议 / 发布 / 读在共享库套件里；旧代码从不删除 `ontology_versions` 的行 |
+
+结论：以上迁移"可逆"由推理升级为实测（空库上的 schema 兼容性；依赖生产数据的部分不在其内）。此前这里写的
+`drill-upgrade.sh --to v0.15.0 --ack-live-restore` 主机 PROBE 不再需要——它的回滚会覆盖活库，维护者 2026-10-02 选择
+不用（S9 D4 方案 (b)）。以后每个改动迁移的 PR 自动跑同一个探针（BASE = 最新发布 tag）。
 
 **规则**：任何一次发布如果表里出现"不可逆"，必须在合并那次 release PR **之前**把这条不可逆标注
 手工加进它自己的 `CHANGELOG.md` 那一节（本文件 §5"回滚一次还没合并的 release PR"已经说明这个
