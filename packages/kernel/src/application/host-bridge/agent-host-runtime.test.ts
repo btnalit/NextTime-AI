@@ -96,6 +96,9 @@ function createFakePool(
    *  `resolveActiveRuntimeImage` then resolves `undefined`, matching every pre-S7-E test's
    *  existing behavior). */
   platformSettingsOverrides: Record<string, unknown> = {},
+  /** R-05: principalIds `readHandleFreshness` should report as disabled (principal or user) —
+   *  empty by default. */
+  disabledPrincipals: ReadonlySet<string> = new Set(),
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
@@ -163,9 +166,17 @@ function createFakePool(
       return { rows: [{ live: !revokedJtis.has(jti) }], rowCount: 1 };
     }
 
-    if (sql.startsWith('select role from principals')) {
+    if (sql.startsWith('select p.role, (p.disabled_at is not null')) {
       const [, principalId] = params as [string, string];
-      return { rows: [{ role: rolesByPrincipal.get(principalId) ?? 'owner' }], rowCount: 1 };
+      return {
+        rows: [
+          {
+            role: rolesByPrincipal.get(principalId) ?? 'owner',
+            disabled: disabledPrincipals.has(principalId),
+          },
+        ],
+        rowCount: 1,
+      };
     }
 
     if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
@@ -716,6 +727,59 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     expect(handleCount.get(principalId)).toBe(2); // reissued despite unchanged role/gate set
     const secondCommand = sent[1] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
     expect(secondCommand.handle).not.toBe(firstCommand.handle);
+  });
+
+  it('refuses a disabled principal: the cached Handle is not reused, none is issued, the Turn fails (R-05)', async () => {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const disabledPrincipals = new Set<string>();
+    const { pool, handleCount } = createFakePool(
+      new Map(),
+      new Map(),
+      new Map(),
+      undefined,
+      [],
+      new Map(),
+      new Set(),
+      {},
+      disabledPrincipals,
+    );
+    const { sink, events } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      entryHandleTtlSeconds: 3600,
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+    expect(handleCount.get(principalId)).toBe(1);
+
+    // The principal (or its user) is disabled while a fresh cached Handle still exists.
+    disabledPrincipals.add(principalId);
+
+    const second = startTurnInput({ principalId, workspaceId });
+    await runtime.startTurn(second);
+
+    expect(sent).toHaveLength(1);
+    expect(handleCount.get(principalId)).toBe(1);
+    expect(events).toContainEqual({
+      type: 'turnEnded',
+      status: 'failed',
+      workspaceId,
+      chatId: second.chatId,
+      turnId: second.turnId,
+      principalId,
+    });
   });
 });
 

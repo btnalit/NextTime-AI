@@ -7,6 +7,7 @@ import {
   hashApiKey,
   loadHandlePrivateKeyFor,
   lookupPrincipalByApiKeyHash,
+  publishSessionKick,
   resolveCaller,
   resolveConsoleUser,
 } from '../../application/gateway/index.js';
@@ -328,6 +329,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     try {
       const user = await resolveConsoleUser(request.headers.cookie, deps);
       await revokeUserSession(deps.pool, user.consoleSessionId);
+      // R-05: every /ws socket this console session opened closes too (another tab included).
+      publishSessionKick({ consoleSessionId: user.consoleSessionId });
     } catch (err) {
       if (!(err instanceof UnauthorizedError)) return mapAuthError(request, reply, err);
     }
