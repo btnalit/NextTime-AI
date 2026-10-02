@@ -101,15 +101,26 @@ for s in $SERVICES; do
   digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" | sed -n "s#^${REGISTRY}/nexttime-ai-${s}@##p" | head -n 1)
   [ -n "$digest" ] || die "no repo digest for $ref"
   if [ "$verify" -eq 1 ]; then
-    set -- --rm
-    if [ -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ]; then
-      set -- "$@" -v "${DOCKER_CONFIG:-$HOME/.docker}/config.json:/docker-config/config.json:ro" -e DOCKER_CONFIG=/docker-config
+    # Anonymous first: the published packages are public. Only if that fails and the host has a
+    # docker config (private packages, `docker login ghcr.io`) retry with it mounted — as uid 0,
+    # because the cosign image runs as a non-root user that cannot read root's 0600 config.json
+    # (2026-10-02 host: "loading config file: permission denied" failed every verification).
+    cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+    if ! out=$(docker run --rm "$COSIGN_IMAGE" verify \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        --certificate-identity-regexp "$IDENTITY" \
+        "${REGISTRY}/nexttime-ai-${s}@${digest}" 2>&1); then
+      if [ -f "$cfg" ]; then
+        out=$(docker run --rm --user 0:0 -v "$cfg:/docker-config/config.json:ro" -e DOCKER_CONFIG=/docker-config \
+          "$COSIGN_IMAGE" verify \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          --certificate-identity-regexp "$IDENTITY" \
+          "${REGISTRY}/nexttime-ai-${s}@${digest}" 2>&1) \
+          || die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+      else
+        die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+      fi
     fi
-    docker run "$@" "$COSIGN_IMAGE" verify \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-      --certificate-identity-regexp "$IDENTITY" \
-      "${REGISTRY}/nexttime-ai-${s}@${digest}" >/dev/null 2>&1 \
-      || die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}"
   fi
   if [ "$s" = "worker-runtime" ]; then
     label=$(docker image inspect --format '{{index .Config.Labels "ai.nexttime.pi-version"}}' "$ref")
