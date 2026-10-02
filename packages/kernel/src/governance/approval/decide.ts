@@ -1,11 +1,13 @@
 import {
   ACTION_REQUEST_TRANSITIONS,
   DECISION_TRANSITIONS,
+  type PrincipalKind,
   type Role,
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import { getPublishedOperation } from '../gatekeepers/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
@@ -13,6 +15,7 @@ import {
   type ActionRequestRow,
   ApprovalReasonRequiredError,
   ApprovalScopeError,
+  HumanDecisionRequiredError,
   SelfApprovalNotAllowedError,
 } from './types.js';
 
@@ -25,7 +28,8 @@ import {
  *   1. `getActionRequestForUpdateOrThrow` (`SELECT ... FOR UPDATE`) — locks the row for the rest
  *      of this transaction. A second concurrent `approve`/`reject` on the same row blocks here
  *      until this transaction commits or rolls back, then re-reads the *already-updated* status.
- *   2. I14 precheck (`assertApproverScope`), then — `approve` only — the S6-A C25 high-blast-radius
+ *   2. I14 precheck (`assertApproverScope`), then the R-17 "a person decides" check
+ *      (`assertPersonDecidesWhenRequired`), then — `approve` only — the S6-A C25 high-blast-radius
  *      `reason` requirement (`ApprovalReasonRequiredError`), then the `transition()` table lookup
  *      — the common case
  *      where a second concurrent caller loses the race fails *here*, with a plain
@@ -141,7 +145,71 @@ async function assertApproverScope(
   }
 }
 
-/** Throws `ApprovalScopeError` (403) if the approver does not hold the required scope,
+/**
+ * R-17 (maintainer decision D-06, docs/code-review-2026-10-02.md): an ActionRequest no
+ * auto-approval rule could ever resolve — `blast_radius = 'high'` (I8 "工作区不能关闭"), or an
+ * Operation that is not `auto_approvable` (I8 signal 1; an unpublished Operation counts as not,
+ * I17) — must be decided by a person, a `kind = 'human'` Principal. A service Principal's API key
+ * also authenticates on the human channel (resolve-caller.ts), so without this an owner could
+ * script `approve` and close an agent → bot loop with no person in it. Below that line a service
+ * Principal may still decide — the same authority a configured auto-approval rule already has —
+ * and the Approval Decision records it as `decided_by`.
+ *
+ * Both inputs are read here, never trusted from the caller, so every entry point that decides an
+ * ActionRequest is covered: the approver's `principals.kind` (the same read
+ * `substrate/epistemic`'s `attachHumanAttestation` makes), and `auto_approvable` from the
+ * currently published Operation — the lookup `request_action` resolves it with
+ * (`application/gateway/request-action-handler.ts`, `getPublishedOperation`), since the row
+ * snapshots `blast_radius` but not `auto_approvable`. A human approver returns before the
+ * Operation read.
+ */
+async function assertPersonDecidesWhenRequired(
+  client: PoolClient,
+  workspaceId: string,
+  approverPrincipalId: string,
+  existing: ActionRequestRow,
+  event: 'approve' | 'reject',
+): Promise<void> {
+  const principal = await client.query<{ kind: PrincipalKind }>(
+    'select kind from principals where workspace_id = $1 and id = $2',
+    [workspaceId, approverPrincipalId],
+  );
+  if (principal.rows[0]?.kind === 'human') return;
+
+  if (existing.blastRadius === 'high') {
+    throw new HumanDecisionRequiredError(
+      existing.id,
+      approverPrincipalId,
+      event,
+      'has blast_radius "high"',
+    );
+  }
+  const published = await getPublishedOperation(
+    client,
+    workspaceId,
+    existing.gatekeeperId,
+    existing.actionKind,
+  );
+  if (!published) {
+    throw new HumanDecisionRequiredError(
+      existing.id,
+      approverPrincipalId,
+      event,
+      `targets Operation "${existing.actionKind}", which is not published (unclassified, I17)`,
+    );
+  }
+  if (!published.operation.auto_approvable) {
+    throw new HumanDecisionRequiredError(
+      existing.id,
+      approverPrincipalId,
+      event,
+      `targets Operation "${existing.actionKind}", which is not auto_approvable`,
+    );
+  }
+}
+
+/** Throws `ApprovalScopeError` (403) if the approver does not hold the required scope (or, as its
+ *  `HumanDecisionRequiredError` subclass, is not a person and the row needs one — R-17),
  *  `ActionRequestNotFoundError` (404) if the id does not resolve, or `IllegalTransition` (409,
  *  including its `ActionRequestConcurrentTransitionError` subclass) if the row is not currently
  *  `pending_approval`. */
@@ -160,6 +228,15 @@ export async function approveActionRequest(
     workspaceId,
     { principalId: input.approverPrincipalId, role: input.approverRole },
     existing,
+  );
+  // R-17: before the reason gate, so a service Principal is not told to add a reason it still
+  // could not use.
+  await assertPersonDecidesWhenRequired(
+    client,
+    workspaceId,
+    input.approverPrincipalId,
+    existing,
+    'approve',
   );
 
   // S6-A C25 (docs/console-completion-plan.md §12 item 6): high blast radius needs a stated
@@ -211,6 +288,13 @@ export async function rejectActionRequest(
     workspaceId,
     { principalId: input.approverPrincipalId, role: input.approverRole },
     existing,
+  );
+  await assertPersonDecidesWhenRequired(
+    client,
+    workspaceId,
+    input.approverPrincipalId,
+    existing,
+    'reject',
   );
 
   const reason = normalizeReason(input.reason);
