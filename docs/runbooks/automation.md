@@ -13,8 +13,11 @@
 Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATED_LOCKFILE` 失败，所以也不配
 `.github/dependabot.yml`。现在的做法：
 
-- **安全**：仓库 Settings → Code security 的 "Dependabot security updates / alerts" 保持开启——告警是输入；
-  它开出的 PR 由 `auto-merge.yml` 分流（npm 的 PR 可能因 lockfile 失败，失败就在下一个升级波次里手动处理）。
+- **安全**：仓库 Settings → Code security 的 "Dependabot alerts" 开启——告警是输入；"Dependabot security
+  updates"（自动开修复 PR）**保持关闭**（2026-10-02 维护者决定，STATUS 遗留 101：此前本文写着"已开"，实际一直是关的，
+  2026-09-28 至 10-01 积了 28 条告警才被人工发现）。做法：每次发版前、每个波次开工时用
+  `gh api repos/{owner}/{repo}/dependabot/alerts?state=open --jq 'length'` 看开放告警数，非 0 就按 #371 的方式在同一
+  大版本内手工升补丁、跑全套 CI。`auto-merge.yml` 保留不动：开关以后若打开，它开出的 PR 直接按下表分流。
 - **常规升级**：按 `docs/convergence-plan-2026-09-25.md` §6 的 W7 波次手动做，分小步、每步跑全套 CI 与截图门槛；
   大版本（TypeScript / React / Biome 等）先出评估报告。
 - **镜像**：`docker-compose.yml` 里的第三方镜像全部钉 digest（2026-09-25 按主机当时在跑的镜像补齐了 pgvector /
@@ -25,7 +28,7 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 
 | Bot / Workflow | 用途 | 在哪跑 / 触发时机 | 开出东西之后做什么 |
 |---|---|---|---|
-| **dependabot[bot]**（仓库原生安全更新，非本仓库 workflow） | 依赖安全漏洞修复 PR；`.github/dependabot.yml` 已删除，所以现在开出来的每一个 dependabot PR 都是这一种，不再有版本更新 PR | 仓库 Settings → Code security 的 "Dependabot security updates" 开关触发（已开），不经过任何配置文件 | 同上，走 auto-merge.yml 分流 |
+| **dependabot[bot]**（仓库原生安全更新，非本仓库 workflow） | 依赖安全漏洞修复 PR；`.github/dependabot.yml` 已删除，所以现在开出来的每一个 dependabot PR 都是这一种，不再有版本更新 PR | 仓库 Settings → Code security 的 "Dependabot security updates" 开关触发（**关闭**，2026-10-02 决定；现在不会开出这种 PR，告警由发版前人工查看），不经过任何配置文件 | 开关打开后：走 auto-merge.yml 分流 |
 | **auto-merge.yml** | 给 Dependabot 开出的 PR 分流：patch/minor 且非 pi 依赖 → 打开 GitHub 原生 auto-merge；major 或 pi 依赖 → 打 `needs-review` 标签，不自动合 | Dependabot PR 的 opened/reopened/synchronize | `needs-review` 标签的 PR：人工审查后手动合并。没打这个标签的：不用管——`guards`/`quality`/`test` 三个必过检查跑绿后 GitHub 自动合并（分支保护 + 仓库已开的 `allow_auto_merge`） |
 | **ci.yml**（已有，未改动） | `guards`/`quality`/`test` 三个必过检查 | 每个 PR + push main | 红了就修；这是唯一真正门禁合并的地方 |
 | **e2e.yml**（已有，未改动） | web 控制台 Playwright e2e | 每个 PR + push main | 红了排查，但**目前不是必过检查**（见文件末尾注释）——稳定几轮之后手动加进分支保护 |
