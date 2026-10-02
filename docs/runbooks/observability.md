@@ -70,8 +70,8 @@ agent-host 经 `/internal/agent-host` WS 上报的事件、以及在 preHandler 
 ## 2. 各服务 `/internal/metrics`
 
 全部是 Prometheus 文本格式（`@nexttime/shared` 的 `metrics.ts`），**都不经 caddy 发布**（caddy 只反代
-`/api/* /ws /mcp /llm/*`、`/api/llm-admin/*`→`/admin/*`、`/gate-host/*`，且 `/gate-host/internal/*`
-显式 404）。从 kernel 容器里读最省事——它在 `control` 网络上，也挂着 `internal_token` 与 `gate_token`：
+`/api/* /ws /mcp /llm/*`、`/api/llm-admin/*`→`/admin/*`，以及 gate-host 唯一的浏览器路由
+`/gate-host/i/<id>/gate/connected-accounts`（POST / DELETE）；`/gate-host/` 下其余路径一律 404）。从 kernel 容器里读最省事——它在 `control` 网络上，也挂着 `internal_token` 与 `gate_token`：
 
 ```sh
 metrics() {  # $1 = token 文件名（internal_token | gate_token），$2 = URL
