@@ -54,6 +54,21 @@ git push
 
 ## 3. 主机怎么跟随一个 release tag
 
+**应用一个 release 的唯一入口（S9 D2）**：在检出根目录
+
+```
+sh scripts/apply-release.sh vX.Y.Z           # 源码构建镜像
+sh scripts/apply-release.sh --pull vX.Y.Z    # 拉取发布镜像（失败自动退回源码构建）
+```
+
+经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
+`STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
+它按顺序做完本节下面分散描述的全部手续：备份新鲜度 → 发版前 dump（`backups/pre-upgrade/`）→ 切 tag →
+拉取或构建镜像 → 迁移 dry-run 与应用 → `up -d` → S3 → S1 → S2 → S4 → `BACKUP_NOW` → 只留 3 份发版前 dump →
+清理过期的 ephemeral 工作区。dump / 切 tag / 镜像 / 迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；
+验收失败只计数不中止（栈已在新版本上，读各套日志后按 §5 决定是否回滚）。主机差异只来自 `.env`。
+下面各小节保留为每一步的背景与手动做法。
+
 `scripts/host-checkout.sh`（`docs/runbooks/host-checkout.md` E3.1）默认把检出目录重置到
 `origin/main`（`BRANCH` 环境变量默认 `main`）——这是"跟主线走"的日常部署模式,不是"锁定在某个
 release"的模式。要让主机部署锁定在某个已发布的 tag（而不是 main 分支最新 commit），在
