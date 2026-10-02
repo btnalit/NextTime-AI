@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -66,6 +67,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let pool: Pool;
     let workspaceId: string;
     let memberId: string;
+    let collectorId: string;
 
     async function makeObject(objectType: string): Promise<string> {
       return withWorkspace(pool, { workspaceId, principalId: memberId }, async (client) => {
@@ -83,6 +85,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       workspaceId = randomUUID();
       memberId = randomUUID();
+      collectorId = randomUUID();
       await withWorkspace(
         pool,
         { workspaceId, principalId: memberId },
@@ -94,6 +97,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           await client.query(
             'insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, $3, $4, $5)',
             [workspaceId, memberId, 'human', 'member', 'member'],
+          );
+          await client.query(
+            'insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, $3, $4, $5)',
+            [workspaceId, collectorId, 'service', 'member', 'collector:test'],
           );
         },
         { skipRoleSwitch: true },
@@ -305,6 +312,102 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       ).rejects.toThrow(/not in the calling handle's scope/);
       expect(await auditRow('invalidate_fact', fact.id)).toEqual([]);
+    });
+
+    // Review 2026-10-02 R-02 / D-03 (`provenance-anchor-guard.ts`): a caller-supplied `activityId`
+    // must name an Activity the caller started — for a Handle, the principal it acts for.
+    it("assert_fact / supersede_fact naming another principal's activityId are refused (403) and write nothing", async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const collectorFact = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, collectorId, ['assert_fact']),
+        'assert_fact',
+        { sourceObjectId, targetObjectId, linkType: 'has_note', properties: { note: 'observed' } },
+      )) as { id: string; activityId: string };
+
+      const forged = {
+        sourceObjectId,
+        targetObjectId,
+        linkType: 'has_note',
+        properties: { note: 'forged' },
+        activityId: collectorFact.activityId,
+      };
+      const member = handleCaller(workspaceId, memberId, ['assert_fact', 'supersede_fact']);
+      // Same identity on the collector's Activity: this used to resolve as the collector's own
+      // origin and supersede its Fact without opening a Conflict (I5).
+      await expect(
+        dispatchCapability({ pool }, member, 'assert_fact', forged),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(
+        dispatchCapability({ pool }, member, 'supersede_fact', {
+          ...forged,
+          factId: collectorFact.id,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(
+        dispatchCapability({ pool }, humanCaller(workspaceId, memberId), 'supersede_fact', {
+          ...forged,
+          factId: collectorFact.id,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      // An Activity that does not exist is refused the same way (no existence oracle).
+      await expect(
+        dispatchCapability({ pool }, member, 'assert_fact', {
+          ...forged,
+          activityId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+
+      await withWorkspace(pool, { workspaceId, principalId: memberId }, async (client) => {
+        const rows = await client.query<{ id: string; superseded_at: Date | null }>(
+          'select id, superseded_at from links where workspace_id = $1 and source_object_id = $2 and target_object_id = $3',
+          [workspaceId, sourceObjectId, targetObjectId],
+        );
+        expect(rows.rows).toHaveLength(1);
+        expect(rows.rows[0]?.id).toBe(collectorFact.id);
+        expect(rows.rows[0]?.superseded_at).toBeNull();
+      });
+    });
+
+    it('assert_fact / supersede_fact on an Activity the caller started are accepted, on either channel', async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const otherTargetObjectId = await makeObject('test.fact-handlers-other-target');
+      const agent = handleCaller(workspaceId, memberId, ['assert_fact', 'supersede_fact']);
+
+      const first = (await dispatchCapability({ pool }, agent, 'assert_fact', {
+        sourceObjectId,
+        targetObjectId,
+        linkType: 'has_note',
+        properties: { note: 'v1' },
+      })) as { id: string; activityId: string };
+      const grouped = (await dispatchCapability({ pool }, agent, 'assert_fact', {
+        sourceObjectId,
+        targetObjectId: otherTargetObjectId,
+        linkType: 'has_note',
+        properties: { note: 'v1' },
+        activityId: first.activityId,
+      })) as { activityId: string };
+      expect(grouped.activityId).toBe(first.activityId);
+
+      // The person on the console may use the Activity their agent's Handle (obo = the person)
+      // started — both are the same calling principal.
+      const replacement = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, memberId),
+        'supersede_fact',
+        {
+          factId: first.id,
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: 'v2' },
+          activityId: first.activityId,
+        },
+      )) as { supersedesId: string | null; activityId: string };
+      expect(replacement.supersedesId).toBe(first.id);
+      expect(replacement.activityId).toBe(first.activityId);
     });
   },
 );

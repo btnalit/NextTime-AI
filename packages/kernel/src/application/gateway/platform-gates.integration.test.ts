@@ -24,7 +24,7 @@ import { internalAuthorizationHeader } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
@@ -41,7 +41,9 @@ import {
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import {
+  getPublishedOperation,
   importManifest,
+  proposeOperation,
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
@@ -906,6 +908,89 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(await countGateLinkRows(GATE_ID_AMBIGUOUS)).toBe(0);
         expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
+      });
+
+      // R-08 (review 2026-10-02): enabling a gate instance that links to this Gatekeeper used to
+      // import over a pending revision draft, drop its `draftOf`, and publish it — v1 and v2 both
+      // `published`, and `getPublishedOperation` returned either one.
+      it('R-08: enabling over a pending revision draft leaves exactly one published row for the Operation — the newest — and retires v1', async () => {
+        const GATE_ID_REVISION = 'fixture-mcp-gate-r08-revision';
+        const ENDPOINT = 'http://127.0.0.1:1/r08-revision/';
+
+        const legacyGatekeeperId = await seedLegacyGatekeeper({
+          name: 'r08-legacy-gate',
+          transportKind: 'cli',
+          target: 'r08',
+          endpoint: ENDPOINT,
+          operations: [STALE_EXECUTE_OP],
+        });
+        const inWorkspace = <T>(fn: (client: PoolClient) => Promise<T>) =>
+          withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, fn);
+        const v1 = await inWorkspace((client) =>
+          getPublishedOperation(client, workspaceId, legacyGatekeeperId, EXECUTE_OP.name),
+        );
+        expect(v1?.version).toBe(1);
+
+        // An agent's v2 revision draft is pending against the published v1.
+        const revision = await inWorkspace(async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.r08_propose',
+            principalId: ownerPrincipalId,
+          });
+          return proposeOperation(client, workspaceId, {
+            gatekeeperId: legacyGatekeeperId,
+            operation: { ...STALE_EXECUTE_OP, mode: 'observe' },
+            proposedBy: { id: ownerPrincipalId, kind: 'agent' },
+            activityId: activity.id,
+          });
+        });
+        expect(revision).toMatchObject({ version: 2, status: 'draft', draftOf: v1?.id });
+
+        const announced = await announce({
+          gateId: GATE_ID_REVISION,
+          connector: 'fixture-mcp',
+          transportKind: 'http',
+          target: 'http://fixture-mcp-r08:9000',
+          endpoint: ENDPOINT,
+          displayName: 'Fixture MCP (R-08)',
+          operations: [EXECUTE_OP],
+        });
+        expect(announced.statusCode).toBe(200);
+        await callAsAdmin('update_gate_instance', { gateId: GATE_ID_REVISION, status: 'enabled' });
+
+        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: GATE_ID_REVISION,
+        });
+        expect(enabled.linkedExisting).toBe(true);
+        expect(enabled.gatekeeperId).toBe(legacyGatekeeperId);
+        expect(enabled.publishedOperationNames).toEqual([EXECUTE_OP.name]);
+
+        const rows = await withAdminClient(pool, async (client) => {
+          const result = await client.query<{
+            id: string;
+            properties: { status: string; version?: number };
+          }>(
+            `select id, properties from objects
+             where workspace_id = $1 and object_type = 'Operation'
+               and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3`,
+            [workspaceId, legacyGatekeeperId, EXECUTE_OP.name],
+          );
+          return result.rows;
+        });
+        const published = rows.filter((row) => row.properties.status === 'published');
+        expect(published).toHaveLength(1);
+        expect(published[0]?.id).toBe(revision.id);
+        expect(published[0]?.properties.version).toBe(2);
+        expect(rows.find((row) => row.id === v1?.id)?.properties.status).toBe('deprecated');
+
+        // The live classification is the imported v2 (the gate's declaration replaced the
+        // agent's draft content), still recorded as a revision of v1.
+        const live = await inWorkspace((client) =>
+          getPublishedOperation(client, workspaceId, legacyGatekeeperId, EXECUTE_OP.name),
+        );
+        expect(live).toMatchObject({ id: revision.id, version: 2, draftOf: v1?.id });
+        expect(live?.operation.blast_radius).toBe(EXECUTE_OP.blast_radius);
+        expect(live?.operation.auto_approvable).toBe(EXECUTE_OP.auto_approvable);
       });
     });
 

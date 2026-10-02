@@ -111,7 +111,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 | 治理页显示"该能力尚未上线 Not live yet" | S3.11 内核 PR 是否已合并部署 | `isNotFoundError`——不是配置错误，是两条并行 PR 尚未都上线 |
 | 治理页显示"需要 owner/operator 权限" | 该 principal 的角色；侧栏角色徽标 | 对应 capability 的 `minRole` |
 | 成员页创建/轮换后密钥找不到了 | 密钥只显示一次，关闭抽屉前是否已复制 | 设计如此（S3.11："API key 只显示一次"）；忘记复制需再次 `rotate_api_key` |
-| 侧栏连接点为黄色 Reconnecting | kernel 是否重启、caddy `/ws` 反代 | `WsClient` 自动重连并从最后 sequence 续订 |
+| 侧栏连接点为黄色 Reconnecting | kernel 是否重启、caddy `/ws` 反代 | `WsClient` 按指数退避加抖动自动重连（1 s 起、翻倍、30 s 封顶，重连认证成功后归零），并从最后 sequence 续订。会话本身失效时不重连：`-32001`（登出、管理员重置密码、停用用户或成员、会话过期）或 HTTP `unauthorized` 直接回登录页；`-32002`（本工作区成员资格没了）重读 `/api/auth/me`，换到其余工作区或"你还不属于任何工作区"页 |
 | 系统接入提交后 `manifest_fetch_failed` / `gatekeeper_timeout` / `gatekeeper_error` | 横幅里门的原文 | 502/504：门或 manifest URL 未响应；修 endpoint/manifestSource 后重试 |
 | 系统接入提交后字段变红（400） | 字段下的说明 | `invalid_params`：例如选了 connected_account 却没填凭证 |
 | "Registered systems" 只显示 50 个 | 无解，内核 `search` 无分页 | 见"已知缺口"；"Health & operations" 详情抽屉（`get_gatekeeper`）不受此限制，但需要该 capability 已部署 |

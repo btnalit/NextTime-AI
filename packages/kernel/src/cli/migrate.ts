@@ -24,6 +24,15 @@ function describeFile(file: MigrationFile): string {
 async function run(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run');
   const pool = createPool();
+  // A migration may `raise notice` what it changed (core 0034 reports how many duplicate
+  // published Operation rows it deprecated). node-postgres drops server notices unless a listener
+  // is attached. Only notices a PL/pgSQL RAISE produced are printed: `drop … if exists` on a
+  // fresh database emits "does not exist, skipping" notices that are just noise.
+  pool.on('connect', (client) => {
+    client.on('notice', (notice) => {
+      if (notice.where?.includes('at RAISE')) console.log(`migrate: notice: ${notice.message}`);
+    });
+  });
 
   try {
     const result = await runMigrations(pool, defaultMigrationsDir(), { dryRun });

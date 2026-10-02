@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
+import { ForbiddenError } from './authorize.js';
 import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
 import { SourceIdentityConflictError } from './ingest-handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -58,6 +59,29 @@ function handleCaller(
       jti: randomUUID(),
       iat: now,
       exp: now + 600,
+    },
+  };
+}
+
+/** A human-channel caller (the console / an API key) — same shape `fact-handlers.integration.
+ *  test.ts` uses. */
+function humanCaller(
+  workspaceId: string,
+  principalId: string,
+  role: 'owner' | 'member',
+): ResolvedCaller {
+  return {
+    channel: 'human',
+    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+    session: {
+      workspaceId,
+      id: randomUUID(),
+      principalId,
+      kind: 'web',
+      onBehalfOf: principalId,
+      status: 'active',
+      createdAt: new Date(),
+      expiresAt: null,
     },
   };
 }
@@ -463,6 +487,236 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, hostObjectId],
         );
         expect(visible.rows.length).toBeGreaterThan(0);
+      });
+    });
+
+    // Review 2026-10-02 R-02 / D-03 (`provenance-anchor-guard.ts`): a caller observes only through
+    // a Source it owns, and only on an Activity it started — for a Handle, "it" is the principal
+    // the Handle acts for. Kernel-internal pairings of a Source and an Activity of different owners
+    // (gatekeeper observe/apply, worker_result) do not go through this handler and are unaffected.
+    describe('R-02: provenance anchors require ownership (Source owner, Activity starter)', () => {
+      const hostname = `r02-host-${randomUUID()}`;
+      const collectorItems = [
+        { objectType: 'Host', identity: { hostname } },
+        {
+          objectType: 'Container',
+          identity: { composeProjectId: `r02-project-${hostname}`, serviceName: 'web' },
+          links: [{ linkType: 'runs_on', target: { objectType: 'Host', identity: { hostname } } }],
+        },
+      ];
+      let collectorSourceId: string;
+      let collectorActivityId: string;
+
+      /** Every `source_id` observed on `activityId`, read past RLS so a private Source shows too. */
+      async function sourcesObservedOn(activityId: string): Promise<string[]> {
+        const rows = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query<{ source_id: string }>(
+              'select distinct source_id from observations where workspace_id = $1 and activity_id = $2',
+              [workspaceId, activityId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        return rows.rows.map((row) => row.source_id);
+      }
+
+      async function observationCount(sourceId: string): Promise<number> {
+        const rows = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query<{ n: number }>(
+              'select count(*)::int as n from observations where workspace_id = $1 and source_id = $2',
+              [workspaceId, sourceId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        return rows.rows[0]?.n ?? 0;
+      }
+
+      async function activeFactsOn(activityId: string): Promise<number> {
+        const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `select id from links where workspace_id = $1 and activity_id = $2
+               and superseded_at is null and invalidated_at is null`,
+            [workspaceId, activityId],
+          ),
+        );
+        return rows.rows.length;
+      }
+
+      beforeAll(async () => {
+        const collector = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        const source = (await dispatchCapability({ pool }, collector, 'register_source', {
+          kind: 'host-inventory-collector',
+          name: 'r02-collector',
+          visibility: 'workspace',
+        })) as { id: string };
+        collectorSourceId = source.id;
+        const run = (await dispatchCapability({ pool }, collector, 'submit_observations', {
+          sourceId: collectorSourceId,
+          observations: collectorItems,
+        })) as SubmitObservationsResult;
+        expect(run.factsAsserted).toBe(1);
+        collectorActivityId = run.activityId;
+      });
+
+      it("a member cannot submit to the collector's Source — 403, nothing recorded, no Fact retired", async () => {
+        const member = handleCaller(workspaceId, memberId, INGEST_CAPABILITIES);
+        const before = await observationCount(collectorSourceId);
+
+        await expect(
+          dispatchCapability({ pool }, member, 'submit_observations', {
+            sourceId: collectorSourceId,
+            observations: collectorItems,
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+        // The bulk-invalidation shape (an empty complete window) is refused the same way.
+        await expect(
+          dispatchCapability({ pool }, member, 'submit_observations', {
+            sourceId: collectorSourceId,
+            observations: [],
+            window: { complete: true, objectTypes: ['Container'] },
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+        // The person on the human channel is refused exactly like an agent acting for them.
+        await expect(
+          dispatchCapability(
+            { pool },
+            humanCaller(workspaceId, memberId, 'member'),
+            'submit_observations',
+            { sourceId: collectorSourceId, observations: collectorItems },
+          ),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+
+        expect(await observationCount(collectorSourceId)).toBe(before);
+        expect(await activeFactsOn(collectorActivityId)).toBe(1);
+      });
+
+      it("a member cannot observe their own private Source on the collector's Activity — 403, the collector's Facts stay visible", async () => {
+        const member = handleCaller(workspaceId, memberId, INGEST_CAPABILITIES);
+        const own = (await dispatchCapability({ pool }, member, 'register_source', {
+          kind: 'test.r02-member',
+          name: 'r02-member-private',
+          visibility: 'private',
+        })) as { id: string };
+
+        await expect(
+          dispatchCapability({ pool }, member, 'submit_observations', {
+            sourceId: own.id,
+            activityId: collectorActivityId,
+            observations: [{ objectType: 'Host', identity: { hostname } }],
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+
+        expect(await sourcesObservedOn(collectorActivityId)).toEqual([collectorSourceId]);
+        // Another person still sees the collector's Fact (link_visible_to_caller, core 0013).
+        expect(await activeFactsOn(collectorActivityId)).toBe(1);
+      });
+
+      it('an unknown activityId is refused with the same 403 (no existence oracle)', async () => {
+        const member = handleCaller(workspaceId, memberId, INGEST_CAPABILITIES);
+        const own = (await dispatchCapability({ pool }, member, 'register_source', {
+          kind: 'test.r02-member',
+          name: 'r02-member-unknown-activity',
+          visibility: 'workspace',
+        })) as { id: string };
+        await expect(
+          dispatchCapability({ pool }, member, 'submit_observations', {
+            sourceId: own.id,
+            activityId: randomUUID(),
+            observations: [{ objectType: 'Host', identity: { hostname: `r02-${randomUUID()}` } }],
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+        expect(await observationCount(own.id)).toBe(0);
+      });
+
+      it('own Source plus own Activity succeeds — phases of one run share the Activity the first phase started', async () => {
+        const member = handleCaller(workspaceId, memberId, INGEST_CAPABILITIES);
+        const own = (await dispatchCapability({ pool }, member, 'register_source', {
+          kind: 'test.r02-member',
+          name: 'r02-member-workspace',
+          visibility: 'workspace',
+        })) as { id: string };
+        const memberHost = `r02-member-host-${randomUUID()}`;
+
+        const phase1 = (await dispatchCapability({ pool }, member, 'submit_observations', {
+          sourceId: own.id,
+          observations: [{ objectType: 'Host', identity: { hostname: memberHost } }],
+        })) as SubmitObservationsResult;
+        const phase2 = (await dispatchCapability({ pool }, member, 'submit_observations', {
+          sourceId: own.id,
+          activityId: phase1.activityId,
+          observations: [
+            {
+              objectType: 'Container',
+              identity: { composeProjectId: `r02-project-${memberHost}`, serviceName: 'web' },
+              links: [
+                {
+                  linkType: 'runs_on',
+                  target: { objectType: 'Host', identity: { hostname: memberHost } },
+                },
+              ],
+            },
+          ],
+        })) as SubmitObservationsResult;
+
+        expect(phase2.activityId).toBe(phase1.activityId);
+        expect(phase2.factsAsserted).toBe(1);
+        expect(await sourcesObservedOn(phase1.activityId)).toEqual([own.id]);
+      });
+
+      it("an agent Handle acting for a person writes to that person's Source and Activity", async () => {
+        // The person registers a Source and opens an Activity on the human channel …
+        const person = humanCaller(workspaceId, ownerId, 'owner');
+        const personSource = (await dispatchCapability({ pool }, person, 'register_source', {
+          kind: 'test.r02-person',
+          name: 'r02-person-source',
+          visibility: 'workspace',
+        })) as { id: string };
+        const personHost = `r02-person-host-${randomUUID()}`;
+        const first = (await dispatchCapability({ pool }, person, 'submit_observations', {
+          sourceId: personSource.id,
+          observations: [{ objectType: 'Host', identity: { hostname: personHost } }],
+        })) as SubmitObservationsResult;
+
+        // … and an agent's Handle on their behalf (obo = the person) uses both.
+        const agent = handleCaller(workspaceId, ownerId, INGEST_CAPABILITIES);
+        const second = (await dispatchCapability({ pool }, agent, 'submit_observations', {
+          sourceId: personSource.id,
+          activityId: first.activityId,
+          observations: [
+            {
+              objectType: 'Container',
+              identity: { composeProjectId: `r02-project-${personHost}`, serviceName: 'web' },
+              links: [
+                {
+                  linkType: 'runs_on',
+                  target: { objectType: 'Host', identity: { hostname: personHost } },
+                },
+              ],
+            },
+          ],
+        })) as SubmitObservationsResult;
+        expect(second.factsAsserted).toBe(1);
+        expect(await sourcesObservedOn(first.activityId)).toEqual([personSource.id]);
+
+        // The same agent still cannot reach the collector's Source or Activity.
+        await expect(
+          dispatchCapability({ pool }, agent, 'submit_observations', {
+            sourceId: collectorSourceId,
+            observations: collectorItems,
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+        await expect(
+          dispatchCapability({ pool }, agent, 'submit_observations', {
+            sourceId: personSource.id,
+            activityId: collectorActivityId,
+            observations: [{ objectType: 'Host', identity: { hostname: personHost } }],
+          }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
       });
     });
   },

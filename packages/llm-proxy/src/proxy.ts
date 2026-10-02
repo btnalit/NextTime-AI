@@ -26,8 +26,9 @@ import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } 
  * (capped), require it to parse as a JSON object with a non-empty string `model` (400 otherwise —
  * this proxy is JSON-only, no passthrough for opaque/non-JSON bodies), 403 if `model` is not
  * whitelisted, and — the one deliberate body mutation (S1.7 task brief) — for an
- * `openai-completions`/`openai-responses` streaming request, force `stream_options.include_usage:
- * true` so the final chunk carries usage → strip both `authorization` and `x-api-key` from the
+ * `openai-completions` streaming request, force `stream_options.include_usage: true` so the final
+ * chunk carries usage (an `openai-responses` stream carries it in `response.completed` unasked,
+ * R-10) → strip both `authorization` and `x-api-key` from the
  * forwarded headers (never let a client sneak a Handle upstream through the header the provider
  * *isn't* configured to use) and set the provider's configured header to the real key from
  * `process.env[api_key_env]` → forward to `upstream_base_url` → stream the response back
@@ -149,7 +150,7 @@ export class InvalidRequestBodyError extends Error {
  *  action route per provider (see `ACTION_PATH_BY_API`); an empty body, non-JSON content, a
  *  non-object body, or a missing/empty `model` field all throw `InvalidRequestBodyError` (400),
  *  never silently pass through to upstream. Applies the one deliberate mutation once the body is
- *  known-valid: for `openai-completions`/`openai-responses` with `stream: true`, forces
+ *  known-valid: for `openai-completions` with `stream: true`, forces
  *  `stream_options.include_usage = true`. */
 function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedRequestBody {
   let parsed: unknown;
@@ -169,7 +170,11 @@ function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedR
   }
   const isStreaming = obj.stream === true;
 
-  if (provider.api !== 'anthropic-messages' && isStreaming) {
+  // R-10: Chat Completions only. The Responses API reports usage in its terminal stream event
+  // unasked, and its `stream_options` has no `include_usage` (official reference: only
+  // `include_obfuscation`) — injecting an undocumented field there only risks a 400 for a valid
+  // request.
+  if (provider.api === 'openai-completions' && isStreaming) {
     const existingStreamOptions =
       typeof obj.stream_options === 'object' && obj.stream_options !== null
         ? (obj.stream_options as Record<string, unknown>)

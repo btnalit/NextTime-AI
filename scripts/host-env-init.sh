@@ -323,6 +323,14 @@ chmod 750 "$NEXTTIME_DATA/backups"
 # takes other-users access AWAY (2026-10-02 review R-32: an earlier version ran `chmod -R o+rX`
 # here, which made that key world-readable on the host). certmagic's own writes are 0600/0700
 # anyway; this only fixes files that already exist, which is exactly what an affected host needs.
+#
+# The tree is chowned to root FIRST: caddy is root but runs with `cap_drop: [ALL]`, so it has no
+# DAC_OVERRIDE and is held to plain owner/group/other bits like any other uid. A host whose caddy/
+# directory itself was left 10001-owned by an earlier version of this script (750) only worked
+# because of the old `o+rX` — removing other-users access there locked caddy out of its own CA
+# ("open /data/caddy/pki/authorities/local/root.crt: permission denied", v0.36.0 host apply).
+chown -R 0:0 "$NEXTTIME_DATA/caddy"
+chmod 700 "$NEXTTIME_DATA/caddy"
 chmod -R o-rwx "$NEXTTIME_DATA/caddy"
 
 # --- config/: left root-owned but made world-readable (it holds no secrets — provider keys ----
@@ -353,7 +361,7 @@ echo "host-env-init: pgdata/ owner -> $(stat -c '%u:%g' "$NEXTTIME_DATA/pgdata" 
 echo "host-env-init: secrets/pg_password -> mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?') (expect 640, group ${POSTGRES_GID})"
 echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"
 echo ""
-echo "host-env-init: caddy/ left root-owned; \`chmod -R o-rwx\` applied (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy"); files readable by others: $(find "$NEXTTIME_DATA/caddy" -perm -o=r | wc -l), expect 0) — backups read it via DAC_READ_SEARCH, see docs/runbooks/backup-restore.md"
+echo "host-env-init: caddy/ chowned 0:0 (caddy is root without DAC_OVERRIDE), \`chmod -R o-rwx\` applied (owner mode now: $(stat -c '%u:%g %a' "$NEXTTIME_DATA/caddy"), expect 0:0 700; files readable by others: $(find "$NEXTTIME_DATA/caddy" -perm -o=r | wc -l), expect 0) — backups read it via DAC_READ_SEARCH, see docs/runbooks/backup-restore.md"
 echo ""
 echo "host-env-init: left untouched: secrets/ (dir itself, and every secrets/*.token /*.key)"
 echo "host-env-init: done (idempotent — safe to re-run)"

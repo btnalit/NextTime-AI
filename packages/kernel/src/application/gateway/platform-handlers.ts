@@ -41,6 +41,7 @@ import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog } from './models-catalog-handler.js';
+import { publishSessionKick } from './session-revocation.js';
 
 /**
  * application/gateway/platform-handlers: the `scope: 'platform'` capabilities (P-A1;
@@ -537,8 +538,12 @@ export const setUserStatusHandler: CapabilityHandler = async (
     resourceType: 'user',
     resourceId: input.userId,
     // P-A2 (design §8 "停用用户 … 入口容器 stop"; a P-A1 gap): once the sessions are gone, stop
-    // the user's resident entry containers too — best-effort, after commit.
+    // the user's resident entry containers too — best-effort, after commit. R-05: and close the
+    // user's open /ws sockets — console ones by user, API-key ones by membership Principal.
     afterCommit: async () => {
+      if (input.status === 'disabled') {
+        publishSessionKick({ userId: input.userId, principalIds });
+      }
       await stopEntryContainers(principalIds);
       return result;
     },
@@ -576,10 +581,17 @@ export const resetUserPasswordHandler: CapabilityHandler = async (
   // password (or a stolen cookie) is out until they log in with the new temporary one.
   await revokeConsoleSessions(client, input.userId);
   await revokeWorkspaceSessions(client, input.userId);
+  const result = { userId: input.userId, temporaryPassword };
   return {
-    result: { userId: input.userId, temporaryPassword },
+    result,
     resourceType: 'user',
     resourceId: input.userId,
+    // R-05: once committed, the console sockets those sessions opened close too. API-key
+    // sockets stay: a password reset does not invalidate a key.
+    afterCommit: async () => {
+      publishSessionKick({ userId: input.userId });
+      return result;
+    },
   };
 };
 
