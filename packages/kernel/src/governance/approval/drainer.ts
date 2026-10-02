@@ -22,6 +22,14 @@ export interface ActionExecutorResult {
   readonly resultMetadata?: Record<string, unknown>;
   /** Failure reason on `ok: false` — threaded through to `markActionRequestFailed`. */
   readonly reason?: string;
+  /** `ok: false` only: the effect's outcome is *unknown*, not failed — the gate call timed out and
+   *  the gate may still finish (real-model regression 2026-10-02: an ActionRequest marked `failed`
+   *  whose container restart completed anyway). The drainer then writes no terminal state and
+   *  leaves the row `executing`; the stale-executing reaper (`application/gateway/action-
+   *  executor.ts`'s `reapStaleExecutingActionRequests`) replays `apply` later under the same
+   *  `actionRequestId`, and the gate's idempotency store returns the stored result if the first
+   *  call completed. */
+  readonly indeterminate?: boolean;
 }
 
 /** The port `drainGatekeeper` calls to actually perform one `executing` ActionRequest's effect
@@ -107,6 +115,13 @@ export class ApprovalDrainer {
         );
 
         const result = await this.deps.executor.execute(executing);
+
+        // Outcome unknown (see `ActionExecutorResult.indeterminate`): no terminal transition —
+        // the row stays `executing` for the stale-executing reaper to resolve by idempotent replay.
+        if (!result.ok && result.indeterminate) {
+          processed += 1;
+          continue;
+        }
 
         await this.deps.withTransaction(workspaceId, principalId, (client) =>
           result.ok

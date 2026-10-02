@@ -367,7 +367,7 @@ q2_provenance_step() {
 
   # Independent graph-side rediscovery of the same Fact (not parsed out of the chat transcript) —
   # identical to scripts/accept_s3.sh's own chat_dependency_step reasoning.
-  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container","limit":200}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || step_fail q2-provenance "search HTTP $status: $(parse_kv "$out" BODY)"
   kernel_container_id=$(parse_kv "$out" EXTRACTED)

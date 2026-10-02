@@ -119,14 +119,14 @@
   版本已知问题（`host-accept-real-model.md` §8 / §9）。首轮（2026-09-18，目标主机，各 10 次；
   供应商 / 模型与费用只在 `docs/private/real-model-2026-09-18.md`）：
 
-  | 场景 | v0.13.0 | v0.13.1（#208 内核修复后复跑） | v0.13.2（#211 后复跑） |
-  |---|---|---|---|
-  | docker_restart | 0/10（动作已执行、Task `no_result`：S5.1 `reject` 拒绝 Worker 附带的 Fact 断言、整份结果契约被拒——遗留 30 第二根因） | 7/10（3 次失败全是入口 agent 没派工 `task=none`，模型行为；7 次派工的全部完成，修复确认） | 7/10（同样 3 次 `task=none`；派工的 7 次全部完成）——**v0.13.2 已知问题**：入口 agent 约三成轮次不派工，归 prompt 契约（S5.4）而非平台 |
-  | api_observe | 10/10 | 10/10 | 10/10 |
-  | ssh_run_approve | 3/10（7 次同一根因） | 5/10（5 次失败 = handler 预校验整单拒绝：Fact 引用元本体类型 I16 ×2、`proposedOperations` 的 `gatekeeperId` 是模型编的 ×3——#211） | **10/10** |
-  | ssh_run_auto | 1/1 | 0/1（同上 ×1） | 1/1 |
-  | dependency_chat | 10/10 | —（未复跑） | — |
-  | make demo | 0/1（Q3 `interrupted`：门在对话后才连接，常驻容器重建撞上 Turn——遗留 44） | 1/1（#210 后：Q1 20 s、Q2 20 s、Q3 62 s，总 402 s 含 267 s 镜像构建，`BUDGET ok`；前两次尝试在 preflight 构建 collector 镜像时 registry ECONNRESET） | — |
+  | 场景 | v0.13.0 | v0.13.1（#208 内核修复后复跑） | v0.13.2（#211 后复跑） | v0.34.0（2026-10-02，S9 D0；中间 21 个版本未跑） |
+  |---|---|---|---|---|
+  | docker_restart | 0/10（动作已执行、Task `no_result`：S5.1 `reject` 拒绝 Worker 附带的 Fact 断言、整份结果契约被拒——遗留 30 第二根因） | 7/10（3 次失败全是入口 agent 没派工 `task=none`，模型行为；7 次派工的全部完成，修复确认） | 7/10（同样 3 次 `task=none`；派工的 7 次全部完成）——**v0.13.2 已知问题**：入口 agent 约三成轮次不派工，归 prompt 契约（S5.4）而非平台 | 7/10——**已知问题，已归因**：1 次平台缺陷（门 `apply` 15 s 超时把已执行的重启记成 `failed`，遗留 104，#382）；2 次 `task=none` 是入口 agent 从图谱与容器启动时间看出上一轮刚重启过、把同一句请求判为重复——场景设计问题（v0.13.2 的 `task=none` 很可能同一模式），第 2 轮起的请求改为注明"新的请求" |
+  | api_observe | 10/10 | 10/10 | 10/10 | 10/10 |
+  | ssh_run_approve | 3/10（7 次同一根因） | 5/10（5 次失败 = handler 预校验整单拒绝：Fact 引用元本体类型 I16 ×2、`proposedOperations` 的 `gatekeeperId` 是模型编的 ×3——#211） | **10/10** | 10/10 |
+  | ssh_run_auto | 1/1 | 0/1（同上 ×1） | 1/1 | 1/1 |
+  | dependency_chat | 10/10 | —（未复跑） | — | 10/10 |
+  | make demo | 0/1（Q3 `interrupted`：门在对话后才连接，常驻容器重建撞上 Turn——遗留 44） | 1/1（#210 后：Q1 20 s、Q2 20 s、Q3 62 s，总 402 s 含 267 s 镜像构建，`BUDGET ok`；前两次尝试在 preflight 构建 collector 镜像时 registry ECONNRESET） | — | 1/1（首跑 q2 FAIL：脚本只读 `search` 第一页 50 条，主机 71 个 Container、kernel 不在其中——脚本缺陷，加 `limit:200` 后重跑 Q1 23 s、Q2 24 s、Q3 34 s 全过） |
 
   真实模型一轮把两条 fake 路径永远测不到的平台缺陷逼了出来（fake-llm 的脚本化 Worker 从不附带
   越界断言、fake 场景的门都在首轮对话前接好）——这正是 S5.7 要常态化的原因。
@@ -239,6 +239,12 @@
 **维护者决定（2026-09-22，原阻塞项 ①–⑥）**：① S6-B 控制台写供应商密钥**不过审批**——这是管理面配置，不是 agent 动作（底线的"必经审批"针对 ActionRequest → 门执行）；易用性优先、不加过度限制：只写不读（列表只显示"已设置"）、审计记谁 / 何时 / 哪个供应商而不记值，不另加重输密码；要守的不变量是 agent 永远拿不到 llm-admin token（`issue_llm_admin_token` 只对平台管理员控制台会话、不在任何 Handle 范围，已有守卫）。S7-A 实现。② 镜像发布与 ③ 遗留 6（主机备份定时器）**排到最后**，稳定后再议（主机本身即部署验证环境）。④ 遗留 45 **不做**（隔离只增不减；owner 的离职场景由禁用成员 / `purge_user` 覆盖）。⑤ 遗留 50 **不接受** `${NEXTTIME_DATA}/config/` owner 改 10001：`config/` 里是 `handle.pub` / `egress-sources.json` 等信任根，靠"每个新文件都记得在 llm-proxy 里再挂只读"守不住；`models.json` 挪到专用目录（S7-A），`host-llm-proxy-init.sh` 不再 chown `config/`——**S7-A 合入发版前主机不应用 v0.14.0**（§5c 末的主机步骤含该 chown）。⑥ 推送 / 开 PR：已完成（#217）。
 
 **当前波次：S9 交付线**（2026-10-02 立项，`development-tasks.md` §5g）：D0 验证债（v0.34.0 真实模型回归）→ D1 版本化镜像发布 → D2 发版应用脚本入库 → D3 干净主机安装首跑 → D4 升级可逆性实测。异地备份不在本阶段（遗留 102 推迟）；扩展线（能力包）在交付线之后，开工时再定 §5f 问题 2–4。
+
+| 项 | 状态 |
+|---|---|
+| D0 | **完成**（2026-10-02，主机 v0.34.0）：docker_restart 7/10、api_observe 10/10、ssh_run_approve 10/10、ssh_run_auto 1/1、dependency_chat 10/10、make demo 1/1（§2.2）；逼出平台缺陷遗留 104（#382）与同类风险 105，另修两处验收脚本缺陷（本 PR） |
+| D1 | **已合入**（#379）：`publish-images` 手动补发 v0.34.0，11 个镜像全部构建、推送、签名成功（CI 半段验证）；主机 `pull-images.sh` 实测待 GHCR 包可见性决定（私有 + 主机 read:packages 令牌，或公开——公开后不可改回） |
+| D2–D4 | 未开始 |
 
 **S8 产品化与修复：完成**（2026-09-23 立项，`development-tasks.md` §5e；依据 `ui-audit-2026-09-23.md`）。维护者决定 F1–F6：不加新功能（`promote_template` 继续推后）；审计问题全部进 S8；组件地基 Radix 原语 + shadcn/ui 式组件 + Tailwind v4，主题沿用 §5.9 令牌；工作单元改为六条用户旅程，每条配 Playwright 旅程测试；CI 加三档截图回归、axe、文案守卫，界面中文为主；内核只加读模型（`execution_readiness`、`resolve_refs`、选择器数据源）。
 
@@ -393,6 +399,8 @@
 | 101 | 仓库的 Dependabot **安全更新**开关是关的（`automated-security-fixes: enabled=false`，告警照常产生但从不开 PR）：本仓库约定"Dependabot 安全更新 PR 由 `auto-merge.yml` 分流"，实际这条分流从没有输入——2026-09-28 至 10-01 积了 28 条运行时依赖告警（fastify 4 高、undici 3 高等）无人处理，直到人工查看 | P2 | 决定 | 已关闭（2026-10-02 维护者决定：**不打开**安全更新开关。告警照常产生、作为输入；改为会话在每次发版前（及每个波次开工时）用 `gh api repos/{owner}/{repo}/dependabot/alerts?state=open` 查看开放告警，按 #371 的方式手工修；`runbooks/automation.md` 与仓库 `CLAUDE.md` 原先写着"开关已开、由 `auto-merge.yml` 分流"，与事实不符，已同步改正——`auto-merge.yml` 保留，开关以后若打开即可直接生效） |
 | 102 | 备份只在本机：`backups/` 与 `pgdata/` 同在主机根 LV，主机或磁盘丢失即备份一并丢失；`files-*.tgz` 含供应商 API key（遗留 58），异地转存需按密钥材料加密 | P2 | 推迟 | 开放·推迟（2026-10-01 收尾波次 C10 记录；2026-10-02 维护者决定**异地备份先不做**。现状：compose `backup` 服务每日 dump + 打包、各留 7 份，发版前 dump 留最新 3 份，`check-backup-freshness.sh` 是发版应用第一步，恢复路径已在主机实测（#373）——覆盖误操作与升级失败，不覆盖主机或磁盘整体丢失。重开时要定：放哪（NAS / 对象存储）、按密钥材料加密（`files-*.tgz` 含供应商 key）、保留几份） |
 | 103 | `observations` 表无保留策略：主机上 2026-09-24 起每天新增 5.5–7.6 万行（采集器周期性提交），10-01 已 49.6 万行 / 83 MB，是库里最大的表；每日 dump 从 09-27 的 22 MB 涨到 10-01 的 38 MB。只有整个工作区清除时才删 | P3 | 决定 | 开放（2026-10-01 收尾波次 C10 查备份增长时发现。观察是溯源证据，不能简单按时间删——需要定语义：例如未变化的重复观察压缩成区间、只保留被 Fact / 证据引用的、或按 Source 设保留期。磁盘余量充足（约 97 GB），不急） |
+| 104 | 门 `apply` 超时被当成失败：内核门客户端所有调用共用 15 s 超时，模型给 `container.restart` 传 `timeoutSeconds: 30`（验收 fixture 不响应 SIGTERM，docker 等满 30 s），ActionRequest 在 15 s 时被记 `failed`，门继续执行、容器实际重启了——记录状态与真实副作用不一致；ssh 长命令同类 | P1 | S9 D0 | 已关闭（2026-10-02 v0.34.0 真实模型回归 docker_restart 第 1 次发现，本 PR：`apply` 独立 60 s 预算，其余门调用仍 15 s；`apply` 超时 = 结果未知——执行器返回 `indeterminate`，drainer 不写终态、行留在 `executing`，由既有 stale-executing reaper 以同一 `actionRequestId` 幂等重放（门端先预留、完成后重放返回已存结果）；重放仍超时则记 `failed`、原因以 "outcome unknown" 开头，有界不悬挂。同类未覆盖：apply 中途的 `network_error`（门已收到、连接被重置）仍记 `failed`；首次超时不写审计行，重建靠 `executing_at` → `executed_at` 间隔与结果里的 `replayed: true`） |
+| 105 | 自动批准操作的内联执行等待可能超过扩展侧的 kernel-client 超时：`request_action` 对 `auto_approved` 行走 `tryExecuteInline` → `drainGatekeeper` → `apply`，遗留 104 之后 `apply` 最长 60 s，而 platform-extension 的 kernel-client 单次调用 30 s 超时——长耗时的自动批准动作会让模型看到调用失败、动作却在执行，与遗留 104 同一模式 | P2 | S9 | 开放（2026-10-02 遗留 104 复审时发现；本次回归的触发场景是 `require_approval`，不走内联路径，未复现。修法：限制内联**等待**而非 apply——超过预算即返回 `executing`（P2-8 已让这个返回如实），apply 本身照常完成） |
 
 ## 5. 更新规则
 

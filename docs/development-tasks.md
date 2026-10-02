@@ -3275,6 +3275,23 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | D3 干净主机安装首跑 | `drill-install.sh` 在一台干净主机（或虚拟机）上用发布镜像首次实跑，跑通旅程 ① | 安装耗时、手动步骤数记入私有记录；runbook 顺序与脚本一致 |
 | D4 升级可逆性 | `drill-upgrade.sh` 改用发布镜像，补拿自 v0.16.0 起缺失的 PROBE（core 0030–0033、governance 0012、worker 0003） | `release.md` §6 的"读代码推理"行改为实测 |
 
+### D0 实现说明（2026-10-02）
+
+- 主机 v0.34.0 按 `host-accept-real-model.md` §8 跑了一轮：S2 / S3 各 `--runs 10` + `make demo`，不加 `--keep`
+  （`llm_usage` 与工作区行照样保留，`report-usage.sh` 照查；fixture 与入口容器由脚本自己回收）。计数见 STATUS §2.2
+  v0.34.0 列；供应商 / 模型、token 与费用只在私有记录。非真实模型步骤 79 PASS / 0 FAIL。
+- **平台缺陷 1 条**（遗留 104，P1，#382）：门 `apply` 与读调用共用 15 s 超时，模型传 `timeoutSeconds:30` 的重启被记
+  `failed` 而实际执行了。修为 `apply` 独立 60 s 预算 + 超时即"结果未知"、交给 stale-executing reaper 幂等重放。
+  复审又记一条同类风险（遗留 105：自动批准的内联执行等待可超过扩展侧 30 s 超时）。
+- **场景设计 2 条**：docker_restart 的两次 `task=none` 不是模型没理解请求——入口 agent 先 inspect 容器、再在图谱里
+  找到上一轮的重启 Task / ActionRequest，判定"已完成、无需重复提交受治理动作"。同一句指令几分钟内重复 10 次时，
+  这是合理的去重。`accept_s2.sh` 第 2 轮起的请求改为注明"第 N 次：新的请求"（第 1 轮原句，保持与历史可比）；
+  v0.13.2 记为"prompt 契约"的三成 `task=none` 很可能同一模式，下一轮回归可验证。
+- **脚本缺陷 1 条**：`demo.sh` q2 与 `accept_s3.sh` 两处按 `identityKey.serviceName==='kernel'` 在 `search` 结果里找
+  kernel 容器，只读默认第一页（50 条）；主机容器增多到 71 个后 kernel 不在第一页。三处加 `limit:200`，demo 重跑全过。
+- 驱动的 RUN 行 `approved=none` 与 `action=executed` 并存不是治理缺口：库里 7 条 ActionRequest 都是
+  `require_approval` 且有人类批准决定，只是驱动没把批准 id 记进 RUN 行。
+
 ### D1 设计（2026-10-02）
 
 - **触发**：release-please 用 `GITHUB_TOKEN` 打 tag、建 Release，这类事件不会触发其他工作流——镜像发布作为
