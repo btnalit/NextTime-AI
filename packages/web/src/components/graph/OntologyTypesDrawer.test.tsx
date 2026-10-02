@@ -483,3 +483,48 @@ describe('OntologyTypesDrawer — publish a proposal', () => {
     expect(screen.queryByTestId('graph-proposal-publish')).toBeNull();
   });
 });
+
+describe('OntologyTypesDrawer — discard a proposal', () => {
+  it('shows Discard on a draft, calls discard_draft{kind:ontology_version,id,version} only after confirm, then refreshes the list', async () => {
+    let discarded = false;
+    const http = proposalsHttp({
+      list_ontology_versions: () =>
+        discarded ? { items: [PUBLISHED_ROW] } : { items: [PUBLISHED_ROW, DRAFT_PROPOSAL] },
+      discard_draft: (params) => {
+        discarded = true;
+        return params;
+      },
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    fireEvent.click(rows[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+
+    fireEvent.click(screen.getByTestId('graph-proposal-discard'));
+    const confirm = await screen.findByTestId('graph-proposal-discard-confirm');
+    expect(http.callsTo('discard_draft')).toHaveLength(0);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await screen.findByTestId('graph-proposals-list-view');
+    await waitFor(() => expect(screen.queryAllByTestId('graph-proposal-row')).toHaveLength(0));
+    expect(http.callsTo('discard_draft')).toEqual([
+      { kind: 'ontology_version', id: DRAFT_PROPOSAL.id, version: DRAFT_PROPOSAL.version },
+    ]);
+    expect(http.callsTo('list_ontology_versions').length).toBeGreaterThan(1);
+  });
+
+  it('shows the kernel refusal inline in the confirm', async () => {
+    const http = proposalsHttp({
+      discard_draft: () =>
+        Promise.reject(new HttpError('capability_error', 'not found', 'not_found')),
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    fireEvent.click(rows[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+    fireEvent.click(screen.getByTestId('graph-proposal-discard'));
+    const confirm = await screen.findByTestId('graph-proposal-discard-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    expect(await within(confirm).findByTestId('confirm-error')).toBeTruthy();
+  });
+});
