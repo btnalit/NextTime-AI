@@ -77,6 +77,17 @@ describe.each([
       entry: { ...descriptorA, data: { applied: true }, observedFacts: [{ x: 1 }] },
     });
   });
+
+  it('release frees a reserved key and never a completed one (R-04)', async () => {
+    const store = makeStore();
+    await store.reserve('k1', descriptorA);
+    await store.release('k1');
+    expect(await store.reserve('k1', descriptorB)).toEqual({ status: 'reserved' });
+
+    await store.complete('k1', { data: { applied: true }, observedFacts: [] });
+    await store.release('k1');
+    expect(await store.reserve('k1', descriptorB)).toMatchObject({ status: 'replay' });
+  });
 });
 
 describe('JsonFileIdempotencyStore', () => {

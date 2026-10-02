@@ -492,6 +492,145 @@ describe('createProxyServer — streaming byte-for-byte forwarding', () => {
   });
 });
 
+/**
+ * R-10: an `openai-responses` provider's usage reaches the usage record (and so the kernel's
+ * I18 budget and cost accounting) as real tokens and a cost — streaming via the terminal
+ * `response.completed` event, non-streaming via the Response object's own `usage` — and the
+ * request goes upstream without an injected `stream_options.include_usage`.
+ */
+describe('createProxyServer — openai-responses usage (R-10)', () => {
+  const RESPONSES_USAGE = {
+    input_tokens: 1200,
+    input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 },
+    output_tokens: 300,
+    output_tokens_details: { reasoning_tokens: 100 },
+    total_tokens: 1500,
+  };
+  const RESPONSES_SSE_BODY = [
+    `event: response.created\ndata: ${JSON.stringify({ type: 'response.created', sequence_number: 0, response: { id: 'resp_1', status: 'in_progress', usage: null } })}\n\n`,
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', sequence_number: 1, delta: 'Hello' })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', sequence_number: 2, response: { id: 'resp_1', status: 'completed', output: [], usage: RESPONSES_USAGE } })}\n\n`,
+  ].join('');
+  const RESPONSES_JSON_BODY = JSON.stringify({
+    id: 'resp_2',
+    object: 'response',
+    status: 'completed',
+    output: [],
+    usage: RESPONSES_USAGE,
+  });
+
+  async function setup(): Promise<{
+    proxyPort: number;
+    token: string;
+    records: LlmUsageRecord[];
+    upstreamBodies: Array<Record<string, unknown>>;
+  }> {
+    const upstreamBodies: Array<Record<string, unknown>> = [];
+    const upstream = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+        upstreamBodies.push(body);
+        if (
+          req.url !== '/v1/responses' ||
+          req.headers.authorization !== `Bearer ${REAL_OPENAI_KEY}`
+        ) {
+          res.writeHead(500, { 'content-type': 'text/plain' });
+          res.end('unexpected path or auth header reaching upstream');
+          return;
+        }
+        if (body.stream === true) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.end(RESPONSES_SSE_BODY);
+        } else {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(RESPONSES_JSON_BODY);
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const records: LlmUsageRecord[] = [];
+    const proxy = createProxyServer({
+      providers: {
+        openai: {
+          api: 'openai-responses',
+          upstream_base_url: `http://127.0.0.1:${upstreamPort}`,
+          api_key_env: 'FAKE_OPENAI_API_KEY',
+          auth: { header: 'authorization', scheme: 'Bearer' },
+          // USD per million tokens.
+          models: [
+            { id: 'gpt-example', cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 } },
+          ],
+        },
+      },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: (r) => records.push(r) },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    return { proxyPort, token: await signHandle(privateKey), records, upstreamBodies };
+  }
+
+  // input 1000 net × $2 + output 300 × $8 + cacheRead 200 × $0.5, per million tokens.
+  const EXPECTED_COST_USD = (1000 * 2 + 300 * 8 + 200 * 0.5) / 1_000_000;
+
+  it('streaming: reports response.completed usage and a cost; no include_usage injected', async () => {
+    const { proxyPort, token, records, upstreamBodies } = await setup();
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/responses',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', input: 'hi', stream: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.toString('utf8')).toBe(RESPONSES_SSE_BODY);
+    expect(upstreamBodies).toEqual([{ model: 'gpt-example', input: 'hi', stream: true }]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-example',
+      inputTokens: 1000,
+      outputTokens: 300,
+      cacheReadTokens: 200,
+      status: 'completed',
+    });
+    expect(records[0]?.costUsd).toBeCloseTo(EXPECTED_COST_USD, 12);
+  });
+
+  it('non-streaming: reports the Response object’s usage and a cost', async () => {
+    const { proxyPort, token, records, upstreamBodies } = await setup();
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/responses',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', input: 'hi' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamBodies).toEqual([{ model: 'gpt-example', input: 'hi' }]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 300,
+      cacheReadTokens: 200,
+    });
+    expect(records[0]?.costUsd).toBeCloseTo(EXPECTED_COST_USD, 12);
+  });
+});
+
 describe('createProxyServer — per-api (method, path) allowlist', () => {
   async function makeProxy(upstreamPort: number): Promise<{ port: number; privateKey: CryptoKey }> {
     // No upstream is ever listened on `upstreamPort` in this suite — every case here must be

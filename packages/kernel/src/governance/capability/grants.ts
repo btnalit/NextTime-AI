@@ -34,15 +34,17 @@ export interface CapabilityGrantRow {
   readonly principalId: string;
   /** The resource kind this grant covers (docs/wire-contract-conventions.md §1, 2026-09-08
    *  decision: `capability_grants.capability` renamed `resource_type` — "capability" is reserved
-   *  for a registry name, never borrowed by a Grant). Today `'gatekeeper'`
-   *  (`GATEKEEPER_GRANT_CAPABILITY`), or a bare I14 action_kind string for an approval-queue grant
-   *  with no single resource instance (`resourceId` is `null` for those rows). */
+   *  for a registry name, never borrowed by a Grant). `'gatekeeper'` (`GATEKEEPER_GRANT_CAPABILITY`)
+   *  for every grant created since R-26 / D-14 (`grant_capability` accepts nothing else); a bare
+   *  I14 action_kind string for an approval-queue grant with no single resource instance
+   *  (`resourceId` `null`) exists only as a historical row, still matched as before. */
   readonly resourceType: string;
   /** The specific resource this grant covers within `resourceType` (e.g. a gatekeeperId) —
    *  `null`/absent means "every resource of this type" (a wildcard grant), or, for an
-   *  action_kind-scoped row, "no single resource applies". Was folded into `scope.resourceScope`
-   *  before migrations/governance/0009_capability_grants_resource_type.sql promoted it to its own
-   *  column. */
+   *  action_kind-scoped row, "no single resource applies"; since R-26 / D-14 `grant_capability`
+   *  requires it, so a `null` only appears on historical rows. Was folded into
+   *  `scope.resourceScope` before migrations/governance/0009_capability_grants_resource_type.sql
+   *  promoted it to its own column. */
   readonly resourceId: string | null;
   readonly scope: CapabilityGrantScope;
   readonly status: GrantStatus;
@@ -105,7 +107,11 @@ export const GATEKEEPER_GRANT_CAPABILITY = 'gatekeeper';
 
 // -------------------------------------------------------------------------------------------
 // grantCapability / revokeCapabilityGrant — the `grant_capability` / `revoke_capability`
-// capabilities' service half (packages/shared/src/capabilities.ts governance group).
+// capabilities' service half (packages/shared/src/capabilities.ts governance group). Both
+// external writers pass only a per-gate grant (`'gatekeeper'` + a `resourceId`): the
+// `grant_capability` `paramsSchema` admits nothing else (R-26 / D-14) and `connectGatekeeper`
+// always names its one Gatekeeper. `GrantCapabilityInput` stays general so tests can still seed
+// the historical row shapes the read paths below keep evaluating.
 // -------------------------------------------------------------------------------------------
 
 export interface GrantCapabilityInput {

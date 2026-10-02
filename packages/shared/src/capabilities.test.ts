@@ -276,12 +276,17 @@ describe('invoke_worker paramsSchema timeout clamp', () => {
   });
 });
 
-describe('grant_capability params (leftover 80, 2026-09-25)', () => {
+describe('grant_capability params (leftover 80, 2026-09-25; R-26 / D-14, 2026-10-02)', () => {
   const schema = () => getCapability('grant_capability')?.paramsSchema;
   const principalId = '00000000-0000-4000-8000-000000000001';
+  const gatekeeperId = '00000000-0000-4000-8000-000000000003';
 
-  it('accepts a gate grant without scope', () => {
-    const result = schema()?.safeParse({ principalId, resourceType: 'gatekeeper' });
+  it('accepts a per-gate grant without scope', () => {
+    const result = schema()?.safeParse({
+      principalId,
+      resourceType: 'gatekeeper',
+      resourceId: gatekeeperId,
+    });
     expect(result?.success).toBe(true);
   });
 
@@ -289,9 +294,25 @@ describe('grant_capability params (leftover 80, 2026-09-25)', () => {
     const result = schema()?.safeParse({
       principalId,
       resourceType: 'gatekeeper',
+      resourceId: gatekeeperId,
       scope: { operationNames: ['container.restart'] },
     });
     expect(result?.success).toBe(false);
+  });
+
+  it('rejects a wildcard gate grant: resourceId is required (the console cannot show or revoke one)', () => {
+    const result = schema()?.safeParse({ principalId, resourceType: 'gatekeeper' });
+    expect(result?.success).toBe(false);
+  });
+
+  it.each([
+    ['an action kind', 'container.restart'],
+    ['a future resource type', 'worker_definition'],
+  ])('rejects a non-gatekeeper resourceType (%s), with or without a resourceId', (_label, type) => {
+    expect(schema()?.safeParse({ principalId, resourceType: type }).success).toBe(false);
+    expect(
+      schema()?.safeParse({ principalId, resourceType: type, resourceId: gatekeeperId }).success,
+    ).toBe(false);
   });
 });
 

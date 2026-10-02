@@ -5,6 +5,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
+import { assertActivityStartedByCaller } from './provenance-anchor-guard.js';
 import { toWireFact } from './resource-wire.js';
 
 /**
@@ -71,15 +72,22 @@ async function guardReferencedObjectTypes(
 /** Resolves the Activity a single ad-hoc Fact write traces to (I3) — the caller's own
  *  `activityId` when given (its lifecycle stays the caller's to manage), or a fresh one this
  *  function starts and ends around just this one write. Returns `null` for `ownActivityId` when
- *  the caller supplied one, so the handler knows not to call `endActivity` on it. */
+ *  the caller supplied one, so the handler knows not to call `endActivity` on it. A given
+ *  `activityId` must be one the caller started (R-02 / D-03, `provenance-anchor-guard.ts`):
+ *  writing on someone else's Activity would borrow their origin and supersede their Fact without
+ *  a Conflict (I5). */
 async function resolveWriteActivity(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
+  capability: string,
   kind: string,
   given: string | undefined,
 ): Promise<{ readonly activityId: string; readonly ownActivityId: string | null }> {
-  if (given) return { activityId: given, ownActivityId: null };
+  if (given) {
+    await assertActivityStartedByCaller(client, workspaceId, capability, principalId, given);
+    return { activityId: given, ownActivityId: null };
+  }
   const activity = await startActivity(client, workspaceId, { kind, principalId });
   return { activityId: activity.id, ownActivityId: activity.id };
 }
@@ -107,6 +115,7 @@ export const assertFactHandler: CapabilityHandler = async (client, workspaceId, 
     client,
     workspaceId,
     principalId,
+    'assert_fact',
     'meta.assert_fact',
     params.activityId,
   );
@@ -151,6 +160,7 @@ export const supersedeFactHandler: CapabilityHandler = async (
     client,
     workspaceId,
     principalId,
+    'supersede_fact',
     'meta.supersede_fact',
     params.activityId,
   );

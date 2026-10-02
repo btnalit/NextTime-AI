@@ -29,8 +29,15 @@ gatekeepers/ caddy/ llm-proxy/ models/`（只读）与 `backups/`（读写）—
 可能重新写文件，任何事先做的 `chmod -R o+rX` / `chown -R :10001 + setgid` 都不会延续到新文件上
 （certmagic 自己的 `chmod(0600)` 还会清掉组位）。能让 `tar` 在任何时刻可靠遍历 `caddy/` 的是这个
 capability，所以 `caddy/` 不需要给其他用户任何权限。`caddy/` 里有内部 CA 的根私钥，
-`scripts/host-env-init.sh` 对它执行的是 `chmod -R o-rwx`（收紧）。早先版本在这里执行的是
-`chmod -R o+rX`，会让根私钥对主机上所有本地账户可读（2026-10-02 复审 R-32），重跑当前版本即可修正。
+`scripts/host-env-init.sh` 对它先 `chown -R 0:0`、顶层 `chmod 700`，再 `chmod -R o-rwx`（收紧）。
+早先版本在这里执行的是 `chmod -R o+rX`，会让根私钥对主机上所有本地账户可读（2026-10-02 复审
+R-32），重跑当前版本即可修正。
+
+**为什么必须先 chown**：caddy 虽然是 root，但带 `cap_drop: [ALL]`，没有 `DAC_OVERRIDE`，和普通 uid
+一样受属主 / 组 / 其他位约束。更早的某个版本把 `caddy/` 顶层目录 chown 成了 10001（750），那样的主机
+全靠旧的 `o+rX` 才进得去；只去掉其他人权限就会把 caddy 自己锁在 CA 外面——v0.36.0 应用到主机时正是
+这样：caddy 报 `open /data/caddy/pki/authorities/local/root.crt: permission denied` 反复重启，控制台
+中断约 10 分钟，`chown 0:0` + `chmod 700` 后恢复。
 
 **主机前置条件**：`${NEXTTIME_DATA}/backups` 必须是 **root 属主（0:0，750）**——没有 `DAC_OVERRIDE`
 的 root 只能写自己拥有的目录；fix/socket-proxy-and-backup-user 那版 `host-env-init.sh` 把它 chown 成了

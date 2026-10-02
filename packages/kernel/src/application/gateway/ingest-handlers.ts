@@ -12,7 +12,9 @@ import type { GraphObject } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { getType } from '../../substrate/ontology/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { assertActivityStartedByCaller } from './provenance-anchor-guard.js';
 import { toWireSource } from './resource-wire.js';
 
 /**
@@ -423,11 +425,31 @@ export const submitObservationsHandler: CapabilityHandler = async (
   // I5.6 / RLS: a Source this caller cannot see (unknown id, or a private Source owned by someone
   // else) reads back as no row — same "not visible = not found" fail-closed shape RLS already
   // gives every other visibility-scoped table in this codebase.
-  const sourceCheck = await client.query<{ id: string }>(
-    'select id from sources where workspace_id = $1 and id = $2',
+  const sourceCheck = await client.query<{ id: string; owner_principal_id: string }>(
+    'select id, owner_principal_id from sources where workspace_id = $1 and id = $2',
     [workspaceId, params.sourceId],
   );
-  if (sourceCheck.rows.length === 0) throw new SourceNotFoundError(params.sourceId);
+  const source = sourceCheck.rows[0];
+  if (!source) throw new SourceNotFoundError(params.sourceId);
+  // R-02 / D-03 (`provenance-anchor-guard.ts`): only the Source's owner observes through it — for a
+  // Handle, the principal it acts for. Visibility is not ownership: a workspace-visible Source (a
+  // collector's) is readable by every member, and its existence is no secret, hence 403 not 404.
+  if (source.owner_principal_id !== principalId) {
+    throw new ForbiddenError(
+      `submit_observations: Source ${params.sourceId} is owned by another principal — observations can only be submitted to a Source the calling principal (for a Handle, the principal it acts for) owns`,
+    );
+  }
+  // …and only on an Activity the caller started: an Observation of this Source on someone else's
+  // Activity changes that Activity's Facts' origin and, for a private Source, hides them.
+  if (params.activityId) {
+    await assertActivityStartedByCaller(
+      client,
+      workspaceId,
+      'submit_observations',
+      principalId,
+      params.activityId,
+    );
+  }
 
   // Validate every observation's/link-target's identity *before* starting an Activity or writing
   // anything — a batch that fails validation leaves no partial state behind. An empty/unpublished

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.36.0](https://github.com/btnalit/NextTime-AI/compare/v0.35.1...v0.36.0) (2026-10-02)
+
+
+### Features
+
+* **ci:** reversibility probe — previous release's kernel suite on the new schema (S9 D4) ([#390](https://github.com/btnalit/NextTime-AI/issues/390)) ([d498a2d](https://github.com/btnalit/NextTime-AI/commit/d498a2d898d09260cbe37760dfca27f44cc06457))
+
+
+### Bug Fixes
+
+* **auth:** disable, logout and reset cut off live WS sessions; console stops reconnecting on revoked sessions ([#401](https://github.com/btnalit/NextTime-AI/issues/401)) ([03d16b1](https://github.com/btnalit/NextTime-AI/commit/03d16b14819a05f847d3de0e83aff83237aac09a))
+* **ci:** reversibility probe reads the pnpm version from head/package.json ([#392](https://github.com/btnalit/NextTime-AI/issues/392)) ([cc86968](https://github.com/btnalit/NextTime-AI/commit/cc869680a17a8c5c799e101f00ac0a7bb96093ba))
+* **deploy:** caddy publishes only the gate-host credential route; caddy data loses other-users access ([#397](https://github.com/btnalit/NextTime-AI/issues/397)) ([c497528](https://github.com/btnalit/NextTime-AI/commit/c497528d33875483003b02afcf870fb9c6da28dc))
+* **gatekeepers:** importing a manifest keeps draftOf; one published row per Operation identity ([#400](https://github.com/btnalit/NextTime-AI/issues/400)) ([94ee7c7](https://github.com/btnalit/NextTime-AI/commit/94ee7c706837b3db65cda39a71d6070d73deb028))
+* **scripts:** restore.sh hint uses the &lt;CODE_DIR&gt; placeholder ([#394](https://github.com/btnalit/NextTime-AI/issues/394)) ([eaf0bc9](https://github.com/btnalit/NextTime-AI/commit/eaf0bc9b1c93f481674b3f0d4932a991c9ae056d))
+* **scripts:** restore.sh restores all-or-nothing into a fresh database and rolls back on failure ([#398](https://github.com/btnalit/NextTime-AI/issues/398)) ([56710ab](https://github.com/btnalit/NextTime-AI/commit/56710ab4b18dfdcc33fd09e1dcf1304755ad7217))
+* **task:** failed spawn and spawn_lost revoke the WorkerRun Handle and terminate its container ([#399](https://github.com/btnalit/NextTime-AI/issues/399)) ([3fe0434](https://github.com/btnalit/NextTime-AI/commit/3fe0434990e1a036595873923860807c6080f7b0))
+
 ## [0.35.1](https://github.com/btnalit/NextTime-AI/compare/v0.35.0...v0.35.1) (2026-10-02)
 
 

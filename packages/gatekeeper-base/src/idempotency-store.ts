@@ -57,6 +57,10 @@ export interface IdempotencyStore {
   reserve(key: string, descriptor: IdempotencyDescriptor): Promise<IdempotencyReserveResult>;
   /** Completes a `'reserved'` key with the invoke result. */
   complete(key: string, result: { data: unknown; observedFacts: unknown }): Promise<void>;
+  /** Frees a `'reserved'` key the transport refused without running anything (R-04,
+   *  `OperationRefusedError`), so a retry is refused again rather than 409. A completed key is
+   *  never released. */
+  release(key: string): Promise<void>;
 }
 
 /** Stable (key-sorted) JSON stringify so `{a:1,b:2}` and `{b:2,a:1}` hash identically —
@@ -135,6 +139,10 @@ function completeEntry(
   return done;
 }
 
+function releaseEntry(map: Map<string, StoreEntryState>, key: string): void {
+  if (map.get(key)?.status === 'pending') map.delete(key);
+}
+
 interface StoreFileShape {
   readonly entries: Record<string, { readonly storedAt: string; readonly entry: Done }>;
 }
@@ -190,6 +198,11 @@ export class JsonFileIdempotencyStore implements IdempotencyStore {
     await this.flush(map);
   }
 
+  async release(key: string): Promise<void> {
+    // A 'reserved' entry was never persisted (see module doc comment) — nothing to flush.
+    releaseEntry(await this.load(), key);
+  }
+
   private async flush(map: Map<string, StoreEntryState>): Promise<void> {
     const entries: StoreFileShape['entries'] = {};
     const now = new Date().toISOString();
@@ -215,5 +228,9 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
 
   async complete(key: string, result: { data: unknown; observedFacts: unknown }): Promise<void> {
     completeEntry(this.map, key, result);
+  }
+
+  async release(key: string): Promise<void> {
+    releaseEntry(this.map, key);
   }
 }

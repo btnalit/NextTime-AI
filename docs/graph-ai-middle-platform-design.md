@@ -251,7 +251,7 @@ graph LR
 | 事项 | 规则 |
 |------|------|
 | 入口 agent | 每用户一个实例，不共用；能力上限固定（§5.1.4）。共用一个常驻代理按对话切换 Handle 是混淆代理风险 |
-| 审批 | 角色 `operator` 只是进队列；能批哪条由 capability 范围决定（I14）；`blast_radius=high` 默认 `requester_can_approve=false`，工作区可覆盖 |
+| 审批 | 角色 `operator` 只是进队列；能批哪条由 capability 范围决定（I14）；`blast_radius=high` 默认 `requester_can_approve=false`，工作区可覆盖；`high` 或 Operation `auto_approvable:false`（含未发布、I17）的请求只能由人（`kind=human` 的 Principal）批准或拒绝，service Principal 的 API key 被拒（403）；更低级别 service 也可决定，权力等同一条自动批准规则，决策记为该 service（R-17 / D-06，`governance/approval/decide.ts`） |
 | 凭证 | 共享凭证（docker、RouterOS）谁能用由授权决定；ConnectedAccount（GitHub、Slack、OA）按 `on_behalf_of` 取用；两种都只在 Gatekeeper 内，基类现在就区分；S2 实现共享凭证与静态录入的个人凭证，OAuth 流程 P5 |
 | 身份配置 | 身份提供方、超级管理员在环境变量层，不进 API；`owner` 不能放宽登录 |
 | 授权数据 | 不用图里 agent 可写的 `owned_by` / `member_of` 边做授权；需要关系型授权时用 OpenFGA / SpiceDB，元组只允许 human 通道写 |

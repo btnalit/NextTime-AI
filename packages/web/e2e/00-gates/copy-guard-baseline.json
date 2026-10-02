@@ -2,7 +2,11 @@
   "access": {},
   "account": {},
   "agent": {},
-  "approvals": {},
+  "approvals": {
+    "uuid": {
+      "count": 1
+    }
+  },
   "audit": {},
   "catalog-modules": {},
   "catalog-operations": {},
