@@ -27,14 +27,15 @@ gatekeepers/ caddy/ llm-proxy/ models/`（只读）与 `backups/`（读写）—
 的 `FileStorage` 把每次证书/密钥写入都硬编码成 `0600`/`0700`、root 属主、原子 rename 替换 inode
 （读过 `filestorage.go` / `internal/atomicfile/file.go` 确认）。`on_demand` TLS 每来一个新 SNI 就
 可能重新写文件，任何事先做的 `chmod -R o+rX` / `chown -R :10001 + setgid` 都不会延续到新文件上
-（certmagic 自己的 `chmod(0600)` 还会清掉组位）。`scripts/host-env-init.sh` 对 `caddy/` 做的
-`chmod -R o+rX` 只是对现有文件的一次性基线，不是正确性的来源；能让 `tar` 在任何时刻可靠遍历
-`caddy/` 的是这个 capability。
+（certmagic 自己的 `chmod(0600)` 还会清掉组位）。能让 `tar` 在任何时刻可靠遍历 `caddy/` 的是这个
+capability，所以 `caddy/` 不需要给其他用户任何权限。`caddy/` 里有内部 CA 的根私钥，
+`scripts/host-env-init.sh` 对它执行的是 `chmod -R o-rwx`（收紧）。早先版本在这里执行的是
+`chmod -R o+rX`，会让根私钥对主机上所有本地账户可读（2026-10-02 复审 R-32），重跑当前版本即可修正。
 
 **主机前置条件**：`${NEXTTIME_DATA}/backups` 必须是 **root 属主（0:0，750）**——没有 `DAC_OVERRIDE`
 的 root 只能写自己拥有的目录；fix/socket-proxy-and-backup-user 那版 `host-env-init.sh` 把它 chown 成了
 10001，导致每次备份以一条空的 `pg_dump failed:` 失败（主机实测），当前版本的 `sh scripts/host-env-init.sh`
-（幂等）会把它强制改回 0:0 并打印确认。它对 `caddy/` 的 `chmod -R o+rX` 是无害基线，可保留。
+（幂等）会把它强制改回 0:0 并打印确认，同时把 `caddy/` 收紧为 `o-rwx`（输出里"files readable by others"应为 0）。
 
 **上线顺序**：`docker compose up -d docker-socket-proxy`（若同批上线；`backup` 本身不用它）→
 `docker compose up -d backup`（或整批 `docker compose up -d`）。
