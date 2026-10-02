@@ -736,12 +736,28 @@ export class AgentHostRuntime implements AgentRuntime {
    * (model, Skills, promptAddendum, autoApproveLow) still forces a fresh mint on the caller's very
    * next Turn — see `CachedHandle.profileVersionKey`'s own doc comment for why the in-memory cache
    * needs this in addition to the DB-side `revokeEntrySessionHandles` call.
+   *
+   * R-05 (review 2026-10-02): refuses — throws, so `startTurn` fails the Turn — when the principal
+   * is disabled or its platform user is, before an entry session is even ensured and whether or
+   * not a cached Handle exists. A Turn queued just before a disable (or a socket that slipped past
+   * the WS recheck) never gets a fresh Handle for the LLM.
    */
   private async ensureEntryHandle(
     workspaceId: string,
     principalId: string,
     agentProfile: ResolvedAgentProfile | undefined,
   ): Promise<string> {
+    const cached = this.handleCache.get(principalId);
+    const { role, disabled, cachedRevoked } = await this.readHandleFreshness(
+      workspaceId,
+      principalId,
+      cached?.jti,
+    );
+    if (disabled) {
+      this.handleCache.delete(principalId);
+      throw new Error(`ensureEntryHandle: principal ${principalId} or its user is disabled`);
+    }
+
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
 
     const grantedGatekeeperIds = await withWorkspace(
@@ -758,13 +774,6 @@ export class AgentHostRuntime implements AgentRuntime {
       ? grantedGatekeeperIds.filter((id) => enabledGatekeepers.includes(id))
       : grantedGatekeeperIds;
     const profileVersionKey = agentProfileVersionKey(agentProfile);
-
-    const cached = this.handleCache.get(principalId);
-    const { role, cachedRevoked } = await this.readHandleFreshness(
-      workspaceId,
-      principalId,
-      cached?.jti,
-    );
 
     if (
       cached &&
@@ -811,16 +820,25 @@ export class AgentHostRuntime implements AgentRuntime {
    * refused downstream anyway (`handle-auth.ts` treats a missing on-behalf-of principal as
    * disabled). `cachedRevoked` is `true` when the jti is unknown *or* revoked — either way the
    * cache entry is not to be trusted. Same inline role query `application/task/handle-mint.ts`
-   * uses.
+   * uses. R-05: the same read also yields `disabled` — the principal's `disabled_at`, or its
+   * platform user's `status` (the workspace transaction may read its own members' `users` rows,
+   * migration core 0021 `users_workspace_members`).
    */
   private async readHandleFreshness(
     workspaceId: string,
     principalId: string,
     cachedJti: string | undefined,
-  ): Promise<{ readonly role: Role | undefined; readonly cachedRevoked: boolean }> {
+  ): Promise<{
+    readonly role: Role | undefined;
+    readonly disabled: boolean;
+    readonly cachedRevoked: boolean;
+  }> {
     return withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-      const roleResult = await client.query<{ role: Role }>(
-        'select role from principals where workspace_id = $1 and id = $2',
+      const roleResult = await client.query<{ role: Role; disabled: boolean }>(
+        `select p.role, (p.disabled_at is not null or coalesce(u.status, 'active') <> 'active') as disabled
+           from principals p
+           left join users u on u.id = p.user_id
+          where p.workspace_id = $1 and p.id = $2`,
         [workspaceId, principalId],
       );
       let cachedRevoked = false;
@@ -831,7 +849,8 @@ export class AgentHostRuntime implements AgentRuntime {
         );
         cachedRevoked = handleResult.rows[0]?.live !== true;
       }
-      return { role: roleResult.rows[0]?.role, cachedRevoked };
+      const row = roleResult.rows[0];
+      return { role: row?.role, disabled: row?.disabled === true, cachedRevoked };
     });
   }
 

@@ -116,6 +116,10 @@ export interface HttpClientOptions {
   /** Injectable `fetch`, for tests. Defaults to a wrapper around the global `fetch` (see module
    *  doc comment — never the bare global, which would be invoked with the wrong receiver). */
   readonly fetchImpl?: typeof fetch;
+  /** R-16: called when the kernel answers `unauthorized` (HTTP 401 — the console session or API
+   *  key is gone), before the call rejects. The session machine maps it to the same "back to
+   *  login" transition as the WebSocket's `-32001`. */
+  readonly onUnauthorized?: () => void;
 }
 
 /** Looks the global `fetch` up at call time (not at construction) and calls it unbound, so the
@@ -126,10 +130,12 @@ const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 export class HttpClient {
   private readonly auth: HttpClientAuth;
   private readonly fetchImpl: typeof fetch;
+  private readonly onUnauthorized: (() => void) | undefined;
 
   constructor(options: HttpClientOptions) {
     this.auth = options.auth;
     this.fetchImpl = options.fetchImpl ?? defaultFetch;
+    this.onUnauthorized = options.onUnauthorized;
   }
 
   /** Calls one capability. Resolves with `result` on `{ok:true}`; throws {@link HttpError}
@@ -175,6 +181,7 @@ export class HttpClient {
       );
     }
     if (!envelope.ok) {
+      if (envelope.error.code === 'unauthorized') this.onUnauthorized?.();
       throw new HttpError('capability_error', envelope.error.message, envelope.error.code);
     }
     return envelope.result as T;

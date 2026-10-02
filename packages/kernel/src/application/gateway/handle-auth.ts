@@ -21,14 +21,14 @@ import { withAdminClient } from './auth.js';
  * `auth.ts`'s `withAdminClient` already establishes for the API-key lookup — no need to decode the
  * token's `ws` claim out-of-band before verification just to pick a workspace to scope RLS to.
  *
- * S3.11 `disable_principal` addition: `disable_principal`'s own handler revokes the disabled
- * Principal's `kind='entry'` sessions (`revokeEntrySessionHandles`, governance/capability/
- * handles.ts) — but a live `kind='worker_run'` Handle whose `obo` is that Principal (minted by an
- * entry Handle before the disable, still within its own ttl) is not a member of any `entry`
- * session and so is not touched by that call. Checking `disabled_at` here, on *every* Handle
- * verification, closes that gap independently — belt (revoke now) and suspenders (also refuse
- * going forward), the same two-layer shape `capability_handles.revoked_at` already gives Handles
- * themselves. Reuses `HandleRevoked` rather than inventing a new error class: functionally this
+ * S3.11 `disable_principal` addition: `disable_principal`'s own handler revokes the Handles of
+ * every session on the disabled Principal's behalf — entry, mcp_session and worker_run since R-05
+ * (`revokeOnBehalfOfSessionHandles`, governance/capability/handles.ts). Checking `disabled_at`
+ * here, on *every* Handle verification, also refuses one that revocation did not reach (a disabled
+ * user, a disabled workspace) — belt (revoke now) and suspenders (also refuse going forward), the
+ * same two-layer shape `capability_handles.revoked_at` already gives Handles themselves. Only the
+ * belt reaches llm-proxy, which checks revoked jtis, not principals (packages/llm-proxy/src/
+ * revocation.ts). Reuses `HandleRevoked` rather than inventing a new error class: functionally this
  * is exactly "treat the credential as revoked", and every existing caller of `verifyHandle`/
  * `authenticateHandle` (resolve-caller.ts) already maps that error to a generic 401 the same way.
  */

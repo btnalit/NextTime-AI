@@ -43,6 +43,7 @@ export type {
 } from './loader.js';
 
 export {
+  deprecatePublishedOperationObjects,
   projectProcedureObject,
   projectSkillObject,
   projectWorkerDefinitionObject,

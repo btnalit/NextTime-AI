@@ -203,9 +203,11 @@ export interface RegisterOperationDraftInput extends OperationIdentity {
    * S3.12 revision path only: the Object id of the `published` Operation row this draft was
    * proposed against (`governance/gatekeepers/manifest.ts`'s `proposeOperation`, when the current
    * row for the identity is `published` rather than a conflicting draft) — stashed on the draft's
-   * own `properties.draftOf` so `publishOperation` can deprecate that exact row, in the same
-   * transaction it publishes this one, without re-deriving which version it supersedes. Absent for
-   * a fresh v1 draft or an in-place same-version redraft.
+   * own `properties.draftOf` so a reader (`list_operations`, the console) can tell a revision from
+   * a fresh draft. Absent for a fresh (non-revision) draft. `properties` is replaced wholesale on
+   * every redraft, so a caller replacing a revision draft must pass it again (`proposeOperation`
+   * and, since R-08, `importManifest` both do). Since R-08 `publishOperation` no longer relies on it
+   * to find the row to retire — it deprecates every `published` row of the identity.
    */
   readonly draftOf?: string;
 }
@@ -363,9 +365,9 @@ export async function projectProcedureObject(
  *  reads it first and runs it through `PUBLISHABLE_TRANSITIONS`) — this function does not check
  *  either, matching `upsertObject`'s own "no identity → always insert" behavior: calling this for
  *  an identity that does not yet exist would silently create an incomplete Object rather than
- *  erroring, which is exactly the mistake callers are expected to avoid by reading first. Also
- *  used, unchanged, to deprecate the *superseded* version when `publishOperation` publishes a
- *  revision draft — same function, just called a second time against the old row's own identity. */
+ *  erroring, which is exactly the mistake callers are expected to avoid by reading first. The
+ *  *superseded* version a publish retires goes through `deprecatePublishedOperationObjects` below
+ *  instead (R-08), which matches by identity fields and status rather than by one exact key. */
 export async function setOperationStatusObject(
   client: PoolClient,
   workspaceId: string,
@@ -381,6 +383,36 @@ export async function setOperationStatusObject(
     },
     properties: { status },
   });
+}
+
+/**
+ * R-08 (review 2026-10-02): flips every row of one Operation identity (`gatekeeperId` + `name`,
+ * any `version`) that is currently `published` to `deprecated`, and returns their Object ids.
+ * `publishOperation` (`governance/gatekeepers/manifest.ts`) calls it right before it publishes a
+ * draft, so the identity never has two live rows — the database enforces the same rule with the
+ * deferred `objects_operation_single_published` constraint (migrations/core/0034). The write is
+ * the same merge `setOperationStatusObject` makes (`properties || {status}`, `updated_at` bumped);
+ * rows are matched by `identity_key ->>` fields, the way every Operation read in `manifest.ts`
+ * matches them, so a row is found whatever version its key carries. The `status = 'published'`
+ * filter is the one source state `PUBLISHABLE_TRANSITIONS` allows `deprecate` from.
+ */
+export async function deprecatePublishedOperationObjects(
+  client: PoolClient,
+  workspaceId: string,
+  identity: Pick<OperationIdentity, 'gatekeeperId' | 'name'>,
+): Promise<readonly string[]> {
+  const result = await client.query<{ id: string }>(
+    `update objects
+     set properties = properties || '{"status":"deprecated"}'::jsonb, updated_at = now()
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and properties ->> 'status' = 'published'
+     returning id`,
+    [workspaceId, identity.gatekeeperId, identity.name],
+  );
+  return result.rows.map((row) => row.id);
 }
 
 /**
