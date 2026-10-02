@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createStreamUsageAccumulator,
   parseAnthropicUsage,
+  parseOpenAiResponsesUsage,
   parseOpenAiUsage,
   parseUsageFromJsonBody,
 } from './usage.js';
@@ -79,16 +80,66 @@ describe('parseAnthropicUsage', () => {
   });
 });
 
+describe('parseOpenAiResponsesUsage', () => {
+  it('nets input_tokens against cached/cache-write tokens; output_tokens as-is (incl. reasoning)', () => {
+    const usage = parseOpenAiResponsesUsage({
+      input_tokens: 100,
+      input_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+      output_tokens: 40,
+      output_tokens_details: { reasoning_tokens: 25 },
+      total_tokens: 140,
+    });
+    expect(usage).toEqual({
+      inputTokens: 60,
+      outputTokens: 40,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 10,
+    });
+  });
+
+  it('omits cache fields when zero and clamps input at 0', () => {
+    expect(
+      parseOpenAiResponsesUsage({
+        input_tokens: 10,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 5,
+      }),
+    ).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(
+      parseOpenAiResponsesUsage({ input_tokens: 5, input_tokens_details: { cached_tokens: 10 } })
+        .inputTokens,
+    ).toBe(0);
+  });
+});
+
 describe('parseUsageFromJsonBody', () => {
-  it('parses OpenAI-shaped usage for openai-completions/openai-responses', () => {
+  it('parses Chat Completions usage for openai-completions', () => {
     const body = { id: 'x', usage: { prompt_tokens: 10, completion_tokens: 2 } };
     expect(parseUsageFromJsonBody('openai-completions', body)).toEqual({
       inputTokens: 10,
       outputTokens: 2,
     });
+  });
+
+  it('parses Responses usage (input_tokens/output_tokens) for openai-responses (R-10)', () => {
+    // The official Response object's top-level `usage` (ResponseUsage).
+    const body = {
+      id: 'resp_1',
+      object: 'response',
+      status: 'completed',
+      output: [],
+      usage: {
+        input_tokens: 36,
+        input_tokens_details: { cached_tokens: 6, cache_write_tokens: 0 },
+        output_tokens: 87,
+        output_tokens_details: { reasoning_tokens: 64 },
+        total_tokens: 123,
+      },
+    };
     expect(parseUsageFromJsonBody('openai-responses', body)).toEqual({
-      inputTokens: 10,
-      outputTokens: 2,
+      inputTokens: 30,
+      outputTokens: 87,
+      cacheReadTokens: 6,
     });
   });
 
@@ -111,7 +162,7 @@ function sseFrame(event: string | undefined, data: string): string {
   return `${event ? `event: ${event}\n` : ''}data: ${data}\n\n`;
 }
 
-describe('createStreamUsageAccumulator — openai-completions/openai-responses', () => {
+describe('createStreamUsageAccumulator — openai-completions', () => {
   it('takes the cumulative usage from the final chunk, ignoring [DONE]', () => {
     const acc = createStreamUsageAccumulator('openai-completions');
     acc.push(sseFrame(undefined, JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })));
@@ -127,7 +178,7 @@ describe('createStreamUsageAccumulator — openai-completions/openai-responses',
   });
 
   it('handles a frame split across two push() calls', () => {
-    const acc = createStreamUsageAccumulator('openai-responses');
+    const acc = createStreamUsageAccumulator('openai-completions');
     const full = sseFrame(
       undefined,
       JSON.stringify({ usage: { prompt_tokens: 8, completion_tokens: 1 } }),
@@ -142,6 +193,71 @@ describe('createStreamUsageAccumulator — openai-completions/openai-responses',
   it('returns undefined when no usage was ever observed', () => {
     const acc = createStreamUsageAccumulator('openai-completions');
     acc.push(sseFrame(undefined, JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })));
+    expect(acc.result()).toBeUndefined();
+  });
+});
+
+describe('createStreamUsageAccumulator — openai-responses (R-10)', () => {
+  const completedUsage = {
+    input_tokens: 50,
+    input_tokens_details: { cached_tokens: 20, cache_write_tokens: 0 },
+    output_tokens: 12,
+    output_tokens_details: { reasoning_tokens: 4 },
+    total_tokens: 62,
+  };
+
+  it('reads usage from response.completed’s response.usage, ignoring earlier events', () => {
+    const acc = createStreamUsageAccumulator('openai-responses');
+    acc.push(
+      sseFrame(
+        'response.created',
+        JSON.stringify({
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_1', status: 'in_progress', usage: null },
+        }),
+      ),
+    );
+    acc.push(
+      sseFrame(
+        'response.output_text.delta',
+        JSON.stringify({ type: 'response.output_text.delta', sequence_number: 1, delta: 'hi' }),
+      ),
+    );
+    expect(acc.result()).toBeUndefined();
+    acc.push(
+      sseFrame(
+        'response.completed',
+        JSON.stringify({
+          type: 'response.completed',
+          sequence_number: 2,
+          response: { id: 'resp_1', status: 'completed', usage: completedUsage },
+        }),
+      ),
+    );
+    expect(acc.result()).toEqual({ inputTokens: 30, outputTokens: 12, cacheReadTokens: 20 });
+  });
+
+  it('also reads response.incomplete (e.g. max_output_tokens hit), split across pushes', () => {
+    const acc = createStreamUsageAccumulator('openai-responses');
+    const full = sseFrame(
+      'response.incomplete',
+      JSON.stringify({
+        type: 'response.incomplete',
+        sequence_number: 5,
+        response: { id: 'resp_2', status: 'incomplete', usage: completedUsage },
+      }),
+    );
+    const splitAt = Math.floor(full.length / 2);
+    acc.push(full.slice(0, splitAt));
+    expect(acc.result()).toBeUndefined();
+    acc.push(full.slice(splitAt));
+    expect(acc.result()).toEqual({ inputTokens: 30, outputTokens: 12, cacheReadTokens: 20 });
+  });
+
+  it('ignores a Chat Completions-style top-level usage — not a Responses event', () => {
+    const acc = createStreamUsageAccumulator('openai-responses');
+    acc.push(sseFrame(undefined, JSON.stringify({ usage: { prompt_tokens: 8 } })));
     expect(acc.result()).toBeUndefined();
   });
 });
