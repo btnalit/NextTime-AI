@@ -1607,15 +1607,17 @@ const governanceCapabilities: readonly Capability[] = [
   },
   {
     // 2026-09-08 wire-contract-conventions §1(c): a Grant points at a resource (`resourceType` +
-    // optional `resourceId`), not a "capability" — that word is reserved for the registry name of
-    // *this* row's own `name` field. Current callers pass `resourceType: 'gatekeeper'` with the
-    // gatekeeper id as `resourceId` (was `capability: 'gatekeeper'` with the id inside `scope`);
-    // future resource types (`worker_definition`, `skill`) follow the same shape. `resourceId` is
-    // optional — a workspace-wide grant (e.g. an approval-queue `action_kind` grant, which has no
-    // single resource instance) omits it, matching the DB's own nullable `resource_id` column
-    // (migrations/governance/00NN_capability_grants_resource_type.sql). No `scope` param: the
-    // stored `capability_grants.scope` was never read by any authorization check, so accepting it
-    // offered a narrowing that did not exist (leftover 80 — maintainer 2026-09-25: no per-Operation
+    // `resourceId`), not a "capability" — that word is reserved for the registry name of *this*
+    // row's own `name` field (was `capability: 'gatekeeper'` with the id inside `scope`).
+    // Review 2026-10-02 R-26 / maintainer decision D-14: only the per-gate grant —
+    // `resourceType: 'gatekeeper'` with a required `resourceId` — is accepted, because it is the
+    // only kind the console shows and revokes (systems/SystemAccessCard). A wildcard
+    // (`resource_id` null) or a bare `action_kind` grant still confers I14 approver authority and
+    // auto-approval-rule eligibility but has been invisible in the console since #312, so it can no
+    // longer be created; such rows only exist historically and are still evaluated as before
+    // (`governance/capability/grants.ts`'s `MATCHING_GRANT_WHERE`). No `scope` param: the stored
+    // `capability_grants.scope` was never read by any authorization check, so accepting it offered
+    // a narrowing that did not exist (leftover 80 — maintainer 2026-09-25: no per-Operation
     // narrowing; stop accepting the param). Historical rows still echo their stored `scope` back
     // in `CapabilityGrantWire`, shown as a note.
     name: 'grant_capability',
@@ -1626,12 +1628,13 @@ const governanceCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({
         principalId: id,
-        resourceType: z.string(),
-        resourceId: id.optional(),
+        resourceType: z.literal('gatekeeper'),
+        resourceId: id,
       })
       .strict(),
     resultSchema: wire.CapabilityGrantWireSchema,
-    description: 'Grant a Capability to a Principal.',
+    description:
+      'Grant a Principal access to one Gatekeeper: resourceType "gatekeeper" with that Gatekeeper’s id as resourceId (no wildcard, no other resource types).',
   },
   {
     name: 'revoke_capability',

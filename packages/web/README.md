@@ -583,6 +583,7 @@ WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
 WEB_E2E_API_KEY=<owner-api-key> \
 WEB_E2E_API_KEY_B=<bob-api-key> \
 WEB_E2E_PRINCIPAL_ID_B=<bob-principal-id> \
+WEB_E2E_ISOLATION_GATEKEEPER_ID=<isolation-row-gate-id> \
 WEB_E2E_SEED_ACTION_REQUESTS=1 \
 corepack pnpm --filter @nexttime/web e2e
 
@@ -604,15 +605,20 @@ corepack pnpm --filter @nexttime/web e2e
 The web owns no capability that can create a *pending* ActionRequest from a bare API key (a real
 one needs `request_action` over a Handle plus a reachable Gatekeeper). `e2e/approvals.spec.ts`
 expects the database to already hold one per scenario (and `WEB_E2E_SEED_ACTION_REQUESTS=1` set,
-see above) — run the block below **twice**, once per `resource_scope` marker (`e2e-approve-flow`,
-`e2e-isolation-flow`; the spec hardcodes both):
+see above) — run the block below **twice**:
+
+- the approve flow: `gatekeeper_id=$(uuidgen)` and `resource_scope=e2e-approve-flow` (the marker
+  the spec hardcodes);
+- holder isolation: `gate=$(uuidgen)`, then `gatekeeper_id=$gate` **and** `resource_scope=$gate`,
+  and export `WEB_E2E_ISOLATION_GATEKEEPER_ID=$gate`. The row is scoped to its own gate the way a
+  real `request_action` writes it, because the spec grants B that gate — `grant_capability` only
+  creates per-gate grants (R-26 / D-14), and I14 matches a gate grant against `resource_scope`.
 
 ```bash
 psql "$DATABASE_URL" -v workspace_id=<workspace-id> -v on_behalf_of=<owner-principal-id> \
-  -v resource_scope=e2e-approve-flow <<'SQL'
-insert into objects (workspace_id, object_type, properties)
-values (:'workspace_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb)
-returning id as gatekeeper_id \gset
+  -v gatekeeper_id="$(uuidgen)" -v resource_scope=e2e-approve-flow <<'SQL'
+insert into objects (workspace_id, id, object_type, properties)
+values (:'workspace_id'::uuid, :'gatekeeper_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb);
 
 insert into action_requests
   (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,

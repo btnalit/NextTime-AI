@@ -180,9 +180,10 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
    "Add a second principal (operator) for approvals.spec.ts" 跑 `bootstrap.js add-principal
    --workspace <id> --name bob --role operator`，导出 `WEB_E2E_API_KEY_B`（遮蔽）与
    `WEB_E2E_PRINCIPAL_ID_B`；"Seed two pending ActionRequests (approvals.spec.ts)" 把 README 的
-   `psql` 种子块通过 `docker compose exec -T postgres psql … <<'SQL'`（SQL 走 stdin）跑两遍，分别用
-   `e2e-approve-flow`/`e2e-isolation-flow` 两个 `resource_scope`，再导出 `WEB_E2E_
-   SEED_ACTION_REQUESTS=1`。再一步（S4.1 新增）"Set console passwords" 用 `bootstrap.js set-password`
+   `psql` 种子块通过 `docker compose exec -T postgres psql … <<'SQL'`（SQL 走 stdin）跑两遍：审批行的
+   `resource_scope` 用 `e2e-approve-flow` 标记；隔离行像真实 `request_action` 一样以自己的门 id 作
+   `resource_scope`（R-26 / D-14：`grant_capability` 只能按门授权，I14 拿门授权去匹配 `resource_scope`），
+   并导出 `WEB_E2E_ISOLATION_GATEKEEPER_ID`；最后导出 `WEB_E2E_SEED_ACTION_REQUESTS=1`。再一步（S4.1 新增）"Set console passwords" 用 `bootstrap.js set-password`
    （密码走 stdin）给 owner 设永久密码、给 bob 设临时密码，导出 `WEB_E2E_OWNER_LOGIN/PASSWORD` 与
    `WEB_E2E_TEMP_LOGIN/PASSWORD`（密码遮蔽）。
 7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> ... corepack pnpm
