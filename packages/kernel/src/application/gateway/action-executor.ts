@@ -3,7 +3,10 @@ import { IllegalTransition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
-import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import {
+  type GatekeeperClient,
+  GatekeeperTimeoutError,
+} from '../../adapters/gatekeeper-client/index.js';
 import type { ActionExecutor, ActionExecutorResult } from '../../governance/approval/index.js';
 import type { ActionRequestRow } from '../../governance/approval/index.js';
 import {
@@ -175,6 +178,16 @@ export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDep
           actionRequestId: actionRequest.id,
         });
       } catch (err) {
+        if (err instanceof GatekeeperTimeoutError) {
+          // The gate may still be performing the effect — the outcome is unknown, not failed.
+          // The drainer leaves the row `executing`; `reapStaleExecutingActionRequests` (below)
+          // replays this same `actionRequestId` later and the gate's idempotency store answers.
+          return {
+            ok: false,
+            indeterminate: true,
+            reason: `outcome unknown: ${err.message} — the gate may still complete it`,
+          };
+        }
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
 
@@ -266,6 +279,9 @@ export async function reapStaleExecutingActionRequests(
   let reaped = 0;
   for (const row of staleRows) {
     try {
+      // An `indeterminate` result here (the replay timed out too) is resolved as `failed` with
+      // its "outcome unknown" reason, not left `executing` again — bounded: the reaper replays a
+      // row at most once more after the first attempt, it never parks a row forever.
       const result = await actionExecutor.execute(row);
       await withTransaction(row.workspaceId, row.onBehalfOf, (client) =>
         result.ok

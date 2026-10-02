@@ -7,6 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { queryAudit } from '../../substrate/audit/index.js';
+import {
+  OntologyDraftNotFoundError,
+  proposeOntologyChange,
+  publishOntologyDraft,
+} from '../../substrate/ontology/index.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from './definitions.js';
@@ -35,6 +40,13 @@ const VALID_SKILL = {
   name: 'diagnose-network',
   description: 'Find the top talker on the network and the process behind it.',
   markdown: 'Run `ss -tnp` and look for the highest byte count.',
+};
+// OntologyDefinitionSchema needs at least one object type and one link type.
+const VALID_ONTOLOGY_CHANGE = {
+  objectTypes: [{ name: 'Widget', description: 'A widget.' }],
+  linkTypes: [
+    { name: 'widget_part_of', domain: 'Widget', range: 'Widget', description: 'A widget part.' },
+  ],
 };
 const VALID_PROCEDURE = {
   name: 'restart-and-verify',
@@ -303,6 +315,92 @@ describe.runIf(DATABASE_URL !== undefined)(
             version: draft.version,
           }),
         ).rejects.toThrow(/not found/i);
+      });
+    });
+
+    describe('discardDraft — ontology_version (leftover 99)', () => {
+      function proposeOntology(principalId: string) {
+        return inTx(principalId, (client) =>
+          proposeOntologyChange(client, workspaceId, {
+            change: VALID_ONTOLOGY_CHANGE,
+            proposedBy: principalId,
+          }),
+        );
+      }
+
+      it('the proposer discards their own ontology draft through dispatchCapability — row gone, AuditRecord written', async () => {
+        const draft = await proposeOntology(proposerId);
+        const result = await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, proposerId),
+          'discard_draft',
+          { kind: 'ontology_version', id: draft.id, version: draft.version },
+        );
+        expect(result).toEqual({ kind: 'ontology_version', id: draft.id, version: draft.version });
+
+        const remaining = await inTx(proposerId, (client) =>
+          client.query('select 1 from ontology_versions where workspace_id = $1 and id = $2', [
+            workspaceId,
+            draft.id,
+          ]),
+        );
+        expect(remaining.rowCount).toBe(0);
+
+        const audit = await inTx(proposerId, (client) =>
+          queryAudit(client, workspaceId, { action: 'discard_draft', resourceId: draft.id }),
+        );
+        expect(audit).toHaveLength(1);
+        expect(audit[0]?.resourceType).toBe('ontology_version');
+        expect(audit[0]?.actorPrincipalId).toBe(proposerId);
+      });
+
+      it('another principal’s ontology draft is not-found (I16) and stays untouched', async () => {
+        const draft = await proposeOntology(proposerId);
+        await expect(
+          inTx(otherId, (client) =>
+            discardDraft(client, workspaceId, otherId, {
+              kind: 'ontology_version',
+              id: draft.id,
+              version: draft.version,
+            }),
+          ),
+        ).rejects.toThrow(OntologyDraftNotFoundError);
+        const remaining = await inTx(proposerId, (client) =>
+          client.query('select 1 from ontology_versions where workspace_id = $1 and id = $2', [
+            workspaceId,
+            draft.id,
+          ]),
+        );
+        expect(remaining.rowCount).toBe(1);
+      });
+
+      it('a published ontology row is DraftNotDiscardableError, and the DB trigger blocks a raw delete as nexttime_app', async () => {
+        const draft = await proposeOntology(proposerId);
+        await inTx(proposerId, (client) =>
+          publishOntologyDraft(client, workspaceId, {
+            id: draft.id,
+            version: draft.version,
+            publishedBy: proposerId,
+          }),
+        );
+        await expect(
+          inTx(proposerId, (client) =>
+            discardDraft(client, workspaceId, proposerId, {
+              kind: 'ontology_version',
+              id: draft.id,
+              version: draft.version,
+            }),
+          ),
+        ).rejects.toThrow(DraftNotDiscardableError);
+
+        await expect(
+          inTx(proposerId, (client) =>
+            client.query('delete from ontology_versions where workspace_id = $1 and id = $2', [
+              workspaceId,
+              draft.id,
+            ]),
+          ),
+        ).rejects.toThrow(/only a draft row may be deleted/);
       });
     });
 

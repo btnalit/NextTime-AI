@@ -90,6 +90,33 @@ describe('HttpGatekeeperClient', () => {
     );
   });
 
+  it('gives gate/apply its own, longer budget than the read-side calls', async () => {
+    // Every call answers after 30 ms unless its signal aborts first.
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(
+            () => resolve(jsonResponse({ ok: true, result: { data: 1, replayed: false } })),
+            30,
+          );
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+    );
+    const client = new HttpGatekeeperClient({ fetchImpl, timeoutMs: 5, applyTimeoutMs: 1_000 });
+    await expect(client.observe('https://example.test', { operation: 'x' })).rejects.toMatchObject({
+      name: 'GatekeeperTimeoutError',
+      path: 'gate/observe',
+    });
+    await expect(
+      client.apply('https://example.test', { operation: 'x', actionRequestId: 'ar-1' }),
+    ).resolves.toMatchObject({ data: 1 });
+  });
+
   it('normalizes the endpoint whether or not it has a trailing slash', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toBe('https://example.test/gate/health');

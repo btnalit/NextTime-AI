@@ -14,7 +14,11 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import {
+  type GatekeeperClient,
+  GatekeeperTimeoutError,
+  HttpGatekeeperClient,
+} from '../../adapters/gatekeeper-client/index.js';
 import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ApprovalDrainer,
@@ -1277,6 +1281,73 @@ describe.runIf(DATABASE_URL !== undefined)(
         getActionRequest(client, workspaceId, actionRequestId),
       );
       expect(row?.status).toBe('executed');
+    });
+
+    // Real-model regression 2026-10-02: a `gate/apply` timeout is "outcome unknown" — the executor
+    // must report it as indeterminate (the drainer then leaves the row `executing`), and the
+    // reaper's replay, if it times out too, resolves the row `failed` with an honest reason
+    // instead of parking it `executing` forever.
+    it('an apply timeout is indeterminate for the executor, and a replay that times out again resolves the row failed as outcome unknown', async () => {
+      const timingOutClient = {
+        apply: async () => {
+          throw new GatekeeperTimeoutError(
+            'gatekeeper client: gate/apply timed out after 60000ms',
+            'gate/apply',
+          );
+        },
+      } as unknown as GatekeeperClient;
+      const actionExecutor = createGatekeeperActionExecutor({
+        gatekeeperClient: timingOutClient,
+        withTransaction: createAdminWithTransaction(pool),
+      });
+
+      const actionRequestId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+               await_decision, on_behalf_of, actor_runtime, executing_at, params
+             ) values ($1, 'executing', $2, $3, 'low', 'allow', false, $4, 'pi',
+               now() - interval '1 hour', $5::jsonb)
+             returning id`,
+            [workspaceId, gatekeeperId, AUTO_OP.name, ownerId, JSON.stringify({ qty: 6160 })],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      if (!row) throw new Error('seeded action request not found');
+
+      const direct = await actionExecutor.execute(row);
+      expect(direct.ok).toBe(false);
+      expect(direct.indeterminate).toBe(true);
+      expect(direct.reason).toMatch(/^outcome unknown: /);
+
+      // 30 min, not the 1 s the crash test above uses: the reaper scans every workspace and this
+      // executor fails everything, so only the hand-seeded 1-hour-old rows may qualify — never a
+      // row another test file running against the same database just left `executing`.
+      await reapStaleExecutingActionRequests(pool, actionExecutor, {
+        staleAfterMs: 30 * 60 * 1000,
+      });
+
+      const after = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(after?.status).toBe('failed');
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: actionRequestId,
+          action: 'action_request.fail',
+        }),
+      );
+      expect((audit[0]?.payload as { reason?: string } | undefined)?.reason).toMatch(
+        /^outcome unknown: /,
+      );
     });
 
     it('a draft (unpublished) operation never executes, even though its own manifest entry declares auto_approvable', async () => {
