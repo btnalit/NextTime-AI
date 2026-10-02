@@ -257,6 +257,62 @@ export async function failTaskRow(
 }
 
 /**
+ * R-09 (docs/code-review-2026-10-02.md): fails a Task **and** reaps every WorkerRun under it — the
+ * one path for the places a Task fails while one of its WorkerRuns may still hold a live Handle or
+ * container: a spawn failure (`invoke.ts`'s initial spawn, `spawnWorkerRunForRetry` below) and the
+ * `spawn_lost` sweep (`reaper.ts`'s `reapLostQueuedTasks`). Both used to only fail the Task, so
+ * §5.5 "terminated revokes every Handle" did not hold: a supervisor client that gave up (30 s)
+ * while worker-supervisor was still starting the container left a `terminated` run with a live
+ * Handle, and a kernel crash between the run reaching `running` and the Task flip left a Worker
+ * running under a `failed: spawn_lost` Task.
+ *
+ * One transaction: every WorkerRun of the Task, whatever its status, goes through
+ * `terminateWorkerRunRow` — a guarded terminate for a live run, and a Handle-tree revoke in every
+ * case, including a run already `terminated` (`spawn.ts`'s own catch got there first) or one whose
+ * guarded UPDATE loses a race (revocation is idempotent). Then `failTaskRow`, itself guarded: a
+ * Task a concurrent writer already made terminal is left as is, but its runs are still reaped.
+ * After commit, a best-effort `supervisorClient.terminate` per run — errors are logged, never
+ * thrown: the revoked Handles are what this guarantees; a container worker-supervisor had not yet
+ * registered when asked is bounded by the supervisor's own `timeoutSec`. Idempotent: a second call
+ * finds every run terminated and revoked and the Task terminal, and only repeats the (idempotent)
+ * supervisor terminate.
+ */
+export async function failTaskAndReapWorkerRuns(
+  deps: TaskRuntimeDeps,
+  workspaceId: string,
+  actorPrincipalId: string,
+  taskId: string,
+  reason: string,
+): Promise<void> {
+  const workerRunIds = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: actorPrincipalId },
+    async (client) => {
+      const result = await client.query<{ id: string }>(
+        'select id from worker_runs where workspace_id = $1 and task_id = $2',
+        [workspaceId, taskId],
+      );
+      const ids = result.rows.map((row) => row.id);
+      for (const workerRunId of ids) {
+        await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, reason);
+      }
+      await failTaskRow(client, workspaceId, actorPrincipalId, taskId, reason);
+      return ids;
+    },
+  );
+
+  for (const workerRunId of workerRunIds) {
+    try {
+      await deps.supervisorClient.terminate(workerRunId);
+    } catch (err) {
+      console.warn(
+        `failTaskAndReapWorkerRuns: best-effort supervisorClient.terminate for WorkerRun ${workerRunId} (Task ${taskId}, ${reason}) failed — its Handle is already revoked; the container is left to worker-supervisor's own timeout: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
+/**
  * The S2.9 result-contract seam (docs/development-tasks.md S2.7 "leave a completeTaskWithResult
  * seam S2.9 will call"): transitions a `running` **or `waiting_approval`** Task to `completed` and
  * records `result` (design doc §7.3 "Worker 结束时返回结构化结果 ... 内核把 facts_to_assert 以 inferred
@@ -597,8 +653,8 @@ async function spawnWorkerRunForRetry(
       image,
     });
   } catch {
-    await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>
-      failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed'),
-    );
+    // R-09: the same path as `invoke.ts`'s initial spawn failure — fail the Task and reap the
+    // retry's WorkerRun (Handle tree revoked, container best-effort stopped).
+    await failTaskAndReapWorkerRuns(deps, workspaceId, onBehalfOf, task.id, 'worker_failed');
   }
 }

@@ -144,6 +144,11 @@
 
 ## 3. 当前波次
 
+**复审修复波次（2026-10-02 起，执行中）**：维护者确认 `code-review-2026-10-02.md` 的 30 项决策全部按推荐执行，原则是"只在关键点做门禁或限制，不能因为过程防御失去易用性"。8 项 ★ 决策对照生产数据复议后落定，见该文 §7。修复按 §8 的六个波次推进，PR 拆分与顺序见 §8.1。
+- 波次 0：caddy 收窄 + R-32、R-09、R-08、R-05 + R-16、R-11，随后发版并应用到主机。
+- 波次 1：R-02 / R-04 / R-10 / R-17 / R-26，然后 R-06，再 R-03 → R-01 + R-27。
+- 进度记在遗留 106–123 的状态列。
+
 **W5 收口：完成**（2026-09-10，一天）。六项里五项关闭（PR #128 文档漂移、#129 fake-llm 自检、#131 `create_task` 下架、#132 `explain` 收敛 + `search` 分页、仓库设置只留 squash、Renovate 决定暂不装），E7 仍待决定；各项细节见 §4 第 1–6 项与 `development-tasks.md` 的 W5 实现说明。复审新发现一条（§4 第 23 项：`query_decisions` / `list_conflicts` 的 cursor 精度）。
 
 **W5.5 P1 修复：完成**（2026-09-10，与 W5 同日）。三项各有正向用例并在 CI 的真 Postgres 上通过（#137 / #140 / #138），`accept_s3.sh` 的异源 Conflict 正向断言已加（#136，待主机复跑）。分工：核心代码与迁移由主会话写，测试 / 文档由 builder 子代理写，每个 PR 经 reviewer 子代理复查；两次复查各抓到真问题并已在合入前修正（16 的可见性副作用与跨用户佐证、18 的缓存吊销与 mcp_session Handle）。
@@ -407,23 +412,23 @@
 | 104 | 门 `apply` 超时被当成失败：内核门客户端所有调用共用 15 s 超时，模型给 `container.restart` 传 `timeoutSeconds: 30`（验收 fixture 不响应 SIGTERM，docker 等满 30 s），ActionRequest 在 15 s 时被记 `failed`，门继续执行、容器实际重启了——记录状态与真实副作用不一致；ssh 长命令同类 | P1 | S9 D0 | 重开（2026-10-02 复审 → 遗留 120 / R-48–R-51：超时不覆盖响应体、`executing` 不是屏障、reaper 重放先跑前置检查且 409 当失败、门侧预留不释放）。原记录：已关闭（2026-10-02 v0.34.0 真实模型回归 docker_restart 第 1 次发现，本 PR：`apply` 独立 60 s 预算，其余门调用仍 15 s；`apply` 超时 = 结果未知——执行器返回 `indeterminate`，drainer 不写终态、行留在 `executing`，由既有 stale-executing reaper 以同一 `actionRequestId` 幂等重放（门端先预留、完成后重放返回已存结果）；重放仍超时则记 `failed`、原因以 "outcome unknown" 开头，有界不悬挂。同类未覆盖：apply 中途的 `network_error`（门已收到、连接被重置）仍记 `failed`；首次超时不写审计行，重建靠 `executing_at` → `executed_at` 间隔与结果里的 `replayed: true`）。**主机实测（v0.35.0，2026-10-02 真实模型冒烟 `--runs 3`）**：一次重启 apply 耗时 30 s、如实记为 `executed`（旧的 15 s 共享超时下会被记 `failed`）；docker_restart 3/3，第 2、3 轮在新措辞下都正常派工 |
 | 105 | 自动批准操作的内联执行等待可能超过扩展侧的 kernel-client 超时：`request_action` 对 `auto_approved` 行走 `tryExecuteInline` → `drainGatekeeper` → `apply`，遗留 104 之后 `apply` 最长 60 s，而 platform-extension 的 kernel-client 单次调用 30 s 超时——长耗时的自动批准动作会让模型看到调用失败、动作却在执行，与遗留 104 同一模式 | P2 | S9 | 已关闭（2026-10-02 遗留 104 复审时发现，本 PR：`tryExecuteInline` 带调用方的绝对截止时间——自动批准路径用与 `await_decision` 同一个 25 s 预算，`pollAndExecute` 沿用它已有的截止时间——drain 与计时器赛跑，超时就读本行真实状态（`executing` / `approved`）如实返回，drain 在后台跑完、其异常被捕获不会成为未处理拒绝；`awaitConcurrentExecution` 的 10 s 等待也受同一截止时间约束。同时覆盖了此前就有的 `await_decision` 路径：人工批准落在第 20 s、再加 apply 就会超过扩展侧 30 s）；2026-10-02 复审：内核侧成立；agent 侧的"勿重复请求"提示与 ops-runner prompt 没跟上（P3 L5-6，遗留 123） |
 | 106 | R-01 共享 `gate_token` 会发往 owner 自填的 endpoint，caddy 又对外转发 gate-host `/i/*`：工作区 owner 可绕过审批与内核审计，直接用管理员配置的实例凭证执行（遗留 36 的真实残余；`code-review-2026-10-02.md` §4） | **P1** | 复审修复波次 0（caddy 收窄）/ 1（每连接密钥，D-01） | 开放 |
-| 107 | R-02 溯源锚点不核对归属：任何主体（含 auditor）都能往别人的 Source 写 Observation、挂到别人的 Activity 上，可永久隐藏 Fact、伪造溯源、绕过 I5（§4） | **P1** | 复审修复波次 1（D-03） | 开放（修复前先在主机跑检测查询） |
+| 107 | R-02 溯源锚点不核对归属：任何主体（含 auditor）都能往别人的 Source 写 Observation、挂到别人的 Activity 上，可永久隐藏 Fact、伪造溯源、绕过 I5（§4） | **P1** | 复审修复波次 1（D-03 已定：只在 handler 层检查，不收紧 RLS，保留 `activityId` 但要求 `started_by = caller`） | 开放（2026-10-02 主机检测查询：混合 owner 的 Activity 为 0，不需要修数据） |
 | 108 | R-03 一把不分路由的 `internal_token` 被 7 个服务（含全部门）持有；第二条 agent-host 连接会顶掉第一条，可截获 prompt 与入口 Handle（§4；是 R-18 的前置） | **P1** | 复审修复波次 1（D-02） | 开放 |
-| 109 | R-04 docker 门可对平台自己的入口 / 任务容器 `logs_tail`，跨工作区读别人的 agent 会话，且自动批准（§4） | **P1** | 复审修复波次 1（D-04） | 开放 |
+| 109 | R-04 docker 门可对平台自己的入口 / 任务容器 `logs_tail`，跨工作区读别人的 agent 会话，且自动批准（§4） | **P1** | 复审修复波次 1（D-04 已定：只排除带 `nexttime.role` 的 agent 容器，平台服务容器保留） | 开放 |
 | 110 | R-05 停用、登出、重置密码切不断已建立的 `/ws` 会话，停用后发起的 Turn 仍拿到新的入口 Handle（§4；须与 R-16 同发） | **P1** | 复审修复波次 0 | 开放 |
-| 111 | R-06 `create_principal` 建出的 service principal 不能停用、轮换 key、改角色（泄露的 owner 级 key 无法吊销）；两边的"最后一个 owner"谓词不一致（§4） | **P1** | 复审修复波次 1（D-05） | 开放 |
+| 111 | R-06 `create_principal` 建出的 service principal 不能停用、轮换 key、改角色（泄露的 owner 级 key 无法吊销）；两边的"最后一个 owner"谓词不一致（§4） | **P1** | 复审修复波次 1（D-05 已定：放开停用 / 轮换 / 改角色；最后一个 owner 必须是人；owner 级 service 用 irreversible 层级确认；排在 R-05 之后） | 开放 |
 | 112 | R-07 公开仓库红线：`scripts/restore.sh:126` 的提示文字写着主机检出路径（§4） | **P1** | — | 关闭（#394：改为 `<CODE_DIR>`；历史中的字符串不改写，记在 `docs/private/`；通用路径 CI 守卫待议） |
-| 113 | R-08 在待审修订草稿上导入 manifest 会丢 `draftOf`，同一 Operation 身份出现两条 `published`，`getPublishedOperation` 任取一条（§4） | **P1** | 复审修复波次 0 | 已关闭（2026-10-02，本 PR：`importManifest` 替换修订草稿时带上 `draftOf`（草稿已丢失时取当前 published 行）；`publishOperation` 先把同一身份所有 `published` 行转 `deprecated` 再发布；`getPublishedOperation` 按版本倒序；迁移 core 0034 先自愈（每个身份只留最高版本的 published，`raise notice` 报行数）再加提交时检查的排除约束 `objects_operation_single_published`——延迟检查是为了让 v0.35.1 的"先发布、后弃用"顺序在回退后仍能提交（可逆，`release.md` §6）。合并前维护者在主机跑 PR 描述里的 Host pre-check 查询。同 Gatekeeper 两条 `workspace_gate_links`（P3 L4-13）不在本 PR） |
-| 114 | R-09 spawn 失败与 `spawn_lost` 扫描让 Task 失败，但 WorkerRun 的 Handle（可能还有容器）仍有效，违反 §5.5"terminated 吊销全部 Handle"（§4） | **P1** | 复审修复波次 0 | 开放 |
-| 115 | R-10（潜在）`openai-responses` 的用量永远解析为 0，I18 预算与成本核算失效（§4；配置了该类供应商才会触发） | **P1** | 复审修复波次 1（D-09） | 开放 |
+| 113 | R-08 在待审修订草稿上导入 manifest 会丢 `draftOf`，同一 Operation 身份出现两条 `published`，`getPublishedOperation` 任取一条（§4） | **P1** | 复审修复波次 0 | 已关闭（2026-10-02，#400：`importManifest` 替换修订草稿时带上 `draftOf`（草稿已丢失时取当前 published 行）；`publishOperation` 先把同一身份所有 `published` 行转 `deprecated` 再发布；`getPublishedOperation` 按版本倒序；迁移 core 0034 先自愈（每个身份只留最高版本的 published，`raise notice` 报行数）再加提交时检查的排除约束 `objects_operation_single_published`——延迟检查是为了让 v0.35.1 的"先发布、后弃用"顺序在回退后仍能提交（可逆，`release.md` §6）。合并前维护者在主机跑 PR 描述里的 Host pre-check 查询。同 Gatekeeper 两条 `workspace_gate_links`（P3 L4-13）不在本 PR） |
+| 114 | R-09 spawn 失败与 `spawn_lost` 扫描让 Task 失败，但 WorkerRun 的 Handle（可能还有容器）仍有效，违反 §5.5"terminated 吊销全部 Handle"（§4） | **P1** | 复审修复波次 0 | 关闭（#399：spawn 失败、重排队 spawn 失败与 `spawn_lost` 扫描共用 `failTaskAndReapWorkerRuns`——事务内终止该 Task 全部 run 并吊销 Handle 树，事务外尽力 `supervisorClient.terminate`；spawn 失败的 catch 同事务吊销本 run 的 Handle；supervisor 在 create 成功、start 失败时删掉容器（L6-18）。残留：客户端超时后 supervisor 尚未登记该 run 时 terminate 落空，容器带着已吊销的 Handle 跑到 supervisor 自己的超时，归 R-27） |
+| 115 | R-10（潜在）`openai-responses` 的用量永远解析为 0，I18 预算与成本核算失效（§4；配置了该类供应商才会触发，主机目前没有） | **P1** | 复审修复波次 1（D-09 已定：写解析器修好，不删类型） | 开放 |
 | 116 | R-11 `restore.sh` 失败或部分恢复时仍报成功，不是可靠的跨版本回滚；release.md §6 的可逆性表依赖它（§4） | **P1** | 复审修复波次 0 | 开放 |
-| 117 | P2 红线与安全 21 簇（§5A）：R-12–R-16 吊销缺口（重置 / 改密 / 5000 行截断 / 登出失败 / 客户端检测不到）、R-17 service principal 可批准（D-06 认定"必经一个人"即升 P1）、R-18 / R-19 门 manifest 信任根与放宽低报、R-22 路径参数穿越、R-23 llm-admin 外带供应商 key、R-24 env 中的 key、R-25、R-26 通配授权不可见（D-14 认定属底线 3 即升 P1）、R-27 supervisor `/task/:id` 不鉴权 + 无出站目标谓词、R-28–R-34 | P2 | 复审修复波次 0（R-16、R-32）/ 1（R-17、R-26、R-27）/ 3（其余） | 开放 |
+| 117 | P2 红线与安全 21 簇（§5A）：R-12–R-16 吊销缺口（重置 / 改密 / 5000 行截断 / 登出失败 / 客户端检测不到）、R-17 service principal 可批准（D-06 已定：`high` 与不可自动批准的请求必须由人批准，保持 P2）、R-18 / R-19 门 manifest 信任根与放宽低报、R-22 路径参数穿越、R-23 llm-admin 外带供应商 key、R-24 env 中的 key、R-25、R-26 通配授权不可见（D-14 已定：`grant_capability` 只接受 gatekeeper 授权，生产为 0，保持 P2）、R-27 supervisor `/task/:id` 不鉴权 + 无出站目标谓词、R-28–R-34 | P2 | 复审修复波次 0（R-16、R-32）/ 1（R-17、R-26、R-27）/ 3（其余） | 开放 |
 | 118 | P2 授权与治理语义 9 簇（§5B）：R-35 auditor 非只读、R-36 `issue_service_handle` 接受内部主体（遗留 88 内核侧回归）、R-37 执行权不按当前 AgentProfile / Policy 复查、R-38 / R-39 授权即审批权且不披露、R-40 / R-41 连接器三态不生效与文案不符、R-42 `get_action` 可见性、R-43 并发绕过登录锁定 | P2 | 复审修复波次 3（R-36、R-43）/ 4（其余） | 开放 |
 | 119 | P2 控制台人控边界 6 簇（§5C）：R-20"总是允许"实为全工作区跨门规则、R-21 `allowMemberAutoApproveLow` 显示生效而运行时忽略、R-44 不可逆确认保留上次输入、R-45 `merge_user` 弱确认、R-46 删除门实例弱确认、R-47 冲突盲裁 | P2 | 复审修复波次 4 | 开放 |
 | 120 | P2 遗留 104 后续与执行可靠性 8 簇（§5D）：R-48 reaper 重放不问门 / 409 当失败 / 无限重放、R-49 超时不覆盖响应体、R-50 按门串行不保证、R-51 门侧预留不释放 + 崩溃后重执行（与 R-48 同发）、R-52 outbox 内联 apply、R-53 / R-54 幂等键语义、R-58 崩溃重试无守卫 | P2 | 复审修复波次 2 | 开放 |
 | 121 | P2 运行时状态与生命周期 9 簇（§5E）：R-55 已停 Turn 仍跑且终态被覆盖、R-56 WS 抖动丢帧致聊天卡死、R-57 入口上下文读即消费、R-59 `roll_entry_containers` 检查在 RLS 下失明（遗留 64 重开）、R-60 / R-61 本体发布无基线检查与 diff 错位、R-62 非 UUID 决策 id、R-63 断线推送不补同步、R-64 切换工作区失败即登出 | P2 | 复审修复波次 2（R-55、R-56、R-57、R-59）/ 4（其余） | 开放 |
 | 122 | P2 数据、计量、运维 7 簇（§5F）：R-65 purge 冻结全平台写入、R-66 缺索引（关联 103）、R-67 用量去重键精度、R-68 计量毒组卡住全平台、R-69 需认证的托管 MCP 门接不进来、R-70 RAGFlow 读失败即退役 Fact、R-71 `apply-release.sh` 失败不留回退点 | P2 | 复审修复波次 5 | 开放 |
-| 123 | P3 98 条（§6，未复核）与 30 项待维护者决策（§7，★ 8 项阻塞波次 1）；含遗留 85 的回归网不在 CI 跑、遗留 58 同类（`gate-host/` 未备份）、遗留 25 的复现尾巴没做、`platform_status.backup` 硬编码"未配置" | P3 | 随所在模块的波次 / 复审修复波次 5 | 开放（决策待维护者） |
+| 123 | P3 98 条（§6，未复核）与 30 项待维护者决策（§7，★ 8 项阻塞波次 1）；含遗留 85 的回归网不在 CI 跑、遗留 58 同类（`gate-host/` 未备份）、遗留 25 的复现尾巴没做、`platform_status.backup` 硬编码"未配置" | P3 | 随所在模块的波次 / 复审修复波次 5 | 开放（30 项决策已于 2026-10-02 落定，见 `code-review-2026-10-02.md` §7） |
 
 ## 5. 更新规则
 

@@ -27,14 +27,15 @@ gatekeepers/ caddy/ llm-proxy/ models/`（只读）与 `backups/`（读写）—
 的 `FileStorage` 把每次证书/密钥写入都硬编码成 `0600`/`0700`、root 属主、原子 rename 替换 inode
 （读过 `filestorage.go` / `internal/atomicfile/file.go` 确认）。`on_demand` TLS 每来一个新 SNI 就
 可能重新写文件，任何事先做的 `chmod -R o+rX` / `chown -R :10001 + setgid` 都不会延续到新文件上
-（certmagic 自己的 `chmod(0600)` 还会清掉组位）。`scripts/host-env-init.sh` 对 `caddy/` 做的
-`chmod -R o+rX` 只是对现有文件的一次性基线，不是正确性的来源；能让 `tar` 在任何时刻可靠遍历
-`caddy/` 的是这个 capability。
+（certmagic 自己的 `chmod(0600)` 还会清掉组位）。能让 `tar` 在任何时刻可靠遍历 `caddy/` 的是这个
+capability，所以 `caddy/` 不需要给其他用户任何权限。`caddy/` 里有内部 CA 的根私钥，
+`scripts/host-env-init.sh` 对它执行的是 `chmod -R o-rwx`（收紧）。早先版本在这里执行的是
+`chmod -R o+rX`，会让根私钥对主机上所有本地账户可读（2026-10-02 复审 R-32），重跑当前版本即可修正。
 
 **主机前置条件**：`${NEXTTIME_DATA}/backups` 必须是 **root 属主（0:0，750）**——没有 `DAC_OVERRIDE`
 的 root 只能写自己拥有的目录；fix/socket-proxy-and-backup-user 那版 `host-env-init.sh` 把它 chown 成了
 10001，导致每次备份以一条空的 `pg_dump failed:` 失败（主机实测），当前版本的 `sh scripts/host-env-init.sh`
-（幂等）会把它强制改回 0:0 并打印确认。它对 `caddy/` 的 `chmod -R o+rX` 是无害基线，可保留。
+（幂等）会把它强制改回 0:0 并打印确认，同时把 `caddy/` 收紧为 `o-rwx`（输出里"files readable by others"应为 0）。
 
 **上线顺序**：`docker compose up -d docker-socket-proxy`（若同批上线；`backup` 本身不用它）→
 `docker compose up -d backup`（或整批 `docker compose up -d`）。
@@ -109,11 +110,24 @@ sh scripts/restore.sh --db ${NEXTTIME_DATA}/backups/db/nexttime-<ts>.dump
 docker compose exec -T postgres psql -U nexttime -d nexttime_restore_<ts> -c '\dt'
 docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "nexttime_restore_<ts>";'
 ```
-要恢复到活库 `nexttime`（危险，仅故障恢复时用）：加 `--target-db nexttime --i-know`。这条路径下
-`restore.sh` 会先 `docker compose stop kernel agent-host worker-supervisor backup`（它们持有到
-`nexttime` 的连接，或写入即将被 `pg_restore --clean` 清空重建的同一份数据），脚本退出时（无论
-成功还是失败）通过 trap 自动 `docker compose start` 把四者拉回来——`postgres` 本身不停，恢复过程
-中始终可达。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
+要恢复到活库 `nexttime`（危险，仅故障恢复时用）：加 `--target-db nexttime --i-know`。这条路径的步骤：
+
+1. `restore.sh` 先 `docker compose stop kernel agent-host worker-supervisor backup`（它们持有到
+   `nexttime` 的连接，或写入即将被替换的数据），等 `nexttime` 上的连接清零。
+2. 把现库**改名**为 `nexttime_pre_restore_<ts>` 留作回退，不删任何东西。
+3. 新建空的 `nexttime`，用 `pg_restore --exit-on-error --single-transaction` 整体恢复：要么全部成功，要么全部回滚。
+4. 核对 public 下的表数是否等于 dump 自己 TOC 里列出的表数。
+
+任何一步失败都会自动把半成品删掉、把 `nexttime_pre_restore_<ts>` 改回 `nexttime`。如果连改名回退也失败了，脚本会打印手工收尾的两条命令。
+
+脚本退出时（无论成功、失败还是被 Ctrl-C / ssh 断开打断）都会通过 trap 自动 `docker compose start` 把四个服务拉回来；`postgres` 本身不停，恢复过程中始终可达。成功后旧库仍以 `nexttime_pre_restore_<ts>` 保留，核对恢复后的栈正常再按 summary 里的命令删掉，它会占用一份库的磁盘空间。
+
+2026-10-02 复审 R-11 之前，这条路径用的是 `pg_restore --clean --if-exists` 直接盖在活库上。这样做有两个问题：
+
+- 新版本建的对象会留下来挡住 DROP，跨版本回滚会得到新旧混杂的库；
+- `pg_restore` 的失败只会让它退出 1，而脚本把退出 1 当成警告，照样报告成功。
+
+只有临时库路径（`drill-restore.sh`）能在主机上实测；活库路径除改名一步外与它完全相同。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
 config/ gatekeepers/ caddy/ llm-proxy/ models/` 任何一个活目录——把 `llm-proxy/keys.json` 之类
 的供应商 key 挪回 `${NEXTTIME_DATA}/llm-proxy/` 前先核对是不是真要覆盖当前值，覆盖前建议先把
 当前 `keys.json` 另存一份；暂存目录本身继承了归档里 `keys.json` 的 `0600`，但目录本身按当前

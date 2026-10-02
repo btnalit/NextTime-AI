@@ -195,6 +195,28 @@ describe('task-service spawn', () => {
     await service.reap();
     expect(docker.stopCalls.map((c) => c.name)).toEqual(['nexttime-task-run-1']);
   });
+
+  it('removes the container and registers nothing when the start fails after the create (L6-18)', async () => {
+    const { service, docker, egressMap } = setup();
+    docker.createAndStart = async () => {
+      throw new Error('start failed');
+    };
+    await expect(service.spawn(spawnInput)).rejects.toThrow('start failed');
+    expect(docker.removeCalls).toEqual(['nexttime-task-run-1']);
+    expect(await service.status('run-1')).toBeUndefined();
+    expect(egressMap.read()).toEqual({});
+  });
+
+  it('still surfaces the original spawn error when the cleanup removal itself fails', async () => {
+    const { service, docker } = setup();
+    docker.createAndStart = async () => {
+      throw new Error('start failed');
+    };
+    docker.remove = async () => {
+      throw new Error('remove failed');
+    };
+    await expect(service.spawn(spawnInput)).rejects.toThrow('start failed');
+  });
 });
 
 describe('task-service terminate', () => {
