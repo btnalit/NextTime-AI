@@ -507,6 +507,29 @@ async function revokeWorkspaceSessions(client: PoolClient, userId: string): Prom
   );
 }
 
+/** R-06: a disabled user signs in nowhere, so disabling one who is a workspace's last active
+ *  human owner would leave that workspace with no person able to own it — the same outcome
+ *  `remove_membership` refuses. Checked per workspace the user owns, with the shared
+ *  `isLastActiveHumanOwner` predicate; the administrator transfers ownership first. */
+async function assertNotLastHumanOwnerAnywhere(client: PoolClient, userId: string): Promise<void> {
+  const owned = await client.query<{ workspace_id: string; id: string; name: string }>(
+    `select p.workspace_id, p.id, w.name
+       from principals p
+       join workspaces w on w.id = p.workspace_id
+      where p.user_id = $1 and p.kind = 'human' and p.role = 'owner' and p.disabled_at is null
+      order by w.created_at`,
+    [userId],
+  );
+  for (const row of owned.rows) {
+    if (await isLastActiveHumanOwner(client, row.workspace_id, row.id)) {
+      throw new PlatformAdminError(
+        'last_owner',
+        `the user is the last human owner of workspace "${row.name}" — make someone else an owner first`,
+      );
+    }
+  }
+}
+
 export const setUserStatusHandler: CapabilityHandler = async (
   client,
   _workspaceId,
@@ -522,6 +545,7 @@ export const setUserStatusHandler: CapabilityHandler = async (
       throw new PlatformAdminError('self_disable', 'you cannot disable your own account');
     }
     await assertAdminCanBeReduced(client, before);
+    if (before.status === 'active') await assertNotLastHumanOwnerAnywhere(client, before.id);
   }
   await client.query('update users set status = $2, updated_at = now() where id = $1', [
     input.userId,

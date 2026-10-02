@@ -343,6 +343,53 @@ describe('MembersPage', () => {
     expect(within(drawer).getByRole('button', { name: '停用成员' })).toBeTruthy();
   });
 
+  it('R-06: promoting a service credential to owner opens the irreversible confirm; cancelling calls nothing', async () => {
+    const service = principal({ id: 'p-svc', kind: 'service', displayName: 'CI runner' });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [service] }),
+      set_principal_role: () => {
+        throw new Error('set_principal_role must not run before the owner confirm is accepted');
+      },
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+
+    fireEvent.change(within(drawer).getByLabelText(/角色/), { target: { value: 'owner' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    const confirm = await screen.findByTestId('principal-owner-confirm');
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+    expect(confirm.textContent).toContain('管理成员');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('CI runner');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('principal-owner-confirm')).toBeNull());
+    expect(http.calls.some((call) => call.name === 'set_principal_role')).toBe(false);
+  });
+
+  it('R-06: promoting a person to owner saves straight away, no confirm', async () => {
+    const bob = principal();
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [bob] }),
+      set_principal_role: (params) => {
+        expect(params).toEqual({ principalId: 'p-1', role: 'owner' });
+        return { ...bob, role: 'owner' };
+      },
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+
+    fireEvent.change(within(drawer).getByLabelText(/角色/), { target: { value: 'owner' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'set_principal_role')).toBe(true),
+    );
+    expect(screen.queryByTestId('principal-owner-confirm')).toBeNull();
+  });
+
   it('R-06: an agent Principal’s drawer shows no role / rotate / disable controls', async () => {
     const agent = principal({
       id: 'p-agent',

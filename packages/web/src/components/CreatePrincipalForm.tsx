@@ -1,7 +1,7 @@
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
-import type { CreatePrincipalResult } from '../lib/governance.js';
+import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
@@ -45,6 +45,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const [created, setCreated] = useState<CreatePrincipalResult | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [confirmingOwner, setConfirmingOwner] = useState(false);
+  const ownerCopy = ownerCredentialConfirmCopy(t);
 
   async function createPrincipal(trimmed: string): Promise<void> {
     const result = await http.call<CreatePrincipalResult>('create_principal', {
@@ -183,22 +184,9 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
             </Button>
           }
           title={t('创建 owner 级服务凭证', 'Create an owner-level service credential')}
-          description={t(
-            '这把 API key 能做 owner 在本工作区能做的一切，包括管理成员和审批。',
-            'This API key can do everything an owner can do in this workspace, including managing members and approving requests.',
-          )}
+          description={ownerCopy.description}
           target={displayName.trim()}
-          impact={[
-            t(
-              '管理成员与凭证（添加、停用、改角色，签发 API key 与 Handle）',
-              'Manage members and credentials: add, disable, change roles, issue API keys and Handles',
-            ),
-            t('批准或驳回动作请求', 'Approve or reject action requests'),
-            t(
-              '修改授权、策略、配额与系统接入',
-              'Change grants, policies, quotas and system connections',
-            ),
-          ]}
+          impact={ownerCopy.impact}
           confirmLabel={t('创建', 'Create')}
           onConfirm={() => createPrincipal(displayName.trim())}
           testId="create-principal-owner-confirm"

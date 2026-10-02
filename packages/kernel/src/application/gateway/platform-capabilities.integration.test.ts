@@ -507,6 +507,42 @@ describe.runIf(DATABASE_URL !== undefined)(
         // A password hash plus a verify (scrypt, ~1s together on a CI runner) on top of the
         // round-trips above — past Vitest's 5s default.
       }, 30_000);
+
+      it('refuses disabling a workspace’s last human owner (R-06: last_owner); allowed once a second human owner exists', async () => {
+        const ws = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query('insert into workspaces (id, name) values ($1, $2)', [
+            ws,
+            `sole-owner-${ws.slice(0, 8)}`,
+          ]),
+        );
+        const owner = await createUser(pool, {
+          login: `sole-owner-${randomUUID().slice(0, 8)}`,
+          displayName: 'Sole Owner',
+        });
+        await callAsAdmin('add_membership', { userId: owner.id, workspaceId: ws, role: 'owner' });
+
+        await expectPlatformError(
+          () => callAsAdmin('set_user_status', { userId: owner.id, status: 'disabled' }),
+          'last_owner',
+        );
+        // Nothing changed under the refusal.
+        const row = await withAdminClient(pool, (client) =>
+          client.query<{ status: string }>('select status from users where id = $1', [owner.id]),
+        );
+        expect(row.rows[0]?.status).toBe('active');
+
+        const second = await createUser(pool, {
+          login: `second-owner-${randomUUID().slice(0, 8)}`,
+          displayName: 'Second Owner',
+        });
+        await callAsAdmin('add_membership', { userId: second.id, workspaceId: ws, role: 'owner' });
+        const disabled = await callAsAdmin<UserWire>('set_user_status', {
+          userId: owner.id,
+          status: 'disabled',
+        });
+        expect(disabled.status).toBe('disabled');
+      });
     });
 
     describe('reset_user_password', () => {

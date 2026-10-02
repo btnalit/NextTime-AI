@@ -2646,7 +2646,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ userId: platformUserId, status: wire.UserStatusWireSchema }).strict(),
     resultSchema: wire.UserWireSchema,
     description:
-      'Disable or re-enable a user. Disabling revokes every console session and every workspace session of the user’s Principals immediately; the row, its memberships and its conversations are kept (audit only grows). The last active administrator cannot be disabled.',
+      'Disable or re-enable a user. Disabling revokes every console session and every workspace session of the user’s Principals immediately; the row, its memberships and its conversations are kept (audit only grows). The last active administrator cannot be disabled, nor can a workspace’s last active human owner (409 last_owner).',
   },
   {
     name: 'reset_user_password',

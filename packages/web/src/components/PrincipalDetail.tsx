@@ -3,10 +3,15 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
-import type { PrincipalRow, RotateApiKeyResult } from '../lib/governance.js';
+import {
+  type PrincipalRow,
+  type RotateApiKeyResult,
+  ownerCredentialConfirmCopy,
+} from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
+import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
 import { DrawerSection, DrawerSections } from './kit/drawer-section.js';
 import { ErrorBanner } from './kit/error-banner.js';
@@ -40,7 +45,10 @@ export interface PrincipalDetailProps {
  * R-06 (review 2026-10-02, D-05): the edit section shows for a `human` member and a `service`
  * credential alike — the kernel disables, re-keys and re-roles both — and stays hidden for the
  * platform's own identities it refuses (`platform_managed`): a Worker's `agent` Principal and an
- * internal service Principal (`internal`, kernel-derived).
+ * internal service Principal (`internal`, kernel-derived). Promoting a service credential to
+ * owner goes through the same `kit/confirm tier="irreversible"` as creating one
+ * (`CreatePrincipalForm`), so "create as member, then promote" cannot skip it; promoting a person,
+ * or demoting anyone, saves straight away as before.
  */
 export function PrincipalDetail({
   http,
@@ -53,6 +61,7 @@ export function PrincipalDetail({
   const [role, setRole] = useState<Role>(principal.role);
   const [savingRole, setSavingRole] = useState(false);
   const [roleError, setRoleError] = useState<unknown | null>(null);
+  const [confirmingOwner, setConfirmingOwner] = useState(false);
 
   const [rotating, setRotating] = useState(false);
   const [rotateError, setRotateError] = useState<unknown | null>(null);
@@ -62,22 +71,40 @@ export function PrincipalDetail({
   const [disabling, setDisabling] = useState(false);
   const [disableError, setDisableError] = useState<unknown | null>(null);
 
+  async function callSetRole(): Promise<void> {
+    const updated = await http.call<PrincipalRow>('set_principal_role', {
+      principalId: principal.id,
+      role,
+    });
+    onChanged(updated);
+  }
+
   async function saveRole(): Promise<void> {
     if (role === principal.role) return;
+    if (principal.kind === 'service' && role === 'owner') {
+      setRoleError(null);
+      setConfirmingOwner(true);
+      return;
+    }
     setSavingRole(true);
     setRoleError(null);
     try {
-      const updated = await http.call<PrincipalRow>('set_principal_role', {
-        principalId: principal.id,
-        role,
-      });
-      onChanged(updated);
+      await callSetRole();
     } catch (err) {
       if (isForbiddenError(err)) onForbidden('set_principal_role');
       setRoleError(err);
       setRole(principal.role);
     } finally {
       setSavingRole(false);
+    }
+  }
+
+  async function promoteServiceToOwner(): Promise<void> {
+    try {
+      await callSetRole();
+    } catch (err) {
+      if (isForbiddenError(err)) onForbidden('set_principal_role');
+      throw err;
     }
   }
 
@@ -117,6 +144,7 @@ export function PrincipalDetail({
 
   const disabled = Boolean(principal.disabledAt);
   const platformManaged = principal.kind === 'agent' || principal.internal === true;
+  const ownerCopy = ownerCredentialConfirmCopy(t);
 
   const metadataItems: KeyValueItem[] = [
     {
@@ -214,14 +242,28 @@ export function PrincipalDetail({
                     </option>
                   ))}
                 </Select>
-                <Button
-                  variant="secondary"
-                  onClick={() => void saveRole()}
-                  aria-busy={savingRole}
-                  disabled={role === principal.role || disabled}
-                >
-                  {t('保存', 'Save')}
-                </Button>
+                <Confirm
+                  tier="irreversible"
+                  open={confirmingOwner}
+                  onOpenChange={setConfirmingOwner}
+                  anchor={
+                    <Button
+                      variant="secondary"
+                      onClick={() => void saveRole()}
+                      aria-busy={savingRole}
+                      disabled={role === principal.role || disabled}
+                    >
+                      {t('保存', 'Save')}
+                    </Button>
+                  }
+                  title={t('把服务凭证提升为 owner', 'Promote a service credential to owner')}
+                  description={ownerCopy.description}
+                  target={principal.displayName}
+                  impact={ownerCopy.impact}
+                  confirmLabel={t('提升为 owner', 'Promote to owner')}
+                  onConfirm={promoteServiceToOwner}
+                  testId="principal-owner-confirm"
+                />
               </div>
             </Field>
             {roleError !== null ? (
