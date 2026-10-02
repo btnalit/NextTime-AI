@@ -289,6 +289,16 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
       timeout: 15_000,
     });
 
+    // --- caddy publishes only that credential route (2026-10-02 review R-01): the kernel-only
+    //     protocol routes and the host's health listing answer 404 at the edge. ---
+    expect((await page.request.get('/gate-host/healthz')).status()).toBe(404);
+    expect(
+      (await page.request.post(`/gate-host/i/${GATE_ID}/gate/apply`, { data: {} })).status(),
+    ).toBe(404);
+    expect(
+      (await page.request.get(`/gate-host/i/${GATE_ID}/gate/connected-accounts`)).status(),
+    ).toBe(404);
+
     // --- 测试连接: the gate host's own health probe against the fixture, through the take-over
     //     from the previous test — never `unreachable` once taken over. Asserted on `data-status`
     //     (the raw wire value `StatusChip` always carries — lib/status-tone.ts's own doc comment),

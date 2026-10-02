@@ -67,9 +67,19 @@ if [ -f scripts/check-backup-freshness.sh ]; then
   sh scripts/check-backup-freshness.sh 2>&1 | sed 's/^/STEP backup-freshness /'
 fi
 
-# 2. pre-upgrade dump
+# 2. pre-upgrade dump — named after the version it actually captures (the checkout is still on
+#    the running release here; step 3 moves it). A re-run after a failure past checkout finds the
+#    checkout already on $TAG: that dump is NOT a pre-$TAG rollback point, so it is named
+#    `nexttime-rerun-…` and kept out of the `nexttime-pre-*` set (and its retention), where it
+#    would otherwise push the genuine pre-upgrade dump out (2026-10-02 review L9-7).
 mkdir -p "$D/backups/pre-upgrade"
-DUMP="$D/backups/pre-upgrade/nexttime-pre-$TAG-$TS.dump"
+FROM=$(git describe --tags --always HEAD 2>/dev/null || echo unknown)
+if [ "$FROM" = "$TAG" ]; then
+  echo "STEP dump WARNING checkout already on $TAG (re-run) — this dump is not a pre-$TAG rollback point"
+  DUMP="$D/backups/pre-upgrade/nexttime-rerun-$TAG-$TS.dump"
+else
+  DUMP="$D/backups/pre-upgrade/nexttime-pre-$TAG-from-$FROM-$TS.dump"
+fi
 docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"$DUMP" </dev/null || fail dump
 echo "STEP dump $(stat -c %s "$DUMP") bytes $(docker compose exec -T postgres pg_restore --list <"$DUMP" | wc -l) toc"
 
@@ -139,6 +149,7 @@ docker compose --profile test stop fake-llm >/dev/null 2>&1
 docker compose run --rm -e BACKUP_NOW=1 backup </dev/null >/dev/null 2>&1
 echo "STEP backup-now exit=$? last=$(sed -n 's/^db_dump=//p' "$D/backups/last-success" 2>/dev/null)"
 ls -t "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | tail -n +4 | xargs -r rm -f --
+ls -t "$D/backups/pre-upgrade"/nexttime-rerun-*.dump 2>/dev/null | tail -n +2 | xargs -r rm -f --
 echo "STEP pre-upgrade-retention kept $(ls "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | wc -l)"
 if [ -f scripts/delete-workspaces-matching.sh ]; then
   sh scripts/delete-workspaces-matching.sh --expired --yes </dev/null 2>&1 | tail -n 3 | sed 's/^/STEP expired-workspaces /'
