@@ -3272,8 +3272,8 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | D0 验证债 | v0.34.0 的 S5.7 真实模型回归（上一次是 2026-09-18 的 v0.13.2，此后 21 个版本未跑；期间 pi 0.84 → 0.99、撤回 D4、每轮重投射门工具、排除清单、入口 prompt 契约都改变了模型看到的工具面） | `host-accept-real-model.md` §8 全流程；计数进 STATUS §2.2；任一场景 `<8/10` 记已知问题并开修复车道 |
 | D1 版本化镜像发布 | 发版即构建、扫描、签名、推送全部平台镜像；主机按版本拉取并重打成 compose 现有的本地镜像名 | 一次发版在 registry 产出每个平台镜像的 `vX.Y.Z` tag + 签名 + SBOM / provenance；主机 `pull-images.sh vX.Y.Z` 后 `up -d --no-build` 通过 S1–S4 |
 | D2 发版应用脚本入库 | 把主机上实际使用的 `nt-apply.sh`（新鲜度检查 → 发版前 dump → 拉 / 建镜像 → 迁移 dry-run → 迁移 → `up` → S3 / S1 / S2 / S4 → `BACKUP_NOW` → 留 3 份发版前 dump → `--expired` 清理）收进仓库，主机差异只读 `.env` | 主机以入库脚本应用下一个版本，一次通过；`runbooks/release.md` 只指向这一个入口 |
-| D3 干净主机安装首跑 | `drill-install.sh` 在一台干净主机（或虚拟机）上用发布镜像首次实跑，跑通旅程 ① | 安装耗时、手动步骤数记入私有记录；runbook 顺序与脚本一致 |
-| D4 升级可逆性 | `drill-upgrade.sh` 改用发布镜像，补拿自 v0.16.0 起缺失的 PROBE（core 0030–0033、governance 0012、worker 0003） | `release.md` §6 的"读代码推理"行改为实测 |
+| D3 干净主机安装首跑 | `drill-install.sh` 在一台干净主机（或虚拟机）上用发布镜像首次实跑，跑通旅程 ① | 安装耗时、手动步骤数记入私有记录；runbook 顺序与脚本一致。**推迟**（2026-10-02 维护者：暂无干净虚拟机，先不测） |
+| D4 升级可逆性 | 补拿自 v0.16.0 起缺失的 PROBE（core 0030–0033、governance 0012、worker 0003）。2026-10-02 维护者选方案 (b)：不碰活库——不用 `drill-upgrade.sh` 的活库回滚，改为 CI 可逆性探针（新版本迁移 + 旧版本 kernel 测试套件） | 改动迁移的 PR 自动出可逆性结论；历史版本对补跑后 `release.md` §6 的"读代码推理"行附上实测 |
 
 ### D0 实现说明（2026-10-02）
 
@@ -3346,7 +3346,21 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `.env` 导出——该脚本缺它会拒绝运行）；日志改到 `${NEXTTIME_DATA}/drills/`（`/tmp` 重启即丢）；验收失败计数，末行
   `RESULT ok` / `RESULT acceptance-failures=<n>` / `RESULT failed-at=<step>`；启动时自我复制到临时文件再 `exec`
   （切 tag 会改写脚本自身，同 `drill-upgrade.sh`）。
-- 验收：下一次发版（v0.35.0）主机用入库脚本应用。默认仍是源码构建，GHCR 可见性定下来之后改用 `--pull`。
+- 验收：v0.35.0 主机用入库脚本应用（源码构建）通过；v0.35.1 用 `--pull` 通过——之后主机应用的常规方式是 `--pull`
+  （包本就公开），源码构建是自动回退。
+
+### D4 实现说明
+
+- `.github/workflows/reversibility-probe.yml`：服务容器 Postgres（与 CI `test` 同镜像同库）→ 检出 HEAD 与 BASE 两份 →
+  列出 HEAD 相对 BASE 新增的迁移、以及 BASE 已发布后又被改过的迁移文件（两者都没有就判"无 schema 差异"直接结束）→
+  HEAD 侧 `pnpm --filter "@nexttime/kernel..." build` 后用自己的 `dist/cli/migrate.js` 把库迁到 HEAD schema → BASE 侧
+  装依赖后跑 `pnpm --filter @nexttime/kernel test`，结论写进 step summary。
+- 为什么这就是 §6 的问题：kernel 是唯一直接连 Postgres 的服务；BASE 的 `runMigrations`（`planMigrations`）只遍历自己
+  知道的文件，库里更新的迁移记录被忽略，被改过的旧迁移报校验和不一致；少数套件自建私有库从头迁移，那是 BASE 配
+  BASE schema，无信号但不污染共享库（核对过没有任何测试 drop 共享库或改 `search_path`）。
+- 触发：改动 `packages/kernel/migrations/**` 的 PR（BASE = 最新发布 tag）；`workflow_dispatch` 补历史。非必过检查。
+- 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
+- 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
 
 ## 6. 验收矩阵
 

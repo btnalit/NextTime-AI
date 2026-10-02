@@ -247,7 +247,8 @@
 | D0 | **完成**（2026-10-02，主机 v0.34.0）：docker_restart 7/10、api_observe 10/10、ssh_run_approve 10/10、ssh_run_auto 1/1、dependency_chat 10/10、make demo 1/1（§2.2）；逼出平台缺陷遗留 104（#382）与同类风险 105，另修两处验收脚本缺陷（本 PR） |
 | D1 | **完成**（#379、#387）：发版时 workflow_call 自动发布 11 个签名镜像（v0.35.0 / v0.35.1）；v0.35.1 在主机以 `apply-release.sh --pull` 应用——11 个镜像匿名拉取、cosign 验签全过（证书身份 `publish-images.yml@refs/heads/main` 对真实签名核实）、重打本地名、`up -d --no-build`，S3 34 / S1 22 / S2 69 / S4 22 一次通过、`RESULT ok`。包继承公开仓库的可见性、从首发起即公开，原"默认私有、待决定"的判断有误、无需决定。首次 `--pull` 暴露两处脚本缺陷（root 0600 docker 配置挂给非 root cosign 导致验签全失败；`| sed` 掩盖拉取失败）由 #387 修复 |
 | D2 | **完成**（#384）：v0.35.0 在主机由入库的 `scripts/apply-release.sh` 应用，`RESULT ok`（S3 34 / S1 22 / S2 69 / S4 22，迁移 core 0033，BACKUP_NOW，清 11 个过期工作区）；主机 `/tmp/nt-apply.sh` 退役 |
-| D3 / D4 | 未开始（D3 需要一台干净主机或虚拟机） |
+| D3 | **推迟**（2026-10-02 维护者：暂无干净虚拟机，先不测） |
+| D4 | 进行中（2026-10-02 维护者选 (b)：不碰活库）：CI 可逆性探针 `reversibility-probe.yml`——新版本迁移 + 旧版本 kernel 测试套件；改迁移的 PR 自动跑，历史版本对（core 0030–0033、governance 0012、worker 0003）用 dispatch 补跑后写进 `release.md` §6 |
 
 **S8 产品化与修复：完成**（2026-09-23 立项，`development-tasks.md` §5e；依据 `ui-audit-2026-09-23.md`）。维护者决定 F1–F6：不加新功能（`promote_template` 继续推后）；审计问题全部进 S8；组件地基 Radix 原语 + shadcn/ui 式组件 + Tailwind v4，主题沿用 §5.9 令牌；工作单元改为六条用户旅程，每条配 Playwright 旅程测试；CI 加三档截图回归、axe、文案守卫，界面中文为主；内核只加读模型（`execution_readiness`、`resolve_refs`、选择器数据源）。
 

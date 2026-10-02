@@ -1,0 +1,159 @@
+name: reversibility-probe
+
+# S9 D4 (docs/development-tasks.md §5g): migration reversibility evidence without touching any
+# live database. docs/runbooks/release.md §6 calls a migration reversible when the *previous*
+# release's code still works against the *new* schema — then a bad release can be rolled back by
+# code alone, no database restore. drill-upgrade.sh measured that on the host by upgrading and then
+# overwriting the live database; this workflow measures it in CI instead:
+#
+#   1. apply HEAD's migrations to a fresh Postgres (HEAD's own migrate CLI);
+#   2. run BASE's kernel test suite against that database.
+#
+# The kernel is the only service that talks to Postgres, so BASE's kernel suite on HEAD's schema is
+# the question release.md §6 asks. BASE's own runMigrations (called in the suite's beforeAll) only
+# walks BASE's files: newer applied migrations are ignored, and a migration file HEAD edited after
+# BASE applied it fails with a checksum mismatch — itself a reversibility failure. A few suites
+# create a private database and migrate it from scratch; they exercise BASE on BASE's schema (no
+# signal, no harm). This proves schema compatibility on an empty database, not on production data.
+#
+# Triggers:
+#   - pull_request touching packages/kernel/migrations/**: BASE = the latest release tag (what a
+#     host runs), HEAD = the PR. The answer arrives before the migration merges.
+#   - workflow_dispatch with explicit base/head: backfill evidence for past releases.
+# Not a required check: it reports; a failure is triaged (real incompatibility vs. a BASE test that
+# asserted a constraint the new migration deliberately changed) and recorded in release.md §6.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/kernel/migrations/**'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Older release tag whose code is probed (vX.Y.Z)
+        required: true
+        type: string
+      head:
+        description: Newer ref whose migrations are applied first (tag, branch or sha)
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.base }}-${{ inputs.head || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nexttime
+          POSTGRES_PASSWORD: nexttime
+          POSTGRES_DB: nexttime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U nexttime"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgres://nexttime:nexttime@localhost:5432/nexttime_test
+    steps:
+      - name: Resolve base and head
+        id: refs
+        env:
+          INPUT_BASE: ${{ inputs.base }}
+          INPUT_HEAD: ${{ inputs.head }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            base="$INPUT_BASE"; head="${INPUT_HEAD:-main}"
+          else
+            base=$(git ls-remote --tags --refs "$REPO" 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -n 1)
+            head="$SHA"
+          fi
+          case "$base" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::base must be a release tag vX.Y.Z, got '$base'"; exit 1 ;; esac
+          echo "base=$base" >>"$GITHUB_OUTPUT"
+          echo "head=$head" >>"$GITHUB_OUTPUT"
+          echo "Probing BASE $base code against HEAD $head schema" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout HEAD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.refs.outputs.head }}
+          path: head
+          persist-credentials: false
+
+      - name: Checkout BASE
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.refs.outputs.base }}
+          path: base
+          persist-credentials: false
+
+      - name: Schema delta (HEAD migrations BASE does not have)
+        id: delta
+        run: |
+          (cd base/packages/kernel/migrations && find . -name '*.sql' | sort) >base.list
+          (cd head/packages/kernel/migrations && find . -name '*.sql' | sort) >head.list
+          comm -13 base.list head.list >delta.list
+          changed=""
+          for f in $(comm -12 base.list head.list); do
+            cmp -s "base/packages/kernel/migrations/$f" "head/packages/kernel/migrations/$f" || changed="$changed $f"
+          done
+          {
+            echo "### Schema delta"
+            if [ -s delta.list ]; then sed 's/^/- new: /' delta.list; else echo "- no new migrations"; fi
+            for f in $changed; do echo "- **edited after BASE shipped it:** $f"; done
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ -s delta.list ] || [ -n "$changed" ]; then echo "has_delta=true" >>"$GITHUB_OUTPUT"; else echo "has_delta=false" >>"$GITHUB_OUTPUT"; fi
+
+      - name: Setup pnpm and Node 22
+        if: steps.delta.outputs.has_delta == 'true'
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          install: false
+
+      - name: Apply HEAD migrations
+        if: steps.delta.outputs.has_delta == 'true'
+        working-directory: head
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter "@nexttime/kernel..." build
+          node packages/kernel/dist/cli/migrate.js
+          psql "$DATABASE_URL" -tAc "select module || ' ' || lpad(version::text, 4, '0') from schema_migrations order by module, version" | tail -n 5 | sed 's/^/applied: /'
+
+      - name: Run BASE kernel suite on HEAD schema
+        if: steps.delta.outputs.has_delta == 'true'
+        working-directory: base
+        run: |
+          pnpm install --frozen-lockfile
+          set +e
+          pnpm --filter @nexttime/kernel test 2>&1 | tee ../probe.log
+          rc=${PIPESTATUS[0]}
+          # set -e stays off: a grep with no match must not abort before the result line is written.
+          {
+            echo "### BASE suite on HEAD schema"
+            sed 's/\x1b\[[0-9;]*m//g' ../probe.log | grep -E 'Test Files|Tests ' | tail -n 2 | sed 's/^/    /' || true
+            sed 's/\x1b\[[0-9;]*m//g' ../probe.log | grep -E '(FAIL|×) ' | sed 's/^/- /' | sort -u | head -n 40 || true
+            if [ "$rc" -eq 0 ]; then echo "**Result: reversible** — BASE code passes on HEAD schema"; else echo "**Result: not proven** — triage the failures above (release.md §6)"; fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+        shell: bash
+
+      - name: No schema delta
+        if: steps.delta.outputs.has_delta != 'true'
+        run: |
+          echo "**Result: trivially reversible** — HEAD adds and changes no migration over BASE" >>"$GITHUB_STEP_SUMMARY"
