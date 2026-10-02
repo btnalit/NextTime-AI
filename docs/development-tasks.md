@@ -3294,6 +3294,25 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - **公开仓库红线**：CI 从干净检出构建，构建上下文不含 `.env` / `secrets/` / `docs/private/`（`.dockerignore`
   另有一层）；镜像只含仓库里已公开的源码与依赖。
 
+### D1 实现说明
+
+- `.github/workflows/publish-images.yml`：`workflow_call`（`release-please.yml` 的 `publish-images` job，条件
+  `release_created`）+ `workflow_dispatch`（输入已有 tag）。十一路矩阵、`fail-fast: false`；检出 `refs/tags/<tag>`，
+  构建参数与 `build-images.sh` 同源，`org.opencontainers.image.revision` 取 tag 检出后的 `git rev-parse HEAD`
+  （不是工作流自身的 `github.sha`——补发历史 tag 时两者不同）；build-push `provenance: mode=max` + `sbom: true`；
+  `cosign sign --yes <image>@<digest>`；Trivy 扫已推送的 digest，SARIF 分类 `publish-<service>`，只报告。
+- `scripts/pull-images.sh`：第 0 遍先解析全部本地名（不碰网络），再拉取 → 验签 → 重打 tag 三遍，任一步失败不留下
+  一半重打的状态。本地名取自 `docker compose --profile build-only config --images <service>`——主机实测
+  （Compose 2.40）这条命令会连带打印 depends_on 链上的镜像且顺序不固定（kernel 会带出 postgres 的 pgvector），
+  所以只认恰好一条 `…-<service>` 形式的名字。验签：`ghcr.io/sigstore/cosign/cosign` 钉 digest 的容器，issuer =
+  GitHub Actions OIDC，身份正则钉到 `<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`（被调用的
+  可复用工作流就是 Fulcio 证书里的身份）；worker-runtime 额外核对 `ai.nexttime.pi-version` 标签等于检出的
+  `pi.version`。`--no-verify` 只能显式给出。
+- 本地无 Docker、无 actionlint：工作流与脚本只做了 `sh -n` 和主机上的 `config --images` 实测；第一次真实验证是合入后
+  对 v0.34.0 手动 dispatch `publish-images`。发布失败不影响发版本身——主机退回 `build-images.sh`。
+- 待维护者决定：GHCR 新包默认私有。主机拉取私有包需要 read:packages 令牌（放主机 `secrets/`）；改为公开与公开
+  仓库、"通用底座"一致，但**公开后不可改回私有**。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
