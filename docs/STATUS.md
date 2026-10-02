@@ -414,7 +414,7 @@
 | 111 | R-06 `create_principal` 建出的 service principal 不能停用、轮换 key、改角色（泄露的 owner 级 key 无法吊销）；两边的"最后一个 owner"谓词不一致（§4） | **P1** | 复审修复波次 1（D-05） | 开放 |
 | 112 | R-07 公开仓库红线：`scripts/restore.sh:126` 的提示文字写着主机检出路径（§4） | **P1** | — | 关闭（#394：改为 `<CODE_DIR>`；历史中的字符串不改写，记在 `docs/private/`；通用路径 CI 守卫待议） |
 | 113 | R-08 在待审修订草稿上导入 manifest 会丢 `draftOf`，同一 Operation 身份出现两条 `published`，`getPublishedOperation` 任取一条（§4） | **P1** | 复审修复波次 0 | 开放（加唯一索引前先查主机有无既有重复） |
-| 114 | R-09 spawn 失败与 `spawn_lost` 扫描让 Task 失败，但 WorkerRun 的 Handle（可能还有容器）仍有效，违反 §5.5"terminated 吊销全部 Handle"（§4） | **P1** | 复审修复波次 0 | 开放 |
+| 114 | R-09 spawn 失败与 `spawn_lost` 扫描让 Task 失败，但 WorkerRun 的 Handle（可能还有容器）仍有效，违反 §5.5"terminated 吊销全部 Handle"（§4） | **P1** | 复审修复波次 0 | 关闭（#399：spawn 失败、重排队 spawn 失败与 `spawn_lost` 扫描共用 `failTaskAndReapWorkerRuns`——事务内终止该 Task 全部 run 并吊销 Handle 树，事务外尽力 `supervisorClient.terminate`；spawn 失败的 catch 同事务吊销本 run 的 Handle；supervisor 在 create 成功、start 失败时删掉容器（L6-18）。残留：客户端超时后 supervisor 尚未登记该 run 时 terminate 落空，容器带着已吊销的 Handle 跑到 supervisor 自己的超时，归 R-27） |
 | 115 | R-10（潜在）`openai-responses` 的用量永远解析为 0，I18 预算与成本核算失效（§4；配置了该类供应商才会触发） | **P1** | 复审修复波次 1（D-09） | 开放 |
 | 116 | R-11 `restore.sh` 失败或部分恢复时仍报成功，不是可靠的跨版本回滚；release.md §6 的可逆性表依赖它（§4） | **P1** | 复审修复波次 0 | 开放 |
 | 117 | P2 红线与安全 21 簇（§5A）：R-12–R-16 吊销缺口（重置 / 改密 / 5000 行截断 / 登出失败 / 客户端检测不到）、R-17 service principal 可批准（D-06 认定"必经一个人"即升 P1）、R-18 / R-19 门 manifest 信任根与放宽低报、R-22 路径参数穿越、R-23 llm-admin 外带供应商 key、R-24 env 中的 key、R-25、R-26 通配授权不可见（D-14 认定属底线 3 即升 P1）、R-27 supervisor `/task/:id` 不鉴权 + 无出站目标谓词、R-28–R-34 | P2 | 复审修复波次 0（R-16、R-32）/ 1（R-17、R-26、R-27）/ 3（其余） | 开放 |
