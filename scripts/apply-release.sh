@@ -39,7 +39,8 @@ if [ "${APPLY_RELEASE_SELF_COPY:-}" != 1 ]; then
   cp "$0" "$self_copy" || exit 1
   APPLY_RELEASE_SELF_COPY=1 exec sh "$self_copy" "$@"
 fi
-trap 'rm -f "$0"' EXIT
+# Remove only the private copy — never the tracked script, even if someone exports the flag.
+case "$0" in /tmp/apply-release.*) trap 'rm -f "$0"' EXIT ;; esac
 
 pull=0
 if [ "${1:-}" = "--pull" ]; then pull=1; shift; fi
@@ -82,10 +83,18 @@ echo "STEP checkout $(git rev-parse --short HEAD) KV=$KERNEL_VERSION"
 # 4. images
 images_from=build
 if [ "$pull" -eq 1 ]; then
-  if [ -f scripts/pull-images.sh ] && sh scripts/pull-images.sh "$TAG" 2>&1 | sed 's/^/STEP pull /'; then
+  # Exit status from the script itself, not from a pipe into sed (that masked a failed pull as
+  # success on 2026-10-02 — no fallback build ran).
+  pull_rc=1
+  if [ -f scripts/pull-images.sh ]; then
+    sh scripts/pull-images.sh "$TAG" >"$LOG_DIR/apply-$TAG-$TS-pull.log" 2>&1
+    pull_rc=$?
+    sed 's/^/STEP pull /' "$LOG_DIR/apply-$TAG-$TS-pull.log"
+  fi
+  if [ "$pull_rc" -eq 0 ]; then
     images_from=pull
   else
-    echo "STEP pull failed — falling back to the source build"
+    echo "STEP pull failed (rc=$pull_rc) — falling back to the source build"
   fi
 fi
 if [ "$images_from" = build ]; then
