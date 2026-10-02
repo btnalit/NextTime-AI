@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { OntologyDraftNotFoundError } from '../../substrate/ontology/index.js';
 import { WorkerDefinitionNotFoundError } from './definitions.js';
 import { ProcedureNotFoundError } from './procedures.js';
 import { SkillNotFoundError } from './skills.js';
@@ -10,9 +11,11 @@ import { SkillNotFoundError } from './skills.js';
 /**
  * application/worker/draft-lifecycle: the S8 W3 K2 (leftover 82) draft terminal states —
  * `draft -> discarded` (manual, one caller's own draft, `discard_draft`) and
- * `draft -> expired` (periodic kernel sweep, every workspace, every kind) — for the three
+ * `draft -> expired` (periodic kernel sweep, every workspace, the three worker kinds) — for the
  * proposer-private (I16) registries this module's siblings own: `worker_definitions`
- * (definitions.ts), `skills` (skills.ts), `procedures` (procedures.ts). Both paths delete the row
+ * (definitions.ts), `skills` (skills.ts), `procedures` (procedures.ts). Leftover 99 adds a fourth
+ * kind to the manual path only: `ontology_versions` (substrate/ontology/registry.ts, migrated by
+ * core/0033) — ontology drafts are discard-only and are NOT swept by `expireDraftsOnce`. Both paths delete the row
  * outright (migrations/worker/0003_draft_discard.sql: no fourth `PublishableStatus` value, and a
  * database trigger blocks deleting anything but a `draft` row regardless of what this file gets
  * right) and write an AuditRecord in the same transaction as the delete (I11) — the durable
@@ -34,6 +37,10 @@ import { SkillNotFoundError } from './skills.js';
 // -------------------------------------------------------------------------------------------
 // discard_draft (manual, one caller's own draft)
 // -------------------------------------------------------------------------------------------
+
+/** The kinds the periodic expiry sweep covers — every `DraftKind` except `ontology_version`
+ *  (leftover 99 asked only for manual discard of ontology drafts, not automatic expiry). */
+type SweptDraftKind = Exclude<DraftKind, 'ontology_version'>;
 
 export interface DraftRef {
   readonly kind: DraftKind;
@@ -105,6 +112,16 @@ async function lookupDraftForUpdate(
     );
     return result.rows[0] ?? null;
   }
+  if (ref.kind === 'ontology_version') {
+    // OntologyDefinition has no display-name field, so `name` is always null.
+    const result = await client.query<DraftLookupRow>(
+      `select status, proposed_by, null::text as name from ontology_versions
+       where workspace_id = $1 and id = $2 and version = $3
+       for update`,
+      [workspaceId, ref.id, ref.version],
+    );
+    return result.rows[0] ?? null;
+  }
   const result = await client.query<DraftLookupRow>(
     `select status, proposed_by, name from procedures
      where workspace_id = $1 and id = $2 and version = $3
@@ -134,6 +151,14 @@ async function deleteDraftRow(
     );
     return (result.rowCount ?? 0) > 0;
   }
+  if (ref.kind === 'ontology_version') {
+    const result = await client.query(
+      `delete from ontology_versions
+       where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'`,
+      [workspaceId, ref.id, ref.version],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
   const result = await client.query(
     `delete from procedures
      where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'`,
@@ -148,6 +173,9 @@ function notFoundErrorFor(ref: DraftRef, workspaceId: string): Error {
   }
   if (ref.kind === 'skill') {
     return new SkillNotFoundError(workspaceId, ref.id);
+  }
+  if (ref.kind === 'ontology_version') {
+    return new OntologyDraftNotFoundError(ref.id, ref.version);
   }
   return new ProcedureNotFoundError(workspaceId, ref.id);
 }
@@ -178,7 +206,7 @@ export async function discardDraft(
 }
 
 // -------------------------------------------------------------------------------------------
-// periodic expiry sweep (all workspaces, all three kinds)
+// periodic expiry sweep (all workspaces, the three worker kinds; ontology drafts are not swept)
 // -------------------------------------------------------------------------------------------
 
 /** Default staleness threshold for the periodic expiry sweep — maintainer decision (S8 W3 K2,
@@ -234,7 +262,7 @@ interface ExpiredDraftCandidateRow {
   readonly workspace_id: string;
   readonly id: string;
   readonly version: number;
-  readonly kind: DraftKind;
+  readonly kind: SweptDraftKind;
   readonly proposed_by: string;
   readonly name: string | null;
 }

@@ -621,6 +621,14 @@ function ProposalDetailView({
     onBack();
   }
 
+  // Discard (leftover 99) deletes the draft row outright — only the drafts list changes; no type
+  // becomes visible or disappears, so `list_types` is left alone.
+  function handleDiscarded(): void {
+    invalidateCapability(http, 'list_ontology_versions');
+    void proposals.reload();
+    onBack();
+  }
+
   return (
     <div className="stack" data-testid="graph-proposal-detail-view">
       <Button variant="ghost" size="s" onClick={onBack} data-testid="graph-proposal-back">
@@ -650,6 +658,7 @@ function ProposalDetailView({
           row={row}
           types={types}
           onPublished={handlePublished}
+          onDiscarded={handleDiscarded}
           t={t}
         />
       )}
@@ -674,12 +683,14 @@ function ProposalDetailBody({
   row,
   types,
   onPublished,
+  onDiscarded,
   t,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OntologyVersionListItemWire;
   readonly types: CapabilityListResult<OntologyTypeWire>;
   readonly onPublished: () => void;
+  readonly onDiscarded: () => void;
   readonly t: Translate;
 }) {
   const currentTypes = types.state.status === 'ready' ? types.state.data.items : undefined;
@@ -750,7 +761,10 @@ function ProposalDetailBody({
         )}
       </div>
       {row.status === 'draft' ? (
-        <PublishProposalButton http={http} row={row} onPublished={onPublished} t={t} />
+        <div className="row-wrap">
+          <PublishProposalButton http={http} row={row} onPublished={onPublished} t={t} />
+          <DiscardProposalButton http={http} row={row} onDiscarded={onDiscarded} t={t} />
+        </div>
       ) : null}
     </div>
   );
@@ -811,6 +825,67 @@ function PublishProposalButton({
         onPublished();
       }}
       testId="graph-proposal-publish-confirm"
+    />
+  );
+}
+
+/** Leftover 99: the proposer discards their own ontology draft (`discard_draft{kind:
+ *  'ontology_version'}`) — a `medium` confirm like `CatalogPage.tsx`'s `DiscardDraftConfirm` (a
+ *  hard delete of a private, easily re-proposed draft; not the `irreversible` tier publish uses). */
+function DiscardProposalButton({
+  http,
+  row,
+  onDiscarded,
+  t,
+}: {
+  readonly http: CapabilityCaller;
+  readonly row: OntologyVersionListItemWire;
+  readonly onDiscarded: () => void;
+  readonly t: Translate;
+}) {
+  const permissions = usePermissions();
+  const [open, setOpen] = useState(false);
+
+  // Same hide-after-a-real-403 idiom (and `&& !open` rule) as `PublishProposalButton` above.
+  if (permissions.isDenied('discard_draft') && !open) return null;
+
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={setOpen}
+      anchor={
+        <Button
+          variant="ghost"
+          size="s"
+          onClick={() => setOpen(true)}
+          data-testid="graph-proposal-discard"
+        >
+          {t('丢弃', 'Discard')}
+        </Button>
+      }
+      title={t('丢弃本体提案', 'Discard ontology proposal')}
+      description={t(
+        '草稿将被删除，无法恢复。',
+        'This draft will be permanently deleted and cannot be recovered.',
+      )}
+      target={`v${row.version}`}
+      confirmLabel={t('丢弃', 'Discard')}
+      danger
+      onConfirm={async () => {
+        try {
+          await http.call('discard_draft', {
+            kind: 'ontology_version',
+            id: row.id,
+            version: row.version,
+          });
+        } catch (err) {
+          if (isForbiddenError(err)) permissions.markDenied('discard_draft');
+          throw err;
+        }
+        onDiscarded();
+      }}
+      testId="graph-proposal-discard-confirm"
     />
   );
 }

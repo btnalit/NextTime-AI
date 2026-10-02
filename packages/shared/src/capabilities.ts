@@ -2067,7 +2067,8 @@ const workerCapabilities: readonly Capability[] = [
     description: 'Deprecate a published WorkerDefinition version.',
   },
   {
-    // S8 W3 K2 (leftover 82): drafts of WorkerDefinition/Skill/Procedure had `draft -> published`
+    // S8 W3 K2 (leftover 82; ontology_version added by leftover 99): drafts of
+    // WorkerDefinition/Skill/Procedure/OntologyVersion had `draft -> published`
     // as their only exit (I16 "提议者私有" — nobody else can even see it, so no owner-override
     // exists either). Human-channel-only, same as publish_*/deprecate_* right above/below — no
     // `minRole`, I16's channel split is the actual gate. Deletes the row outright (never a fourth
@@ -2084,7 +2085,7 @@ const workerCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.DiscardDraftResultWireSchema,
     description:
-      'Discard one of your own private draft WorkerDefinition/Skill/Procedure versions (I16). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
+      'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
   },
   {
     name: 'list_worker_definitions',
