@@ -3327,8 +3327,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `pi.version`。`--no-verify` 只能显式给出。
 - 本地无 Docker、无 actionlint：工作流与脚本只做了 `sh -n` 和主机上的 `config --images` 实测；第一次真实验证是合入后
   对 v0.34.0 手动 dispatch `publish-images`。发布失败不影响发版本身——主机退回 `build-images.sh`。
-- 待维护者决定：GHCR 新包默认私有。主机拉取私有包需要 read:packages 令牌（放主机 `secrets/`）；改为公开与公开
-  仓库、"通用底座"一致，但**公开后不可改回私有**。
+- ~~待维护者决定：GHCR 新包默认私有~~ 更正（2026-10-02 核实）：由公开仓库的工作流发布的包继承仓库可见性，11 个包
+  从第一次发布起就是公开的、匿名可拉，无需决定也无需改设置。
+- 主机首次 `--pull`（v0.35.0 重新应用）暴露两处脚本缺陷：主机有 root 的 0600 `~/.docker/config.json` 时，
+  `pull-images.sh` 把它挂给以非 root 运行的 cosign 容器 → "permission denied"，每个镜像都验签失败（签名本身与
+  身份正则无误——同一 digest 用精确正则匿名验签通过，证书身份即 `publish-images.yml@refs/heads/main`）；
+  `apply-release.sh` 以管道 `| sed` 判断拉取成败，取到的是 sed 的退出码，失败被当成成功、没有退回源码构建
+  （三遍式设计让验签失败发生在重打 tag 之前，本地镜像未被改动，栈不受影响）。修为匿名优先、失败且有配置时以
+  uid 0 挂配置重试并打印 cosign 报错；拉取退出码直接取自脚本。
 
 ### D2 实现说明
 

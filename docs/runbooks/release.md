@@ -99,8 +99,9 @@ sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（身份钉到本仓�
 docker compose up -d --no-build
 ```
 
-验签用钉 digest 的 cosign 容器跑，主机不需要装任何东西；私有包需先 `docker login ghcr.io`（read:packages
-令牌，放主机 `secrets/`，不进仓库）。重打 tag 之后 compose、worker-supervisor 白名单、`activeRuntimeImage`、
+验签用钉 digest 的 cosign 容器跑，主机不需要装任何东西。包是公开的（从公开仓库的工作流发布、继承仓库可见性，
+2026-10-02 核实匿名可拉），主机不需要任何 registry 凭证；若以后改成私有，先 `docker login ghcr.io`（read:packages
+令牌，放主机 `secrets/`，不进仓库），验签会在匿名失败后带上 docker 配置重试。重打 tag 之后 compose、worker-supervisor 白名单、`activeRuntimeImage`、
 「pi 运行时」卡片看到的名字与标签和源码构建完全一样。`.env` 里 `EXPLORER_BUILD=1` 的主机：发布的 caddy
 不含 Explorer bundle，caddy 仍用 `sh scripts/build-images.sh caddy` 构建。验收夹具（accept-s2 / fake-llm）
 不发布，照旧在主机构建。拉取或验签失败就退回 `build-images.sh`，并记进主机私有记录。
