@@ -190,7 +190,7 @@
 
 | 车道 | 项 | 状态 |
 |---|---|---|
-| W9-C | 遗留 36 `create_connection` 拒绝命中任何 `gate_instances.endpoint` 的地址（400 `endpoint_is_platform_gate`）；`accept_s2.sh` 的 docker 门改走 P-B1 目录路径 | 完成（PR #186；关闭 36） |
+| W9-C | 遗留 36 `create_connection` 拒绝命中任何 `gate_instances.endpoint` 的地址（400 `endpoint_is_platform_gate`）；`accept_s2.sh` 的 docker 门改走 P-B1 目录路径 | 完成（PR #186；关闭 36——2026-10-02 复审重开 → 遗留 106 / 117） |
 | W9-C | 遗留 22 supervisor `reconcile()` 以标签 ∪ 当前已发布 egressDeny 为准，复用分支 egressDeny 变化并入重建判定 | 完成（PR #187；关闭 22） |
 | W9-C | 遗留 20 postgres / 两个打包门 / gate-host / caddy 补 `read_only` + `cap_drop:[ALL]` + `no-new-privileges`（caddy 文件 capability 改 `cap_add: [NET_BIND_SERVICE]`） | 完成（PR #188；关闭 20；打包门的加固只能在主机验证） |
 | W9-B | S5.4 prompt 与工具描述对齐契约（09-09 审计 15 条）、`scripts/guards/prompt-contract.mjs` 进 `ci:guards`、fake-llm 拒绝非对象工具 schema | 完成（PR #190） |
@@ -245,7 +245,7 @@
 
 | 项 | 状态 |
 |---|---|
-| D0 | **完成**（2026-10-02，主机 v0.34.0）：docker_restart 7/10、api_observe 10/10、ssh_run_approve 10/10、ssh_run_auto 1/1、dependency_chat 10/10、make demo 1/1（§2.2）；逼出平台缺陷遗留 104（#382）与同类风险 105，另修两处验收脚本缺陷（本 PR） |
+| D0 | **完成**（2026-10-02，主机 v0.34.0）：docker_restart 7/10、api_observe 10/10、ssh_run_approve 10/10、ssh_run_auto 1/1、dependency_chat 10/10、make demo 1/1（§2.2）；逼出平台缺陷遗留 104（#382；2026-10-02 复审重开 → 遗留 120）与同类风险 105，另修两处验收脚本缺陷（本 PR） |
 | D1 | **完成**（#379、#387）：发版时 workflow_call 自动发布 11 个签名镜像（v0.35.0 / v0.35.1）；v0.35.1 在主机以 `apply-release.sh --pull` 应用——11 个镜像匿名拉取、cosign 验签全过（证书身份 `publish-images.yml@refs/heads/main` 对真实签名核实）、重打本地名、`up -d --no-build`，S3 34 / S1 22 / S2 69 / S4 22 一次通过、`RESULT ok`。包继承公开仓库的可见性、从首发起即公开，原"默认私有、待决定"的判断有误、无需决定。首次 `--pull` 暴露两处脚本缺陷（root 0600 docker 配置挂给非 root cosign 导致验签全失败；`| sed` 掩盖拉取失败）由 #387 修复 |
 | D2 | **完成**（#384）：v0.35.0 在主机由入库的 `scripts/apply-release.sh` 应用，`RESULT ok`（S3 34 / S1 22 / S2 69 / S4 22，迁移 core 0033，BACKUP_NOW，清 11 个过期工作区）；主机 `/tmp/nt-apply.sh` 退役 |
 | D3 | **推迟**（2026-10-02 维护者：暂无干净虚拟机，先不测） |
