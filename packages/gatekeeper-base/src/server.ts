@@ -12,6 +12,7 @@ import {
   IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
+  OperationRefusedError,
   ParamsSchemaInvalidError,
   ParamsValidationError,
   RevertNotSupportedError,
@@ -77,6 +78,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
   }
   if (err instanceof IdempotencyConflictError) {
     return { status: 409, code: 'idempotency_conflict', message: err.message };
+  }
+  if (err instanceof OperationRefusedError) {
+    return { status: 403, code: 'operation_refused', message: err.message };
   }
   if (err instanceof CredentialResolutionError) {
     return { status: 424, code: 'credential_unavailable', message: err.message };

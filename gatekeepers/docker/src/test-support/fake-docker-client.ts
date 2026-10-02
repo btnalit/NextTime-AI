@@ -15,6 +15,7 @@ export interface FakeContainerSeed {
 }
 
 export interface FakeDockerClient extends DockerClient {
+  readonly logsTailCalls: string[];
   readonly restartCalls: Array<{ id: string; timeoutSeconds: number }>;
   readonly startCalls: string[];
   readonly stopCalls: string[];
@@ -54,21 +55,25 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
     });
   }
 
+  const logsTailCalls: string[] = [];
   const restartCalls: Array<{ id: string; timeoutSeconds: number }> = [];
   const startCalls: string[] = [];
   const stopCalls: string[] = [];
   let pingCalls = 0;
 
+  /** Docker's own lookup order: full id, then name, then an unambiguous id prefix. */
   function findByIdOrName(idOrName: string) {
     const byId = containers.get(idOrName);
     if (byId) return byId;
     for (const c of containers.values()) {
       if (c.name === idOrName) return c;
     }
-    return undefined;
+    const byPrefix = [...containers.values()].filter((c) => c.id.startsWith(idOrName));
+    return byPrefix.length === 1 ? byPrefix[0] : undefined;
   }
 
   return {
+    logsTailCalls,
     restartCalls,
     startCalls,
     stopCalls,
@@ -98,6 +103,7 @@ export function createFakeDockerClient(seeds: readonly FakeContainerSeed[] = [])
     },
 
     async logsTail(id: string, tail: number): Promise<string> {
+      logsTailCalls.push(id);
       const found = findByIdOrName(id);
       if (!found) throw new Error(`no such container: ${id}`);
       return `fake logs for ${found.name} (tail=${tail})`;

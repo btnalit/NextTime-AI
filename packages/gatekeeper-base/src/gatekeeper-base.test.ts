@@ -1,6 +1,11 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { CredentialResolutionError, IdempotencyConflictError } from './errors.js';
+import {
+  CredentialResolutionError,
+  IdempotencyConflictError,
+  OperationRefusedError,
+  TransportInvokeError,
+} from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
@@ -129,6 +134,35 @@ describe('GatekeeperBase', () => {
     await expect(gate.apply('stock.adjust', { qty: 2 }, 'req-2')).rejects.toBeInstanceOf(
       IdempotencyConflictError,
     );
+  });
+
+  it('a transport refusal releases the reservation; any other transport failure keeps it (R-04)', async () => {
+    let refuse = true;
+    const invoke = vi.fn(async () => {
+      if (refuse) throw new OperationRefusedError('not served by this gate');
+      throw new TransportInvokeError('target failed mid-call');
+    });
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
+      OperationRefusedError,
+    );
+    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
+      OperationRefusedError,
+    );
+    refuse = false;
+    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
+      TransportInvokeError,
+    );
+    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
+      IdempotencyConflictError,
+    );
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
 
   it('validates params against the operation params_schema and rejects invalid input', async () => {

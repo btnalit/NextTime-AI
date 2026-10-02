@@ -1,12 +1,13 @@
 import {
   BindingKindMismatchError,
+  OperationRefusedError,
   type Transport,
   type TransportInvokeContext,
   TransportInvokeError,
   type TransportInvokeResult,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
-import type { ContainerSummary, DockerClient } from './docker-client.js';
+import type { ContainerSummary, DockerClient, ListContainersOptions } from './docker-client.js';
 
 /**
  * DockerodeTransport: this gate's own `Transport` implementation (design doc §7.5's "binding.kind
@@ -29,9 +30,28 @@ import type { ContainerSummary, DockerClient } from './docker-client.js';
  * `GatekeeperBase.simulate` calls a transport's `simulate` for *any* Operation name when the
  * transport defines one (not just `mode: 'execute'` ones — `gatekeeper-base.ts`), so every
  * Operation name below has a `simulate` case, not only the three execute ones.
+ *
+ * Agent containers (R-04, decision D-04): this gate never lists or touches the platform's own
+ * agent containers — the entry and Task containers worker-supervisor spawns, whose stdout carries
+ * pi RPC (prompts, tool calls, tool results) of whichever principal owns them. They are filtered
+ * out of every enumeration (`containers.list`, `compose.ls`, `compose.up/down`'s targets and
+ * results), and every per-container Operation resolves its target first, refuses an agent
+ * container with `OperationRefusedError` (403 `operation_refused`), and then acts on the resolved
+ * full id — never on the caller's name or id prefix. The platform's service containers (kernel,
+ * postgres, caddy, …) stay visible and operable.
  */
 
 const OBSERVE_ALL_DEFAULT = true;
+
+/** The label worker-supervisor stamps on every container it spawns: `entry` for a resident entry
+ *  container, `worker` for a Task container (`packages/worker-supervisor/src/spawn-spec.ts`
+ *  `ENTRY_ROLE_LABEL`, `task-spawn-spec.ts` `TASK_ROLE_VALUE`). Matched by key alone, as the
+ *  supervisor's own event filter does (`docker-events.ts`), so every role value is excluded. */
+const AGENT_ROLE_LABEL = 'nexttime.role';
+
+function isAgentContainer(container: ContainerSummary): boolean {
+  return container.labels[AGENT_ROLE_LABEL] !== undefined;
+}
 
 function asRecord(params: unknown): Record<string, unknown> {
   return (params ?? {}) as Record<string, unknown>;
@@ -72,6 +92,33 @@ function assertCliBinding(operation: Operation): void {
   }
 }
 
+/** Every container enumeration goes through here, so no Operation can list an agent container. */
+async function listServedContainers(
+  client: DockerClient,
+  options: ListContainersOptions,
+): Promise<ContainerSummary[]> {
+  const all = await client.listContainers(options);
+  return all.filter((c) => !isAgentContainer(c));
+}
+
+/** Resolves a per-container Operation's `id` param — a full id, an id prefix or a name, whatever
+ *  the Engine API's inspect accepts — to the container it actually names, and refuses an agent
+ *  container by that container's own labels, never by the name. Callers then act on the returned
+ *  full id, so the check and the action cannot name different containers. */
+async function resolveServedContainer(
+  client: DockerClient,
+  operationName: string,
+  idOrName: string,
+): Promise<ContainerSummary> {
+  const container = await client.inspectContainer(idOrName);
+  if (isAgentContainer(container)) {
+    throw new OperationRefusedError(
+      `docker gate: operation "${operationName}" refused — container "${idOrName}" is a platform agent container (label ${AGENT_ROLE_LABEL}); this gate never lists or touches agent containers`,
+    );
+  }
+  return container;
+}
+
 /** `compose.up`/`compose.down`'s reduced semantics (README/PR body "已知偏离"): starts/stops the
  *  containers *already present* on the host under `com.docker.compose.project=<project>` — not a
  *  full Compose reconciliation (no image pull, no service create/recreate, no network/volume
@@ -82,7 +129,7 @@ async function composeTargets(
   project: string,
   wantRunning: boolean,
 ): Promise<ContainerSummary[]> {
-  const all = await client.listContainers({ all: true, project });
+  const all = await listServedContainers(client, { all: true, project });
   return all.filter((c) => (wantRunning ? c.state !== 'running' : c.state === 'running'));
 }
 
@@ -94,17 +141,17 @@ async function invokeOperation(
   switch (operation.name) {
     case 'containers.list': {
       const all = optionalBoolean(params, 'all', OBSERVE_ALL_DEFAULT);
-      const items = await client.listContainers({ all });
+      const items = await listServedContainers(client, { all });
       return { data: items };
     }
     case 'container.inspect': {
       const id = requireString(params, 'id', operation.name);
-      const item = await client.inspectContainer(id);
+      const item = await resolveServedContainer(client, operation.name, id);
       return { data: item };
     }
     case 'compose.ls': {
       const project = optionalString(params, 'project');
-      const items = await client.listContainers({ all: true, project });
+      const items = await listServedContainers(client, { all: true, project });
       const byProject = new Map<string, ContainerSummary[]>();
       for (const item of items) {
         const key = item.labels['com.docker.compose.project'] ?? '';
@@ -123,28 +170,30 @@ async function invokeOperation(
     case 'container.logs_tail': {
       const id = requireString(params, 'id', operation.name);
       const tail = optionalNumber(params, 'tail', 200);
-      const text = await client.logsTail(id, tail);
+      const target = await resolveServedContainer(client, operation.name, id);
+      const text = await client.logsTail(target.id, tail);
       return { data: { id, tail, text } };
     }
     case 'container.restart': {
       const id = requireString(params, 'id', operation.name);
       const timeoutSeconds = optionalNumber(params, 'timeoutSeconds', 10);
-      await client.restart(id, timeoutSeconds);
-      const item = await client.inspectContainer(id);
+      const target = await resolveServedContainer(client, operation.name, id);
+      await client.restart(target.id, timeoutSeconds);
+      const item = await client.inspectContainer(target.id);
       return { data: item };
     }
     case 'compose.up': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, true);
       for (const target of targets) await client.start(target.id);
-      const containers = await client.listContainers({ all: true, project });
+      const containers = await listServedContainers(client, { all: true, project });
       return { data: { project, started: targets.map((t) => t.id), containers } };
     }
     case 'compose.down': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, false);
       for (const target of targets) await client.stop(target.id);
-      const containers = await client.listContainers({ all: true, project });
+      const containers = await listServedContainers(client, { all: true, project });
       return { data: { project, stopped: targets.map((t) => t.id), containers } };
     }
     default:
@@ -158,9 +207,18 @@ async function simulateOperation(
   params: Record<string, unknown>,
 ): Promise<{ description: string; detail?: unknown }> {
   switch (operation.name) {
+    case 'container.inspect':
+    case 'container.logs_tail': {
+      const id = requireString(params, 'id', operation.name);
+      await resolveServedContainer(client, operation.name, id);
+      return {
+        description: `would ${operation.mode} "${operation.name}" via docker`,
+        detail: { params },
+      };
+    }
     case 'container.restart': {
       const id = requireString(params, 'id', operation.name);
-      const item = await client.inspectContainer(id);
+      const item = await resolveServedContainer(client, operation.name, id);
       return {
         description: `would restart container "${item.name}" (${item.id})`,
         detail: { containers: [item] },
@@ -203,7 +261,7 @@ export function createDockerTransport(client: DockerClient): Transport {
       try {
         return await invokeOperation(client, operation, asRecord(params));
       } catch (err) {
-        if (err instanceof TransportInvokeError) throw err;
+        if (err instanceof TransportInvokeError || err instanceof OperationRefusedError) throw err;
         throw new TransportInvokeError(`docker transport: operation "${operation.name}" failed`, {
           cause: err,
         });

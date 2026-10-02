@@ -5,6 +5,7 @@ import type { Operation } from '@nexttime/shared';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConnectedAccountStore } from './credentials/index.js';
+import { OperationRefusedError } from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
@@ -217,6 +218,28 @@ describe('gatekeeper protocol server', () => {
     });
     expect(second.statusCode).toBe(409);
     expect(second.json().error.code).toBe('idempotency_conflict');
+  });
+
+  it('POST /gate/apply maps a transport refusal to 403 operation_refused, on retry too (R-04)', async () => {
+    app = buildApp({
+      kind: 'http',
+      async invoke() {
+        throw new OperationRefusedError('not served by this gate');
+      },
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers: AUTH_HEADERS,
+        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-refused' },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error).toEqual({
+        code: 'operation_refused',
+        message: 'not served by this gate',
+      });
+    }
   });
 
   it('POST /gate/simulate returns a description without executing', async () => {
