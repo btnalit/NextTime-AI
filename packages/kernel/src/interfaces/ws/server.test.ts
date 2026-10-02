@@ -9,7 +9,7 @@ import { WebSocket } from 'ws';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishPrincipalPushEvent } from '../../application/chat/index.js';
-import { hashApiKey } from '../../application/gateway/index.js';
+import { dispatchCapability, hashApiKey } from '../../application/gateway/index.js';
 import { CONSOLE_SESSION_COOKIE, createUser } from '../../application/identity/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createBackgroundServices, createServer } from '../../index.js';
@@ -62,6 +62,8 @@ class WsRpcClient {
     { resolve: (v: unknown) => void; reject: (e: unknown) => void }
   >();
   readonly notifications: { method: string; params: unknown }[] = [];
+  /** Error frames with `id: null` — answers to no call (R-05: a kick closing the socket). */
+  readonly unsolicitedErrors: { code: number; message: string }[] = [];
   private readonly ws: WebSocket;
 
   private constructor(ws: WebSocket) {
@@ -76,6 +78,8 @@ class WsRpcClient {
         else pending.resolve(msg.result);
       } else if (msg.method) {
         this.notifications.push({ method: msg.method, params: msg.params });
+      } else if (msg.error) {
+        this.unsolicitedErrors.push(msg.error);
       }
     });
   }
@@ -852,6 +856,276 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toBe(false);
 
       client.close();
+    });
+
+    // R-05 (review 2026-10-02): HTTP re-resolves its caller on every request, `/ws` only at
+    // connect. A disable / logout / reset must reach a socket that is already open — at its next
+    // call (the per-call recheck) and, for the four revoking operations, at once (the kick bus).
+    describe('R-05: revocation reaches an already-open socket', () => {
+      let revApp: FastifyInstance;
+      let revWsUrl: string;
+      let revWorkspaceId: string;
+      let revOwnerKey: string;
+      const password = 'correct horse battery staple';
+
+      async function insertMember(opts: {
+        apiKey?: string;
+        userId?: string;
+        role?: string;
+      }): Promise<string> {
+        const id = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId: revWorkspaceId, principalId: id },
+          async (client) => {
+            await client.query(
+              `insert into principals
+                 (workspace_id, id, kind, role, display_name, api_key_hash, user_id)
+               values ($1, $2, 'human', $3, 'revocation test member', $4, $5)`,
+              [
+                revWorkspaceId,
+                id,
+                opts.role ?? 'member',
+                opts.apiKey ? hashApiKey(opts.apiKey) : null,
+                opts.userId ?? null,
+              ],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+        return id;
+      }
+
+      async function adminExec(sql: string, params: unknown[]): Promise<void> {
+        await withWorkspace(
+          pool,
+          { workspaceId: revWorkspaceId, principalId: randomUUID() },
+          async (client) => {
+            await client.query(sql, params);
+          },
+          { skipRoleSwitch: true },
+        );
+      }
+
+      async function newConsoleUser(platformRole: 'admin' | 'user' = 'user') {
+        return createUser(pool, {
+          login: `ws-rev-${randomUUID().slice(0, 8)}`,
+          displayName: 'WS Revocation User',
+          password,
+          platformRole,
+        });
+      }
+
+      async function loginForCookie(login: string): Promise<string> {
+        const response = await revApp.inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          headers: { 'x-requested-with': 'nexttime', 'content-type': 'application/json' },
+          payload: { login, password },
+        });
+        const raw = response.headers['set-cookie'];
+        const setCookie = Array.isArray(raw) ? raw[0] : raw;
+        if (typeof setCookie !== 'string') throw new Error('no Set-Cookie header');
+        const match = new RegExp(`^${CONSOLE_SESSION_COOKIE}=([^;]*)`).exec(setCookie);
+        if (!match?.[1]) throw new Error(`unexpected Set-Cookie: ${setCookie}`);
+        return match[1];
+      }
+
+      async function cookieSocket(token: string): Promise<WsRpcClient> {
+        const client = await WsRpcClient.connect(revWsUrl, {
+          cookie: `${CONSOLE_SESSION_COOKIE}=${token}`,
+        });
+        await client.call('authenticate', { workspaceId: revWorkspaceId });
+        await client.call('list_chats', {});
+        return client;
+      }
+
+      async function apiKeySocket(apiKey: string): Promise<WsRpcClient> {
+        const client = await WsRpcClient.connect(revWsUrl, { authorization: `Bearer ${apiKey}` });
+        // A real round trip: the header path subscribes (pushes + kicks) inside initAuth, before
+        // any frame is answered — see the push tests above.
+        await client.call('list_chats', {});
+        return client;
+      }
+
+      function platformAdmin(user: { id: string; login: string; displayName: string }) {
+        return {
+          channel: 'platform' as const,
+          user: {
+            id: user.id,
+            login: user.login,
+            displayName: user.displayName,
+            platformRole: 'admin' as const,
+            mustChangePassword: false,
+            consoleSessionId: randomUUID(),
+          },
+        };
+      }
+
+      beforeAll(async () => {
+        const { publicKey, privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+          crv: 'Ed25519',
+          extractable: true,
+        });
+        revApp = createServer({
+          pool,
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => privateKey,
+        });
+        const address = await revApp.listen({ port: 0, host: '127.0.0.1' });
+        revWsUrl = `${address.replace('http://', 'ws://')}/ws`;
+        revWorkspaceId = await adminInsertWorkspace('ws-server-test-revocation-workspace');
+        revOwnerKey = `rev-owner-key-${randomUUID()}`;
+        await insertMember({ apiKey: revOwnerKey, role: 'owner' });
+      });
+
+      afterAll(async () => {
+        await revApp.close();
+      });
+
+      it('a member disabled behind the socket’s back: the next call is refused (UNAUTHORIZED) and the socket closes', async () => {
+        const memberKey = `rev-member-key-${randomUUID()}`;
+        const memberId = await insertMember({ apiKey: memberKey });
+        const client = await apiKeySocket(memberKey);
+
+        // Directly in the database — no kick — so only the per-call recheck can catch it.
+        await adminExec(
+          'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+          [revWorkspaceId, memberId],
+        );
+
+        await expect(client.call('list_chats', {})).rejects.toMatchObject({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+        });
+        await client.waitForClose();
+      });
+
+      it('a cookie member whose membership is disabled: the next call is FORBIDDEN (membership gone) and the socket closes', async () => {
+        const user = await newConsoleUser();
+        const memberId = await insertMember({ userId: user.id });
+        const client = await cookieSocket(await loginForCookie(user.login));
+
+        await adminExec(
+          'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+          [revWorkspaceId, memberId],
+        );
+
+        await expect(client.call('list_chats', {})).rejects.toMatchObject({
+          code: WS_ERROR_CODES.FORBIDDEN,
+        });
+        await client.waitForClose();
+      });
+
+      it('a console session revoked behind the socket’s back: the next call is UNAUTHORIZED and the socket closes', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const client = await cookieSocket(await loginForCookie(user.login));
+
+        await adminExec('update user_sessions set revoked_at = now() where user_id = $1', [
+          user.id,
+        ]);
+
+        await expect(client.call('list_chats', {})).rejects.toMatchObject({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+        });
+        await client.waitForClose();
+      });
+
+      it('disable_principal closes the member’s open socket at once; the owner’s own socket is untouched', async () => {
+        const memberKey = `rev-member-key-${randomUUID()}`;
+        const memberId = await insertMember({ apiKey: memberKey });
+        const memberClient = await apiKeySocket(memberKey);
+        const ownerClient = await apiKeySocket(revOwnerKey);
+
+        const response = await revApp.inject({
+          method: 'POST',
+          url: '/api/cap/disable_principal',
+          headers: { authorization: `Bearer ${revOwnerKey}`, 'content-type': 'application/json' },
+          payload: { principalId: memberId },
+        });
+        expect(response.statusCode).toBe(200);
+
+        // No call from the member: the kick alone closes it, with an `id: null` UNAUTHORIZED.
+        await memberClient.waitForClose();
+        expect(memberClient.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+
+        const chats = await ownerClient.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        expect(ownerClient.unsolicitedErrors).toEqual([]);
+        ownerClient.close();
+      });
+
+      it('logout closes the sockets of that console session, not those of the same user’s other session', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const loggedOutToken = await loginForCookie(user.login);
+        const otherToken = await loginForCookie(user.login);
+        const loggedOut = await cookieSocket(loggedOutToken);
+        const other = await cookieSocket(otherToken);
+
+        const response = await revApp.inject({
+          method: 'POST',
+          url: '/api/auth/logout',
+          headers: {
+            cookie: `${CONSOLE_SESSION_COOKIE}=${loggedOutToken}`,
+            'x-requested-with': 'nexttime',
+          },
+        });
+        expect(response.statusCode).toBe(200);
+
+        await loggedOut.waitForClose();
+        expect(loggedOut.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+
+        const chats = await other.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        other.close();
+      });
+
+      it('reset_user_password closes the user’s console sockets', async () => {
+        const admin = await newConsoleUser('admin');
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const client = await cookieSocket(await loginForCookie(user.login));
+
+        await dispatchCapability({ pool }, platformAdmin(admin), 'reset_user_password', {
+          userId: user.id,
+        });
+
+        await client.waitForClose();
+        expect(client.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+      });
+
+      it('set_user_status → disabled closes the user’s sockets on every credential, API key included', async () => {
+        const admin = await newConsoleUser('admin');
+        const user = await newConsoleUser();
+        const memberKey = `rev-member-key-${randomUUID()}`;
+        await insertMember({ userId: user.id, apiKey: memberKey });
+        const cookieClient = await cookieSocket(await loginForCookie(user.login));
+        const keyClient = await apiKeySocket(memberKey);
+
+        await dispatchCapability({ pool }, platformAdmin(admin), 'set_user_status', {
+          userId: user.id,
+          status: 'disabled',
+        });
+
+        await cookieClient.waitForClose();
+        await keyClient.waitForClose();
+        for (const client of [cookieClient, keyClient]) {
+          expect(client.unsolicitedErrors).toContainEqual({
+            code: WS_ERROR_CODES.UNAUTHORIZED,
+            message: 'unauthorized',
+          });
+        }
+      });
     });
   },
 );

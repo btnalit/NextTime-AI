@@ -76,6 +76,9 @@ vi.mock('./lib/ws-client.js', async (importOriginal) => {
     onStatusChange(): () => void {
       return () => undefined;
     }
+    onSessionEnded(): () => void {
+      return () => undefined;
+    }
   }
   return { ...original, WsClient: StubWsClient };
 });

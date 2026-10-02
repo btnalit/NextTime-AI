@@ -5,6 +5,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { getActionRequest } from '../../governance/approval/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import {
+  failTaskAndReapWorkerRuns,
   failTaskRow,
   reactToSupervisorStatus,
   readTaskRow,
@@ -249,11 +250,15 @@ const DEFAULT_DURATION_LIMIT_SEC = 3600;
 // -------------------------------------------------------------------------------------------
 // queued spawn-lost sweep (S5.6 "崩溃缺口"; I-S5-3): `create_task` is retired (W5, 遗留 3) —
 // `invoke_worker`'s own `insertQueuedTaskWithQuotaCheck` (invoke.ts) is the only INSERT that ever
-// puts a Task at `queued`, and the very next thing that same call does is either spawn a
-// WorkerRun and flip the row to `running`, or — on a caught spawn error — fail it synchronously
-// in its own catch block. A Task genuinely observed `queued` is therefore either mid-flight
-// (milliseconds) or the kernel process died between the INSERT committing and either of those two
-// outcomes ever running — there is no third way for a `queued` row to persist. `updated_at`
+// puts a Task at `queued`. That same call then runs `spawnWorkerRun` (spawn.ts), which commits
+// its own transactions — the WorkerRun row and its Handle (`provisioning`), then `running` once the
+// supervisor confirms, or `terminated` on a spawn error — and only *after* that flips the Task to
+// `running`, or fails it in its own catch block, in a separate transaction. A Task genuinely
+// observed `queued` is therefore either mid-flight (bounded by the supervisor client's own
+// timeout) or the kernel process died somewhere between the INSERT and that final Task write — and
+// if it died after `spawnWorkerRun` had begun, the Task may already have a WorkerRun with a live
+// Handle and a running container (R-09, docs/code-review-2026-10-02.md). The sweep therefore
+// reaps the Task's WorkerRuns as well as failing it (`failTaskAndReapWorkerRuns`). `updated_at`
 // (defaulted `now()` at INSERT, never written again by any code path before the row leaves
 // `queued` — same "never touched until the transition that matters" property `created_at` has)
 // is therefore an exact proxy for "how long has this row been stuck", not merely a heuristic.
@@ -277,13 +282,15 @@ interface LostQueuedTaskRow {
  * Sweeps every workspace for a Task stuck `queued` past {@link QUEUED_SPAWN_LOST_THRESHOLD_MS}
  * and fails it — `failure_reason='spawn_lost'` — through the same governed path every other
  * sweep in this file uses (`failTaskRow`: the shared/transition-table hop, the `task.fail` audit
- * row, the `TaskUpdated` outbox event), never a bare `UPDATE`. Deliberately does **not** attempt
- * to re-spawn: whatever the crashed kernel was about to do (mint a Handle, call the supervisor)
- * is unrecoverable from here — the caller that originally invoked `invoke_worker` already got no
- * response and must decide on its own whether to retry, the same way any other `worker_failed`/
- * `timeout` Task failure is surfaced to it. Cross-workspace, one raw `SELECT` — same shape as the
- * duration-limit scan above (`runTaskReaper`'s own doc comment: "exactly one kernel process, not
- * one per workspace").
+ * row, the `TaskUpdated` outbox event), never a bare `UPDATE`. R-09: it goes through
+ * `failTaskAndReapWorkerRuns`, so any WorkerRun the crashed kernel already created under the Task
+ * is terminated with its Handle tree revoked, and its container best-effort stopped — a Task
+ * reported `failed: spawn_lost` no longer leaves a Worker running until its duration limit.
+ * Deliberately does **not** attempt to re-spawn: the caller that originally invoked
+ * `invoke_worker` already got no response and must decide on its own whether to retry, the same
+ * way any other `worker_failed`/`timeout` Task failure is surfaced to it. Cross-workspace, one raw
+ * `SELECT` — same shape as the duration-limit scan above (`runTaskReaper`'s own doc comment:
+ * "exactly one kernel process, not one per workspace").
  */
 async function reapLostQueuedTasks(deps: TaskRuntimeDeps): Promise<number> {
   const now = deps.now ?? (() => new Date());
@@ -304,17 +311,12 @@ async function reapLostQueuedTasks(deps: TaskRuntimeDeps): Promise<number> {
   }
 
   for (const candidate of candidates) {
-    await withWorkspace(
-      deps.pool,
-      { workspaceId: candidate.workspace_id, principalId: candidate.on_behalf_of },
-      (client) =>
-        failTaskRow(
-          client,
-          candidate.workspace_id,
-          candidate.on_behalf_of,
-          candidate.id,
-          'spawn_lost',
-        ),
+    await failTaskAndReapWorkerRuns(
+      deps,
+      candidate.workspace_id,
+      candidate.on_behalf_of,
+      candidate.id,
+      'spawn_lost',
     );
   }
 

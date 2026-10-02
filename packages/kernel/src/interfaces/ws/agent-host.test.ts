@@ -62,9 +62,10 @@ function createFakePool(): PoolLike {
       return { rows: [{ live: true }], rowCount: 1 };
     }
 
-    if (sql.startsWith('select role from principals')) {
+    if (sql.startsWith('select p.role, (p.disabled_at is not null')) {
       // W5.5 (STATUS leftover 18): `ensureEntryHandle`'s role read — owner keeps the full ceiling.
-      return { rows: [{ role: 'owner' }], rowCount: 1 };
+      // R-05: the same read reports the principal enabled.
+      return { rows: [{ role: 'owner', disabled: false }], rowCount: 1 };
     }
 
     if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
