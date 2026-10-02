@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.1](https://github.com/btnalit/NextTime-AI/compare/v0.35.0...v0.35.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **kernel:** request_action never waits past its own budget for an inline apply (leftover 105) ([#386](https://github.com/btnalit/NextTime-AI/issues/386)) ([56c6eb2](https://github.com/btnalit/NextTime-AI/commit/56c6eb2cb2ca06abcd63a0faea605a9df09aeeee))
+* **scripts:** pull-images verifies anonymously first; apply-release honours a failed pull ([#387](https://github.com/btnalit/NextTime-AI/issues/387)) ([5354b97](https://github.com/btnalit/NextTime-AI/commit/5354b971cf9ed5f6ad8ac2388a453632195722eb))
+
 ## [0.35.0](https://github.com/btnalit/NextTime-AI/compare/v0.34.0...v0.35.0) (2026-10-02)
 
 
