@@ -190,6 +190,68 @@ describe.runIf(DATABASE_URL !== undefined)('recordUsage — integration (real Po
     expect(count).toBe(1);
   });
 
+  // R-67 (L6-13): llm-proxy stamps `startedAt` at millisecond precision and every request a
+  // container sends carries the same Handle, so concurrent requests used to collapse into one row.
+  it('keeps concurrent requests under one Handle that started in the same millisecond as separate rows, and skips their replays', async () => {
+    const jti = await issueTestHandle(workspaceId, ownerId, sessionId);
+    const startedAt = new Date().toISOString();
+    const first = baseRecord({ jti, startedAt, requestId: randomUUID(), inputTokens: 100 });
+    const second = baseRecord({ jti, startedAt, requestId: randomUUID(), inputTokens: 40 });
+    const third = baseRecord({ jti, startedAt, requestId: randomUUID(), inputTokens: 7 });
+
+    const once = await withWorkspace(pool, { workspaceId, principalId: sessionId }, (client) =>
+      recordUsage(client, [first, second]),
+    );
+    // A later batch: its record finds the millisecond taken by two committed rows.
+    const later = await withWorkspace(pool, { workspaceId, principalId: sessionId }, (client) =>
+      recordUsage(client, [third]),
+    );
+    const replay = await withWorkspace(pool, { workspaceId, principalId: sessionId }, (client) =>
+      recordUsage(client, [second, first, third]),
+    );
+    expect(once).toEqual({ inserted: 2, rejected: 0 });
+    expect(later).toEqual({ inserted: 1, rejected: 0 });
+    expect(replay).toEqual({ inserted: 0, rejected: 0 });
+
+    const rows = await withWorkspace(
+      pool,
+      { workspaceId, principalId: sessionId },
+      async (client) =>
+        (
+          await client.query<{ request_id: string; input_tokens: string; offset_us: string }>(
+            `select request_id, input_tokens::text,
+                    (extract(epoch from started_at - $2::timestamptz) * 1000000)::bigint::text as offset_us
+               from llm_usage where workspace_id = $1 and jti = $3 order by started_at`,
+            [workspaceId, startedAt, jti],
+          )
+        ).rows,
+    );
+    expect(rows.map((row) => row.request_id)).toEqual([
+      first.requestId,
+      second.requestId,
+      third.requestId,
+    ]);
+    expect(rows.map((row) => Number(row.input_tokens))).toEqual([100, 40, 7]);
+    // Every row stays inside the millisecond llm-proxy reported.
+    for (const row of rows) {
+      expect(Number(row.offset_us)).toBeGreaterThanOrEqual(0);
+      expect(Number(row.offset_us)).toBeLessThan(1000);
+    }
+  });
+
+  it('skips a record whose session or Handle no longer exists as rejected, and still records the rest (R-68)', async () => {
+    const jti = await issueTestHandle(workspaceId, ownerId, sessionId);
+    const live = baseRecord({ jti, requestId: randomUUID() });
+    const unknownHandle = baseRecord({ jti: randomUUID(), requestId: randomUUID() });
+    const unknownSession = baseRecord({ jti, sessionId: randomUUID(), requestId: randomUUID() });
+    const legacyUnknownHandle = baseRecord({ jti: randomUUID() });
+
+    const result = await withWorkspace(pool, { workspaceId, principalId: sessionId }, (client) =>
+      recordUsage(client, [unknownHandle, live, unknownSession, legacyUnknownHandle]),
+    );
+    expect(result).toEqual({ inserted: 1, rejected: 3 });
+  });
+
   it('rejects a batch mixing more than one workspaceId', async () => {
     const jti = await issueTestHandle(workspaceId, ownerId, sessionId);
     const record = baseRecord({ jti });

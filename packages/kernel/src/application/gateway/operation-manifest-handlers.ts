@@ -13,7 +13,7 @@ import {
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 
 /**
  * application/gateway/operation-manifest-handlers: `propose_operation` (Handle channel, drafts
@@ -43,8 +43,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  * meta-objects.ts`'s own doc comment: Objects carry no provenance chain of their own) — this one
  * exists purely for that audit trail, not to satisfy an `activityId` requirement.
  *
- * S8 W3-K1 addition (leftover 81): `update_operation_description` — human channel, same `minRole`
- * as `publish_operation`/`deprecate_operation` (none named by §9.3), edits one Operation's
+ * D-24 (review 2026-10-02): `publish_operation`/`deprecate_operation` are `minRole: 'builder'` and
+ * only the row's proposer or the workspace owner may act (`governance/capability/
+ * publish-authority.ts`, checked by `publishOperation`/`deprecateOperation` on the row itself).
+ *
+ * S8 W3-K1 addition (leftover 81): `update_operation_description` — human channel, no `minRole`
+ * (D-24 covered publish/deprecate only, not this documentation edit), edits one Operation's
  * documentation-only `description` in place (no draft/publish step — `governance/gatekeepers/
  * manifest.ts`'s `updateOperationDescription` doc comment). `refresh_operation_governance`
  * (leftover 79, the sibling *governance*-field write) lives in `gate-instance-handlers.ts` instead,
@@ -125,12 +129,13 @@ export const publishOperationHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { gatekeeperId, name } = params as { gatekeeperId: string; name: string };
-  const record = await publishOperation(client, workspaceId, { gatekeeperId, name });
+  // D-24: the draft's proposer or the owner (checked on the row being published).
+  const actor = publishActorOf('publish_operation', ctx);
+  const record = await publishOperation(client, workspaceId, { gatekeeperId, name, actor });
 
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   const activity = await startActivity(client, workspaceId, {
     kind: 'operation_publish',
-    principalId,
+    principalId: actor.principalId,
     metadata: { gatekeeperId, name, supersedes: record.supersedes ?? null },
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
@@ -151,9 +156,18 @@ export const publishOperationHandler: CapabilityHandler = async (
   };
 };
 
-export const deprecateOperationHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const deprecateOperationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { gatekeeperId, name } = params as { gatekeeperId: string; name: string };
-  const record = await deprecateOperation(client, workspaceId, { gatekeeperId, name });
+  const record = await deprecateOperation(client, workspaceId, {
+    gatekeeperId,
+    name,
+    actor: publishActorOf('deprecate_operation', ctx),
+  });
   return {
     result: { gatekeeperId: record.gatekeeperId, name: record.name, status: record.status },
     resourceType: 'operation',

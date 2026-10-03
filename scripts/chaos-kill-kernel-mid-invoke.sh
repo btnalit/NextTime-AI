@@ -15,9 +15,10 @@
 #                            /proc/<pid>/cmdline, and shell history keeps it. The key: a
 #                            human-channel API key for the target workspace holding at least
 #                            `builder` role (`propose_worker_definition`'s own minRole — this
-#                            script also calls `publish_worker_definition`, channel:'human' with
-#                            no additional minRole, and `invoke_worker`/`get_task`/`list_tasks`,
-#                            all `member` at most, so `builder` already covers every call here).
+#                            script also calls `publish_worker_definition`, channel:'human',
+#                            `builder` too, on the draft it just proposed itself (D-24: only the
+#                            proposer or the owner may publish it), and `invoke_worker`/`get_task`/
+#                            `list_tasks`, all `member`, so `builder` already covers every call here).
 #   [pollTimeoutSeconds]  — how long to wait for the Task to reach `completed`/`failed` after the
 #                            kernel comes back, once it starts answering again. Default 150 — the
 #                            crash-gap sweep's own 60s staleness threshold

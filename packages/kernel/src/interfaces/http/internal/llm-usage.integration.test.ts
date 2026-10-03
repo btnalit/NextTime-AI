@@ -170,10 +170,66 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ ok: true, result: { inserted: 1 } });
+      expect(res.json()).toEqual({
+        ok: true,
+        result: {
+          inserted: 1,
+          groups: [{ workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 }],
+        },
+      });
 
       const turnIdColumn = await readTurnId(workspaceId, principalId, jti);
       expect(turnIdColumn).toBe(turnId);
+    });
+
+    // R-68 (L1-11): usage still queued in llm-proxy for a workspace that has since been purged
+    // used to fail the whole POST with a foreign-key error (23503) — forever, for every workspace
+    // in the batch. Now that group is acknowledged as rejected and the others are recorded.
+    it('acknowledges usage for a purged workspace as rejected and records the rest of the batch', async () => {
+      const workspaceId = await adminInsertWorkspace('llm-usage-route-r68-live');
+      const principalId = await adminInsertPrincipal(workspaceId);
+      const sessionId = await insertSession(workspaceId, principalId);
+      const jti = await issueTestHandle(workspaceId, principalId, sessionId);
+      // Nothing of this workspace exists any more: no workspace row, session or Handle.
+      const purgedWorkspaceId = randomUUID();
+
+      app = Fastify();
+      await registerLlmUsageRoutes(app, { pool });
+
+      const usage = (overrides: Partial<LlmUsageRecord>): LlmUsageRecord => ({
+        workspaceId,
+        sessionId,
+        jti,
+        provider: 'example-provider',
+        model: 'example-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        startedAt: new Date().toISOString(),
+        status: 'completed',
+        requestId: randomUUID(),
+        ...overrides,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/llm-usage',
+        payload: [
+          usage({ workspaceId: purgedWorkspaceId, sessionId: randomUUID(), jti: randomUUID() }),
+          usage({}),
+        ],
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        ok: true,
+        result: {
+          inserted: 1,
+          groups: [
+            { workspaceId: purgedWorkspaceId, outcome: 'recorded', inserted: 0, rejected: 1 },
+            { workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 },
+          ],
+        },
+      });
+      expect(await readTurnId(workspaceId, principalId, jti)).toBeNull();
     });
 
     it('records turn_id = null (never rejects) when the session has no running or recent Turn', async () => {
@@ -204,7 +260,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ ok: true, result: { inserted: 1 } });
+      expect(res.json()).toEqual({
+        ok: true,
+        result: {
+          inserted: 1,
+          groups: [{ workspaceId, outcome: 'recorded', inserted: 1, rejected: 0 }],
+        },
+      });
 
       const turnIdColumn = await readTurnId(workspaceId, principalId, jti);
       expect(turnIdColumn).toBeNull();

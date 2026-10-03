@@ -12,7 +12,7 @@ import {
   publishSkill,
 } from '../../application/worker/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 
 /**
  * application/gateway/skill-procedure-handlers: `propose_skill` / `publish_skill` /
@@ -50,8 +50,8 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
 
 const publishSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skillId } = params as { skillId: string };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const record = await publishSkill(client, workspaceId, principalId, skillId);
+  const actor = publishActorOf('publish_skill', ctx);
+  const record = await publishSkill(client, workspaceId, actor.principalId, skillId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'skill',
@@ -59,9 +59,14 @@ const publishSkillHandler: CapabilityHandler = async (client, workspaceId, param
   };
 };
 
-const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skillId } = params as { skillId: string };
-  const record = await deprecateSkill(client, workspaceId, skillId);
+  const record = await deprecateSkill(
+    client,
+    workspaceId,
+    skillId,
+    publishActorOf('deprecate_skill', ctx),
+  );
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'skill',
@@ -136,8 +141,8 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
 
 const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { procedureId } = params as { procedureId: string };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const record = await publishProcedure(client, workspaceId, principalId, procedureId);
+  const actor = publishActorOf('publish_procedure', ctx);
+  const record = await publishProcedure(client, workspaceId, actor.principalId, procedureId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'procedure',
@@ -145,9 +150,14 @@ const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, p
   };
 };
 
-const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { procedureId } = params as { procedureId: string };
-  const record = await deprecateProcedure(client, workspaceId, procedureId);
+  const record = await deprecateProcedure(
+    client,
+    workspaceId,
+    procedureId,
+    publishActorOf('deprecate_procedure', ctx),
+  );
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'procedure',

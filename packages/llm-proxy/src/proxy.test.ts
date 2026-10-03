@@ -444,6 +444,24 @@ describe('createProxyServer — streaming byte-for-byte forwarding', () => {
       outputTokens: 3,
       status: 'completed',
     });
+
+    // R-67: every upstream request gets its own usage identity, even under the same Handle —
+    // the kernel dedupes on it, so two concurrent requests are never merged into one record.
+    await Promise.all(
+      [0, 1].map(() =>
+        rawRequest({
+          port: proxyPort,
+          method: 'POST',
+          path: '/openai/v1/chat/completions',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-example', stream: true }),
+        }),
+      ),
+    );
+    expect(records).toHaveLength(3);
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    for (const record of records) expect(record.requestId).toMatch(uuid);
+    expect(new Set(records.map((record) => record.requestId)).size).toBe(3);
   });
 
   it('parses and reports Anthropic streaming usage (message_start + message_delta)', async () => {
