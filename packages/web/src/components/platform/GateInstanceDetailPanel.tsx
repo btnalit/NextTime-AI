@@ -20,6 +20,7 @@ import { Notice } from '../ui/Notice.js';
 import { RefChip } from '../ui/RefChip.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { GateCredentialEntry } from './GateCredentialEntry.js';
+import { PendingManifestReview } from './PendingManifestReview.js';
 import { PlatformError } from './PlatformError.js';
 
 /** `GateInstanceTestResultWireSchema`'s shape (`packages/shared/src/wire/platform.ts`) — no
@@ -46,6 +47,8 @@ export interface GateInstanceDetailPanelProps {
  * components/platform/GateInstanceDetailPanel: one gate instance's drawer body (P-B1, design
  * §6.3 "门实例") — `update_gate_instance` (rename / enable-disable / MCP trust) and
  * `test_gate_instance` (probes health + re-describes Operations without changing anything else).
+ * R-18 (D-18): a held re-announced manifest (`pendingManifest`) renders under the announced
+ * Operations with its review-and-adopt confirm (`PendingManifestReview`).
  *
  * Trust (`vetted`) only applies to `transportKind === 'mcp'` — the kernel refuses anything else
  * with `trust_not_applicable` — so the control (and its explanation) render only for an MCP
@@ -311,6 +314,16 @@ export function GateInstanceDetailPanel({
               </div>
             )}
           </div>
+
+          {instance.pendingManifest ? (
+            <PendingManifestReview
+              http={http}
+              gateId={instance.gateId}
+              displayName={instance.displayName}
+              pending={instance.pendingManifest}
+              onConfirmed={onChanged}
+            />
+          ) : null}
         </DrawerSection>
 
         <DrawerSection title={t('相关链接 Related links', 'Related links')}>

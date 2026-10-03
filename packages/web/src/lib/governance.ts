@@ -1,4 +1,9 @@
-import type { GrantStatus, PrincipalKind, Role } from '@nexttime/shared';
+import type {
+  GrantStatus,
+  OperationGovernanceChangeWire,
+  PrincipalKind,
+  Role,
+} from '@nexttime/shared';
 import type { ActionRequestRowLike } from './action-card.js';
 import type { Translate } from './i18n.js';
 import { principalKindLabel, roleLabel } from './labels.js';
@@ -196,6 +201,9 @@ export interface OperationCatalogRow {
   /** S8 W3-K1 (leftover 81) — absent or blank means "未填写描述", never coerced to `''` here so the
    *  page can tell "no description" from "kernel omitted the field" the same way either way. */
   readonly description?: string;
+  /** R-19 (D-17): on a draft that revises a published version — what publishing it would change,
+   *  with the kernel's direction (`OperationSummaryWire.governanceChange`). */
+  readonly governanceChange?: OperationGovernanceChangeWire;
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see

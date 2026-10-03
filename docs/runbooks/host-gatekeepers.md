@@ -116,9 +116,11 @@ docker compose up -d gatekeeper-docker gatekeeper-ragflow
 docker compose ps gatekeeper-docker gatekeeper-ragflow
 ```
 
-`gatekeeper-ragflow` 需要 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 里
-`RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY` 有值才能真正连上一个 RAGFlow 实例——本机若
-没有可用的 RAGFlow 部署，容器仍会正常起（这两个值只在真正发起 HTTP 调用时才用到），`describe_
+`gatekeeper-ragflow` 需要 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 里的 `RAGFLOW_BASE_URL`
+与 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow/api_key` 里的 API key（R-24：0640、组 10001，经
+`GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE` 读取；旧的 env 变量 `GATE_CREDENTIAL_RAGFLOW_API_KEY` 仍兼容，带弃用告警）
+才能真正连上一个 RAGFlow 实例——本机若没有可用的 RAGFlow 部署，容器仍会正常起（这两个值只在真正发起
+HTTP 调用时才用到），`describe_
 operations`/`health` 不需要它们生效。两个服务的 `/gate/*` 协议端口都只在 `control` 网络上暴露
 （`gatekeeper-docker` 额外还在 `dockerapi-gate` 网络上，那是它和 `docker-socket-proxy-gate` 之间
 的私有通道，不影响这一点——compose 都没有发布任何主机端口），从主机 `curl` 不到；用 `kernel` 容器

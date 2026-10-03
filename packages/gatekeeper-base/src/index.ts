@@ -135,7 +135,9 @@ export type { CredentialResolver, ResolvedCredential } from './credentials/index
 
 export {
   HttpTransport,
+  encodePathSegment,
   importOpenApi,
+  resolveBindingUrl,
   McpTransport,
   importMcpTools,
   CliTransport,

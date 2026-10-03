@@ -2108,5 +2108,227 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
     });
+
+    // -----------------------------------------------------------------------------------------
+    // R-18 (decision D-18): an enabled gate's re-announced manifest takes effect only once a
+    // platform administrator confirms exactly the version shown; a restart's unchanged re-announce
+    // creates nothing. Own connector / gate id / endpoint, so the shared fixture above is untouched.
+    // -----------------------------------------------------------------------------------------
+    describe('R-18 announced manifest confirmation', () => {
+      const PENDING_GATE = 'pending-fixture-gate';
+      const pendingBody = {
+        ...announceBody,
+        gateId: PENDING_GATE,
+        connector: 'pending-fixture',
+        endpoint: 'http://127.0.0.1:3',
+        displayName: 'Pending fixture',
+      };
+      const loosenedExecute: Operation = { ...EXECUTE_OP, blast_radius: 'low' };
+      const ADDED_OP: Operation = {
+        ...EXECUTE_OP,
+        name: 'wipe_thing',
+        binding: { kind: 'mcp', tool_name: 'wipe_thing' },
+      };
+
+      async function instance(): Promise<GateInstanceWire> {
+        return callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: PENDING_GATE });
+      }
+
+      async function confirmedAuditRows(): Promise<Record<string, unknown>[]> {
+        return withAdminClient(pool, async (client) => {
+          const result = await client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where action = 'gate_instance.manifest_confirmed' and payload->>'resourceRef' = $1
+              order by created_at`,
+            [PENDING_GATE],
+          );
+          return result.rows.map((row) => row.payload);
+        });
+      }
+
+      it('an undecided instance takes every announce at once; nothing is held', async () => {
+        expect((await announce({ ...pendingBody, operations: [OBSERVE_OP] })).statusCode).toBe(200);
+        expect((await announce(pendingBody)).statusCode).toBe(200);
+        const discovered = await instance();
+        expect(discovered.status).toBe('discovered');
+        expect(discovered.operations.map((o) => o.name).sort()).toEqual(
+          [OBSERVE_OP.name, EXECUTE_OP.name].sort(),
+        );
+        expect(discovered.pendingManifest).toBeNull();
+      });
+
+      it('once enabled, an unchanged re-announce (reordered, reworded) creates no pending item', async () => {
+        await callAsAdmin('update_gate_instance', { gateId: PENDING_GATE, status: 'enabled' });
+        const restart = await announce({
+          ...pendingBody,
+          operations: [{ ...EXECUTE_OP, description: 'Restart the thing.' }, OBSERVE_OP],
+        });
+        expect(restart.statusCode).toBe(200);
+        const after = await instance();
+        expect(after.pendingManifest).toBeNull();
+        expect(after.status).toBe('enabled');
+        expect(after.health).toBe('ok');
+      });
+
+      it('a changed re-announce is held: the manifest in effect stays and the diff carries the kernel direction', async () => {
+        const before = await instance();
+        const changed = await announce({
+          ...pendingBody,
+          operations: [OBSERVE_OP, loosenedExecute, ADDED_OP],
+        });
+        expect(changed.statusCode).toBe(200);
+        const after = await instance();
+        expect(after.operations).toEqual(before.operations);
+        expect(after.operationCount).toBe(2);
+        expect(after.pendingManifest).toMatchObject({
+          operationCount: 3,
+          added: [{ name: ADDED_OP.name }],
+          removed: [],
+          changed: [
+            {
+              name: EXECUTE_OP.name,
+              before: { mode: 'execute', blastRadius: 'medium', autoApprovable: true },
+              after: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+              direction: 'loosened',
+              otherChangedFields: [],
+            },
+          ],
+        });
+        expect(after.pendingManifest?.digest).toMatch(/^[0-9a-f]{64}$/);
+
+        // The same pending manifest announced again keeps its digest and announcedAt.
+        await announce({ ...pendingBody, operations: [OBSERVE_OP, loosenedExecute, ADDED_OP] });
+        const again = await instance();
+        expect(again.pendingManifest?.digest).toBe(after.pendingManifest?.digest);
+        expect(again.pendingManifest?.announcedAt).toBe(after.pendingManifest?.announcedAt);
+      });
+
+      it('a workspace enable imports the manifest in effect, never the held one', async () => {
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(preview.operationsToImport.map((o) => o.name).sort()).toEqual(
+          [OBSERVE_OP.name, EXECUTE_OP.name].sort(),
+        );
+        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: PENDING_GATE,
+          manifestDigest: preview.manifestDigest,
+        });
+        expect(enabled.publishedOperationNames.sort()).toEqual(
+          [OBSERVE_OP.name, EXECUTE_OP.name].sort(),
+        );
+      });
+
+      it('a stale digest is refused (a newer announce replaced what was shown); nothing changes', async () => {
+        const shown = (await instance()).pendingManifest;
+        expect(shown).not.toBeNull();
+        // The gate announces yet another manifest after the administrator loaded the page.
+        await announce({
+          ...pendingBody,
+          operations: [OBSERVE_OP, { ...EXECUTE_OP, mode: 'observe' }],
+        });
+        const replaced = (await instance()).pendingManifest;
+        expect(replaced?.digest).not.toBe(shown?.digest);
+        expect(replaced?.changed.map((c) => c.direction)).toEqual(['loosened']);
+
+        await expectPlatformError(
+          () =>
+            callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: shown?.digest }),
+          'manifest_changed',
+        );
+        const after = await instance();
+        expect(after.operations.find((o) => o.name === EXECUTE_OP.name)?.mode).toBe('execute');
+        expect(after.pendingManifest?.digest).toBe(replaced?.digest);
+        expect(await confirmedAuditRows()).toEqual([]);
+      });
+
+      it('confirm adopts exactly the reviewed version and audits it; a second confirm finds nothing pending', async () => {
+        // Back to the version with the added Operation, and confirm that one.
+        await announce({ ...pendingBody, operations: [OBSERVE_OP, loosenedExecute, ADDED_OP] });
+        const reviewed = (await instance()).pendingManifest;
+        if (!reviewed) throw new Error('expected a pending manifest');
+        const confirmed = await callAsAdmin<GateInstanceWire>('confirm_gate_manifest', {
+          gateId: PENDING_GATE,
+          digest: reviewed.digest,
+        });
+        expect(confirmed.pendingManifest).toBeNull();
+        expect(confirmed.operations.map((o) => [o.name, o.blastRadius]).sort()).toEqual(
+          [
+            [OBSERVE_OP.name, 'low'],
+            [EXECUTE_OP.name, 'low'],
+            [ADDED_OP.name, 'medium'],
+          ].sort(),
+        );
+        const audit = await confirmedAuditRows();
+        expect(audit).toHaveLength(1);
+        expect(audit[0]).toMatchObject({
+          resourceRef: PENDING_GATE,
+          digest: reviewed.digest,
+          added: [ADDED_OP.name],
+          removed: [],
+        });
+
+        await expectPlatformError(
+          () =>
+            callAsAdmin('confirm_gate_manifest', {
+              gateId: PENDING_GATE,
+              digest: reviewed.digest,
+            }),
+          'no_pending_manifest',
+        );
+        await expectPlatformError(
+          () => callAsAdmin('confirm_gate_manifest', { gateId: 'no-such-gate', digest: 'x' }),
+          'gate_not_found',
+        );
+      });
+
+      it('a restart after the confirm creates nothing; a held change is dropped when the gate goes back', async () => {
+        await announce({ ...pendingBody, operations: [ADDED_OP, OBSERVE_OP, loosenedExecute] });
+        expect((await instance()).pendingManifest).toBeNull();
+
+        await announce({ ...pendingBody, operations: [OBSERVE_OP] });
+        expect((await instance()).pendingManifest).not.toBeNull();
+        await announce({ ...pendingBody, operations: [OBSERVE_OP, loosenedExecute, ADDED_OP] });
+        expect((await instance()).pendingManifest).toBeNull();
+      });
+
+      it('the workspace refresh aligns to the confirmed manifest only with the digest previewed after the confirm', async () => {
+        const available = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
+          'list_available_gate_instances',
+        );
+        const gatekeeperId = available.items.find(
+          (item) => item.gateId === PENDING_GATE,
+        )?.gatekeeperId;
+        if (!gatekeeperId) throw new Error('expected the pending fixture to be enabled here');
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        const drifting = preview.operationsAlreadyPresent.find((o) => o.name === EXECUTE_OP.name);
+        expect(drifting).toMatchObject({ differs: true, direction: 'loosened' });
+        expect(
+          preview.operationsAlreadyPresent.find((o) => o.name === OBSERVE_OP.name)?.direction,
+        ).toBe('neutral');
+
+        await expect(
+          callAsOwner('refresh_operation_governance', {
+            gatekeeperId,
+            operationNames: [EXECUTE_OP.name],
+            manifestDigest: 'f'.repeat(64),
+          }),
+        ).rejects.toMatchObject({ code: 'manifest_changed' });
+        const refreshed = await callAsOwner<{
+          refreshed: readonly { name: string; direction: string }[];
+        }>('refresh_operation_governance', {
+          gatekeeperId,
+          operationNames: [EXECUTE_OP.name],
+          manifestDigest: preview.manifestDigest,
+        });
+        expect(refreshed.refreshed).toEqual([
+          expect.objectContaining({ name: EXECUTE_OP.name, direction: 'loosened' }),
+        ]);
+      });
+    });
   },
 );

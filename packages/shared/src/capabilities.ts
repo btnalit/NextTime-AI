@@ -882,10 +882,14 @@ const connectionCapabilities: readonly Capability[] = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    // R-18 (D-18): `manifestDigest` is the `preview_gate_instance_enable` digest the owner looked
+    // at; when given, the enable refuses `manifest_changed` if the manifest in effect moved since.
+    paramsSchema: z
+      .object({ gateId: z.string().min(1), manifestDigest: z.string().min(1).optional() })
+      .strict(),
     resultSchema: wire.EnableGateInstanceResultWireSchema,
     description:
-      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess.',
+      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess. R-18: an optional manifestDigest (from preview_gate_instance_enable) makes it refuse 409 manifest_changed when the manifest in effect is no longer the previewed one.',
   },
   {
     // S8 W2-K2 (audit J3 "一键写入 ... 没有预览或确认"): the console ConfirmTier's read model for
@@ -913,12 +917,19 @@ const connectionCapabilities: readonly Capability[] = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    // R-18 (D-18): `manifestDigest` (from `preview_gate_instance_enable`) binds the write to the
+    // manifest the owner reviewed — required, so a re-announce between preview and confirm can
+    // never apply values nobody saw.
     paramsSchema: z
-      .object({ gatekeeperId: id, operationNames: z.array(z.string().min(1)).optional() })
+      .object({
+        gatekeeperId: id,
+        operationNames: z.array(z.string().min(1)).optional(),
+        manifestDigest: z.string().min(1),
+      })
       .strict(),
     resultSchema: wire.RefreshOperationGovernanceResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance. One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification.',
+      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification.',
   },
   {
     name: 'issue_gate_credential_token',
@@ -3102,6 +3113,20 @@ const platformCapabilities: readonly Capability[] = [
       'Name, enable / disable, or mark a gate instance `vetted` (MCP: allows auto-approval of non-destructive idempotent tools; read at every decision, revocable any time).',
   },
   {
+    // R-18 (decision D-18): an enabled / disabled gate's re-announced manifest that changes its
+    // Operation set or a reviewed field is held as `pendingManifest`; this adopts exactly the
+    // version the administrator looked at (its digest), never a later one.
+    name: 'confirm_gate_manifest',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ gateId: z.string().min(1), digest: z.string().min(1) }).strict(),
+    resultSchema: wire.GateInstanceWireSchema,
+    description:
+      'R-18: adopt a gate instance’s pending announced manifest (pendingManifest) as the manifest in effect — what later workspace enables import and refresh_operation_governance aligns to. digest must be the pending manifest’s own digest: a newer announce replaces it, so a stale digest refuses 409 manifest_changed; nothing pending refuses 409 no_pending_manifest. Platform AuditRecord with the added / removed / changed Operations.',
+  },
+  {
     name: 'create_gate_instance',
     group: 'platform',
     mode: 'write',
@@ -3498,6 +3523,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'list_gate_instances',
     'get_gate_instance',
     'update_gate_instance',
+    'confirm_gate_manifest',
     'test_gate_instance',
     'list_external_runtimes',
     'revoke_external_runtime',

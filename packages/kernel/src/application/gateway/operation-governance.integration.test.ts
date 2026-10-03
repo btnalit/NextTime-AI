@@ -14,7 +14,7 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
-import { insertGateLink, upsertAnnouncement } from '../gates/index.js';
+import { insertGateLink, manifestDigest, upsertAnnouncement } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
@@ -218,6 +218,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       return { gatekeeperId, gateId };
     }
 
+    /** R-18: the digest `preview_gate_instance_enable` would return for this instance's manifest
+     *  in effect — what `refresh_operation_governance` requires back. */
+    async function digestOf(gateId: string): Promise<string> {
+      const row = await asAdmin((client) =>
+        client.query<{ operations: unknown }>(
+          'select operations from gate_instances where gate_id = $1',
+          [gateId],
+        ),
+      );
+      return manifestDigest(row.rows[0]?.operations);
+    }
+
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
@@ -244,7 +256,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           blast_radius: 'low' as const,
           auto_approvable: true,
         };
-        const { gatekeeperId } = await seedLinkedGatekeeper([op], [announced]);
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [announced]);
 
         const result = await callAs<{
           refreshed: readonly {
@@ -254,7 +266,10 @@ describe.runIf(DATABASE_URL !== undefined)(
             direction: string;
           }[];
           unchanged: readonly string[];
-        }>(ownerId, 'owner', 'refresh_operation_governance', { gatekeeperId });
+        }>(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          manifestDigest: await digestOf(gateId),
+        });
 
         expect(result.refreshed).toHaveLength(1);
         expect(result.refreshed[0]).toMatchObject({ name: op.name, direction: 'loosened' });
@@ -284,10 +299,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a member (non-owner) is refused with ForbiddenError, nothing is written', async () => {
         const op = testOperation({ name: `gov.forbidden.${randomUUID()}`, auto_approvable: false });
         const announced = { ...op, auto_approvable: true };
-        const { gatekeeperId } = await seedLinkedGatekeeper([op], [announced]);
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [announced]);
 
         await expect(
-          callAs(memberId, 'member', 'refresh_operation_governance', { gatekeeperId }),
+          callAs(memberId, 'member', 'refresh_operation_governance', {
+            gatekeeperId,
+            manifestDigest: await digestOf(gateId),
+          }),
         ).rejects.toBeInstanceOf(ForbiddenError);
 
         const stillOld = await inTx((client) =>
@@ -311,6 +329,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const thrown = await callAs(ownerId, 'owner', 'refresh_operation_governance', {
           gatekeeperId: registered.gatekeeperId,
+          manifestDigest: 'no-manifest-to-match',
         }).then(
           () => {
             throw new Error('expected GateInstanceNotAvailableError, but the call resolved');
@@ -319,6 +338,72 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(thrown).toBeInstanceOf(GateInstanceNotAvailableError);
         expect((thrown as GateInstanceNotAvailableError).code).toBe('no_announced_manifest');
+      });
+
+      it('R-18: applies only the manifest the owner previewed — a digest of any other manifest refuses manifest_changed and writes nothing', async () => {
+        const op = testOperation({
+          name: `gov.stale.${randomUUID()}`,
+          mode: 'execute',
+          blast_radius: 'high',
+          auto_approvable: false,
+        });
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [op]);
+        const previewedDigest = await digestOf(gateId);
+        // The manifest in effect moves on after the preview (the instance is still undecided, so
+        // the announce takes effect at once — the case a confirm in between produces otherwise).
+        await asAdmin((client) =>
+          upsertAnnouncement(
+            client,
+            {
+              gateId,
+              connector: 'http',
+              transportKind: 'http',
+              endpoint: `https://gate-${randomUUID()}.example.invalid`,
+              operations: [{ ...op, blast_radius: 'low', auto_approvable: true }],
+            },
+            'gate',
+          ),
+        );
+
+        const thrown = await callAs(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          manifestDigest: previewedDigest,
+        }).then(
+          () => {
+            throw new Error('expected GateInstanceNotAvailableError, but the call resolved');
+          },
+          (err: unknown) => err,
+        );
+        expect(thrown).toBeInstanceOf(GateInstanceNotAvailableError);
+        expect((thrown as GateInstanceNotAvailableError).code).toBe('manifest_changed');
+        const untouched = await inTx((client) =>
+          getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(untouched?.operation.blast_radius).toBe('high');
+
+        // A refresh bound to the manifest now in effect applies exactly that.
+        const applied = await callAs<{ refreshed: readonly { direction: string }[] }>(
+          ownerId,
+          'owner',
+          'refresh_operation_governance',
+          { gatekeeperId, manifestDigest: await digestOf(gateId) },
+        );
+        expect(applied.refreshed.map((entry) => entry.direction)).toEqual(['loosened']);
+      });
+
+      it('R-18: the digest is required — a call without it is refused before anything runs', async () => {
+        const op = testOperation({ name: `gov.nodigest.${randomUUID()}`, auto_approvable: false });
+        const { gatekeeperId } = await seedLinkedGatekeeper(
+          [op],
+          [{ ...op, auto_approvable: true }],
+        );
+        await expect(
+          callAs(ownerId, 'owner', 'refresh_operation_governance', { gatekeeperId }),
+        ).rejects.toThrow();
+        const stillOld = await inTx((client) =>
+          getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(stillOld?.operation.auto_approvable).toBe(false);
       });
     });
 

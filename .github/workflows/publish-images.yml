@@ -21,9 +21,21 @@ name: publish-images
 # console's "pi 运行时" card reads are the same as a host build's.
 #
 # Integrity: buildx SBOM + provenance attestations; cosign keyless signature on the pushed digest
-# (identity = this workflow in this repository; scripts/pull-images.sh verifies exactly that).
-# Trivy scans the pushed image and uploads SARIF (report only, never blocks the release — same
-# stance as image-scan.yml).
+# (identity = this workflow on main in this repository; scripts/pull-images.sh verifies exactly
+# that). Trivy scans the pushed image and uploads SARIF (report only, never blocks the release —
+# same stance as image-scan.yml).
+#
+# Two jobs (R-33, 2026-10-02 review). `build-sign` is the only job that can push to GHCR
+# (packages: write) and mint the Fulcio identity pull-images.sh trusts (id-token: write); it runs
+# only checkout, the build (Docker's buildx / login / build-push actions), and cosign (sigstore's
+# installer) — the vendors of the tools it uses. `scan` runs Trivy and the SARIF upload with
+# neither permission and no registry credentials (the packages are public), on the digest each
+# build-sign leg hands over as an artifact. Before the split, every step of one job — Trivy
+# included, with the GITHUB_TOKEN as its registry password — could re-push a release tag and
+# keyless-sign it as this workflow. Every action is pinned to a full commit SHA.
+#
+# Only from main: a run from any other ref would overwrite the release's tags with images whose
+# signature pull-images.sh rejects (its identity pins refs/heads/main), so build-sign refuses it.
 #
 # Public-repo red line: built from a clean checkout of the tag; the build context never contains
 # .env / secrets/ / docs/private/ (not in git, and .dockerignore excludes them too).
@@ -50,15 +62,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: publish (${{ matrix.service }})
+  build-sign:
+    name: build-sign (${{ matrix.service }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
       id-token: write
-      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -88,12 +99,18 @@ jobs:
     env:
       TAG: ${{ inputs.tag }}
     steps:
-      - name: Validate tag
+      - name: Validate tag and ref
         run: |
           case "$TAG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "::error::tag must look like vX.Y.Z, got '$TAG'"; exit 1 ;;
           esac
+          # workflow_call: the caller's ref (release-please runs on pushes to main);
+          # workflow_dispatch: the ref the run was started from.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::publish only from main (this run is on '$GITHUB_REF'); its signatures would not verify on a host"
+            exit 1
+          fi
 
       - name: Checkout ${{ inputs.tag }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,14 +177,93 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.image }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      # Handed to `scan` — signed digests only, written after the signature exists.
+      - name: Record the signed digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digest"
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" >"$RUNNER_TEMP/digest/image-ref"
+
+      - name: Upload the signed digest (${{ matrix.service }})
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.service }}
+          path: ${{ runner.temp }}/digest/image-ref
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: echo "${IMAGE}:${TAG} -> ${DIGEST}" >>"$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: scan (${{ matrix.service }})
+    needs: build-sign
+    # Scan whatever was published, even if another service's leg failed.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No packages, no id-token: nothing here can push or sign. Trivy pulls the public image
+    # anonymously.
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same services as build-sign.
+        service:
+          - kernel
+          - agent-host
+          - worker-supervisor
+          - llm-proxy
+          - egress-proxy
+          - caddy
+          - worker-runtime
+          - gatekeeper-docker
+          - gatekeeper-ragflow
+          - gate-host
+          - collector-host-inventory
+    steps:
+      # Only so the SARIF upload attributes the results to the tag's commit, as before the split.
+      - name: Checkout ${{ inputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Download the signed digest (${{ matrix.service }})
+        id: download
+        # Absent when this service's build-sign leg failed — nothing to scan then.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digest-${{ matrix.service }}
+          path: ${{ runner.temp }}/digest
+
+      - name: Read the image reference
+        id: ref
+        if: steps.download.outcome == 'success'
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          ref=$(head -n 1 "$RUNNER_TEMP/digest/image-ref")
+          case "$ref" in
+            ghcr.io/*/nexttime-ai-"$SERVICE"@sha256:*) ;;
+            *) echo "::error::unexpected image reference '$ref'"; exit 1 ;;
+          esac
+          echo "image_ref=$ref" >>"$GITHUB_OUTPUT"
+
       - name: Scan ${{ matrix.service }} with Trivy
+        if: steps.ref.outcome == 'success'
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
-          image-ref: ${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}
+          image-ref: ${{ steps.ref.outputs.image_ref }}
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
           severity: HIGH,CRITICAL
@@ -181,9 +277,3 @@ jobs:
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: publish-${{ matrix.service }}
-
-      - name: Summary
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: echo "${IMAGE}:${TAG} -> ${DIGEST}" >>"$GITHUB_STEP_SUMMARY"
