@@ -20,7 +20,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
-import { nameOf } from './useDirectoryNames.js';
+import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
 export interface ApprovalDecisionInput {
   readonly actionRequestId: string;
@@ -163,15 +163,20 @@ export function ApprovalDetail({
     }
   }
 
+  // L8a-10: a gate-scoped request (the kernel's only writer stores the gate's id as the scope) reads
+  // as "the whole gate", never as the gate's raw id posing as the action's target.
+  const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
   const actionItems: KeyValueItem[] = [
     { key: 'kind', label: t('能力', 'Capability'), value: row.actionKindTag, mono: true },
     {
       key: 'target',
       label: t('目标', 'Target'),
-      value: row.resourceScope ? (
+      value: scopeLabel ? (
         <span className="mono" data-testid="approval-target">
-          {row.resourceScope}
+          {scopeLabel}
         </span>
+      ) : row.resourceScope ? (
+        <span data-testid="approval-target">{t('整个门', 'The whole gate')}</span>
       ) : (
         <span className="text-3" data-testid="approval-target">
           {t('未限定资源', 'No resource scope')}
@@ -263,7 +268,7 @@ export function ApprovalDetail({
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
           <h2 className="approval-detail-title">
             {humanizeKind(row.actionKindTag)}
-            {row.resourceScope ? <span className="mono text-2"> · {row.resourceScope}</span> : null}
+            {scopeLabel ? <span className="mono text-2"> · {scopeLabel}</span> : null}
           </h2>
           <Button variant="secondary" size="s" asChild>
             <a href={provenance} data-testid="approval-provenance-link">
@@ -485,7 +490,7 @@ export function ApprovalDetail({
                   'The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.',
                 )
         }
-        target={row.resourceScope ?? row.actionKindTag}
+        target={scopeLabel ?? nameOf(gatekeeperNames, row.gatekeeperId) ?? row.actionKindTag}
         impact={
           pending ? confirmImpact(pending, row, principalNames, gatekeeperNames, t) : undefined
         }
@@ -562,7 +567,10 @@ function confirmImpact(
 ): readonly string[] {
   const lines: string[] = [
     `${t('动作', 'Action')}: ${row.actionKindTag}`,
-    `${t('目标资源', 'Target')}: ${row.resourceScope ?? t('未限定', 'no resource scope')}`,
+    `${t('目标资源', 'Target')}: ${
+      resourceScopeLabel(row, gatekeeperNames) ??
+      (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope'))
+    }`,
     `${t('门', 'Gatekeeper')}: ${gatekeeperNames?.get(row.gatekeeperId) ?? row.gatekeeperId}`,
     `${t('影响范围', 'Blast radius')}: ${labelText(statusChipStyle('blastRadius', row.blastRadius), t)}`,
   ];

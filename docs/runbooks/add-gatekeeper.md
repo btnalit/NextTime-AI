@@ -135,7 +135,7 @@ ConnectSystemLauncher.tsx`）。按第一步选的种类分两条路：
 | 步 | 谁 | 页面做什么 | 内核能力 |
 |---|---|---|---|
 | 连接与凭证 | 管理员 | 在启动器里直接填 `CreateGateInstanceForm`（gate id、目标地址、凭证模式、http 的 OpenAPI 清单 URL）；`shared` 模式随后"获取 5 分钟令牌"把共享凭证**直接 POST 到门宿主**（经 caddy `/gate-host/*`，内核不经手）；然后等门宿主接管（默认 60 秒内，页面每 5 秒重查） | `create_gate_instance`、`issue_gate_host_token` |
-| 能力与策略（平台侧） | 管理员 | **启用**该实例——按钮只在 `discovered` 出现（B7；`disabled` 显示"重新启用"，`enabled` 无按钮）；若接入包（`http` / `mcp`）不是**平台预置**，页面提示并可一键设为 `platform_preset`（否则工作区在目录里看不到它，`connector_not_preset`） | `update_gate_instance{status}`、`set_connector_mode` |
+| 能力与策略（平台侧） | 管理员 | **启用**该实例——按钮只在 `discovered` 出现（B7；`disabled` 显示"重新启用"，`enabled` 无按钮）；若接入包（`http` / `mcp`）不是**平台预置**，页面提示并可一键设为 `platform_preset`（否则工作区在目录里看不到它，`connector_not_preset`）；注意设为平台预置后，工作区就不能再自己连这一种类的系统（`create_connection` / `request_connection` 只认"可自连"，409 `connector_not_self_serve`，R-40） | `update_gate_instance{status}`、`set_connector_mode` |
 | 能力与策略（工作区侧） | owner | **在本工作区启用**（注册 Gatekeeper、导入并**发布** announce 的 Operation、写工作区链接）→ 审核分类（同接入向导第④步，`propose_operation` / `publish_operation`）→ 授予成员（成员下拉来自 `list_principals`） | `enable_gate_instance`、`connect_gatekeeper` |
 | 握手验证 | 管理员 / owner | "测试连接"（平台侧）+ 状态 / 健康 / 本工作区的门链接 | `test_gate_instance` |
 

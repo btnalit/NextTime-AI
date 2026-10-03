@@ -14,6 +14,9 @@ function factStep(overrides: Partial<NonNullable<ExplainResult['fact']>> = {}): 
     fact: {
       id: 'fact-1',
       linkType: 'test.runs_on',
+      sourceObjectId: 'o-container',
+      targetObjectId: 'o-host',
+      properties: {},
       epistemicStatus: 'asserted',
       assertedByPrincipal: { id: 'human-1', kind: 'human', role: 'owner', displayName: 'Alice' },
       verifiedByPrincipal: null,

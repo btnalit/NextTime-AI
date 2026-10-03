@@ -12,7 +12,12 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { ApprovalDetail } from './approvals/ApprovalDetail.js';
 import { useApprovalQueue } from './approvals/useApprovalQueue.js';
-import { nameOf, useGatekeeperNames, usePrincipalNames } from './approvals/useDirectoryNames.js';
+import {
+  nameOf,
+  resourceScopeLabel,
+  useGatekeeperNames,
+  usePrincipalNames,
+} from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
@@ -316,6 +321,7 @@ function PendingList({
       <List ariaLabel="Approval requests" testId="approvals-list">
         {rows.map((row) => {
           const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? shortId(row.gatekeeperId);
+          const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
           const principalName = row.onBehalfOf
             ? (nameOf(principalNames, row.onBehalfOf) ?? shortId(row.onBehalfOf))
             : null;
@@ -344,14 +350,16 @@ function PendingList({
                   {waitingLabel(row.requestedAt, t)}
                 </time>
               </span>
-              <span className="truncate">
+              {/* `data-gatekeeper-id`: how a test finds a gate-scoped row now that its scope is no
+                  longer printed as text (L8a-10) — an attribute, never visible copy. */}
+              <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
                 <span>{gateName}</span>
                 <span className="meta-sep" />
                 <span>{humanizeKind(row.actionKindTag)}</span>
-                {row.resourceScope ? (
+                {scopeLabel ? (
                   <>
                     {' → '}
-                    <span className="mono">{row.resourceScope}</span>
+                    <span className="mono">{scopeLabel}</span>
                   </>
                 ) : null}
               </span>
@@ -483,6 +491,7 @@ function ApprovalHistoryTab({
               const decidedBy = row.decidedBy ?? null;
               const gateName =
                 nameOf(gatekeeperNames, row.gatekeeperId) ?? shortId(row.gatekeeperId);
+              const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
               const principalName = row.onBehalfOf
                 ? (nameOf(principalNames, row.onBehalfOf) ?? shortId(row.onBehalfOf))
                 : null;
@@ -519,14 +528,14 @@ function ApprovalHistoryTab({
                       {formatRelative(row.decidedAt ?? row.requestedAt)}
                     </time>
                   </span>
-                  <span className="truncate">
+                  <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
                     <span>{gateName}</span>
                     <span className="meta-sep" />
                     <span>{humanizeKind(row.actionKindTag)}</span>
-                    {row.resourceScope ? (
+                    {scopeLabel ? (
                       <>
                         {' → '}
-                        <span className="mono">{row.resourceScope}</span>
+                        <span className="mono">{scopeLabel}</span>
                       </>
                     ) : null}
                   </span>

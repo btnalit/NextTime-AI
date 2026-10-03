@@ -1554,6 +1554,16 @@
                       "null"
                     ]
                   },
+                  "properties": {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  "sourceObjectId": {
+                    "type": "string"
+                  },
+                  "targetObjectId": {
+                    "type": "string"
+                  },
                   "verifiedByPrincipal": {
                     "anyOf": [
                       {
@@ -1595,6 +1605,9 @@
                 "required": [
                   "id",
                   "linkType",
+                  "sourceObjectId",
+                  "targetObjectId",
+                  "properties",
                   "epistemicStatus",
                   "assertedByPrincipal",
                   "verifiedByPrincipal",
@@ -4837,6 +4850,16 @@
                 "null"
               ]
             },
+            "properties": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "sourceObjectId": {
+              "type": "string"
+            },
+            "targetObjectId": {
+              "type": "string"
+            },
             "verifiedByPrincipal": {
               "anyOf": [
                 {
@@ -4878,6 +4901,9 @@
           "required": [
             "id",
             "linkType",
+            "sourceObjectId",
+            "targetObjectId",
+            "properties",
             "epistemicStatus",
             "assertedByPrincipal",
             "verifiedByPrincipal",
@@ -15484,13 +15510,13 @@
       "properties": {
         "relatedFactIds": {
           "items": {
-            "minLength": 1,
+            "format": "uuid",
             "type": "string"
           },
           "type": "array"
         },
         "relatedTaskId": {
-          "minLength": 1,
+          "format": "uuid",
           "type": "string"
         },
         "summary": {

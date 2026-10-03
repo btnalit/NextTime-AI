@@ -679,8 +679,10 @@ const connectionCapabilities: readonly Capability[] = [
       .object({ kind: z.enum(['http', 'mcp', 'cli', 'ssh']), target: z.string() })
       .strict(),
     resultSchema: wire.ConnectionRequestCreatedWireSchema,
+    // R-40 (maintainer decision D-19): refused (409 `connector_not_self_serve`) unless the platform
+    // keeps the generic connector for `kind` in `self_serve` — an owner could never complete it.
     description:
-      'Propose connecting a new system; produces a connection-request card for a human to fill in credentials.',
+      'Propose connecting a new system; produces a connection-request card for a human to fill in credentials. Refused (409 connector_not_self_serve) when the platform has not opened this kind for self-connection.',
   },
   {
     // S2.13 extension (task brief: "add the follow-up capability the human uses to complete a
@@ -731,7 +733,7 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.CreateConnectionResultWireSchema,
     description:
-      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks (400 connection_target_refused).',
+      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks (400 connection_target_refused). Refused (409 connector_not_self_serve) unless the platform keeps this kind’s connector in self-serve mode.',
     redactedParamKeys: ['credentials', 'connectionSecret'],
   },
   {
@@ -1296,7 +1298,8 @@ const epistemicCapabilities: readonly Capability[] = [
       'Observations and their Sources — narrowed to just the Fact’s own Observation when it ' +
       'recorded one (e.g. `submit_observations`), otherwise every Observation the Activity ' +
       'recorded (a bulk collector run or an ad-hoc `assert_fact`/Worker result can mean hundreds ' +
-      'of entries). For a Fact, `fact.humanAttestations` lists every human attestation ' +
+      'of entries). For a Fact, `fact` also carries its two Objects (`sourceObjectId`, ' +
+      '`targetObjectId`) and value (`properties`), and `fact.humanAttestations` lists every human attestation ' +
       '(kind `human_attestation`: a person’s own confirmation — who, when, note, link), which is ' +
       'a person’s word, not machine evidence.',
   },
@@ -1306,17 +1309,21 @@ const epistemicCapabilities: readonly Capability[] = [
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
+    // R-62: Fact / Task ids are uuids, checked here — a stored non-uuid used to break every
+    // `query_decisions` / `find_precedents` by objectId in the workspace (those reads now also
+    // skip such values in rows written before this check).
     paramsSchema: z
       .object({
         summary: z.string(),
-        relatedFactIds: z.array(id).optional(),
-        relatedTaskId: id.optional(),
+        relatedFactIds: z.array(z.string().uuid()).optional(),
+        relatedTaskId: z.string().uuid().optional(),
       })
       .strict(),
     resultSchema: z.object({ id, status: z.string(), turnId: z.string() }).strict(),
     description:
       'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
-      'why), optional `relatedFactIds` (the Facts it rests on) and `relatedTaskId`. Automatically ' +
+      'why), optional `relatedFactIds` (the ids of the Facts it rests on) and `relatedTaskId` — ' +
+      'both uuids as returned by the graph and task tools, else 400 invalid_params. Automatically ' +
       'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
       'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
       'Not for routine observations — only for real choices worth tracing.',
@@ -3079,7 +3086,7 @@ const platformCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.ConnectorWireSchema,
     description:
-      'Set a connector’s mode (disabled / self-serve / platform preset) and/or the Operations it may never run. A mode change never tears down existing workspace links; a disabled Operation is refused on its next call everywhere.',
+      'Set a connector’s mode (disabled / self-serve / platform preset) and/or the Operations it may never run. The mode governs catalog visibility and new connections only (create_connection / request_connection need self-serve, enable_gate_instance needs platform preset); it never tears down existing workspace links. A disabled Operation is refused on its next call everywhere — that is the cut-off for links that already exist.',
   },
   {
     name: 'list_gate_instances',

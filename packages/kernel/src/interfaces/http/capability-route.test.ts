@@ -24,6 +24,7 @@ import {
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
   ConnectionSecretInvalidError,
+  ConnectorNotSelfServeError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -142,6 +143,11 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
         new ConnectionEndpointIsPlatformGateError('http://gate-host:8083/i/x', 'hosted-x'),
       ),
     ).toMatchObject({ status: 400, code: 'endpoint_is_platform_gate' });
+    // R-40 (D-19): the platform keeps the kind's connector out of self_serve — a 409 state refusal.
+    expect(mapCapabilityError(new ConnectorNotSelfServeError('ssh', 'disabled'))).toMatchObject({
+      status: 409,
+      code: 'connector_not_self_serve',
+    });
     // R-27: an owner-supplied URL aimed at the platform — the caller's to fix, nothing contacted.
     const refused = mapCapabilityError(
       new OutboundTargetRefusedError(
