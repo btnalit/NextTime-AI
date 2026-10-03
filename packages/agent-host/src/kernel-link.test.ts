@@ -215,7 +215,7 @@ describe('createKernelLink', () => {
     await vi.waitFor(() => expect(startCalls).toHaveLength(1));
   });
 
-  it('sends well-shaped runtimeEvent/turnAccepted/turnRejected frames', async () => {
+  it('sends well-shaped runtimeEvent/turnAccepted/turnRejected/turnUnknown frames, numbered in order', async () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
@@ -232,13 +232,18 @@ describe('createKernelLink', () => {
     await nextMessage(serverSideSocket); // hello
 
     link.sendTurnAccepted('turn-1');
-    expect(await nextMessage(serverSideSocket)).toEqual({ type: 'turnAccepted', turnId: 'turn-1' });
+    expect(await nextMessage(serverSideSocket)).toEqual({
+      type: 'turnAccepted',
+      turnId: 'turn-1',
+      seq: 1,
+    });
 
     link.sendTurnRejected('turn-2', 'busy');
     expect(await nextMessage(serverSideSocket)).toEqual({
       type: 'turnRejected',
       turnId: 'turn-2',
       reason: 'busy',
+      seq: 2,
     });
 
     const event = {
@@ -250,10 +255,17 @@ describe('createKernelLink', () => {
       principalId: 'p-1',
     };
     link.sendRuntimeEvent(event);
-    expect(await nextMessage(serverSideSocket)).toEqual({ type: 'runtimeEvent', event });
+    expect(await nextMessage(serverSideSocket)).toEqual({ type: 'runtimeEvent', event, seq: 3 });
+
+    link.sendTurnUnknown('turn-3');
+    expect(await nextMessage(serverSideSocket)).toEqual({
+      type: 'turnUnknown',
+      turnId: 'turn-3',
+      seq: 4,
+    });
   });
 
-  it('does not throw when sending while disconnected, and drops the frame', async () => {
+  it('does not throw when sending while disconnected', async () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
@@ -366,5 +378,202 @@ describe('createKernelLink', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(server.connections.length).toBe(connectionCountAfterStop);
     expect(link.isConnected()).toBe(false);
+  });
+});
+
+/** Every message `ws` receives from here on, parsed, in arrival order. */
+function collect(ws: WebSocket): unknown[] {
+  const received: unknown[] = [];
+  ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+  return received;
+}
+
+const CORRELATION = { workspaceId: 'ws-1', chatId: 'chat-1', principalId: 'p-1' };
+
+function finalMessage(turnId: string, text: string) {
+  return {
+    type: 'message' as const,
+    role: 'assistant' as const,
+    content: { text },
+    ...CORRELATION,
+    turnId,
+  };
+}
+
+function turnEnded(turnId: string) {
+  return { type: 'turnEnded' as const, status: 'completed' as const, ...CORRELATION, turnId };
+}
+
+function textDelta(turnId: string, delta: string) {
+  return { type: 'textDelta' as const, delta, ...CORRELATION, turnId };
+}
+
+type ReceivedFrame = {
+  type: string;
+  turnId?: string;
+  seq?: number;
+  event?: { type: string; turnId: string };
+};
+
+function frameTurnId(frame: ReceivedFrame): string | undefined {
+  return frame.turnId ?? frame.event?.turnId;
+}
+
+function frameKind(frame: ReceivedFrame): string | undefined {
+  return frame.type === 'runtimeEvent' ? frame.event?.type : frame.type;
+}
+
+describe('createKernelLink — replay after a flap (R-56)', () => {
+  it('a Turn that ends while the link is down: its final message and turnEnded follow hello on reconnect', async () => {
+    server = await startFakeKernelServer();
+    link = createKernelLink({
+      kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      reconnectBaseDelayMs: 150, // a wide enough window to send into while the link is down
+      log: () => {},
+    });
+
+    const first = server.nextConnection();
+    link.start();
+    const firstSocket = await first;
+    await nextMessage(firstSocket); // hello
+
+    const second = server.nextConnection();
+    firstSocket.terminate();
+    await vi.waitFor(() => expect(link?.isConnected()).toBe(false));
+    link.sendRuntimeEvent(finalMessage('turn-1', 'the answer'));
+    link.sendRuntimeEvent(turnEnded('turn-1'));
+
+    const secondSocket = await second;
+    const received = collect(secondSocket);
+    await vi.waitFor(() => expect(received).toHaveLength(3));
+    expect(received[0]).toMatchObject({ type: 'hello' });
+    expect(received[1]).toEqual({
+      type: 'runtimeEvent',
+      event: finalMessage('turn-1', 'the answer'),
+      seq: 1,
+    });
+    expect(received[2]).toEqual({ type: 'runtimeEvent', event: turnEnded('turn-1'), seq: 2 });
+  });
+
+  it('frames written into a link that then dropped are sent again unless the kernel acknowledged them', async () => {
+    server = await startFakeKernelServer();
+    link = createKernelLink({
+      kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      reconnectBaseDelayMs: 5,
+      reconnectMaxDelayMs: 20,
+      log: () => {},
+    });
+
+    const first = server.nextConnection();
+    link.start();
+    const firstSocket = await first;
+    await nextMessage(firstSocket); // hello
+    const onFirst = collect(firstSocket);
+
+    link.sendTurnAccepted('turn-1');
+    link.sendRuntimeEvent(finalMessage('turn-1', 'the answer'));
+    link.sendRuntimeEvent(turnEnded('turn-1'));
+    await vi.waitFor(() => expect(onFirst).toHaveLength(3));
+    // The kernel got all three onto its socket but only processed (acknowledged) the first
+    // before the link died — the other two must not be lost.
+    firstSocket.send(JSON.stringify({ type: 'ack', seq: 1 }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const second = server.nextConnection();
+    firstSocket.terminate();
+    const secondSocket = await second;
+    const onSecond = collect(secondSocket);
+    await vi.waitFor(() => expect(onSecond).toHaveLength(3));
+    expect((onSecond as ReceivedFrame[]).map((frame) => frame.seq)).toEqual([undefined, 2, 3]);
+
+    // Acknowledged now: the next reconnect sends hello and nothing else.
+    secondSocket.send(JSON.stringify({ type: 'ack', seq: 3 }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const third = server.nextConnection();
+    secondSocket.terminate();
+    const thirdSocket = await third;
+    const onThird = collect(thirdSocket);
+    await vi.waitFor(() => expect(onThird).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onThird).toEqual([expect.objectContaining({ type: 'hello' })]);
+  });
+
+  it('keeps a bounded number of frames per Turn: stream deltas go first, the final message and turnEnded stay', async () => {
+    server = await startFakeKernelServer();
+    const lines: string[] = [];
+    link = createKernelLink({
+      kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      maxBufferedFramesPerTurn: 4,
+      log: (line) => lines.push(line),
+    });
+
+    // Not started yet — everything is kept for the first connection.
+    link.sendTurnAccepted('turn-2');
+    link.sendTurnAccepted('turn-1');
+    for (let i = 0; i < 20; i += 1) link.sendRuntimeEvent(textDelta('turn-1', `d${i}`));
+    link.sendRuntimeEvent(finalMessage('turn-1', 'first'));
+    for (let i = 20; i < 30; i += 1) link.sendRuntimeEvent(textDelta('turn-1', `d${i}`));
+    link.sendRuntimeEvent(finalMessage('turn-1', 'final'));
+    link.sendRuntimeEvent(turnEnded('turn-1'));
+
+    const first = server.nextConnection();
+    link.start();
+    const socket = await first;
+    const received = collect(socket);
+    await vi.waitFor(() => expect(received).toHaveLength(6));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(received).toHaveLength(6); // hello + turn-2's frame + turn-1's four
+
+    const frames = received.slice(1) as ReceivedFrame[];
+    const turn1 = frames.filter((frame) => frameTurnId(frame) === 'turn-1');
+    expect(turn1.map(frameKind)).toEqual(['turnAccepted', 'message', 'message', 'turnEnded']);
+    expect(frames).toContainEqual({ type: 'turnAccepted', turnId: 'turn-2', seq: 1 });
+    const seqs = frames.map((frame) => frame.seq as number);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(lines.filter((l) => l.includes('over the per-Turn bound'))).toHaveLength(1);
+  });
+
+  it('a ping the kernel never answers drops the link, and agent-host reconnects', async () => {
+    const silent = new WebSocketServer({ port: 0, host: '127.0.0.1', autoPong: false });
+    let connections = 0;
+    silent.on('connection', () => {
+      connections += 1;
+    });
+    await new Promise<void>((resolve) => silent.once('listening', () => resolve()));
+    const address = silent.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const lines: string[] = [];
+    link = createKernelLink({
+      kernelWsUrl: `ws://127.0.0.1:${port}`,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      heartbeatIntervalMs: 25,
+      reconnectBaseDelayMs: 5,
+      reconnectMaxDelayMs: 20,
+      log: (line) => lines.push(line),
+    });
+    try {
+      link.start();
+      await vi.waitFor(() => expect(connections).toBeGreaterThanOrEqual(2), { timeout: 2_000 });
+      expect(lines.some((l) => l.includes('no pong from the kernel'))).toBe(true);
+    } finally {
+      link.stop();
+      for (const client of silent.clients) client.terminate();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
   });
 });

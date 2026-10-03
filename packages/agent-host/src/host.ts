@@ -584,7 +584,13 @@ export function createHost(options: HostOptions): Host {
 
     handleStopTurn(cmd): void {
       const turn = activeTurns.get(cmd.principalId);
-      if (!turn || turn.turnId !== cmd.turnId) return; // unknown/already-ended — idempotent no-op
+      if (!turn || turn.turnId !== cmd.turnId) {
+        // Unknown or already ended (R-56): say so, so the kernel ends a Turn it still tracks —
+        // e.g. one whose `turnEnded` it never received — instead of waiting for a report this
+        // process will never send. Answering again for a repeated stop is harmless.
+        kernelLink.sendTurnUnknown(cmd.turnId);
+        return;
+      }
       turn.stopRequested = true;
       // Mid-`switch_session`: pi has not been given this Turn's prompt yet, so there is nothing to
       // abort — handleSwitchSessionResponse drops the Turn when the switch lands instead.

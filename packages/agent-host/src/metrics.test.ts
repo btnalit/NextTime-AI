@@ -26,6 +26,7 @@ function fakeLink(connected = true): KernelLink {
     sendRuntimeEvent: vi.fn(),
     sendTurnAccepted: vi.fn(),
     sendTurnRejected: vi.fn(),
+    sendTurnUnknown: vi.fn(),
   };
 }
 

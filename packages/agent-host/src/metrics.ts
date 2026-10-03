@@ -121,6 +121,8 @@ export function createAgentHostMetrics(options: AgentHostMetricsOptions = {}): A
           link.sendRuntimeEvent(event);
           if (event.type === 'turnEnded') finish(event.turnId, event.status);
         },
+        // Not a Turn outcome of this process (it has no record of the Turn) — not counted.
+        sendTurnUnknown: (turnId) => link.sendTurnUnknown(turnId),
       };
     },
     render() {
