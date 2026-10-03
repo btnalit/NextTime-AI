@@ -3,11 +3,11 @@ import type {
   ConflictStatus,
   ConnectionRequestStatus,
   DecisionStatus,
-  EntryAgentSessionStatus,
   EpistemicStatus,
   GrantStatus,
   PublishableStatus,
   TaskStatus,
+  TurnStatus,
   WorkerRunStatus,
 } from './enums.js';
 
@@ -319,40 +319,27 @@ export const WORKER_RUN_TRANSITIONS: TransitionTable<WorkerRunStatus, WorkerRunE
 };
 
 // ---------------------------------------------------------------------------------------------
-// EntryAgent session (§5.5, §7.2): `starting → ready → busy → ready …`; `crashed → starting`
-// (host auto-recovery); `stopped` (idle timeout, only while `ready` — §7.2 "空闲超时停容器").
+// Turn (§9.2 `activities(kind='agent_turn')`, §13 "Turn 非法转移被拒"): `running → completed |
+// interrupted | failed`; every end state is terminal — a late `completed` never overwrites an
+// `interrupted` or `failed` Turn (2026-10-02 review R-55). The one table every kernel writer of a
+// Turn's status goes through (`application/chat`'s `endTurn`). Replaces the EntryAgent session
+// table that stood here: no code ever moved an entry session through it (the kernel's `entry`
+// session rows carry no lifecycle; the resident container's state lives in agent-host and
+// worker-supervisor), so it described nothing the system enforced.
 // ---------------------------------------------------------------------------------------------
 
-export const ENTRY_AGENT_SESSION_EVENT_VALUES = [
-  'become_ready',
-  'start_turn',
-  'end_turn',
-  'crash',
-  'restart',
-  'stop',
-] as const;
-export type EntryAgentSessionEvent = (typeof ENTRY_AGENT_SESSION_EVENT_VALUES)[number];
+export const TURN_EVENT_VALUES = ['complete', 'interrupt', 'fail'] as const;
+export type TurnEvent = (typeof TURN_EVENT_VALUES)[number];
 
-export const ENTRY_AGENT_SESSION_EDGES: readonly StateTransition<
-  EntryAgentSessionStatus,
-  EntryAgentSessionEvent
->[] = [
-  { from: 'starting', event: 'become_ready', to: 'ready' },
-  { from: 'ready', event: 'start_turn', to: 'busy' },
-  { from: 'busy', event: 'end_turn', to: 'ready' },
-  { from: 'starting', event: 'crash', to: 'crashed' },
-  { from: 'ready', event: 'crash', to: 'crashed' },
-  { from: 'busy', event: 'crash', to: 'crashed' },
-  { from: 'crashed', event: 'restart', to: 'starting' },
-  { from: 'ready', event: 'stop', to: 'stopped' },
+export const TURN_EDGES: readonly StateTransition<TurnStatus, TurnEvent>[] = [
+  { from: 'running', event: 'complete', to: 'completed' },
+  { from: 'running', event: 'interrupt', to: 'interrupted' },
+  { from: 'running', event: 'fail', to: 'failed' },
 ];
 
-export const ENTRY_AGENT_SESSION_TRANSITIONS: TransitionTable<
-  EntryAgentSessionStatus,
-  EntryAgentSessionEvent
-> = {
-  machine: 'EntryAgentSession',
-  edges: ENTRY_AGENT_SESSION_EDGES,
+export const TURN_TRANSITIONS: TransitionTable<TurnStatus, TurnEvent> = {
+  machine: 'Turn',
+  edges: TURN_EDGES,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -423,7 +410,7 @@ export const ALL_TRANSITION_TABLES = [
   ACTION_REQUEST_TRANSITIONS,
   TASK_TRANSITIONS,
   WORKER_RUN_TRANSITIONS,
-  ENTRY_AGENT_SESSION_TRANSITIONS,
+  TURN_TRANSITIONS,
   PUBLISHABLE_TRANSITIONS,
   GRANT_TRANSITIONS,
   CONNECTION_REQUEST_TRANSITIONS,

@@ -3,12 +3,26 @@ import type { ContextItemKind } from './types.js';
 
 /**
  * application/linkage/store: the one read/write path for `pending_context_items`
- * (migrations/linkage/0001_pending_context_items.sql) — see that migration's own doc comment and
- * `application/linkage/index.ts`'s module doc comment for the full design.
+ * (migrations/linkage/0001_pending_context_items.sql, 0002_context_item_chat_lease.sql) — see those
+ * migrations' own doc comments and `application/linkage/index.ts`'s module doc comment for the full
+ * design.
+ *
+ * Delivery (2026-10-02 review R-57, maintainer decision D-23): an item belongs to one Chat and is
+ * shown to that Chat's Turns until a Turn that saw it is acknowledged by `report_turn`.
+ *   - `leaseContextItemsToTurn` (`get_entry_context` with a `turnId`) returns the same items for
+ *     every call of one Turn — each LLM call, a provider-error retry — and never consumes them.
+ *   - `acknowledgeTurnContextItems` (`report_turn`) is the only thing that does.
+ *   - `peekContextItems` (`get_entry_context` without a Turn: interactive / MCP sessions) reads
+ *     and writes nothing.
+ * So no read without an acknowledgement loses an item, and a Chat only sees its own items.
  */
 
 export interface InsertPendingContextItemInput {
   readonly principalId: string;
+  /** The Chat this item belongs to (R-57, D-23) — the Chat whose Turn invoked the Task / whose
+   *  Task's Worker raised the ActionRequest, i.e. the Chat the matching system message went to
+   *  (`application/linkage/chat-targets.ts`). Only that Chat's Turns lease it. */
+  readonly chatId: string;
   readonly kind: ContextItemKind;
   readonly subjectId: string;
   readonly payload: Record<string, unknown>;
@@ -29,12 +43,13 @@ export async function insertPendingContextItem(
 ): Promise<void> {
   await client.query(
     `insert into pending_context_items
-       (workspace_id, principal_id, kind, subject_id, payload, source_outbox_id)
-     values ($1, $2, $3, $4, $5::jsonb, $6)
+       (workspace_id, principal_id, chat_id, kind, subject_id, payload, source_outbox_id)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7)
      on conflict (workspace_id, principal_id, source_outbox_id) do nothing`,
     [
       workspaceId,
       input.principalId,
+      input.chatId,
       input.kind,
       input.subjectId,
       JSON.stringify(input.payload),
@@ -43,62 +58,117 @@ export async function insertPendingContextItem(
   );
 }
 
-export interface DrainedContextItems {
-  /** `payload`s of every undelivered non-`action_request_update` item, oldest first. */
+export interface EntryContextItems {
+  /** `payload`s of the non-`action_request_update` items, oldest first. */
   readonly tasks: readonly Record<string, unknown>[];
-  /** `payload`s of every undelivered `action_request_update` item, oldest first. */
+  /** `payload`s of the `action_request_update` items, oldest first. */
   readonly pendingApprovals: readonly Record<string, unknown>[];
 }
 
-/**
- * Reads every undelivered `pending_context_items` row for `principalId` and marks them delivered
- * — in the same transaction `client` belongs to, so a downstream failure in the caller (e.g.
- * `get_entry_context`'s Fact read) rolls this back too and the items remain undelivered for the
- * next call, never silently lost. Called exactly once per `get_entry_context` invocation
- * (`application/gateway/handlers.ts`).
- *
- * `for update skip locked` (lane-4 P3 fix, docs/development-tasks.md): without it, two concurrent
- * `get_entry_context` calls for the same principal (a real possibility — nothing prevents an entry
- * agent, or a client retry, from issuing two overlapping `get_entry_context` requests) can both
- * `SELECT` the same undelivered rows before either commits its `delivered_at` UPDATE, and both
- * then return the same context items — one Task outcome or approval update narrated to the entry
- * agent twice in the same "round" (not merely across separate Turns, which is a normal and
- * expected redelivery-safe outcome this table's whole design already tolerates). `SKIP LOCKED`
- * means the second, concurrent call simply sees none of the rows the first one already has locked
- * (rather than blocking on them) — it returns fewer or zero items for *this* call rather than
- * duplicating them; nothing is lost, since an unlocked/skipped row is still `delivered_at IS NULL`
- * and will be picked up whole by the next call once the first transaction commits.
- */
-export async function drainPendingContextItems(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-): Promise<DrainedContextItems> {
-  const result = await client.query<{
-    id: string;
-    kind: ContextItemKind;
-    payload: Record<string, unknown>;
-  }>(
-    `select id, kind, payload from pending_context_items
-     where workspace_id = $1 and principal_id = $2 and delivered_at is null
-     order by created_at asc
-     for update skip locked`,
-    [workspaceId, principalId],
-  );
-  if (result.rows.length === 0) return { tasks: [], pendingApprovals: [] };
-
-  const ids = result.rows.map((row) => row.id);
-  await client.query(
-    `update pending_context_items set delivered_at = now()
-     where workspace_id = $1 and id = any($2::uuid[])`,
-    [workspaceId, ids],
-  );
-
+function toEntryContextItems(
+  rows: readonly { kind: ContextItemKind; payload: Record<string, unknown> }[],
+): EntryContextItems {
   const tasks: Record<string, unknown>[] = [];
   const pendingApprovals: Record<string, unknown>[] = [];
-  for (const row of result.rows) {
+  for (const row of rows) {
     if (row.kind === 'action_request_update') pendingApprovals.push(row.payload);
     else tasks.push(row.payload);
   }
   return { tasks, pendingApprovals };
+}
+
+/** The Turn a `get_entry_context` call is serving: its `activities.id` and that Activity's Chat. */
+export interface EntryContextTurn {
+  readonly turnId: string;
+  readonly chatId: string | null;
+}
+
+/**
+ * Leases every unacknowledged item of `principalId` that belongs to `turn`'s Chat (or to no Chat —
+ * rows written before migration 0002) to `turn`, and returns every item leased to it, oldest first.
+ * Nothing is marked delivered: the same call for the same Turn returns the same items (plus any
+ * that arrived since) until `acknowledgeTurnContextItems` runs for it.
+ *
+ * `lease_turn_id is distinct from $3` takes over a lease held by another Turn. That Turn is of the
+ * same Chat, and a Chat runs one Turn at a time (`activities_one_running_turn_per_chat_uidx`;
+ * agent-host runs one per user), so it has ended — without `report_turn`, or the item would be
+ * acknowledged — and showing the item again is the at-least-once side of "no read loses an item".
+ *
+ * Concurrency: a second call for the same Turn while the first is open blocks on the rows the first
+ * UPDATE locked, re-checks them once it commits (now leased to this Turn, so skipped), and its
+ * SELECT then sees the committed leases — both calls return the full set, never a duplicate row.
+ */
+export async function leaseContextItemsToTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  turn: EntryContextTurn,
+): Promise<EntryContextItems> {
+  await client.query(
+    `update pending_context_items set lease_turn_id = $3::uuid
+     where workspace_id = $1 and principal_id = $2 and delivered_at is null
+       and (chat_id = $4::uuid or chat_id is null)
+       and lease_turn_id is distinct from $3::uuid`,
+    [workspaceId, principalId, turn.turnId, turn.chatId],
+  );
+  const result = await client.query<{ kind: ContextItemKind; payload: Record<string, unknown> }>(
+    `select kind, payload from pending_context_items
+     where workspace_id = $1 and principal_id = $2 and lease_turn_id = $3::uuid
+       and delivered_at is null
+     order by created_at asc, id asc`,
+    [workspaceId, principalId, turn.turnId],
+  );
+  return toEntryContextItems(result.rows);
+}
+
+/**
+ * Upper bound on a peek's items. A peek spans every Chat of the principal, and an item now stays
+ * until a Turn of its own Chat is acknowledged — items of a Chat nobody returns to would otherwise
+ * grow every interactive session's context without limit. The most recent ones are kept.
+ */
+export const PEEK_CONTEXT_ITEM_LIMIT = 50;
+
+/**
+ * Every unacknowledged item of `principalId`, in any Chat (the newest `PEEK_CONTEXT_ITEM_LIMIT`),
+ * oldest first. Read-only: no lease, no acknowledgement — an interactive or MCP session's read
+ * never takes an item away from the Chat it belongs to.
+ */
+export async function peekContextItems(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<EntryContextItems> {
+  const result = await client.query<{ kind: ContextItemKind; payload: Record<string, unknown> }>(
+    `select kind, payload from (
+       select kind, payload, created_at, id from pending_context_items
+       where workspace_id = $1 and principal_id = $2 and delivered_at is null
+       order by created_at desc, id desc
+       limit $3
+     ) recent
+     order by created_at asc, id asc`,
+    [workspaceId, principalId, PEEK_CONTEXT_ITEM_LIMIT],
+  );
+  return toEntryContextItems(result.rows);
+}
+
+/**
+ * Acknowledges (`delivered_at = now()`) every item of `principalId` currently leased to `turnId` —
+ * called by `report_turn`, in its transaction. Items that arrived after the Turn's last
+ * `get_entry_context` call were never leased to it and stay for the next Turn; an item another Turn
+ * has since taken over is not touched. Idempotent: a second `report_turn` acknowledges only what
+ * was leased in between. Returns the number of rows acknowledged.
+ */
+export async function acknowledgeTurnContextItems(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  turnId: string,
+): Promise<number> {
+  const result = await client.query(
+    `update pending_context_items set delivered_at = now()
+     where workspace_id = $1 and principal_id = $2 and lease_turn_id = $3::uuid
+       and delivered_at is null`,
+    [workspaceId, principalId, turnId],
+  );
+  return result.rowCount ?? 0;
 }

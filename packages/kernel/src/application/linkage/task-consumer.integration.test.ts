@@ -18,12 +18,12 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
-import { startActivity } from '../../substrate/epistemic/index.js';
+import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { newChat } from '../chat/index.js';
 import { completeTaskWithResult, invokeWorker, readTask } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
-import { drainPendingContextItems } from './store.js';
+import { acknowledgeTurnContextItems, leaseContextItemsToTurn } from './store.js';
 import { registerTaskUpdatedConsumer } from './task-consumer.js';
 import type { TaskUpdatedSource } from './task-consumer.js';
 
@@ -298,23 +298,67 @@ describe.runIf(DATABASE_URL !== undefined)(
         summary: 'did the thing',
       });
 
-      // get_entry_context's own read path (drainPendingContextItems) sees the outcome exactly
-      // once — the first drain returns it and marks it delivered, the second drain (simulating the
-      // *next* Turn's context call) sees nothing.
-      const firstDrain = await inTx(ownerId, (client) =>
-        drainPendingContextItems(client, workspaceId, ownerId),
+      // get_entry_context's own read path (R-57 / D-23): the next Turn of the originating Chat
+      // sees the outcome on every one of its calls until report_turn acknowledges it; a Turn of
+      // another Chat of the same user never sees it; the Turn after the acknowledgement sees
+      // nothing.
+      await inTx(ownerId, (client) => endActivity(client, workspaceId, turn.id, 'completed'));
+      const otherChat = await inTx(ownerId, (client) => newChat(client, workspaceId, ownerId, {}));
+      const otherTurn = await inTx(ownerId, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: otherChat.id,
+          principalId: ownerId,
+        }),
       );
-      expect(firstDrain.tasks).toHaveLength(1);
-      expect(firstDrain.tasks[0]).toMatchObject({
-        taskId: spawnResult.taskId,
-        status: 'completed',
-      });
-      expect(firstDrain.pendingApprovals).toHaveLength(0);
+      const otherChatContext = await inTx(ownerId, (client) =>
+        leaseContextItemsToTurn(client, workspaceId, ownerId, {
+          turnId: otherTurn.id,
+          chatId: otherChat.id,
+        }),
+      );
+      expect(otherChatContext.tasks).toHaveLength(0);
 
-      const secondDrain = await inTx(ownerId, (client) =>
-        drainPendingContextItems(client, workspaceId, ownerId),
+      const nextTurn = await inTx(ownerId, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: chat.id,
+          principalId: ownerId,
+        }),
       );
-      expect(secondDrain.tasks).toHaveLength(0);
+      const nextTurnRef = { turnId: nextTurn.id, chatId: chat.id };
+      for (let call = 0; call < 2; call += 1) {
+        const context = await inTx(ownerId, (client) =>
+          leaseContextItemsToTurn(client, workspaceId, ownerId, nextTurnRef),
+        );
+        expect(context.tasks).toHaveLength(1);
+        expect(context.tasks[0]).toMatchObject({
+          taskId: spawnResult.taskId,
+          status: 'completed',
+        });
+        expect(context.pendingApprovals).toHaveLength(0);
+      }
+
+      await inTx(ownerId, (client) =>
+        acknowledgeTurnContextItems(client, workspaceId, ownerId, nextTurn.id),
+      );
+      await inTx(ownerId, (client) => endActivity(client, workspaceId, nextTurn.id, 'completed'));
+      const turnAfter = await inTx(ownerId, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: chat.id,
+          principalId: ownerId,
+        }),
+      );
+      const afterAck = await inTx(ownerId, (client) =>
+        leaseContextItemsToTurn(client, workspaceId, ownerId, {
+          turnId: turnAfter.id,
+          chatId: chat.id,
+        }),
+      );
+      expect(afterAck.tasks).toHaveLength(0);
+      await inTx(ownerId, (client) => endActivity(client, workspaceId, turnAfter.id, 'completed'));
+      await inTx(ownerId, (client) => endActivity(client, workspaceId, otherTurn.id, 'completed'));
     });
 
     it('redelivering the identical outbox row does not duplicate the context item (unique index)', async () => {

@@ -37,10 +37,11 @@ import { type AllowedOperationWire, gateToolDescription, gateToolName } from './
  * 决策" for `entry`): there is no Turn for a directly-connected interactive session to report
  * against in the first place (`report_turn`'s own handler resolves an existing Activity by
  * `turnId`; nothing here ever creates one via `send_chat_message`). `context` injection
- * (`get_entry_context`) is kept — it is purely per-Principal (pending approvals/tasks/facts,
- * `application/gateway/handlers.ts`'s `getEntryContextHandler` reads `currentPrincipalId`, never a
- * Turn or Chat), so it is exactly as meaningful for an interactive session as for the resident
- * entry agent.
+ * (`get_entry_context`) is kept, called without a `turnId`: a read-only peek over the Principal's
+ * pending approvals/tasks across all of their chats, plus facts (2026-10-02 review R-57, decision
+ * D-23 — `application/gateway/handlers.ts`'s `getEntryContextHandler`). It consumes nothing, so an
+ * interactive session never takes a Task result or approval update away from the chat it belongs
+ * to; that chat's entry agent still sees it.
  *
  * **Kernel transport: the HTTP capability route (`KernelClient`, `/api/cap/<name>`), not `/mcp`.**
  * `interactive` mode still runs *inside* pi's own extension mechanism, registering pi
@@ -253,7 +254,8 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
   });
 
   // context injection (§7.4 "同 entry") — no turn-id correlation, no report_turn: see this file's
-  // own module doc comment for why interactive mode has neither.
+  // own module doc comment for why interactive mode has neither. Without a `turnId` the kernel
+  // answers with a read-only peek (R-57 / D-23), so this never consumes the entry agent's items.
   pi.on('context', async (event) => {
     let entryContext: EntryContextResult;
     try {

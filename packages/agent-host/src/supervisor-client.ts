@@ -28,9 +28,11 @@
  * Turn id) sent as `x-correlation-id` — a header, since `/resident/spawn`'s body schema is strict.
  */
 
-import { correlationHeaders } from '@nexttime/shared';
+import { AGENT_HOST_SPAWN_TIMEOUT_MS, correlationHeaders } from '@nexttime/shared';
 
-export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
+/** `@nexttime/shared`'s spawn budget — the kernel sizes its `turnAccepted` timeout from the same
+ *  constant (R-55). */
+export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = AGENT_HOST_SPAWN_TIMEOUT_MS;
 
 /** Per-call options for {@link SupervisorClientPort.spawn} / `touch` (leftover 87). */
 export interface SupervisorCallOptions {

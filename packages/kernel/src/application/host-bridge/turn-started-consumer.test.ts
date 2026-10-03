@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentRuntime, StartTurnInput } from './agent-runtime.js';
 import {
+  type IsTurnRunning,
   type ResolveTurnPrompt,
   type TurnStartedSource,
   registerTurnStartedConsumer,
@@ -51,6 +52,9 @@ const PROMPT_TEXT = 'hi there';
 /** A `resolvePrompt` fake that always returns `PROMPT_TEXT`, regardless of the event given. */
 const resolvePrompt: ResolveTurnPrompt = async () => PROMPT_TEXT;
 
+/** An `isTurnRunning` fake for a Turn that is still running. */
+const running: IsTurnRunning = async () => true;
+
 const EVENT = {
   type: 'TurnStarted' as const,
   workspaceId: 'ws1',
@@ -64,7 +68,7 @@ describe('registerTurnStartedConsumer', () => {
   it('calls startTurn with the resolved prompt prefixed by the turn_id marker', async () => {
     const dispatcher = createFakeDispatcher();
     const { runtime, started } = fakeRuntime();
-    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt);
+    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, running);
 
     await dispatcher.emit('outbox-1', EVENT);
 
@@ -84,7 +88,7 @@ describe('registerTurnStartedConsumer', () => {
     const resolve = vi.fn(async (event: Parameters<ResolveTurnPrompt>[0]) =>
       event.chatMessageId === EVENT.chatMessageId ? PROMPT_TEXT : 'wrong message',
     );
-    registerTurnStartedConsumer(dispatcher, runtime, resolve);
+    registerTurnStartedConsumer(dispatcher, runtime, resolve, running);
 
     await dispatcher.emit('outbox-1', EVENT);
 
@@ -95,7 +99,7 @@ describe('registerTurnStartedConsumer', () => {
   it('dedupes redelivery of the same outbox row id — startTurn is called exactly once', async () => {
     const dispatcher = createFakeDispatcher();
     const { runtime, started } = fakeRuntime();
-    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt);
+    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, running);
 
     await dispatcher.emit('outbox-1', EVENT);
     await dispatcher.emit('outbox-1', EVENT); // simulated redelivery of the identical row
@@ -106,7 +110,7 @@ describe('registerTurnStartedConsumer', () => {
   it('a different outbox row id for a different Turn is not deduped', async () => {
     const dispatcher = createFakeDispatcher();
     const { runtime, started } = fakeRuntime();
-    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt);
+    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, running);
 
     await dispatcher.emit('outbox-1', EVENT);
     await dispatcher.emit('outbox-2', { ...EVENT, turnId: 'turn2' });
@@ -117,7 +121,7 @@ describe('registerTurnStartedConsumer', () => {
   it('unsubscribing stops further delivery to the runtime', async () => {
     const dispatcher = createFakeDispatcher();
     const { runtime, started } = fakeRuntime();
-    const unsubscribe = registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt);
+    const unsubscribe = registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, running);
     unsubscribe();
 
     await dispatcher.emit('outbox-1', EVENT);
@@ -139,7 +143,7 @@ describe('registerTurnStartedConsumer', () => {
       }),
       stopTurn: vi.fn(async () => true),
     };
-    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt);
+    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, running);
 
     // First delivery throws — the outboxId must not have been marked "seen" as a result (the
     // previous shape of this function added it *before* calling startTurn, which would have
@@ -169,7 +173,46 @@ describe('registerTurnStartedConsumer', () => {
       }
       return PROMPT_TEXT;
     };
-    registerTurnStartedConsumer(dispatcher, runtime, flakyResolve);
+    registerTurnStartedConsumer(dispatcher, runtime, flakyResolve, running);
+
+    await expect(dispatcher.emit('outbox-1', EVENT)).rejects.toThrow('db down');
+    expect(started).toHaveLength(0);
+
+    await dispatcher.emit('outbox-1', EVENT);
+    expect(started).toHaveLength(1);
+  });
+
+  it('R-55: a TurnStarted whose Turn already ended (Stop before delivery, or replayed after recovery) starts nothing', async () => {
+    const dispatcher = createFakeDispatcher();
+    const { runtime, started } = fakeRuntime();
+    const isTurnRunning = vi.fn<IsTurnRunning>(async () => false);
+    const resolve = vi.fn(resolvePrompt);
+    registerTurnStartedConsumer(dispatcher, runtime, resolve, isTurnRunning);
+
+    await dispatcher.emit('outbox-1', EVENT);
+
+    expect(isTurnRunning).toHaveBeenCalledWith(EVENT);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(runtime.startTurn).not.toHaveBeenCalled();
+    expect(started).toHaveLength(0);
+
+    // Acknowledged, not retried: the same row again does not even re-check.
+    await dispatcher.emit('outbox-1', EVENT);
+    expect(isTurnRunning).toHaveBeenCalledTimes(1);
+  });
+
+  it('R-55: an isTurnRunning rejection is not deduped — redelivery retries the check', async () => {
+    const dispatcher = createFakeDispatcher();
+    const { runtime, started } = fakeRuntime();
+    let failNext = true;
+    const flakyCheck: IsTurnRunning = async () => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('db down');
+      }
+      return true;
+    };
+    registerTurnStartedConsumer(dispatcher, runtime, resolvePrompt, flakyCheck);
 
     await expect(dispatcher.emit('outbox-1', EVENT)).rejects.toThrow('db down');
     expect(started).toHaveLength(0);

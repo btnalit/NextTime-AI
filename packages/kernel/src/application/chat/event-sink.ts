@@ -1,10 +1,9 @@
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
-import { endActivity } from '../../substrate/epistemic/index.js';
-import { enqueue } from '../../substrate/outbox/index.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
 import { chatMessageKind, chatMessageText, insertChatMessage } from './service.js';
+import { endTurn } from './turn-recovery.js';
 
 /**
  * application/chat/event-sink: `createChatEventSink` implements `application/host-bridge`'s
@@ -108,28 +107,16 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
         }
 
         case 'turnEnded': {
+          // R-55: through the one Turn transition (`endTurn`, turn-recovery.ts) — a no-op for a
+          // Turn that already ended (a Stop, an accept timeout, the extension's `report_turn`), so
+          // a late `completed` never overwrites `interrupted`/`failed`. When it does move the
+          // Turn it also enqueues `TurnCompleted` and pushes `chat.metadata` (§13 "未完成 Turn 标
+          // interrupted；下一轮注入'上轮中断'" — how a connected client learns the Turn ended).
           await withWorkspace(
             deps.pool,
             { workspaceId: event.workspaceId, principalId: event.principalId },
-            async (client) => {
-              await endActivity(client, event.workspaceId, event.turnId, event.status);
-              await enqueue(client, {
-                type: 'TurnCompleted',
-                workspaceId: event.workspaceId,
-                chatId: event.chatId,
-                turnId: event.turnId,
-                status: event.status,
-              });
-            },
+            (client) => endTurn(client, event.workspaceId, event.turnId, event.status),
           );
-          // §13 "未完成 Turn 标 interrupted；下一轮注入'上轮中断'" — chat.metadata is how a
-          // currently-connected client learns the Turn ended without needing a separate
-          // chat.stream taskUpdated/workerSpawned sub-kind (there is no Task yet in S1 scope).
-          publishChatPushEvent({
-            type: 'chat.metadata',
-            chatId: event.chatId,
-            metadata: { turnId: event.turnId, turnStatus: event.status },
-          });
           return;
         }
       }

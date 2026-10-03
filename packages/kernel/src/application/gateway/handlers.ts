@@ -11,19 +11,26 @@ import {
   chatMessageKind,
   chatMessageText,
   currentPrincipalId,
+  endTurn,
   endUnknownRuntimeTurn,
   findRunningTurn,
   getChatHistory,
   listChats,
   newChat,
   renameChat,
+  requestTurnStop,
   requireChatAccess,
   sendChatMessage,
   setChatArchived,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
-import { drainPendingContextItems } from '../../application/linkage/index.js';
+import {
+  type EntryContextTurn,
+  acknowledgeTurnContextItems,
+  leaseContextItemsToTurn,
+  peekContextItems,
+} from '../../application/linkage/index.js';
 import {
   DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
@@ -475,6 +482,10 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
     // it before this call) and will never independently emit the `turnEnded` that would otherwise
     // end it — end it here instead, so the Chat is not wedged behind
     // `activities_one_running_turn_per_chat_uidx` forever.
+    //
+    // R-55: the stop intent is recorded on the Turn first, so whichever report of its end lands
+    // first — agent-host's `turnEnded` or the extension's `report_turn` — it ends `interrupted`.
+    await requestTurnStop(client, workspaceId, running.id);
     const runtimeKnowsTurn = await agentRuntime?.stopTurn(running.id);
     if (runtimeKnowsTurn === false) {
       await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
@@ -623,33 +634,93 @@ const renameChatHandler: CapabilityHandler = async (client, workspaceId, params,
  * S1 scope was: pending approvals and running tasks always empty, `facts` the one real piece of
  * context (`GraphStore.listRecentFacts`). S2.11 addition (design doc §7.4 `context` injection row,
  * §8.2 "用户下一次发言时，context 事件把 Task 结果注入"; docs/development-tasks.md S2.11 deliverable 3):
- * `tasks`/`pendingApprovals` are now populated from `application/linkage`'s
- * `drainPendingContextItems` — every undelivered Task outcome, budget warning (≥80%), or
- * `waiting_approval` notice for this principal (`tasks` bucket), and every undelivered ActionRequest
- * status change this principal is the requester of (`pendingApprovals` bucket) — marked delivered
- * in the same call so nothing repeats on the next Turn (`application/linkage/store.ts`'s own doc
- * comment has the full "why a table, not a column" rationale). `precedents` remains S3 scope (no
- * Procedure/Skill graph content exists yet to precedent-match against).
+ * `tasks`/`pendingApprovals` are populated from `application/linkage`'s `pending_context_items` —
+ * Task outcomes, budget warnings (≥80%) and `waiting_approval` notices (`tasks` bucket), and
+ * ActionRequest status changes this principal is the requester of (`pendingApprovals` bucket).
+ * `precedents` remains S3 scope (no Procedure/Skill graph content exists yet to precedent-match
+ * against).
+ *
+ * Delivery (2026-10-02 review R-57, maintainer decision D-23): pi's `context` event fires before
+ * every LLM call and its injection is not persisted, so a read must not consume.
+ *   - With `turnId` (the entry runtime, every call of a Turn): the items of that Turn's Chat are
+ *     leased to the Turn and returned — the same items for every call of the Turn (a second LLM
+ *     call, a provider-error retry) until `report_turn` for it acknowledges them. A Chat only sees
+ *     its own items.
+ *   - Without `turnId`: a read-only peek over the principal's unacknowledged items (interactive /
+ *     MCP sessions, which have no Turn), so such a session never takes an item away from its Chat.
+ *     One exception, for an entry image built before `turnId` existed (it calls with `{}` during a
+ *     rolling upgrade, and possibly longer — the runtime image is an operator setting): an `entry`
+ *     session is attributed to the principal's running Turn (agent-host runs one Turn per user at a
+ *     time), and its existing `report_turn` acknowledges it, so an old image gets the same
+ *     semantics. With no running Turn it peeks.
  *
  * Field names deliberately unchanged from the S1 stub (`tasks`/`pendingApprovals`, not new keys) —
  * `packages/platform-extension/src/modes/entry.ts`'s `EntryContextResult`/`renderSection` already
- * render any JSON-shaped array under these two keys generically; inventing new top-level keys would
- * need a platform-extension change, which is out of this task's ownership (S2.9's area).
+ * render any JSON-shaped array under these two keys generically.
  */
-const getEntryContextHandler: CapabilityHandler = async (client, workspaceId) => {
+const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { turnId } = params as { turnId?: string };
   const principalId = await currentPrincipalId(client);
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const facts = await graphStore.listRecentFacts(client, workspaceId);
-  const drained = await drainPendingContextItems(client, workspaceId, principalId);
+  const turn = await resolveEntryContextTurn(client, workspaceId, principalId, {
+    turnId,
+    sessionId: ctx?.claims?.sid,
+  });
+  const items = turn
+    ? await leaseContextItemsToTurn(client, workspaceId, principalId, turn)
+    : await peekContextItems(client, workspaceId, principalId);
   return {
     result: {
-      pendingApprovals: drained.pendingApprovals,
-      tasks: drained.tasks,
+      pendingApprovals: items.pendingApprovals,
+      tasks: items.tasks,
       facts: facts.map(toWireFact),
       precedents: [],
     },
   };
 };
+
+/** The caller's own `agent_turn` Activity `turnId` and its Chat, or `undefined` — RLS
+ *  (`activities_visibility`) plus `started_by` keep it to the caller's own Turns. */
+async function readOwnAgentTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  turnId: string,
+): Promise<EntryContextTurn | undefined> {
+  const result = await client.query<{ id: string; chat_id: string | null }>(
+    `select id, chat_id from activities
+     where workspace_id = $1 and id = $2 and kind = 'agent_turn' and started_by = $3`,
+    [workspaceId, turnId, principalId],
+  );
+  const row = result.rows[0];
+  return row ? { turnId: row.id, chatId: row.chat_id } : undefined;
+}
+
+/** Which Turn a `get_entry_context` call serves, or `undefined` for a peek — see
+ *  `getEntryContextHandler`'s doc comment. An unknown `turnId` is `TurnNotFoundError` (404), the
+ *  same masking `report_turn` uses. */
+async function resolveEntryContextTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  input: { readonly turnId?: string; readonly sessionId?: string },
+): Promise<EntryContextTurn | undefined> {
+  if (input.turnId !== undefined) {
+    const turn = await readOwnAgentTurn(client, workspaceId, principalId, input.turnId);
+    if (!turn) throw new TurnNotFoundError(workspaceId, input.turnId);
+    return turn;
+  }
+  if (!input.sessionId) return undefined;
+  const session = await client.query<{ kind: string }>(
+    'select kind from sessions where workspace_id = $1 and id = $2',
+    [workspaceId, input.sessionId],
+  );
+  if (session.rows[0]?.kind !== 'entry') return undefined;
+  const running = await findAttributableTurn(client, { workspaceId, principalId, at: new Date() });
+  if (!running?.wasRunning) return undefined;
+  return readOwnAgentTurn(client, workspaceId, principalId, running.id);
+}
 
 export class TurnNotFoundError extends Error {
   constructor(workspaceId: string, turnId: string) {
@@ -659,17 +730,14 @@ export class TurnNotFoundError extends Error {
 }
 
 /**
- * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends the Turn Activity (idempotent — a
- * second `report_turn` for an already-ended Turn re-merges the same metadata rather than erroring,
- * matching entry.ts's own retry-tolerant `agent_settled` handler) and records `summary`/
- * `decisions` in `activities.metadata`. Written as a direct parameterized query rather than
- * extending `substrate/epistemic/activities.ts`'s `endActivity` — this task's ownership permits
- * adding to gateway/handlers.ts but not modifying substrate/epistemic (unlike substrate/graph,
- * which has an explicit carve-out for a small additive method); see the PR body "假设与偏离".
- * Visibility/ownership is enforced by `activities`' own RLS policy (`activities_visibility`,
- * migrations/core/0003_chat.sql) — a `turnId` outside the caller's own chats simply matches no
- * row, indistinguishable from a nonexistent one, same masking convention as
- * application/chat/service.ts's `requireChatAccess`.
+ * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends a still-running Turn Activity
+ * `completed` through `endTurn` (R-55 — a Turn already ended keeps its status) and records
+ * `summary`/`decisions` in `activities.metadata` (idempotent — a second `report_turn` for an
+ * already-ended Turn re-merges the same metadata rather than erroring, matching entry.ts's own
+ * retry-tolerant `agent_settled` handler). Visibility/ownership is enforced by `activities`' own
+ * RLS policy (`activities_visibility`, migrations/core/0003_chat.sql) — a `turnId` outside the
+ * caller's own chats simply matches no row, indistinguishable from a nonexistent one, same masking
+ * convention as application/chat/service.ts's `requireChatAccess`.
  */
 const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { turnId, summary, decisions } = params as {
@@ -680,17 +748,24 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   const metadataPatch: Record<string, unknown> = { summary };
   if (decisions !== undefined) metadataPatch.decisions = decisions;
 
+  // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a
+  // Turn that already ended (Stop, accept timeout, agent-host's own `turnEnded`) keeps its status,
+  // one whose stop was requested ends `interrupted`, and the writer that moves it enqueues
+  // `TurnCompleted` and pushes `chat.metadata`.
+  await endTurn(client, workspaceId, turnId, 'completed');
   const result = await client.query<{ id: string; status: string }>(
     `update activities
-     set status = case when status = 'running' then 'completed' else status end,
-         ended_at = coalesce(ended_at, now()),
-         metadata = metadata || $3::jsonb
+     set metadata = metadata || $3::jsonb
      where workspace_id = $1 and id = $2 and kind = 'agent_turn'
      returning id, status`,
     [workspaceId, turnId, JSON.stringify(metadataPatch)],
   );
   const row = result.rows[0];
   if (!row) throw new TurnNotFoundError(workspaceId, turnId);
+
+  // R-57 (D-23): reporting the Turn acknowledges the context items it was shown
+  // (`get_entry_context` leased them to it), so the next Turn does not see them again.
+  await acknowledgeTurnContextItems(client, workspaceId, await currentPrincipalId(client), turnId);
 
   return {
     result: { turnId: row.id, status: row.status },

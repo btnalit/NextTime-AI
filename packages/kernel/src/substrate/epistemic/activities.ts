@@ -107,7 +107,10 @@ export async function startActivity(
   return mapActivityRow(row);
 }
 
-/** Ends an Activity: sets `status` (caller-chosen, e.g. `'completed'`/`'failed'`) and `ended_at`. */
+/** Ends an Activity: sets `status` (caller-chosen, e.g. `'completed'`/`'failed'`) and `ended_at`.
+ *  Unguarded, so the kernel ends a Turn (`kind = 'agent_turn'`) through `application/chat`'s
+ *  `endTurn` instead, which follows `TURN_TRANSITIONS` (2026-10-02 review R-55 — this UPDATE was
+ *  how a late `completed` overwrote an `interrupted` Turn). Test fixtures still use it to end one. */
 export async function endActivity(
   client: PoolClient,
   workspaceId: string,

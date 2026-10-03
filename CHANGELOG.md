@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.37.0](https://github.com/btnalit/NextTime-AI/compare/v0.36.0...v0.37.0) (2026-10-03)
+
+
+### Bug Fixes
+
+* **approval:** a person must decide high-impact and non-auto-approvable requests ([#404](https://github.com/btnalit/NextTime-AI/issues/404)) ([302ed0f](https://github.com/btnalit/NextTime-AI/commit/302ed0fbab8252d6e209b10064476f6caa19a10f))
+* **gatekeeper-docker:** the docker gate never lists or touches the platform's agent containers ([#403](https://github.com/btnalit/NextTime-AI/issues/403)) ([c702f7f](https://github.com/btnalit/NextTime-AI/commit/c702f7f580de1a836eb578f2b4511f05374873c6))
+* **gateway:** gate-action replay asks the gate, unknown outcomes are bounded, executing rows are a per-gate barrier ([#414](https://github.com/btnalit/NextTime-AI/issues/414)) ([8409dd4](https://github.com/btnalit/NextTime-AI/commit/8409dd4dfa4dd4d1a834d1bd5e872c90264a9b62))
+* **gateway:** gate-client timeout covers the response body; the approval drain no longer blocks outbox delivery ([#415](https://github.com/btnalit/NextTime-AI/issues/415)) ([368c705](https://github.com/btnalit/NextTime-AI/commit/368c70528e272b0d79db447fd0bd0bcedf13d55d))
+* **gateway:** provenance anchors require ownership — Source owner and Activity starter must be the caller ([#402](https://github.com/btnalit/NextTime-AI/issues/402)) ([3016be3](https://github.com/btnalit/NextTime-AI/commit/3016be3bac22f8889465f95c19047b6498b0c331))
+* **governance:** derived idempotency keys dedupe only in-flight rows; invoke_worker gets a key (R-53, R-54) ([#413](https://github.com/btnalit/NextTime-AI/issues/413)) ([6eb7fee](https://github.com/btnalit/NextTime-AI/commit/6eb7fee174c11968818458976a7b5ee6af30c04f))
+* **governance:** grant_capability accepts only per-gate grants the console can show and revoke ([#407](https://github.com/btnalit/NextTime-AI/issues/407)) ([c4034f3](https://github.com/btnalit/NextTime-AI/commit/c4034f3d9ebc16ea74f1311613f46d33bac302fa))
+* **internal-auth:** per-service internal credentials with a per-route allow-list; agent-host link cannot be replaced ([#411](https://github.com/btnalit/NextTime-AI/issues/411)) ([383967c](https://github.com/btnalit/NextTime-AI/commit/383967cd096b003b4f8607068245ec925b67435d))
+* **llm-proxy:** parse openai-responses usage so budgets and cost accounting see real tokens ([#406](https://github.com/btnalit/NextTime-AI/issues/406)) ([390055d](https://github.com/btnalit/NextTime-AI/commit/390055d04d56e9e2ca53b0f46edbba509a9564fb))
+* **members:** service principals can be disabled, re-keyed and re-roled; the last owner must be a person ([#410](https://github.com/btnalit/NextTime-AI/issues/410)) ([3e9d35f](https://github.com/btnalit/NextTime-AI/commit/3e9d35f1b6129679029cb49e36c50aeca9567578))
+* **scripts:** host-env-init chowns caddy data to root before removing other-users access ([#409](https://github.com/btnalit/NextTime-AI/issues/409)) ([3961281](https://github.com/btnalit/NextTime-AI/commit/3961281273b9266140fbe7640f761f94f41a2f15))
+* **task:** guard the crash-retry path; roll_entry_containers sees private-chat Turns (R-58, R-59) ([#416](https://github.com/btnalit/NextTime-AI/issues/416)) ([92686b7](https://github.com/btnalit/NextTime-AI/commit/92686b7629558d3b8077cf7fc307929c98cb4483))
+
 ## [0.36.0](https://github.com/btnalit/NextTime-AI/compare/v0.35.1...v0.36.0) (2026-10-02)
 
 

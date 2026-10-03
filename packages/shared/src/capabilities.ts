@@ -1862,10 +1862,10 @@ const governanceCapabilities: readonly Capability[] = [
 // "每轮回传 Turn 与决策") without naming the capabilities. Assumption (see PR body "假设"): grouped
 // under `task` rather than a new group, since both are per-Turn/Task-lifecycle facilities for the
 // entry agent (bootstrap read / write-back), not graph reads (`graph`) or provenance queries
-// (`epistemic`). `get_entry_context` takes no params — the kernel derives the caller and workspace
-// from the Handle. `report_turn`'s field names follow this file's established camelCase param
-// convention (`turnId`, not the task brief's prose `turn_id`) for consistency with every other
-// capability here.
+// (`epistemic`). `get_entry_context` derives the caller and workspace from the Handle; its one
+// optional param, `turnId` (2026-10-02 review R-57, decision D-23), names the Turn the read serves.
+// `report_turn`'s field names follow this file's established camelCase param convention (`turnId`,
+// not the task brief's prose `turn_id`) for consistency with every other capability here.
 // -------------------------------------------------------------------------------------------
 
 /**
@@ -1900,11 +1900,15 @@ const taskCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: noParams,
+    // R-57 (D-23): never consumes. With `turnId`, the Turn's Chat's items are returned for every
+    // call of that Turn until `report_turn` (a `write`) acknowledges them; without it, a peek. An
+    // older entry runtime sends `{}` and is still valid (the kernel attributes it to the running
+    // Turn — application/gateway/handlers.ts `getEntryContextHandler`).
+    paramsSchema: z.object({ turnId: id.optional() }).strict(),
     resultSchema: z
       .object({
-        // `application/linkage`'s own undelivered-item payloads — opaque per-kind JSON, not one
-        // fixed shape (`DrainedContextItems`, application/linkage/store.ts).
+        // `application/linkage`'s own unacknowledged-item payloads — opaque per-kind JSON, not one
+        // fixed shape (`EntryContextItems`, application/linkage/store.ts).
         pendingApprovals: z.array(jsonRecord),
         tasks: z.array(jsonRecord),
         facts: z.array(wire.FactWireSchema),
@@ -1915,7 +1919,9 @@ const taskCapabilities: readonly Capability[] = [
       'The calling principal’s current situation: pending approvals, running and recently ' +
       'finished Tasks with their results, relevant Facts (with epistemic_status), and precedents. ' +
       'Entry agents receive this automatically before every model call; call it yourself only ' +
-      'from an interactive session, which has no such injection.',
+      'from an interactive session, which has no such injection. Reading never consumes ' +
+      'anything: without `turnId` it covers every chat; with `turnId` only that Turn’s chat, ' +
+      'and the same items come back for that Turn until `report_turn` acknowledges them.',
   },
   {
     name: 'report_turn',
@@ -1932,9 +1938,9 @@ const taskCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: z.object({ turnId: id, status: z.string() }).strict(),
     description:
-      'Record the outcome of a finished Turn (`turnId`, `summary`, optional `decisions`). The ' +
-      'entry runtime calls this once per Turn on its own; interactive sessions have no Turn to ' +
-      'report.',
+      'Record the outcome of a finished Turn (`turnId`, `summary`, optional `decisions`), and ' +
+      'acknowledge the context items `get_entry_context` showed it. The entry runtime calls this ' +
+      'once per Turn on its own; interactive sessions have no Turn to report.',
   },
   {
     name: 'invoke_worker',
