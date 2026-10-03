@@ -13466,15 +13466,39 @@
         "backup": {
           "additionalProperties": false,
           "properties": {
-            "configured": {
-              "type": "boolean"
-            },
             "detail": {
+              "type": "string"
+            },
+            "lastSuccessAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maxAgeHours": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "stale": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "fresh",
+                "stale",
+                "unknown"
+              ],
               "type": "string"
             }
           },
           "required": [
-            "configured",
+            "status",
+            "lastSuccessAt",
+            "stale",
+            "maxAgeHours",
             "detail"
           ],
           "type": "object"

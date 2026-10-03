@@ -27,6 +27,7 @@ import type { CapabilityHandler, CapabilityHandlerContext } from '../gateway/cap
 import { readModelCatalog } from '../gateway/models-catalog-handler.js';
 import { PlatformAdminError, queryPlatformAudit } from '../gateway/platform-handlers.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
+import { readBackupStatus, resolveBackupLastSuccessFile } from './backup-status.js';
 import {
   readPlatformSettings,
   toWirePlatformSettings,
@@ -738,6 +739,8 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
   const gateInstances = await listGateInstances(client);
   const llmUsage30d = await sumLlmUsage30Days(client);
   const recentAudit = await queryPlatformAudit(client, { limit: 50 });
+  // D-28: the backup service's mounted `last-success` marker — never throws (backup-status.ts).
+  const backup = await readBackupStatus(resolveBackupLastSuccessFile(process.env));
 
   const health: ServiceHealthWire[] = [
     { service: 'kernel', status: 'ok' },
@@ -763,10 +766,7 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
 
   const result: PlatformStatusWire = {
     health,
-    backup: {
-      configured: false,
-      detail: '未配置 not configured — 遗留 6 落地前如实显示；本能力不新增备份定时器',
-    },
+    backup,
     llmUsage30d,
     recentAudit: recentAudit.items,
     checkedAt: new Date().toISOString(),

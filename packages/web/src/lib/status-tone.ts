@@ -8,6 +8,7 @@ import type {
   GrantStatus,
   OperationMode,
   PiDriftStatusWire,
+  PlatformBackupStatusWire,
   PlatformRoleWire,
   PublishableStatus,
   Role,
@@ -29,6 +30,7 @@ import {
   OPERATION_MODE_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
+  PlatformBackupStatusWireSchema,
   PlatformRoleWireSchema,
   ROLE_VALUES,
   ServiceHealthWireSchema,
@@ -106,7 +108,8 @@ export type StatusMachine =
   | 'connectorMode'
   | 'serviceHealth'
   | 'platformRole'
-  | 'piDrift';
+  | 'piDrift'
+  | 'backupFreshness';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -315,6 +318,14 @@ export const PI_DRIFT_TONES: Readonly<Record<PiDriftStatusWire, ChipStyle>> = {
   unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 
+/** `platform_status.backup.status` (review 2026-10-02 D-28): the nightly backup's freshness, from
+ *  the backup service's `last-success` marker — `unknown` when the kernel cannot read one. */
+export const BACKUP_FRESHNESS_TONES: Readonly<Record<PlatformBackupStatusWire, ChipStyle>> = {
+  fresh: { tone: 'ok', label: { zh: '正常', en: 'Up to date' } },
+  stale: { tone: 'danger', label: { zh: '已过期', en: 'Stale' } },
+  unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -341,6 +352,10 @@ const MACHINES: Readonly<
   },
   platformRole: { values: PlatformRoleWireSchema.options, tones: PLATFORM_ROLE_TONES },
   piDrift: { values: PiDriftStatusWireSchema.options, tones: PI_DRIFT_TONES },
+  backupFreshness: {
+    values: PlatformBackupStatusWireSchema.options,
+    tones: BACKUP_FRESHNESS_TONES,
+  },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

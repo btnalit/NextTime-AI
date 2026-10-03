@@ -40,7 +40,13 @@ function status(overrides: Partial<PlatformStatusWire> = {}): PlatformStatusWire
       { service: 'worker-supervisor', status: 'down', detail: 'connect ECONNREFUSED' },
       { service: 'egress-proxy', status: 'unknown', detail: 'loopback-only by design' },
     ],
-    backup: { configured: false, detail: '未配置' },
+    backup: {
+      status: 'fresh',
+      lastSuccessAt: '2026-09-21T19:30:00.000Z',
+      stale: false,
+      maxAgeHours: 26,
+      detail: 'last successful backup 2026-09-21T19:30:00Z (4h30m old, limit 26h)',
+    },
     llmUsage30d: {
       windowDays: 30,
       totalCostUsd: 12.5,
@@ -55,7 +61,7 @@ function status(overrides: Partial<PlatformStatusWire> = {}): PlatformStatusWire
 }
 
 describe('PlatformStatusPage', () => {
-  it('renders health chips for every probed service, the honest backup state and 30-day usage', async () => {
+  it('renders health chips for every probed service, the backup freshness and 30-day usage', async () => {
     const http = scriptedHttp({ platform_status: () => status() });
     renderPage(http);
 
@@ -64,10 +70,54 @@ describe('PlatformStatusPage', () => {
     expect(health.textContent).toContain('worker-supervisor');
     expect(health.textContent).toContain('egress-proxy');
 
-    expect(screen.getByTestId('status-backup').textContent).toContain('未配置');
+    const backup = screen.getByTestId('status-backup');
+    expect(backup.textContent).toContain('正常');
+    expect(backup.textContent).toContain('26 小时以内');
+    expect(screen.getByTestId('status-backup-facts').textContent).toContain('09-2');
     const usage = screen.getByTestId('status-llm-usage');
     expect(usage.textContent).toContain('42');
     expect(usage.textContent).toContain('$12.50');
+  });
+
+  it('D-28: a stale backup is a danger chip that says what to check; unknown says why it cannot tell', async () => {
+    const stale = scriptedHttp({
+      platform_status: () =>
+        status({
+          backup: {
+            status: 'stale',
+            lastSuccessAt: '2026-09-19T19:30:00.000Z',
+            stale: true,
+            maxAgeHours: 26,
+            detail: 'last successful backup 2026-09-19T19:30:00Z is 52h30m old (> 26h)',
+          },
+        }),
+    });
+    renderPage(stale);
+    const backup = await screen.findByTestId('status-backup');
+    expect(backup.textContent).toContain('已过期');
+    expect(backup.textContent).toContain('backup 服务的日志');
+    cleanup();
+
+    const unknown = scriptedHttp({
+      platform_status: () =>
+        status({
+          backup: {
+            status: 'unknown',
+            lastSuccessAt: null,
+            stale: null,
+            maxAgeHours: 26,
+            detail: 'no backup marker at /data/backups/last-success',
+          },
+        }),
+    });
+    renderPage(unknown);
+    const unknownBackup = await screen.findByTestId('status-backup');
+    expect(unknownBackup.textContent).toContain('未知');
+    // Never the old "not configured" placeholder.
+    expect(unknownBackup.textContent).not.toContain('未配置');
+    expect(screen.getByTestId('status-backup-facts').textContent).toContain('—');
+    // The kernel's own reason stays behind the technical-details disclosure.
+    expect(screen.getByTestId('status-backup-detail').textContent).toContain('no backup marker');
   });
 
   it('ui-audit ST2: each health row shows the service name before the chip, and the egress-proxy unknown status carries a visible explanation', async () => {

@@ -19,7 +19,13 @@ afterEach(cleanup);
 function defaultStatus(): PlatformStatusWire {
   return {
     health: [],
-    backup: { configured: false, detail: 'not configured' },
+    backup: {
+      status: 'unknown',
+      lastSuccessAt: null,
+      stale: null,
+      maxAgeHours: 26,
+      detail: 'no backup marker',
+    },
     llmUsage30d: {
       windowDays: 30,
       totalCostUsd: null,
