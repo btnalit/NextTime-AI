@@ -42,7 +42,7 @@ const inboundHeaders = {
   'openai-organization': 'org-other',
   'openai-project': 'proj-other',
   'x-correlation-id': 'turn-1',
-  'x-forwarded-for': '10.0.0.1',
+  'x-forwarded-for': '203.0.113.7',
   cookie: 'a=b',
   'proxy-authorization': 'Basic Zm9vOmJhcg==',
   'anthropic-version': '2023-06-01',
