@@ -251,7 +251,7 @@ graph LR
 | 事项 | 规则 |
 |------|------|
 | 入口 agent | 每用户一个实例，不共用；能力上限固定（§5.1.4）。共用一个常驻代理按对话切换 Handle 是混淆代理风险 |
-| 审批 | 角色 `operator` 只是进队列；能批哪条由 capability 范围决定（I14）；`blast_radius=high` 默认 `requester_can_approve=false`，工作区可覆盖；`high` 或 Operation `auto_approvable:false`（含未发布、I17）的请求只能由人（`kind=human` 的 Principal）批准或拒绝，service Principal 的 API key 被拒（403）；更低级别 service 也可决定，权力等同一条自动批准规则，决策记为该 service（R-17 / D-06，`governance/approval/decide.ts`） |
+| 审批 | 角色 `operator` 只是进队列；能批哪条由 capability 范围决定（I14）；门（gatekeeper）授权也算该门上任意动作的范围，所以把一个门授权给 operator+ 即让他成为该门所有动作的审批者，控制台在授权、系统卡片与撤销处明示（D-13 / R-39，暂不拆分两种权限）；`blast_radius=high` 默认 `requester_can_approve=false`，工作区可覆盖；`high` 或 Operation `auto_approvable:false`（含未发布、I17）的请求只能由人（`kind=human` 的 Principal）批准或拒绝，service Principal 的 API key 被拒（403）；更低级别 service 也可决定，权力等同一条自动批准规则，决策记为该 service（R-17 / D-06，`governance/approval/decide.ts`） |
 | 凭证 | 共享凭证（docker、RouterOS）谁能用由授权决定；ConnectedAccount（GitHub、Slack、OA）按 `on_behalf_of` 取用；两种都只在 Gatekeeper 内，基类现在就区分；S2 实现共享凭证与静态录入的个人凭证，OAuth 流程 P5 |
 | 身份配置 | 身份提供方、超级管理员在环境变量层，不进 API；`owner` 不能放宽登录 |
 | 授权数据 | 不用图里 agent 可写的 `owned_by` / `member_of` 边做授权；需要关系型授权时用 OpenFGA / SpiceDB，元组只允许 human 通道写 |
@@ -723,7 +723,8 @@ create table worker_definitions (
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
 | | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |
 | governance | `request_action` | execute | Worker |
-| | `approve` / `reject` / `list_pending` / `get_action` / `set_auto_approved_action_kind` | human | I14 |
+| | `approve` / `reject` / `list_pending` / `set_auto_approved_action_kind` | human | I14 |
+| | `get_action` / `list_action_requests` | human（observe） | 同一可见性谓词：owner 看全部；其他人只看匹配自己有效授权的（I14）或自己发起的；`get_action` 读不到的一律 404（R-42 / D-22） |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
 | task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明 |
 | worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` / `list_worker_definitions` | propose / human / observe | |
@@ -743,7 +744,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 
 | 事件 | 字段 | 说明 |
 |------|------|------|
-| `action.pending` | `actionRequestId, gatekeeperId, title, description, actionKind: {tag, label}, awaitDecision, simulated?` | 推给该 ActionRequest 的每个持有者（I14 范围内）与发起者本人（§8.5：发起者只看状态，不看批准按钮——这条区分体现在**持久化的系统消息**里，WS 推送帧本身对持有者与发起者一致，是否显示批准按钮由 web 客户端按自己的 `list_pending`/授权范围决定）。`title`/`description` 由 `application/linkage` 从 `actionKind`/`gatekeeperId`/`resourceScope` 生成（`action_requests` 本身未存这两个字段——来自门的接口清单的更精确标题留给 S2.4/S2.13 落地后接入）。 |
+| `action.pending` | `actionRequestId, gatekeeperId, title, description, actionKind: {tag, label}, awaitDecision, simulated?` | 推给该 ActionRequest 的每个持有者（I14 范围内；持有者 = 能审批者：未停用、角色满足 `approve` 的 `minRole`、持有匹配范围，与 `approve` 前置检查同一谓词，R-38 / D-13）与发起者本人（§8.5：发起者只看状态，不看批准按钮——这条区分体现在**持久化的系统消息**里，WS 推送帧本身对持有者与发起者一致，是否显示批准按钮由 web 客户端按自己的 `list_pending`/授权范围决定）。`title`/`description` 由 `application/linkage` 从 `actionKind`/`gatekeeperId`/`resourceScope` 生成（`action_requests` 本身未存这两个字段——来自门的接口清单的更精确标题留给 S2.4/S2.13 落地后接入）。 |
 | `action.updated` | `actionRequestId, status` | 推给同一组人（持有者 + 发起者），ActionRequest 每次进入 §5.5 状态图中一个"值得播报"的终态/中间态时（`auto_approved / approved / rejected / expired / denied / executed / failed / compensated`——`proposed`/`policy_evaluated`/`pending_approval`/`executing`/`verified` 不单独推送，前三个在 `request_action` 的实现里从不可单独观测到，后两个是内部过渡态）。 |
 | `task.updated` | `taskId, status` | 推给该 Task 的 `on_behalf_of` 用户，Task 每次状态转移（含 `queued`/`running` 这类中间态）都推送——web 端按需过滤；对话里的**持久化**系统消息（`chat_messages`）只在 `waiting_approval / completed / failed / cancelled` 时才写。 |
 
