@@ -125,6 +125,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
             : () => http.call<{ status: string }>('publish_skill', { skillId: proposed.id })
         }
         onDone={onDone}
+        reviewersSeeDraft
       />
     );
   }
@@ -155,8 +156,8 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       ) : (
         <Notice testId="skill-private-notice">
           {t(
-            '草稿只有你（提议者）可见，发布后所有成员可见（I16）。',
-            'The draft is private to you until published (I16).',
+            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见（I16）。',
+            'Until published, the draft is visible only to you, the workspace owner and builders (I16).',
           )}
         </Notice>
       )}

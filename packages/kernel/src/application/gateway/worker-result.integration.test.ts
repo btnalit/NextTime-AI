@@ -334,14 +334,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       // Owned by on_behalf_of (ownerId, per spawnWorkerRun's own `caller.principalId: ownerId`) —
-      // visible to ownerId's own listSkills, and (I16 read-privacy) not to another principal.
-      const ownList = await inTx(ownerId, (client) => listSkills(client, workspaceId, ownerId));
+      // visible to ownerId's own listSkills, and (I16 read-privacy) not to another principal who
+      // is not a draft reviewer (an operator; owner and builders review every draft, D-26 rule).
+      const ownList = await inTx(ownerId, (client) =>
+        listSkills(client, workspaceId, { principalId: ownerId, role: 'owner' }),
+      );
       const draft = ownList.items.find((s) => s.name === skillName);
       expect(draft?.status).toBe('draft');
       expect(draft?.proposedBy).toBe(ownerId);
 
       const otherId = await adminInsertPrincipal('operator', `other-${taskId}`);
-      const otherList = await inTx(otherId, (client) => listSkills(client, workspaceId, otherId));
+      const otherList = await inTx(otherId, (client) =>
+        listSkills(client, workspaceId, { principalId: otherId, role: 'operator' }),
+      );
       expect(otherList.items.some((s) => s.name === skillName)).toBe(false);
     });
 

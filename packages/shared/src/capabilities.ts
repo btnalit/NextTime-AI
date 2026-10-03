@@ -1146,8 +1146,10 @@ const metaCapabilities: readonly Capability[] = [
     description: 'Propose a private draft Procedure distilled from a successful Task.',
   },
   {
-    // D-24 — see publish_operation. Someone else's draft is not visible to the caller (I16), so it
-    // is not found; a published version that is not the caller's is 403 not_proposer.
+    // D-24 — see publish_operation. The owner and builders see every draft (D-26 rule,
+    // application/worker/draft-visibility.ts), so another builder's publish of someone else's
+    // draft is 403 not_proposer, like a published version that is not the caller's; a draft the
+    // caller cannot see is not found.
     name: 'publish_skill',
     group: 'meta',
     mode: 'execute',
@@ -1156,7 +1158,7 @@ const metaCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ skillId: id }).strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
+      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer.',
   },
   {
     name: 'publish_procedure',
@@ -1167,7 +1169,7 @@ const metaCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ procedureId: id }).strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer.',
   },
   {
     name: 'deprecate_skill',
@@ -1194,10 +1196,11 @@ const metaCapabilities: readonly Capability[] = [
   {
     // S2.14 addition, same style as `list_worker_definitions` (worker group, below): observe,
     // handle channel, no minRole beyond authentication. Unlike `list_worker_definitions` ("List
-    // published WorkerDefinitions" only), this also returns the caller's own drafts (I16 read-
-    // privacy: a draft is private to its proposer, enforced by `application/worker/skills.ts`'s
-    // `listSkills` query itself, not by this schema) — see this task's PR body for the "propose →
-    // not visible to another principal → publish → visible" acceptance test this backs.
+    // published WorkerDefinitions" only), this also returns drafts the caller may see (I16 read-
+    // privacy: a draft is visible to its proposer, and — D-26's reviewer rule — to the owner and
+    // builders, so a member's Worker-proposed Skill can be reviewed and published; enforced by
+    // `application/worker/skills.ts`'s `listSkills` query itself, not by this schema). On the
+    // handle channel the caller is the Handle's obo with that principal's role.
     name: 'list_skills',
     group: 'meta',
     mode: 'observe',
@@ -1212,8 +1215,9 @@ const metaCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: listEnvelope(wire.SkillSummaryWireSchema),
     description:
-      'List published Skills plus the caller’s own draft Skills (latest version per id, newest ' +
-      'first); keyset-paginated (limit, cursor → nextCursor).',
+      'List published Skills plus the draft Skills the caller may see — their own, or every ' +
+      'draft for the owner and builders (D-26 rule, I16) — latest version per id, newest first, ' +
+      'each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S8 W1-C (leftover 48 "list_skills 无 markdown / 无 get_skill" — Skill "编辑" needs the full
@@ -1227,9 +1231,9 @@ const metaCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ skillId: id }).strict(),
     resultSchema: wire.SkillDetailWireSchema.nullable(),
     description:
-      'Read one Skill (latest version) with its full markdown body — same I16 read-privacy as ' +
-      'list_skills (published, or the caller’s own draft); null for an unknown id or a draft ' +
-      'the caller does not own.',
+      'Read one Skill (latest version) with its full markdown body — same read rule as ' +
+      'list_skills (published, or a draft the caller may see); null for an unknown id or a ' +
+      'draft the caller may not see.',
   },
   {
     name: 'list_procedures',
@@ -1243,8 +1247,9 @@ const metaCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: listEnvelope(wire.ProcedureSummaryWireSchema),
     description:
-      'List published Procedures plus the caller’s own draft Procedures (latest version per id, ' +
-      'newest first); keyset-paginated (limit, cursor → nextCursor).',
+      'List published Procedures plus the draft Procedures the caller may see — their own, or ' +
+      'every draft for the owner and builders (D-26 rule, I16) — latest version per id, newest ' +
+      'first, each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing

@@ -261,6 +261,9 @@ export interface SkillRow {
   readonly name: string;
   readonly description: string;
   readonly applicable?: Readonly<Record<string, unknown>>;
+  /** The proposer's principal id. The owner and builders see every draft (D-26 rule), so the
+   *  catalog shows whose draft it is; optional only so older fixtures still type-check. */
+  readonly proposedBy?: string;
 }
 
 /** `list_procedures` (same handler file, `listProceduresHandler`) — verified. */
@@ -271,6 +274,8 @@ export interface ProcedureRow {
   readonly name: string;
   readonly description: string;
   readonly steps?: readonly unknown[];
+  /** As `SkillRow.proposedBy`. */
+  readonly proposedBy?: string;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -9,11 +9,7 @@ import {
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
-import {
-  type PublishActor,
-  assertPublishAuthority,
-  roleSatisfiesMinRole,
-} from '../capability/index.js';
+import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -642,21 +638,20 @@ export interface OperationViewer {
   readonly role: Role;
 }
 
-/** Owner and builder review Operation drafts (`roleSatisfiesMinRole(role, 'builder')`: the owner
- *  clears every role, `builder` is the role that proposes meta-ontology). */
+/** Owner and builder review Operation drafts — the one reviewer rule every meta-ontology draft
+ *  registry shares (`seesEveryDraft`, governance/capability/publish-authority.ts). */
 function viewerSeesEveryOperationDraft(role: Role): boolean {
-  return roleSatisfiesMinRole(role, 'builder');
+  return seesEveryDraft(role);
 }
 
 /**
  * D-26 (review 2026-10-02, L2-15): an Operation **draft** is private to its proposer (I16 —
- * `propose_operation` is "a private draft Operation"), the same read rule Skill / Procedure /
- * WorkerDefinition drafts follow (`status = 'published' or (status = 'draft' and proposed_by =
- * caller)`, application/worker/skills.ts). One difference, by decision: the workspace's reviewers —
+ * `propose_operation` is "a private draft Operation"), except that the workspace's reviewers —
  * `owner` and `builder` — see every draft, because an agent's Operation proposal (a member's
  * Worker result, `proposedBy` = that member) only ever goes live through an owner's
- * `publish_operation` from the catalog. Published and deprecated rows stay workspace-visible. A
- * legacy draft with no recorded proposer is nobody's draft: reviewers only.
+ * `publish_operation` from the catalog. Skill and Procedure drafts follow the same rule
+ * (`draftVisibleTo`, application/worker/draft-visibility.ts). Published and deprecated rows stay
+ * workspace-visible. A legacy draft with no recorded proposer is nobody's draft: reviewers only.
  */
 export function operationVisibleTo(viewer: OperationViewer, record: OperationRecord): boolean {
   if (record.status !== 'draft') return true;
