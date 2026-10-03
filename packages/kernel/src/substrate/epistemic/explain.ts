@@ -93,6 +93,12 @@ export interface ExplainHumanAttestationRef {
 export interface ExplainFactRef {
   readonly id: string;
   readonly linkType: string;
+  /** R-47 (review 2026-10-02, L8b-5): the Fact's own two Objects and its value — what a person
+   *  deciding a Conflict between two Facts has to see side by side, next to where each came from
+   *  (the same columns `state_at` returns for an Object's Facts, read here by Fact id). */
+  readonly sourceObjectId: string;
+  readonly targetObjectId: string;
+  readonly properties: Record<string, unknown>;
   readonly epistemicStatus: string;
   readonly assertedByPrincipal: ExplainPrincipalRef | null;
   readonly verifiedByPrincipal: ExplainPrincipalRef | null;
@@ -186,6 +192,9 @@ interface ActivityDbRow {
 interface FactDbRow {
   id: string;
   link_type: string;
+  source_object_id: string;
+  target_object_id: string;
+  properties: Record<string, unknown> | null;
   epistemic_status: string;
   activity_id: string;
   asserted_by: string;
@@ -331,7 +340,8 @@ async function explainFact(
   factId: string,
 ): Promise<ExplainResult> {
   const result = await client.query<FactDbRow>(
-    `select id, link_type, epistemic_status, activity_id, asserted_by, verified_by, observation_id,
+    `select id, link_type, source_object_id, target_object_id, properties, epistemic_status,
+            activity_id, asserted_by, verified_by, observation_id,
             invalidated_at, invalidation_reason, last_observation_id
        from links where workspace_id = $1 and id = $2`,
     [workspaceId, factId],
@@ -364,6 +374,9 @@ async function explainFact(
     fact: {
       id: row.id,
       linkType: row.link_type,
+      sourceObjectId: row.source_object_id,
+      targetObjectId: row.target_object_id,
+      properties: row.properties ?? {},
       epistemicStatus: row.epistemic_status,
       assertedByPrincipal,
       verifiedByPrincipal,

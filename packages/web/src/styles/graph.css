@@ -381,3 +381,94 @@
     order: -1;
   }
 }
+
+/* R-47 (review L8b-5): a Conflict row opens its two Facts under it — stacked cards, since the
+   search pane is narrow at every width — with the Resolve button below, so the evidence is on
+   screen when the choice is made. Keys the two sides disagree on carry a warn tint and edge. */
+.graph-conflict-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.graph-conflict-review {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.graph-conflict-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.graph-conflict-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-1);
+}
+
+.graph-conflict-side-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.graph-conflict-side-label {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-s);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.graph-conflict-values {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: var(--fs-13);
+}
+
+.graph-conflict-value {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-s);
+  transition: background var(--transition);
+}
+
+.graph-conflict-value dt {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.graph-conflict-value dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.graph-conflict-value[data-differs="true"] {
+  background: var(--warn-soft);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.graph-conflict-value[data-differs="true"] dd {
+  font-weight: 600;
+}

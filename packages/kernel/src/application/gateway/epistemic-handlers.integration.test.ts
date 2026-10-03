@@ -13,7 +13,11 @@ import {
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
+import {
+  InvalidCapabilityParamsError,
+  dispatchCapability,
+  isResultValidationEnabled,
+} from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -460,6 +464,135 @@ describe.runIf(DATABASE_URL !== undefined)(
       })) as { epistemicStatus: string; verifiedBy: string | null };
       expect(verified.epistemicStatus).toBe('verified');
       expect(verified.verifiedBy).toBe(ownerId);
+    });
+
+    // R-62 (review 2026-10-02, L3-6): `record_decision` used to store `relatedFactIds` verbatim,
+    // and one `"fact-1"` (a common LLM slip) made every objectId-filtered decision read in the
+    // workspace fail with 22P02 — permanently, since Decisions are not deletable. Its own
+    // workspace, so the deliberately bad row cannot touch the other cases here.
+    it('R-62: a stored non-uuid Fact id no longer breaks query_decisions / find_precedents / decision_impact / causal_chain; record_decision refuses one', async () => {
+      const badWorkspaceId = await adminInsertWorkspace('epistemic-handlers-r62-workspace');
+      const badOwnerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: badWorkspaceId, principalId: badOwnerId },
+        (client) =>
+          client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'r62-owner')`,
+            [badWorkspaceId, badOwnerId],
+          ),
+        { skipRoleSwitch: true },
+      );
+
+      const { objectId, serviceId, factId, decisionId } = await withWorkspace(
+        pool,
+        { workspaceId: badWorkspaceId, principalId: badOwnerId },
+        async (client) => {
+          const host = await store.upsertObject(client, badWorkspaceId, {
+            objectType: 'test.host',
+            identity: { hostname: `r62-${randomUUID()}` },
+          });
+          const service = await store.upsertObject(client, badWorkspaceId, {
+            objectType: 'test.service',
+            identity: { name: `r62-svc-${randomUUID()}` },
+          });
+          const source = await registerPrivateSource(client, badWorkspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: badOwnerId,
+          });
+          const activity = await startActivity(client, badWorkspaceId, { kind: 'test.ingest' });
+          await recordSourceObservation(client, badWorkspaceId, {
+            sourceId: source.id,
+            activityId: activity.id,
+          });
+          const fact = await store.assertFact(
+            client,
+            badWorkspaceId,
+            { id: badOwnerId, kind: 'human' },
+            {
+              linkType: 'test.runs_on',
+              sourceObjectId: service.id,
+              targetObjectId: host.id,
+              activityId: activity.id,
+              properties: { port: 80 },
+            },
+          );
+          // The row an unvalidated record_decision wrote: a bad id next to a good one (and a bad
+          // factAId, the resolve_conflict half of the same rationale read).
+          const inserted = await client.query<{ id: string }>(
+            `insert into decisions (workspace_id, status, activity_id, summary, rationale)
+             values ($1, 'proposed', $2, 'r62 bad ids', $3::jsonb) returning id`,
+            [
+              badWorkspaceId,
+              activity.id,
+              JSON.stringify({
+                relatedFactIds: ['fact-1', fact.id],
+                relatedTaskId: null,
+                factAId: 'not-a-uuid',
+              }),
+            ],
+          );
+          return {
+            objectId: host.id,
+            serviceId: service.id,
+            factId: fact.id,
+            decisionId: inserted.rows[0]?.id ?? '',
+          };
+        },
+      );
+
+      const reader = handleCaller(badWorkspaceId, badOwnerId, [...READ_CAPABILITIES, 'explain']);
+
+      // R-47: `explain` on a Fact also says what it says — its two Objects and its value — which
+      // the console's Conflict review shows for each side (result schema validated here).
+      const explained = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: factId,
+      })) as {
+        fact: { sourceObjectId: string; targetObjectId: string; properties: unknown };
+      };
+      expect(explained.fact).toMatchObject({
+        sourceObjectId: serviceId,
+        targetObjectId: objectId,
+        properties: { port: 80 },
+      });
+
+      const byObject = (await dispatchCapability({ pool }, reader, 'query_decisions', {
+        objectId,
+      })) as { items: Array<{ id: string }> };
+      expect(byObject.items.map((item) => item.id)).toContain(decisionId);
+
+      const precedents = (await dispatchCapability({ pool }, reader, 'find_precedents', {
+        objectId,
+      })) as { items: Array<{ id: string }> };
+      expect(precedents.items.map((item) => item.id)).toContain(decisionId);
+
+      const impact = (await dispatchCapability({ pool }, reader, 'decision_impact', {
+        decisionId,
+      })) as { facts: Array<{ id: string }> };
+      expect(impact.facts.map((fact) => fact.id)).toContain(factId);
+
+      const chain = (await dispatchCapability({ pool }, reader, 'causal_chain', {
+        decisionId,
+      })) as { rootType: string; chain: unknown[] };
+      expect(chain.rootType).toBe('decision');
+      // The Decision itself plus its one real Fact — the bad ids are skipped, not explained.
+      expect(chain.chain).toHaveLength(2);
+
+      // The write side refuses a non-uuid id before any handler runs.
+      const writer = handleCaller(badWorkspaceId, badOwnerId, ['record_decision']);
+      await expect(
+        dispatchCapability({ pool }, writer, 'record_decision', {
+          summary: 'r62',
+          relatedFactIds: ['fact-1'],
+        }),
+      ).rejects.toThrow(InvalidCapabilityParamsError);
+      await expect(
+        dispatchCapability({ pool }, writer, 'record_decision', {
+          summary: 'r62',
+          relatedTaskId: 'task-1',
+        }),
+      ).rejects.toThrow(InvalidCapabilityParamsError);
     });
 
     it('find_precedents(objectId) and find_precedents() with neither param', async () => {
