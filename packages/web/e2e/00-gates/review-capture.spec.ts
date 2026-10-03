@@ -26,6 +26,8 @@ const REVIEW_SURFACE_IDS = [
   'catalog-skills',
   'platform-overview',
   'platform-integrations',
+  // D-28 (review 2026-10-02): the backup card on 运行状态.
+  'platform-status',
 ] as const;
 const VARIANTS = [
   { scheme: 'dark', width: 1440 },

@@ -817,7 +817,27 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('platform_status', () => {
-      it('returns a well-formed status: known services, backup not-configured, llmUsage30d shape', async () => {
+      let backupDir: string;
+
+      beforeEach(async () => {
+        backupDir = await mkdtemp(path.join(tmpdir(), 'backup-marker-'));
+      });
+
+      afterEach(async () => {
+        Reflect.deleteProperty(process.env, 'BACKUP_LAST_SUCCESS_FILE');
+        await rm(backupDir, { recursive: true, force: true });
+      });
+
+      it('returns a well-formed status: known services, backup freshness, llmUsage30d shape', async () => {
+        // D-28: the marker the backup service writes (deploy/backup/backup.sh), an hour old.
+        const marker = path.join(backupDir, 'last-success');
+        const stamp = new Date(Date.now() - 60 * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        await writeFile(
+          marker,
+          `timestamp=${stamp}\ndb_dump=/data/backups/db/nexttime-x.dump size=1\nfiles_tar=/data/backups/files/files-x.tgz size=1\n`,
+        );
+        process.env.BACKUP_LAST_SUCCESS_FILE = marker;
+
         const result = await callAsAdmin<PlatformStatusWire>('platform_status');
 
         const byService = new Map(result.health.map((h) => [h.service, h]));
@@ -832,14 +852,27 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(['ok', 'degraded', 'down', 'unknown']).toContain(entry.status);
         }
 
-        expect(result.backup).toEqual({
-          configured: false,
-          detail: expect.stringContaining('未配置'),
+        expect(result.backup).toMatchObject({
+          status: 'fresh',
+          lastSuccessAt: new Date(stamp).toISOString(),
+          stale: false,
+          maxAgeHours: 26,
         });
         expect(result.llmUsage30d.windowDays).toBe(30);
         expect(result.llmUsage30d.totalInputTokens).toBeGreaterThanOrEqual(0);
         expect(result.llmUsage30d.totalOutputTokens).toBeGreaterThanOrEqual(0);
         expect(Array.isArray(result.recentAudit)).toBe(true);
+      }, 15_000);
+
+      it('a missing marker is an explicit unknown, and the call still succeeds', async () => {
+        process.env.BACKUP_LAST_SUCCESS_FILE = path.join(backupDir, 'missing');
+        const result = await callAsAdmin<PlatformStatusWire>('platform_status');
+        expect(result.backup).toMatchObject({
+          status: 'unknown',
+          lastSuccessAt: null,
+          stale: null,
+        });
+        expect(result.backup.detail).toContain('no backup marker');
       }, 15_000);
     });
 

@@ -10,8 +10,9 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * both deterministically read `down` here — the honest signal an operator would also see from a
  * host with those services stopped, not a test artifact to work around. `kernel`/`postgres` are
  * always `ok` (the handler could not have run otherwise) and `egress-proxy` is always `unknown`
- * by design (loopback-only healthz, never probed). `backup.configured` is always `false` (遗留 6
- * has not landed). This spec asserts those deterministic facts and that the page's own controls
+ * by design (loopback-only healthz, never probed). The backup is always `unknown` (D-28: the
+ * `backup` service never runs here, so the marker scripts/host-env-init.sh pre-created stays
+ * empty). This spec asserts those deterministic facts and that the page's own controls
  * (刷新, the 30s auto-refresh) are present — not exact llm-usage/audit counts, which depend on
  * what earlier steps/specs in this same continuous run happened to do.
  *
@@ -99,8 +100,10 @@ test.describe('S7-E acceptance: platform status page, honest service health in t
       'unknown',
     );
 
-    // E4: honestly "not configured" until 遗留 6 lands — never a fabricated timer.
-    await expect(page.getByTestId('status-backup')).toContainText('未配置');
+    // D-28: the backup service never runs in this workflow, so the marker host-env-init.sh
+    // pre-created stays empty — an explicit unknown, never "fresh" and never "not configured".
+    await expect(page.getByTestId('status-backup-chip')).toHaveAttribute('data-status', 'unknown');
+    await expect(page.getByTestId('status-backup')).not.toContainText('未配置');
 
     // 30-day usage and recent-audit cards render regardless of their exact values.
     await expect(page.getByTestId('status-llm-usage')).toBeVisible();

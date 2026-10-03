@@ -164,11 +164,17 @@ run_backup() {
 	prune "$DB_DIR" "nexttime-[0-9]*.dump" "$RETENTION"
 	prune "$FILES_DIR" "files-[0-9]*.tgz" "$RETENTION"
 
+	# D-28: the kernel bind-mounts this one file read-only (platform_status.backup), and a file bind
+	# mount follows the inode — so it is rewritten IN PLACE (truncate + write), never
+	# write-temp-then-rename, and kept 0644 so the kernel's uid 10001 can read it. It names only
+	# container paths and sizes; nothing in it is secret.
 	{
 		echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 		echo "db_dump=$dump_file size=$dump_size"
 		echo "files_tar=$tar_file size=$tar_size"
 	} >"$LAST_SUCCESS_FILE"
+	chmod 644 "$LAST_SUCCESS_FILE" ||
+		log "WARNING: could not chmod 644 $LAST_SUCCESS_FILE — the console will show the backup as unknown (docs/runbooks/backup-restore.md)"
 	log "last-success written: $LAST_SUCCESS_FILE"
 
 	return 0

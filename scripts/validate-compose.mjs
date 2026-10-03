@@ -132,6 +132,33 @@ for (const [name, envName] of requiredCredentialWiring) {
   }
 }
 
+// D-28: the one thing from backups/ any service other than `backup` may mount is the success
+// marker, read-only — backups/ holds the dumps and the files tarballs with provider keys.
+const BACKUPS_SOURCE = /\/backups(\/|$)/;
+for (const [name, service] of Object.entries(doc.services ?? {})) {
+  if (name === 'backup') continue;
+  for (const entry of service.volumes ?? []) {
+    let source;
+    let readOnly;
+    if (typeof entry === 'string') {
+      // `${NEXTTIME_DATA:?}` itself contains a colon — blank out interpolations before splitting.
+      const [src = '', , mode = ''] = entry.replace(/\$\{[^}]*\}/g, '$VAR').split(':');
+      source = src;
+      readOnly = mode.split(',').includes('ro');
+    } else {
+      source = String(entry?.source ?? '');
+      readOnly = entry?.read_only === true;
+    }
+    if (!BACKUPS_SOURCE.test(source)) continue;
+    if (!/\/backups\/last-success$/.test(source) || !readOnly) {
+      console.error(
+        `service ${name} mounts ${source} — only backups/last-success, read-only, may leave the backup service (D-28)`,
+      );
+      process.exitCode = 1;
+    }
+  }
+}
+
 // R-27: the kernel's fixed acceptance-fixture allow-list (NEXTTIME_CONNECTION_FIXTURE_HOSTS) is
 // allowed past the owner-supplied-URL predicate permanently, which is only harmless while every
 // name on it is an acceptance fixture: `accept-`-prefixed, an existing service, and never handed

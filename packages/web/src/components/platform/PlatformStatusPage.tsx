@@ -2,7 +2,7 @@ import type { PlatformStatusWire } from '@nexttime/shared';
 import { useEffect } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatAuditActor, formatDateTime } from '../../lib/format.js';
+import { formatAuditActor, formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
@@ -30,7 +30,7 @@ const AUTO_REFRESH_MS = 30_000;
  * — design doc §6.7) — `platform_status`: service health (kernel/postgres probed in-process;
  * llm-proxy/worker-supervisor via a 2s healthz probe; egress-proxy always `unknown`, loopback-only
  * by design; each `list_gate_instances` gate's last-checked health, not re-probed here), the
- * backup item (honestly "未配置" until 遗留 6 lands — E4, never a stubbed timer), a 30-day
+ * backup's freshness (D-28: the backup service's `last-success` marker — `BackupCard`), a 30-day
  * cross-workspace llm_usage rollup, and the last 50 platform audit rows (same row rendering as
  * `PlatformAuditPage`, via `formatAuditActor`).
  *
@@ -148,22 +148,7 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
         </div>
       </Card>
 
-      <Card title={t('备份', 'Backup')}>
-        <p className="text-2" data-testid="status-backup">
-          {data.backup.configured
-            ? t('已配置', 'Configured')
-            : t('未配置备份', 'Backup not configured')}
-        </p>
-        {/* S8 W1-A10 (audit S14): `data.backup.detail` is kernel-authored prose that names an
-         *  internal tracking number ("遗留 6") — never shown inline; kept available for an
-         *  operator behind a disclosure instead, matching the audit's "技术细节" pattern. */}
-        {!data.backup.configured ? (
-          <details className="disclosure">
-            <summary>{t('技术细节', 'Technical details')}</summary>
-            <p className="text-3 text-small">{data.backup.detail}</p>
-          </details>
-        ) : null}
-      </Card>
+      <BackupCard backup={data.backup} />
 
       <Card title={t('30 天用量', '30-day usage')}>
         {/* ui-audit ST2 ("用量数字无千分位"): `.toLocaleString()` + the same `.tabular`
@@ -212,6 +197,59 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
         )}
       </Card>
     </>
+  );
+}
+
+/**
+ * Review 2026-10-02 D-28: the nightly backup's freshness, from the backup service's
+ * `last-success` marker (`platform_status.backup`) — the console's only signal that backups have
+ * silently stopped (C10). A status chip and one plain sentence; the last-success time and the
+ * limit underneath; the kernel's own `detail` (a container path, an errno reason) stays behind
+ * "技术细节" as before (S8 W1-A10 / audit S14).
+ */
+function BackupCard({ backup }: { readonly backup: PlatformStatusWire['backup'] }) {
+  const t = useT();
+  const hours = backup.maxAgeHours;
+  const summary =
+    backup.status === 'fresh'
+      ? t(`最近一次备份在 ${hours} 小时以内。`, `The latest backup is within ${hours} hours.`)
+      : backup.status === 'stale'
+        ? t(
+            `超过 ${hours} 小时没有成功的备份——请在主机上查看 backup 服务的日志。`,
+            `No successful backup for more than ${hours} hours — check the backup service's logs on the host.`,
+          )
+        : t(
+            '读不到备份记录：可能还没有成功过一次备份，或者内核没有挂载备份记录文件。',
+            'No backup record could be read: no backup has succeeded yet, or the kernel cannot see the record file.',
+          );
+  return (
+    <Card title={t('备份', 'Backup')}>
+      <div className="row" data-testid="status-backup">
+        <StatusChip
+          machine="backupFreshness"
+          status={backup.status}
+          size="s"
+          testId="status-backup-chip"
+        />
+        <span className="text-2">{summary}</span>
+      </div>
+      <dl className="definition-list" data-testid="status-backup-facts">
+        <dt>{t('上次成功', 'Last success')}</dt>
+        <dd className="tabular" title={backup.lastSuccessAt ?? undefined}>
+          {backup.lastSuccessAt
+            ? `${formatDateTime(backup.lastSuccessAt)} · ${formatRelative(backup.lastSuccessAt)}`
+            : '—'}
+        </dd>
+        <dt>{t('过期阈值', 'Stale after')}</dt>
+        <dd className="tabular">{t(`${hours} 小时`, `${hours} hours`)}</dd>
+      </dl>
+      <details className="disclosure">
+        <summary>{t('技术细节', 'Technical details')}</summary>
+        <p className="text-3 text-small" data-testid="status-backup-detail">
+          {backup.detail}
+        </p>
+      </details>
+    </Card>
   );
 }
 

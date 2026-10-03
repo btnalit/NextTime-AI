@@ -562,8 +562,11 @@ pi，卡片再按 `runtime_inventory` 的 `needsRebuild` 给出「一键升级 N
 **`platform_status`（决定 E4）**：内核直接探测（2 秒超时）`llm-proxy` / `worker-supervisor` 的 `/healthz`；
 `egress-proxy` 的 healthz 按设计是 loopback-only（隔离边界，`packages/egress-proxy/src/index.ts`），**不探测**，
 固定报 `unknown`；门实例健康读的是已有的 `list_gate_instances` 最近一次检查结果，不重新探测；30 天跨工作区
-`llm_usage` 汇总（成本 + token）；最近 50 条平台审计。`backup` 字段如实报"未配置"——遗留 6 落地前没有备份
-定时器，这不是缺陷。
+`llm_usage` 汇总（成本 + token）；最近 50 条平台审计。`backup`（2026-10-02 复审 D-28）读 backup 服务写的
+`backups/last-success`（只读挂进内核的就这一个文件），`status` 三值：`fresh` / `stale`（与
+`scripts/check-backup-freshness.sh` 同一个 26 小时上限）/ `unknown`（标记文件不存在、读不到或解析不了——
+原因写在 `detail` 里，`lastSuccessAt` 与 `stale` 为 `null`）。控制台 运行状态 页的「备份」卡片就是它；
+它只看新鲜度，"backup 服务在跑、dump 还在盘上"两项仍只有主机上的脚本能查（`backup-restore.md`）。
 
 ```bash
 cap platform_status | jq '{health, backup, llmUsage30d}'
@@ -579,6 +582,8 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `runtime_inventory` 里 `activeImageInfo` 是 `null` | 活动镜像的 tag/digest 不在 `list_runtime_images` 里（自定义镜像没打三个 label，或 worker-supervisor 连不上） | 检查镜像是否带 `ai.nexttime.*` label；`residentContainers[].needsRebuild` 此时恒为 `false`（不猜） |
 | `platform_status.health` 里 `llm-proxy` / `worker-supervisor` 是 `down` | 服务没起，或内核到不了 `KERNEL_LLM_URL` / `SUPERVISOR_URL` | `docker compose ps`；确认内核与这两个服务同在 `control` 网络 |
 | `roll_entry_containers` 全是 `skipped_in_flight` | 用户确实在用 | 符合预期——加速项不抢占正在进行的 Turn；等 Turn 结束，或等其自然下一次 spawn 收敛 |
+| `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
+| `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 
 ## 14. 模块管理（P-B2b）
 

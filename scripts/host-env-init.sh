@@ -326,6 +326,27 @@ chgrp "$POSTGRES_GID" "$PG_PASSWORD_FILE" 2>/dev/null || echo "host-env-init: WA
 chown -R 0:0 "$NEXTTIME_DATA/backups"
 chmod 750 "$NEXTTIME_DATA/backups"
 
+# --- backups/last-success (review 2026-10-02 D-28): the kernel bind-mounts this ONE file, -----
+# read-only, for `platform_status.backup` (docker-compose.yml kernel service). Docker creates a
+# DIRECTORY at a missing bind source, which would then stop backup.sh from ever writing the
+# marker — so the file must exist before the first `docker compose up`: an empty marker reads as
+# "unknown" until the first backup succeeds. If a previous `up` already left an empty directory
+# there, it is removed (rmdir only ever removes an empty one). Mode 0644, root:root: the kernel's
+# uid 10001 needs read on the file itself only — through the bind mount, backups/ (0750) is never
+# traversed. backup.sh rewrites the marker in place and re-applies 0644 after every success.
+BACKUP_MARKER="$NEXTTIME_DATA/backups/last-success"
+if [ -d "$BACKUP_MARKER" ]; then
+	rmdir "$BACKUP_MARKER" 2>/dev/null ||
+		echo "host-env-init: WARNING: $BACKUP_MARKER is a non-empty directory — move it aside, then re-run (docs/runbooks/backup-restore.md)" >&2
+fi
+if [ ! -e "$BACKUP_MARKER" ]; then
+	: >"$BACKUP_MARKER"
+fi
+if [ -f "$BACKUP_MARKER" ]; then
+	chown 0:0 "$BACKUP_MARKER"
+	chmod 644 "$BACKUP_MARKER"
+fi
+
 # --- caddy/ (fix/socket-proxy-and-backup-user): chown does NOT work here the way it does for -----
 # the uid-10001-owned directories above — `caddy` (docker-compose.yml) runs as the image's own
 # default ROOT user, and its on-demand TLS cert/key storage (Caddy's internal CA, via
@@ -376,6 +397,7 @@ done
 echo "host-env-init: pgdata/ owner -> $(stat -c '%u:%g' "$NEXTTIME_DATA/pgdata" 2>/dev/null || echo '?') (expect ${POSTGRES_UID}:${POSTGRES_GID})"
 echo "host-env-init: secrets/pg_password -> mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?') (expect 640, group ${POSTGRES_GID})"
 echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"
+echo "host-env-init: backups/last-success -> $(stat -c '%F %u:%g %a' "$BACKUP_MARKER" 2>/dev/null || echo 'missing') (expect regular file / regular empty file 0:0 644 — mounted read-only into the kernel, D-28)"
 echo ""
 echo "host-env-init: caddy/ chowned 0:0 (caddy is root without DAC_OVERRIDE), \`chmod -R o-rwx\` applied (owner mode now: $(stat -c '%u:%g %a' "$NEXTTIME_DATA/caddy"), expect 0:0 700; files readable by others: $(find "$NEXTTIME_DATA/caddy" -perm -o=r | wc -l), expect 0) — backups read it via DAC_READ_SEARCH, see docs/runbooks/backup-restore.md"
 echo ""

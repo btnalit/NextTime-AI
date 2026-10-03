@@ -104,6 +104,17 @@ fi
 #    `nexttime-rerun-…` and kept out of the `nexttime-pre-*` set (and its retention), where it
 #    would otherwise push the genuine pre-upgrade dump out (2026-10-02 review L9-7).
 mkdir -p "$D/backups/pre-upgrade"
+# D-28: the kernel bind-mounts backups/last-success (one file, read-only). Every `docker compose
+# run/up` of the kernel below would make Docker create a DIRECTORY there if the file were missing,
+# which would stop backup.sh from ever writing the marker again — so make sure it exists first
+# (an empty marker reads as "unknown" until the next backup). Same rule as host-env-init.sh.
+if [ -d "$D/backups/last-success" ]; then
+  rmdir "$D/backups/last-success" 2>/dev/null && echo "STEP backup-marker removed an empty directory in place of backups/last-success"
+fi
+if [ ! -e "$D/backups/last-success" ]; then
+  : >"$D/backups/last-success" && chmod 644 "$D/backups/last-success" &&
+    echo "STEP backup-marker created an empty backups/last-success (0644)"
+fi
 FROM=$(git describe --tags --always HEAD 2>/dev/null || echo unknown)
 if [ "$FROM" = "$TAG" ]; then
   echo "STEP dump WARNING checkout already on $TAG (re-run) — this dump is not a pre-$TAG rollback point"

@@ -941,11 +941,23 @@ export type PiDriftWire = z.infer<typeof PiDriftWireSchema>;
 
 /** `platform_status` (E4): service health probes kernel actually performs (never a stand-in for
  *  the workspace-scoped `list_gate_instances` health, which is reused verbatim here), a 30-day
- *  cross-workspace `llm_usage` rollup, and the most recent platform audit rows. `backup` reports
- *  "未配置 not configured" until 遗留 6 lands — no backup timer exists, this is not a stub for one. */
+ *  cross-workspace `llm_usage` rollup, and the most recent platform audit rows.
+ *
+ *  `backup` (review 2026-10-02 D-28, replacing the old `{configured: false}` placeholder): the
+ *  nightly backup's freshness, read from the `backup` service's `last-success` marker (mounted
+ *  read-only into the kernel). `fresh` / `stale` use the same 26 h limit as
+ *  `scripts/check-backup-freshness.sh`; `unknown` when the marker is missing, unreadable or
+ *  unparseable — `lastSuccessAt` and `stale` are then `null`. `detail` is kernel-authored prose
+ *  for operators (the reason, or the age). */
+export const PlatformBackupStatusWireSchema = z.enum(['fresh', 'stale', 'unknown']);
+export type PlatformBackupStatusWire = z.infer<typeof PlatformBackupStatusWireSchema>;
+
 export const PlatformStatusBackupWireSchema = z
   .object({
-    configured: z.boolean(),
+    status: PlatformBackupStatusWireSchema,
+    lastSuccessAt: z.string().nullable(),
+    stale: z.boolean().nullable(),
+    maxAgeHours: z.number().int().positive(),
     detail: z.string(),
   })
   .strict();

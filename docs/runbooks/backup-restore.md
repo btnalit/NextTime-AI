@@ -104,6 +104,45 @@ sh scripts/check-backup-freshness.sh --max-age-hours 50 # 例如刚改过 BACKUP
 三行 `PASS backup-service / last-success / dump-present` 加 `BACKUP-FRESHNESS OK`；任一 `FAIL` 非零退出。
 只读。发版应用时它是第一步（`release.md` §3"备份三件事"）。
 
+## 备份状态（控制台，2026-10-02 复审 D-28）
+
+平台 运行状态 页的「备份」卡片（`platform_status.backup`）读的就是上面那个 `last-success`：
+`docker-compose.yml` 把**这一个文件**只读挂进内核（`/data/backups/last-success`），`backups/` 目录本身、
+dump 与含密钥的 `files-*.tgz` 都不进内核（`scripts/validate-compose.mjs` 守着这一条）。`正常` / `已过期`
+用的是和 `check-backup-freshness.sh` 同一个 26 小时上限；读不到标记时是 `未知`，原因在「技术细节」里。
+卡片只看新鲜度——"backup 服务在跑"和"dump 还在盘上"仍然只有主机上的脚本能查。
+
+**主机上这个文件要求的属主与权限（逐条，别的都不用动）：**
+
+| 路径 | 类型 | 属主 | 权限 | 谁保证 |
+|---|---|---|---|---|
+| `${NEXTTIME_DATA}/backups/` | 目录 | `0:0`（root） | `750`（**不变**） | `host-env-init.sh`（原有） |
+| `${NEXTTIME_DATA}/backups/last-success` | **普通文件**（不能是目录、不能是符号链接） | `0:0`（root） | `644` | `host-env-init.sh` 与 `apply-release.sh` 在不存在时建一个空的；`backup.sh` 每次成功后原地重写并 `chmod 644` |
+
+为什么是这样：内核以 uid 10001 运行；绑定挂载单个文件时，容器里只检查**这个文件本身**的权限位，
+宿主机上 `backups/`（root 750）不会被穿越，所以只需要文件对其他人可读（`644`），`backups/` 不用放宽。
+文件绑定挂载跟着 inode 走：`backup.sh` 用截断原地重写（不是写临时文件再改名），内核总能看到最新内容；
+**不要手工 `mv` / 替换这个文件**——替换后内核在重建前一直看到旧 inode。
+
+检查（主机上，只读）：
+```
+stat -c '%F %u:%g %a' ${NEXTTIME_DATA}/backups/last-success   # 期望：regular file 0:0 644（空文件显示 regular empty file）
+docker compose exec -T kernel cat /data/backups/last-success   # 内核里看到的应与主机上 cat 一致
+```
+
+修复：
+- 卡片显示 `not readable`：`chmod 644 ${NEXTTIME_DATA}/backups/last-success`（下次备份成功时 `backup.sh` 也会再设一次）。
+- 卡片显示 `is a directory`（文件不存在时内核先起来了，Docker 在那个路径建了一个空目录；之后 `backup.sh`
+  再也写不了标记，`check-backup-freshness.sh` 会 FAIL）：
+  ```
+  docker compose stop kernel
+  rmdir ${NEXTTIME_DATA}/backups/last-success
+  sudo env NEXTTIME_DATA=${NEXTTIME_DATA} sh scripts/host-env-init.sh   # 或手工：: > 该文件; chmod 644 该文件
+  docker compose up -d kernel
+  docker compose run --rm -e BACKUP_NOW=1 backup                         # 立刻写一次真实标记
+  ```
+- 卡片显示 `no backup marker` 但主机上文件在：内核容器是 D-28 之前建的、还没有这个挂载——`docker compose up -d kernel`。
+
 ## 恢复演练（`scripts/restore.sh`，在宿主机上跑，不在容器内）
 先 `--dry-run`：只校验 dump 与 tgz，不建库、不解压。
 ```
