@@ -13,6 +13,12 @@
  * `LlmUsageRecordSchema`, which this shape must match field-for-field) — see that kernel file's
  * doc comment for why the task prose's snake_case naming is read as describing DB columns, not
  * a wire-format mandate.
+ *
+ * Settling a batch (R-68): the kernel answers per workspace group (`LlmUsageGroupResult`). Only
+ * `retry` groups go back on the queue; a group the kernel refused for good (its workspace,
+ * session or Handle no longer exists) is dropped with a warn line. A response without per-group
+ * results (an older kernel, a network error, any other failure) requeues the whole batch, as
+ * before — safe, because every record carries its `requestId` and the kernel skips a replay.
  */
 
 export interface LlmUsageRecord {
@@ -30,6 +36,48 @@ export interface LlmUsageRecord {
   readonly finishedAt?: string;
   /** `'completed'` or `'error'` — see index.ts's call sites for exactly when each is used. */
   readonly status: string;
+  /** R-67: a UUID minted for the one upstream request this record meters (proxy.ts), resent
+   *  unchanged on every retry — the kernel's dedupe key, so concurrent requests under one Handle
+   *  that start in the same millisecond stay separate records. */
+  readonly requestId: string;
+}
+
+/**
+ * One workspace group's outcome in the kernel's `/internal/llm-usage` response (R-68) — mirrors
+ * the kernel's `LlmUsageGroupResult` (interfaces/http/internal/llm-usage.ts). Only `retry` is
+ * requeued; `recorded` (with any `rejected` records) and `rejected` are done.
+ */
+export type LlmUsageGroupResult =
+  | { readonly workspaceId: string; readonly outcome: 'recorded'; readonly rejected?: number }
+  | { readonly workspaceId: string; readonly outcome: 'rejected'; readonly reason?: string }
+  | { readonly workspaceId: string; readonly outcome: 'retry' };
+
+/** The per-group outcomes in a kernel response body — `result.groups` on a 200,
+ *  `error.details.groups` on a 500 — or `undefined` when the body carries none (a kernel that
+ *  predates R-68, a non-JSON body, any other error). */
+async function readGroupResults(res: Response): Promise<LlmUsageGroupResult[] | undefined> {
+  if (typeof res.json !== 'function') return undefined;
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return undefined;
+  }
+  const container = body as {
+    result?: { groups?: unknown };
+    error?: { details?: { groups?: unknown } };
+  } | null;
+  const groups = container?.result?.groups ?? container?.error?.details?.groups;
+  if (!Array.isArray(groups)) return undefined;
+  return groups.filter(
+    (group): group is LlmUsageGroupResult =>
+      typeof group === 'object' &&
+      group !== null &&
+      typeof (group as { workspaceId?: unknown }).workspaceId === 'string' &&
+      ['recorded', 'rejected', 'retry'].includes(
+        (group as { outcome?: unknown }).outcome as string,
+      ),
+  );
 }
 
 /** Per-record context that is logged but never sent to the kernel (leftover 87). */
@@ -126,6 +174,9 @@ export class LlmUsageReporter {
     if (this.flushing || this.queue.length === 0 || !this.kernelUrl) return;
     this.flushing = true;
     const batch = this.queue.splice(0, this.queue.length);
+    // What goes back on the queue when this attempt does not settle it: the whole batch, unless
+    // the kernel answers per workspace group (R-68).
+    let unsettled: readonly LlmUsageRecord[] = batch;
     try {
       const res = await this.fetchImpl(`${this.kernelUrl}/internal/llm-usage`, {
         method: 'POST',
@@ -135,17 +186,34 @@ export class LlmUsageReporter {
         },
         body: JSON.stringify(batch),
       });
-      if (!res.ok) throw new Error(`kernel responded ${res.status}`);
-      this.currentFlushIntervalMs = this.baseFlushIntervalMs;
+      const groups = await readGroupResults(res);
+      if (groups) this.logRejected(groups, batch);
+      if (res.ok) {
+        unsettled = [];
+      } else if (groups) {
+        // Requeue only the groups the kernel could not record. One poisoned workspace no longer
+        // holds every other workspace's usage hostage, and a workspace missing from the answer
+        // is retried rather than assumed recorded.
+        const settled = new Set(
+          groups.filter((group) => group.outcome !== 'retry').map((group) => group.workspaceId),
+        );
+        unsettled = batch.filter((record) => !settled.has(record.workspaceId));
+      }
+      if (unsettled.length === 0) {
+        this.currentFlushIntervalMs = this.baseFlushIntervalMs;
+        return;
+      }
+      throw new Error(`kernel responded ${res.status}`);
     } catch (err) {
       this.log(
         JSON.stringify({
           level: 'warn',
           msg: 'llm-proxy: failed to report usage to kernel, will retry',
           error: String(err),
+          retrying: unsettled.length,
         }),
       );
-      const requeued = [...batch, ...this.queue];
+      const requeued = [...unsettled, ...this.queue];
       this.queue = requeued.slice(Math.max(0, requeued.length - this.maxQueueSize));
       this.currentFlushIntervalMs = Math.min(
         this.currentFlushIntervalMs * 2,
@@ -154,6 +222,31 @@ export class LlmUsageReporter {
       this.scheduleFlush(this.currentFlushIntervalMs);
     } finally {
       this.flushing = false;
+    }
+  }
+
+  /** One warn line per workspace whose usage the kernel refused for good — the workspace (or the
+   *  session / Handle a record names) no longer exists. Those records are dropped, not retried. */
+  private logRejected(
+    groups: readonly LlmUsageGroupResult[],
+    batch: readonly LlmUsageRecord[],
+  ): void {
+    for (const group of groups) {
+      const dropped =
+        group.outcome === 'rejected'
+          ? batch.filter((record) => record.workspaceId === group.workspaceId).length
+          : group.outcome === 'recorded'
+            ? (group.rejected ?? 0)
+            : 0;
+      if (dropped === 0) continue;
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: kernel rejected usage whose workspace, session or Handle no longer exists; dropped',
+          workspaceId: group.workspaceId,
+          dropped,
+        }),
+      );
     }
   }
 

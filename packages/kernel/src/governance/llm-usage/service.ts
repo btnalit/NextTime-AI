@@ -51,6 +51,12 @@ export const LlmUsageRecordSchema = z
     /** Free-text outcome (no shared enum — see the migration's own header comment for why);
      *  `packages/llm-proxy` documents the values it actually writes (`completed`/`error`). */
     status: z.string().min(1),
+    /** R-67: llm-proxy's id for the one upstream request this record meters, minted per request
+     *  (never taken from the caller) and identical on every replay of the record — the record's
+     *  identity (`llm_usage.request_id`, migrations/llm-usage/0002). Absent from an llm-proxy that
+     *  predates R-67: such a record falls back to the `(workspace_id, jti, started_at)` key, see
+     *  `recordUsage`. */
+    requestId: z.string().uuid().optional(),
   })
   .strict();
 export type LlmUsageRecord = z.infer<typeof LlmUsageRecordSchema>;
@@ -104,9 +110,13 @@ export interface RecordUsageOptions {
 }
 
 export interface RecordUsageResult {
-  /** Number of records actually inserted — a replayed record already present under the
-   *  `(workspace_id, jti, started_at)` unique constraint counts as 0, not an error. */
+  /** Number of records actually inserted — a replayed record (same `requestId`, or for a record
+   *  without one the same `(workspace_id, jti, started_at)`) counts as 0, not an error. */
   readonly inserted: number;
+  /** R-68: records refused for good because the session or Handle they name no longer exists —
+   *  the workspace was purged while llm-proxy still held its usage. Not inserted and not an
+   *  error: retrying can never succeed, so the caller acknowledges them and logs. */
+  readonly rejected: number;
   /** Set only on the batch whose insert(s) pushed the workspace's UTC-day token total from below
    *  80% of the configured budget to at or above it (an edge-triggered crossing — see module doc
    *  comment on why this alone guarantees "once per workspace per day" with no extra state). */
@@ -165,13 +175,126 @@ export async function sumTodayCostUsd(client: PoolClient, workspaceId: string): 
   return Number(result.rows[0]?.total ?? 0);
 }
 
+/** What became of one record in `recordUsage`. */
+type RecordOutcome = 'inserted' | 'duplicate' | 'rejected';
+
+/** How many times in a row one record may find its `(jti, started_at)` microsecond taken by a
+ *  concurrently committed row before `recordUsage` gives up and throws (the caller retries the
+ *  group). Each miss jumps past every row already in that millisecond, so one is the norm. */
+const MAX_SLOT_ATTEMPTS = 8;
+
+/** Inserts one record at `started_at + $16 µs`, only if its session and Handle still exist (the
+ *  two foreign keys — checked here, so a purged workspace's record is skipped instead of raising
+ *  a 23503 that aborts the whole transaction). `on conflict do nothing` covers both unique keys:
+ *  `request_id` (a replay) and 0001's `(workspace_id, jti, started_at)`. */
+const INSERT_USAGE_SQL = `
+  insert into llm_usage (
+    workspace_id, session_id, jti, turn_id, provider, model,
+    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+    started_at, finished_at, status, request_id
+  )
+  select $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::text, $6::text,
+         $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::numeric,
+         $12::timestamptz + $16::int * interval '1 microsecond', $13::timestamptz, $14::text,
+         $15::uuid
+   where exists (select 1 from sessions s where s.workspace_id = $1::uuid and s.id = $2::uuid)
+     and exists (
+       select 1 from capability_handles h where h.workspace_id = $1::uuid and h.jti = $3::uuid
+     )
+  on conflict do nothing`;
+
+/** Why `INSERT_USAGE_SQL` wrote nothing: a replay of the same `request_id`, a missing session or
+ *  Handle, or else the `(jti, started_at)` slot is taken — and then the first microsecond offset
+ *  past every row this Handle already has in that millisecond. */
+const CLASSIFY_SKIPPED_USAGE_SQL = `
+  select exists (
+           select 1 from llm_usage u where u.workspace_id = $1::uuid and u.request_id = $2::uuid
+         ) as replayed,
+         exists (select 1 from sessions s where s.workspace_id = $1::uuid and s.id = $3::uuid)
+           and exists (
+             select 1 from capability_handles h
+              where h.workspace_id = $1::uuid and h.jti = $4::uuid
+           ) as references_exist,
+         (select floor(extract(epoch from max(u.started_at) - $5::timestamptz) * 1000000)::int + 1
+            from llm_usage u
+           where u.workspace_id = $1::uuid and u.jti = $4::uuid
+             and u.started_at >= $5::timestamptz
+             and u.started_at < $5::timestamptz + interval '1 millisecond') as next_offset_micros`;
+
 /**
- * Idempotently inserts `records` into `llm_usage` (idempotency key: `(workspace_id, jti,
- * started_at)` — see the migration's header comment for why this option was picked over a
- * client-generated id) and, when `LLM_DAILY_TOKEN_BUDGET` (or `options.dailyTokenBudgetTokens`)
- * is configured, checks whether this call's insert(s) crossed 80% of the workspace's UTC-day
- * token budget; if so, enqueues exactly one `BudgetWarning` domain event (design doc §7.10 event
- * vocabulary) via `substrate/outbox`'s `enqueue()`, in the same transaction as the insert.
+ * One record's insert (the identity rules are on `recordUsage`). The microsecond step exists
+ * only because 0001's key `(workspace_id, jti, started_at)` is kept for the previous release's
+ * `on conflict` (migrations/llm-usage/0002): two requests under one Handle that started in the
+ * same millisecond are two rows, the later one stored a few microseconds into that millisecond —
+ * below llm-proxy's millisecond measurement, so the reported instant is unchanged.
+ */
+async function insertUsageRecord(
+  client: PoolClient,
+  record: LlmUsageRecord,
+  turnId: string | null,
+): Promise<RecordOutcome> {
+  let offsetMicros = 0;
+  for (let attempt = 0; attempt < MAX_SLOT_ATTEMPTS; attempt += 1) {
+    const insert = await client.query(INSERT_USAGE_SQL, [
+      record.workspaceId,
+      record.sessionId,
+      record.jti,
+      turnId,
+      record.provider,
+      record.model,
+      record.inputTokens,
+      record.outputTokens,
+      record.cacheReadTokens ?? null,
+      record.cacheWriteTokens ?? null,
+      record.costUsd ?? null,
+      record.startedAt,
+      record.finishedAt ?? null,
+      record.status,
+      record.requestId ?? null,
+      offsetMicros,
+    ]);
+    if ((insert.rowCount ?? 0) > 0) return 'inserted';
+
+    const { rows } = await client.query<{
+      replayed: boolean;
+      references_exist: boolean;
+      next_offset_micros: number | null;
+    }>(CLASSIFY_SKIPPED_USAGE_SQL, [
+      record.workspaceId,
+      record.requestId ?? null,
+      record.sessionId,
+      record.jti,
+      record.startedAt,
+    ]);
+    const state = rows[0];
+    if (state?.replayed) return 'duplicate';
+    if (!state?.references_exist) return 'rejected';
+    // 0001's key is taken. Without a request id it is the record's only identity, so this is a
+    // replay — the pre-R-67 rule, kept for an llm-proxy that predates R-67.
+    if (record.requestId === undefined) return 'duplicate';
+    // Another request under this Handle holds the microsecond: move past every row in it.
+    offsetMicros = Math.max(offsetMicros + 1, state.next_offset_micros ?? 0);
+  }
+  throw new Error(
+    `recordUsage: request ${record.requestId} found its started_at taken ${MAX_SLOT_ATTEMPTS} times in a row`,
+  );
+}
+
+/**
+ * Idempotently inserts `records` into `llm_usage` and, when `LLM_DAILY_TOKEN_BUDGET` (or
+ * `options.dailyTokenBudgetTokens`) is configured, checks whether this call's insert(s) crossed
+ * 80% of the workspace's UTC-day token budget; if so, enqueues exactly one `BudgetWarning` domain
+ * event (design doc §7.10 event vocabulary) via `substrate/outbox`'s `enqueue()`, in the same
+ * transaction as the insert.
+ *
+ * Identity (R-67, migrations/llm-usage/0002): a record's `requestId` — llm-proxy mints one per
+ * upstream request — so concurrent requests under one Handle are separate rows and a replay of
+ * the same record is skipped. A record without one (an llm-proxy that predates R-67, only during
+ * a rolling upgrade) falls back to 0001's key `(workspace_id, jti, started_at)`: a conflict there
+ * is a replay, exactly as before.
+ *
+ * Purged workspaces (R-68): a record whose session or Handle no longer exists is counted in
+ * `rejected` and skipped — never a foreign-key error that aborts the batch.
  *
  * Every record in `records` must share one `workspaceId` — this function does not itself open
  * `withWorkspace` (see module doc comment), so it has no way to scope a mixed-workspace batch
@@ -182,7 +305,7 @@ export async function recordUsage(
   records: readonly LlmUsageRecord[],
   options: RecordUsageOptions = {},
 ): Promise<RecordUsageResult> {
-  if (records.length === 0) return { inserted: 0 };
+  if (records.length === 0) return { inserted: 0, rejected: 0 };
 
   const workspaceId = records[0]?.workspaceId;
   for (const record of records) {
@@ -192,7 +315,7 @@ export async function recordUsage(
       );
     }
   }
-  if (workspaceId === undefined) return { inserted: 0 };
+  if (workspaceId === undefined) return { inserted: 0, rejected: 0 };
 
   const resolveTurnId = options.resolveTurnId ?? defaultResolveTurnId;
   const onRecordInserted = options.onRecordInserted ?? (() => {});
@@ -201,34 +324,12 @@ export async function recordUsage(
   const before = budget !== undefined ? await sumTodayTokens(client, workspaceId) : 0;
 
   let inserted = 0;
+  let rejected = 0;
   for (const record of records) {
     const turnId = await resolveTurnId(record.sessionId);
-    const result = await client.query(
-      `insert into llm_usage (
-         workspace_id, session_id, jti, turn_id, provider, model,
-         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
-         started_at, finished_at, status
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       on conflict (workspace_id, jti, started_at) do nothing`,
-      [
-        record.workspaceId,
-        record.sessionId,
-        record.jti,
-        turnId ?? null,
-        record.provider,
-        record.model,
-        record.inputTokens,
-        record.outputTokens,
-        record.cacheReadTokens ?? null,
-        record.cacheWriteTokens ?? null,
-        record.costUsd ?? null,
-        record.startedAt,
-        record.finishedAt ?? null,
-        record.status,
-      ],
-    );
-    const recordInserted = (result.rowCount ?? 0) > 0;
-    if (recordInserted) {
+    const outcome = await insertUsageRecord(client, record, turnId ?? null);
+    if (outcome === 'rejected') rejected += 1;
+    if (outcome === 'inserted') {
       inserted += 1;
       // Only for a genuinely new row — a replayed record the `on conflict` skips must never be
       // double-counted against a Task's token budget (see this option's own doc comment).
@@ -236,7 +337,7 @@ export async function recordUsage(
     }
   }
 
-  if (budget === undefined) return { inserted };
+  if (budget === undefined) return { inserted, rejected };
 
   const after = await sumTodayTokens(client, workspaceId);
   const warningThreshold = budget * 0.8;
@@ -248,10 +349,10 @@ export async function recordUsage(
       scope: 'workspace_daily',
       percent,
     });
-    return { inserted, budgetWarning: { percent } };
+    return { inserted, rejected, budgetWarning: { percent } };
   }
 
-  return { inserted };
+  return { inserted, rejected };
 }
 
 // -------------------------------------------------------------------------------------------
