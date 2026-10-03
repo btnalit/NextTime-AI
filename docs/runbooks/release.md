@@ -67,9 +67,8 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 `scripts/apply-release.sh` 是旧 tag 的副本——它切到新 tag 后仍按旧流程往下走，新版本加进流程的步骤
 它一概不会做。R-03 起的第一次应用就是这样：旧副本没有"派生 internal-plane 凭证"这一步
 （`scripts/derive-internal-tokens.sh`），迁移的 `docker compose run` 因新 compose 文件引用的
-`secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响；
-此时检出已在新 tag 上，再跑一次 `sh scripts/apply-release.sh` 也能过）。用 `git show` 取出目标 tag 的
-副本，流程永远属于被应用的那个版本。
+`secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响）。
+用 `git show` 取出目标 tag 的副本，流程永远属于被应用的那个版本。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
@@ -77,7 +76,12 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 派生 internal-plane 凭证（新 tag 自己的 `scripts/derive-internal-tokens.sh`，只写
 `secrets/internal-*-to-*.token`，R-03）→ 拉取或构建镜像 → 迁移 dry-run 与应用 → `up -d` → S3 → S1 → S2 →
 S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 清理过期的 ephemeral 工作区。dump / 切 tag / 派生 / 镜像 /
-迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；
+迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；切 tag 之前记下原来的 ref（`STEP checkout-from`），
+切 tag 之后、`up` 之前的失败会把检出切回去（`STEP checkout restored to …`，切不回时打印要手动执行的
+`git checkout`），让检出始终与在跑的栈一致；迁移失败时先列出已提交的迁移（每个文件一个事务，
+`STEP migrate committed <module>/<version>`）和本次的发版前 dump（`STEP migrate rollback point`），
+再按 §5 / §6 决定是修好重跑还是恢复 dump（R-71）。`up` 本身失败时检出留在新 tag 上（部分容器可能已是新版本），
+按 §5 手动回滚，日志里的 `checkout-from` 就是上一版的位置；
 验收失败只计数不中止（栈已在新版本上，读各套日志后按 §5 决定是否回滚）。主机差异只来自 `.env`。
 下面各小节保留为每一步的背景与手动做法。
 
