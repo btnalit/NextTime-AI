@@ -1,7 +1,11 @@
-import type { ActionRequestStatus, Role } from '@nexttime/shared';
+import { type ActionRequestStatus, type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { queryAuditActionOperationStats } from '../../substrate/audit/index.js';
-import { GATEKEEPER_GRANT_CAPABILITY, hasActiveGrant } from '../capability/index.js';
+import {
+  GATEKEEPER_GRANT_CAPABILITY,
+  hasActiveGrant,
+  roleSatisfiesMinRole,
+} from '../capability/index.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
   type ActionRequestDbRow,
@@ -25,6 +29,61 @@ export async function getActionRequest(
   const result = await client.query<ActionRequestDbRow>(
     `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests where workspace_id = $1 and id = $2`,
     [workspaceId, actionRequestId],
+  );
+  const row = result.rows[0];
+  return row ? mapActionRequestRow(row) : null;
+}
+
+/**
+ * R-42 (maintainer decision D-22, docs/code-review-2026-10-02.md): who may *read* an
+ * ActionRequest. `get_action` and `list_action_requests` share this one predicate, so a single-row
+ * read never shows more than the list does: the workspace owner sees every row; anyone else sees
+ * a row whose `action_kind` / `resource_scope` matches one of their own active
+ * `capability_grants` (I14 — the same match `listPendingForApprover` and `approverHasScope` use,
+ * including item 2's "gatekeeper grant satisfies I14" branch), or a row they requested themselves
+ * (`on_behalf_of` — design doc §8.5: the requester follows their own request's status even
+ * without the scope to decide it). The table alias is always `ar`; `isOwnerParam` /
+ * `principalParam` are the calling query's own positional placeholders for "the caller is the
+ * workspace owner" and the caller's principal id.
+ */
+function actionRequestVisibleToCallerSql(isOwnerParam: string, principalParam: string): string {
+  return `(
+    ${isOwnerParam}::boolean
+    or ar.on_behalf_of = ${principalParam}::uuid
+    or exists (
+      select 1 from capability_grants cg
+      where cg.workspace_id = ar.workspace_id
+        and cg.principal_id = ${principalParam}::uuid
+        and cg.status = 'active'
+        and (cg.expires_at is null or cg.expires_at > now())
+        and (
+          (cg.resource_type = ar.action_kind
+           and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope))
+          or (
+            ar.resource_scope is not null
+            and cg.resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
+            and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
+          )
+        )
+    )
+  )`;
+}
+
+/** `get_action` (R-42, D-22): one ActionRequest, only if `caller` may see it under
+ *  `actionRequestVisibleToCallerSql` — `null` both when the id does not resolve and when the row
+ *  exists outside the caller's visibility, so the read is no existence oracle (the handler answers
+ *  404 for both). */
+export async function getActionRequestVisibleTo(
+  client: PoolClient,
+  workspaceId: string,
+  caller: { readonly principalId: string; readonly role: Role },
+  actionRequestId: string,
+): Promise<ActionRequestRow | null> {
+  const result = await client.query<ActionRequestDbRow>(
+    `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests ar
+     where ar.workspace_id = $1 and ar.id = $2
+       and ${actionRequestVisibleToCallerSql('$3', '$4')}`,
+    [workspaceId, actionRequestId, caller.role === 'owner', caller.principalId],
   );
   const row = result.rows[0];
   return row ? mapActionRequestRow(row) : null;
@@ -167,13 +226,12 @@ export interface ActionRequestListPage {
  * own cursor doc comment above; `truncated`-on-clamp is the caller's concern, same as `search`'s
  * own handler).
  *
- * Visibility mirrors `listPendingForApprover` exactly (I14, design doc §8.5 "用户 B 看不到也批不了"):
- * the workspace owner sees every row; any other role sees only rows whose `action_kind`/
- * `resource_scope` matches one of their own active `capability_grants` (the same `exists` clause
- * `listPendingForApprover` uses, copied rather than factored into a shared SQL fragment — this
- * module has no query-builder layer, unlike `substrate/graph/queries.ts`). An ActionRequest a
- * caller may not see must not appear here even once it is no longer pending — this list is a
- * superset of `list_pending` by status, not by visibility.
+ * Visibility is `actionRequestVisibleToCallerSql` above, the one predicate `get_action` shares
+ * (R-42, D-22; design doc §8.5 "用户 B 看不到也批不了"): the workspace owner sees every row; any other
+ * role sees rows whose `action_kind`/`resource_scope` matches one of their own active
+ * `capability_grants` (the same match `listPendingForApprover` uses) plus the rows they requested
+ * themselves. An ActionRequest a caller may not see must not appear here even once it is no
+ * longer pending.
  */
 export async function listActionRequestsForApprover(
   client: PoolClient,
@@ -206,25 +264,7 @@ export async function listActionRequestsForApprover(
          $5::timestamptz is null
          or (date_trunc('milliseconds', ar.requested_at), ar.id) < ($5::timestamptz, $6::uuid)
        )
-       and (
-         $7::boolean
-         or exists (
-           select 1 from capability_grants cg
-           where cg.workspace_id = ar.workspace_id
-             and cg.principal_id = $8
-             and cg.status = 'active'
-             and (cg.expires_at is null or cg.expires_at > now())
-             and (
-               (cg.resource_type = ar.action_kind
-                and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope))
-               or (
-                 ar.resource_scope is not null
-                 and cg.resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
-                 and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
-               )
-             )
-         )
-       )
+       and ${actionRequestVisibleToCallerSql('$7', '$8')}
      order by date_trunc('milliseconds', ar.requested_at) desc, ar.id desc
      limit $4`,
     [
@@ -334,17 +374,35 @@ export async function listExecutableQueue(
   return result.rows.map(mapActionRequestRow);
 }
 
+/** `approve`'s `minRole`, read from the shared capability registry — the same value
+ *  `application/gateway/authorize.ts` checks a human caller against before `approve` (or `reject`,
+ *  registered with the same `minRole`) ever reaches this module. */
+const APPROVE_MIN_ROLE = getCapability('approve')?.minRole;
+
+/** R-38 (maintainer decision D-13: holder = approver, one predicate): the role half of "who may
+ *  decide an ActionRequest" — `roleSatisfiesMinRole` against `approve`'s registry `minRole`, the
+ *  exact rule `authorize.ts` applies at the gateway. `approverHasScope` below and `routing.ts`'s
+ *  `computeActionRequestHolders` both apply it, so the approval fan-out never reaches a role
+ *  (`member`, `builder`, `auditor`) whose `approve` call would be refused — even when that
+ *  principal holds a gatekeeper grant so their agent can use the gate. */
+export function roleMayDecideActionRequests(role: Role): boolean {
+  return roleSatisfiesMinRole(role, APPROVE_MIN_ROLE);
+}
+
 /** I14: the workspace owner counts as holding every scope; every other role must hold a matching
  *  active `capability_grants` row. Role gates *entry to the queue*
  *  (`application/gateway/authorize.ts`'s `minRole: 'operator'` on `approve`/`reject` — a `member`
- *  never reaches this function); this decides *which* pending ActionRequests that operator/owner
- *  may actually approve (§5.8 "角色 operator 只是进队列；能批哪条由 capability 范围决定"). */
+ *  never reaches this function; `roleMayDecideActionRequests` repeats that rule here so this
+ *  precheck and the holder fan-out are one predicate, R-38); this decides *which* pending
+ *  ActionRequests that operator/owner may actually approve (§5.8 "角色 operator 只是进队列；能批哪条由
+ *  capability 范围决定"). */
 export async function approverHasScope(
   client: PoolClient,
   workspaceId: string,
   approver: { readonly principalId: string; readonly role: Role },
   target: { readonly actionKind: string; readonly resourceScope: string | null },
 ): Promise<boolean> {
+  if (!roleMayDecideActionRequests(approver.role)) return false;
   if (approver.role === 'owner') return true;
   return hasActiveGrant(client, workspaceId, {
     principalId: approver.principalId,

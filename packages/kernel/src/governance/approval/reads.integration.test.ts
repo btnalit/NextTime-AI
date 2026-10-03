@@ -8,7 +8,11 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { grantCapability } from '../capability/index.js';
 import { registerGatekeeper } from '../gatekeepers/index.js';
-import { getOperationStats, listActionRequestsForApprover } from './reads.js';
+import {
+  getActionRequestVisibleTo,
+  getOperationStats,
+  listActionRequestsForApprover,
+} from './reads.js';
 
 /**
  * governance/approval/reads.integration: two independent DB-gated suites, each with its own
@@ -28,6 +32,8 @@ import { getOperationStats, listActionRequestsForApprover } from './reads.js';
  *   - S5.5 leftover 21's `listActionRequestsForApprover` (`list_action_requests`): status filter
  *     (single/array), I14 visibility across decided and pending rows alike, and keyset pagination
  *     across a same-millisecond pair — the same three properties this task's own dispatch named.
+ *     R-42 (D-22) adds the visibility `getActionRequestVisibleTo` (`get_action`) shares with it:
+ *     a requester sees their own rows; a single-row read never shows more than the list.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -453,6 +459,68 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
       );
       expect(otherOperatorView.items).toEqual([]);
+    });
+
+    it('R-42: get_action and list_action_requests share one visibility — a requester sees their own row, a scoped operator matching rows, anyone else neither', async () => {
+      const gatekeeperId = await insertGatekeeperObject('la-get-action-visibility-gate');
+      const ownRequest = await insertActionRequest({
+        gatekeeperId,
+        status: 'auto_approved',
+        actionKind: 'la.unscoped.action',
+        onBehalfOf: otherOperatorId,
+      });
+      const matching = await insertActionRequest({
+        gatekeeperId,
+        status: 'pending_approval',
+        actionKind: 'la.test.action',
+      });
+      const neither = await insertActionRequest({
+        gatekeeperId,
+        status: 'auto_approved',
+        actionKind: 'la.unscoped.action',
+      });
+
+      const views: Record<string, { principalId: string; role: 'owner' | 'operator' }> = {
+        owner: { principalId: ownerId, role: 'owner' },
+        scoped: { principalId: operatorId, role: 'operator' },
+        requester: { principalId: otherOperatorId, role: 'operator' },
+      };
+      const expected: Record<string, readonly string[]> = {
+        owner: [ownRequest, matching, neither],
+        scoped: [matching],
+        requester: [ownRequest],
+      };
+      for (const [name, caller] of Object.entries(views)) {
+        const listed = await withWorkspace(
+          pool,
+          { workspaceId, principalId: caller.principalId },
+          (client) => listActionRequestsForApprover(client, workspaceId, caller, { gatekeeperId }),
+        );
+        expect(new Set(listed.items.map((r) => r.id)), name).toEqual(new Set(expected[name]));
+
+        for (const id of [ownRequest, matching, neither]) {
+          const single = await withWorkspace(
+            pool,
+            { workspaceId, principalId: caller.principalId },
+            (client) => getActionRequestVisibleTo(client, workspaceId, caller, id),
+          );
+          expect(single?.id ?? null, `${name} → ${id}`).toBe(
+            expected[name]?.includes(id) ? id : null,
+          );
+        }
+      }
+
+      // An unknown id reads exactly like an invisible one.
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequestVisibleTo(
+            client,
+            workspaceId,
+            { principalId: ownerId, role: 'owner' },
+            randomUUID(),
+          ),
+        ),
+      ).resolves.toBeNull();
     });
 
     it('pagination: a limit of 1 pages through two rows sharing the same millisecond requested_at without skipping or repeating either', async () => {

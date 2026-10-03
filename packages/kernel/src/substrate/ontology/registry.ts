@@ -1,6 +1,6 @@
 import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
+import { lockOntologyFamily, mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
 import type { ActionTypeDefinition, ObjectTypeDefinition, OntologyDefinition } from './schema.js';
 import { OntologyDefinitionSchema } from './schema.js';
@@ -68,11 +68,33 @@ export interface ProposeOntologyChangeInput {
   readonly proposedBy: string;
 }
 
+/** R-60: the family's published head — its highest `published` version, the one every reader of
+ *  "the published ontology" (`loadPublishedLinkTypes`, `loadVisibleOntology` for anyone without a
+ *  newer draft) takes for that family — or null when nothing of it is published. */
+async function loadPublishedHeadVersion(
+  client: PoolClient,
+  workspaceId: string,
+  id: string,
+): Promise<number | null> {
+  const result = await client.query<{ head: number | null }>(
+    `select max(version) as head from ontology_versions
+     where workspace_id = $1 and id = $2 and status = 'published'`,
+    [workspaceId, id],
+  );
+  return result.rows[0]?.head ?? null;
+}
+
 /** Validates `input.change` against `OntologyDefinitionSchema` and inserts it as a new `draft`
  *  `ontology_versions` row. Dispatch.ts's own `paramsSchema` check already validates `change`
  *  end-to-end for a real capability call (`propose_ontology_change`'s registry entry,
  *  `packages/shared/src/capabilities.ts`) — this second check stays so `registry.ts` is correct
- *  when called directly (tests, a future non-capability caller), not only behind dispatch. */
+ *  when called directly (tests, a future non-capability caller), not only behind dispatch.
+ *
+ *  R-60: the draft records its base — the family's published head right now (null for a new
+ *  family, or one with nothing published) — so `publishOntologyDraft` can refuse it once that
+ *  head has moved. Read without the family lock on purpose: a publish that commits concurrently
+ *  can only leave the recorded base *older* than the head, which the publish check then refuses
+ *  (the proposer proposes again) — never a base newer than what the draft was written against. */
 export async function proposeOntologyChange(
   client: PoolClient,
   workspaceId: string,
@@ -81,13 +103,24 @@ export async function proposeOntologyChange(
   const parsed = OntologyDefinitionSchema.safeParse(input.change);
   if (!parsed.success) throw new OntologyChangeValidationError(parsed.error.issues);
 
+  const baseVersion = input.id
+    ? await loadPublishedHeadVersion(client, workspaceId, input.id)
+    : null;
   const version = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
-    `insert into ontology_versions (workspace_id, id, version, status, definition, proposed_by)
-     values ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4::jsonb, $5)
+    `insert into ontology_versions
+       (workspace_id, id, version, status, definition, proposed_by, base_version)
+     values ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4::jsonb, $5, $6)
      returning workspace_id, id, version, status, definition, proposed_by, published_by,
        created_at, published_at`,
-    [workspaceId, input.id ?? null, version, JSON.stringify(parsed.data), input.proposedBy],
+    [
+      workspaceId,
+      input.id ?? null,
+      version,
+      JSON.stringify(parsed.data),
+      input.proposedBy,
+      baseVersion,
+    ],
   );
   const row = result.rows[0];
   if (!row) throw new Error('proposeOntologyChange: INSERT ... RETURNING produced no row');
@@ -111,6 +144,40 @@ export class OntologyDraftNotFoundError extends Error {
   }
 }
 
+/** R-60: the draft was proposed against a published version that is no longer the family's head —
+ *  someone published another version of it since (another proposer's draft, a domain pack, a
+ *  module upgrade). Every version is a full replacement definition, so publishing this one would
+ *  either do nothing (a lower number than the head) or silently drop whatever the newer version
+ *  added; the proposer proposes again from the current head instead. */
+export class OntologyBaseMovedError extends Error {
+  readonly code = 'ontology_base_moved' as const;
+  readonly ontologyId: string;
+  readonly version: number;
+  /** The published version the draft was proposed against (null: nothing was published then). */
+  readonly baseVersion: number | null;
+  /** The family's published head now. */
+  readonly publishedVersion: number | null;
+  constructor(
+    ontologyId: string,
+    version: number,
+    baseVersion: number | null,
+    publishedVersion: number | null,
+  ) {
+    super(
+      `draft ontology version (id=${ontologyId}, version=${version}) was proposed against ${
+        baseVersion === null ? 'no published version' : `published version ${baseVersion}`
+      }, but the family's published version is now ${
+        publishedVersion === null ? 'none' : publishedVersion
+      } — propose the change again from the current version`,
+    );
+    this.name = 'OntologyBaseMovedError';
+    this.ontologyId = ontologyId;
+    this.version = version;
+    this.baseVersion = baseVersion;
+    this.publishedVersion = publishedVersion;
+  }
+}
+
 export interface PublishOntologyDraftInput {
   readonly id: string;
   readonly version: number;
@@ -131,12 +198,33 @@ export interface PublishOntologyDraftInput {
  *  I12 (`definition` immutable once published) is enforced by the
  *  existing DB trigger (`ontology_versions_block_published_definition_update`,
  *  `migrations/core/0011_ontology_versions_status_lock.sql`) — this UPDATE never touches
- *  `definition`, so the trigger's own `old.status = 'published'` branch never applies to it. */
+ *  `definition`, so the trigger's own `old.status = 'published'` branch never applies to it.
+ *
+ *  R-60: under the family lock (`lockOntologyFamily`, shared with the loader's
+ *  `publishOntologyVersion`), the draft's recorded `base_version` must still be the family's
+ *  published head, else `OntologyBaseMovedError` and nothing changes. The lock makes "check the
+ *  head, then publish" one step for every publisher of the family: two drafts made from the same
+ *  base can no longer both pass. The not-found check runs first, so a draft that is not the
+ *  caller's never reveals anything about its family. */
 export async function publishOntologyDraft(
   client: PoolClient,
   workspaceId: string,
   input: PublishOntologyDraftInput,
 ): Promise<OntologyVersionRow> {
+  await lockOntologyFamily(client, workspaceId, input.id);
+  const draft = await client.query<{ base_version: number | null }>(
+    `select base_version from ontology_versions
+     where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'
+       and proposed_by = $4`,
+    [workspaceId, input.id, input.version, input.publishedBy],
+  );
+  const draftRow = draft.rows[0];
+  if (!draftRow) throw new OntologyDraftNotFoundError(input.id, input.version);
+  const head = await loadPublishedHeadVersion(client, workspaceId, input.id);
+  if (head !== draftRow.base_version) {
+    throw new OntologyBaseMovedError(input.id, input.version, draftRow.base_version, head);
+  }
+
   const result = await client.query<OntologyVersionDbRow>(
     `update ontology_versions
        set status = 'published', published_by = $4, published_at = now()
@@ -440,6 +528,15 @@ export interface OntologyVersionListItem {
     readonly displayName: string | null;
   };
   readonly createdAt: Date;
+  /** R-61: for a draft, the published version of its own family it was proposed against (R-60's
+   *  `base_version`) with that version's definition — what the draft changes is exactly the diff
+   *  between the two, within this one family. Null for a draft of a new family (or one with
+   *  nothing published when it was proposed), and always null for a published row: a base only
+   *  means something while there is still a decision to make. */
+  readonly base: {
+    readonly version: number;
+    readonly definition: OntologyDefinition;
+  } | null;
 }
 
 interface OntologyVersionListDbRow {
@@ -451,6 +548,8 @@ interface OntologyVersionListDbRow {
   proposer_id: string;
   proposer_kind: PrincipalKind;
   proposer_display_name: string | null;
+  base_version: number | null;
+  base_definition: OntologyDefinition | null;
 }
 
 function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
@@ -465,6 +564,10 @@ function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
       displayName: row.proposer_display_name,
     },
     createdAt: row.created_at,
+    base:
+      row.base_version !== null && row.base_definition !== null
+        ? { version: row.base_version, definition: row.base_definition }
+        : null,
   };
 }
 
@@ -523,6 +626,11 @@ export interface OntologyVersionsPage {
  * resolved `{id, kind, displayName}` — the FK (`ontology_versions.proposed_by references
  * principals`) guarantees the join always finds a row, so this is a plain `join`, not a `left
  * join`.
+ *
+ * R-61: a draft row also carries its `base` — a `left join` to the same family's row at the
+ * draft's `base_version` (R-60). That row is published by construction (a base is only ever taken
+ * from `published` rows, and a published row never goes back to draft), and the join still
+ * excludes drafts outright, so it can never surface another principal's draft (I16).
  */
 export async function listOntologyVersions(
   client: PoolClient,
@@ -536,9 +644,16 @@ export async function listOntologyVersions(
 
   const result = await client.query<OntologyVersionListDbRow>(
     `select t.id, t.version, t.status, t.definition, t.created_at,
-            p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name
+            p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name,
+            b.version as base_version, b.definition as base_definition
      from ontology_versions t
      join principals p on p.workspace_id = t.workspace_id and p.id = t.proposed_by
+     left join ontology_versions b
+       on t.status = 'draft'
+      and b.workspace_id = t.workspace_id
+      and b.id = t.id
+      and b.version = t.base_version
+      and b.status <> 'draft'
      where t.workspace_id = $1
        and (
          t.status = 'published'

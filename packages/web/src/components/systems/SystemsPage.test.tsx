@@ -238,6 +238,45 @@ describe('SystemsPage', () => {
     expect(within(form).getByTestId('ggf-locked-gate-chip').textContent).toContain('Docker prod');
   });
 
+  it('R-39: an operator grantee is marked as also an approver, and revoking says the approval right goes too', async () => {
+    const http = scriptedHttp({
+      execution_readiness: (params) =>
+        readiness({
+          principalId: (params as { principalId?: string }).principalId ?? 'p-self',
+          ready: true,
+          gates: [gate()],
+        }),
+      list_principals: () => ({
+        items: [
+          principal({ role: 'operator' }),
+          principal({ id: 'p-self', displayName: 'Alice', role: 'owner' }),
+        ],
+      }),
+      list_grants: () => ({ items: [grant()] }),
+    });
+    renderPage(http);
+
+    const card = (await screen.findAllByTestId('gatekeeper-card')).find((el) =>
+      el.textContent?.includes('Docker prod'),
+    ) as HTMLElement;
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    expect(within(drawer).getByTestId('system-access-approver-hint').textContent).toContain(
+      '所有动作的审批者',
+    );
+
+    const list = within(drawer).getByTestId('system-access-list');
+    await waitFor(() => expect(within(list).getByText('Bob')).toBeTruthy());
+    const row = within(list).getByTestId('system-access-row');
+    expect(within(row).getByTestId('system-access-approver-tag').textContent).toContain(
+      '也是审批者',
+    );
+
+    fireEvent.click(within(row).getByTestId('gatekeeper-revoke-grant-1'));
+    const confirm = await screen.findByTestId('gatekeeper-revoke-confirm-grant-1');
+    expect(confirm.textContent).toContain('也不再是这个门上动作的审批者');
+  });
+
   it('member view: a 403 on list_grants/list_principals degrades to the caller’s own row, no grant/revoke actions', async () => {
     const http = scriptedHttp({
       get_workspace: () => workspace('member'),

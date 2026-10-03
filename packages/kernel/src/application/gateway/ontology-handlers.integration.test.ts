@@ -7,8 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  OntologyBaseMovedError,
   OntologyDraftNotFoundError,
+  loadPublishedLinkTypes,
   publishOntologyDomainPack,
+  publishOntologyVersion,
 } from '../../substrate/ontology/index.js';
 import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -314,6 +317,213 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
       )) as { status: string };
       expect(published.status).toBe('published');
+    });
+
+    // R-60 (review 2026-10-02, L3-5): every version is a full replacement definition, so of two
+    // drafts made from the same published version, whichever publishes second would silently
+    // drop what the first added (or, with the lower number, publish into nothing). The second
+    // publish is now refused 409 `ontology_base_moved` and the first one's types stay in force.
+    describe('R-60: a draft whose base is no longer the published head is refused', () => {
+      const BASE_CHANGE = {
+        objectTypes: [{ name: 'Valve', description: 'A valve.', identityKey: ['valveId'] }],
+        linkTypes: [{ name: 'valve_feeds', domain: 'Valve', range: 'Valve', description: 'd' }],
+      };
+      function withLinkType(...names: string[]) {
+        return {
+          ...BASE_CHANGE,
+          linkTypes: [
+            ...BASE_CHANGE.linkTypes,
+            ...names.map((name) => ({
+              name,
+              domain: 'Valve',
+              range: 'Valve',
+              description: `${name} (R-60 fixture)`,
+            })),
+          ],
+        };
+      }
+
+      /** A fresh family published at v1 by Alice — what both later drafts start from. */
+      async function publishedFamily(): Promise<string> {
+        const v1 = (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'propose_ontology_change',
+          { change: BASE_CHANGE },
+        )) as { id: string; version: number };
+        await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, aliceId, 'builder'),
+          'publish_ontology_version',
+          { id: v1.id, version: v1.version },
+        );
+        return v1.id;
+      }
+
+      async function propose(principalId: string, id: string, change: unknown) {
+        return (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, principalId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'propose_ontology_change',
+          { id, change },
+        )) as { id: string; version: number };
+      }
+
+      function publish(principalId: string, draft: { id: string; version: number }) {
+        return dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, principalId, 'builder'),
+          'publish_ontology_version',
+          { id: draft.id, version: draft.version },
+        );
+      }
+
+      async function publishedLinkTypeNames(): Promise<string[]> {
+        const linkTypes = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (c) =>
+          loadPublishedLinkTypes(c, workspaceId),
+        );
+        return [...linkTypes.keys()];
+      }
+
+      it('two drafts from the same base: the first publishes, the second gets 409 and the first’s LinkTypes survive', async () => {
+        const familyId = await publishedFamily();
+        const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_alice_rel'));
+        const bobDraft = await propose(bobId, familyId, withLinkType('valve_bob_rel'));
+        expect([aliceDraft.version, bobDraft.version]).toEqual([2, 3]);
+
+        await publish(aliceId, aliceDraft);
+        const refused = publish(bobId, bobDraft);
+        await expect(refused).rejects.toThrow(OntologyBaseMovedError);
+        await expect(refused).rejects.toMatchObject({
+          code: 'ontology_base_moved',
+          baseVersion: 1,
+          publishedVersion: 2,
+        });
+
+        // Enforcement still reads Alice's v2: her LinkType is declared, Bob's never was.
+        const names = await publishedLinkTypeNames();
+        expect(names).toContain('valve_alice_rel');
+        expect(names).not.toContain('valve_bob_rel');
+        // A third principal with no drafts of their own sees the same through `validate`.
+        const carolValidates = (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, carolId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'validate',
+          { link: { linkType: 'valve_alice_rel', sourceType: 'Valve', targetType: 'Valve' } },
+        )) as { valid: boolean };
+        expect(carolValidates.valid).toBe(true);
+
+        // Bob's draft is untouched (still his, still a draft) and he can propose again from v2.
+        const bobList = (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, bobId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'list_ontology_versions',
+          {},
+        )) as { items: Array<{ id: string; version: number; status: string }> };
+        expect(
+          bobList.items.find((i) => i.id === familyId && i.version === bobDraft.version)?.status,
+        ).toBe('draft');
+        const bobAgain = await propose(
+          bobId,
+          familyId,
+          withLinkType('valve_alice_rel', 'valve_bob_rel'),
+        );
+        await publish(bobId, bobAgain);
+        expect(await publishedLinkTypeNames()).toEqual(
+          expect.arrayContaining(['valve_alice_rel', 'valve_bob_rel']),
+        );
+      });
+
+      it('the other order: once the higher-numbered draft is published, the lower-numbered one is refused instead of publishing into nothing', async () => {
+        const familyId = await publishedFamily();
+        const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_low_rel'));
+        const bobDraft = await propose(bobId, familyId, withLinkType('valve_high_rel'));
+
+        await publish(bobId, bobDraft);
+        await expect(publish(aliceId, aliceDraft)).rejects.toMatchObject({
+          code: 'ontology_base_moved',
+          baseVersion: 1,
+          publishedVersion: 3,
+        });
+        const names = await publishedLinkTypeNames();
+        expect(names).toContain('valve_high_rel');
+        expect(names).not.toContain('valve_low_rel');
+      });
+
+      it('a loader publish (domain pack / module) into the family moves its head the same way', async () => {
+        const familyId = await publishedFamily();
+        const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_pack_rel'));
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          publishOntologyVersion(client, workspaceId, {
+            id: familyId,
+            definition: BASE_CHANGE,
+            principalId: ownerId,
+          }),
+        );
+        await expect(publish(aliceId, aliceDraft)).rejects.toThrow(OntologyBaseMovedError);
+      });
+
+      it('a draft whose base is still the head publishes, including over another proposer’s discarded draft', async () => {
+        const familyId = await publishedFamily();
+        const bobDraft = await propose(bobId, familyId, withLinkType('valve_dropped_rel'));
+        await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, bobId, 'builder'),
+          'discard_draft',
+          { kind: 'ontology_version', id: bobDraft.id, version: bobDraft.version },
+        );
+        const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_kept_rel'));
+        const published = (await publish(aliceId, aliceDraft)) as { status: string };
+        expect(published.status).toBe('published');
+      });
+
+      // R-61 (review L8b-1): the console diffs a draft against its own family's published base,
+      // never against the merged `list_types` namespace — so the kernel hands that base over.
+      it('R-61: list_ontology_versions carries each draft’s own-family base; published rows and new families carry none', async () => {
+        type Item = {
+          id: string;
+          version: number;
+          status: string;
+          base: { version: number; definition: unknown } | null;
+        };
+        const familyId = await publishedFamily();
+        const revision = await propose(aliceId, familyId, withLinkType('valve_listed_rel'));
+        const freshFamily = (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'propose_ontology_change',
+          { change: BASE_CHANGE },
+        )) as { id: string; version: number };
+
+        async function aliceItems(): Promise<Item[]> {
+          const page = (await dispatchCapability(
+            { pool },
+            handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES),
+            'list_ontology_versions',
+            {},
+          )) as { items: Item[] };
+          return page.items;
+        }
+        const find = (items: Item[], ref: { id: string; version: number }) =>
+          items.find((i) => i.id === ref.id && i.version === ref.version);
+
+        const before = await aliceItems();
+        expect(find(before, revision)?.base).toEqual({ version: 1, definition: BASE_CHANGE });
+        expect(find(before, { id: familyId, version: 1 })?.base).toBeNull();
+        expect(find(before, freshFamily)?.base).toBeNull();
+
+        // Once published it is no longer a decision to make — the row carries no base.
+        await publish(aliceId, revision);
+        expect(find(await aliceItems(), revision)?.base).toBeNull();
+      });
+
+      it('another principal’s draft still reads not-found, never base-moved (nothing about the family leaks)', async () => {
+        const familyId = await publishedFamily();
+        const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_private_rel'));
+        const bobDraft = await propose(bobId, familyId, withLinkType('valve_other_rel'));
+        await publish(bobId, bobDraft);
+        await expect(publish(bobId, aliceDraft)).rejects.toThrow(OntologyDraftNotFoundError);
+      });
     });
 
     // Closing wave C5b (coverage gap G1 part 2): `list_ontology_versions` end to end through

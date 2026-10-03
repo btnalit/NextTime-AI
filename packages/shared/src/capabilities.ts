@@ -319,6 +319,9 @@ const ontologyCapabilities: readonly Capability[] = [
     // proposer may publish it (`publishOntologyDraft`'s `proposed_by` predicate): drafts are
     // visible to their proposer only (I16's read half), so nobody else could ever have reviewed
     // what they would be publishing.
+    // R-60: a draft remembers the published version it was proposed against (its base); once the
+    // family's published head has moved past it the publish refuses 409 `ontology_base_moved` —
+    // every version is a full replacement, so publishing it would drop the newer version's types.
     name: 'publish_ontology_version',
     group: 'ontology',
     mode: 'execute',
@@ -327,7 +330,7 @@ const ontologyCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ id: id, version: z.number().int().positive() }).strict(),
     resultSchema: wire.OntologyPublishResultWireSchema,
     description:
-      'Publish your own draft OntologyVersion (I16). Human channel only; another principal’s draft reads as not found.',
+      'Publish your own draft OntologyVersion (I16). Human channel only; another principal’s draft reads as not found. A draft proposed against a published version that is no longer the family’s latest (someone published another version since) refuses 409 ontology_base_moved — propose the change again from the current version.',
   },
   {
     // S3.1: handled by `proposeOntologyChangeHandler` (`registry.ts`'s `proposeOntologyChange`).
@@ -345,7 +348,7 @@ const ontologyCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ id: id.optional(), change: OntologyDefinitionSchema }).strict(),
     resultSchema: wire.OntologyProposeResultWireSchema,
     description:
-      'Propose a private draft ontology change (I16); visible only to the proposer until published.',
+      'Propose a private draft ontology change (I16); visible only to the proposer until published. change is the family’s complete new definition, not a delta; with id it is based on that family’s latest published version, and publishing it fails with ontology_base_moved if another version is published first.',
   },
   {
     // S3.1: handled by `getTypeHandler` (`registry.ts`'s `getType`) — looks up `typeName` across
@@ -414,7 +417,7 @@ const ontologyCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: listEnvelope(wire.OntologyVersionListItemWireSchema),
     description:
-      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish.',
+      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish; a draft also carries base — the published version of its own family it was proposed against, with that version’s definition (null: the family had nothing published) — so what the draft changes is the diff between the two.',
   },
 ];
 
@@ -1608,15 +1611,21 @@ const governanceCapabilities: readonly Capability[] = [
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
-    description: 'Read one ActionRequest.',
+    // R-42 (maintainer decision D-22): the same visibility as `list_action_requests` — one
+    // predicate (`governance/approval/reads.ts`'s `getActionRequestVisibleTo`), so a single-row
+    // read never shows more than the list. A row outside it answers 404, like an unknown id.
+    description:
+      'Read one ActionRequest the caller may see: the owner sees every row, anyone else only a row matching one of their own active grants (I14) or one they requested. Otherwise 404.',
   },
   {
     // S5.5 leftover 21 (docs/STATUS.md row 21, docs/development-tasks.md §5b S5.5 item 8): the
     // console's "审批历史" read — every ActionRequest regardless of status, unlike `list_pending`'s
-    // hardcoded `pending_approval` filter. Same I14 visibility as `list_pending`/`get_action`
-    // (`governance/approval/reads.ts`'s `listActionRequestsForApprover` doc comment): the owner
-    // sees every row, any other role only rows matching one of their own active `capability_grants`
-    // — a row a caller may not see must not appear here even once it is no longer pending.
+    // hardcoded `pending_approval` filter. Same visibility as `get_action` (R-42, D-22 — one
+    // predicate, `governance/approval/reads.ts`'s `listActionRequestsForApprover` doc comment): the
+    // owner sees every row, any other role only rows matching one of their own active
+    // `capability_grants` (I14, the match `list_pending` uses) plus the rows they requested
+    // themselves — a row a caller may not see must not appear here even once it is no longer
+    // pending.
     name: 'list_action_requests',
     group: 'governance',
     mode: 'observe',
@@ -1644,8 +1653,9 @@ const governanceCapabilities: readonly Capability[] = [
     description:
       'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
       'status, gatekeeperId, taskId (every WorkerRun of that Task) or parentWorkerRunId; ' +
-      'keyset-paginated (limit, cursor → nextCursor). Same I14 visibility as list_pending. Decided ' +
-      'rows carry decisionReason / decidedBy / decidedAt.',
+      'keyset-paginated (limit, cursor → nextCursor). Same visibility as get_action: the owner ' +
+      'sees every row, anyone else rows matching one of their own active grants (I14) or that ' +
+      'they requested. Decided rows carry decisionReason / decidedBy / decidedAt.',
   },
   {
     // Review 2026-10-02 R-20 / maintainer decision D-15: the rule is keyed by (gatekeeperId,

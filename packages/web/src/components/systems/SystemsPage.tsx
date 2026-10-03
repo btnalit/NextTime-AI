@@ -1,4 +1,4 @@
-import type { AvailableGateInstanceWire, OperationSummaryWire } from '@nexttime/shared';
+import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -194,6 +194,11 @@ export function SystemsPage({
     if (principalsList.state.status !== 'ready') return EMPTY_NAMES;
     return new Map(principalsList.state.data.items.map((row) => [row.id, row.displayName]));
   }, [principalsList.state]);
+  // R-39: the grantee's role, for the card's "also an approver" disclosure.
+  const principalRoles = useMemo(() => {
+    if (principalsList.state.status !== 'ready') return new Map<string, Role>();
+    return new Map(principalsList.state.data.items.map((row) => [row.id, row.role]));
+  }, [principalsList.state]);
 
   const grantsByGate = useMemo(() => {
     const map = new Map<string, GrantRow[]>();
@@ -378,6 +383,7 @@ export function SystemsPage({
                   grantId: row.id,
                   principalId: row.principalId,
                   principalName: principalNames.get(row.principalId),
+                  principalRole: principalRoles.get(row.principalId),
                 }))
               : selfPrincipalId
                 ? [{ grantId: '', principalId: selfPrincipalId }]

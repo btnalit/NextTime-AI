@@ -64,6 +64,12 @@ export const OntologyPublishResultWireSchema = OntologyVersionWireSchema.pick({
  * `definition` reuses `OntologyDefinitionSchema` (not the loose `z.record` the sibling
  * `OntologyVersionWireSchema.definition` uses) so the console can diff a draft's own declared
  * object/link/action types structurally, not just render an opaque blob.
+ *
+ * R-61: `base` is, for a draft, the published version of the draft's own family it was proposed
+ * against (R-60), with that version's definition — the console diffs the draft against it, never
+ * against the merged type namespace (which already contains the proposer's own draft and every
+ * other family). Null for a draft of a new family, or of one with nothing published when it was
+ * proposed (everything in it is new), and always null for a published row.
  */
 export const OntologyVersionListItemWireSchema = z
   .object({
@@ -79,6 +85,13 @@ export const OntologyVersionListItemWireSchema = z
       .strict(),
     createdAt: z.string(),
     definition: OntologyDefinitionSchema,
+    base: z
+      .object({
+        version: z.number().int().positive(),
+        definition: OntologyDefinitionSchema,
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type OntologyVersionListItemWire = z.infer<typeof OntologyVersionListItemWireSchema>;
