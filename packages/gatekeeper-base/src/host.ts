@@ -26,7 +26,12 @@ import { HttpTransport, McpTransport, importMcpTools, importOpenApi } from './ki
 import type { OpenApiDocumentLike } from './kinds/index.js';
 import type { Transport } from './kinds/types.js';
 import { createGateMetrics } from './metrics.js';
-import { type GateRouteContext, gateRequestId, registerGateRoutes } from './server.js';
+import {
+  type CredentialRouteContext,
+  type GateRouteContext,
+  gateRequestId,
+  registerGateRoutes,
+} from './server.js';
 import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tls.js';
 
 /**
@@ -49,6 +54,11 @@ import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tl
  * Handle public key from `GATE_HOST_PUBLIC_KEY_FILE`) whose `gate` claim equals the path — the
  * browser posting a credential straight here (决定 ⑩). The slot written is the token's `obo`, never
  * the body's. Credentials live in `/data/gate/<gateId>/` under one `GATE_STORE_KEY_FILE` (决定 ⑪).
+ * R-69: those two routes resolve on the instance table whether or not the instance is built yet —
+ * a target whose `tools/list` itself needs the credential could otherwise never receive it — and
+ * storing the shared credential of an `mcp` instance re-handshakes it right away (rebuild with
+ * that credential, then announce), before the response. A re-handshake that fails keeps whatever
+ * was already built; builds of one instance run one at a time.
  *
  * Never logs a token, a credential, or the internal token.
  */
@@ -99,15 +109,21 @@ type HostedInstanceListItem = z.infer<typeof HostedInstanceListSchema>['result']
 
 interface HostedInstance {
   readonly gateId: string;
-  readonly displayName: string;
+  /** Updated in place on a rename — a build may be running on this object. */
+  displayName: string;
   readonly definition: GateHostedDefinitionWire;
   readonly definitionKey: string;
   readonly store: ConnectedAccountStore;
+  /** One per instance, shared by every build of it: a re-handshake (R-69) replaces the gate while
+   *  `apply` calls may be in flight, and the file store is not safe for two writers. */
+  readonly idempotencyStore: JsonFileIdempotencyStore;
   /** Set once the target answered and the Operations were imported. */
   gate?: GatekeeperBase;
   operations: readonly Operation[];
   /** Last build failure, for `GET /healthz` and the log; cleared on success. */
   buildError?: string;
+  /** Tail of this instance's build queue (`buildInTurn`). */
+  building?: Promise<boolean>;
 }
 
 export interface GateHostOptions {
@@ -281,6 +297,18 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         ...(forced !== undefined ? { forcedOnBehalfOf: forced } : {}),
       };
     },
+    // R-69: the store exists from the moment the kernel lists the instance — built or not.
+    resolveCredentialRoute: (request): CredentialRouteContext | undefined => {
+      const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
+      const instance = gateId ? table.get(gateId) : undefined;
+      if (!instance) return undefined;
+      const forced = forcedSlot.get(request);
+      return {
+        connectedAccountStore: instance.store,
+        ...(forced !== undefined ? { forcedOnBehalfOf: forced } : {}),
+        afterStore: (slot) => afterCredentialStored(instance, slot),
+      };
+    },
   });
 
   // Leftover 87: gate_token, like every kernel-facing `/i/*` route. caddy's `/gate-host/*`
@@ -338,10 +366,75 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       manifest: operations,
       transport,
       credentialResolver: resolver,
-      idempotencyStore: new JsonFileIdempotencyStore(join(dataDir, instance.gateId)),
+      idempotencyStore: instance.idempotencyStore,
     });
     instance.operations = operations;
     instance.buildError = undefined;
+  }
+
+  /**
+   * Queues one build of `instance` behind any build of it already running — the tick and a
+   * credential store (R-69) can both ask for one, and a handshake started before a credential was
+   * stored must never land after one started after it. `onlyIfNotReady` (the tick's retry): skipped
+   * when the instance is ready by the time its turn comes. Resolves `true` when the instance was
+   * built or needed no build, `false` when this build failed; never rejects. A failed build never
+   * drops a gate already built (a rejected credential leaves the working instance in place, with
+   * `buildError` saying why).
+   */
+  function buildInTurn(instance: HostedInstance, onlyIfNotReady: boolean): Promise<boolean> {
+    const run = (instance.building ?? Promise.resolve(true)).then(async () => {
+      // Ready = built with Operations. An MCP server that listed nothing yet, or an OpenAPI
+      // document that was empty, is retried every tick.
+      if (onlyIfNotReady && instance.gate && instance.operations.length > 0) return true;
+      try {
+        await buildInstance(instance);
+        return true;
+      } catch (err) {
+        instance.buildError = err instanceof Error ? err.message : String(err);
+        log(
+          JSON.stringify({
+            level: 'warn',
+            msg: instance.gate
+              ? 'gate host: re-handshake failed, the instance keeps its previous build'
+              : 'gate host: instance not ready (target or manifest unreachable), will retry',
+            gateId: instance.gateId,
+            error: instance.buildError,
+          }),
+        );
+        return false;
+      }
+    });
+    instance.building = run;
+    return run;
+  }
+
+  /** R-69: the one credential a build itself presents — the shared slot of an `mcp` instance in
+   *  `shared` mode (`buildInstance`'s `tools/list`). A member's own slot (`connected_account`) never
+   *  drives discovery, and an OpenAPI document is fetched without any credential. */
+  function isDiscoveryCredential(instance: HostedInstance, slot: string): boolean {
+    return (
+      instance.definition.transportKind === 'mcp' &&
+      instance.definition.credentialMode === 'shared' &&
+      slot === GATE_SHARED_CREDENTIAL_SLOT
+    );
+  }
+
+  /** R-69: re-handshake with the credential just stored and announce, instead of waiting for the
+   *  next tick — or, for an instance already taken over, never. Never throws (`afterStore`). */
+  async function afterCredentialStored(instance: HostedInstance, slot: string): Promise<void> {
+    if (!isDiscoveryCredential(instance, slot)) return;
+    const built = await buildInTurn(instance, false);
+    // Removed, or re-created with another definition, while the handshake ran: the tick owns it.
+    if (!built || table.get(instance.gateId) !== instance) return;
+    log(
+      JSON.stringify({
+        level: 'info',
+        msg: 'gate host: instance re-handshaken with the stored credential',
+        gateId: instance.gateId,
+        operationCount: instance.operations.length,
+      }),
+    );
+    await announce(instance);
   }
 
   /** Credentials belong to one definition (决定 ⑪): when an instance is removed, or re-created with
@@ -368,9 +461,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       const key = definitionKey(item);
       const existing = table.get(item.gateId);
       if (existing && existing.definitionKey === key) {
-        if (existing.displayName !== item.displayName) {
-          table.set(item.gateId, { ...existing, displayName: item.displayName });
-        }
+        existing.displayName = item.displayName;
         continue;
       }
       if (existing) await wipeInstanceData(item.gateId);
@@ -383,6 +474,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
           dataDir: join(dataDir, item.gateId),
           keyFilePath: storeKeyFile as string,
         }),
+        idempotencyStore: new JsonFileIdempotencyStore(join(dataDir, item.gateId)),
         operations: [],
       });
       log(
@@ -451,6 +543,18 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     };
   }
 
+  async function announce(instance: HostedInstance): Promise<void> {
+    await postAnnouncement({
+      url: `${kernelUrl}/internal/gates/announce`,
+      token: internalToken,
+      body: announceBodyOf(instance),
+      fetchImpl: kernelFetch,
+      log,
+      setTimer,
+      clearTimer,
+    });
+  }
+
   async function tick(): Promise<boolean> {
     const items = await pull();
     if (!items) return false;
@@ -458,31 +562,8 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     for (const instance of table.values()) {
       // Rebuild while not ready (target was unreachable) or while it still has no Operations (an
       // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every tick.
-      if (!instance.gate || instance.operations.length === 0) {
-        try {
-          await buildInstance(instance);
-        } catch (err) {
-          instance.buildError = err instanceof Error ? err.message : String(err);
-          log(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'gate host: instance not ready (target or manifest unreachable), will retry',
-              gateId: instance.gateId,
-              error: instance.buildError,
-            }),
-          );
-          continue;
-        }
-      }
-      await postAnnouncement({
-        url: `${kernelUrl}/internal/gates/announce`,
-        token: internalToken,
-        body: announceBodyOf(instance),
-        fetchImpl: kernelFetch,
-        log,
-        setTimer,
-        clearTimer,
-      });
+      if (!(await buildInTurn(instance, true))) continue;
+      await announce(instance);
     }
     return true;
   }
