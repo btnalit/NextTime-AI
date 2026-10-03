@@ -81,6 +81,7 @@ import {
 import {
   GrantNotFoundError,
   HandleIssuanceError,
+  NotProposerError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
@@ -213,6 +214,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
   }
   if (err instanceof ForbiddenError) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  // D-24: HTTP's 403 `not_proposer` (capability-route.ts). WS has no string code; the message
+  // names the row.
+  if (err instanceof NotProposerError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
   if (err instanceof CapabilityNotFoundError) {

@@ -6,11 +6,13 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
+import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
  * application/worker/procedures: the Procedure registry (design doc §5.1.4 Procedure, §5.4
@@ -190,6 +192,23 @@ async function getLatestForUpdate(
   return mapRow(row);
 }
 
+/** D-24 (`governance/capability/publish-authority.ts`): the locked row's proposer or the owner.
+ *  Someone else's draft is invisible to the caller (I16), so it is not found — the same answer
+ *  `discard_draft` gives; a published/deprecated version everyone can see is a 403. */
+function requireProcedureAuthority(
+  action: 'publish_procedure' | 'deprecate_procedure',
+  actor: PublishActor | undefined,
+  row: ProcedureRow,
+): void {
+  assertPublishAuthority(
+    action,
+    actor,
+    row,
+    `Procedure ${row.id}@${row.version}`,
+    () => new ProcedureNotFoundError(row.workspaceId, row.id),
+  );
+}
+
 interface ResolvedStepTarget {
   readonly stepIndex: number;
   readonly targetObjectId: string;
@@ -265,15 +284,29 @@ async function resolveStepTargets(
  *  graph (`resolveStepTargets` — throws `ProcedureStepReferenceError` on the first bad reference),
  *  sets `published_by`/`published_at`, and projects the Procedure plus its `steps` Links into the
  *  graph (`substrate/ontology`'s `projectProcedureObject`, `SqlGraphStore.assertFact` for each
- *  resolved step) so `find_procedures` has something to traverse. */
+ *  resolved step) so `find_procedures` has something to traverse.
+ *
+ *  `actor` (D-24): the `publish_procedure` caller — `actor.principalId` is
+ *  `publisherPrincipalId` — checked against the locked row (`requireProcedureAuthority`) and the
+ *  family's live version it would supersede (`assertFamilyPublishAuthority`); omitted by internal
+ *  callers. */
 export async function publishProcedure(
   client: PoolClient,
   workspaceId: string,
   publisherPrincipalId: string,
   procedureId: string,
+  actor?: PublishActor,
 ): Promise<ProcedureRow> {
   const row = await getLatestForUpdate(client, workspaceId, procedureId);
+  requireProcedureAuthority('publish_procedure', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'procedures',
+    action: 'publish_procedure',
+    familyId: row.id,
+    subject: `Procedure ${row.id}@${row.version}`,
+    actor,
+  });
 
   if (row.steps.length === 0) {
     throw new ProcedureStepReferenceError(-1, 'a Procedure must have at least one step to publish');
@@ -327,8 +360,10 @@ export async function deprecateProcedure(
   client: PoolClient,
   workspaceId: string,
   procedureId: string,
+  actor?: PublishActor,
 ): Promise<ProcedureRow> {
   const row = await getLatestForUpdate(client, workspaceId, procedureId);
+  requireProcedureAuthority('deprecate_procedure', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'deprecate');
 
   const result = await client.query<ProcedureDbRow>(

@@ -110,6 +110,7 @@ import {
 import {
   GrantNotFoundError,
   HandleIssuanceError,
+  NotProposerError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
@@ -248,6 +249,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ForbiddenError) {
     return { status: 403, code: 'forbidden', message: err.message };
+  }
+  // D-24 (governance/capability/publish-authority.ts): a publish_* / deprecate_* on a row someone
+  // else proposed. Its own code, not `forbidden`: the refusal is about this row, not the role —
+  // the console must not conclude the capability is closed to the caller altogether.
+  if (err instanceof NotProposerError) {
+    return { status: 403, code: err.code, message: err.message };
   }
   if (err instanceof InvalidCapabilityParamsError) {
     return { status: 400, code: 'invalid_params', message: err.message };

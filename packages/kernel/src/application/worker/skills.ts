@@ -9,9 +9,11 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { stringify as stringifyYaml } from 'yaml';
+import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
+import { assertFamilyPublishAuthority } from './publish-family.js';
 
 const graphStore = new SqlGraphStore();
 
@@ -228,20 +230,50 @@ async function getLatestForUpdate(
   return mapRow(row);
 }
 
+/** D-24 (`governance/capability/publish-authority.ts`): the locked row's proposer or the owner.
+ *  Someone else's draft is invisible to the caller (I16), so it is not found — the same answer
+ *  `discard_draft` gives; a published/deprecated version everyone can see is a 403. */
+function requireSkillAuthority(
+  action: 'publish_skill' | 'deprecate_skill',
+  actor: PublishActor | undefined,
+  row: SkillRow,
+): void {
+  assertPublishAuthority(
+    action,
+    actor,
+    row,
+    `Skill ${row.id}@${row.version}`,
+    () => new SkillNotFoundError(row.workspaceId, row.id),
+  );
+}
+
 /** Publishes the latest draft version of `skillId` (human channel only — enforced at the gateway):
  *  validates the transition (`IllegalTransition` on anything but `draft -> published`), validates
  *  content (`validateSkillContent`), sets `published_by`/`published_at`, and projects the Skill
  *  into the graph (`substrate/ontology`'s `projectSkillObject`) so `find_procedures`/`list_skills`
  *  and a future WorkerDefinition's `uses` resolution (`application/task/spawn.ts`) have something
- *  to find. */
+ *  to find.
+ *
+ *  `actor` (D-24): the `publish_skill` caller — `actor.principalId` is `publisherPrincipalId` —
+ *  checked against the locked row (`requireSkillAuthority`) and against the family's live
+ *  version it would supersede (`assertFamilyPublishAuthority`); omitted by internal callers. */
 export async function publishSkill(
   client: PoolClient,
   workspaceId: string,
   publisherPrincipalId: string,
   skillId: string,
+  actor?: PublishActor,
 ): Promise<SkillRow> {
   const row = await getLatestForUpdate(client, workspaceId, skillId);
+  requireSkillAuthority('publish_skill', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'skills',
+    action: 'publish_skill',
+    familyId: row.id,
+    subject: `Skill ${row.id}@${row.version}`,
+    actor,
+  });
   validateSkillContent(row);
 
   const result = await client.query<SkillDbRow>(
@@ -344,13 +376,15 @@ async function linkPublishedWorkerDefinitionsUsingSkill(
 }
 
 /** Deprecates the latest version of `skillId` (human channel only). `IllegalTransition` unless it
- *  is currently `published`. */
+ *  is currently `published`. `actor` (D-24): as for `publishSkill`. */
 export async function deprecateSkill(
   client: PoolClient,
   workspaceId: string,
   skillId: string,
+  actor?: PublishActor,
 ): Promise<SkillRow> {
   const row = await getLatestForUpdate(client, workspaceId, skillId);
+  requireSkillAuthority('deprecate_skill', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'deprecate');
 
   const result = await client.query<SkillDbRow>(

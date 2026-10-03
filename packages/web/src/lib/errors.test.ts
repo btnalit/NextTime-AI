@@ -16,6 +16,18 @@ describe('describeError', () => {
     expect(isForbiddenError(new HttpError('capability_error', 'x', 'forbidden'))).toBe(true);
   });
 
+  it('treats D-24 not_proposer as a per-row refusal, not a role denial', () => {
+    const err = new HttpError(
+      'capability_error',
+      'deprecate_skill: Skill s@1 was proposed by another principal',
+      'not_proposer',
+    );
+    expect(describeError(err)).toMatchObject({ code: 'not_proposer', title: 'Not the proposer' });
+    // usePermissions.markDenied runs only on `forbidden` — one row someone else proposed must not
+    // hide the action for the caller's own rows.
+    expect(isForbiddenError(err)).toBe(false);
+  });
+
   it('uses the HttpError kind as the code for network/invalid_response failures', () => {
     expect(describeError(new HttpError('network', 'capability call failed')).code).toBe('network');
     expect(describeError(new HttpError('invalid_response', 'non-JSON')).title).toBe(

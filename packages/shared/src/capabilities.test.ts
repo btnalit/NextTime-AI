@@ -424,3 +424,27 @@ describe('list_ontology_versions (closing wave C5b)', () => {
     expect(schema?.safeParse({ unexpected: true }).success).toBe(false);
   });
 });
+
+describe('D-24 publish / deprecate authority (review 2026-10-02)', () => {
+  it('every publish_* / deprecate_* capability is human-channel with at least the builder floor', () => {
+    const family = CAPABILITY_REGISTRY.filter((c) => /^(publish|deprecate)_/.test(c.name));
+    expect(family.map((c) => c.name).sort()).toEqual(
+      [
+        'deprecate_operation',
+        'deprecate_procedure',
+        'deprecate_skill',
+        'deprecate_worker_definition',
+        'publish_manifest',
+        'publish_ontology_version',
+        'publish_operation',
+        'publish_procedure',
+        'publish_skill',
+        'publish_worker_definition',
+      ].sort(),
+    );
+    for (const capability of family) {
+      expect(capability.channel, capability.name).toBe('human');
+      expect(['builder', 'owner'], capability.name).toContain(capability.minRole);
+    }
+  });
+});

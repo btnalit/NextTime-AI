@@ -9,7 +9,11 @@ import {
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
-import { roleSatisfiesMinRole } from '../capability/index.js';
+import {
+  type PublishActor,
+  assertPublishAuthority,
+  roleSatisfiesMinRole,
+} from '../capability/index.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -738,6 +742,11 @@ async function requirePublishedOperation(
 export interface PublishOperationInput {
   readonly gatekeeperId: string;
   readonly name: string;
+  /** D-24: the `publish_operation` caller, checked against the draft being published
+   *  (`governance/capability/publish-authority.ts`) — its proposer or the owner. Omitted by
+   *  internal callers (`publishManifest`, `enable_gate_instance`, the CLI). Operation drafts are
+   *  reviewed by builders and owners (D-26), so a refusal is a 403, never a not-found. */
+  readonly actor?: PublishActor;
 }
 
 /**
@@ -766,7 +775,27 @@ export async function publishOperation(
   input: PublishOperationInput,
 ): Promise<OperationRecord> {
   const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
+  assertPublishAuthority(
+    'publish_operation',
+    input.actor,
+    { status: existing.status, proposedBy: existing.proposedBy?.id },
+    `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
+  );
   transition(PUBLISHABLE_TRANSITIONS, existing.status, 'publish');
+  // D-24: publishing a revision also deprecates the live row below, so the caller needs deprecate
+  // authority over that row too — a builder may revise their own Operation, but replacing (and
+  // reclassifying) a row someone else proposed, such as a gate's imported Operation, is the owner's.
+  if (input.actor !== undefined) {
+    const live = await getPublishedOperation(client, workspaceId, input.gatekeeperId, input.name);
+    if (live) {
+      assertPublishAuthority(
+        'publish_operation',
+        input.actor,
+        { status: live.status, proposedBy: live.proposedBy?.id },
+        `Operation ${input.gatekeeperId}/${input.name}@${live.version} (the published version this draft would replace)`,
+      );
+    }
+  }
   // `existing` is a draft here (the transition above allows `publish` from `draft` only), so this
   // never touches the row being published.
   const superseded = await deprecatePublishedOperationObjects(client, workspaceId, {
@@ -835,6 +864,9 @@ export async function publishManifest(
 export interface DeprecateOperationInput {
   readonly gatekeeperId: string;
   readonly name: string;
+  /** D-24: the `deprecate_operation` caller — the published row's proposer or the owner (see
+   *  `PublishOperationInput.actor`). */
+  readonly actor?: PublishActor;
 }
 
 /** Deprecates a published Operation. Throws `OperationNotFoundError` if unknown, `IllegalTransition`
@@ -850,6 +882,12 @@ export async function deprecateOperation(
     workspaceId,
     input.gatekeeperId,
     input.name,
+  );
+  assertPublishAuthority(
+    'deprecate_operation',
+    input.actor,
+    { status: existing.status, proposedBy: existing.proposedBy?.id },
+    `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
   transition(PUBLISHABLE_TRANSITIONS, existing.status, 'deprecate');
   await setOperationStatusObject(

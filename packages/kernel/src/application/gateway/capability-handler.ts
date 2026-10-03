@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import type { PublishActor } from '../../governance/capability/index.js';
 import type { PlatformRole } from '../identity/index.js';
 
 /**
@@ -97,6 +98,24 @@ export interface CapabilityHandlerContext {
    * admins for others") without threading a whole `ConsoleUser` through.
    */
   readonly consoleUser?: { readonly platformRole: PlatformRole };
+}
+
+/**
+ * D-24 (`governance/capability/publish-authority.ts`): the caller of a `publish_*` /
+ * `deprecate_*` capability, for the service's proposer-or-owner check. Every one of those is
+ * `channel: 'human'`, so dispatch.ts has always resolved the Principal — a missing one is a wiring
+ * bug, not a caller to wave through.
+ */
+export function publishActorOf(
+  capability: string,
+  ctx: CapabilityHandlerContext | undefined,
+): PublishActor {
+  if (!ctx?.principal) {
+    throw new Error(
+      `${capability}: no resolved human principal in context (this capability is channel:"human"-only)`,
+    );
+  }
+  return { principalId: ctx.principal.id, role: ctx.principal.role };
 }
 
 /**
