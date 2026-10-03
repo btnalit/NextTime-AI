@@ -6,7 +6,7 @@ import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
 import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
-import { createServer } from './server.js';
+import { PUBLIC_ROUTES, createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 
@@ -16,7 +16,7 @@ const WS_R = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ALICE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const NOBODY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
-// Fixed test internal-plane token — POST /task/spawn and every /resident/* route require it
+// Fixed test internal-plane token — every route but GET /healthz requires a caller credential
 // (internal-auth.ts, lane-6 review P1-3: this supervisor is dual-homed on `control`+`workers`,
 // so any agent container could otherwise reach these routes directly). AUTH is the header every
 // test below sends for a guarded route; the dedicated "internal-plane auth" describe block below
@@ -181,14 +181,61 @@ describe('internal-plane auth — POST /task/spawn and /resident/*', () => {
     }
   });
 
-  it('does not guard unrelated routes (GET /healthz, GET/POST /task/:workerRunId)', async () => {
+  it('R-03 review: Task terminate and status admit the kernel only — no header, a wrong token or agent-host’s credential is 401 and never reaches the task service', async () => {
+    const { app, taskService } = setup();
+    const spawned = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: {
+        taskId: '11111111-1111-1111-1111-111111111111',
+        workerRunId: '22222222-2222-2222-2222-222222222222',
+        workspaceId: '33333333-3333-3333-3333-333333333333',
+        onBehalfOf: '44444444-4444-4444-4444-444444444444',
+        capabilityHandle: 'h1',
+      },
+    });
+    expect(spawned.statusCode).toBe(200);
+    const run = '22222222-2222-2222-2222-222222222222';
+    for (const headers of [{}, { authorization: 'Bearer wrong-token' }, AGENT_HOST_AUTH]) {
+      const terminate = await app.inject({
+        method: 'POST',
+        url: `/task/${run}/terminate`,
+        headers,
+      });
+      expect(terminate.statusCode).toBe(401);
+      expect(terminate.json().error.code).toBe('unauthorized');
+      const status = await app.inject({ method: 'GET', url: `/task/${run}`, headers });
+      expect(status.statusCode).toBe(401);
+    }
+    // The refused terminates never reached the container.
+    expect((await taskService.status(run))?.status).toBe('running');
+
+    const status = await app.inject({ method: 'GET', url: `/task/${run}`, headers: AUTH });
+    expect(status.statusCode).toBe(200);
+    const terminate = await app.inject({
+      method: 'POST',
+      url: `/task/${run}/terminate`,
+      headers: AUTH,
+    });
+    expect(terminate.statusCode).toBe(204);
+  });
+
+  it('leaves only GET /healthz public', async () => {
     const { app } = setup();
     const healthz = await app.inject({ method: 'GET', url: '/healthz' });
     expect(healthz.statusCode).toBe(200);
-    const taskStatus = await app.inject({ method: 'GET', url: '/task/nobody' });
-    expect(taskStatus.statusCode).toBe(404); // not 401 — this route is not guarded
-    const terminate = await app.inject({ method: 'POST', url: '/task/nobody/terminate' });
-    expect(terminate.statusCode).toBe(404); // not 401 — this route is not guarded
+    expect(PUBLIC_ROUTES).toEqual(['/healthz']);
+  });
+
+  it('fails closed at registration: a route added without a caller guard throws', () => {
+    const { app } = setup();
+    expect(() => app.post('/task/:workerRunId/pause', async () => null)).toThrow(
+      /has no caller guard/,
+    );
+    expect(() =>
+      app.get('/resident/:principalId/logs', { preHandler: async () => {} }, async () => null),
+    ).toThrow(/has no caller guard/);
   });
 });
 
@@ -735,7 +782,7 @@ describe('POST /task/spawn', () => {
 describe('POST /task/:workerRunId/terminate', () => {
   it('404s for an unknown workerRunId', async () => {
     const { app } = setup();
-    const res = await app.inject({ method: 'POST', url: '/task/nobody/terminate' });
+    const res = await app.inject({ method: 'POST', url: '/task/nobody/terminate', headers: AUTH });
     expect(res.statusCode).toBe(404);
   });
 
@@ -747,7 +794,11 @@ describe('POST /task/:workerRunId/terminate', () => {
       headers: AUTH,
       payload: validTaskSpawnBody,
     });
-    const res = await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate` });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/task/${WORKER_RUN_ID}/terminate`,
+      headers: AUTH,
+    });
     expect(res.statusCode).toBe(204);
   });
 });
@@ -755,7 +806,7 @@ describe('POST /task/:workerRunId/terminate', () => {
 describe('GET /task/:workerRunId', () => {
   it('404s when nothing has been spawned', async () => {
     const { app } = setup();
-    const res = await app.inject({ method: 'GET', url: '/task/nobody' });
+    const res = await app.inject({ method: 'GET', url: '/task/nobody', headers: AUTH });
     expect(res.statusCode).toBe(404);
   });
 
@@ -767,7 +818,7 @@ describe('GET /task/:workerRunId', () => {
       headers: AUTH,
       payload: validTaskSpawnBody,
     });
-    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
+    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}`, headers: AUTH });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ workerRunId: WORKER_RUN_ID, status: 'running' });
   });
@@ -780,8 +831,8 @@ describe('GET /task/:workerRunId', () => {
       headers: AUTH,
       payload: validTaskSpawnBody,
     });
-    await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate` });
-    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
+    await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate`, headers: AUTH });
+    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}`, headers: AUTH });
     expect(res.json()).toMatchObject({ status: 'terminated', reason: 'requested' });
   });
 });
@@ -873,7 +924,7 @@ describe('correlation id + /internal/metrics (leftover 87)', () => {
     });
     const name = docker.createCalls[0]?.name as string;
     docker.simulateExit(name, 1);
-    await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
+    await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}`, headers: AUTH });
 
     const res = await app.inject({ method: 'GET', url: '/internal/metrics', headers: AUTH });
     expect(res.statusCode).toBe(200);

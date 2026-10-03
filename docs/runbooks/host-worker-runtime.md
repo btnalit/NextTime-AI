@@ -88,11 +88,11 @@ fetch('http://localhost:8081/healthz').then(r=>r.text()).then(t=>console.log(t))
 期望 `{"status":"ok"}`。下面的每个 `/resident/*` 调用都用这个 `node -e fetch(...)` 模式
 （`-T` 关掉伪 TTY，避免 `docker compose exec` 吞掉后续脚本的 stdin）。
 
-**内部认证**（fix/runtime-hardening，lane-6 review P1-3）：`POST /task/spawn` 与全部
-`/resident/*` 路由现在都要求 `Authorization: Bearer <调用方凭证>`（`GET /healthz`、
-`GET /task/:workerRunId`、`POST /task/:workerRunId/terminate` 不受影响，仍不需要）。R-03 起每条
+**内部认证**（fix/runtime-hardening，lane-6 review P1-3）：除 `GET /healthz` 外的每条路由现在都
+要求 `Authorization: Bearer <调用方凭证>`。R-03 起每条
 路由只放行用它的调用方：`/resident/spawn`、`/resident/:id/touch` 只认 agent-host 的凭证；
-`/task/spawn`、`/resident/reclaim`、`/residents`、`/images` 只认 kernel 的；`/resident/stop`、
+`/task/spawn`、`/task/:workerRunId`、`/task/:workerRunId/terminate`、`/resident/reclaim`、
+`/residents`、`/images` 只认 kernel 的；`/resident/stop`、
 `GET /resident/:id` 两者都认。`worker-supervisor` 自己容器里正好挂着这两份（都由
 `scripts/derive-internal-tokens.sh` 派生，不是根）：kernel 的在 `/run/secrets/internal_token`，
 agent-host 的在 `/run/secrets/internal_token_agent_host`——下面的示例按路由选其一，
@@ -311,7 +311,8 @@ docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/${WORKER_RUN_ID}')
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}', {headers: {authorization: 'Bearer ' + token}})
   .then(r => r.text()).then(t => console.log(t))
 "
 ```
@@ -330,7 +331,8 @@ ls "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}"   # 目录还在（entrypoint.
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST'})
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST', headers: {authorization: 'Bearer ' + token}})
   .then(r => console.log(r.status))
 "
 ```

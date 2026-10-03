@@ -1,15 +1,16 @@
 /**
  * server: the resident-mode AND one-shot Task-mode HTTP API (docs/development-tasks.md S1.5a and
  * S2.8 task briefs) — Fastify, matching `@nexttime/kernel`'s own stack and giving the route tests
- * both briefs explicitly ask for (`Fastify inject`, no bound port). `POST /task/spawn` and every
- * `/resident/*` route require the internal-plane shared secret (`internal-auth.ts`, lane-6 review
- * P1-3): this service is `control`-network only (docker-compose.yml — no agent container can
- * reach it directly), but every other `control`-network service could previously call these
- * routes unauthenticated too, not just agent-host / the kernel's `task/service.ts` — "trusted
- * caller, no separate auth" was a convention, not something the listener enforced. `POST
- * /task/:workerRunId/terminate`, `GET /task/:workerRunId`, and `GET /healthz` stay unguarded, per
- * the same review's own scoping. R-03: each guarded route admits only the caller(s) that use it
- * — `[agent-host]`, `[kernel]` or both, marked below — each presenting its own credential.
+ * both briefs explicitly ask for (`Fastify inject`, no bound port). Every route but `GET /healthz`
+ * requires an internal-plane caller credential (`internal-auth.ts`, lane-6 review P1-3): this
+ * service is `control`-network only (docker-compose.yml — no agent container can reach it
+ * directly), but every other `control`-network service could previously call these routes
+ * unauthenticated too, not just agent-host / the kernel's `task/service.ts` — "trusted caller, no
+ * separate auth" was a convention, not something the listener enforced. R-03: each guarded route
+ * admits only the caller(s) that use it — `[agent-host]`, `[kernel]` or both, marked below — each
+ * presenting its own credential; and an `onRoute` hook refuses to register any route outside
+ * `PUBLIC_ROUTES` without a guard, so a new route fails closed instead of shipping open (the
+ * Task terminate / status routes once did: any `control`-network peer could kill any Task).
  *
  * Routes:
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
@@ -44,9 +45,9 @@
  *                                   image?, model?, systemPrompt?, skillsInline?,
  *                                   timeoutSec?}                                   [kernel]
  *                                  -> 200 {containerId, ip} | 400 | 403 (image not allowlisted)
- *   POST /task/:workerRunId/terminate -> 204 | 404
- *   GET  /task/:workerRunId       -> 200 TaskStatus | 404
- *   GET  /healthz                 -> 200 {status:"ok"}
+ *   POST /task/:workerRunId/terminate -> 204 | 404                               [kernel]
+ *   GET  /task/:workerRunId       -> 200 TaskStatus | 404                        [kernel]
+ *   GET  /healthz                 -> 200 {status:"ok"}                  (public, PUBLIC_ROUTES)
  *   GET  /internal/metrics        -> 200 Prometheus text (metrics.ts)             [kernel]
  *
  * Leftover 87 (cross-service correlation id): every request's Fastify `request.id` is its
@@ -75,7 +76,11 @@ import {
 } from './config.js';
 import { IdClaimSchema, type SupervisorConfig } from './config.js';
 import { dockerErrorStatusCode } from './docker-client.js';
-import { type SupervisorCaller, requireInternalCaller } from './internal-auth.js';
+import {
+  type SupervisorCaller,
+  isInternalCallerGuard,
+  requireInternalCaller,
+} from './internal-auth.js';
 import {
   SUPERVISOR_OPERATION_BY_ROUTE,
   type SupervisorMetrics,
@@ -108,6 +113,14 @@ export interface CreateServerOptions {
   readonly metrics?: SupervisorMetrics;
 }
 
+/**
+ * The only routes that answer without a caller credential: `GET /healthz` (and the `HEAD` route
+ * Fastify exposes for it), a liveness probe that reveals nothing and changes nothing. Every other
+ * route must carry a `requireInternalCaller` guard — `createServer`'s `onRoute` hook throws at
+ * registration otherwise.
+ */
+export const PUBLIC_ROUTES: readonly string[] = ['/healthz'];
+
 export function createServer(options: CreateServerOptions): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? false,
@@ -123,6 +136,23 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     preHandler: requireInternalCaller(callerTokens, callers),
   });
   const metrics = options.metrics ?? createSupervisorMetrics();
+
+  // Fail closed (R-03 review): a route outside PUBLIC_ROUTES without a caller guard is a
+  // registration error, not an open route — the same rule the kernel's `onRoute` check applies to
+  // its `/internal/` plane (interfaces/internal-auth).
+  app.addHook('onRoute', (routeOptions) => {
+    if (PUBLIC_ROUTES.includes(routeOptions.url)) return;
+    const preHandler = routeOptions.preHandler;
+    const handlers = Array.isArray(preHandler) ? preHandler : preHandler ? [preHandler] : [];
+    if (!handlers.some(isInternalCallerGuard)) {
+      const methods = Array.isArray(routeOptions.method)
+        ? routeOptions.method.join(',')
+        : routeOptions.method;
+      throw new Error(
+        `worker-supervisor: route ${methods} ${routeOptions.url} has no caller guard — attach requireInternal(<callers>) (server.ts)`,
+      );
+    }
+  });
 
   // Leftover 87: echo the id, and count every container-lifecycle call by outcome and latency.
   app.addHook('onRequest', (request, reply, done) => {
@@ -311,8 +341,11 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     }
   });
 
+  // R-03 review: the kernel's TaskSupervisorClient (`terminate`, `status`) is the only caller of
+  // these two; open, any `control`-network peer could kill any Task container.
   app.post<{ Params: { workerRunId: string } }>(
     '/task/:workerRunId/terminate',
+    requireInternal('kernel'),
     async (request, reply) => {
       if (!taskService) {
         reply.code(501);
@@ -336,19 +369,25 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     },
   );
 
-  app.get<{ Params: { workerRunId: string } }>('/task/:workerRunId', async (request, reply) => {
-    if (!taskService) {
-      reply.code(501);
-      return { error: { code: 'not_implemented', message: 'Task mode is not wired up' } };
-    }
-    const status = await taskService.status(request.params.workerRunId);
-    if (!status) {
-      reply.code(404);
-      return { error: { code: 'not_found', message: 'no Task container for this workerRunId' } };
-    }
-    reply.code(200);
-    return status;
-  });
+  app.get<{ Params: { workerRunId: string } }>(
+    '/task/:workerRunId',
+    requireInternal('kernel'),
+    async (request, reply) => {
+      if (!taskService) {
+        reply.code(501);
+        return { error: { code: 'not_implemented', message: 'Task mode is not wired up' } };
+      }
+      const status = await taskService.status(request.params.workerRunId);
+      if (!status) {
+        reply.code(404);
+        return {
+          error: { code: 'not_found', message: 'no Task container for this workerRunId' },
+        };
+      }
+      reply.code(200);
+      return status;
+    },
+  );
 
   return app;
 }

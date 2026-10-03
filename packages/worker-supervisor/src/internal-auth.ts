@@ -1,6 +1,6 @@
 /**
- * internal-auth: gates `POST /task/spawn` and every `/resident/*` route behind the same internal-
- * plane credential contract the kernel enforces for its own `/internal/*` plane
+ * internal-auth: gates every route but `GET /healthz` behind the same internal-plane credential
+ * contract the kernel enforces for its own `/internal/*` plane
  * (`packages/kernel/src/interfaces/internal-auth/internal-auth.ts`) and `@nexttime/shared`'s
  * `internal-token.ts` defines. Lane-6 review P1-3: this service is `control`-network only
  * (docker-compose.yml — unlike the kernel/llm-proxy/egress-proxy, it is never on `workers`, so no
@@ -35,9 +35,11 @@
  *
  * Fail-closed: a caller whose token is `undefined` (no file configured) matches nothing, so with
  * neither configured every guarded request is rejected — same as the kernel's guard when it
- * starts without a configured root. `POST /task/:workerRunId/terminate`, `GET /task/:workerRunId`,
- * and `GET /healthz` are intentionally left unguarded (not named in the P1-3 fix), matching the
- * review's own scoping.
+ * starts without a configured root. Every route is guarded except `GET /healthz`: `server.ts`
+ * registers an `onRoute` hook (`isInternalCallerGuard`) that refuses any other route without a
+ * guard, so a new route cannot ship open (R-03 review: `POST /task/:workerRunId/terminate` and
+ * `GET /task/:workerRunId` used to be left open, letting any `control`-network peer kill any Task
+ * container).
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -122,6 +124,15 @@ function tokenMatches(presented: string, expected: Buffer): boolean {
 
 const UNAUTHORIZED_BODY = { error: { code: 'unauthorized', message: 'unauthorized' } } as const;
 
+/** Every function `requireInternalCaller` has built — what `isInternalCallerGuard` checks. */
+const callerGuards = new WeakSet<object>();
+
+/** Whether `handler` is a guard `requireInternalCaller` built — `server.ts`'s `onRoute` check that
+ *  every non-public route carries one. */
+export function isInternalCallerGuard(handler: unknown): boolean {
+  return typeof handler === 'function' && callerGuards.has(handler);
+}
+
 /**
  * Builds a Fastify `preHandler` that requires `Authorization: Bearer <token>` matching the
  * credential of one of `allowed` (from `tokens`). Every rejection — no header, no match, or a
@@ -138,7 +149,7 @@ export function requireInternalCaller(
     const token = tokens[caller];
     return token !== undefined ? [Buffer.from(token, 'utf8')] : [];
   });
-  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const guard = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const presented = bearerToken(request.headers.authorization);
     let ok = false;
     if (presented !== undefined) {
@@ -151,4 +162,6 @@ export function requireInternalCaller(
     reply.header('www-authenticate', 'Bearer');
     await reply.send(UNAUTHORIZED_BODY);
   };
+  callerGuards.add(guard);
+  return guard;
 }
