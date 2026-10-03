@@ -159,7 +159,7 @@ export async function setAgentProfile(
 
 // -------------------------------------------------------------------------------------------
 // AgentPolicy — at most one row per workspace; absent = the compiled-in defaults below (S3.13's
-// own defaults list: "[]、null、true、2000、[]、[]、false").
+// own defaults list: "[]、null、true、2000、[]、[]、false", the last one flipped to true by D-16).
 // -------------------------------------------------------------------------------------------
 
 interface AgentPolicyDbRow {
@@ -196,7 +196,10 @@ function mapAgentPolicyRow(row: AgentPolicyDbRow): AgentPolicyRow {
 }
 
 /** The compiled-in defaults projected when no `agent_policies` row exists yet for `workspaceId`
- *  (S3.13's own defaults list, verbatim). */
+ *  (S3.13's own defaults list, except `allowMemberAutoApproveLow`: R-21 / D-16 made it an
+ *  enforced narrowing and flipped its default to `true` in the same change — `false` here would
+ *  turn off low-blast-radius auto-approval in every workspace without a policy row. The column
+ *  default flipped with it, migration governance/0016). */
 export function defaultAgentPolicy(workspaceId: string): AgentPolicyRow {
   return {
     workspaceId,
@@ -206,7 +209,7 @@ export function defaultAgentPolicy(workspaceId: string): AgentPolicyRow {
     maxPromptAddendumChars: 2000,
     allowedSkills: [],
     allowedGatekeepers: [],
-    allowMemberAutoApproveLow: false,
+    allowMemberAutoApproveLow: true,
     updatedBy: null,
     updatedAt: null,
   };

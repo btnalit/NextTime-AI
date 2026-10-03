@@ -105,7 +105,9 @@ export function useActionCards(
     // only source of the kind tag here. Without it — a push that outran persistence, a card
     // this closure no longer sees — there is nothing to write a rule for; say so instead of
     // calling `set_auto_approved_action_kind` with `actionKindTag: undefined`.
-    if (!card) {
+    // R-20 / D-15: the rule is keyed by (gate, action kind) — without the gate there is nothing to
+    // key it by either.
+    if (!card || card.gatekeeperId === '') {
       toast.push({
         tone: 'warn',
         title: t(
@@ -113,22 +115,25 @@ export function useActionCards(
           'Approved, but the auto-approval rule was not written',
         ),
         description: t(
-          '这个请求的动作种类尚未到达此对话。',
-          'The action kind of this request is not known to this chat yet.',
+          '这个请求的门与动作种类尚未到达此对话。',
+          'The gate and action kind of this request are not known to this chat yet.',
         ),
       });
       return;
     }
     try {
-      await http.call('set_auto_approved_action_kind', { actionKindTag: card.actionKindTag });
+      await http.call('set_auto_approved_action_kind', {
+        gatekeeperId: card.gatekeeperId,
+        actionKindTag: card.actionKindTag,
+      });
       // S8 W4 i18n baseline: was a raw un-t()'d template literal splicing the enum value
       // (`actionKindTag`) straight into glued zh/en text — `humanizeKind` (same helper
       // `ApprovalQueuePage`'s own toast already uses for this) instead of the raw tag.
       toast.push({
         tone: 'info',
         title: t(
-          `今后将自动批准 ${humanizeKind(card.actionKindTag)}`,
-          `Will be auto-approved from now on: ${humanizeKind(card.actionKindTag)}`,
+          `今后此门上的 ${humanizeKind(card.actionKindTag)} 将对所有发起人自动批准`,
+          `From now on ${humanizeKind(card.actionKindTag)} on this gate is auto-approved for every requester`,
         ),
       });
     } catch (err) {

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   type ActionCardData,
   DECIDABLE_STATUS,
@@ -7,6 +8,7 @@ import {
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -54,6 +56,10 @@ export function ActionRequestCard({
   canAlwaysAllow,
 }: ActionRequestCardProps) {
   const t = useT();
+  // The reason typed when "总是允许" was clicked, while its confirm is open (null = closed).
+  const [pendingAlwaysAllow, setPendingAlwaysAllow] = useState<{
+    readonly reason: string | undefined;
+  } | null>(null);
   const status = card.status ?? DECIDABLE_STATUS;
   const outcome = (
     <div className="system-status-line" data-testid="action-outcome" data-status={status}>
@@ -80,63 +86,93 @@ export function ActionRequestCard({
   const decidable = isDecidable(card.status);
   const blocking = card.awaitDecision && decidable;
   const blastRadius = card.blastRadius ?? FALLBACK_BLAST_RADIUS;
-  // Kernel I8: a `high` blast radius can never be auto-approved — no rule to offer.
-  const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high';
+  // Kernel I8: a `high` blast radius can never be auto-approved — no rule to offer. R-20 / D-15:
+  // the rule is keyed by (gate, action kind), so a card whose gate is not known offers none.
+  const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high' && card.gatekeeperId !== '';
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
+
+  const approvalCard = (
+    <ApprovalCard
+      actionRequestId={card.actionRequestId}
+      actionKind={card.actionKindTag}
+      blastRadius={blastRadius}
+      target={<span className="mono">{card.resourceScope ?? '—'}</span>}
+      gatekeeper={card.gatekeeperId ? { id: card.gatekeeperId } : undefined}
+      onBehalfOf={card.onBehalfOf !== undefined ? { id: card.onBehalfOf } : undefined}
+      policySummary={card.policyDecision ? card.policyDecision : undefined}
+      approvalsHref={hrefs.approval(card.actionRequestId)}
+      readOnly={!decidable}
+      onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
+      onReject={(reason) => onReject(card.actionRequestId, reason)}
+      onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
+      testId="action-request-card"
+    >
+      {card.description && card.description !== card.title ? (
+        <p className="pre-wrap text-2">{card.description}</p>
+      ) : null}
+      {card.actorRuntime ? (
+        <div className="row-wrap text-small">
+          <span className="text-3">{t('运行时', 'Runtime')}</span>
+          <span className="tag">{card.actorRuntime}</span>
+        </div>
+      ) : null}
+      {hasParams && card.params ? (
+        <div className="stack-s">
+          <span className="section-title">{t('参数', 'Parameters')}</span>
+          <pre className="code-block params-block">{prettyJson(redactSensitive(card.params))}</pre>
+        </div>
+      ) : null}
+      {card.simulated !== undefined ? (
+        <div className="stack-s">
+          <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
+          <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
+        </div>
+      ) : null}
+      {blocking ? (
+        <Notice tone="warn">
+          {t('等待你的决定，Worker 已阻塞。', 'Awaiting your decision — the Worker is blocked.')}
+        </Notice>
+      ) : null}
+    </ApprovalCard>
+  );
 
   return (
     <div
       className={`action-card${blocking ? ' action-card-blocking' : ''}`}
       data-action-request-id={card.actionRequestId}
     >
-      <ApprovalCard
-        actionRequestId={card.actionRequestId}
-        actionKind={card.actionKindTag}
-        blastRadius={blastRadius}
-        target={<span className="mono">{card.resourceScope ?? '—'}</span>}
-        gatekeeper={card.gatekeeperId ? { id: card.gatekeeperId } : undefined}
-        onBehalfOf={card.onBehalfOf !== undefined ? { id: card.onBehalfOf } : undefined}
-        policySummary={card.policyDecision ? card.policyDecision : undefined}
-        approvalsHref={hrefs.approval(card.actionRequestId)}
-        readOnly={!decidable}
-        onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
-        onReject={(reason) => onReject(card.actionRequestId, reason)}
-        onAlwaysAllow={
-          offerAlwaysAllow
-            ? (reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: true })
-            : undefined
-        }
-        testId="action-request-card"
-      >
-        {card.description && card.description !== card.title ? (
-          <p className="pre-wrap text-2">{card.description}</p>
-        ) : null}
-        {card.actorRuntime ? (
-          <div className="row-wrap text-small">
-            <span className="text-3">{t('运行时', 'Runtime')}</span>
-            <span className="tag">{card.actorRuntime}</span>
-          </div>
-        ) : null}
-        {hasParams && card.params ? (
-          <div className="stack-s">
-            <span className="section-title">{t('参数', 'Parameters')}</span>
-            <pre className="code-block params-block">
-              {prettyJson(redactSensitive(card.params))}
-            </pre>
-          </div>
-        ) : null}
-        {card.simulated !== undefined ? (
-          <div className="stack-s">
-            <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
-            <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
-          </div>
-        ) : null}
-        {blocking ? (
-          <Notice tone="warn">
-            {t('等待你的决定，Worker 已阻塞。', 'Awaiting your decision — the Worker is blocked.')}
-          </Notice>
-        ) : null}
-      </ApprovalCard>
+      {/* R-20 / D-15: "总是允许" writes a rule that outlives this request and covers every
+          requester of this gate's action kind — it always goes through a confirm that says so. */}
+      <Confirm
+        tier="medium"
+        open={pendingAlwaysAllow !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingAlwaysAllow(null);
+        }}
+        anchor={approvalCard}
+        title={t(
+          `批准并总是允许 ${card.actionKindTag}`,
+          `Approve and always allow ${card.actionKindTag}`,
+        )}
+        description={t(
+          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
+          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
+        )}
+        target={card.actionKindTag}
+        impact={[
+          `${t('门', 'Gatekeeper')}: ${card.gatekeeperId}`,
+          `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后', 'this gate · every requester · from now on')}`,
+        ]}
+        confirmLabel={t('批准并总是允许', 'Approve and always allow')}
+        danger
+        onConfirm={async () => {
+          await onApprove(card.actionRequestId, {
+            reason: pendingAlwaysAllow?.reason,
+            alwaysAllow: true,
+          });
+        }}
+        testId="action-card-always-allow-confirm"
+      />
       {error !== null && error !== undefined ? <ErrorBanner error={error} /> : null}
       {outcome}
     </div>

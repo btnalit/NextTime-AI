@@ -914,14 +914,15 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     // S3.13 regression guard (found in CI, not reproducible on a machine with no local
     // Postgres): an earlier version of this feature fed the *resolved* `effective.autoApproveLow`
-    // into the policy engine's narrowing check — which folds in `AgentPolicy
-    // .allowMemberAutoApproveLow`'s own compiled-in-`false` default — so *every* workspace with no
-    // `agent_policies` row (i.e. every workspace that predates S3.13, including every other test
-    // in this file) got low-blast-radius auto-approval silently disabled platform-wide the moment
-    // that code ran. These two tests pin both halves of the fix: a principal with no AgentProfile
-    // row at all (every test above this one) keeps the pre-S3.13 behavior; only a principal whose
-    // own AgentProfile explicitly narrows `autoApproveLow: false` sees `request_action` require
-    // approval on an otherwise-auto-approved, low-blast-radius Operation.
+    // into the policy engine's narrowing check while `AgentPolicy.allowMemberAutoApproveLow`'s
+    // compiled-in default was `false` — so *every* workspace with no `agent_policies` row (every
+    // other test in this file included) got low-blast-radius auto-approval silently disabled. R-21
+    // / D-16 now does feed the resolved value (the owner's policy is an enforced narrowing) and
+    // flipped that default to `true` in the same change. These tests pin all of it: a principal
+    // with no AgentProfile row and no policy row keeps auto-approval; a principal whose own
+    // AgentProfile says `false`, or any principal in a workspace whose AgentPolicy says `false`,
+    // sees `request_action` require approval on an otherwise-auto-approved, low-blast-radius
+    // Operation.
     it('S3.13: a principal whose own AgentProfile explicitly sets autoApproveLow:false has an otherwise-auto-approved low-blast-radius request narrowed to require_approval', async () => {
       const narrowedMemberId = await adminInsertPrincipal('member-narrowed-auto-approve', 'member');
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -985,6 +986,57 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
+    });
+
+    it('R-21 / D-16: the AgentPolicy allowMemberAutoApproveLow:false narrows every requester — no profile row, or a stored profile true, alike', async () => {
+      const noProfileId = await adminInsertPrincipal('member-policy-narrowed', 'member');
+      const optedInId = await adminInsertPrincipal('member-policy-narrowed-opted-in', 'member');
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        for (const principalId of [noProfileId, optedInId]) {
+          await grantCapability(client, workspaceId, {
+            principalId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: ownerId,
+          });
+        }
+        // Stored while the policy still allowed it.
+        await setAgentProfile(client, workspaceId, optedInId, ownerId, { autoApproveLow: true });
+        await setAgentPolicy(client, workspaceId, ownerId, { allowMemberAutoApproveLow: false });
+      });
+
+      const pendingIds: string[] = [];
+      try {
+        for (const [principalId, qty] of [
+          [noProfileId, 4],
+          [optedInId, 5],
+        ] as const) {
+          const before = transport.calls[AUTO_OP.name] ?? 0;
+          const result = (await dispatchCapability(
+            { pool },
+            humanCaller(workspaceId, principalId, 'member'),
+            'request_action',
+            { gatekeeperId, operation: AUTO_OP.name, params: { qty } },
+          )) as { status: string; id: string };
+          pendingIds.push(result.id);
+          expect(result.status).toBe('pending_approval'); // the owner's narrowing applies
+          expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called
+        }
+      } finally {
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          await setAgentPolicy(client, workspaceId, ownerId, { allowMemberAutoApproveLow: true });
+          // Same cleanup convention as the S3.13 test above: an unresolved pending row would block
+          // every later AUTO_OP on this Gatekeeper behind it (drainer ordering).
+          for (const actionRequestId of pendingIds) {
+            await rejectActionRequest(client, workspaceId, {
+              actionRequestId,
+              approverPrincipalId: ownerId,
+              approverRole: 'owner',
+            });
+          }
+        });
+        await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      }
     });
 
     // P2-2 fix (review job 652a4abc): phase 2's inline execution now routes through the

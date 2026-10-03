@@ -76,10 +76,13 @@ export type CapabilityGrantWire = z.infer<typeof CapabilityGrantWireSchema>;
  *  `actionKindTag` at this wire boundary only — §1's vocabulary table reserves the bare word
  *  `actionKind` for the `{tag,label}` ActionDescription display object; a policy row's action-kind
  *  is the bare tag string, so it gets the tag name (`application/gateway/resource-wire.ts`'s
- *  `toWirePolicy` does the rename; `governance/policy/policies.ts` itself is untouched). */
+ *  `toWirePolicy` does the rename; `governance/policy/policies.ts` itself is untouched).
+ *  `gatekeeperId` (R-20 / D-15): the gate a gate-scoped rule applies to — "Always allow" writes
+ *  only these — or `null` for a workspace-wide rule (every gate; it can only require approval). */
 export const PolicyWireSchema = z
   .object({
     id: z.string(),
+    gatekeeperId: z.string().nullable(),
     actionKindTag: z.string(),
     blastRadius: BlastRadiusSchema.nullable(),
     autoApprove: z.boolean(),

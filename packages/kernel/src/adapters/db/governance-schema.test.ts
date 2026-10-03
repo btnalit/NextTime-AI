@@ -27,6 +27,7 @@ const SHARED_ENUMS_PATH = path.resolve(KERNEL_ROOT, '..', 'shared', 'src', 'enum
 const NEW_MIGRATION_FILES = [
   path.join(MIGRATIONS_DIR, 'governance', '0002_policy.sql'),
   path.join(MIGRATIONS_DIR, 'governance', '0003_action_requests.sql'),
+  path.join(MIGRATIONS_DIR, 'governance', '0016_auto_approval_scope.sql'),
   path.join(MIGRATIONS_DIR, 'task', '0001_tasks.sql'),
   path.join(MIGRATIONS_DIR, 'worker', '0001_worker_definitions.sql'),
 ];
@@ -103,6 +104,7 @@ function extractSharedEnumValues(source: string): Record<string, string[]> {
 
 const EXPECTED_ENUM_CHECKS: ReadonlyArray<{ table: string; column: string; enumExport: string }> = [
   { table: 'policies', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
+  { table: 'gatekeeper_policies', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
   { table: 'capability_grants', column: 'status', enumExport: 'GRANT_STATUS_VALUES' },
   { table: 'action_requests', column: 'status', enumExport: 'ACTION_REQUEST_STATUS_VALUES' },
   { table: 'action_requests', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
