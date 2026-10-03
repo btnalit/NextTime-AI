@@ -174,16 +174,22 @@ function mapFactRefRow(row: FactDbRow): FactRef {
 }
 
 /** Every distinct Fact id `rationale` names, from whichever of `record_decision`'s
- *  `relatedFactIds` or `resolve_conflict`'s `factAId`/`factBId` it carries (module doc comment). */
+ *  `relatedFactIds` or `resolve_conflict`'s `factAId`/`factBId` it carries (module doc comment).
+ *  R-62: only uuid-shaped values — `record_decision` stored ids verbatim until it validated them,
+ *  and a stored `"fact-1"` cast to uuid (`explain`, `id = any($2::uuid[])`) failed the whole read
+ *  with 22P02. Such a value never names a Fact, so it is skipped, not an error. */
 function extractFactIdsFromRationale(rationale: Record<string, unknown> | null): readonly string[] {
   if (!rationale) return [];
   const ids = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value === 'string' && UUID_PATTERN.test(value)) ids.add(value);
+  };
   const related = rationale.relatedFactIds;
   if (Array.isArray(related)) {
-    for (const value of related) if (typeof value === 'string') ids.add(value);
+    for (const value of related) add(value);
   }
-  if (typeof rationale.factAId === 'string') ids.add(rationale.factAId);
-  if (typeof rationale.factBId === 'string') ids.add(rationale.factBId);
+  add(rationale.factAId);
+  add(rationale.factBId);
   return [...ids];
 }
 
@@ -205,6 +211,23 @@ function rationaleFactIdsJsonb(alias: string): string {
          then jsonb_build_array(${col} ->> 'factBId') else '[]'::jsonb end
   )`;
 }
+
+/**
+ * R-62: one rationale Fact id (`jsonb_array_elements_text` alias `column`) as a uuid, or null when
+ * it is not uuid-shaped — a `relatedFactIds: ["fact-1"]` stored before `record_decision` validated
+ * its ids used to fail every `query_decisions{objectId}` / `find_precedents{objectId}` in the
+ * workspace with 22P02, permanently (Decisions are not deletable). The pattern test sits inside
+ * the `case` on purpose: a `where` filter next to a plain `::uuid` cast in the join condition does
+ * not fix the evaluation order — the planner may cast first — while `case` only evaluates the
+ * branch it takes. A null never equals a Fact id, so the row simply contributes no match.
+ */
+function factIdAsUuid(column: string): string {
+  return `(case when ${column} ~ '${UUID_SQL_PATTERN}' then ${column}::uuid end)`;
+}
+
+/** `UUID_PATTERN` for SQL (POSIX regex, case-insensitive by its character classes). */
+const UUID_SQL_PATTERN =
+  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 
 async function getDecisionRow(
   client: PoolClient,
@@ -288,7 +311,7 @@ export async function queryDecisions(
          or exists (
            select 1
            from jsonb_array_elements_text(${rationaleFactIdsJsonb('d')}) fid
-           join links l on l.workspace_id = d.workspace_id and l.id = fid::uuid
+           join links l on l.workspace_id = d.workspace_id and l.id = ${factIdAsUuid('fid')}
            where l.source_object_id = $3 or l.target_object_id = $3
          )
        )
@@ -344,7 +367,7 @@ export async function findPrecedents(
            and exists (
              select 1
              from jsonb_array_elements_text(${rationaleFactIdsJsonb('d')}) fid
-             join links l on l.workspace_id = d.workspace_id and l.id = fid::uuid
+             join links l on l.workspace_id = d.workspace_id and l.id = ${factIdAsUuid('fid')}
              where l.source_object_id = $2 or l.target_object_id = $2
            )
          )

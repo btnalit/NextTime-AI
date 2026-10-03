@@ -129,6 +129,9 @@ export const EXPLAIN_F1: ExplainResultWire = {
   fact: {
     id: 'f-1',
     linkType: 'runs_on',
+    sourceObjectId: 'o-container',
+    targetObjectId: 'o-host',
+    properties: {},
     epistemicStatus: 'observed',
     assertedByPrincipal: {
       id: 'p-collector',

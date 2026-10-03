@@ -77,6 +77,9 @@ describe('explainView', () => {
       fact: {
         id: 'fact-1',
         linkType: 'runs_on',
+        sourceObjectId: 'o-container',
+        targetObjectId: 'o-host',
+        properties: {},
         epistemicStatus: 'observed',
         assertedByPrincipal: principal,
         verifiedByPrincipal: null,

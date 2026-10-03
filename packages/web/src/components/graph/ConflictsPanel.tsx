@@ -1,12 +1,23 @@
-import type { ConflictWire } from '@nexttime/shared';
+import type { ConflictWire, ExplainResultWire } from '@nexttime/shared';
 import { useId, useState } from 'react';
+import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { auditHrefForNode } from '../../lib/graph-route.js';
+import {
+  type ConflictSideView,
+  type ConflictValueRow,
+  conflictSideView,
+  conflictValueRows,
+} from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { Select } from '../kit/select.js';
+import { SkeletonRows } from '../kit/skeleton.js';
+import { useGraphObjects, useResolvedObjects } from './GraphObjectsContext.js';
 
 export interface ConflictsPanelProps {
   readonly http: CapabilityCaller;
@@ -36,6 +47,13 @@ const RESOLUTION_LABEL: Readonly<Record<Resolution, { readonly zh: string; reado
  * later re-observation can still supersede the invalidated side, but not undoable from this UI, so
  * medium — not `low` — is the right tier) collecting the three-way choice `resolveConflictHandler`
  * accepts and a required reason, both written into the audit row and the Decision it also records.
+ *
+ * R-47 (review 2026-10-02, L8b-5): the choice is no longer made blind. "对比并解决 Review" opens
+ * the two Facts side by side — relation, both Objects (each a link to its object view), value
+ * (keys the sides disagree on marked), Source and when it last said so, who asserted it, and a
+ * link to each Fact's full provenance — read from `explain{nodeId}` per side only when the row is
+ * opened, and the Resolve button sits under that comparison, so it is on screen when the choice
+ * is made.
  */
 export function ConflictsPanel({ http, conflicts, loading, onResolved }: ConflictsPanelProps) {
   const t = useT();
@@ -79,19 +97,19 @@ function ConflictRow({
   readonly onResolved: () => void;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
-  const [resolution, setResolution] = useState<Resolution>('keep_a');
-  const [reason, setReason] = useState('');
-  const resolutionId = useId();
-  const reasonId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const compareId = useId();
 
   return (
-    <li className="data-row" data-testid="graph-conflict-row" data-conflict-id={conflict.id}>
+    <li
+      className="data-row graph-conflict-row"
+      data-testid="graph-conflict-row"
+      data-conflict-id={conflict.id}
+    >
       <div className="data-row-main">
         <div className="data-row-title row-wrap">
           <span className="tag mono">{conflict.conflictType}</span>
-          <RefChip kind="object" id={conflict.factAId} name="Fact A" size="s" />
-          <RefChip kind="object" id={conflict.factBId} name="Fact B" size="s" />
+          <span className="text-13 text-text-2">{t('两条事实不一致', 'Two Facts disagree')}</span>
         </div>
         <div className="data-row-meta">
           {conflict.description ? <span>{conflict.description}</span> : null}
@@ -101,76 +119,270 @@ function ConflictRow({
         </div>
       </div>
       <div className="data-row-trailing">
-        <Confirm
-          tier="medium"
-          open={open}
-          onOpenChange={(next) => {
-            setOpen(next);
-            if (!next) {
-              setResolution('keep_a');
-              setReason('');
-            }
-          }}
-          anchor={
-            <Button
-              variant="ghost"
-              size="s"
-              onClick={() => setOpen(true)}
-              data-testid="graph-conflict-resolve"
-            >
-              {t('解决', 'Resolve')}
-            </Button>
-          }
-          title={t('解决这个冲突', 'Resolve this Conflict')}
-          description={t(
-            '选择保留哪一侧（另一侧失效），或让两侧都失效；这个选择与理由会写入审计与一条 Decision。',
-            'Choose which side to keep (the other is invalidated), or invalidate both; the choice and reason are recorded in the audit log and a Decision.',
-          )}
-          confirmLabel={t('解决', 'Resolve')}
-          onConfirm={async () => {
-            const trimmedReason = reason.trim();
-            if (trimmedReason === '') {
-              throw new Error(t('请填写理由。', 'A reason is required.'));
-            }
-            await http.call('resolve_conflict', {
-              conflictId: conflict.id,
-              resolution,
-              reason: trimmedReason,
-            });
-            onResolved();
-          }}
-          testId="graph-conflict-resolve-confirm"
+        <Button
+          variant={expanded ? 'ghost' : 'secondary'}
+          size="s"
+          aria-expanded={expanded}
+          aria-controls={compareId}
+          onClick={() => setExpanded((value) => !value)}
+          data-testid="graph-conflict-review"
         >
-          <Select
-            id={resolutionId}
-            label={t('处理方式', 'Resolution')}
-            value={resolution}
-            onChange={(event) => setResolution(event.target.value as Resolution)}
-          >
-            {(Object.keys(RESOLUTION_LABEL) as Resolution[]).map((value) => (
-              <option key={value} value={value}>
-                {t(RESOLUTION_LABEL[value].zh, RESOLUTION_LABEL[value].en)}
-              </option>
-            ))}
-          </Select>
-          <div className="field">
-            <label className="field-label" htmlFor={reasonId}>
-              {t('理由', 'Reason')}
-              <span className="field-required" aria-hidden>
-                *
-              </span>
-            </label>
-            <textarea
-              id={reasonId}
-              className="textarea"
-              rows={2}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              data-testid="graph-conflict-reason"
+          {expanded ? t('收起', 'Hide') : t('对比并解决', 'Review')}
+        </Button>
+      </div>
+      {expanded ? (
+        <div id={compareId} className="graph-conflict-review" data-testid="graph-conflict-compare">
+          <ConflictComparison http={http} conflict={conflict} onResolved={onResolved} />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** Both sides, read with one `explain` each (cached per Fact by `useCapability`); the Resolve
+ *  control appears only once both have loaded — never offered over a comparison that failed. */
+function ConflictComparison({
+  http,
+  conflict,
+  onResolved,
+}: {
+  readonly http: CapabilityCaller;
+  readonly conflict: ConflictWire;
+  readonly onResolved: () => void;
+}) {
+  const t = useT();
+  const a = useCapability<ExplainResultWire>(http, 'explain', { nodeId: conflict.factAId });
+  const b = useCapability<ExplainResultWire>(http, 'explain', { nodeId: conflict.factBId });
+  const sideA = a.state.status === 'ready' ? conflictSideView(a.state.data) : null;
+  const sideB = b.state.status === 'ready' ? conflictSideView(b.state.data) : null;
+  const values = conflictValueRows(sideA?.properties ?? {}, sideB?.properties ?? {});
+
+  if (a.state.status === 'loading' || b.state.status === 'loading') {
+    return <SkeletonRows count={3} label="Loading Facts" testId="graph-conflict-compare-loading" />;
+  }
+  const failed = a.state.status === 'error' ? a.state : b.state.status === 'error' ? b.state : null;
+  if (failed) {
+    return (
+      <ErrorBanner
+        error={failed.error}
+        title={t('无法读取冲突的两条事实', 'Could not read the two Facts of this Conflict')}
+        onRetry={() => {
+          void a.reload();
+          void b.reload();
+        }}
+        testId="graph-conflict-compare-error"
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="graph-conflict-sides">
+        <ConflictSide label="A" factId={conflict.factAId} side={sideA} values={values} pick="a" />
+        <ConflictSide label="B" factId={conflict.factBId} side={sideB} values={values} pick="b" />
+      </div>
+      <ResolveConflictButton http={http} conflict={conflict} onResolved={onResolved} />
+    </>
+  );
+}
+
+function ConflictSide({
+  label,
+  factId,
+  side,
+  values,
+  pick,
+}: {
+  readonly label: 'A' | 'B';
+  readonly factId: string;
+  readonly side: ConflictSideView | null;
+  readonly values: readonly ConflictValueRow[];
+  readonly pick: 'a' | 'b';
+}) {
+  const t = useT();
+  const { nameOf, hrefFor } = useGraphObjects();
+  useResolvedObjects(side ? [side.sourceObjectId, side.targetObjectId] : []);
+
+  return (
+    <section
+      className="graph-conflict-side"
+      data-testid="graph-conflict-side"
+      data-side={label}
+      aria-label={`Fact ${label}`}
+    >
+      <header className="graph-conflict-side-head">
+        <span className="graph-conflict-side-label">{label}</span>
+        {side ? (
+          <>
+            <span className="mono text-13">{side.linkType}</span>
+            <span className="tag mono" title={t('认知状态', 'Epistemic status')}>
+              {side.epistemicStatus}
+            </span>
+          </>
+        ) : (
+          <span className="text-3 text-13">
+            {t('不是一条事实', 'Not a Fact')} · <span className="mono">{factId}</span>
+          </span>
+        )}
+      </header>
+      {side ? (
+        <>
+          <div className="row-wrap" data-testid="graph-conflict-side-objects">
+            <RefChip
+              kind="object"
+              id={side.sourceObjectId}
+              name={nameOf(side.sourceObjectId)}
+              href={hrefFor(side.sourceObjectId)}
+              size="s"
+            />
+            <span aria-hidden>→</span>
+            <RefChip
+              kind="object"
+              id={side.targetObjectId}
+              name={nameOf(side.targetObjectId)}
+              href={hrefFor(side.targetObjectId)}
+              size="s"
             />
           </div>
-        </Confirm>
-      </div>
-    </li>
+          <dl className="graph-conflict-values" data-testid="graph-conflict-side-values">
+            {values.length === 0 ? (
+              <div className="graph-conflict-value">
+                <dt>{t('值', 'Value')}</dt>
+                <dd className="text-3">{t('无属性', 'No properties')}</dd>
+              </div>
+            ) : (
+              values.map((row) => (
+                <div
+                  key={row.key}
+                  className="graph-conflict-value"
+                  data-differs={row.differs ? 'true' : undefined}
+                >
+                  <dt className="mono">{row.key}</dt>
+                  <dd className="mono">{row[pick]}</dd>
+                </div>
+              ))
+            )}
+          </dl>
+          <div className="data-row-meta" data-testid="graph-conflict-side-source">
+            <span>
+              {t('来源', 'Source')}{' '}
+              {side.source ? (
+                <span className="mono">{side.source.uri ?? side.source.kind}</span>
+              ) : (
+                t('无记录', 'none on file')
+              )}
+            </span>
+            {side.observedAt ? (
+              <span className="meta-sep" title={formatDateTime(side.observedAt)}>
+                {formatRelative(side.observedAt)}
+              </span>
+            ) : null}
+            {side.assertedBy ? (
+              <span className="meta-sep">
+                {t('断言者', 'Asserted by')} {side.assertedBy}
+              </span>
+            ) : null}
+          </div>
+          <a
+            className="text-13"
+            href={auditHrefForNode(factId)}
+            data-testid="graph-conflict-side-provenance"
+          >
+            {t('完整溯源', 'Full provenance')}
+          </a>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function ResolveConflictButton({
+  http,
+  conflict,
+  onResolved,
+}: {
+  readonly http: CapabilityCaller;
+  readonly conflict: ConflictWire;
+  readonly onResolved: () => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [resolution, setResolution] = useState<Resolution>('keep_a');
+  const [reason, setReason] = useState('');
+  const resolutionId = useId();
+  const reasonId = useId();
+
+  return (
+    <div className="row-wrap">
+      <Confirm
+        tier="medium"
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) {
+            setResolution('keep_a');
+            setReason('');
+          }
+        }}
+        anchor={
+          <Button
+            variant="primary"
+            size="s"
+            onClick={() => setOpen(true)}
+            data-testid="graph-conflict-resolve"
+          >
+            {t('解决', 'Resolve')}
+          </Button>
+        }
+        title={t('解决这个冲突', 'Resolve this Conflict')}
+        description={t(
+          '对照上面两条事实，选择保留哪一侧（另一侧失效），或让两侧都失效；这个选择与理由会写入审计与一条 Decision。',
+          'Using the two Facts above, choose which side to keep (the other is invalidated), or invalidate both; the choice and reason are recorded in the audit log and a Decision.',
+        )}
+        confirmLabel={t('解决', 'Resolve')}
+        onConfirm={async () => {
+          const trimmedReason = reason.trim();
+          if (trimmedReason === '') {
+            throw new Error(t('请填写理由。', 'A reason is required.'));
+          }
+          await http.call('resolve_conflict', {
+            conflictId: conflict.id,
+            resolution,
+            reason: trimmedReason,
+          });
+          onResolved();
+        }}
+        testId="graph-conflict-resolve-confirm"
+      >
+        <Select
+          id={resolutionId}
+          label={t('处理方式', 'Resolution')}
+          value={resolution}
+          onChange={(event) => setResolution(event.target.value as Resolution)}
+        >
+          {(Object.keys(RESOLUTION_LABEL) as Resolution[]).map((value) => (
+            <option key={value} value={value}>
+              {t(RESOLUTION_LABEL[value].zh, RESOLUTION_LABEL[value].en)}
+            </option>
+          ))}
+        </Select>
+        <div className="field">
+          <label className="field-label" htmlFor={reasonId}>
+            {t('理由', 'Reason')}
+            <span className="field-required" aria-hidden>
+              *
+            </span>
+          </label>
+          <textarea
+            id={reasonId}
+            className="textarea"
+            rows={2}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            data-testid="graph-conflict-reason"
+          />
+        </div>
+      </Confirm>
+    </div>
   );
 }

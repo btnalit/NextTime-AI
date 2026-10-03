@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  conflictValueRows,
   conflictsByFactId,
   explainToProvenance,
   factDirection,
@@ -137,6 +138,23 @@ describe('facts around an Object', () => {
   });
 });
 
+describe('conflictValueRows (R-47)', () => {
+  it('lists every key of either side, sorted, marking the ones the sides disagree on', () => {
+    expect(
+      conflictValueRows({ port: 80, tags: ['a'], name: 'x' }, { port: 81, name: 'x', tls: true }),
+    ).toEqual([
+      { key: 'name', a: 'x', b: 'x', differs: false },
+      { key: 'port', a: '80', b: '81', differs: true },
+      { key: 'tags', a: '["a"]', b: '—', differs: true },
+      { key: 'tls', a: '—', b: 'true', differs: true },
+    ]);
+  });
+
+  it('two empty values compare equal with no rows', () => {
+    expect(conflictValueRows({}, {})).toEqual([]);
+  });
+});
+
 describe('conflictsByFactId', () => {
   it('indexes both sides of every conflict', () => {
     const conflict = (id: string, a: string, b: string): ConflictWire => ({
@@ -172,6 +190,9 @@ describe('explainToProvenance', () => {
     fact: {
       id: 'f-1',
       linkType: 'runs_on',
+      sourceObjectId: 'o-container',
+      targetObjectId: 'o-host',
+      properties: {},
       epistemicStatus: 'observed',
       assertedByPrincipal: { id: 'p-1', kind: 'service', role: 'member', displayName: 'collector' },
       verifiedByPrincipal: null,

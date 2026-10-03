@@ -1296,7 +1296,8 @@ const epistemicCapabilities: readonly Capability[] = [
       'Observations and their Sources — narrowed to just the Fact’s own Observation when it ' +
       'recorded one (e.g. `submit_observations`), otherwise every Observation the Activity ' +
       'recorded (a bulk collector run or an ad-hoc `assert_fact`/Worker result can mean hundreds ' +
-      'of entries). For a Fact, `fact.humanAttestations` lists every human attestation ' +
+      'of entries). For a Fact, `fact` also carries its two Objects (`sourceObjectId`, ' +
+      '`targetObjectId`) and value (`properties`), and `fact.humanAttestations` lists every human attestation ' +
       '(kind `human_attestation`: a person’s own confirmation — who, when, note, link), which is ' +
       'a person’s word, not machine evidence.',
   },
@@ -1306,17 +1307,21 @@ const epistemicCapabilities: readonly Capability[] = [
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
+    // R-62: Fact / Task ids are uuids, checked here — a stored non-uuid used to break every
+    // `query_decisions` / `find_precedents` by objectId in the workspace (those reads now also
+    // skip such values in rows written before this check).
     paramsSchema: z
       .object({
         summary: z.string(),
-        relatedFactIds: z.array(id).optional(),
-        relatedTaskId: id.optional(),
+        relatedFactIds: z.array(z.string().uuid()).optional(),
+        relatedTaskId: z.string().uuid().optional(),
       })
       .strict(),
     resultSchema: z.object({ id, status: z.string(), turnId: z.string() }).strict(),
     description:
       'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
-      'why), optional `relatedFactIds` (the Facts it rests on) and `relatedTaskId`. Automatically ' +
+      'why), optional `relatedFactIds` (the ids of the Facts it rests on) and `relatedTaskId` — ' +
+      'both uuids as returned by the graph and task tools, else 400 invalid_params. Automatically ' +
       'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
       'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
       'Not for routine observations — only for real choices worth tracing.',

@@ -363,6 +363,72 @@ export function conflictsByFactId(
   return map;
 }
 
+/** R-47 (review L8b-5): one side of a Conflict as a person deciding it needs to see it — what
+ *  the Fact says (its relation, its two Objects, its value) and where it came from — read from
+ *  `explain{nodeId: factId}`. `null` when the explain result is not a Fact. */
+export interface ConflictSideView {
+  readonly factId: string;
+  readonly linkType: string;
+  readonly sourceObjectId: string;
+  readonly targetObjectId: string;
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly epistemicStatus: string;
+  /** The Source that last confirmed the Fact, else the one its Activity observed. */
+  readonly source: { readonly kind: string; readonly uri: string | null } | null;
+  /** When that Source last said so (latest re-confirmation, else the original Observation, else
+   *  the producing Activity's start). */
+  readonly observedAt: string | null;
+  readonly assertedBy: string | null;
+}
+
+export function conflictSideView(result: ExplainResultWire): ConflictSideView | null {
+  const fact = result.fact;
+  if (!fact) return null;
+  const observation = fact.lastObservation ?? result.activity?.observations[0] ?? null;
+  const source = observation?.source ?? null;
+  const asserted = fact.assertedByPrincipal;
+  return {
+    factId: fact.id,
+    linkType: fact.linkType,
+    sourceObjectId: fact.sourceObjectId,
+    targetObjectId: fact.targetObjectId,
+    properties: fact.properties,
+    epistemicStatus: fact.epistemicStatus,
+    source: source ? { kind: source.kind, uri: source.uri } : null,
+    observedAt: observation?.createdAt ?? result.activity?.createdAt ?? null,
+    assertedBy: asserted ? (asserted.displayName ?? asserted.id) : null,
+  };
+}
+
+/** A Fact property value as one line of text: strings verbatim, everything else as JSON, and an
+ *  absent key as `—`. */
+export function formatFactValue(value: unknown): string {
+  if (value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+export interface ConflictValueRow {
+  readonly key: string;
+  readonly a: string;
+  readonly b: string;
+  /** The two sides disagree on this key (one lacks it, or the values differ). */
+  readonly differs: boolean;
+}
+
+/** Both Facts' values key by key (sorted), so the keys the two sides disagree on stand out. */
+export function conflictValueRows(
+  a: Readonly<Record<string, unknown>>,
+  b: Readonly<Record<string, unknown>>,
+): readonly ConflictValueRow[] {
+  const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
+  return keys.map((key) => {
+    const left = formatFactValue(a[key]);
+    const right = formatFactValue(b[key]);
+    return { key, a: left, b: right, differs: left !== right };
+  });
+}
+
 // -------------------------------------------------------------------------------------------
 // explain → ProvenanceChain
 // -------------------------------------------------------------------------------------------
