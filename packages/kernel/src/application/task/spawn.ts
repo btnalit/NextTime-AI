@@ -1,3 +1,4 @@
+import { IllegalTransition, TASK_TRANSITIONS } from '@nexttime/shared';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
@@ -88,7 +89,8 @@ export interface SpawnWorkerRunInput {
  *  Handle on a spawn failure — the caller decides what "failed to even start" means for the Task
  *  (initial spawn: `spawn_failed`; requeue: `worker_failed`, no further retry) and fails it through
  *  `lifecycle.ts`'s `failTaskAndReapWorkerRuns` (R-09), which also best-effort stops a container
- *  the supervisor may have started after the client gave up. */
+ *  the supervisor may have started after the client gave up. Throws `IllegalTransition` before
+ *  creating anything when the Task is already terminal (R-58). */
 export async function spawnWorkerRun(
   deps: TaskRuntimeDeps,
   workspaceId: string,
@@ -107,6 +109,25 @@ export async function spawnWorkerRun(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
     async (client) => {
+      // 2026-10-02 review R-58: never start a WorkerRun under a Task that is already terminal. The
+      // caller read `input.task` earlier (`invoke.ts`'s initial spawn sees it `queued`,
+      // `lifecycle.ts`'s crash retry `running`), and a cancel may have landed since. Checked before
+      // anything is created or the supervisor is called; both callers handle the throw through
+      // `failTaskAndReapWorkerRuns`, which leaves an already-terminal Task as it is.
+      const taskResult = await client.query<{ status: string }>(
+        'select status from tasks where workspace_id = $1 and id = $2',
+        [workspaceId, input.task.id],
+      );
+      const taskStatus = taskResult.rows[0]?.status;
+      if (
+        taskStatus === undefined ||
+        taskStatus === 'completed' ||
+        taskStatus === 'failed' ||
+        taskStatus === 'cancelled'
+      ) {
+        throw new IllegalTransition(TASK_TRANSITIONS.machine, taskStatus ?? 'missing', 'start');
+      }
+
       // One agent principal per (workspace, WorkerDefinition) — resolved/created idempotently
       // before the WorkerRun row exists so its id can be stamped on the row in the same INSERT
       // (agent-principal.ts's own doc comment has the full "why this identity, why not per-run"

@@ -95,18 +95,23 @@ export async function revokeWorkerRunAndDescendants(
  *  `TaskSupervisorClientPort.terminate`'s own idempotency contract) and revokes its Handle tree.
  *  Does **not** touch the Task's own status — callers decide that separately (a terminated
  *  WorkerRun might be immediately requeued under the same Task, or might be the Task's final
- *  outcome). */
+ *  outcome).
+ *
+ *  Returns whether *this* call moved the run to `terminated` (its guarded UPDATE matched) —
+ *  `false` when the run was already terminated or a concurrent call won. 2026-10-02 review R-58:
+ *  `reactToSupervisorStatus`'s crash-retry path requeues only on `true`, so of two reactions to the
+ *  same crashed run only one can spawn the retry. */
 export async function terminateWorkerRunRow(
   client: PoolClient,
   workspaceId: string,
   actorPrincipalId: string,
   workerRunId: string,
   reason: string,
-): Promise<void> {
+): Promise<boolean> {
   const row = await readWorkerRunRow(client, workspaceId, workerRunId);
   if (!row || row.status === 'terminated') {
     if (row) await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
-    return;
+    return false;
   }
 
   // Status-guarded UPDATE + rowCount (leftover 90, docs/STATUS.md §4 — same race class leftover 67
@@ -142,13 +147,13 @@ export async function terminateWorkerRunRow(
         extraAuditPayload: { reason },
       });
       await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
-      return;
+      return true;
     }
     const reread = await readWorkerRunRow(client, workspaceId, workerRunId);
-    if (!reread) return;
+    if (!reread) return false;
     if (reread.status === 'terminated') {
       await revokeWorkerRunAndDescendants(client, workspaceId, workerRunId);
-      return;
+      return false;
     }
     current = reread;
   }
@@ -496,14 +501,39 @@ export async function reactToSupervisorStatus(
     // routing consumer resolves the Task via that WorkerRun's id). Fail it directly instead of
     // spending the one retry on a run that cannot help.
     if (task.retryCount < 1 && task.status !== 'waiting_approval') {
-      await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-        await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'failed');
-        await client.query(
-          'update tasks set retry_count = retry_count + 1 where workspace_id = $1 and id = $2',
-          [workspaceId, task.id],
-        );
-      });
-      await spawnWorkerRunForRetry(deps, workspaceId, onBehalfOf, task, workerRun);
+      // 2026-10-02 review R-58: the reaper tick and a `wait:true` poll can react to the same crash
+      // at once, and a cancel can land between the reads above and here. Both writes are guarded,
+      // and the retry is spawned only when *this* call terminated the run and won the
+      // `retry_count` bump on a Task that is still `running` — so exactly one reaction spawns, and
+      // none spawns under a Task already cancelled or failed. A call that did not terminate the
+      // run leaves the Task to the one that did. A call that terminated it but lost the bump (the
+      // Task moved off `running` meanwhile) fails it like the no-retry branch below — a no-op for
+      // a Task already terminal.
+      const claimedRetry = await withWorkspace(
+        deps.pool,
+        { workspaceId, principalId: onBehalfOf },
+        async (client) => {
+          const moved = await terminateWorkerRunRow(
+            client,
+            workspaceId,
+            onBehalfOf,
+            workerRunId,
+            'failed',
+          );
+          if (!moved) return false;
+          const bumped = await client.query(
+            `update tasks set retry_count = retry_count + 1
+             where workspace_id = $1 and id = $2 and retry_count = $3 and status = 'running'`,
+            [workspaceId, task.id, task.retryCount],
+          );
+          if ((bumped.rowCount ?? 0) === 1) return true;
+          await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed');
+          return false;
+        },
+      );
+      if (claimedRetry) {
+        await spawnWorkerRunForRetry(deps, workspaceId, onBehalfOf, task, workerRun);
+      }
       return;
     }
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {

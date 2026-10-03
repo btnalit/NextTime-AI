@@ -117,6 +117,69 @@ describe('HttpGatekeeperClient', () => {
     ).resolves.toMatchObject({ data: 1 });
   });
 
+  // R-49: the budget covers the response body, not just the headers — an endpoint that answers
+  // its headers and then trickles (or stalls) the body is a timeout, and for `gate/apply` that is
+  // "outcome unknown" (GatekeeperTimeoutError), never a plain failure.
+  it('times out a body that stalls after the headers, for reads and for apply', async () => {
+    let cancelled = 0;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"ok":true,'));
+              // …and never another byte, never closed.
+            },
+            cancel() {
+              cancelled += 1;
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const client = new HttpGatekeeperClient({ fetchImpl, timeoutMs: 20, applyTimeoutMs: 30 });
+    await expect(client.observe('https://example.test', { operation: 'x' })).rejects.toMatchObject({
+      name: 'GatekeeperTimeoutError',
+      path: 'gate/observe',
+    });
+    await expect(
+      client.apply('https://example.test', { operation: 'x', actionRequestId: 'ar-1' }),
+    ).rejects.toMatchObject({ name: 'GatekeeperTimeoutError', path: 'gate/apply' });
+    expect(cancelled).toBe(2);
+  });
+
+  it('refuses a body larger than the cap instead of buffering it', async () => {
+    const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+    let pulls = 0;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pulls += 1;
+              controller.enqueue(chunk); // an endless body
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    const failure = client.health('https://example.test');
+    await expect(failure).rejects.toBeInstanceOf(GatekeeperClientError);
+    await expect(failure).rejects.toMatchObject({ code: 'response_too_large', status: 200 });
+    expect(pulls).toBeLessThan(20);
+  });
+
+  it('maps a non-JSON body to invalid_response with the HTTP status', async () => {
+    const fetchImpl = vi.fn(async () => new Response('<html>bad gateway</html>', { status: 502 }));
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    await expect(client.health('https://example.test')).rejects.toMatchObject({
+      name: 'GatekeeperClientError',
+      code: 'invalid_response',
+      status: 502,
+    });
+  });
+
   it('normalizes the endpoint whether or not it has a trailing slash', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toBe('https://example.test/gate/health');
