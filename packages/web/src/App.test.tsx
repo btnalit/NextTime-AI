@@ -33,6 +33,9 @@ const authApi = vi.hoisted(() => ({
   setWorkspaceCookie: vi.fn(),
 }));
 
+/** R-64: workspaces whose WS `authenticate` the stub kernel refuses. */
+const wsStub = vi.hoisted(() => ({ refusedWorkspaces: new Set<string>() }));
+
 vi.mock('./lib/auth-api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/auth-api.js')>()),
   ...authApi,
@@ -45,7 +48,11 @@ vi.mock('./lib/ws-client.js', async (importOriginal) => {
     async connect(): Promise<void> {
       this.status = 'connected';
     }
-    async authenticate(): Promise<void> {}
+    async authenticate(credential?: { workspaceId?: string }): Promise<void> {
+      if (credential?.workspaceId && wsStub.refusedWorkspaces.has(credential.workspaceId)) {
+        throw new Error('no active membership in the requested workspace');
+      }
+    }
     close(): void {
       this.status = 'closed';
     }
@@ -79,6 +86,9 @@ vi.mock('./lib/ws-client.js', async (importOriginal) => {
     onSessionEnded(): () => void {
       return () => undefined;
     }
+    onResynced(): () => void {
+      return () => undefined;
+    }
   }
   return { ...original, WsClient: StubWsClient };
 });
@@ -106,6 +116,7 @@ beforeEach(() => {
   sessionStorage.clear();
   window.location.hash = '';
   vi.clearAllMocks();
+  wsStub.refusedWorkspaces.clear();
 });
 
 afterEach(cleanup);
@@ -173,6 +184,31 @@ describe('App: 我的账户', () => {
     await screen.findByText('carol');
     // `BindApiKeyForm` renders only when `onBound` is wired (AccountPage.tsx) — C1's second half.
     await screen.findByLabelText(/API key/);
+  });
+
+  it('R-64: a workspace switch the kernel refuses keeps the shell signed in and says why', async () => {
+    authApi.getMe.mockResolvedValue({
+      user: CAROL,
+      memberships: [
+        { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'member' },
+        { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
+      ],
+    });
+    wsStub.refusedWorkspaces.add('ws-2');
+    render(<App />);
+    await screen.findByTestId('nav-agent');
+
+    fireEvent.change(screen.getAllByTestId('workspace-switcher')[0] as HTMLElement, {
+      target: { value: 'ws-2' },
+    });
+
+    await screen.findByText('没能切换到工作区「Beta」');
+    expect(screen.getByText(/no active membership in the requested workspace/)).toBeTruthy();
+    // Still in the shell — not dropped to the login page.
+    expect(screen.getByTestId('nav-agent')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    // The membership list was re-read after the failure.
+    await waitFor(() => expect(authApi.getMe).toHaveBeenCalledTimes(2));
   });
 
   it('cookie user with no workspace → account page: the bind-API-key card is offered there too', async () => {

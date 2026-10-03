@@ -79,12 +79,21 @@ function pushSource(): PushSource & {
   emitPending: (event: ActionPendingPush) => void;
   emitUpdated: (event: ActionUpdatedPush) => void;
   emitTask: (event: TaskUpdatedPush) => void;
+  resync: () => void;
 } {
   const pending = new Set<(event: ActionPendingPush) => void>();
   const updated = new Set<(event: ActionUpdatedPush) => void>();
   const tasks = new Set<(event: TaskUpdatedPush) => void>();
+  const resynced = new Set<() => void>();
   return {
     ...SILENT_PUSH_SOURCE,
+    onResynced: (handler) => {
+      resynced.add(handler);
+      return () => resynced.delete(handler);
+    },
+    resync: () => {
+      for (const fn of resynced) fn();
+    },
     onActionPending: (handler) => {
       pending.add(handler);
       return () => pending.delete(handler);
@@ -224,6 +233,37 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     );
     expect(http.calls.filter((name) => name === 'get_task')).toHaveLength(1);
     expect(http.calls.filter((name) => name === 'list_tasks')).toHaveLength(1);
+  });
+
+  // R-63: a task.updated sent while the socket was down is lost — the reconnect re-reads the list.
+  it('a WS reconnect re-reads the whole list (statuses that changed during the outage)', async () => {
+    const pushes = pushSource();
+    let listed = 0;
+    const http = scriptedHttp({
+      list_tasks: () => {
+        listed += 1;
+        return {
+          items: [
+            listed === 1
+              ? task()
+              : task({ status: 'completed', completedAt: '2026-09-03T00:01:00.000Z' }),
+          ],
+        };
+      },
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, pushes);
+    const row = await screen.findByTestId('task-row');
+    expect(row.querySelector('[data-status]')?.getAttribute('data-status')).toBe('running');
+
+    act(() => pushes.resync());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('task-row').querySelector('[data-status]')?.getAttribute('data-status'),
+      ).toBe('completed'),
+    );
+    expect(http.calls.filter((name) => name === 'list_tasks')).toHaveLength(2);
   });
 });
 

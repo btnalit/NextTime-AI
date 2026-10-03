@@ -3,11 +3,14 @@ import { AccountPage } from './components/AccountPage.js';
 import { RouteBoundary } from './components/RouteBoundary.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { EmptyState } from './components/ui/EmptyState.js';
+import { useToast } from './components/ui/Toast.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
+import { describeError } from './lib/errors.js';
 import { type Translate, useT } from './lib/i18n.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import type { Session } from './session/types.js';
+import type { WorkspaceSwitchFailure } from './session/useSessionMachine.js';
 
 /**
  * Every page below `AccountPage` is `React.lazy` (S8 W1-A5, leftover 49: the main JS chunk was
@@ -157,9 +160,38 @@ export interface RoutedProps {
   readonly onLogout: () => void;
   readonly onSwitchWorkspace: (workspaceId: string, destination?: string) => void;
   readonly switchingWorkspace: boolean;
+  /** R-64: the last switch that failed — the current session stayed; announced once per failure. */
+  readonly workspaceSwitchFailure?: WorkspaceSwitchFailure | null;
+  /** R-64: re-read the signed-in user's own memberships (`/api/auth/me`). */
+  readonly onMembershipsChanged?: () => void;
   readonly onUserChanged: (user: WireUser) => void;
   readonly onKeyBound: (result: MeResult) => void;
   readonly onClaimed: (result: SessionResult) => void;
+}
+
+/** R-64: a failed workspace switch keeps the current session; this says so, once per failure (the
+ *  toast replaces itself by key), with the kernel's own reason. */
+function useWorkspaceSwitchFailureToast(
+  failure: WorkspaceSwitchFailure | null,
+  generation: number,
+  t: Translate,
+): void {
+  const toast = useToast();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one toast per failure (`seq`), not per re-render or language switch.
+  useEffect(() => {
+    if (!failure || failure.generation !== generation) return;
+    const name = failure.workspaceName ?? failure.workspaceId;
+    toast.push({
+      tone: 'danger',
+      key: 'workspace-switch-failed',
+      title: t(`没能切换到工作区「${name}」`, `Could not switch to workspace "${name}"`),
+      description: t(
+        `仍在当前工作区。${describeError(failure.error).message}`,
+        `You are still in the current workspace. ${describeError(failure.error).message}`,
+      ),
+      durationMs: 10_000,
+    });
+  }, [failure?.seq]);
 }
 
 /** The signed-in shell: `AppShell` around the page `route` selects. */
@@ -169,6 +201,8 @@ export function Routed({
   onLogout,
   onSwitchWorkspace,
   switchingWorkspace,
+  workspaceSwitchFailure,
+  onMembershipsChanged,
   onUserChanged,
   onKeyBound,
   onClaimed,
@@ -176,6 +210,7 @@ export function Routed({
   const t = useT();
   const active = sectionOf(route);
   usePushToasts(session.ws, active);
+  useWorkspaceSwitchFailureToast(workspaceSwitchFailure ?? null, session.generation, t);
   const openApproval = (id: string) => navigate(hrefs.approval(id));
   const openTask = (id: string) => navigate(hrefs.task(id));
 
@@ -331,6 +366,7 @@ export function Routed({
         <PlatformWorkspacesPage
           http={session.http}
           memberships={session.memberships ?? []}
+          onMembershipsChanged={onMembershipsChanged}
           onOpenWorkspaceConfig={(workspaceId) => {
             // Already in it (the switcher would no-op) — just go to the owner pages.
             if (workspaceId === session.selectedWorkspaceId) navigate(hrefs.members());
