@@ -279,10 +279,11 @@ export async function runOnce(options: RunOptions): Promise<RunSummary> {
       const phase4 = await collectRagflowObservations({
         kernelClient,
         gatekeeperId: config.ragflowGatekeeperId,
-        logger,
       });
       // S5.2: submitted even when empty — an empty batch with a window is how a knowledge base
-      // that lost every Document gets its Facts retired. A collection failure above throws past
+      // that lost every Document gets its Facts retired. R-70: the window is committed only after
+      // every page of `kb.list` and of every KnowledgeBase's `kb.documents` was read — any failed
+      // or inconsistent read (including RAGFlow's own non-zero `code` in a 200 body) throws past
       // this call, so a gate that could not be read never declares anything absent.
       phase4Result = await kernelClient.submitObservations({
         sourceId,

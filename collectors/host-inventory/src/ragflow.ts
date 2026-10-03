@@ -28,21 +28,27 @@ import type { IngestObservation } from './types.js';
  * `gatekeepers/docker`'s `Container`-typed observe facts against this collector's own
  * differently-scoped `Container` Observations).
  *
- * **No pagination loop**: `kb.list`/`kb.documents` both accept RAGFlow's own `page`/`page_size`
- * params; this module calls each once with a generously-sized `page_size`
- * (`DEFAULT_PAGE_SIZE`) rather than looping pages — a known, documented limitation (README /
- * `docs/runbooks/host-collector.md`), not a silent gap: a workspace with more KnowledgeBases or
- * Documents than one page holds gets a partial observation, not a crash.
+ * **All or nothing (R-70)**: `run.ts` submits this phase with an S5.2 observation window — "this is
+ * this Source's complete view of KnowledgeBase / Document" — so the kernel retires every such Fact
+ * this run did not re-observe. "Could not read" must therefore never look like "does not exist".
+ * Every page of `kb.list`, and every page of every KnowledgeBase's `kb.documents`, is read
+ * (`readAllPages`); anything short of that throws `RagflowReadError` (or the kernel client's own
+ * error) — a non-zero RAGFlow `code` (RAGFlow reports its errors in a `200` body), a response not
+ * shaped like the listing, a listing that changed while it was being read, one that never ends —
+ * and `run.ts` then submits nothing for this phase and commits no window: the existing Facts stay
+ * as they are until a later run reads everything.
  *
  * **Non-fatal**: unlike Docker (this collector's hard-required source), a RAGFlow Gatekeeper being
  * unreachable, unregistered, or erroring must not fail this collector's whole run — `run.ts`'s own
- * phase 4 wraps this module's entry point in a try/catch and logs a warning instead. Within one
- * successful `kb.list`, a single KnowledgeBase's `kb.documents` call failing degrades to "that
- * KnowledgeBase, zero Documents" rather than dropping the whole run.
+ * phase 4 wraps this module's entry point in a try/catch and logs a warning instead.
  */
 
-export interface RagflowLogger {
-  warn(message: string, detail?: Record<string, unknown>): void;
+/** Anything short of a complete read of the RAGFlow listings (R-70) — see this module's doc. */
+export class RagflowReadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RagflowReadError';
+  }
 }
 
 // Raw RAGFlow response shapes — verified against `gatekeepers/ragflow/manifest.json`'s own
@@ -67,32 +73,28 @@ interface RawDocument {
   readonly chunk_count?: number;
 }
 
-interface RagflowEnvelope<T> {
+interface RagflowEnvelope {
   readonly code: number;
-  readonly data?: T;
-  readonly message?: string;
+  readonly data?: unknown;
+  readonly message?: unknown;
 }
 
 /** Unwraps RAGFlow's own `{code, data}` envelope (`observe_operation`'s `data` field is this raw,
  *  untouched — `gatekeepers/ragflow/README.md`'s own documented limitation: "RAGFlow's own
- *  `{code, data}` error envelope is invisible to the protocol"). A non-zero `code`, or a response
- *  that is not even shaped like RAGFlow's envelope, logs a warning and yields `undefined` — the
- *  caller treats that the same as "nothing observed", never a thrown error. */
-function unwrapEnvelope<T>(raw: unknown, operation: string, logger: RagflowLogger): T | undefined {
+ *  `{code, data}` error envelope is invisible to the protocol"). R-70: a non-zero `code`, or a
+ *  response not even shaped like RAGFlow's envelope, throws — it is a failed read, not an empty one. */
+function unwrapEnvelope(raw: unknown, what: string): RagflowEnvelope {
   if (!raw || typeof raw !== 'object' || typeof (raw as { code?: unknown }).code !== 'number') {
-    logger.warn('ragflow: unexpected observe_operation response shape', { operation });
-    return undefined;
+    throw new RagflowReadError(`ragflow: ${what}: unexpected observe_operation response shape`);
   }
-  const envelope = raw as RagflowEnvelope<T>;
+  const envelope = raw as RagflowEnvelope;
   if (envelope.code !== 0) {
-    logger.warn('ragflow: operation returned a non-zero RAGFlow code', {
-      operation,
-      code: envelope.code,
-      message: envelope.message,
-    });
-    return undefined;
+    const message = typeof envelope.message === 'string' ? envelope.message.slice(0, 200) : '';
+    throw new RagflowReadError(
+      `ragflow: ${what}: RAGFlow answered code ${envelope.code}${message ? ` (${message})` : ''}`,
+    );
   }
-  return envelope.data;
+  return envelope;
 }
 
 interface KnowledgeBaseWithDocuments {
@@ -156,56 +158,129 @@ export function buildRagflowObservations(
   return observations;
 }
 
-/** One generously-sized page rather than a pagination loop — see this module's own doc comment. */
-const DEFAULT_PAGE_SIZE = 1000;
+/** RAGFlow's current server answers at most 100 items per page on the document list and silently
+ *  falls back to 10 for any larger `page_size` — the former single 1000-sized page therefore saw
+ *  ten Documents per KnowledgeBase, and the window retired the rest (R-70). Used for both listings. */
+const RAGFLOW_PAGE_SIZE = 100;
+/** A listing still not ended after this many pages is a failed read (e.g. a server ignoring `page`). */
+const MAX_PAGES = 1000;
+
+interface ListingPage {
+  readonly items: readonly unknown[];
+  /** The listing's own total, when RAGFlow reports one. */
+  readonly total: number | undefined;
+}
+
+/** RAGFlow's total for a listing: `total` (the document list), or `total_datasets` (the dataset
+ *  list, and the document list as RAGFlow's own HTTP reference documents it). */
+function reportedTotal(holder: unknown): number | undefined {
+  if (!holder || typeof holder !== 'object') return undefined;
+  const { total, total_datasets: totalDatasets } = holder as {
+    total?: unknown;
+    total_datasets?: unknown;
+  };
+  if (typeof total === 'number') return total;
+  if (typeof totalDatasets === 'number') return totalDatasets;
+  return undefined;
+}
+
+/**
+ * R-70: reads one listing page by page (1-based) until it ends — an empty page, or, when RAGFlow
+ * reports a total, once that many distinct items were read. Throws `RagflowReadError` unless the
+ * read is complete and consistent:
+ *   - an item that is not an object with a non-empty string `id` (nothing to key it by — and an
+ *     item left out would be retired);
+ *   - a total that differs between pages (the listing changed mid-read, so an offset page may have
+ *     skipped an item) or from the number of distinct items read;
+ *   - a page holding only items already read (paging not honoured), or no end after `MAX_PAGES`.
+ */
+async function readAllPages<T extends { readonly id: string }>(
+  what: string,
+  fetchPage: (page: number) => Promise<ListingPage>,
+): Promise<T[]> {
+  const byId = new Map<string, T>();
+  let firstTotal: number | undefined;
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const { items, total } = await fetchPage(page);
+    if (page === 1) {
+      firstTotal = total;
+    } else if (total !== firstTotal) {
+      throw new RagflowReadError(`ragflow: ${what}: the listing changed while it was being read`);
+    }
+    let added = 0;
+    for (const item of items) {
+      const id =
+        typeof item === 'object' && item !== null ? (item as { id?: unknown }).id : undefined;
+      if (typeof id !== 'string' || id === '') {
+        throw new RagflowReadError(`ragflow: ${what}: an item without an id on page ${page}`);
+      }
+      if (!byId.has(id)) {
+        byId.set(id, item as T);
+        added += 1;
+      }
+    }
+    if (items.length === 0 || (total !== undefined && byId.size >= total)) {
+      if (total !== undefined && byId.size !== total) {
+        throw new RagflowReadError(
+          `ragflow: ${what}: read ${byId.size} items, the listing reports ${total}`,
+        );
+      }
+      return [...byId.values()];
+    }
+    if (added === 0) {
+      throw new RagflowReadError(
+        `ragflow: ${what}: page ${page} held only items already read — paging not honoured`,
+      );
+    }
+  }
+  throw new RagflowReadError(`ragflow: ${what}: no end after ${MAX_PAGES} pages`);
+}
 
 export interface CollectRagflowObservationsInput {
   readonly kernelClient: KernelClient;
   readonly gatekeeperId: string;
-  readonly logger: RagflowLogger;
 }
 
-/** Calls `kb.list` then, per KnowledgeBase, `kb.documents` — both via `observe_operation` — and
- *  builds the resulting `IngestObservation[]`. Lets a `kb.list` failure (network/kernel/gate error,
- *  a thrown `KernelClientError`) propagate to the caller (`run.ts`'s phase 4 wraps this whole call
- *  and treats any failure as "skip the RAGFlow phase this run" — this module's own doc comment); a
- *  per-KnowledgeBase `kb.documents` failure degrades to zero Documents for that one KnowledgeBase
- *  instead of failing the whole call. */
+/** Calls `kb.list` then, per KnowledgeBase, `kb.documents` — both via `observe_operation`, every
+ *  page of each (`readAllPages`) — and builds the resulting `IngestObservation[]`. Any failure — a
+ *  thrown `KernelClientError` (network / kernel / gate) or a `RagflowReadError` — propagates to the
+ *  caller and nothing is returned: `run.ts`'s phase 4 then skips this phase for this run, window
+ *  included (this module's own doc comment). */
 export async function collectRagflowObservations(
   input: CollectRagflowObservationsInput,
 ): Promise<IngestObservation[]> {
-  const { kernelClient, gatekeeperId, logger } = input;
+  const { kernelClient, gatekeeperId } = input;
 
-  const kbListResult = await kernelClient.observeOperation({
-    gatekeeperId,
-    operation: 'kb.list',
-    params: { page_size: DEFAULT_PAGE_SIZE },
+  const knowledgeBases = await readAllPages<RawKnowledgeBase>('kb.list', async (page) => {
+    const result = await kernelClient.observeOperation({
+      gatekeeperId,
+      operation: 'kb.list',
+      params: { page, page_size: RAGFLOW_PAGE_SIZE },
+    });
+    const envelope = unwrapEnvelope(result.data, 'kb.list');
+    if (!Array.isArray(envelope.data)) {
+      throw new RagflowReadError('ragflow: kb.list: `data` is not a list');
+    }
+    return { items: envelope.data, total: reportedTotal(envelope) };
   });
-  const knowledgeBases =
-    unwrapEnvelope<RawKnowledgeBase[]>(kbListResult.data, 'kb.list', logger) ?? [];
 
   const withDocuments: KnowledgeBaseWithDocuments[] = [];
   for (const kb of knowledgeBases) {
-    if (!kb.id) continue;
-    try {
-      const docsResult = await kernelClient.observeOperation({
+    const what = `kb.documents ${kb.id}`;
+    const documents = await readAllPages<RawDocument>(what, async (page) => {
+      const result = await kernelClient.observeOperation({
         gatekeeperId,
         operation: 'kb.documents',
-        params: { dataset_id: kb.id, page_size: DEFAULT_PAGE_SIZE },
+        params: { dataset_id: kb.id, page, page_size: RAGFLOW_PAGE_SIZE },
       });
-      const docsData = unwrapEnvelope<{ docs?: RawDocument[] }>(
-        docsResult.data,
-        'kb.documents',
-        logger,
-      );
-      withDocuments.push({ kb, documents: docsData?.docs ?? [] });
-    } catch (err) {
-      logger.warn(
-        'ragflow: kb.documents failed for one KnowledgeBase — keeping the KnowledgeBase, no Documents for it this run',
-        { kbId: kb.id, error: err instanceof Error ? err.message : String(err) },
-      );
-      withDocuments.push({ kb, documents: [] });
-    }
+      const envelope = unwrapEnvelope(result.data, what);
+      const docs = (envelope.data as { docs?: unknown } | null | undefined)?.docs;
+      if (!Array.isArray(docs)) {
+        throw new RagflowReadError(`ragflow: ${what}: \`data.docs\` is not a list`);
+      }
+      return { items: docs, total: reportedTotal(envelope.data) };
+    });
+    withDocuments.push({ kb, documents });
   }
 
   return buildRagflowObservations({ gatekeeperId, knowledgeBases: withDocuments });
