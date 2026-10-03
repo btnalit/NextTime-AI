@@ -79,9 +79,10 @@ still exits non-zero"）。
 agent 的最终回复文本命中 `"did not resolve"`（或整段回复为空），脚本判定为
 `packages/platform-extension` 的 entry-mode 工具注册尚未部署（或部署了但被 §5 "已知偏离"里另一条更
 深的架构限制挡住），打印 `kernel/platform-extension entry tools not deployed — needs PR fix/
-entry-mode-tools` 并立即退出，而不是含糊地继续跑或悄悄 SKIP。换句话说：**本 runbook 描述的是"修复
-落地后"应有的行为**；在修复落地前对着当前 `main` 跑这个脚本，预期结果是 step 2 在
-`step2-chat-entry-tools` 上 FAIL（而不是给出 `S2 OK`），这是脚本设计的一部分，不是 bug。示例（真实
+entry-mode-tools` 并立即退出，而不是含糊地继续跑或悄悄 SKIP。**该修复早已落地**（entry 模式注册 S2 工具与 `observe_operation`，
+`packages/platform-extension/src/modes/entry.ts`），当前 `main` 在主机上整条链路通过（S2 71 项，见
+`docs/STATUS.md`）；`step2-chat-entry-tools` 的 FAIL 现在只会出现在入口镜像过旧（没有重建）时，
+这是脚本设计的一部分，不是 bug。下面的失败输出是**该修复落地之前**的历史示例（真实
 id/key 已脱敏）：
 
 ```
@@ -170,8 +171,8 @@ PASS ops-runner-publish ops-runner@1 published
 FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed — needs PR fix/entry-mode-tools (last assistant reply: 'echo: 重启测试容器 CONTAINER_ID=<id> (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)')
 ```
 
-脚本立即以非 0 退出（`fail()` 的既有行为，同 accept_s1.sh）——这是预期行为，不是本次改动的 bug，见
-§5 "已知偏离"关于这条 FAIL 的两种可能根因。
+脚本立即以非 0 退出（`fail()` 的既有行为，同 accept_s1.sh）——这是预期行为，不是脚本的 bug。
+见 §5 "已知偏离"里这条 FAIL 的历史根因（核心缺口 1 / 2，均已修复）；今天再看到它，先核对入口镜像是否已重建。
 
 ## 4. 每一步对应 S2.12 七条验收的哪一条
 
@@ -192,8 +193,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 
 ## 5. 已知偏离
 
-- **核心缺口 1（正在修——`fix/entry-mode-tools` 分支，draft PR "fix(entry): register S2 entry tools
-  + observe_operation"）：`packages/platform-extension` 的 entry 模式从未注册 S2 新增的任何工具**——
+- **核心缺口 1（已修复——`fix/entry-mode-tools` 已合入，entry 模式现在注册 S2 的工具与 `observe_operation`；
+  以下为当时的根因记录）：`packages/platform-extension` 的 entry 模式当时从未注册 S2 新增的任何工具**——
   `packages/platform-extension/src/modes/entry.ts` 的 `OBSERVE_CAPABILITY_NAMES` 硬编码成 S1 的五个
   观察类工具（`get_object`/`traverse`/`search`/`explain`/`get_task`），整个文件只有这一处
   `pi.registerTool()` 调用点。`find_operations`/`find_workers`/`find_procedures`/`invoke_worker`/
@@ -217,8 +218,9 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   过期的 Handle；`step2_docker_restart` 开头仍然显式加了一次防御性 `resident_stop`（该函数自己的
   头注释有完整说明），只为兜底"重跑同一 workspace/容器复用"这类边缘情形，正常路径下是空操作。
 
-- **核心缺口 2（协调者已用一个专门的新 capability 部分解决——`observe_operation`，不是
-  `request_action`）**：本次实现过程中发现，一个真实入口 Handle 无法调用任何声明了 `request_action`
+- **核心缺口 2（已全部解决：观察路径用专门的 `observe_operation`，执行路径由 `invoke_worker` 的
+  `delegatedRequestAction` 把 `request_action` 交给子 Handle，见 `application/task/handle-mint.ts`；
+  以下为当时的记录）**：本次实现过程中发现，一个真实入口 Handle 无法调用任何声明了 `request_action`
   需求的 WorkerDefinition/工具——`governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES`
   按**capability 名字本身**（不是按目标 Operation 的 observe/execute 模式）永久排除 `request_action`
   （I11/§5.3 item 11 的字面机制：`authorize.ts` 的 `authorizeCapabilityCall` 在 handler 被调用之前
@@ -227,7 +229,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   模式一样直接调 `request_action`），这条新路径不受上面这条限制——`step3_observe_no_worker`
   因此断言 `audit_records.action='observe_operation'`（而非 `request_action`）、Activity kind 仍是
   `gatekeeper_observe`、且 `tasks`/`action_requests` 两张表都不新增行。
-  - **这条修复目前只覆盖 step 3（观察路径），不覆盖 step 2（执行路径）**：`ops-runner`
+  - **（历史，已过时）这条修复当时只覆盖 step 3（观察路径），不覆盖 step 2（执行路径）；其后
+    `delegatedRequestAction` 补上了执行路径，step 2 在主机上通过**：`ops-runner`
     WorkerDefinition 声明的 `capabilities:['request_action']`（Worker 自己需要用它触达
     `container.restart` 这个 **execute** 类 Operation，`observe_operation` 不适用于 execute
     路径）仍然会撞上同一条 `ENTRY_CEILING_CAPABILITIES` 限制——`application/task/service.ts` 的
@@ -236,7 +239,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
     `InvokeWorkerAttenuationError`。这条限制是 S2.7 落地时**特意加上的**（"入口 Handle 请求含
     execute 的子 Handle 被拒"是 S2.7 自己的验收条目），本 runbook 记录下来供后续判断，不代为决定
     要不要、或如何放开它——那是 `packages/kernel` 的治理模型决定。
-  - `scripts/accept_s2.sh` 目前**无法**从 alice 的最终回复文本单独区分"核心缺口 1 未修"和"核心缺口
+  - （历史）`scripts/accept_s2.sh` 当时**无法**从 alice 的最终回复文本单独区分"核心缺口 1 未修"和"核心缺口
     2 仍然挡住 step 2 的执行路径"——两种情况下 `entryRestartChatScenario` 的 fallback 分支都会产出
     含 `"did not resolve"` 的文本，`step2-chat-entry-tools` 因此用同一条 FAIL 信息覆盖两种根因；
     哪一种是真实原因需要看 kernel 日志/`docker exec` 进入口容器核对。step 3 不受此影响——见上一段。

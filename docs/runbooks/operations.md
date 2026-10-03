@@ -214,9 +214,10 @@ docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Health}}'
 
 ## 7. 指标位置
 
-**现状：没有指标端点。** 设计文档 §12 列出的指标（待审批数与等待时长、ActionRequest 终态计数、
-open Conflict 数、Fact 按状态分布、每 Task/每 Turn 的 token 成本、入口 agent 重启次数、Worker 失败
-率）目前**没有**任何服务暴露 Prometheus 风格的 `/metrics` 端点，也没有 OpenTelemetry
+**现状：没有业务指标端点（只有小的 `/internal/metrics`）。** 设计文档 §12 列出的业务指标（待审批数与等待时长、
+ActionRequest 终态计数、open Conflict 数、Fact 按状态分布、每 Task/每 Turn 的 token 成本、入口 agent
+重启次数、Worker 失败率）目前**没有**任何服务以 Prometheus 指标暴露（内核的 `GET /internal/metrics`
+只有 I1–I16 违反计数，各运行时服务的 `/internal/metrics` 是各自的小计数，见 `observability.md`），也没有 OpenTelemetry
 exporter/collector 接入（`packages/kernel/src` 下没有 `prom-client`/`opentelemetry` 依赖）。能拿到
 的近似替代：
 
@@ -330,7 +331,7 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 | 改了 `secrets/*.env` 之后重启了服务，行为看起来还是旧值 | 用了 `docker compose restart` 而不是 `--force-recreate`（§4.2） | `docker compose up -d --force-recreate <service>` |
 | `docker compose logs <service>` 什么都看不到，或只有很少几行 | 容器刚被 `--force-recreate` 过（旧容器的日志随旧容器一起没了），或该服务本身就没有多少输出（如 `egress-proxy`/`llm-proxy` 空闲时几乎不打印） | 正常；需要持续观测时用 `docker compose logs -f`，从这次重建之后开始跟随 |
 | `caddy` 起来了，但 `/api/*` 反代一直 502 | `caddy` 的 `depends_on: kernel` 只保证启动顺序，不等待 kernel 的健康检查（compose 定义如此——`kernel` 有 `condition: service_healthy` 边，`caddy` 自己那条也是，见 `docker-compose.yml`，实际仍可能出现短暂窗口） | 重试几次；若持续 502，按 §5 单独验证 `kernel` 是否真的 `healthy` |
-| 想看 Prometheus 风格的指标面板，发现没有任何端点 | 见 §7——设计文档 §12 的指标体系尚未实现，这不是本次文档遗漏，是代码现状 | 用 §7 表格里的 SQL/capability 近似替代；若确实需要真正的指标端点，那是一项新的实现任务（development-tasks.md S3.8），不是本 runbook 能补的文档缺口 |
+| 想看待审批数 / Conflict 数 / token 成本这类业务指标的面板，发现没有 | 见 §7——`/internal/metrics` 只覆盖不变量违反计数与各运行时服务自己的小计数，设计文档 §12 的业务指标体系尚未实现，这是代码现状 | 用 §7 表格里的 SQL/capability 近似替代；不变量与各服务计数读 `/internal/metrics`（`host-chaos.md` §5、`observability.md`）；若确实需要业务指标端点，那是一项新的实现任务 |
 | 目标主机上跑 `make migrate` 报 `corepack`/`pnpm` 不存在 | 目标主机通常没有 Node/corepack（`docs/runbooks/accept-s1.md` §1） | 用容器化命令 `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`（见 §4.1）；`make migrate` 只在装了 Node/corepack 的机器（如开发机、CI）上直接可用 |
 | `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js` 报找不到该文件 | `kernel` 镜像还没构建，或构建的是旧代码 | `docker compose build kernel` 后重试 |
 
@@ -489,8 +490,8 @@ sh scripts/build-images.sh worker-runtime   # 导出 PI_VERSION / PLATFORM_EXTEN
 指向新构建的镜像，旧 build 就此**掉 tag、只剩 digest**——`set_active_runtime_image`/`rollback_runtime_image`
 现在都会先查 worker-supervisor 自己的 allowlist（`WORKER_IMAGE_ALLOWLIST` env，
 `isImageAllowed`/`config.taskImageAllowlist`，跟 `/task/spawn`、`/resident/spawn` 的 403 判断同一份），
-一个 digest 永远不可能出现在这份 allowlist 里（allowlist 只装名字/tag，这些镜像从不推 registry，没有
-真正意义上的 digest 可配）——所以只剩 digest 的旧 build**再也回不去**，"设为活动"/回滚都会 409
+一个 digest 永远不可能出现在这份 allowlist 里（allowlist 只装名字/tag；本机构建的 worker-runtime 不推 registry，
+发版 CI 发布的签名镜像经 `apply-release.sh --pull` 拉下后也重打成本地名，没有可配的 digest）——所以只剩 digest 的旧 build**再也回不去**，"设为活动"/回滚都会 409
 `image_not_allowed`。构建后立刻给它一个不会被下次构建覆盖的 tag，再加进 allowlist：
 
 ```bash
@@ -523,7 +524,7 @@ cap runtime_inventory | jq '{activeImage, activeImageSource, images: [.images[]|
 ```
 
 **"待重建"是什么（决定 E2）**：`needsRebuild` 比较的是**镜像 id**（`docker inspect` 的 `Image`/`Id` 字段，
-`sha256:...`），不是 tag——这些镜像从不推到 registry，同一个 tag 重新构建也会换一个 id，只比 tag 会漏判。
+`sha256:...`），不是 tag——同一个 tag 重新构建（或重新拉取重打）也会换一个 id，只比 tag 会漏判。
 派生是**实时**的（每次调用现算，never 存表），不建任何"待重建"状态列。
 
 **滚动重建不是"拒绝新 Turn"（决定 E2）**：入口容器在自己的**下一次** Turn 开始时，`spawn()` 发现请求的镜像

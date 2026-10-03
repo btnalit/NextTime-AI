@@ -348,6 +348,16 @@ pi 本身没有运行时"回滚"的概念（它不是一个常驻服务，是每
    `WORKER_IMAGE` 引用，保留旧 tag 至少一个发布周期，坏了直接把 `WORKER_IMAGE`
    改回旧 tag、重启 `worker-supervisor`——常驻入口容器与一次性 Worker 容器都是下次 spawn 才
    用新镜像，不需要重建正在跑的容器。
+   - **平台设置 `activeRuntimeImage` 才是"当前用哪个镜像"的权威**（设置值；未设时才回落到
+     worker-supervisor 的 `WORKER_IMAGE` env 缺省）。有活动镜像设置时，改回旧 tag 的正路是
+     `rollback_runtime_image`（改回上一个 `platform_settings` 版本）或
+     `set_active_runtime_image '{"image":"nexttime-ai-worker-runtime:pi-<旧版本>"}'`——两者都要求目标
+     在 `list_runtime_images` 的清单里、且在 `WORKER_IMAGE_ALLOWLIST` 里（否则 409
+     `image_not_in_inventory` / `image_not_allowed`），所以**旧 tag 要先留着并加进 allowlist**，
+     只剩 digest 的旧 build 回不去；只改 `WORKER_IMAGE` env 在已设过活动镜像的平台上不生效。
+     已运行的入口容器在自己的下一次 Turn 自然重建，`roll_entry_containers` 可加速空闲容器；
+     `pi_drift`（运行层页「pi 运行时」卡片）会显示活动镜像的 pi 版本与本版期望是否一致。细节见
+     `operations.md` §13。
 2. 代码侧回滚：`git revert` 升级 PR（`pi.version`、两个 package.json 字段、`pnpm-lock.yaml`
    一起回退），重新构建镜像。
 3. `.github/workflows/pi-drift.yml`/`.github/dependabot.yml` 本身不涉及运行时，不需要回滚
