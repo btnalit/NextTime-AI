@@ -4,7 +4,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
-import { nameOf } from '../approvals/useDirectoryNames.js';
+import { nameOf, resourceScopeLabel } from '../approvals/useDirectoryNames.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { RefChip } from '../ui/RefChip.js';
@@ -84,8 +84,10 @@ export function ApprovalContext({
           blastRadius={row.blastRadius}
           status={row.status}
           target={
-            row.resourceScope ? (
-              <span className="mono">{row.resourceScope}</span>
+            resourceScopeLabel(row, gatekeeperNames) ? (
+              <span className="mono">{resourceScopeLabel(row, gatekeeperNames)}</span>
+            ) : row.resourceScope ? (
+              <span>{t('整个门', 'The whole gate')}</span>
             ) : (
               <span className="text-3">{t('未限定资源', 'No resource scope')}</span>
             )

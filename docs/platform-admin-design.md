@@ -170,7 +170,7 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
 
 | 层 | 是什么 | 今天 | 管理面 |
 |---|---|---|---|
-| **接入包（connector）** | 一种可部署的门：预置包 `gatekeepers/docker`、`gatekeepers/ragflow`，或通用种类 `http` / `mcp` / `cli` / `ssh` | 源码目录 + Dockerfile | 目录页列出本部署带的接入包（名、种类、Operation 数、版本、说明），每个有**三态**：禁用 / 可自连（工作区 owner 可自己连）/ 平台预置（管理员建实例、工作区一键启用）——借 cloudflare-os `ambientGatekeeperModes` |
+| **接入包（connector）** | 一种可部署的门：预置包 `gatekeepers/docker`、`gatekeepers/ragflow`，或通用种类 `http` / `mcp` / `cli` / `ssh` | 源码目录 + Dockerfile | 目录页列出本部署带的接入包（名、种类、Operation 数、版本、说明），每个有**三态**：禁用 / 可自连（工作区 owner 可自己连）/ 平台预置（管理员建实例、工作区一键启用）——借 cloudflare-os `ambientGatekeeperModes`。三态管的是目录可见性与**新连接**：`create_connection` / `request_connection` 只在该种类的通用接入包为"可自连"时放行（否则 409 `connector_not_self_serve`，R-40），`enable_gate_instance` 只认"平台预置"；已建立的连接不受三态影响，要切断已启用的工作区用下面的按 Operation 开关（控制台的禁用确认里可一并"禁用全部 Operation"，R-41 / D-19） |
 | **门实例（gate instance）** | 一个在跑的门进程 + 它指向的目标（RAGFlow 地址、某个 MCP server、某台 SSH 主机） | 每实例一个 compose 服务，`register-gatekeeper` CLI 注册 | 见下文两条路径；实例有健康、最近检查、启用它的工作区数 |
 | **连接（connection）** | 某工作区 / 某用户对一个门实例的使用关系 + 凭证（凭证只在门内） | `request_connection` 卡片 → 门存 ConnectedAccount → 图里生成 `Gatekeeper` 与系统对象 | 不变；集成页只看"谁在用"，不看凭证 |
 

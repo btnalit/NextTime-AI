@@ -8,10 +8,13 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { HttpError } from '../../lib/http-client.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
+import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { Confirm } from '../kit/confirm.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -32,6 +35,15 @@ interface GateInstanceTestResult {
   readonly health: GateInstanceWire['health'];
   readonly describedOperationCount: number | null;
   readonly checkedAt: string;
+}
+
+/** The kernel's platform error with the console's bilingual copy as its message, so `kit/confirm`'s
+ *  own inline error banner reads the same as `PlatformError` does (the `PurgeWorkspaceDrawer`
+ *  convention). Anything unmapped is rethrown as it came. */
+function friendly(err: unknown, t: Translate): unknown {
+  const mapped = platformErrorMessage(err, t);
+  if (mapped === null || !(err instanceof HttpError)) return err;
+  return new HttpError(err.kind, mapped, err.code);
 }
 
 export interface GateInstanceDetailPanelProps {
@@ -56,6 +68,13 @@ export interface GateInstanceDetailPanelProps {
  * low-stakes here (design §6.3: a disabled instance just disappears from the workspace catalog —
  * an existing workspace link keeps working until its own Operations are disabled), so this panel,
  * unlike `WorkspaceDetailPanel`/`UserDetailPanel`, acts directly rather than behind a confirm step.
+ *
+ * R-46 (review 2026-10-02): deleting a hosted instance makes the gate host drop it and wipe its
+ * stored credentials (the shared slot and every member's connected-account slot; gate-host data is
+ * not in the backup, so they cannot be restored). The delete button is disabled while any
+ * workspace still has the instance enabled (`enabledWorkspaceCount` — the same count the kernel's
+ * `gate_in_use` refusal uses); otherwise it opens `kit/confirm tier="irreversible"` — retype the
+ * gate id — that says the credentials are destroyed.
  *
  * S6-C: B7 (docs/console-completion-plan.md §4 "接入三层": 启用 only appears in `discovered`) —
  * the status control is one button whose meaning follows the machine: `discovered` → 启用,
@@ -89,8 +108,6 @@ export function GateInstanceDetailPanel({
   const [testError, setTestError] = useState<unknown | null>(null);
 
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<unknown | null>(null);
 
   const nameDirty = displayName.trim() !== instance.displayName && displayName.trim().length > 0;
 
@@ -163,19 +180,18 @@ export function GateInstanceDetailPanel({
     }
   }
 
+  /** `kit/confirm`'s `onConfirm`: throws on failure so the tier keeps itself open with the error
+   *  inline (`gate_in_use` when a workspace enabled it after this drawer was read). */
   async function deleteInstance(): Promise<void> {
-    if (deleting) return;
-    setDeleting(true);
-    setDeleteError(null);
     try {
       await http.call('delete_gate_instance', { gateId: instance.gateId });
-      onDeleted(instance.gateId);
     } catch (err) {
-      setDeleteError(err);
-    } finally {
-      setDeleting(false);
+      throw friendly(err, t);
     }
+    onDeleted(instance.gateId);
   }
+
+  const inUseCount = instance.enabledWorkspaceCount;
 
   return (
     <div className="stack" data-testid="gate-instance-detail">
@@ -465,38 +481,56 @@ export function GateInstanceDetailPanel({
                 ) : null}
 
                 <div className="divider" />
-                <PlatformError
-                  error={deleteError}
-                  title={t('无法删除', 'Could not delete this instance')}
-                  testId="gate-instance-delete-error"
+                {inUseCount > 0 ? (
+                  <p className="text-3 text-small" data-testid="gate-instance-delete-blocked">
+                    {t(
+                      `${inUseCount} 个工作区启用着这个实例，要先在这些工作区停用它才能删除。`,
+                      `${inUseCount} workspace(s) have this instance enabled — disable it there before deleting it.`,
+                    )}
+                  </p>
+                ) : null}
+                <Confirm
+                  tier="irreversible"
+                  open={confirmingDelete}
+                  onOpenChange={setConfirmingDelete}
+                  anchor={
+                    <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      <Button
+                        variant="danger"
+                        size="s"
+                        onClick={() => setConfirmingDelete(true)}
+                        disabled={inUseCount > 0}
+                        data-testid="gate-instance-delete"
+                      >
+                        {t('删除', 'Delete')}
+                      </Button>
+                    </div>
+                  }
+                  title={t(
+                    `删除门实例 ${instance.displayName}`,
+                    `Delete gate instance ${instance.displayName}`,
+                  )}
+                  description={t(
+                    '门宿主下一次拉取定义时会丢弃这个实例，并销毁它存储的全部凭证。凭证不在备份里，无法恢复；以后用同一个 gate id 新建也不会继承。',
+                    'On its next definition pull the gate host drops this instance and destroys every credential it stored. The credentials are not in any backup and cannot be restored; a new instance with the same gate id does not inherit them.',
+                  )}
+                  target={instance.gateId}
+                  impact={[
+                    instance.definition.credentialMode === 'shared'
+                      ? t('销毁共享凭证', 'The shared credential is destroyed')
+                      : t(
+                          '销毁每个成员录入的连接账号凭证',
+                          "Every member's connected-account credential is destroyed",
+                        ),
+                    t(
+                      '这个实例从门实例目录中移除',
+                      'The instance is removed from the gate-instance catalog',
+                    ),
+                  ]}
+                  confirmLabel={t('删除', 'Delete')}
+                  onConfirm={deleteInstance}
+                  testId="gate-instance-delete-confirm"
                 />
-                {confirmingDelete ? (
-                  <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
-                    <Button variant="ghost" size="s" onClick={() => setConfirmingDelete(false)}>
-                      {t('取消', 'Cancel')}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="s"
-                      onClick={() => void deleteInstance()}
-                      loading={deleting}
-                      data-testid="gate-instance-delete-confirm"
-                    >
-                      {t('确认删除', 'Confirm delete')}
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    <Button
-                      variant="danger"
-                      size="s"
-                      onClick={() => setConfirmingDelete(true)}
-                      data-testid="gate-instance-delete"
-                    >
-                      {t('删除', 'Delete')}
-                    </Button>
-                  </div>
-                )}
               </div>
             </>
           ) : null}

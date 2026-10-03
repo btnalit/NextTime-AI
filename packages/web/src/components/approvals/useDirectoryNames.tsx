@@ -115,3 +115,20 @@ export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, 
 export function nameOf(names: ReadonlyMap<string, string> | undefined, id: string): string | null {
   return (names ?? NONE).get(id) ?? null;
 }
+
+/**
+ * L8a-10 (review 2026-10-02): what to show for an ActionRequest's `resourceScope` next to its gate.
+ * The kernel's only writer (`request_action`) stores the Gatekeeper's own id there, so a scope equal
+ * to the row's `gatekeeperId` names the gate itself — `null` here, because every caller already
+ * shows the gate by name beside it (printing the id again only read as "the target" while naming
+ * the gate). Another known Gatekeeper id reads as that gate's name; any other scope (free text) is
+ * shown as it is.
+ */
+export function resourceScopeLabel(
+  row: { readonly resourceScope: string | null; readonly gatekeeperId: string },
+  gatekeeperNames: ReadonlyMap<string, string> | undefined,
+): string | null {
+  const scope = row.resourceScope;
+  if (!scope || scope === row.gatekeeperId) return null;
+  return nameOf(gatekeeperNames, scope) ?? scope;
+}

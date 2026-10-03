@@ -146,6 +146,22 @@ describe('ApprovalQueuePage state machine', () => {
     expect(within(pane).queryByTestId('approval-detail')).toBeNull();
   });
 
+  it('L8a-10: a gate-scoped row shows the gate (by name) once, never its id as a "→ target"', async () => {
+    const gatekeeperId = '3f2a9c1e-0b4d-4e6f-8a7b-1c2d3e4f5a6b';
+    const http = scriptedHttp(
+      [() => Promise.resolve([row({ gatekeeperId, resourceScope: gatekeeperId })])],
+      {
+        list_gatekeepers: () =>
+          Promise.resolve({ items: [{ id: gatekeeperId, name: 'docker-prod' }] }),
+      },
+    );
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    const rowEl = await screen.findByTestId('approval-row');
+    await waitFor(() => expect(rowEl.textContent).toContain('docker-prod'));
+    expect(rowEl.textContent).not.toContain(gatekeeperId);
+    expect(rowEl.textContent).not.toContain('→');
+  });
+
   it('shows an operator-role explanation (not a generic error) on 403 forbidden', async () => {
     const http = scriptedHttp([
       () =>

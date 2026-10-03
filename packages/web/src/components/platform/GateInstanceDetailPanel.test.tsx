@@ -193,8 +193,41 @@ describe('GateInstanceDetailPanel', () => {
     expect(definition.textContent).toContain('共享');
     expect(within(definition).getByTestId('gate-credential-token-button')).toBeTruthy();
     fireEvent.click(screen.getByTestId('gate-instance-delete'));
-    fireEvent.click(screen.getByTestId('gate-instance-delete-confirm'));
+    // R-46: irreversible — states the credential loss, needs the gate id retyped + acknowledged.
+    const confirm = await screen.findByTestId('gate-instance-delete-confirm');
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+    expect(confirm.textContent).toContain('销毁共享凭证');
+    expect(http.calls.some((call) => call.name === 'delete_gate_instance')).toBe(false);
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'gate-h' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith('gate-h'));
+  });
+
+  it('R-46: delete is disabled, with the reason, while a workspace still has the instance enabled', () => {
+    const http = scriptedHttp({});
+    renderPanel(
+      http,
+      gateInstance({
+        gateId: 'gate-h',
+        connector: 'http',
+        transportKind: 'http',
+        hosted: true,
+        enabledWorkspaceCount: 2,
+        definition: {
+          transportKind: 'http',
+          target: 'https://billing.internal',
+          credentialMode: 'shared',
+          manifestSource: 'https://billing.internal/openapi.json',
+        },
+      }),
+    );
+    expect(screen.getByTestId('gate-instance-delete').hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('gate-instance-delete-blocked').textContent).toContain(
+      '2 个工作区启用着这个实例',
+    );
   });
 
   it('renames through update_gate_instance{displayName} only when the name changed', async () => {
