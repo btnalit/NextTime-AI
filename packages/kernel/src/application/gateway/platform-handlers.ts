@@ -91,6 +91,9 @@ export type PlatformErrorCode =
   | 'gate_in_use'
   | 'gate_not_hosted'
   | 'credential_mode_mismatch'
+  // R-18 (`confirm_gate_manifest`): nothing held, or the held manifest is not the one shown
+  | 'no_pending_manifest'
+  | 'manifest_changed'
   // S6 A1 (`purge_workspace`; application/platform/purge-workspace.ts)
   | 'workspace_active'
   | 'retention_not_elapsed'

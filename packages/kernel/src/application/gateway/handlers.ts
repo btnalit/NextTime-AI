@@ -186,6 +186,7 @@ import {
   updateOperationDescriptionHandler,
 } from './operation-manifest-handlers.js';
 import {
+  confirmGateManifestHandler,
   createGateInstanceHandler,
   deleteGateInstanceHandler,
   getGateInstanceHandler,
@@ -1637,6 +1638,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_gate_instances', listGateInstancesHandler],
   ['get_gate_instance', getGateInstanceHandler],
   ['update_gate_instance', updateGateInstanceHandler],
+  // R-18 (D-18): adopt a held announced manifest, by digest.
+  ['confirm_gate_manifest', confirmGateManifestHandler],
   ['test_gate_instance', testGateInstanceHandler],
   ['list_external_runtimes', listExternalRuntimesHandler],
   ['revoke_external_runtime', revokeExternalRuntimeHandler],

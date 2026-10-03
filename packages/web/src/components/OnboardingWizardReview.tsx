@@ -1,5 +1,9 @@
-import { BLAST_RADIUS_VALUES, OPERATION_MODE_VALUES } from '@nexttime/shared';
-import { useCallback, useState } from 'react';
+import {
+  BLAST_RADIUS_VALUES,
+  OPERATION_MODE_VALUES,
+  type OperationGovernanceChangeWire,
+} from '@nexttime/shared';
+import { useCallback, useRef, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
@@ -11,6 +15,13 @@ import {
 } from '../lib/connections.js';
 import { prettyJson } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import {
+  GovernanceChangeList,
+  governanceChangeSummary,
+  governanceConsequences,
+  isLoosening,
+} from './connect/GovernanceChange.js';
+import { Confirm } from './kit/confirm.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -42,7 +53,12 @@ export interface OnboardingWizardReviewProps {
  *
  * "Propose reclassification" is deliberately the two-step `propose_operation` → `publish_operation`
  * pair, never a direct edit (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") —
- * same convention `CatalogPage`'s publish/deprecate buttons already follow. **Narrower kernel
+ * same convention `CatalogPage`'s publish/deprecate buttons already follow. **R-19 (decision D-17)**:
+ * the two steps are no longer chained blind. `propose_operation` answers with `governanceChange`
+ * (the published version → this draft, with the kernel's direction); a non-`neutral` change opens
+ * a confirm listing old → new — danger-styled, with what it means, when it loosens — and only
+ * that confirm takes the `publish_operation` step. Cancelling leaves the draft unpublished (the
+ * catalog shows it, with the same confirm on its Publish). **Narrower kernel
  * interaction gap than this screen used to have** (not a bug in this UI; fix/operation-revision-via-
  * propose, S3.12): `propose_operation`'s own conflict guard (`governance/gatekeepers/manifest.ts`'s
  * `isOwnProposalDraft`) only ever replaces a draft the *same* proposer already wrote through
@@ -149,22 +165,52 @@ function OperationReviewRow({
   const [autoApprovable, setAutoApprovable] = useState(row.autoApprovable);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // R-19 (D-17): the proposed draft's change, waiting for the confirm before it is published.
+  const [pendingChange, setPendingChange] = useState<OperationGovernanceChangeWire | null>(null);
+  const [draftKept, setDraftKept] = useState(false);
+  const publishedRef = useRef(false);
+
+  async function publish(): Promise<void> {
+    await http.call('publish_operation', { gatekeeperId: row.gatekeeperId, name: row.name });
+    publishedRef.current = true;
+    setPendingChange(null);
+    setEditing(false);
+    onChanged();
+  }
 
   async function submit(): Promise<void> {
     setBusy(true);
     setError(null);
+    setDraftKept(false);
+    publishedRef.current = false;
     try {
       const operation = reclassifiedOperationPayload(row, { mode, blastRadius, autoApprovable });
-      await http.call('propose_operation', { gatekeeperId: row.gatekeeperId, operation });
-      await http.call('publish_operation', { gatekeeperId: row.gatekeeperId, name: row.name });
-      setEditing(false);
-      onChanged();
+      const proposed = await http.call<{ governanceChange: OperationGovernanceChangeWire | null }>(
+        'propose_operation',
+        { gatekeeperId: row.gatekeeperId, operation },
+      );
+      const change = proposed.governanceChange ?? null;
+      if (change !== null && change.direction !== 'neutral') {
+        setPendingChange(change);
+        return;
+      }
+      await publish();
     } catch (err) {
       setError(err);
     } finally {
       setBusy(false);
     }
   }
+
+  function onConfirmOpenChange(open: boolean): void {
+    if (open) return;
+    // Closed without publishing (cancel / Escape): the draft stays, unpublished.
+    if (!publishedRef.current) setDraftKept(true);
+    setPendingChange(null);
+  }
+
+  const changeItem = pendingChange ? { name: row.name, ...pendingChange } : null;
+  const consequences = changeItem ? governanceConsequences(changeItem, t) : [];
 
   return (
     <>
@@ -196,8 +242,10 @@ function OperationReviewRow({
           <td colSpan={6}>
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
               <Notice>
-                先创建新草稿（propose_operation），再发布（publish_operation）——
-                分类变更永远经过这两步，不提供直接改的捷径。
+                {t(
+                  '先创建新草稿（propose_operation），确认分类变化后再发布（publish_operation）——分类变更永远经过这两步，不提供直接改的捷径。',
+                  'First a new draft (propose_operation), then — after you confirm the classification change — the publish (publish_operation). A classification change always takes both steps; there is no direct edit.',
+                )}
               </Notice>
               <div className="row">
                 <Field id={`wizard-reclassify-mode-${row.objectId}`} label="Mode">
@@ -247,10 +295,47 @@ function OperationReviewRow({
                   )}
                 />
               ) : null}
+              {draftKept ? (
+                <Notice testId="wizard-review-draft-kept">
+                  {t(
+                    '草稿已保留、未发布；可以稍后在能力目录里发布。',
+                    'The draft is kept, not published — you can publish it from the catalog later.',
+                  )}
+                </Notice>
+              ) : null}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <Button variant="primary" size="s" loading={busy} onClick={() => void submit()}>
-                  {t('提交', 'Submit')}
-                </Button>
+                <Confirm
+                  tier="medium"
+                  open={changeItem !== null}
+                  onOpenChange={onConfirmOpenChange}
+                  anchor={
+                    <Button variant="primary" size="s" loading={busy} onClick={() => void submit()}>
+                      {t('提交', 'Submit')}
+                    </Button>
+                  }
+                  title={t('发布这次重分类', 'Publish this reclassification')}
+                  description={t(
+                    '分类决定这个 Operation 要不要人工审批、要不要授权。确认后发布新版本，替换当前生效的版本。',
+                    'The classification decides whether this operation needs a person’s approval and a grant. Confirming publishes the new version in place of the one in effect.',
+                  )}
+                  target={row.name}
+                  impact={changeItem ? [governanceChangeSummary(changeItem, t)] : []}
+                  confirmLabel={t('发布', 'Publish')}
+                  danger={changeItem !== null && isLoosening(changeItem.direction)}
+                  onConfirm={publish}
+                  testId="wizard-review-reclassify-confirm"
+                >
+                  {consequences.length > 0 ? (
+                    <Notice tone="warn" testId="wizard-review-reclassify-loosens">
+                      <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                        {consequences.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    </Notice>
+                  ) : null}
+                  {changeItem ? <GovernanceChangeList items={[changeItem]} /> : null}
+                </Confirm>
               </div>
             </div>
           </td>

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   deprecateOperation,
   getOperation,
+  getPublishedOperation,
+  operationGovernanceChange,
   proposeOperation,
   publishManifest,
   publishOperation,
@@ -84,6 +86,9 @@ export const proposeOperationHandler: CapabilityHandler = async (
     activityId: activity.id,
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
+  // R-19 (D-17): what publishing this draft would change on the version in effect — the wizard
+  // confirms a non-neutral change before it takes the `publish_operation` step.
+  const live = await getPublishedOperation(client, workspaceId, gatekeeperId, record.name);
 
   return {
     result: {
@@ -95,6 +100,7 @@ export const proposeOperationHandler: CapabilityHandler = async (
       // identity — the Object id of the version it is proposed against (never itself published by
       // this call; `publish_operation` is the separate, explicit second step, unchanged).
       draftOf: record.draftOf ?? null,
+      governanceChange: live ? operationGovernanceChange(live.operation, record.operation) : null,
     },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,

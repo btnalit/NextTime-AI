@@ -29,6 +29,12 @@ import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
+import {
+  GovernanceChangeList,
+  governanceChangeSummary,
+  governanceConsequences,
+  isLoosening,
+} from './connect/GovernanceChange.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import {
@@ -287,6 +293,80 @@ function DeprecateConfirm({
   );
 }
 
+/** R-19 (decision D-17): Publish for a draft that changes the published version's mode / blast
+ *  radius / auto-approvable — a `medium` confirm listing old → new from the kernel's own
+ *  `governanceChange`, danger-styled with what it means when the kernel's direction loosens. A
+ *  draft with no such change (a new Operation, or one whose classification is unchanged) keeps the
+ *  plain one-click Publish. */
+function PublishGovernanceConfirm({
+  row,
+  change,
+  busy,
+  onConfirm,
+  testId,
+}: {
+  readonly row: OperationCatalogRow;
+  readonly change: NonNullable<OperationCatalogRow['governanceChange']>;
+  readonly busy: boolean;
+  readonly onConfirm: () => Promise<void>;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const item = { name: row.name, ...change };
+  const consequences = governanceConsequences(item, t);
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={setOpen}
+      anchor={
+        <Button
+          variant="primary"
+          size="s"
+          disabled={busy}
+          aria-busy={busy || undefined}
+          onClick={() => setOpen(true)}
+          data-testid={`${testId}-trigger`}
+        >
+          {t('发布', 'Publish')}
+        </Button>
+      }
+      title={t(`发布 ${row.name}`, `Publish ${row.name}`)}
+      description={t(
+        '这个草稿改变了当前生效版本的分类——分类决定它要不要人工审批、要不要授权。发布后替换当前版本。',
+        'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
+      )}
+      target={row.name}
+      impact={[governanceChangeSummary(item, t)]}
+      confirmLabel={t('发布', 'Publish')}
+      danger={isLoosening(change.direction)}
+      onConfirm={onConfirm}
+      testId={testId}
+    >
+      {consequences.length > 0 ? (
+        <Notice tone="warn" testId={`${testId}-loosens`}>
+          <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+            {consequences.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </Notice>
+      ) : null}
+      <GovernanceChangeList items={[item]} />
+    </Confirm>
+  );
+}
+
+/** A catalog row's selection key: `operationKey`, except a draft that revises a published version
+ *  (it carries `governanceChange`) — both rows share the identity, and the draft must stay
+ *  selectable on its own to be published from here (R-19). */
+function catalogOperationKey(row: OperationCatalogRow): string {
+  return row.status === 'draft' && row.governanceChange
+    ? `${operationKey(row)}@draft`
+    : operationKey(row);
+}
+
 /** S8 W3 K2 (leftover 82): the caller's own private draft's "丢弃" action — a `kit/confirm`
  *  `medium` popover, same tier as `DeprecateConfirm` above (the dispatch's own wording: "kit/confirm
  *  tier medium, consequence '草稿将被删除，无法恢复'"). Unlike Deprecate, this is destructive and
@@ -433,7 +513,7 @@ function OperationDetailView({
   readonly onEditDescription: () => void;
 }) {
   const t = useT();
-  const key = operationKey(row);
+  const key = catalogOperationKey(row);
   const items: KeyValueItem[] = [
     {
       key: 'gatekeeper',
@@ -509,7 +589,18 @@ function OperationDetailView({
       </header>
       <KeyValue items={items} />
       <div className="row-wrap">
-        {canPublish && row.status === 'draft' ? (
+        {canPublish &&
+        row.status === 'draft' &&
+        row.governanceChange &&
+        row.governanceChange.direction !== 'neutral' ? (
+          <PublishGovernanceConfirm
+            row={row}
+            change={row.governanceChange}
+            busy={busy}
+            onConfirm={onPublish}
+            testId={`operation-publish-confirm-${key}`}
+          />
+        ) : canPublish && row.status === 'draft' ? (
           <Button
             variant="primary"
             size="s"
@@ -584,7 +675,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const descriptionFieldId = useId();
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
-  const selected = itemId ? rows.find((row) => operationKey(row) === itemId) : undefined;
+  const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
@@ -601,7 +692,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     row: OperationCatalogRow,
     action: 'publish_operation' | 'deprecate_operation',
   ) {
-    const key = operationKey(row);
+    const key = catalogOperationKey(row);
     setBusy(key);
     try {
       await http.call(action, { gatekeeperId: row.gatekeeperId, name: row.name });
@@ -679,7 +770,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     ) : (
       <List ariaLabel="Operations" testId="catalog-list">
         {rows.map((row) => {
-          const key = operationKey(row);
+          const key = catalogOperationKey(row);
           return (
             <ListRow
               key={key}
@@ -715,7 +806,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canPublish={!permissions.isDenied('publish_operation')}
       canDeprecate={!permissions.isDenied('deprecate_operation')}
       canEditDescription={!permissions.isDenied('update_operation_description')}
-      busy={busy === operationKey(selected)}
+      busy={busy === catalogOperationKey(selected)}
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
       onEditDescription={() => openDescriptionEditor(selected)}

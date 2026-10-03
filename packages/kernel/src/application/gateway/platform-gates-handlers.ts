@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
+  confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,
   getConnector,
@@ -152,6 +153,57 @@ export const updateGateInstanceHandler: CapabilityHandler = async (
     );
   }
   await updateGateInstance(client, input.gateId, input);
+  const after = await requireGateInstance(client, input.gateId);
+  return { result: after, resourceType: 'gate_instance', resourceId: after.gateId };
+};
+
+/**
+ * `confirm_gate_manifest` (R-18, decision D-18): adopts the instance's held announcement as the
+ * manifest in effect — the one later workspace enables import and `refresh_operation_governance`
+ * aligns to. `digest` must be the pending manifest's own digest (`GateInstanceWire.pendingManifest
+ * .digest`): a newer announce replaces the pending manifest, so a confirm can only adopt what the
+ * administrator was shown. Workspace Operations already deployed are untouched — each owner aligns
+ * them with their own preview and confirm. One platform AuditRecord names what changed.
+ */
+export const confirmGateManifestHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as { gateId: string; digest: string };
+  const outcome = await confirmPendingManifest(client, input.gateId, input.digest);
+  if (outcome.kind === 'not_found') {
+    throw new PlatformAdminError('gate_not_found', 'gate instance not found');
+  }
+  if (outcome.kind === 'nothing_pending') {
+    throw new PlatformAdminError(
+      'no_pending_manifest',
+      `gate instance "${input.gateId}" has no announced manifest awaiting confirmation`,
+    );
+  }
+  if (outcome.kind === 'stale') {
+    throw new PlatformAdminError(
+      'manifest_changed',
+      `gate instance "${input.gateId}" announced a newer manifest since this one was shown — review it again`,
+    );
+  }
+  await writeAudit(client, {
+    workspaceId: null,
+    actorPrincipalId: null,
+    actorUserId: ctx?.platformUser?.id,
+    action: 'gate_instance.manifest_confirmed',
+    resourceType: 'gate_instance',
+    // `audit_records.resource_id` is a uuid; a gate instance is keyed by its `GATE_ID`, so it goes
+    // in the payload as `resourceRef` (same convention as `connector.entry_handles_revoked`).
+    payload: {
+      resourceRef: input.gateId,
+      digest: input.digest,
+      added: outcome.diff.added.map((operation) => operation.name),
+      removed: outcome.diff.removed.map((operation) => operation.name),
+      changed: outcome.diff.changed,
+    },
+  });
   const after = await requireGateInstance(client, input.gateId);
   return { result: after, resourceType: 'gate_instance', resourceId: after.gateId };
 };

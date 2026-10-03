@@ -10,6 +10,9 @@ import { RefreshOperationGovernanceConfirm } from './RefreshOperationGovernanceC
  * preview-then-confirm flow in front of `refresh_operation_governance` — the "already aligned"
  * no-op path (no confirm renders), the diff preview + medium confirm, a successful refresh
  * reporting back to the caller, and a refused call (`no_announced_manifest`) rendering inline.
+ * R-19 (D-17): the danger case follows the kernel's `direction` only (a lower blast radius and
+ * execute → observe count as loosening) with old → new values and plain consequences; R-18 (D-18):
+ * the confirm carries the preview's `manifestDigest` back.
  */
 
 afterEach(cleanup);
@@ -36,7 +39,26 @@ function preview(operationsAlreadyPresent: readonly Record<string, unknown>[] = 
     ambiguousCandidates: [],
     operationsToImport: [],
     operationsAlreadyPresent,
+    manifestDigest: 'digest-1',
   };
+}
+
+function renderConfirm(http: CapabilityCaller, onRefreshed = vi.fn()) {
+  render(
+    <RefreshOperationGovernanceConfirm
+      http={http}
+      gatekeeperId="gk-1"
+      platformGateId="gate-1"
+      gateDisplayName="Docker prod"
+      onRefreshed={onRefreshed}
+      testId="align-gk-1"
+    />,
+  );
+  return onRefreshed;
+}
+
+function confirmButtonIsDanger(confirm: HTMLElement): boolean {
+  return within(confirm).getByTestId('confirm-button').className.includes('text-danger');
 }
 
 describe('RefreshOperationGovernanceConfirm', () => {
@@ -55,6 +77,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
             },
             announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
             differs: false,
+            direction: 'neutral',
           },
         ]);
       },
@@ -91,6 +114,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
             },
             announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
             differs: true,
+            direction: 'tightened',
           },
           {
             name: 'container.list',
@@ -102,12 +126,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
             },
             announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
             differs: false,
+            direction: 'neutral',
           },
         ]),
       refresh_operation_governance: (params) => {
         expect(params).toEqual({
           gatekeeperId: 'gk-1',
           operationNames: ['container.restart'],
+          manifestDigest: 'digest-1',
         });
         return {
           gatekeeperId: 'gk-1',
@@ -141,8 +167,12 @@ describe('RefreshOperationGovernanceConfirm', () => {
     // Only the drifting operation renders in the diff — the unchanged one is not listed.
     expect(within(confirm).getByText('container.restart')).toBeTruthy();
     expect(within(confirm).queryByText('container.list')).toBeNull();
-    // A tightening needs no extra warning.
+    // A tightening needs no extra warning and no danger styling.
     expect(within(confirm).queryByTestId('align-gk-1-loosens')).toBeNull();
+    expect(confirmButtonIsDanger(confirm)).toBe(false);
+    expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+      'tightened',
+    );
 
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
@@ -154,7 +184,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(result.textContent).toContain('1');
   });
 
-  it('calls out an Operation that would stop needing approval (auto-approve switched on)', async () => {
+  it('auto-approve switched on at high impact is a loosening, said accurately (high still needs a person)', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () =>
         preview([
@@ -168,26 +198,138 @@ describe('RefreshOperationGovernanceConfirm', () => {
             },
             announced: { mode: 'execute', blastRadius: 'high', autoApprovable: true },
             differs: true,
+            direction: 'loosened',
           },
         ]),
     });
-    render(
-      <RefreshOperationGovernanceConfirm
-        http={http}
-        gatekeeperId="gk-1"
-        platformGateId="gate-1"
-        gateDisplayName="Docker prod"
-        onRefreshed={vi.fn()}
-        testId="align-gk-1"
-      />,
-    );
+    renderConfirm(http);
 
     fireEvent.click(screen.getByTestId('align-gk-1'));
     const confirm = await screen.findByTestId('align-gk-1-confirm');
     expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(confirmButtonIsDanger(confirm)).toBe(true);
     const warning = within(confirm).getByTestId('align-gk-1-loosens');
     expect(warning.textContent).toContain('container.restart');
-    expect(warning.textContent).toContain('不再需要人工审批');
+    expect(warning.textContent).toContain('高影响仍必须人工审批');
+  });
+
+  it('R-19 scenario A: high → low blast radius is a loosening — danger, old → new, and no longer mandatory approval', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'db.restart',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+            differs: true,
+            direction: 'loosened',
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirmButtonIsDanger(confirm)).toBe(true);
+    // Old → new in the impact line, from the shared status labels.
+    expect(confirm.textContent).toContain('db.restart: 影响级');
+    expect(confirm.textContent).toMatch(/影响级 \S+ → \S+/);
+    const warning = within(confirm).getByTestId('align-gk-1-loosens');
+    expect(warning.textContent).toContain('不再是高影响');
+    expect(warning.textContent).toContain('请求者可以批准自己的请求');
+    expect(warning.textContent).toContain('自动批准策略可以直接放行');
+    expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+      'loosened',
+    );
+  });
+
+  it('R-19 scenario B: execute → observe says it needs no grant either, and the description no longer claims who may call is unchanged', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.remove',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'medium', autoApprovable: false },
+            differs: true,
+            direction: 'loosened',
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirmButtonIsDanger(confirm)).toBe(true);
+    const warning = within(confirm).getByTestId('align-gk-1-loosens');
+    expect(warning.textContent).toContain('不再需要授权');
+    expect(confirm.textContent).not.toContain('不改变谁能调用这个系统');
+  });
+
+  it('follows the kernel direction, never its own ranking: a mixed change is a danger case', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.exec',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'low',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'high', autoApprovable: true },
+            differs: true,
+            direction: 'mixed',
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirmButtonIsDanger(confirm)).toBe(true);
+    expect(within(confirm).getByTestId('align-gk-1-loosens')).toBeTruthy();
+  });
+
+  it('R-18: a manifest that changed after the preview is refused with its own copy', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            differs: true,
+            direction: 'loosened',
+          },
+        ]),
+      refresh_operation_governance: () => {
+        throw new HttpError('capability_error', 'changed', 'manifest_changed');
+      },
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.textContent).toContain('门的清单在你查看之后变了');
   });
 
   it('maps no_announced_manifest on the confirmed call to its bilingual copy', async () => {
@@ -204,6 +346,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
             },
             announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
             differs: true,
+            direction: 'tightened',
           },
         ]),
       refresh_operation_governance: () => {
