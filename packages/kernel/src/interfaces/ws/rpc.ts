@@ -24,6 +24,7 @@ import {
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
   ConnectionSecretInvalidError,
+  ConnectorNotSelfServeError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -371,7 +372,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  if (err instanceof ConnectionSecretConflictError) {
+  if (err instanceof ConnectionSecretConflictError || err instanceof ConnectorNotSelfServeError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof GateConnectionSecretsUnavailableError) {
