@@ -1267,7 +1267,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           blastRadius: 'medium' as const,
           operationAutoApprovable: true,
           requesterScope: { capabilities: [], resources: { gatekeeper: ['g'] } },
-          workspacePolicy: { autoApprove: true, requesterCanApprove: null },
+          workspacePolicy: {
+            scope: 'gatekeeper' as const,
+            autoApprove: true,
+            requesterCanApprove: null,
+          },
         };
         expect(evaluate({ ...base, mcpTrustBlocked: true })).toMatchObject({
           decision: 'require_approval',

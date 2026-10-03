@@ -1665,15 +1665,18 @@ const governanceCapabilities: readonly Capability[] = [
       'they requested. Decided rows carry decisionReason / decidedBy / decidedAt.',
   },
   {
+    // Review 2026-10-02 R-20 / maintainer decision D-15: the rule is keyed by (gatekeeperId,
+    // actionKindTag). It used to be the bare Operation name on every gate, but names collide
+    // across gates and the approver only ever saw one.
     name: 'set_auto_approved_action_kind',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ actionKindTag: z.string() }).strict(),
+    paramsSchema: z.object({ gatekeeperId: id, actionKindTag: z.string().min(1) }).strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      '"Always allow this kind" — writes a workspace auto-approval rule for an ActionKind.',
+      '"Always allow" — auto-approve this Gatekeeper’s published Operation `actionKindTag` from now on, for every requester (a gate-scoped Policy rule; the same name on other Gatekeepers is not affected). 404 for an Operation not published on that Gatekeeper; 400 for a high-blast-radius Operation, which is never auto-approved (I8).',
   },
   {
     // 2026-09-08 wire-contract-conventions §1(c): a Grant points at a resource (`resourceType` +
@@ -1724,7 +1727,8 @@ const governanceCapabilities: readonly Capability[] = [
     minRole: 'owner',
     paramsSchema: z.object({ policy: jsonRecord }).strict(),
     resultSchema: wire.PolicyWireSchema,
-    description: 'Write a Policy rule (allow/require_approval/deny).',
+    description:
+      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one.',
   },
   {
     name: 'set_quota',
@@ -2613,7 +2617,7 @@ const agentProfileCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.AgentProfileWireSchema,
     description:
-      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — the Skill / Gatekeeper / Worker lists are exclusion lists and can only narrow; 400 invalid_params on a model outside the whitelist, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
+      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — the Skill / Gatekeeper / Worker lists are exclusion lists and can only narrow; 400 invalid_params on a model outside the whitelist, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it; autoApproveLow false narrows, null and true follow the policy). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
   },
   {
     name: 'get_agent_policy',
@@ -2645,7 +2649,7 @@ const agentProfileCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.AgentPolicyWireSchema,
     description:
-      'Update the workspace’s AgentPolicy — a partial update, omitted fields are left unchanged. Owner only.',
+      'Update the workspace’s AgentPolicy — a partial update, omitted fields are left unchanged. Owner only. allowMemberAutoApproveLow (default true) is enforced: false turns off low-blast-radius auto-approval for every requester, whatever their AgentProfile says (D-16).',
   },
 ];
 

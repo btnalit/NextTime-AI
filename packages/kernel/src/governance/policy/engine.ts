@@ -19,7 +19,9 @@ import type { BlastRadius, CapabilityScope, PolicyDecision } from '@nexttime/sha
  *                task's brief). Checked first: an out-of-scope caller is refused before any
  *                blast-radius/auto-approval reasoning even runs.
  *   - `allow`  — I8's double signal: the Operation itself declares `auto_approvable` **and** the
- *                effective workspace rule enables auto-approval for this `action_kind`. `high`
+ *                effective rule enables auto-approval for this `action_kind` — a gate-scoped
+ *                rule for this Gatekeeper, or the compiled-in `low` default; a workspace-wide
+ *                rule can only opt out (R-20 / D-15, `WorkspacePolicyInput.scope`). `high`
  *                blast radius can never resolve to `allow`, regardless of either signal (§5.4 I8
  *                "工作区不能关闭"; the DB CHECK on `policies.auto_approve` — migrations/governance/
  *                0002_policy.sql — already forbids the *workspace rule* from doing this; this
@@ -41,14 +43,25 @@ import type { BlastRadius, CapabilityScope, PolicyDecision } from '@nexttime/sha
 // -------------------------------------------------------------------------------------------
 
 /**
- * The workspace's `policies` row for one `action_kind` (migrations/governance/0002_policy.sql),
- * or `undefined` when no row exists ("no row for a given action_kind means use the compiled-in
- * default" — that migration's own header comment).
+ * The policy rule that applies to one ActionRequest (`policies.ts` `readEffectivePolicy`): the
+ * gate-scoped `gatekeeper_policies` row for `(gatekeeper, action_kind)` if one exists, else the
+ * workspace-wide `policies` row for `action_kind` (migrations/governance/0002_policy.sql), or
+ * `undefined` when neither exists ("no row means use the compiled-in default").
  */
 export interface WorkspacePolicyInput {
-  /** `policies.auto_approve` (signal 2 of I8's double signal). */
+  /**
+   * R-20 / D-15: which table the rule came from. Auto-approval consent is per gate — the approver
+   * saw one gate, and Operation names collide across gates — so only a `'gatekeeper'` rule can
+   * turn auto-approval *on*. A `'workspace'` rule may still turn it off (`autoApprove: false`),
+   * and its `requesterCanApprove` applies; its `autoApprove: true` is treated as "no opinion"
+   * (the compiled-in default), never as an opt-in. The kernel no longer writes such a row
+   * (`setPolicy`) and migration governance/0016 re-scoped the existing ones; this is the
+   * evaluation-side half of the same rule.
+   */
+  readonly scope: 'gatekeeper' | 'workspace';
+  /** `auto_approve` (signal 2 of I8's double signal). */
   readonly autoApprove: boolean;
-  /** `policies.requester_can_approve` — `undefined`/`null` means "use the blast-radius default". */
+  /** `requester_can_approve` — `undefined`/`null` means "use the blast-radius default". */
   readonly requesterCanApprove?: boolean | null;
 }
 
@@ -78,24 +91,18 @@ export interface PolicyEvaluationInput {
    *  `authorize.ts`'s job, already run before `request_action`'s handler is ever reached). */
   readonly requesterScope: CapabilityScope;
   /**
-   * S3.13 (docs/development-tasks.md "每用户智能体配置" — `AgentProfile.autoApproveLow`): the
-   * requesting principal's own **raw** `AgentProfile.autoApproveLow` — deliberately *not* the
-   * fully-resolved `effective.autoApproveLow` (`governance/agent-profile/resolve.ts`'s
-   * `resolveEffectiveAgentProfile`, which folds in `AgentPolicy.allowMemberAutoApproveLow`'s own
-   * compiled-in-`false` default). The task's own instruction for this projection is specifically
-   * "per-principal false disables auto-approve ... even when the workspace default allows it" —
-   * the principal's own explicit choice, not the workspace policy's default flowing through on
-   * its own. Feeding the resolved `effective` value here instead would mean every workspace that
-   * has never written an `agent_policies` row (i.e. every workspace that predates S3.13) gets
-   * that compiled-in default narrowing every low-blast-radius auto-approval platform-wide the
-   * moment this feature ships — caught in CI by `request-action.integration.test.ts` regressing.
-   * `true` when omitted/`undefined` (no AgentProfile row, or one that has never set this field) —
-   * every pre-S3.13 caller, and every principal who has not explicitly narrowed themselves, keeps
-   * this module's exact prior behavior. `false` narrows: even a `low`-blast-radius,
-   * `auto_approvable` Operation that a workspace policy would otherwise auto-approve must still
-   * `require_approval` for *this* requester — never the other direction (this can only ever
-   * remove an `allow` outcome, never manufacture one an operation/workspace-policy combination
-   * would not already produce on its own).
+   * S3.13 / R-21 (decision D-16): the requester's resolved `effective.autoApproveLow`
+   * (`governance/agent-profile/resolve.ts` `resolveAutoApproveLow` — the same function the
+   * "当前生效" read model uses): `false` when the workspace AgentPolicy's
+   * `allowMemberAutoApproveLow` is off (an enforced narrowing for every requester) or the
+   * principal's own AgentProfile says `false`. Until D-16 the runtime fed only the profile's raw
+   * value here, so an owner's policy narrowing showed as effective but was ignored; the policy's
+   * compiled-in default flipped to `true` in the same change, so a workspace with no AgentPolicy
+   * row keeps auto-approving low-blast-radius actions. `true` when omitted. `false` narrows: even
+   * a `low`-blast-radius, `auto_approvable` Operation that a workspace policy would otherwise
+   * auto-approve must still `require_approval` for *this* requester — never the other direction
+   * (this can only ever remove an `allow` outcome, never manufacture one an
+   * operation/workspace-policy combination would not already produce on its own).
    */
   readonly principalAutoApproveLowEnabled?: boolean;
 }
@@ -131,10 +138,10 @@ export type PolicyEvaluationReason =
   | 'mcp_gate_not_vetted'
   | 'workspace_policy_disables_auto_approve'
   | 'no_workspace_policy_and_not_low_blast_radius'
-  // S3.13: the requester's own AgentProfile.autoApproveLow (resolved false, whether by explicit
-  // choice or by inheriting a workspace AgentPolicy.allowMemberAutoApproveLow of false) narrows
-  // an otherwise-`allow` low-blast-radius outcome back to `require_approval` for this requester
-  // only — see `PolicyEvaluationInput.principalAutoApproveLowEnabled`'s own doc comment.
+  // S3.13 / D-16: the requester's resolved autoApproveLow is false — the workspace AgentPolicy's
+  // allowMemberAutoApproveLow is off (enforced for everyone) or the principal's own AgentProfile
+  // says false — which narrows an otherwise-`allow` low-blast-radius outcome back to
+  // `require_approval` for this requester; see `PolicyEvaluationInput.principalAutoApproveLowEnabled`.
   | 'principal_auto_approve_low_disabled';
 
 /** The exact coverage rule this module implements (see `GATEKEEPER_RESOURCE_SCOPE_KEY`'s doc
@@ -144,17 +151,14 @@ function hasGatekeeperScope(scope: CapabilityScope, gatekeeperId: string): boole
 }
 
 /**
- * Whether the workspace's effective auto-approval rule is "on" for this action_kind (I8 signal 2):
- * an explicit `policies` row wins outright; absent one, the compiled-in default is "on" only for
- * `low` blast radius (S2.3's own default-policy-table note: "low 自动批准、medium / high 与未分类要人
- * 批").
+ * A rule row's own say on auto-approval for this action_kind (I8 signal 2): `true` / `false` when
+ * it opts in / out, `undefined` when it has none and the compiled-in default applies — no row, or
+ * (R-20 / D-15) a workspace-wide row's `autoApprove: true`, see `WorkspacePolicyInput.scope`.
  */
-function effectiveWorkspaceAutoApprove(
-  blastRadius: BlastRadius,
-  workspacePolicy: WorkspacePolicyInput | undefined,
-): boolean {
-  if (workspacePolicy) return workspacePolicy.autoApprove;
-  return blastRadius === 'low';
+function ruleAutoApprove(workspacePolicy: WorkspacePolicyInput | undefined): boolean | undefined {
+  if (!workspacePolicy) return undefined;
+  if (workspacePolicy.scope === 'workspace' && workspacePolicy.autoApprove) return undefined;
+  return workspacePolicy.autoApprove;
 }
 
 /** I8/§5.8: `requester_can_approve` defaults `false` for `high`, `true` otherwise; a workspace row
@@ -208,18 +212,19 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
     };
   }
 
-  const workspaceAutoApprove = effectiveWorkspaceAutoApprove(
-    input.blastRadius,
-    input.workspacePolicy,
-  );
+  // I8 signal 2: the rule row's own say, else the compiled-in default ("on" only for `low` — S2.3's
+  // default-policy-table note: "low 自动批准、medium / high 与未分类要人批").
+  const ruleOpinion = ruleAutoApprove(input.workspacePolicy);
+  const workspaceAutoApprove = ruleOpinion ?? input.blastRadius === 'low';
   if (!workspaceAutoApprove) {
-    const reason: PolicyEvaluationReason = input.workspacePolicy
-      ? 'workspace_policy_disables_auto_approve'
-      : 'no_workspace_policy_and_not_low_blast_radius';
+    const reason: PolicyEvaluationReason =
+      ruleOpinion === false
+        ? 'workspace_policy_disables_auto_approve'
+        : 'no_workspace_policy_and_not_low_blast_radius';
     return { decision: 'require_approval', reason, requesterCanApprove };
   }
 
-  // S3.13: the requester's own AgentProfile.autoApproveLow narrows a low-blast-radius `allow`
+  // S3.13 / D-16: the requester's resolved autoApproveLow narrows a low-blast-radius `allow`
   // back to `require_approval` — checked only once every other signal has already agreed on
   // `allow`, so this can only ever remove that outcome, never produce one on its own (a `false`
   // here on a `medium`/`high` Operation is a no-op: those can never reach this line either
@@ -232,9 +237,10 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
     };
   }
 
-  const reason: PolicyEvaluationReason = input.workspacePolicy
-    ? 'auto_approved_by_operation_and_workspace_policy'
-    : 'auto_approved_by_operation_and_low_blast_radius_default';
+  const reason: PolicyEvaluationReason =
+    ruleOpinion === true
+      ? 'auto_approved_by_operation_and_workspace_policy'
+      : 'auto_approved_by_operation_and_low_blast_radius_default';
   return { decision: 'allow', reason, requesterCanApprove };
 }
 

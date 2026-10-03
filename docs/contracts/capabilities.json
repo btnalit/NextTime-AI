@@ -11012,6 +11012,12 @@
               "createdAt": {
                 "type": "string"
               },
+              "gatekeeperId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -11030,6 +11036,7 @@
             },
             "required": [
               "id",
+              "gatekeeperId",
               "actionKindTag",
               "blastRadius",
               "autoApprove",
@@ -18509,10 +18516,16 @@
       "additionalProperties": false,
       "properties": {
         "actionKindTag": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
           "type": "string"
         }
       },
       "required": [
+        "gatekeeperId",
         "actionKindTag"
       ],
       "type": "object"
@@ -18545,6 +18558,12 @@
         "createdAt": {
           "type": "string"
         },
+        "gatekeeperId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -18563,6 +18582,7 @@
       },
       "required": [
         "id",
+        "gatekeeperId",
         "actionKindTag",
         "blastRadius",
         "autoApprove",
@@ -19064,6 +19084,12 @@
         "createdAt": {
           "type": "string"
         },
+        "gatekeeperId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -19082,6 +19108,7 @@
       },
       "required": [
         "id",
+        "gatekeeperId",
         "actionKindTag",
         "blastRadius",
         "autoApprove",

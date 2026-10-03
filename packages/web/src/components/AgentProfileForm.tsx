@@ -55,6 +55,9 @@ interface FormState {
   readonly excludedGatekeepers: readonly string[];
   readonly excludedWorkerDefs: readonly string[];
   readonly promptAddendum: string;
+  /** R-21 / D-16: ticked = "follow the workspace" (the profile's `null`), unticked = "narrow me"
+   *  (`false`). The profile can only narrow — an explicit `true` would mean the same as `null`
+   *  under the enforced AgentPolicy — so the form never writes `true`. */
   readonly autoApproveLow: boolean;
 }
 
@@ -65,7 +68,7 @@ function initialState(profile: AgentProfile): FormState {
     excludedGatekeepers: profile.excludedGatekeepers,
     excludedWorkerDefs: profile.excludedWorkerDefinitions,
     promptAddendum: profile.promptAddendum ?? '',
-    autoApproveLow: profile.autoApproveLow ?? profile.effective.autoApproveLow,
+    autoApproveLow: profile.autoApproveLow !== false,
   };
 }
 
@@ -77,8 +80,11 @@ function toggleItem(list: readonly string[], id: string): readonly string[] {
  * components/AgentProfileForm: the editable half of 我的智能体 My Agent (`/me/agent`, S3.13) —
  * model select, Skills/systems/Worker-definition checklists (ticked = in use; unticking excludes —
  * see `FormState`), prompt addendum with a live char count, and the autoApproveLow toggle. Always
- * sends the full six-field state on `set_agent_profile` (never a partial diff) so a field the
- * reader clears is unambiguously cleared.
+ * sends the full state of the first five fields on `set_agent_profile` (never a partial diff) so a
+ * field the reader clears is unambiguously cleared. `autoApproveLow` is the exception (R-21): it is
+ * sent only when the reader changed the checkbox, and never while the checkbox is disabled — an
+ * unrelated save must not turn "inherit" into an explicit value, and a stored value the policy no
+ * longer allows must not lock the profile against every later save.
  */
 export function AgentProfileForm({
   http,
@@ -121,7 +127,13 @@ export function AgentProfileForm({
 
   const maxChars = policy?.maxPromptAddendumChars;
   const overLimit = maxChars !== undefined && state.promptAddendum.length > maxChars;
-  const autoApproveLowDisabled = editForbidden || policy?.allowMemberAutoApproveLow === false;
+  // R-21 / D-16: the workspace AgentPolicy's `false` is enforced — the checkbox is then disabled,
+  // shows the effective (off) value, and is never sent.
+  const autoApproveLowForcedOff = policy?.allowMemberAutoApproveLow === false;
+  const autoApproveLowDisabled = editForbidden || autoApproveLowForcedOff;
+  const autoApproveLowChecked = autoApproveLowDisabled
+    ? profile.effective.autoApproveLow
+    : state.autoApproveLow;
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setState((prev) => ({ ...prev, [key]: value }));
@@ -133,6 +145,10 @@ export function AgentProfileForm({
     setFieldErrors({});
     setSubmitError(null);
 
+    // Only a change the reader made, on an enabled checkbox: ticked → `null` (follow the
+    // workspace), unticked → `false` (narrow me).
+    const autoApproveLowChanged =
+      !autoApproveLowDisabled && state.autoApproveLow !== (profile.autoApproveLow !== false);
     const params: SetAgentProfileParams = {
       principalId,
       model: state.model === INHERIT_MODEL ? null : state.model,
@@ -140,7 +156,7 @@ export function AgentProfileForm({
       excludedGatekeepers: state.excludedGatekeepers,
       excludedWorkerDefinitions: state.excludedWorkerDefs,
       promptAddendum: state.promptAddendum.trim().length > 0 ? state.promptAddendum : null,
-      autoApproveLow: state.autoApproveLow,
+      ...(autoApproveLowChanged ? { autoApproveLow: state.autoApproveLow ? null : false } : {}),
     };
 
     setSubmitting(true);
@@ -337,23 +353,31 @@ export function AgentProfileForm({
         <label className="checkbox" data-testid="agent-profile-auto-approve-low">
           <input
             type="checkbox"
-            checked={state.autoApproveLow}
+            checked={autoApproveLowChecked}
             onChange={(event) => update('autoApproveLow', event.target.checked)}
             disabled={disabled || autoApproveLowDisabled}
           />
           <span>
             {t('低风险动作自动批准', 'Auto-approve low blast-radius actions')}
-            {autoApproveLowDisabled && !editForbidden ? (
+            {autoApproveLowForcedOff && !editForbidden ? (
               <span className="text-3 text-small">
                 {' '}
                 {t(
-                  '— 工作区策略未开放"允许自动批准低风险动作"',
-                  'workspace policy does not allow "auto-approve low-impact actions"',
+                  '— 工作区策略已关闭低风险自动批准，对所有人强制生效',
+                  '— the workspace policy has turned low-risk auto-approval off for everyone',
                 )}
               </span>
             ) : null}
           </span>
         </label>
+        {!autoApproveLowDisabled ? (
+          <p className="field-hint" data-testid="agent-profile-auto-approve-low-hint">
+            {t(
+              '勾选：跟随工作区策略（当前允许）。取消勾选：你发起的低风险动作也都要人工审批。',
+              'Ticked: follow the workspace policy (currently allowed). Unticked: your low-blast-radius actions need human approval too.',
+            )}
+          </p>
+        ) : null}
 
         {fieldErrors.autoApproveLow ? (
           <p className="field-error" role="alert">

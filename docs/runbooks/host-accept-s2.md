@@ -134,7 +134,7 @@ PASS step5-bob-forbidden bob (member) approve(<uuid>) -> 403
 PASS step5-still-pending ActionRequest <uuid> unaffected by bob's forbidden attempt
 PASS step4-approve-1 alice approved <uuid>
 PASS step4-executed-1 first ssh run executed
-PASS step4-always-allow workspace policy: ssh.run_command auto-approved from now on
+PASS step4-always-allow gate policy: ssh.run_command on the ssh gate auto-approved from now on
 PASS step4-invoke-worker-2 second ssh Worker run -> auto_approved
 PASS step4-no-second-card list_pending unchanged (0) — second identical run produced no approval card
 PASS step4-second-auto-approved second ActionRequest (<uuid>) resolved policy_decision=allow (auto_approved) directly, no human decision required

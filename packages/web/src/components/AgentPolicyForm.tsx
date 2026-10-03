@@ -325,13 +325,15 @@ export function AgentPolicyForm({
           onChange={(event) => update('allowMemberAutoApproveLow', event.target.checked)}
           disabled={submitting}
         />
-        <span>
-          {t(
-            '允许 member 自动批准低风险动作',
-            'Allow members to auto-approve low-blast-radius actions',
-          )}
-        </span>
+        <span>{t('低风险动作可以自动批准', 'Low-blast-radius actions may be auto-approved')}</span>
       </label>
+      {/* R-21 / D-16: an enforced narrowing — the runtime reads exactly this. */}
+      <p className="field-hint" data-testid="agent-policy-auto-approve-low-hint">
+        {t(
+          '关闭后强制生效：工作区内所有人发起的低风险动作都要人工审批，个人的「我的智能体」设置不能改回。开启时，每个人仍可在「我的智能体」里为自己关闭。',
+          'Off is enforced: every low-blast-radius action anyone in this workspace requests needs human approval, and no personal My Agent setting can turn it back on. While on, each person can still turn it off for themselves on My Agent.',
+        )}
+      </p>
 
       {submitError !== null ? (
         <ErrorBanner error={submitError} title={t('无法保存策略', 'Could not save the policy')} />
@@ -339,8 +341,8 @@ export function AgentPolicyForm({
 
       <Notice>
         {t(
-          '变更立即影响所有未显式覆盖该项的智能体配置。',
-          'Changes apply immediately to every Agent profile that has not explicitly overridden this field.',
+          '变更立即生效。这里的限制对所有成员的智能体强制生效，个人配置只能在此范围内再收窄。',
+          'Changes take effect immediately. These limits bind every member’s agent; a personal profile can only narrow further within them.',
         )}
       </Notice>
 

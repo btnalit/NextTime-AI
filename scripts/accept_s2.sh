@@ -870,11 +870,11 @@ step4_step5_ssh_always_allow() {
   [ "$executed" = "1" ] || fail "step4-executed-1" "ActionRequest $AR_ID_SSH1 did not reach executed within 30s (last: $ar_status)"
   pass "step4-executed-1" "first ssh run executed"
 
-  # --- "always allow this kind" ---
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"actionKindTag\":\"ssh.run_command\"}" "")
+  # --- "always allow this kind" (R-20 / D-15: keyed by gate + action kind) ---
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
-  pass "step4-always-allow" "workspace policy: ssh.run_command auto-approved from now on"
+  pass "step4-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
 
   out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
   pending_before_second=$(parse_kv "$out" EXTRACTED)
@@ -1336,10 +1336,10 @@ real_scenarios_step() {
   i=1
   while [ "$i" -le "$RUNS" ]; do real_ssh_run "$i" approve; i=$((i + 1)); done
 
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"actionKindTag\":\"ssh.run_command\"}" "")
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "real-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
-  pass "real-always-allow" "workspace policy: ssh.run_command auto-approved from now on"
+  pass "real-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
   real_ssh_run 1 auto
 }
 
