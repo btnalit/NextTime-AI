@@ -694,7 +694,9 @@ export function createBackgroundServices(
   // (skipRoleSwitch): this is background, cross-workspace machinery in the same category as the
   // outbox dispatcher itself and the approval-expiry reaper above, not a per-request path.
   // `buildGatekeeperExecutionDeps` is the same construction `createServer()` uses for
-  // `request_action`'s own phase-2 continuation — see that function's own doc comment.
+  // `request_action`'s own phase-2 continuation — see that function's own doc comment. The
+  // consumer starts the drain without awaiting it (R-52): a slow `apply` must not hold the
+  // dispatcher's single serial delivery loop, and with it every other event.
   const { actionExecutor, withTransaction: adminWithTransaction } = buildGatekeeperExecutionDeps(
     options.pool,
   );

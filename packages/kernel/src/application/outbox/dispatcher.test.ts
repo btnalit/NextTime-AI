@@ -1,6 +1,9 @@
 import type { Pool, PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApprovalDrainer } from '../../governance/approval/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
+import type { WithTransactionFn } from '../gateway/action-executor.js';
+import { registerActionRequestDrainConsumer } from '../gateway/action-request-drain-consumer.js';
 import { OutboxDeliveryError, OutboxDispatcher } from './dispatcher.js';
 
 /**
@@ -579,5 +582,60 @@ describe('OutboxDispatcher.start/stop', () => {
     expect(consumer).toHaveBeenCalledTimes(1);
     expect(rows[0]?.dispatched_at).not.toBeNull();
     dispatcher.stop();
+  });
+});
+
+// R-52 (2026-10-02 review): the dispatcher is one serial loop delivering each row inside an open
+// transaction. The approval-drain consumer used to await the gate `apply` there, so one approved
+// `container.restart` held up `TurnStarted` delivery in every workspace. With the real consumer
+// wired to a drain that never finishes, the row after it is still delivered.
+describe('OutboxDispatcher + the approval-drain consumer', () => {
+  it('a drain still applying does not hold up delivery of the rows after it', async () => {
+    const { pool, rows } = createFakeOutboxPool([
+      {
+        id: '1',
+        workspace_id: 'ws1',
+        event_type: 'ActionRequestUpdated',
+        payload: {
+          type: 'ActionRequestUpdated',
+          workspaceId: 'ws1',
+          actionRequestId: 'ar-1',
+          status: 'approved',
+        },
+        dispatched_at: null,
+      },
+      {
+        id: '2',
+        workspace_id: 'ws1',
+        event_type: 'TurnStarted',
+        payload: {
+          type: 'TurnStarted',
+          workspaceId: 'ws1',
+          chatId: 'chat-1',
+          turnId: 'turn-1',
+          principalId: 'p-1',
+          chatMessageId: 'm-1',
+        },
+        dispatched_at: null,
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool);
+    const drainGatekeeper = vi.fn(() => new Promise<never>(() => {})); // an apply that never returns
+    registerActionRequestDrainConsumer(
+      dispatcher,
+      { drainGatekeeper } as unknown as ApprovalDrainer,
+      (async () => ({ gatekeeperId: 'gk-1' })) as unknown as WithTransactionFn,
+    );
+    const turnsStarted: string[] = [];
+    dispatcher.subscribe('TurnStarted', (event) => {
+      turnsStarted.push(event.turnId);
+    });
+
+    const delivered = await dispatcher.pollOnce();
+
+    expect(delivered).toBe(2);
+    expect(drainGatekeeper).toHaveBeenCalledTimes(1);
+    expect(turnsStarted).toEqual(['turn-1']);
+    expect(rows.every((row) => row.dispatched_at !== null)).toBe(true);
   });
 });

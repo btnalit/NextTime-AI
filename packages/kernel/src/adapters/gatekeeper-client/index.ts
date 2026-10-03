@@ -143,6 +143,47 @@ export interface HttpGatekeeperClientOptions {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_APPLY_TIMEOUT_MS = 60_000;
+/** R-49: the most bytes one gate response body may have. Above the gate's own 10 MiB exec output
+ *  buffer (`@nexttime/gatekeeper-base` `kinds/ssh.ts` / `kinds/cli.ts`) with room for JSON
+ *  escaping; a larger body is refused (`response_too_large`) rather than buffered whole. */
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+class ResponseTooLargeError extends Error {}
+
+/**
+ * R-49: reads `response`'s body as UTF-8 text, refusing past `maxBytes`, and gives up the moment
+ * `signal` aborts — raced explicitly, so the budget holds whether or not the fetch implementation
+ * ties its body stream to the request's signal.
+ */
+async function readBodyBounded(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = (): void => reject(new Error('aborted while reading the response body'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  aborted.catch(() => {}); // only ever observed through the race below
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new ResponseTooLargeError();
+      chunks.push(value);
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => {});
+    throw err;
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 interface EnvelopeOk {
   readonly ok: true;
@@ -180,30 +221,57 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     const headers: Record<string, string> = { ...correlationHeaders(currentCorrelationId()) };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.token !== undefined) headers.authorization = gateAuthorizationHeader(this.token);
+    const timedOut = (): GatekeeperTimeoutError =>
+      new GatekeeperTimeoutError(`gatekeeper client: ${path} timed out after ${timeoutMs}ms`, path);
     let response: Response;
+    let text: string;
     try {
-      response = await this.fetchImpl(url, {
-        method,
-        headers: Object.keys(headers).length > 0 ? headers : undefined,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-    } catch (err) {
-      if ((err as { name?: string }).name === 'AbortError') {
-        throw new GatekeeperTimeoutError(
-          `gatekeeper client: ${path} timed out after ${timeoutMs}ms`,
-          path,
-        );
+      try {
+        response = await this.fetchImpl(url, {
+          method,
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if ((err as { name?: string }).name === 'AbortError') throw timedOut();
+        throw new GatekeeperClientError(`gatekeeper client: ${path} request failed`, {
+          code: 'network_error',
+          status: 0,
+        });
       }
-      throw new GatekeeperClientError(`gatekeeper client: ${path} request failed`, {
-        code: 'network_error',
-        status: 0,
-      });
+      // R-49: the abort stays armed through the body. A gate (or a workspace owner's endpoint) that
+      // sends its headers and then trickles the body must not hold the call — and, for a read
+      // inside the dispatch transaction, a pool connection — past the budget; for `gate/apply` a
+      // stall here is the same "outcome unknown" as a stall before the headers.
+      try {
+        text = await readBodyBounded(response, MAX_RESPONSE_BYTES, controller.signal);
+      } catch (err) {
+        if (err instanceof ResponseTooLargeError) {
+          throw new GatekeeperClientError(
+            `gatekeeper client: ${path} response exceeds ${MAX_RESPONSE_BYTES} bytes`,
+            { code: 'response_too_large', status: response.status },
+          );
+        }
+        if (controller.signal.aborted) throw timedOut();
+        throw new GatekeeperClientError(`gatekeeper client: ${path} response failed`, {
+          code: 'network_error',
+          status: 0,
+        });
+      }
     } finally {
       clearTimeout(timeout);
     }
 
-    const envelope = (await response.json()) as Envelope;
+    let envelope: Envelope;
+    try {
+      envelope = JSON.parse(text) as Envelope;
+    } catch {
+      throw new GatekeeperClientError(`gatekeeper client: ${path} returned a non-JSON response`, {
+        code: 'invalid_response',
+        status: response.status,
+      });
+    }
     if (!envelope.ok) {
       throw new GatekeeperClientError(envelope.error.message, {
         code: envelope.error.code,
