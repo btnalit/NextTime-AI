@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.39.0](https://github.com/btnalit/NextTime-AI/compare/v0.38.0...v0.39.0) (2026-10-03)
+
+
+### Bug Fixes
+
+* **ci:** only build and cosign run with push and signing rights; pull-images matches the signer exactly (R-33) ([#427](https://github.com/btnalit/NextTime-AI/issues/427)) ([0ff575d](https://github.com/btnalit/NextTime-AI/commit/0ff575dbfd0f5177969a730dcfad6e684f70adea))
+* **gatekeeper-base:** HTTP path parameters stay one segment; binding paths keep the base URL prefix (R-22) ([#430](https://github.com/btnalit/NextTime-AI/issues/430)) ([266c47e](https://github.com/btnalit/NextTime-AI/commit/266c47eb42e30e989317562a761956e297d00622))
+* **gateway:** confirm a gate's re-announced manifest before it takes effect; one kernel direction for classification confirms (R-18, R-19) ([#429](https://github.com/btnalit/NextTime-AI/issues/429)) ([18d608e](https://github.com/btnalit/NextTime-AI/commit/18d608e36da27ca05690384f0d9dbe14f7728c8e))
+* **identity:** audit API-key binds, identity claims and CLI identity changes; atomic login lockout; scoped issue_service_handle (R-28, R-43, R-36) ([#432](https://github.com/btnalit/NextTime-AI/issues/432)) ([28e0ae5](https://github.com/btnalit/NextTime-AI/commit/28e0ae590a6902b6027f4b593c3dc913bff2ea58))
+* **identity:** resets, disables and password changes revoke Handles and keys; no API keys for people; sign-out always ends the session (R-12, R-13, R-15) ([#428](https://github.com/btnalit/NextTime-AI/issues/428)) ([d585245](https://github.com/btnalit/NextTime-AI/commit/d5852457718e01a50517f26b96f9de4e3cc4505f))
+* **kernel:** the database confines writes — unused grants revoked, revocation monotonic, platform tables under RLS (R-29) ([#436](https://github.com/btnalit/NextTime-AI/issues/436)) ([f88ca3b](https://github.com/btnalit/NextTime-AI/commit/f88ca3bda93647278eec51c1c8bcde74a5c26773))
+* **llm-proxy:** keys only go to their own upstream; provider-side tools and agent-chosen headers never reach the provider (R-23, R-30) ([#426](https://github.com/btnalit/NextTime-AI/issues/426)) ([1be688b](https://github.com/btnalit/NextTime-AI/commit/1be688b0cb3102fe2c82c25f30410b8ea39773f2))
+* **llm-proxy:** page handle revocations instead of truncating at 5000; advance the sync cursor only as far as received (R-14) ([#435](https://github.com/btnalit/NextTime-AI/issues/435)) ([0f5d33e](https://github.com/btnalit/NextTime-AI/commit/0f5d33e69731c29934d0b84fd214ee212f9133ed))
+* **scripts:** keys, Handles and connection secrets never ride in argv (R-34) ([#431](https://github.com/btnalit/NextTime-AI/issues/431)) ([c577c44](https://github.com/btnalit/NextTime-AI/commit/c577c44206583c3b5748c8af932410e3e7ecca0f))
+* **security:** provider and RAGFlow keys from mounted files; collector strips credentials from git remote URLs (R-24, R-25) ([#434](https://github.com/btnalit/NextTime-AI/issues/434)) ([9f6f04e](https://github.com/btnalit/NextTime-AI/commit/9f6f04e384945ab2b122feb797fe9c5065593bbe))
+
+
+### Documentation
+
+* **status:** review wave 3 merged — leftover 117 closed ([#437](https://github.com/btnalit/NextTime-AI/issues/437)) ([7883e8d](https://github.com/btnalit/NextTime-AI/commit/7883e8d5225fb518ac0b45f3c3e008f5cf2f8b4d))
+
 ## [0.38.0](https://github.com/btnalit/NextTime-AI/compare/v0.37.0...v0.38.0) (2026-10-03)
 
 
