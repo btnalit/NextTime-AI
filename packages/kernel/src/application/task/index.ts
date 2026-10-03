@@ -38,6 +38,7 @@ export {
   type FindMeansCaller,
   type ListTasksFilter,
   type TasksPage,
+  type TaskViewer,
   type TaskWithWorkerRuns,
   type WorkerDefinitionMatch,
   type WorkerRunUsageTokens,
@@ -45,10 +46,12 @@ export {
   findProcedures,
   findWorkers,
   findWorkerRunBySessionId,
+  getTaskVisibleTo,
   getTaskWithWorkerRuns,
   listTasksForPrincipal,
   recordWorkerRunUsage,
   taskForWorkerRun,
+  taskVisibleTo,
   terminateTask,
 } from './service.js';
 

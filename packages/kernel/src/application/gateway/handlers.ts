@@ -42,6 +42,7 @@ import {
   findProcedures,
   findWorkers,
   getConfiguredTaskRuntime,
+  getTaskVisibleTo,
   getTaskWithWorkerRuns,
   invokeWorkerCreate,
   listQuotas,
@@ -49,6 +50,7 @@ import {
   resolveParentAuthority,
   resolveWaitTimeoutMs,
   setQuotaValue,
+  taskVisibleTo,
   terminateTask,
   waitForOutcome,
 } from '../../application/task/index.js';
@@ -1490,9 +1492,23 @@ function toWireTask(task: TaskRow, workerRuns: readonly WorkerRunRow[]) {
   };
 }
 
-const getTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
+/** `get_task` — D-21 (review 2026-10-02, L2-11): only the workspace owner, the Task's requester
+ *  and the Task's own WorkerRun Handle may read it (`taskVisibleTo`, application/task/service.ts);
+ *  anyone else gets the same 404 an unknown id gets. On the handle channel the viewer is the
+ *  Handle's `obo` (I13) with that principal's role, plus the Handle's own session. */
+const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { taskId } = params as { taskId: string };
-  const { task, workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const { task, workerRuns } = await getTaskVisibleTo(
+    client,
+    workspaceId,
+    {
+      principalId: caller.id,
+      role: caller.role,
+      ...(ctx?.claims ? { sessionId: ctx.claims.sid } : {}),
+    },
+    taskId,
+  );
   return {
     result: toWireTask(task, workerRuns),
     resourceType: 'task',
@@ -1630,13 +1646,17 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
  *  bypasses (tenant-root, same convention every other owner-override in this module already
  *  uses). Reads the Task first (`getTaskWithWorkerRuns`, the same read `get_task` already does) —
  *  a 403 for "not yours" is preferable to `terminateTask`'s own `TaskNotFoundError` (404) leaking
- *  no information either way, but 403 is the more accurate reason here. */
+ *  no information either way, but 403 is the more accurate reason here.
+ *
+ *  D-21: the ownership rule is `taskVisibleTo` — the one predicate `get_task` reads with. No
+ *  sessionId is passed (and no WorkerRun Handle carries this capability — it is outside the Worker
+ *  ceiling), so the rule here stays exactly "owner or requester". */
 const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { taskId } = params as { taskId: string };
   const caller = await currentPrincipalRole(client, workspaceId);
   if (caller.role !== 'owner') {
-    const { task } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
-    if (task.onBehalfOf !== caller.id) {
+    const { task, workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
+    if (!taskVisibleTo({ principalId: caller.id, role: caller.role }, task, workerRuns)) {
       throw new ForbiddenError(
         `cancel_task: principal ${caller.id} may not cancel Task ${taskId} (owned by another principal)`,
       );
