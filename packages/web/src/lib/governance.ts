@@ -1,8 +1,9 @@
-import type {
-  GrantStatus,
-  OperationGovernanceChangeWire,
-  PrincipalKind,
-  Role,
+import {
+  type GrantStatus,
+  type OperationGovernanceChangeWire,
+  type PrincipalKind,
+  type Role,
+  getCapability,
 } from '@nexttime/shared';
 import type { ActionRequestRowLike } from './action-card.js';
 import type { Translate } from './i18n.js';
@@ -85,6 +86,19 @@ export function ownerCredentialConfirmCopy(t: Translate): {
       t('修改授权、策略、配额与系统接入', 'Change grants, policies, quotas and system connections'),
     ],
   };
+}
+
+/** R-39 (review 2026-10-02, maintainer decision D-13: a gate grant holder stays an approver, and
+ *  the console says so): whether granting a gate to a principal with `role` also makes them an
+ *  approver of every action on that gate. The kernel counts a gatekeeper grant as I14 approval
+ *  scope, and `approve`'s registry `minRole` decides whose grant counts — the same
+ *  `roleSatisfiesMinRole` rule the kernel applies (`member` is the floor every role clears,
+ *  anything else needs that exact role). An `owner` approves everything without a grant, so for
+ *  them the grant adds nothing and this answers `false`. */
+export function gateGrantMakesApprover(role: Role): boolean {
+  if (role === 'owner') return false;
+  const minRole = getCapability('approve')?.minRole;
+  return minRole === undefined || minRole === 'member' || role === minRole;
 }
 
 // -------------------------------------------------------------------------------------------

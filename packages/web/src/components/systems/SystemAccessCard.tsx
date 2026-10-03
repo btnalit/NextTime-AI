@@ -2,11 +2,13 @@ import type {
   ExecutionReadinessGateWire,
   ExecutionReadinessWire,
   RefreshOperationGovernanceResultWire,
+  Role,
   RotateConnectionSecretResultWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { shortId } from '../../lib/format.js';
+import { gateGrantMakesApprover } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
@@ -49,6 +51,9 @@ export interface SystemAccessGranteeRow {
   /** Known from the owner/operator directory read; omitted for the self-only row a plain member
    *  sees (`RefChip` then self-resolves it through `resolve_refs`). */
   readonly principalName?: string;
+  /** From the same directory read — drives the R-39 approver disclosure (`gateGrantMakesApprover`):
+   *  an operator grantee is also an approver of every action on this gate. Omitted with the name. */
+  readonly principalRole?: Role;
 }
 
 export interface SystemAccessHealth {
@@ -444,6 +449,12 @@ export function SystemAccessCard({
                   'Who is granted (writes; reads need no grant)',
                 )}
               </span>
+              <p className="field-hint" data-testid="system-access-approver-hint">
+                {t(
+                  '授权给 operator 时，他同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
+                  'A grant to an operator also makes them an approver of every action on this gate — they can approve or reject other members’ writes. Owners can approve everything anyway.',
+                )}
+              </p>
               {rows.length === 0 ? (
                 <EmptyState
                   variant="inline"
@@ -538,6 +549,7 @@ function GranteeRow({
   const t = useT();
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const gateStatus = readiness?.gates.find((entry) => entry.gateId === gateId);
+  const approver = row.principalRole !== undefined && gateGrantMakesApprover(row.principalRole);
 
   return (
     <div className="row-wrap" data-testid="system-access-row" data-principal-id={row.principalId}>
@@ -549,6 +561,18 @@ function GranteeRow({
         size="s"
       />
       {isSelf ? <span className="tag">{t('你', 'You')}</span> : null}
+      {approver ? (
+        <span
+          className="tag"
+          title={t(
+            '这份授权也让他成为这个门上所有动作的审批者',
+            'This grant also makes them an approver of every action on this gate',
+          )}
+          data-testid="system-access-approver-tag"
+        >
+          {t('也是审批者', 'Also an approver')}
+        </span>
+      ) : null}
       {readiness === undefined ? (
         <span className="text-3 text-small">
           {readinessPending
@@ -590,10 +614,17 @@ function GranteeRow({
             </Button>
           }
           title={t('撤销授权', 'Revoke this grant')}
-          description={t(
-            '该成员将不能再经 Worker 对这个系统执行写操作；只读操作不需要授权，不受影响。',
-            'This member will no longer be able to act on this system through a Worker; read operations need no grant and are unaffected.',
-          )}
+          description={
+            approver
+              ? t(
+                  '该成员将不能再经 Worker 对这个系统执行写操作，也不再是这个门上动作的审批者；只读操作不需要授权，不受影响。',
+                  'This member will no longer be able to act on this system through a Worker, and is no longer an approver of actions on this gate; read operations need no grant and are unaffected.',
+                )
+              : t(
+                  '该成员将不能再经 Worker 对这个系统执行写操作；只读操作不需要授权，不受影响。',
+                  'This member will no longer be able to act on this system through a Worker; read operations need no grant and are unaffected.',
+                )
+          }
           danger
           confirmLabel={t('撤销', 'Revoke')}
           onConfirm={() => onRevoke(row.grantId)}
