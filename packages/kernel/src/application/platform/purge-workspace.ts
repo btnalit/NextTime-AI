@@ -50,8 +50,11 @@ import { readPlatformSettings } from './settings.js';
  * key among them, so a future migration's table is picked up automatically) and sorted by
  * `computeWorkspaceTableDeletionOrder` — children before parents, ties broken by
  * {@link PURGE_TABLE_PRIORITY} so the result reads as §4 wherever the foreign keys leave a
- * choice. Every statement runs in one transaction; the two append-only triggers (`links` I4,
- * `audit_records` I11) are disabled and re-enabled inside it, never past COMMIT.
+ * choice. Every statement runs in one transaction. The per-table deletes run under
+ * `set local session_replication_role = replica` (R-65), which is how they get past the two
+ * append-only triggers (`links` I4, `audit_records` I11) without locking either table for other
+ * workspaces; the role is back to `origin` before the workspace row, the users and the platform
+ * audit row are touched, and it can never outlive the transaction.
  *
  * **Edge (a)** — a `service` Principal (a collector, an external runtime over `/mcp`) may have a
  * Handle some process is still presenting: the preview and the result carry a
@@ -232,6 +235,82 @@ export function computeWorkspaceTableDeletionOrder(schema: WorkspaceScopedSchema
   return order;
 }
 
+/** A foreign key into one of the cascade's tables that the cascade's own deletes do not
+ *  provably satisfy — see {@link findForeignKeysOutsideCascade}. */
+export interface ForeignKeyOutsideCascade {
+  readonly constraint: string;
+  readonly childTable: string;
+  readonly parentTable: string;
+}
+
+export class PurgeCascadeForeignKeyError extends Error {
+  readonly foreignKeys: readonly ForeignKeyOutsideCascade[];
+  constructor(foreignKeys: readonly ForeignKeyOutsideCascade[]) {
+    const listed = foreignKeys
+      .map((fk) => `${fk.childTable} (${fk.constraint}) → ${fk.parentTable}`)
+      .join(', ');
+    super(
+      `purge-workspace: refusing to purge — these foreign keys reference rows the cascade deletes, but their own rows are not deleted with them: ${listed}. Give the child table a workspace_id that is part of the foreign key, or extend the cascade`,
+    );
+    this.name = 'PurgeCascadeForeignKeyError';
+    this.foreignKeys = foreignKeys;
+  }
+}
+
+/**
+ * Every foreign key that points into `tables` (the cascade's delete set) and is NOT of the shape
+ * the cascade satisfies by construction: a child table that is itself in `tables` (so it is
+ * deleted too, earlier in the order) and whose key pairs its own `workspace_id` with the parent's
+ * `workspace_id` (so every child row of a purged parent row belongs to the purged workspace).
+ *
+ * The cascade's deletes skip Postgres's referential checks (`session_replication_role = replica`,
+ * R-65), so this check is what still stands between a purge and a dangling reference: a future
+ * migration that adds, say, a platform table pointing at `principals` makes the purge refuse —
+ * loudly, before any delete, and in the purge integration tests — instead of silently orphaning
+ * that table's rows. Empty for every schema this codebase's migrations declare today.
+ */
+export async function findForeignKeysOutsideCascade(
+  client: PoolClient,
+  tables: readonly string[],
+): Promise<ForeignKeyOutsideCascade[]> {
+  const result = await client.query<{
+    constraint_name: string;
+    child_table: string;
+    parent_table: string;
+  }>(
+    `select c.conname as constraint_name,
+            case when cn.nspname = 'public' then child.relname
+                 else cn.nspname || '.' || child.relname end as child_table,
+            parent.relname as parent_table
+       from pg_constraint c
+       join pg_class child on child.oid = c.conrelid
+       join pg_namespace cn on cn.oid = child.relnamespace
+       join pg_class parent on parent.oid = c.confrelid
+       join pg_namespace pn on pn.oid = parent.relnamespace
+      where c.contype = 'f'
+        and pn.nspname = 'public'
+        and parent.relname = any($1::text[])
+        and not (
+          cn.nspname = 'public'
+          and child.relname = any($1::text[])
+          and exists (
+            select 1
+              from unnest(c.conkey, c.confkey) as k(child_attnum, parent_attnum)
+              join pg_attribute ca on ca.attrelid = c.conrelid and ca.attnum = k.child_attnum
+              join pg_attribute pa on pa.attrelid = c.confrelid and pa.attnum = k.parent_attnum
+             where ca.attname = 'workspace_id' and pa.attname = 'workspace_id'
+          )
+        )
+      order by 2, 1`,
+    [tables],
+  );
+  return result.rows.map((row) => ({
+    constraint: row.constraint_name,
+    childTable: row.child_table,
+    parentTable: row.parent_table,
+  }));
+}
+
 // -------------------------------------------------------------------------------------------
 // Eligibility
 // -------------------------------------------------------------------------------------------
@@ -395,9 +474,6 @@ export interface PurgeWorkspaceInput {
   readonly force?: boolean;
 }
 
-const LINKS_DELETE_TRIGGER = 'links_immutable_delete';
-const AUDIT_RECORDS_DELETE_TRIGGER = 'audit_records_no_delete';
-
 interface WorkspaceRow {
   id: string;
   name: string;
@@ -553,6 +629,9 @@ export async function purgeWorkspace(
           throw new Error(`purge-workspace: refusing to touch unexpected table name "${table}"`);
         }
       }
+      // Checked for the preview too: a cascade that would be refused must not preview as fine.
+      const outsideCascade = await findForeignKeysOutsideCascade(client, order);
+      if (outsideCascade.length > 0) throw new PurgeCascadeForeignKeyError(outsideCascade);
 
       const counts: Record<string, number> = {};
       let totalRows = 0;
@@ -597,32 +676,35 @@ export async function purgeWorkspace(
         [workspace.id],
       );
 
-      // I4 / I11: the two append-only triggers raise for every role, superuser included. This is
-      // the one deliberate, audited override anywhere in the kernel; both are re-enabled before
-      // COMMIT (`alter table … enable trigger` is DDL inside the same transaction — leaving either
-      // disabled past COMMIT would silently remove the invariant for every future write).
-      if (order.includes('links')) {
-        await client.query(`alter table links disable trigger ${LINKS_DELETE_TRIGGER}`);
-      }
-      if (order.includes('audit_records')) {
-        await client.query(
-          `alter table audit_records disable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
-        );
-      }
+      // I4 / I11: the two append-only triggers (`links_immutable_delete`,
+      // `audit_records_no_delete`) raise for every role, superuser included. This is the one
+      // deliberate, audited override anywhere in the kernel, and it is a session setting, not a
+      // catalog change (R-65): under `session_replication_role = replica` this session's
+      // statements fire no ordinary trigger — those two, the draft-only delete guards (which bind
+      // `nexttime_app` only and pass this login role anyway) and Postgres's internal foreign-key
+      // checks. Setting it takes no lock, every other session keeps every trigger, and `set
+      // local` ends with this transaction, rollback included. The `alter table … disable
+      // trigger` it replaces took SHARE ROW EXCLUSIVE on `links` and `audit_records` until
+      // COMMIT, so every workspace's audit and Fact inserts waited for the whole purge.
+      //
+      // Skipping the foreign-key checks loses nothing: `order` deletes every child before its
+      // parent (self-references within one statement), and `findForeignKeysOutsideCascade`
+      // above refused any foreign key whose rows these deletes would not also remove. It also
+      // takes the per-row probes of unindexed child columns out of the purge's run time.
+      // Privilege: a superuser-only (SUSET) parameter; the cascade runs on the superuser login
+      // role (`skipRoleSwitch`), which `alter table … disable trigger` needed as well (table
+      // owner) — no new grant.
+      await client.query('set local session_replication_role = replica');
       for (const table of order) {
         const result = await client.query(`delete from "${table}" where workspace_id = $1`, [
           workspace.id,
         ]);
         record(table, result.rowCount ?? 0);
       }
-      if (order.includes('audit_records')) {
-        await client.query(
-          `alter table audit_records enable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
-        );
-      }
-      if (order.includes('links')) {
-        await client.query(`alter table links enable trigger ${LINKS_DELETE_TRIGGER}`);
-      }
+      // Back to ordinary before anything outside the workspace-scoped tables is touched: the
+      // workspace row, the cascaded users and the platform audit row below get every trigger and
+      // foreign-key check as usual.
+      await client.query('set local session_replication_role = origin');
 
       const deletedWorkspace = await client.query('delete from workspaces where id = $1', [
         workspace.id,

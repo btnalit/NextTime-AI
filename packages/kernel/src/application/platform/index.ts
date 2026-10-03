@@ -13,6 +13,7 @@ export {
 } from './settings.js';
 export type {
   ForeignKeyEdge,
+  ForeignKeyOutsideCascade,
   PurgeEligibility,
   PurgeEligibilityRow,
   PurgeRefusalCode,
@@ -23,11 +24,13 @@ export type {
 export {
   PURGE_RETENTION_DAYS,
   PURGE_TABLE_PRIORITY,
+  PurgeCascadeForeignKeyError,
   PurgeWorkspaceRefusedError,
   WorkspaceDeletionOrderCycleError,
   assessPurgeEligibility,
   computeWorkspaceTableDeletionOrder,
   discoverWorkspaceScopedSchema,
+  findForeignKeysOutsideCascade,
   findUserReferences,
   purgeWorkspace,
   wireTableKey,
