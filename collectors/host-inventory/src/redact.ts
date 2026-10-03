@@ -19,7 +19,7 @@
  *   1. Structural redaction (`redactCommandLine`): replaces `--token=X` / `token=X` / `token: X` /
  *      `token X` / `password=X` / `key=X` (case-insensitive, optionally `--`-prefixed, quoted or
  *      bare values) and `Bearer <token>` with a fixed `***` marker — the exact four patterns the
- *      task names.
+ *      task names — plus (R-25) a URL's userinfo, `scheme://user:pass@` → `scheme://***@`.
  *   2. Residual-secret sniff (`assertNoResidualSecret`): re-scans the *already-redacted* text for
  *      anything that still looks like a live secret independent of a preceding key name — a
  *      JWT-shaped three-part token, or any other long opaque (base64/hex/UUID-shaped) run of 32+
@@ -33,6 +33,9 @@
 
 const KEY_VALUE_SECRET_PATTERN = /(--)?(token|password|passwd|key)([=: ]+)("[^"]*"|'[^']*'|\S+)/gi;
 const BEARER_PATTERN = /\bBearer\s+[^\s"']+/gi;
+/** R-25: the userinfo of a URL on a command line (`git clone https://user:token@host/repo`) —
+ *  `scheme://***@host`, whatever the password's length or shape. */
+const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@"']+@/gi;
 
 /** A JWT's three base64url segments joined by `.` — matches regardless of a preceding key name. */
 const JWT_SHAPE_PATTERN = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/;
@@ -60,7 +63,8 @@ export function redactCommandLine(commandLine: string): string {
         return `${prefix}${key}${sep}***`;
       },
     )
-    .replace(BEARER_PATTERN, 'Bearer ***');
+    .replace(BEARER_PATTERN, 'Bearer ***')
+    .replace(URL_USERINFO_PATTERN, '$1***@');
 }
 
 /** Tier 2 — throws `SecretRedactionError` if `redacted` (the *output* of `redactCommandLine`)

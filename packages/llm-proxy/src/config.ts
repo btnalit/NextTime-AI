@@ -7,6 +7,7 @@ import {
 } from '@nexttime/shared';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { DEFAULT_PROVIDER_KEYS_DIR } from './provider-keys.js';
 
 /**
  * config: env vars (`loadConfig`) and `${NEXTTIME_DATA}/config/llm-providers.yaml`
@@ -255,6 +256,9 @@ export interface LlmProxyConfig {
   readonly budgetSyncIntervalMs: number;
   /** S6-B: ceiling for the two upstream round trips of `POST /admin/providers/:id/test`. */
   readonly providerTestTimeoutMs: number;
+  /** R-24: the directory of provider key files, one per `api_key_env` name (provider-keys.ts).
+   *  Optional so a hand-built config keeps compiling; `loadConfig` always sets it. */
+  readonly providerKeysDir?: string;
 }
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
@@ -282,5 +286,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/models/models.json',
     budgetSyncIntervalMs: parseIntEnv(env.BUDGET_SYNC_INTERVAL_MS, 15_000),
     providerTestTimeoutMs: parseIntEnv(env.PROVIDER_TEST_TIMEOUT_MS, 30_000),
+    providerKeysDir: env.LLM_PROVIDER_KEYS_DIR || DEFAULT_PROVIDER_KEYS_DIR,
   };
 }

@@ -29,6 +29,7 @@ describe('loadConfig', () => {
       upstreamConnectTimeoutMs: 10_000,
       providerStoreFile: '/data/state/providers.json',
       keyStoreFile: '/data/state/keys.json',
+      providerKeysDir: '/run/secrets/llm-provider-keys',
     });
   });
 
@@ -48,6 +49,7 @@ describe('loadConfig', () => {
       UPSTREAM_CONNECT_TIMEOUT_MS: '3000',
       LLM_PROVIDER_STORE_FILE: '/custom/providers.json',
       LLM_KEY_STORE_FILE: '/custom/keys.json',
+      LLM_PROVIDER_KEYS_DIR: '/custom/provider-keys',
     });
     expect(config).toMatchObject({
       port: 9000,
@@ -64,6 +66,7 @@ describe('loadConfig', () => {
       upstreamConnectTimeoutMs: 3000,
       providerStoreFile: '/custom/providers.json',
       keyStoreFile: '/custom/keys.json',
+      providerKeysDir: '/custom/provider-keys',
     });
   });
 
