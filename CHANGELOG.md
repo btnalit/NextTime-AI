@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.38.0](https://github.com/btnalit/NextTime-AI/compare/v0.37.0...v0.38.0) (2026-10-03)
+
+
+### Bug Fixes
+
+* **agent-host:** replay unacknowledged frames after a link flap; a stop agent-host cannot match ends the Turn (R-56) ([#422](https://github.com/btnalit/NextTime-AI/issues/422)) ([ed88d2b](https://github.com/btnalit/NextTime-AI/commit/ed88d2b254276b754c925f65a70482d92cdab501))
+* **chat:** a stopped, interrupted or failed Turn never starts or finishes again (R-55) ([#420](https://github.com/btnalit/NextTime-AI/issues/420)) ([4239f81](https://github.com/btnalit/NextTime-AI/commit/4239f810e4d471303d30179776e0317a6cfc60cd))
+* **gateway:** self-connected gates get their own connection secret; one outbound-target predicate for owner-supplied URLs (R-01, R-27) ([#423](https://github.com/btnalit/NextTime-AI/issues/423)) ([79c737c](https://github.com/btnalit/NextTime-AI/commit/79c737c3a415daef68f89658927129f1f3349259))
+* **linkage:** entry context is acknowledged on report_turn and belongs to its chat (R-57) ([#418](https://github.com/btnalit/NextTime-AI/issues/418)) ([887ea1f](https://github.com/btnalit/NextTime-AI/commit/887ea1f0f714206d1e03620e15193cf47bddb8f5))
+
+
+### Documentation
+
+* **status:** review 1-H2 merged — R-01 full fix + R-27, R-55/R-56/R-57; leftovers 36, 106 closed ([#424](https://github.com/btnalit/NextTime-AI/issues/424)) ([a71a6db](https://github.com/btnalit/NextTime-AI/commit/a71a6dbc905ac74dbfbb09f29b2ff03b232d629e))
+
 ## [0.37.0](https://github.com/btnalit/NextTime-AI/compare/v0.36.0...v0.37.0) (2026-10-03)
 
 
