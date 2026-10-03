@@ -101,6 +101,37 @@ for (const [name, service] of Object.entries(doc.services ?? {})) {
   }
 }
 
+// R-24: a credential must never be a service's container env — the read-only collector socket proxy
+// can inspect every container. Compose may only name the *file* (`..._FILE`) or the directory
+// (`LLM_PROVIDER_KEYS_DIR`) a credential is read from; the two services that read provider / RAGFlow
+// keys must carry that wiring. (An operator's env_file is outside this static check — the services
+// log a deprecation warning when they still fall back to it.)
+const CREDENTIAL_ENV_NAME = /^GATE_CREDENTIAL_(?!MODE$)[A-Z0-9_]+$|_API_KEY$/;
+const envNamesOf = (environment) =>
+  Array.isArray(environment)
+    ? environment.map((entry) => String(entry).split('=')[0])
+    : Object.keys(environment ?? {});
+for (const [name, service] of Object.entries(doc.services ?? {})) {
+  for (const envName of envNamesOf(service.environment)) {
+    if (CREDENTIAL_ENV_NAME.test(envName) && !envName.endsWith('_FILE')) {
+      console.error(
+        `service ${name} sets credential env ${envName} — read it from a mounted file instead (${envName}_FILE, or for llm-proxy a file in LLM_PROVIDER_KEYS_DIR) (R-24)`,
+      );
+      process.exitCode = 1;
+    }
+  }
+}
+const requiredCredentialWiring = [
+  ['llm-proxy', 'LLM_PROVIDER_KEYS_DIR'],
+  ['gatekeeper-ragflow', 'GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE'],
+];
+for (const [name, envName] of requiredCredentialWiring) {
+  if (!envNamesOf(doc.services?.[name]?.environment).includes(envName)) {
+    console.error(`service ${name} must read its keys from files: ${envName} is not set (R-24)`);
+    process.exitCode = 1;
+  }
+}
+
 // R-27: the kernel's fixed acceptance-fixture allow-list (NEXTTIME_CONNECTION_FIXTURE_HOSTS) is
 // allowed past the owner-supplied-URL predicate permanently, which is only harmless while every
 // name on it is an acceptance fixture: `accept-`-prefixed, an existing service, and never handed

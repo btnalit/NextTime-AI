@@ -75,17 +75,22 @@ the raw `data.code`/`data.message` itself; the gate protocol does not surface it
 
 ## Credentials
 
-`SharedEnvCredentialResolver({name: 'RAGFLOW_API_KEY'})` reads `GATE_CREDENTIAL_RAGFLOW_API_KEY`
-from the gate's own env (`docker-compose.yml`'s `env_file: … secrets/gatekeeper-ragflow.env`) and
-treats it as an opaque bearer token — `HttpTransport` sends
-`Authorization: Bearer <GATE_CREDENTIAL_RAGFLOW_API_KEY>`, RAGFlow's own auth convention.
+`SharedEnvCredentialResolver({name: 'RAGFLOW_API_KEY'})` reads the key from the file named by
+`GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE` (R-24: `docker-compose.yml` sets it to
+`/run/secrets/gatekeeper-ragflow/api_key`, a read-only mount of
+`${NEXTTIME_DATA}/secrets/gatekeeper-ragflow/`; the file is 0640, group 10001, read by this gate's
+uid 10001 on every call) and treats it as an opaque bearer token — `HttpTransport` sends
+`Authorization: Bearer <key>`, RAGFlow's own auth convention. The old env var
+`GATE_CREDENTIAL_RAGFLOW_API_KEY` (from `secrets/gatekeeper-ragflow.env`) still works when the file
+is absent, with a deprecation warning — it is visible to anything that can inspect the container.
 
 ## Env
 
 | Var | Required | Notes |
 |---|---|---|
 | `RAGFLOW_BASE_URL` | yes | e.g. `http://ragflow:9380` — never hardcoded, never committed |
-| `GATE_CREDENTIAL_RAGFLOW_API_KEY` | yes | RAGFlow API key |
+| `GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE` | yes (set by compose) | file holding the RAGFlow API key (R-24) |
+| `GATE_CREDENTIAL_RAGFLOW_API_KEY` | deprecated | the key as env — only read when the file above is absent or empty |
 | `GATE_TLS_CA_FILE` | no | PEM of the RAGFlow edge's certificate (self-signed) or its CA — trusted as the only anchor for this gate's target connections. Put it under the mounted data dir, e.g. `/data/gate/tls/edge.pem`. |
 | `GATE_TLS_SERVERNAME` | no | Name to verify the certificate against when `RAGFLOW_BASE_URL` uses an IP that is not in the certificate's SAN (e.g. the edge cert's own CN). Never use `NODE_TLS_REJECT_UNAUTHORIZED=0` — this gate refuses to start if it is set (review lane 5, P3 batch). |
 | `GATE_KERNEL_TOKEN_FILE` | no (`/run/secrets/gate_token`) | the shared secret every `/gate/*` route requires as `Authorization: Bearer <token>` (review lane 5, P1-1) — this gate refuses to start without a readable, valid file here. |

@@ -16,7 +16,7 @@ covers the package's own internals.
 | Docker Engine API | `docker-client.ts` | `dockerode` over `DOCKER_HOST` (a dedicated `docker-socket-proxy-collector` instance — no `docker.sock` mount, no docker CLI in the image). Containers, images, networks, volumes, host info. |
 | systemd | `systemd.ts` | `systemctl list-units --type=service`, only when `/run/systemd` is mounted (optional — skips cleanly otherwise). |
 | Process tree | `process-tree.ts` | Limited to the agent-runtime process's own subtree. **Current default deployment has no `pid: host`**, so this collector's own `/proc` never shows a different container's processes — `collectProcessTree` legitimately returns `skipped: true` every run in that shape; this is documented, not a bug. See that module's own doc comment for the full reasoning and the (declined) alternative. |
-| git remotes | `repository.ts` | `git remote -v` for each path in `HOST_INVENTORY_REPOSITORY_PATHS` (optional, empty by default). |
+| git remotes | `repository.ts` | `git remote -v` for each path in `HOST_INVENTORY_REPOSITORY_PATHS` (optional, empty by default). **Disabled in the shipped compose** (not forwarded, no repo mounted — decision D-27); remote URLs are stripped of userinfo, query and fragment before use (R-25). |
 | RAGFlow KnowledgeBase/Document (S3.4) | `ragflow.ts` | `observe_operation(kb.list)` / `observe_operation(kb.documents)` on a RAGFlow Gatekeeper, only when `RAGFLOW_GATEKEEPER_ID` is set (optional, off by default). |
 
 ## Ontology mapping

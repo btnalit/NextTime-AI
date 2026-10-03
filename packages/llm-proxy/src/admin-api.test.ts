@@ -9,7 +9,7 @@ import { SignJWT, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { KernelAuditEvent } from './admin-api.js';
-import { createAdminApi } from './admin-api.js';
+import { createAdminApi, upstreamKey } from './admin-api.js';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
@@ -808,5 +808,218 @@ describe('admin API — provider secrets (S7-A)', () => {
     expect(res.status).toBe(503);
     expect((res.body as { error: { code: string } }).error.code).toBe('store_unwritable');
     h.keyStore.set = originalSet;
+  });
+});
+
+describe('admin API — a key only goes to the upstream it was provisioned for (R-23)', () => {
+  /** A full PUT body for the yaml provider, with overrides. */
+  const fileOverride = (overrides: Partial<LlmProviderInputWire> = {}): LlmProviderInputWire => ({
+    id: 'openai',
+    api: 'openai-completions',
+    upstreamBaseUrl: 'https://file.example.invalid',
+    authHeader: 'authorization',
+    apiKeyEnv: 'FILE_KEY',
+    models: [{ id: 'file-model', displayName: null, cost: null }],
+    ...overrides,
+  });
+
+  it('PUT to another upstream clears the console key first and audits the change old → new', async () => {
+    const h = await harness({ env: {} });
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-console-acme' },
+    });
+    expect(h.keyStore.get('acme')).toBe('sk-console-acme');
+
+    const moved = await request(h.port, 'PUT', '/admin/providers/acme', {
+      headers: admin,
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: 'https://attacker.example.invalid' },
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.body).toMatchObject({ credentialPresent: false, credentialSource: 'none' });
+    expect(h.keyStore.get('acme')).toBeUndefined();
+    const updated = h.kernelEvents.find((e) => e.action === 'provider_updated');
+    expect(updated?.details).toMatchObject({
+      changed: ['upstream_base_url'],
+      upstreamBaseUrl: {
+        from: 'https://acme.example.invalid',
+        to: 'https://attacker.example.invalid',
+      },
+      secretCleared: true,
+    });
+    expect(h.kernelEvents.at(-1)).toMatchObject({
+      action: 'provider_secret_cleared',
+      providerId: 'acme',
+      details: { reason: 'upstream_changed' },
+    });
+
+    // The point of it: a test against the new upstream has no key to send.
+    const test = await request(h.port, 'POST', '/admin/providers/acme/test', { headers: admin });
+    expect(test.status).toBe(409);
+    expect(h.testRuns).toEqual([]);
+    expect(h.logLines.join('\n')).not.toContain('sk-console-acme');
+  });
+
+  it('PUT that keeps the upstream (models, display name, enabled, api kind, a trailing slash) keeps the console key', async () => {
+    const h = await harness({ env: {} });
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-console-acme' },
+    });
+    const edited = await request(h.port, 'PUT', '/admin/providers/acme', {
+      headers: admin,
+      body: {
+        ...NEW_PROVIDER,
+        api: 'openai-responses',
+        upstreamBaseUrl: 'https://ACME.example.invalid/',
+        displayName: 'Acme 2',
+        enabled: false,
+        models: [{ id: 'acme-xl', displayName: null, cost: null }],
+      },
+    });
+    expect(edited.status).toBe(200);
+    expect(h.keyStore.get('acme')).toBe('sk-console-acme');
+    expect(h.kernelEvents.at(-1)?.action).toBe('provider_updated');
+    expect(h.kernelEvents.at(-1)?.details).not.toHaveProperty('upstreamBaseUrl');
+    expect(h.kernelEvents.some((e) => e.action === 'provider_secret_cleared')).toBe(false);
+  });
+
+  it('a console key set on a yaml provider does not follow an override to another upstream', async () => {
+    const h = await harness({ env: {} });
+    const admin = await h.adminHeaders();
+    await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-console-openai' },
+    });
+    const moved = await request(h.port, 'PUT', '/admin/providers/openai', {
+      headers: admin,
+      body: fileOverride({
+        upstreamBaseUrl: 'https://attacker.example.invalid',
+        apiKeyEnv: undefined,
+      }),
+    });
+    expect(moved.status).toBe(200);
+    expect(h.keyStore.get('openai')).toBeUndefined();
+  });
+
+  it('PUT to another upstream fails whole (503) when the key cannot be cleared — the key never ends up pointed at the new host', async () => {
+    const h = await harness({ env: {} });
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-console-acme' },
+    });
+    h.keyStore.remove = async () => {
+      throw new KeyStoreError('unwritable', 'simulated: key store directory went read-only');
+    };
+    const moved = await request(h.port, 'PUT', '/admin/providers/acme', {
+      headers: admin,
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: 'https://attacker.example.invalid' },
+    });
+    expect(moved.status).toBe(503);
+    expect(h.store.get('acme')?.upstream_base_url).toBe('https://acme.example.invalid');
+    expect(h.keyStore.get('acme')).toBe('sk-console-acme');
+  });
+
+  it('POST clears a console key left behind under the id (a DELETE whose best-effort clear failed)', async () => {
+    const h = await harness({ env: {} });
+    const admin = await h.adminHeaders();
+    await h.keyStore.set('acme', 'sk-orphan');
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: NEW_PROVIDER,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ credentialSource: 'none' });
+    expect(h.keyStore.get('acme')).toBeUndefined();
+    expect(h.kernelEvents.at(-1)).toMatchObject({
+      action: 'provider_secret_cleared',
+      details: { reason: 'new_provider' },
+    });
+  });
+
+  it('refuses (409) naming an env var that holds a key on an upstream nothing pairs it with — the operator’s key never reaches that host', async () => {
+    const h = await harness({
+      env: { FILE_KEY: 'sk-file', ANTHROPIC_API_KEY: 'sk-ant', PATH: '/usr/bin' },
+    });
+    const admin = await h.adminHeaders();
+    for (const apiKeyEnv of ['FILE_KEY', 'ANTHROPIC_API_KEY', 'PATH']) {
+      const res = await request(h.port, 'POST', '/admin/providers', {
+        headers: admin,
+        body: { ...NEW_PROVIDER, upstreamBaseUrl: 'https://attacker.example.invalid', apiKeyEnv },
+      });
+      expect(res.status).toBe(409);
+      expect((res.body as { error: { code: string } }).error.code).toBe('api_key_env_not_allowed');
+    }
+    expect(h.store.get('acme')).toBeUndefined();
+    expect(h.kernelEvents).toEqual([]);
+    const refusals = h.logLines.filter((line) => line.includes('provider admin refused'));
+    expect(refusals).toHaveLength(3);
+    expect(h.logLines.join('\n')).not.toMatch(/sk-file|sk-ant/);
+  });
+
+  it('refuses (409) repointing a yaml provider while keeping its env key; same upstream is fine', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file' } });
+    const admin = await h.adminHeaders();
+    const moved = await request(h.port, 'PUT', '/admin/providers/openai', {
+      headers: admin,
+      body: fileOverride({ upstreamBaseUrl: 'https://attacker.example.invalid' }),
+    });
+    expect(moved.status).toBe(409);
+    expect((moved.body as { error: { code: string } }).error.code).toBe('api_key_env_not_allowed');
+    expect(h.store.get('openai')).toBeUndefined();
+
+    const disabled = await request(h.port, 'PUT', '/admin/providers/openai', {
+      headers: admin,
+      body: fileOverride({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    // The yaml still pairs FILE_KEY with its upstream while an override shadows it, so a second
+    // override (or a store provider) on that same upstream may name it.
+    const second = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: {
+        ...NEW_PROVIDER,
+        upstreamBaseUrl: 'https://file.example.invalid/',
+        apiKeyEnv: 'FILE_KEY',
+      },
+    });
+    expect(second.status).toBe(201);
+    // …but swapping a provider's env var for one paired elsewhere is refused.
+    const swapped = await request(h.port, 'PUT', '/admin/providers/acme', {
+      headers: admin,
+      body: { ...NEW_PROVIDER, apiKeyEnv: 'FILE_KEY' },
+    });
+    expect(swapped.status).toBe(409);
+  });
+
+  it('accepts an env var that holds no key yet (the documented flow: the operator adds it afterwards for the upstream on the page)', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file' } });
+    const admin = await h.adminHeaders();
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: NEW_PROVIDER,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ apiKeyEnv: 'ACME_KEY', credentialSource: 'none' });
+  });
+
+  it('upstreamKey: normalizes case, default port and trailing slashes; a path or port change is another upstream', () => {
+    expect(upstreamKey('https://API.example.invalid:443/')).toBe('https://api.example.invalid');
+    expect(upstreamKey('https://api.example.invalid')).toBe('https://api.example.invalid');
+    expect(upstreamKey('https://gw.example.invalid/tenant-a/')).not.toBe(
+      upstreamKey('https://gw.example.invalid/tenant-b'),
+    );
+    expect(upstreamKey('https://api.example.invalid:8443')).not.toBe(
+      upstreamKey('https://api.example.invalid'),
+    );
   });
 });

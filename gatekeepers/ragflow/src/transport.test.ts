@@ -126,6 +126,26 @@ describe('RagflowTransport', () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
+    // R-22: `dataset_id` is a path segment here too — never `..` up to `/api/v1/documents`.
+    it.each([['..'], ['%2e%2e'], ['a/../b'], ['.']])(
+      'refuses dataset_id %j without ever calling fetch',
+      async (datasetId) => {
+        const fetchImpl = vi.fn();
+        const transport = new RagflowTransport({
+          baseUrl: BASE_URL,
+          fetchImpl: fetchImpl as never,
+        });
+        await expect(
+          transport.invoke(
+            uploadOperation,
+            { dataset_id: datasetId, name: 'note.txt', content: 'x' },
+            {},
+          ),
+        ).rejects.toThrow(/path parameter "dataset_id"/);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      },
+    );
+
     it('throws when a required param is missing', async () => {
       const transport = new RagflowTransport({ baseUrl: BASE_URL });
       await expect(
@@ -191,6 +211,15 @@ describe('RagflowTransport', () => {
       );
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(result.description).toContain('would call POST');
+    });
+
+    it('R-22: document.parse with dataset_id ".." is refused, never a POST to /api/v1/chunks', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new RagflowTransport({ baseUrl: BASE_URL, fetchImpl: fetchImpl as never });
+      await expect(
+        transport.invoke(parseOperation, { dataset_id: '..', document_ids: ['doc1'] }, {}),
+      ).rejects.toThrow(/single path segment/);
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
 
     it('kb.list invoke sends a plain GET', async () => {

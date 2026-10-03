@@ -236,6 +236,10 @@ async function callUpstream(
       headers,
       body: JSON.stringify(call.body),
       signal: controller.signal,
+      // R-23 (L6-19): 'follow' resends every header but `Authorization` to whatever host a 3xx
+      // names — `x-api-key` included. A redirect is a failed test, never a second destination
+      // for the key (gatekeeper-base kinds/http.ts applies the same rule to gate credentials).
+      redirect: 'error',
     });
     let body: unknown;
     try {

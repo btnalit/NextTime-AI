@@ -52,6 +52,18 @@ describe('redactCommandLine', () => {
     expect(redactCommandLine('myapp --TOKEN=abc123')).toBe('myapp --TOKEN=***');
   });
 
+  it('R-25: redacts the userinfo of a URL, whatever the password looks like', () => {
+    expect(redactCommandLine('git clone https://bot:hunter2@github.com/org/repo.git')).toBe(
+      'git clone https://***@github.com/org/repo.git',
+    );
+    expect(redactCommandLine('git fetch https://ghp_x@github.com/org/repo.git')).toBe(
+      'git fetch https://***@github.com/org/repo.git',
+    );
+    expect(redactCommandLine('curl http://example.test/path')).toBe(
+      'curl http://example.test/path',
+    );
+  });
+
   it('leaves unrelated flags untouched', () => {
     expect(redactCommandLine('myapp --verbose --port=8080')).toBe('myapp --verbose --port=8080');
   });

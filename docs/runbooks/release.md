@@ -107,7 +107,7 @@ Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检
 签名；历史版本可在 Actions 手动跑 `publish-images` 补发）。检出切到同一个 tag 后：
 
 ```
-sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（身份钉到本仓库 main 上的 publish-images.yml）→ 重打成 compose 的本地名
+sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（精确匹配：本仓库 main 上的 publish-images.yml，且由本仓库 main 上的运行签出）→ 重打成 compose 的本地名
 docker compose up -d --no-build
 ```
 
@@ -333,6 +333,48 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
 
 **回滚**：切回上一版代码即可（无 schema 变化）。旧代码不认识 salt，会重新把 `gate_token` 发给自连门——
 已经换成连接密钥的门会 401，直到把门的 `GATE_KERNEL_TOKEN_FILE` 指回平台 `gate.token`。
+
+### 3.6 provider key 与 RAGFlow key 改为文件（R-24）
+
+**变化**：容器 env 能被只读的采集器 socket 代理 `inspect` 看到，所以两类密钥改从文件读：
+
+| 密钥 | 主机文件（目录 0750 root:10001，文件 0640 root:10001） | 容器内路径（只读目录挂载） | 谁读（uid） |
+|---|---|---|---|
+| LLM provider key | `${NEXTTIME_DATA}/secrets/llm-provider-keys/<NAME>`，`<NAME>` = provider 的 `api_key_env` | `/run/secrets/llm-provider-keys/<NAME>`（`LLM_PROVIDER_KEYS_DIR`） | `llm-proxy`，uid 10001 / gid 10001，**启动时**读 |
+| RAGFlow API key | `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow/api_key` | `/run/secrets/gatekeeper-ragflow/api_key`（`GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE`） | `gatekeeper-ragflow`，uid 10001 / gid 10001，**每次调用**读 |
+
+**升级不会断**：目录不存在时 Docker 建一个空目录，服务照常起；没有文件的 key 退回读 `secrets/llm-proxy.env` /
+`secrets/gatekeeper-ragflow.env` 里的原变量，并打一行弃用告警（`provider key read from the environment` /
+`credential GATE_CREDENTIAL_RAGFLOW_API_KEY read from the environment`，只有变量名，从不打印值）。迁移步骤（在主机上，
+不要把 key 打到终端）：
+
+1. 照常应用发布（§3）。
+2. 建目录并定权限：`sudo NEXTTIME_DATA="$NEXTTIME_DATA" sh scripts/host-env-init.sh`（幂等；它也把两个目录下已有
+   文件改成 0640、组 10001——服务以 uid/gid 10001 运行，读不了的文件会被跳过并在日志里报 `could not be read`）。
+3. 每个 provider key 搬一个文件（`NAME` 逐个取 `config/llm-providers.yaml` 与控制台里各 provider 的
+   `api_key_env`；env 文件里的值若带引号，文件里不要引号）：
+
+   ```bash
+   NAME=EXAMPLE_API_KEY
+   sudo sh -c "umask 027; sed -n 's/^$NAME=//p' '$NEXTTIME_DATA/secrets/llm-proxy.env' | tr -d '\n' > '$NEXTTIME_DATA/secrets/llm-provider-keys/$NAME'"
+   ```
+
+   RAGFlow 同理：`GATE_CREDENTIAL_RAGFLOW_API_KEY` 的值 → `secrets/gatekeeper-ragflow/api_key`。
+4. 再跑一次第 2 步修正新文件的权限，然后从两个 env 文件里删掉已搬走的变量，
+   `docker compose up -d --force-recreate llm-proxy gatekeeper-ragflow`。
+5. 验证：`docker compose logs llm-proxy gatekeeper-ragflow | grep -E 'read from the environment|could not be read'`
+   为空；`docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' <容器> | cut -d= -f1` 只列变量名，
+   其中不再有 key；走一轮对话 / 一次 RAGFlow 调用。记结果到 `docs/private/`。
+
+`scripts/validate-compose.mjs` 现在拒绝在 `docker-compose.yml` 的任何服务 `environment` 里出现
+`GATE_CREDENTIAL_*` / `*_API_KEY`（`*_FILE` 除外），并要求上面两项文件接线；操作员自己的 env 文件不在它的检查范围内，
+靠第 5 步的日志确认。
+
+**回滚**：上一版只读 env——在确认新版本工作前先别删 env 文件里的变量；若已删、又要回滚，按 key 文件的内容把变量
+写回 env 文件再 `--force-recreate`。无 schema 变化。
+
+**不在本次范围**：worker / 入口容器的 `CAPABILITY_HANDLE` 仍以容器 env 传入（短时、按 scope 收窄的 Handle，
+不是 provider key），见 R-24 的后续项。
 
 ## 4. Hotfix 流程
 
