@@ -248,12 +248,17 @@ Network / Endpoint 固定；Repository 只在配置了仓库路径时；SystemdS
   观察。代码保留、不接线；要启用须同时加 env 透传与只读挂载。无论启用与否，remote URL 在成为 Repository
   身份键之前都会脱敏：去掉 userinfo（`https://user:token@host/…`、scp 式 `token@host:path`）、查询串
   与片段（`sanitizeRemoteUrl`）；进程命令行里 URL 的 userinfo 也一律替换为 `***`（`redact.ts`）。
-- **S3.4 phase 4 无分页循环**：`ragflow.ts` 对 `kb.list`/`kb.documents` 各只调用一次（一个较大的
-  `page_size`），不会翻页——一个 workspace 的 KnowledgeBase 或某个 KnowledgeBase 的 Document 数量
-  超过一页时，这次运行只观察到部分，不是崩溃。
-- **S3.4 phase 4 非致命**：RAGFlow 门不可达/未接入/`kb.list` 报错只记一条 warning 并跳过这一 phase，
-  不会让整次采集运行失败（Docker 才是本采集器唯一的硬性数据源）；单个 KnowledgeBase 的
-  `kb.documents` 调用失败也只让那一个 KnowledgeBase 的 Document 数为零，不影响其它 KnowledgeBase。
+- **S3.4 phase 4 全读完才提交窗口（R-70）**：phase 4 带 S5.2 观察窗口提交，窗口的意思是"这就是本
+  Source 眼里的全部 KnowledgeBase / Document"，没再观察到的 Fact 会被退休——所以"读不到"绝不能被当成
+  "不存在"。`ragflow.ts` 对 `kb.list` 与每个 KnowledgeBase 的 `kb.documents` 按页翻到底（`page_size`
+  100：RAGFlow 现行服务端对更大的值静默改成每页 10 条），读到空页、或读满 RAGFlow 自报的总数即止。
+  任何一处没读完整都让整个 phase 4 本轮不提交任何东西、不提交窗口，已有 Fact 原样保留到下一轮读完整为止：
+  RAGFlow 在 200 里回非零 `code`（例如 API key 轮换 / 过期）、响应形状不对、条目缺 id、翻页过程中总数变了
+  （列表正在被改，偏移翻页可能漏项）、读到的去重条目数与自报总数不符、服务端不认 `page`、超过 1000 页。
+- **S3.4 phase 4 非致命**：RAGFlow 门不可达/未接入/上面任何一种读取失败都只记一条 warning
+  （`ragflow observation phase failed`，带原因）并跳过这一 phase，不会让整次采集运行失败（Docker 才是本
+  采集器唯一的硬性数据源）。连续出现这条 warning 意味着 KnowledgeBase / Document 一直没有被重新确认——
+  按原因修 RAGFlow 门或它的 key。
 - **S3.4 phase 4 与门自己的 observe 写入是两条独立路径**：见 §4.5 末尾——本采集器不会、也不需要去
   重这两份 Object。
 

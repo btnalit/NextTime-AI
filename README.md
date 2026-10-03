@@ -26,13 +26,15 @@
 
 ## 状态
 
-当前版本 **v0.3.0**。S1（对话入图）、S2（审批执行写回）、S3（本体、采集器、Explorer、MCP）三个
-切片均已由验收脚本在目标主机通过。进度、当前波次与遗留清单只在一处维护：
-**[`docs/STATUS.md`](docs/STATUS.md)**。任何会话从那里开始；agent 会话的约束见
-[`CLAUDE.md`](CLAUDE.md)。
+当前版本见上方 Release 徽章与 [`CHANGELOG.md`](CHANGELOG.md)（自 v0.3.0 起已持续发版；README 不再写死版本号）。
+S1（对话入图）、S2（审批执行写回）、S3（本体、采集器、Explorer、MCP）以及其后的平台管理、
+控制台、运行层、镜像发布等阶段，均已由验收脚本在目标主机通过。进度、当前波次与遗留清单只在一处维护：
+**[`docs/STATUS.md`](docs/STATUS.md)**（已完成波次的记录在 [`docs/status-history.md`](docs/status-history.md)）。
+任何会话从那里开始；agent 会话的约束见 [`CLAUDE.md`](CLAUDE.md)。
 
-验收证明的是内核 / 门 / 扩展这一侧的链路成立。三份验收全部跑在 `deploy/fake-llm`（硬编码的
-状态机）上，真实模型自己选对工具这件事尚未验证，是下一阶段的内容。
+验收脚本（S1 / S2 / S3 / S4）默认跑在 `deploy/fake-llm`（硬编码的状态机）上，证明的是内核 / 门 /
+扩展这一侧的链路成立；真实模型自己选对工具另有 `--real` 模式的回归，数字与边界见
+`docs/STATUS.md` §2.2 与 `docs/runbooks/host-accept-real-model.md`。
 
 ## 部署
 

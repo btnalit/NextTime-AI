@@ -42,7 +42,11 @@ Activity (`run.ts`'s own doc comment has the full phase table):
    Independent of Host/Container (`gatekeeperId` here is a *configured* value, not one resolved from
    an earlier phase), so it needs no previously-resolved id and runs after phase 3 unconditionally
    of whether phase 3 ran. Non-fatal: unlike Docker, a RAGFlow Gatekeeper being unreachable only
-   skips this one phase (logged as a warning) — it never fails the run. See `ragflow.ts`'s own doc
+   skips this one phase (logged as a warning) — it never fails the run. All or nothing (R-70): the
+   phase carries an S5.2 window over KnowledgeBase/Document, so it is submitted only after every
+   page of `kb.list` and of every KnowledgeBase's `kb.documents` was read; any failed or
+   inconsistent read (including RAGFlow's own non-zero `code` in a 200 body) skips the phase, window
+   included, and leaves the existing Facts as they are. See `ragflow.ts`'s own doc
    comment for the two-independent-write-paths note (the gate's own `observe_operation` call also
    writes its own low-fidelity `{id}`-identified facts, unconditionally — documented in
    `ontology/ops-assets-v2.yaml`'s header comment, not something this collector reconciles).
