@@ -31,6 +31,9 @@ export interface DraftProposedProps {
    *  the Workers tab's own "我的草稿" section is the fallback now, this prop just keeps the nudge
    *  toward publishing front and center on the screen that already has the draft in view.) */
   readonly unpublishedConsequence?: string;
+  /** Skill / Procedure drafts are also visible to the workspace owner and builders, who review
+   *  and publish them (D-26 rule); WorkerDefinition drafts stay the proposer's alone. */
+  readonly reviewersSeeDraft?: boolean;
 }
 
 /**
@@ -46,6 +49,7 @@ export function DraftProposed({
   onDone,
   note,
   unpublishedConsequence,
+  reviewersSeeDraft = false,
 }: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
@@ -101,15 +105,20 @@ export function DraftProposed({
         tone={unpublishedConsequence !== undefined && status === 'draft' ? 'warn' : 'info'}
         testId="draft-private-notice"
       >
-        {status === 'draft'
+        {status === 'draft' && reviewersSeeDraft
           ? t(
-              '草稿只有你（提议者）可见；发布后工作区所有成员可见、可选用。',
-              'Drafts are private to you, the proposer; publishing makes it visible and selectable for every member.',
+              '草稿只有你（提议者）和工作区的 owner、builder 可见；发布后工作区所有成员可见、可选用。',
+              'Drafts are visible only to you, the proposer, and the workspace owner and builders; publishing makes it visible and selectable for every member.',
             )
-          : t(
-              '已发布：工作区所有成员现在可见。 Published —',
-              'visible to every member of the workspace now.',
-            )}
+          : status === 'draft'
+            ? t(
+                '草稿只有你（提议者）可见；发布后工作区所有成员可见、可选用。',
+                'Drafts are private to you, the proposer; publishing makes it visible and selectable for every member.',
+              )
+            : t(
+                '已发布：工作区所有成员现在可见。 Published —',
+                'visible to every member of the workspace now.',
+              )}
         {note ? ` ${note}` : ''}
         {unpublishedConsequence !== undefined && status === 'draft'
           ? ` ${unpublishedConsequence}`

@@ -149,6 +149,7 @@ export function ProcedureEditor({
             : () => http.call<{ status: string }>('publish_procedure', { procedureId: proposed.id })
         }
         onDone={onDone}
+        reviewersSeeDraft
       />
     );
   }
@@ -170,8 +171,8 @@ export function ProcedureEditor({
       ) : (
         <Notice testId="procedure-private-notice">
           {t(
-            '草稿只有你（提议者）可见，发布后所有成员可见（I16）；发布时每个 operation / worker 步骤引用的对象必须已发布。',
-            'The draft is private to you until published (I16); publishing resolves every operation / worker step against published objects.',
+            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见（I16）；发布时每个 operation / worker 步骤引用的对象必须已发布。',
+            'Until published, the draft is visible only to you, the workspace owner and builders (I16); publishing resolves every operation / worker step against published objects.',
           )}
         </Notice>
       )}

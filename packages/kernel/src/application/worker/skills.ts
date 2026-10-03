@@ -13,6 +13,7 @@ import { type PublishActor, assertPublishAuthority } from '../../governance/capa
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
+import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
 const graphStore = new SqlGraphStore();
@@ -36,9 +37,10 @@ const graphStore = new SqlGraphStore();
  * `channel:'human'`) — this module does not re-check channel. `propose` always inserts a row it
  * owns (`proposedBy` is always the calling principal), so "modify another principal's draft"
  * cannot happen through this capability's shape. What this module *does* own is I16's **read**
- * half — a draft is private to its proposer, not just unwritable by anyone else — via `listSkills`'s
- * own predicate (see that function's doc comment; the migration's header comment explains why this
- * is *not* an RLS policy).
+ * half — a draft is visible only to its proposer and the workspace's draft reviewers (owner,
+ * builder — D-26's rule, `draftVisibleTo` in ./draft-visibility.ts), not just unwritable by anyone
+ * else — via `listSkills`'s own predicate (see that function's doc comment; the migration's header
+ * comment explains why this is *not* an RLS policy).
  */
 
 // -------------------------------------------------------------------------------------------
@@ -231,8 +233,9 @@ async function getLatestForUpdate(
 }
 
 /** D-24 (`governance/capability/publish-authority.ts`): the locked row's proposer or the owner.
- *  Someone else's draft is invisible to the caller (I16), so it is not found — the same answer
- *  `discard_draft` gives; a published/deprecated version everyone can see is a 403. */
+ *  A draft the caller cannot see (`draftVisibleTo`) is not found — the same answer `get_skill`
+ *  gives; a row the caller can see (a builder reviewing someone else's draft, or any published /
+ *  deprecated version) is a 403 `not_proposer`. */
 function requireSkillAuthority(
   action: 'publish_skill' | 'deprecate_skill',
   actor: PublishActor | undefined,
@@ -243,7 +246,9 @@ function requireSkillAuthority(
     actor,
     row,
     `Skill ${row.id}@${row.version}`,
-    () => new SkillNotFoundError(row.workspaceId, row.id),
+    actor && !draftVisibleTo(actor, row)
+      ? () => new SkillNotFoundError(row.workspaceId, row.id)
+      : undefined,
   );
 }
 
@@ -404,11 +409,12 @@ export async function deprecateSkill(
 // -------------------------------------------------------------------------------------------
 
 /** `list_skills`: published Skills (their latest version only — a superseded draft-before-publish
- *  version never surfaces once a later one exists) plus `callerPrincipalId`'s own draft Skills
- *  (I16 read-privacy — this is the enforcement point this module's own doc comment describes: a
- *  draft proposed by principal A is simply absent from principal B's `list_skills` result, the same
- *  "not found" behavior a single-row lookup would give, without needing a separate single-row
- *  capability to test it against). */
+ *  version never surfaces once a later one exists) plus the draft Skills `viewer` may see — their
+ *  own, or every draft for the owner and builders (I16 read-privacy with D-26's reviewer rule,
+ *  `draftVisibleTo` — this is the enforcement point this module's own doc comment describes: a
+ *  draft proposed by principal A is simply absent from a non-reviewer principal B's `list_skills`
+ *  result, the same "not found" behavior a single-row lookup would give). A deprecated version is
+ *  not listed (unchanged). */
 // -------------------------------------------------------------------------------------------
 // S8 W1-C (leftover 48 pagination list): `list_skills` keyset page — the pre-existing `distinct
 // on (id) ... order by id, version desc` picked "latest version per id" but sorted the *page*
@@ -460,18 +466,22 @@ export interface SkillsPage {
 export async function listSkills(
   client: PoolClient,
   workspaceId: string,
-  callerPrincipalId: string,
+  viewer: DraftViewer,
   filter: ListSkillsFilter = {},
 ): Promise<SkillsPage> {
   const requestedLimit = filter.limit ?? DEFAULT_LIST_SKILLS_LIMIT;
   const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_SKILLS_LIMIT);
   const cursor = decodeListSkillsCursor(filter.cursor);
+  const visibility = draftVisibilityBinds(viewer);
 
   const result = await client.query<SkillDbRow>(
     `with latest as (
        select distinct on (id) ${SELECT_COLUMNS} from skills
        where workspace_id = $1
-         and (status = 'published' or (status = 'draft' and proposed_by = $2))
+         and (
+           status = 'published'
+           or (status = 'draft' and ($6::boolean or proposed_by = $2))
+         )
        order by id, version desc
      )
      select * from latest
@@ -481,7 +491,14 @@ export async function listSkills(
      )
      order by date_trunc('milliseconds', created_at) desc, id desc
      limit $5`,
-    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+    [
+      workspaceId,
+      visibility.principalId,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      limit + 1,
+      visibility.seesEveryDraft,
+    ],
   );
 
   const rows = result.rows.slice(0, limit).map(mapRow);
@@ -499,31 +516,35 @@ export async function listSkills(
 }
 
 /** `get_skill` (S8 W1-C, leftover 48 "无 get_skill"): one Skill's latest version, full markdown
- *  body included — same I16 read-privacy predicate as `listSkills` (published, or the caller's
- *  own draft); `null` for an unknown id or a draft the caller does not own (never distinguished —
- *  same "not found" convention `listSkills`'s own doc comment already established for this
- *  predicate). */
+ *  body included — same read predicate as `listSkills` (published, or a draft `viewer` may see:
+ *  their own, or any for the owner and builders — `draftVisibleTo`); `null` for an unknown id or
+ *  a draft the viewer may not see (never distinguished — same "not found" convention
+ *  `listSkills`'s own doc comment already established for this predicate). */
 export async function getSkill(
   client: PoolClient,
   workspaceId: string,
-  callerPrincipalId: string,
+  viewer: DraftViewer,
   skillId: string,
 ): Promise<SkillRow | null> {
+  const visibility = draftVisibilityBinds(viewer);
   const result = await client.query<SkillDbRow>(
     `select ${SELECT_COLUMNS} from skills
      where workspace_id = $1
        and id = $2
-       and (status = 'published' or (status = 'draft' and proposed_by = $3))
+       and (
+         status = 'published'
+         or (status = 'draft' and ($4::boolean or proposed_by = $3))
+       )
      order by version desc
      limit 1`,
-    [workspaceId, skillId, callerPrincipalId],
+    [workspaceId, skillId, visibility.principalId, visibility.seesEveryDraft],
   );
   const row = result.rows[0];
   return row ? mapRow(row) : null;
 }
 
-/** Every currently-published Skill's own `id` (workspace-wide, no caller-draft mixing — unlike
- *  `listSkills` above, which also surfaces the caller's own drafts for I16 read-privacy). S3.13's
+/** Every currently-published Skill's own `id` (workspace-wide, no draft mixing — unlike
+ *  `listSkills` above, which also surfaces the drafts its viewer may see). S3.13's
  *  `governance/agent-profile` uses this as the "every published Skill" ceiling
  *  `AgentProfile.enabledSkills === null` (inherit) resolves to. */
 export async function listPublishedSkillIds(

@@ -169,12 +169,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
 
         const ownList = await inTx(proposerId, (client) =>
-          listSkills(client, workspaceId, proposerId),
+          listSkills(client, workspaceId, { principalId: proposerId, role: 'member' }),
         );
         expect(ownList.items.some((s) => s.name === unique)).toBe(true);
 
         const otherList = await inTx(otherPrincipalId, (client) =>
-          listSkills(client, workspaceId, otherPrincipalId),
+          listSkills(client, workspaceId, { principalId: otherPrincipalId, role: 'member' }),
         );
         expect(otherList.items.some((s) => s.name === unique)).toBe(false);
       });
@@ -187,7 +187,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, draft.id));
 
         const otherList = await inTx(otherPrincipalId, (client) =>
-          listSkills(client, workspaceId, otherPrincipalId),
+          listSkills(client, workspaceId, { principalId: otherPrincipalId, role: 'member' }),
         );
         expect(otherList.items.some((s) => s.name === unique && s.status === 'published')).toBe(
           true,

@@ -12,6 +12,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
+import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
@@ -193,8 +194,9 @@ async function getLatestForUpdate(
 }
 
 /** D-24 (`governance/capability/publish-authority.ts`): the locked row's proposer or the owner.
- *  Someone else's draft is invisible to the caller (I16), so it is not found — the same answer
- *  `discard_draft` gives; a published/deprecated version everyone can see is a 403. */
+ *  A draft the caller cannot see (`draftVisibleTo`) is not found — the same answer
+ *  `list_procedures` gives; a row the caller can see (a builder reviewing someone else's draft, or
+ *  any published / deprecated version) is a 403 `not_proposer`. */
 function requireProcedureAuthority(
   action: 'publish_procedure' | 'deprecate_procedure',
   actor: PublishActor | undefined,
@@ -205,7 +207,9 @@ function requireProcedureAuthority(
     actor,
     row,
     `Procedure ${row.id}@${row.version}`,
-    () => new ProcedureNotFoundError(row.workspaceId, row.id),
+    actor && !draftVisibleTo(actor, row)
+      ? () => new ProcedureNotFoundError(row.workspaceId, row.id)
+      : undefined,
   );
 }
 
@@ -443,23 +447,28 @@ export interface ProceduresPage {
   readonly truncated?: true;
 }
 
-/** `list_procedures` — same "published, or my own draft" predicate as `skills.ts`'s `listSkills`
- *  (I16 read-privacy; see that function's own doc comment), and the same keyset-page shape. */
+/** `list_procedures` — same "published, or a draft the viewer may see" predicate as `skills.ts`'s
+ *  `listSkills` (I16 read-privacy with D-26's reviewer rule, `draftVisibleTo`; see that function's
+ *  own doc comment), and the same keyset-page shape. */
 export async function listProcedures(
   client: PoolClient,
   workspaceId: string,
-  callerPrincipalId: string,
+  viewer: DraftViewer,
   filter: ListProceduresFilter = {},
 ): Promise<ProceduresPage> {
   const requestedLimit = filter.limit ?? DEFAULT_LIST_PROCEDURES_LIMIT;
   const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_PROCEDURES_LIMIT);
   const cursor = decodeListProceduresCursor(filter.cursor);
+  const visibility = draftVisibilityBinds(viewer);
 
   const result = await client.query<ProcedureDbRow>(
     `with latest as (
        select distinct on (id) ${SELECT_COLUMNS} from procedures
        where workspace_id = $1
-         and (status = 'published' or (status = 'draft' and proposed_by = $2))
+         and (
+           status = 'published'
+           or (status = 'draft' and ($6::boolean or proposed_by = $2))
+         )
        order by id, version desc
      )
      select * from latest
@@ -469,7 +478,14 @@ export async function listProcedures(
      )
      order by date_trunc('milliseconds', created_at) desc, id desc
      limit $5`,
-    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+    [
+      workspaceId,
+      visibility.principalId,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      limit + 1,
+      visibility.seesEveryDraft,
+    ],
   );
 
   const rows = result.rows.slice(0, limit).map(mapRow);
