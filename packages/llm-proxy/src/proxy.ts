@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { CORRELATION_ID_HEADER, type HandleClaims, resolveCorrelationId } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
@@ -451,6 +452,10 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     armTimeout(options.upstreamConnectTimeoutMs);
 
     const upstreamStartedMs = Date.now();
+    // R-67: this upstream request's usage identity — minted here, never taken from the caller,
+    // so the kernel tells concurrent requests under one Handle apart (their `startedAt` can be
+    // the same millisecond) and still recognizes a replay of this record.
+    const requestId = randomUUID();
     let upstreamRes: Response;
     try {
       upstreamRes = await fetchImpl(upstreamUrl, {
@@ -559,6 +564,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         status: upstreamOutcome,
+        requestId,
       },
       { correlationId },
     );

@@ -13,6 +13,7 @@ function record(overrides: Partial<LlmUsageRecord> = {}): LlmUsageRecord {
     outputTokens: 5,
     startedAt: new Date(0).toISOString(),
     status: 'completed',
+    requestId: 'request-1',
     ...overrides,
   };
 }
@@ -158,6 +159,119 @@ describe('LlmUsageReporter', () => {
     const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(String(secondInit.body)) as LlmUsageRecord[];
     expect(body).toHaveLength(1);
+    reporter.close();
+  });
+
+  // R-68 (L1-11): the kernel answers per workspace group; one poisoned workspace must not keep
+  // every other workspace's usage in the queue.
+  it('requeues only the groups the kernel asks to retry, and drops the ones it rejected for good', async () => {
+    const lines: string[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({
+          ok: false,
+          error: {
+            code: 'internal_error',
+            message: 'failed to record usage for some workspaces — retry those groups',
+            details: {
+              groups: [
+                { workspaceId: 'ws-recorded', outcome: 'recorded', inserted: 1, rejected: 0 },
+                { workspaceId: 'ws-retry', outcome: 'retry' },
+                { workspaceId: 'ws-gone', outcome: 'rejected', reason: 'workspace_not_found' },
+              ],
+            },
+          },
+        }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    const reporter = new LlmUsageReporter({
+      log: (line) => lines.push(line),
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(record({ workspaceId: 'ws-recorded', requestId: 'r-1' }));
+    reporter.record(record({ workspaceId: 'ws-retry', requestId: 'r-2' }));
+    reporter.record(record({ workspaceId: 'ws-gone', requestId: 'r-3' }));
+    reporter.record(record({ workspaceId: 'ws-gone', requestId: 'r-4' }));
+    // In the batch but missing from the kernel's answer: retried, never assumed recorded.
+    reporter.record(record({ workspaceId: 'ws-unanswered', requestId: 'r-5' }));
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(reporter.pending).toBe(2);
+    const dropped = lines
+      .map((line) => JSON.parse(line) as { msg?: string; workspaceId?: string; dropped?: number })
+      .filter((line) => line.msg?.includes('rejected usage'));
+    expect(dropped).toEqual([expect.objectContaining({ workspaceId: 'ws-gone', dropped: 2 })]);
+
+    await vi.advanceTimersByTimeAsync(200); // backoff doubled; the retry carries only those two
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [, retryInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+    const retried = JSON.parse(String(retryInit.body)) as LlmUsageRecord[];
+    expect(retried.map((r) => r.requestId)).toEqual(['r-2', 'r-5']);
+    expect(reporter.pending).toBe(0);
+    reporter.close();
+  });
+
+  it('settles the whole batch on a 200 and logs records the kernel rejected inside a recorded group', async () => {
+    const lines: string[] = [];
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          inserted: 1,
+          groups: [{ workspaceId: 'ws-1', outcome: 'recorded', inserted: 1, rejected: 1 }],
+        },
+      }),
+    } as unknown as Response);
+    const reporter = new LlmUsageReporter({
+      log: (line) => lines.push(line),
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(record({ requestId: 'r-1' }));
+    reporter.record(record({ requestId: 'r-2' }));
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reporter.pending).toBe(0);
+    expect(
+      lines.some((line) => line.includes('rejected usage') && line.includes('"dropped":1')),
+    ).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    reporter.close();
+  });
+
+  it('requeues the whole batch on an error response without per-group results (an older kernel)', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ ok: false, error: { code: 'internal_error', message: 'x' } }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    const reporter = new LlmUsageReporter({
+      log: () => {},
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(record({ workspaceId: 'ws-a', requestId: 'r-1' }));
+    reporter.record(record({ workspaceId: 'ws-b', requestId: 'r-2' }));
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reporter.pending).toBe(2);
+    await vi.advanceTimersByTimeAsync(200);
+    const [, retryInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+    const retried = JSON.parse(String(retryInit.body)) as LlmUsageRecord[];
+    expect(retried.map((r) => r.requestId)).toEqual(['r-1', 'r-2']);
     reporter.close();
   });
 
