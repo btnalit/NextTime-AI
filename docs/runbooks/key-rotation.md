@@ -216,9 +216,15 @@ docker compose restart kernel agent-host worker-supervisor llm-proxy egress-prox
 
 同 §2——单一共享密钥，`kernel`（客户端角色，`NEXTTIME_GATE_TOKEN_FILE`）与每个门服务（服务端角色，
 `GATE_KERNEL_TOKEN_FILE`）各自在启动时读一次，无重叠期。**消费者数量取决于当前部署了多少个门**——
-生产环境至少是 `kernel` + `gatekeeper-docker` + `gatekeeper-ragflow`；`accept-s2-ssh-gate`/
-`accept-s2-http-gate` 只在 `accept-s2` profile 起时才存在，不属于常规轮换范围；任何按
+生产环境至少是 `kernel` + `gatekeeper-docker` + `gatekeeper-ragflow`（+ `gate-host`）；
+`accept-s2-ssh-gate`/`accept-s2-http-gate` 是自连门，不持 `gate_token`（见下）；任何按
 `docs/runbooks/add-gatekeeper.md` 新增的门服务同样要计入。
+
+**自连门的连接密钥随之全部失效**（R-01，维护者决定 D-01）：经 `create_connection` 接入的自连门不持
+`gate_token`，持的是从它派生的、每个连接一把的连接密钥——换 `gate_token` 后内核派生出的值全变了，
+每个自连门都会 401，直到它的 owner 在控制台 **系统与授权 → ⋯ → 重新签发连接密钥**（或
+`rotate_connection_secret`）并把新密钥写进门的 `GATE_KERNEL_TOKEN_FILE`。轮换前用
+`docs/runbooks/release.md` §3.5 第 1 步的查询列出受影响的门，提前通知 owner。
 
 ### 3.3 步骤
 

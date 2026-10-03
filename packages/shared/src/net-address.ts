@@ -1,7 +1,13 @@
 /**
- * Pure IPv4/IPv6 parsing and address classification (design doc §7.9, §5.4 I10). No IO — every
- * function here is a deterministic function of its arguments so `policy.ts` can unit-test every
- * deny class without a real network or DNS resolver.
+ * Pure IPv4/IPv6 parsing, address classification and hostname rules (design doc §7.9, §5.4 I10).
+ * No IO — every function here is a deterministic function of its arguments, so every deny class is
+ * unit-testable without a real network or DNS resolver.
+ *
+ * Two consumers, one copy (R-27, 2026-10-02 review): `@nexttime/egress-proxy`'s `policy.ts` (a
+ * Worker's outbound traffic) and this package's `outbound-target.ts` (the kernel's own fetches of
+ * an owner-supplied URL). This file lived in egress-proxy as `net-utils.ts` until the kernel needed
+ * the same rules; each consumer decides which address classes it refuses, the classification
+ * itself is defined once here.
  *
  * Well-known deny classes (RFC1918, loopback, link-local, CGNAT, IPv6 unique-local/link-local)
  * are matched via direct octet/bit comparisons rather than parsed CIDR string literals. This
@@ -369,4 +375,48 @@ export function classifyAddress(
   }
 
   return 'invalid';
+}
+
+/**
+ * The "this host" addresses: IPv4 `0.0.0.0/8` (RFC 1122 §3.2.1.3) and IPv6 `::`. `classifyAddress`
+ * reports them as `'public'` (none of its deny classes covers them), yet a TCP connect to `0.0.0.0`
+ * reaches the *local* host on Linux — so a caller refusing loopback must refuse these as well.
+ * IPv4-mapped forms (`::ffff:0.0.0.0`) are unwrapped first, like `classifyAddress` does.
+ */
+export function isUnspecifiedAddress(rawIp: string): boolean {
+  const ip = normalizeAddress(rawIp);
+  const v4 = parseIPv4(ip);
+  if (v4) return v4[0] === 0;
+  const v6 = parseIPv6(ip);
+  return v6?.every((group) => group === 0) ?? false;
+}
+
+// -------------------------------------------------------------------------------------------
+// Hostname rules (moved here from egress-proxy's `policy.ts` with the address rules above).
+// -------------------------------------------------------------------------------------------
+
+/** Lower-cased, trimmed, one trailing root `.` removed (`Kernel.` → `kernel`). */
+export function normalizeHostname(hostname: string): string {
+  const lower = hostname.trim().toLowerCase();
+  return lower.endsWith('.') ? lower.slice(0, -1) : lower;
+}
+
+/**
+ * Whether `hostname` matches any pattern in `patterns` as a suffix: an exact match, or the
+ * pattern preceded by a `.` (so `deny: ["example.com"]` also blocks `sub.example.com`).
+ */
+export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false;
+  const host = normalizeHostname(hostname);
+  for (const raw of patterns) {
+    const pattern = normalizeHostname(raw);
+    if (pattern === '') continue;
+    if (host === pattern || host.endsWith(`.${pattern}`)) return true;
+  }
+  return false;
+}
+
+/** Bare hostnames (no dot) can't be real public domains — they're internal/Docker DNS names. */
+export function isBareHostname(hostname: string): boolean {
+  return !normalizeHostname(hostname).includes('.');
 }

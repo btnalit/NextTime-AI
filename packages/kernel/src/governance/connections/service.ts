@@ -144,6 +144,9 @@ export interface CompleteConnectionInput {
   readonly kind: ConnectionRequestKind;
   readonly target: string;
   readonly endpoint: string;
+  /** R-01 / D-01: the salt of the connection secret the owner gave this gate (verified by the
+   *  caller) — stored on the Gatekeeper Object so the kernel can re-derive the secret per call. */
+  readonly connectionSecretSalt: string;
   /** Already resolved by the caller (OpenAPI import, MCP `tools/list`, or the gate's own
    *  `describe_operations` — application/gateway/connection-handlers.ts). Always imported as
    *  drafts regardless of what the transport suggested (I17) — same contract as
@@ -213,6 +216,7 @@ export async function completeConnection(
     transportKind: input.kind,
     target: input.target,
     endpoint: input.endpoint,
+    connectionSecretSalt: input.connectionSecretSalt,
     activityId: input.activityId,
     registeredBy: input.completedBy,
   });

@@ -24,8 +24,29 @@ const request: ConnectionRequestRow = {
   completedAt: null,
 };
 
+/** R-01: what `mint_connection_secret` answers in these tests. */
+const SECRET = `ntgc1_${'a'.repeat(32)}_${'b'.repeat(64)}`;
+
+/** A caller that answers the form's own `mint_connection_secret` (on mount) and hands every other
+ *  call to `call`. */
 function httpWith(call: (name: string, params: unknown) => Promise<unknown>): CapabilityCaller {
-  return { call: vi.fn(call) as CapabilityCaller['call'] };
+  return {
+    call: vi.fn((name: string, params: unknown) =>
+      name === 'mint_connection_secret'
+        ? Promise.resolve({ connectionSecret: SECRET })
+        : call(name, params),
+    ) as CapabilityCaller['call'],
+  };
+}
+
+/** How many `create_connection` calls `http` received. */
+function createCalls(http: CapabilityCaller): number {
+  return vi.mocked(http.call).mock.calls.filter(([name]) => name === 'create_connection').length;
+}
+
+/** The form's submit stays disabled until the connection secret is on screen. */
+async function secretShown(): Promise<void> {
+  await screen.findByTestId('cc-connection-secret-reveal');
 }
 
 describe('CompleteConnectionForm', () => {
@@ -34,6 +55,7 @@ describe('CompleteConnectionForm', () => {
     render(
       <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
     );
+    await secretShown();
 
     expect((screen.getByLabelText(/^类型/) as HTMLSelectElement).value).toBe('http');
     expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe(request.target);
@@ -46,12 +68,13 @@ describe('CompleteConnectionForm', () => {
     // only at the error id, never at a `-hint` id that is not in the DOM.
     expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-error');
     expect(document.getElementById('cc-endpoint-error')).not.toBeNull();
-    expect(http.call).not.toHaveBeenCalled();
+    expect(createCalls(http)).toBe(0);
   });
 
   it('C15: rejects a Gatekeeper endpoint that is not a URL, on the field, before any call', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
     const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
     // Before any submit the hint is the only description.
     expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-hint');
@@ -60,16 +83,17 @@ describe('CompleteConnectionForm', () => {
     fireEvent.change(endpoint, { target: { value: 'gate-host:8080' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     expect(await screen.findByText(/必须是一个 URL/)).toBeTruthy();
-    expect(http.call).not.toHaveBeenCalled();
+    expect(createCalls(http)).toBe(0);
 
     fireEvent.change(endpoint, { target: { value: 'http://gate-host:8080' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    await waitFor(() => expect(http.call).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
   it('shows the credentials box only for connected_account, and requires it there', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
     expect(screen.queryByLabelText(/^凭证(?!类型)/)).toBeNull();
 
     fireEvent.click(screen.getByLabelText(/已连接账户/));
@@ -81,10 +105,10 @@ describe('CompleteConnectionForm', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     expect(await screen.findByText(/连接账户方式需要一份凭证/)).toBeTruthy();
-    expect(http.call).not.toHaveBeenCalled();
+    expect(createCalls(http)).toBe(0);
   });
 
-  it('shows manifest source for http/mcp only', () => {
+  it('shows manifest source for http/mcp only', async () => {
     render(
       <CompleteConnectionForm
         http={httpWith(async () => ({}))}
@@ -92,6 +116,7 @@ describe('CompleteConnectionForm', () => {
         onCancel={vi.fn()}
       />,
     );
+    await secretShown();
     expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'ssh' } });
     expect(screen.queryByLabelText(/清单来源/)).toBeNull();
@@ -108,6 +133,7 @@ describe('CompleteConnectionForm', () => {
         kind: 'http',
         target: 'https://inventory.example.internal',
         endpoint: 'http://gate:8080',
+        connectionSecret: SECRET,
         credentialKind: 'connected_account',
         credentials: { apiKey: 'k' },
         manifestSource: 'https://inventory.example.internal/openapi.json',
@@ -121,6 +147,7 @@ describe('CompleteConnectionForm', () => {
     render(
       <CompleteConnectionForm http={http} request={request} onDone={onDone} onCancel={vi.fn()} />,
     );
+    await secretShown();
 
     fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
@@ -148,6 +175,7 @@ describe('CompleteConnectionForm', () => {
       );
     });
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
     fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
@@ -166,6 +194,7 @@ describe('CompleteConnectionForm', () => {
       );
     });
     render(<CompleteConnectionForm http={http400} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
     fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
@@ -191,6 +220,7 @@ describe('CompleteConnectionForm', () => {
         onCancel={vi.fn()}
       />,
     );
+    await secretShown();
     expect(screen.queryByLabelText(/^类型/)).toBeNull();
     // mcp supports manifestSource, so that field should still render.
     expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
@@ -202,7 +232,57 @@ describe('CompleteConnectionForm', () => {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    await waitFor(() => expect(http.call).toHaveBeenCalled());
+    await waitFor(() => expect(createCalls(http)).toBeGreaterThan(0));
+  });
+
+  // R-01 (D-01): the gate's own connection secret, minted when the form opens and shown once.
+  it('shows the minted connection secret with a copy control before anything is registered', async () => {
+    const http = httpWith(async () => ({}));
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    expect(screen.getByTestId('connection-secret-value').textContent).toBe(SECRET);
+    expect(screen.getByRole('button', { name: 'Copy connection secret' })).toBeTruthy();
+    expect(vi.mocked(http.call).mock.calls.map(([name]) => name)).toEqual([
+      'mint_connection_secret',
+    ]);
+  });
+
+  it('keeps Register disabled and says why when no connection secret could be minted', async () => {
+    const http: CapabilityCaller = {
+      call: vi.fn(async () => {
+        throw new HttpError(
+          'capability_error',
+          'connection secrets are unavailable',
+          'service_unavailable',
+        );
+      }) as CapabilityCaller['call'],
+    };
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByText(/无法生成连接密钥/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: '注册门' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(createCalls(http)).toBe(0);
+  });
+
+  // R-27: an endpoint aimed at the platform's own services is refused on the field it names.
+  it('shows a connection_target_refused 400 on the endpoint field', async () => {
+    const http = httpWith(async () => {
+      throw new HttpError(
+        'capability_error',
+        'create_connection: endpoint "worker-supervisor" is refused: a single-label host name (a platform service name, localhost) is not reachable from here',
+        'connection_target_refused',
+      );
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
+      target: { value: 'http://worker-supervisor:8081' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    const fieldError = await screen.findByText(/is refused/);
+    expect(fieldError.getAttribute('id')).toBe('cc-endpoint-error');
   });
 
   it('parses credentials as JSON when they are JSON, raw otherwise; maps 400 messages to fields', () => {

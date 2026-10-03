@@ -1,9 +1,11 @@
 import { IllegalTransition } from '@nexttime/shared';
 import { z } from 'zod';
 import {
+  GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
+import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import {
   ChatArchivedError,
   ChatNotFoundError,
@@ -20,6 +22,8 @@ import {
   ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  ConnectionSecretConflictError,
+  ConnectionSecretInvalidError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -357,6 +361,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S2.13 `create_connection` — same additions as capability-route.ts's mapCapabilityError.
   if (err instanceof ConnectionCredentialRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // R-27 / R-01 (D-01) — same additions as capability-route.ts's mapCapabilityError.
+  if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof ConnectionSecretConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (err instanceof GateConnectionSecretsUnavailableError) {
+    return { code: WS_ERROR_CODES.SERVICE_UNAVAILABLE, message: err.message };
   }
   if (err instanceof ConnectionManifestFetchError || err instanceof GatekeeperTimeoutError) {
     return { code: WS_ERROR_CODES.UPSTREAM_ERROR, message: err.message };

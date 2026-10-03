@@ -1,5 +1,18 @@
-import type { CidrRange } from './net-utils.js';
-import { classifyAddress, isInCidr, isIpLiteral } from './net-utils.js';
+import {
+  type CidrRange,
+  classifyAddress,
+  isBareHostname,
+  isInCidr,
+  isIpLiteral,
+  matchesSuffix,
+  normalizeHostname,
+} from '@nexttime/shared';
+
+// The hostname rules (`matchesSuffix`, `isBareHostname`) and the address classification above
+// live in `@nexttime/shared`'s `net-address.ts` since R-27 (2026-10-02 review): the kernel's
+// owner-supplied-URL predicate (`outbound-target.ts`) applies the same rules, from the same code.
+// Re-exported so this module's own surface (and its tests) is unchanged.
+export { isBareHostname, matchesSuffix };
 
 /**
  * Egress decision policy (design doc §7.9, §5.4 I10). Pure aside from the injected `resolve`
@@ -87,31 +100,6 @@ export interface PolicyDecision {
 /** Resolves a hostname to every address it points at. Injected so tests never touch real DNS. */
 export type Resolver = (hostname: string) => Promise<string[]>;
 
-function normalizeHostname(hostname: string): string {
-  const lower = hostname.trim().toLowerCase();
-  return lower.endsWith('.') ? lower.slice(0, -1) : lower;
-}
-
-/**
- * Whether `hostname` matches any pattern in `patterns` as a suffix: an exact match, or the
- * pattern preceded by a `.` (so `deny: ["example.com"]` also blocks `sub.example.com`).
- */
-export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
-  if (!patterns || patterns.length === 0) return false;
-  const host = normalizeHostname(hostname);
-  for (const raw of patterns) {
-    const pattern = normalizeHostname(raw);
-    if (pattern === '') continue;
-    if (host === pattern || host.endsWith(`.${pattern}`)) return true;
-  }
-  return false;
-}
-
-/** Bare hostnames (no dot) can't be real public domains — they're internal/Docker DNS names. */
-export function isBareHostname(hostname: string): boolean {
-  return !normalizeHostname(hostname).includes('.');
-}
-
 export interface DecideEgressInput {
   hostname: string;
   source: SourcePolicy | undefined;
@@ -171,7 +159,7 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
   // PolicyConfig.trustedResolvedCidrs): the exemption is about what the network's resolver
   // answered for a *name*, not about letting callers dial into that range directly. `isIpLiteral`
   // (not just strict dotted-quad/colon-hex) so an alternate notation (decimal/hex/octal/short
-  // dotted forms — net-utils.ts `parseIPv4Literal`'s own doc comment) can never bypass this rule
+  // dotted forms — `@nexttime/shared` net-address.ts `parseIPv4Literal`'s own doc comment) can never bypass this rule
   // by spelling the same target in a form the strict parser alone wouldn't recognize (lane-6
   // review P3).
   const targetIsLiteral = isIpLiteral(hostname);

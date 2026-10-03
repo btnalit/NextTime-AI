@@ -198,12 +198,17 @@ export {
   ConnectionCredentialRequiredError,
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
+  ConnectionSecretConflictError,
+  ConnectionSecretInvalidError,
   connectGatekeeperHandler,
   createConnectionHandler,
   listConnectionRequestsHandler,
+  mintConnectionSecretHandler,
   requestConnectionHandler,
+  rotateConnectionSecretHandler,
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
+export { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
 
 export { publishManifestHandler } from './operation-manifest-handlers.js';

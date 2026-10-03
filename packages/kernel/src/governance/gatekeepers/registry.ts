@@ -1,7 +1,10 @@
 import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { registerGatekeeperObject } from '../../substrate/ontology/index.js';
+import {
+  registerGatekeeperObject,
+  setGatekeeperConnectionSecretSaltObject,
+} from '../../substrate/ontology/index.js';
 
 /**
  * governance/gatekeepers/registry: Gatekeeper instance registration + lookup (design doc §5.1.4
@@ -37,6 +40,9 @@ export interface RegisterGatekeeperInput {
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly target: string;
   readonly endpoint: string;
+  /** R-01 / D-01: a self-connected gate's connection-secret salt (`create_connection`); omitted for
+   *  a gate the kernel provisioned. */
+  readonly connectionSecretSalt?: string;
   /** The connected system's own Object id (design doc §5.1.4 Connection "产生 Gatekeeper 实例对象、
    *  系统对象与 connects_to 边"). When omitted, a lightweight `ConnectedSystem` Object is created
    *  from `name`/`target` — the common case for this task's own tests and for a gate registered
@@ -72,6 +78,9 @@ export async function registerGatekeeper(
     target: input.target,
     name: input.name,
     endpoint: input.endpoint,
+    ...(input.connectionSecretSalt !== undefined
+      ? { connectionSecretSalt: input.connectionSecretSalt }
+      : {}),
     systemObjectId,
     activityId: input.activityId,
     registeredBy: input.registeredBy,
@@ -80,12 +89,51 @@ export async function registerGatekeeper(
   return { gatekeeperId: result.gatekeeperObjectId };
 }
 
+/** R-01 / D-01 `rotate_connection_secret`: records `salt` as the Gatekeeper's current connection-
+ *  secret salt — the previous secret stops working the moment this commits. Throws
+ *  `GatekeeperNotFoundError` when there is no such Gatekeeper. Which Gatekeepers may carry a salt
+ *  at all (never a platform-catalog one) is the caller's rule (application/gateway). */
+export async function setGatekeeperConnectionSecretSalt(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  salt: string,
+): Promise<void> {
+  const updated = await setGatekeeperConnectionSecretSaltObject(
+    client,
+    workspaceId,
+    gatekeeperId,
+    salt,
+  );
+  if (!updated) throw new GatekeeperNotFoundError(gatekeeperId);
+}
+
+/** The id of the Gatekeeper in `workspaceId` whose connection-secret salt is `salt`, or `null` —
+ *  `create_connection` refuses to reuse one connection's secret for another (R-01). */
+export async function findGatekeeperIdByConnectionSecretSalt(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+): Promise<string | null> {
+  const result = await client.query<{ id: string }>(
+    `select id from objects
+     where workspace_id = $1 and object_type = 'Gatekeeper'
+       and properties ->> 'connectionSecretSalt' = $2
+     limit 1`,
+    [workspaceId, salt],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
 export interface GatekeeperRecord {
   readonly gatekeeperId: string;
   readonly name: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly target: string;
   readonly endpoint: string;
+  /** R-01 / D-01: the self-connected gate's connection-secret salt, when it has one
+   *  (`application/gateway/gate-target.ts` reads it; never the secret). */
+  readonly connectionSecretSalt?: string;
   /** S3.11 addition (`get_gatekeeper`'s own wire shape needs it) — the underlying Object's own
    *  `created_at`, purely additive to every pre-existing caller of this function. */
   readonly createdAt: Date;
@@ -105,6 +153,7 @@ export async function getGatekeeper(
     target?: string;
     name?: string;
     endpoint?: string;
+    connectionSecretSalt?: unknown;
   };
   if (!props.transportKind || !props.target || !props.endpoint) return null;
   return {
@@ -113,6 +162,9 @@ export async function getGatekeeper(
     transportKind: props.transportKind as GatekeeperRecord['transportKind'],
     target: props.target,
     endpoint: props.endpoint,
+    ...(typeof props.connectionSecretSalt === 'string'
+      ? { connectionSecretSalt: props.connectionSecretSalt }
+      : {}),
     createdAt: object.createdAt,
   };
 }

@@ -90,5 +90,13 @@ for (const [name, service] of Object.entries(doc.services ?? {})) {
       console.error(`service ${name} names undeclared secret ${source}`);
       process.exitCode = 1;
     }
+    // R-01 (D-01): the accept-s2 gates are self-connected — they authenticate the kernel with their
+    // own connection secret and must never be handed the platform gate token.
+    if (source === 'gate_token' && (service.profiles ?? []).includes('accept-s2')) {
+      console.error(
+        `service ${name} is a self-connected acceptance gate and must not mount gate_token`,
+      );
+      process.exitCode = 1;
+    }
   }
 }

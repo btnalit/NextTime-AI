@@ -10,7 +10,11 @@ import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { createPool, logIdleClientErrorToStderr, withWorkspace } from './adapters/db/pool.js';
 import type { PoolLike } from './adapters/db/pool.js';
-import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
+import {
+  HttpGatekeeperClient,
+  createGateConnectionSecrets,
+  loadGateToken,
+} from './adapters/gatekeeper-client/index.js';
 import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
 import type { TaskSupervisorClientPort } from './adapters/supervisor-client/index.js';
 import {
@@ -177,7 +181,12 @@ export function createServer(
   // S2.13: `create_connection`'s handler reuses the *same* `GatekeeperClient` instance
   // `request_action` uses — one HTTP client construction, same "single shared executor path"
   // reasoning `buildGatekeeperExecutionDeps`'s own doc comment gives for `ActionExecutor`.
-  setConnectionHandlerDeps({ gatekeeperClient });
+  // R-01 (D-01): the connection-secret issuer holds the same `gate_token` the client reads; the
+  // handlers never see either.
+  setConnectionHandlerDeps({
+    gatekeeperClient,
+    connectionSecrets: createGateConnectionSecrets(loadGateToken(process.env)),
+  });
 
   app.get('/api/health', async (_request, reply) => {
     if (options.isBackgroundReady && !options.isBackgroundReady()) {

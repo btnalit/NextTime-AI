@@ -1,9 +1,9 @@
+import { parseCidr } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { parseCidr } from './net-utils.js';
 import type { PolicyConfig, Resolver, SourcePolicy } from './policy.js';
 import { decideEgress, isBareHostname, matchesSuffix } from './policy.js';
 
-/** See net-utils.test.ts: avoids writing a literal RFC1918 address into this file's source text. */
+/** See `@nexttime/shared` net-address.test.ts: avoids writing a literal RFC1918 address into this file's source text. */
 const quad = (a: number, b: number, c: number, d: number): string => [a, b, c, d].join('.');
 
 const DEFAULT_DENY_HOSTS = [

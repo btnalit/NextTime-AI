@@ -2,6 +2,7 @@ import type {
   ExecutionReadinessGateWire,
   ExecutionReadinessWire,
   RefreshOperationGovernanceResultWire,
+  RotateConnectionSecretResultWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -10,6 +11,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
+import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
 import { RefreshOperationGovernanceConfirm } from '../connect/RefreshOperationGovernanceConfirm.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -228,6 +230,12 @@ export function SystemAccessCard({
   const [detailOpen, setDetailOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
+  // R-01 (D-01): a gate the workspace connected itself (not a catalog instance) authenticates the
+  // kernel with its own connection secret; the owner can issue a new one here — also how a gate
+  // connected before per-connection secrets gets its first. Shown once, in the sheet below.
+  const canRotateSecret = canManage && !healthInfo.linked;
+  const [rotateOpen, setRotateOpen] = useState(false);
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
 
   async function publish(): Promise<void> {
     setPublishing(true);
@@ -243,6 +251,49 @@ export function SystemAccessCard({
   }
 
   const workers = gate.workerDefinitionIds;
+
+  function moreMenu() {
+    return (
+      // `modal={false}` when the menu hands off to the rotation confirm (same reason as
+      // graph/FactRow.tsx's menu: a modal menu keeps its outside-pointer lock while the next
+      // surface opens).
+      <DropdownMenu modal={canRotateSecret ? false : undefined}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="s"
+            aria-label={t('更多操作', 'More actions')}
+            data-testid="gatekeeper-more"
+          >
+            <MoreIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => onOpenDetail(gate.gateId)}>
+            {t('健康与操作', 'Health & operations')}
+          </DropdownMenuItem>
+          {canPublish ? (
+            <DropdownMenuItem
+              disabled={publishing || draftCount === 0}
+              onSelect={() => void publish()}
+              data-testid="gatekeeper-publish-manifest"
+            >
+              {t('发布清单', 'Publish manifest')}
+              {draftCount > 0 ? ` (${draftCount})` : ''}
+            </DropdownMenuItem>
+          ) : null}
+          {canRotateSecret ? (
+            <DropdownMenuItem
+              onSelect={() => setRotateOpen(true)}
+              data-testid="gatekeeper-rotate-secret"
+            >
+              {t('重新签发连接密钥', 'Issue a new connection secret')}
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
 
   return (
     <li className="data-row" data-testid="gatekeeper-card" data-gatekeeper-id={gate.gateId}>
@@ -300,33 +351,35 @@ export function SystemAccessCard({
             {t('授权', 'Grant')}
           </Button>
         ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="s"
-              aria-label={t('更多操作', 'More actions')}
-              data-testid="gatekeeper-more"
-            >
-              <MoreIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => onOpenDetail(gate.gateId)}>
-              {t('健康与操作', 'Health & operations')}
-            </DropdownMenuItem>
-            {canPublish ? (
-              <DropdownMenuItem
-                disabled={publishing || draftCount === 0}
-                onSelect={() => void publish()}
-                data-testid="gatekeeper-publish-manifest"
-              >
-                {t('发布清单', 'Publish manifest')}
-                {draftCount > 0 ? ` (${draftCount})` : ''}
-              </DropdownMenuItem>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {canRotateSecret ? (
+          <Confirm
+            tier="medium"
+            danger
+            open={rotateOpen}
+            onOpenChange={setRotateOpen}
+            anchor={moreMenu()}
+            title={t('重新签发连接密钥', 'Issue a new connection secret')}
+            target={gate.name}
+            impact={[
+              t(
+                '旧密钥立即失效：在门里换上新密钥并重启之前，内核调不通这个门',
+                'The old secret stops working now — the kernel cannot reach this gate until it holds the new one and restarts',
+              ),
+              t('新密钥只显示一次', 'The new secret is shown once'),
+            ]}
+            confirmLabel={t('签发', 'Issue')}
+            onConfirm={async () => {
+              const result = await http.call<RotateConnectionSecretResultWire>(
+                'rotate_connection_secret',
+                { gatekeeperId: gate.gateId },
+              );
+              setRotatedSecret(result.connectionSecret);
+            }}
+            testId="gatekeeper-rotate-secret-confirm"
+          />
+        ) : (
+          moreMenu()
+        )}
       </div>
 
       {publishError !== null ? (
@@ -335,6 +388,28 @@ export function SystemAccessCard({
           title={t('无法发布清单', 'Could not publish the manifest')}
         />
       ) : null}
+
+      <Sheet
+        open={rotatedSecret !== null}
+        onOpenChange={(open) => {
+          if (!open) setRotatedSecret(null);
+        }}
+      >
+        <SheetContent data-testid="gatekeeper-rotated-secret">
+          <SheetHeader>
+            <SheetTitle>{t('新的连接密钥', 'New connection secret')}</SheetTitle>
+            <SheetDescription>{gate.name}</SheetDescription>
+          </SheetHeader>
+          <div className="stack">
+            {rotatedSecret !== null ? <ConnectionSecretReveal secret={rotatedSecret} /> : null}
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <Button variant="primary" size="s" onClick={() => setRotatedSecret(null)}>
+                {t('我已复制', "I've copied it — Done")}
+              </Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <GrantGateDrawer
         http={http}

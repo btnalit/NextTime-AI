@@ -27,6 +27,15 @@
   导入直接由内核进程调 `manifestSource`（`McpTransport.listTools`），不经过门；两个工具不需要凭证，
   这一步用 `credentialKind:'shared'`（也是唯一不触发 `create_connection` 向 `endpoint` POST
   ConnectedAccount 凭证的取值），因此不需要像 http/ssh 那样另建一个 `gatekeeper-base` 前置门实例。
+- **自连门的连接密钥与出站目标判定（R-01 / R-27，维护者决定 D-01）**：`accept-s2-ssh-gate` /
+  `accept-s2-http-gate` 是自连门（经 `create_connection` 接入），不再挂 `gate_token`——脚本用 alice
+  的 key 调 `mint_connection_secret` 给每个门各签一把连接密钥，写进
+  `${NEXTTIME_DATA}/accept-s2/<门>/kernel.token`（门的 `GATE_KERNEL_TOKEN_FILE`）再起门，健康检查用这把
+  密钥，并断言平台 `gate_token` 被这个门拒绝；`create_connection` 带同一把 `connectionSecret`。验收夹具都
+  在平台自己的 `control` 网络上、用裸服务名，内核的出站目标判定默认拒绝这种地址，所以脚本在 preflight
+  末尾用 `NEXTTIME_CONNECTION_ALLOW_HOSTS=<.env 原值,>accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp`
+  **重建一次 kernel**（等 healthcheck 变 healthy），退出时（EXIT trap）再按 `.env` 原值重建回来——跑验收期间
+  kernel 会各重启一次，进行中的会话会断开重连。
 - 主机上有 `docker`、`docker compose`、`curl`、`psql`（经 `docker compose exec postgres`）；**没有**
   `node`/`corepack`/`ssh-keygen`——脚本把每一次 JSON-RPC 交互、每一次密钥生成都放进一次性容器里跑
   （见脚本头注释）。
@@ -79,13 +88,15 @@ PASS preflight-fake-provider fake provider configured in .../config/llm-provider
 PASS preflight-migrations up to date
 PASS preflight-worker-runtime-image nexttime-ai-worker-runtime present
 PASS preflight-accept-s2-build accept-s2 fixture/gate images built
+PASS preflight-kernel-allow-fixtures kernel recreated with the accept-s2 fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)
 PASS bootstrap-workspace workspace=<uuid> alice=<uuid> key=abc123...(redacted)
 PASS bootstrap-bob bob=<uuid> (member) key=def456...(redacted)
 PASS fixtures-ssh-keygen keypair generated into ${NEXTTIME_DATA}/accept-s2/ssh/
 PASS fixtures-store-key ConnectedAccount store key generated into ${NEXTTIME_DATA}/accept-s2/http-gate/
 PASS fixtures-api-token bearer token generated: 9f3a1c...(redacted)
 PASS fixtures-up accept-s2-sshd, accept-s2-openapi, accept-s2-restart-target up
-PASS fixtures-gates-up accept-s2-ssh-gate, accept-s2-http-gate healthy
+PASS fixtures-gate-secrets ssh/http gates' own connection secrets minted: ntgc1_...(redacted), ntgc1_...(redacted)
+PASS fixtures-gates-up accept-s2-ssh-gate, accept-s2-http-gate healthy on their own connection secrets; the platform gate token is refused
 PASS fixtures-restart-target restart target container id=<64-hex-id>
 PASS connect-ssh-request connectionRequestId=<uuid>
 PASS connect-ssh-create gatekeeperId=<uuid>
@@ -135,6 +146,7 @@ PASS step7-fact-asserted-by-agent Fact asserted_by principal kind='agent' displa
 PASS step7-fact-on-behalf-of-alice worker_result Activity metadata.onBehalfOf=<alice's principal id> (human kept as provenance alongside the agent asserted_by — application/task/result.ts)
 PASS connect-mcp-fixture-up accept-s2-mcp up
 PASS connect-mcp-request connectionRequestId=<uuid>
+PASS connect-mcp-target-refused manifestSource http://worker-supervisor:8081/... refused with connection_target_refused, nothing fetched
 PASS connect-mcp-create gatekeeperId=<uuid> (imported both fixture tools from manifestSource tools/list)
 PASS connect-mcp-find-operations-pre-publish find_operations('accept_s2_mcp') misses before publish_manifest, as required
 PASS connect-mcp-publish mcp manifest published
@@ -173,6 +185,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `step5-bob-forbidden` / `step5-still-pending` | (5) 用户 B 尝试批准 A 范围的动作 403 | bob（member）对 step 4 第一次调用产生的、真实处于 `pending_approval` 的 ActionRequest 调 `approve` → 403；随后确认该行状态未被这次失败尝试改变 |
 | `step6-*` | (6) Worker 容器 `env | grep -ci api_key` 为 0；直连内网失败；**未注册来源**经代理访问 `http://example.com` 被拒 403（egress 按来源 fail-closed，`EGRESS_DENY_UNKNOWN_SOURCE` 默认开）；**已注册**的 alice 常驻入口容器经代理 `curl https://example.com` 得 200 | 前三项直接跑 `nexttime-ai-worker-runtime` 镜像（`workers` 网络 + 与真实 Worker 相同的 `HTTP(S)_PROXY`，但无来源注册），见 §5 "已知偏离"关于为什么不经 Worker 自己的工具调用；正向探测 `docker exec` 进 `nexttime-entry-<alice>`（步骤 2–3 由 worker-supervisor 拉起并注册） |
 | `step7-*` | (7) Worker 结果契约里的 Fact 入图为 `inferred`，`asserted_by` 是真实 agent 类 principal（非 `viaAgent` 降级标记），alice 作为 provenance 留在 Activity `metadata.onBehalfOf` 上 | 查 `links` 表 `epistemic_status` 列，`link_type='accept_s2_restarted'`（step 2 的 docker-restart Worker 通过 `report_result` 写入）；再查 `asserted_by` 关联的 `principals.kind='agent'`/`display_name` 以 `worker:` 开头；再查 `activities.metadata->>'onBehalfOf'` 等于 alice 的 principal id |
+| `connect-mcp-target-refused` | R-27（2026-10-02 评审）：owner 提供的 `manifestSource` 指向平台服务（`http://worker-supervisor:8081/task/<id>/terminate`）→ 内核出站目标判定在任何抓取前拒绝，400 `connection_target_refused` | 同一个 `create_connection`，换一个指向 worker-supervisor 的 `manifestSource`；不带 `connectionRequestId`，不消耗随后那张连接请求卡 |
 | `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
 | `cleanup` | — | 停 alice/bob 入口容器、`docker compose --profile accept-s2 down`；workspace 行留作审计留痕 |
 

@@ -1750,6 +1750,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "connectionSecret": {
+          "minLength": 1,
+          "type": "string"
+        },
         "credentialKind": {
           "enum": [
             "shared",
@@ -11245,6 +11249,32 @@
   },
   {
     "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "mint_connection_secret",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionSecret": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "connectionSecret"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "execute",
@@ -15851,6 +15881,44 @@
       "required": [
         "principalId",
         "apiKey"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "rotate_connection_secret",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionSecret": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "connectionSecret"
       ],
       "type": "object"
     }

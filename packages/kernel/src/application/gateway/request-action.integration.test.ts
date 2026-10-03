@@ -16,10 +16,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  type GateTarget,
   type GatekeeperClient,
   GatekeeperTimeoutError,
   HttpGatekeeperClient,
+  deriveConnectionSecret,
 } from '../../adapters/gatekeeper-client/index.js';
+import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
 import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ApprovalDrainer,
@@ -65,6 +68,12 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * The fake Gatekeeper is a *real* `@nexttime/gatekeeper-base` `GatekeeperBase` + Fastify server on
  * a real local port — this exercises the actual HTTP wire (adapters/gatekeeper-client ⇄
  * gatekeeper-base/server.ts), not an in-process fake of the client port.
+ *
+ * R-01 / maintainer decision D-01: the fake gate is registered the way a self-connected gate is
+ * (`registerGatekeeper` with a connection-secret salt, no catalog instance at its address), so it is
+ * configured with — and every kernel call presents — its own derived connection secret, never
+ * GATE_TEST_TOKEN itself. Its loopback address is allowed past the owner-supplied-URL predicate
+ * (R-27) explicitly; the predicate's own cases are unit tests.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -73,6 +82,14 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 // review lane 5, P1-1: every /gate/* route now requires Authorization: Bearer <token> — this
 // test's own fake gate server and every HttpGatekeeperClient it talks to share this fixed value.
 const GATE_TEST_TOKEN = 'gate-integration-test-token-0123456789abcdef';
+const GATE_CONNECTION_SALT = 'e'.repeat(32);
+const ALLOW_LOOPBACK = createOutboundTargetGuard({
+  policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+});
+
+function testGatekeeperClient(): HttpGatekeeperClient {
+  return new HttpGatekeeperClient({ token: GATE_TEST_TOKEN, outboundTargetGuard: ALLOW_LOOPBACK });
+}
 
 function humanCaller(
   workspaceId: string,
@@ -251,7 +268,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let ownerId: string;
     let gatekeeperId: string;
     let fakeGateApp: FastifyInstance;
-    let gateEndpoint: string;
+    let gateTarget: GateTarget;
     let transport: RecordingTransport;
     let drainer: ApprovalDrainer;
     // Item 1 fix fixtures (review job 652a4abc): a member with no grant at all, a member holding
@@ -306,11 +323,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
-      fakeGateApp = createGatekeeperServer({ gate, token: GATE_TEST_TOKEN });
+      fakeGateApp = createGatekeeperServer({
+        gate,
+        token: deriveConnectionSecret(GATE_TEST_TOKEN, workspaceId, GATE_CONNECTION_SALT),
+      });
       await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
       const address = fakeGateApp.server.address() as AddressInfo;
       const endpoint = `http://127.0.0.1:${address.port}`;
-      gateEndpoint = endpoint;
+      gateTarget = {
+        endpoint,
+        credential: { kind: 'connection', workspaceId, salt: GATE_CONNECTION_SALT },
+      };
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const activity = await startActivity(client, workspaceId, {
@@ -322,6 +345,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           transportKind: 'http',
           target: 'example-system',
           endpoint,
+          connectionSecretSalt: GATE_CONNECTION_SALT,
           activityId: activity.id,
           registeredBy: { id: ownerId, kind: 'human' },
         });
@@ -351,7 +375,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
 
-      const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
+      const gatekeeperClient = testGatekeeperClient();
       const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
         gatekeeperClient,
@@ -374,7 +398,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       drainer = new ApprovalDrainer({
         executor: createGatekeeperActionExecutor({
-          gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+          gatekeeperClient: testGatekeeperClient(),
           withTransaction: adminWithTransaction,
         }),
         withTransaction: adminWithTransaction,
@@ -1344,7 +1368,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const before = transport.calls[AUTO_OP.name] ?? 0;
       const withTransactionAdmin = createAdminWithTransaction(pool);
       const actionExecutor = createGatekeeperActionExecutor({
-        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+        gatekeeperClient: testGatekeeperClient(),
         withTransaction: withTransactionAdmin,
       });
 
@@ -1439,14 +1463,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       const params = { slowMs: 1500, marker: randomUUID() };
       const actionRequestId = await seedStaleExecutingRow(params);
       const before = transport.calls[AUTO_OP.name] ?? 0;
-      const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
+      const gatekeeperClient = testGatekeeperClient();
       const actionExecutor = createGatekeeperActionExecutor({
         gatekeeperClient,
         withTransaction: createAdminWithTransaction(pool),
       });
 
       // The first `apply` for this key is still running on the gate (its kernel caller gave up).
-      const firstApply = gatekeeperClient.apply(gateEndpoint, {
+      const firstApply = gatekeeperClient.apply(gateTarget, {
         operation: AUTO_OP.name,
         params,
         onBehalfOf: ownerId,
@@ -1490,7 +1514,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const actionRequestId = await seedStaleExecutingRow(params);
       const before = transport.calls[AUTO_OP.name] ?? 0;
       const actionExecutor = createGatekeeperActionExecutor({
-        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+        gatekeeperClient: testGatekeeperClient(),
         withTransaction: createAdminWithTransaction(pool),
       });
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>

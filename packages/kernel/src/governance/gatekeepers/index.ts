@@ -18,6 +18,8 @@ export {
   countGatekeepers,
   findGatekeepersByEndpoint,
   normalizeGateEndpoint,
+  setGatekeeperConnectionSecretSalt,
+  findGatekeeperIdByConnectionSecretSalt,
   GatekeeperNotFoundError,
 } from './registry.js';
 export type {

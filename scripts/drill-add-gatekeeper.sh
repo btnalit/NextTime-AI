@@ -28,8 +28,12 @@
 #   - `docker compose --profile accept-s2 build accept-s2-openapi accept-s2-http-gate` has been
 #     run at least once (images built) — same precondition accept_s2.sh's own preflight_step
 #     checks for the full accept-s2 fixture/gate set.
-#   - `${NEXTTIME_DATA}/secrets/gate_token` exists (host-gatekeepers.md §0 — every Gatekeeper,
-#     including this fixture one, refuses to start without it).
+#   - The fixture gate is a *self-connected* gate (R-01, maintainer decision D-01): it never holds
+#     the platform gate_token — this drill mints its own connection secret (`mint_connection_secret`)
+#     into ${NEXTTIME_DATA}/accept-s2/http-gate/kernel.token before starting it. Because it lives on
+#     the platform's `control` network under a bare compose name, the kernel is recreated for the
+#     run with the fixture hosts on NEXTTIME_CONNECTION_ALLOW_HOSTS (R-27) and recreated from .env
+#     on exit (scripts/lib/accept-common.sh kernel_allow_hosts_up / kernel_allow_hosts_restore).
 #
 # Shared-fixture warning: accept-s2-openapi/accept-s2-http-gate and
 # ${NEXTTIME_DATA}/accept-s2/http-gate/ are the *same* fixture directory/services
@@ -86,6 +90,10 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+# R-27: the kernel's fixture allow-list (preflight_step) is undone on every exit path.
+trap kernel_allow_hosts_restore EXIT
+trap 'exit 130' INT TERM HUP PIPE
+
 # --------------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------------
@@ -108,6 +116,9 @@ preflight_step() {
     fail "preflight-build" "docker compose --profile accept-s2 build failed: $(printf '%s' "$build_out" | tail -20)"
   fi
   pass "preflight-build" "accept-s2-openapi, accept-s2-http-gate images built"
+
+  kernel_allow_hosts_up "accept-s2-http-gate,accept-s2-openapi" || fail "preflight-kernel-allow-fixtures" "the kernel did not come back healthy with NEXTTIME_CONNECTION_ALLOW_HOSTS set for the fixtures"
+  pass "preflight-kernel-allow-fixtures" "kernel recreated with the fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)"
 }
 
 bootstrap_step() {
@@ -167,12 +178,21 @@ fixtures_up_step() {
   export ACCEPT_S2_API_TOKEN="$API_TOKEN"
   pass "fixtures-api-token" "bearer token generated: $(redact "$API_TOKEN")"
 
-  up_out=$(docker compose --profile accept-s2 up -d accept-s2-openapi accept-s2-http-gate 2>&1)
+  # R-01: the gate's own connection secret, in place before it starts (create_connection below
+  # passes the same one).
+  GATE_SECRET=$(mint_gate_secret "$OWNER_KEY" "fixtures-gate-secret")
+  [ -n "$GATE_SECRET" ] || fail "fixtures-gate-secret" "mint_connection_secret returned no secret"
+  GATE_TOKEN_FILE="${NEXTTIME_DATA}/accept-s2/http-gate/kernel.token"
+  write_gate_secret "$GATE_SECRET" "$GATE_TOKEN_FILE" || fail "fixtures-gate-secret" "could not write $GATE_TOKEN_FILE"
+  pass "fixtures-gate-secret" "the gate's own connection secret minted: $(redact "$GATE_SECRET")"
+
+  # --force-recreate: a gate left running (--keep, or accept_s2.sh) read another token at start.
+  up_out=$(docker compose --profile accept-s2 up -d --force-recreate accept-s2-openapi accept-s2-http-gate 2>&1)
   up_rc=$?
   if [ "$up_rc" -ne 0 ]; then
     fail "fixtures-up" "docker compose up failed: $(printf '%s' "$up_out" | tail -20)"
   fi
-  if ! wait_for_gate_health "http://accept-s2-http-gate:8090"; then
+  if ! wait_for_gate_health "http://accept-s2-http-gate:8090" "$GATE_TOKEN_FILE"; then
     fail "fixtures-up" "accept-s2-http-gate /gate/health never came back ok — docker compose logs accept-s2-http-gate"
   fi
   pass "fixtures-up" "accept-s2-openapi, accept-s2-http-gate up and healthy"
@@ -191,7 +211,7 @@ connection_flow_step() {
   # 2. create_connection — add-gatekeeper.md §7 step 3(b): import via manifestSource (the OpenAPI
   # document), owner-only.
   out=$(cap "$OWNER_KEY" create_connection \
-    "{\"connectionRequestId\":\"$CR_ID\",\"kind\":\"http\",\"target\":\"drill-add-gatekeeper\",\"endpoint\":\"http://accept-s2-http-gate:8090\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"http://accept-s2-openapi:8080/openapi.json\"}" \
+    "{\"connectionRequestId\":\"$CR_ID\",\"kind\":\"http\",\"target\":\"drill-add-gatekeeper\",\"endpoint\":\"http://accept-s2-http-gate:8090\",\"connectionSecret\":\"$GATE_SECRET\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"http://accept-s2-openapi:8080/openapi.json\"}" \
     "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "create-connection" "create_connection HTTP $status: $(parse_kv "$out" BODY)"

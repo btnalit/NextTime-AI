@@ -104,12 +104,19 @@ cap() {
 # Polls one gate's /gate/health (control-network-only, no host port) from inside the kernel
 # image, sending the kernel container's own gate token as Bearer (the driver's gate-health
 # subcommand). Retries for up to ~30s — gate containers take a few seconds to bind their port
-# after `docker compose up -d`.
+# after `docker compose up -d`. Optional second argument (R-01): a host file holding a
+# self-connected gate's own connection secret — mounted read-only and sent instead of the platform
+# gate token, which such a gate never accepts.
 wait_for_gate_health() {
   gate_url="$1"
+  token_file="${2:-}"
   attempt=0
   while [ "$attempt" -lt 15 ]; do
-    out=$(run_driver gate-health "$gate_url")
+    if [ -n "$token_file" ]; then
+      out=$(run_driver_mount "$token_file" gate-health "$gate_url" /tmp/mounted)
+    else
+      out=$(run_driver gate-health "$gate_url")
+    fi
     case "$out" in
       *OK=true*) return 0 ;;
     esac
@@ -117,6 +124,70 @@ wait_for_gate_health() {
     sleep 2
   done
   return 1
+}
+
+# R-27 (2026-10-02 review): the kernel refuses an owner-supplied URL on the platform's own networks
+# (bare compose names, the control/workers subnets), and the acceptance fixtures a script connects
+# through `create_connection` are exactly that — self-connected gates on `control`. For one run,
+# kernel_allow_hosts_up <comma-separated hosts> recreates the kernel with them appended to
+# NEXTTIME_CONNECTION_ALLOW_HOSTS (whatever .env already sets is kept) and waits for its healthcheck;
+# kernel_allow_hosts_restore (call it from the script's EXIT trap) recreates it from .env alone.
+# Idempotent; a no-op if kernel_allow_hosts_up never ran. The kernel restarts twice per run.
+KERNEL_ALLOW_SWITCHED=0
+
+wait_for_kernel_healthy() {
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    cid=$(docker compose ps -q kernel 2>/dev/null)
+    if [ -n "$cid" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null)" = "healthy" ]; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  return 1
+}
+
+kernel_allow_hosts_up() {
+  # Marked before the recreate, like accept_provider_up: a half-done recreate is still restored.
+  KERNEL_ALLOW_SWITCHED=1
+  allow="${NEXTTIME_CONNECTION_ALLOW_HOSTS:+$NEXTTIME_CONNECTION_ALLOW_HOSTS,}$1"
+  if ! up_out=$(NEXTTIME_CONNECTION_ALLOW_HOSTS="$allow" docker compose up -d --no-deps --force-recreate kernel </dev/null 2>&1); then
+    echo "accept: recreating the kernel with the fixture allow-list failed: $(printf '%s' "$up_out" | tail -10)" >&2
+    return 1
+  fi
+  wait_for_kernel_healthy
+}
+
+kernel_allow_hosts_restore() {
+  [ "$KERNEL_ALLOW_SWITCHED" -eq 1 ] || return 0
+  if ! restore_out=$(docker compose up -d --no-deps --force-recreate kernel </dev/null 2>&1); then
+    echo "accept: restoring the kernel failed — run 'docker compose up -d --no-deps --force-recreate kernel' by hand: $(printf '%s' "$restore_out" | tail -10)" >&2
+    return 1
+  fi
+  KERNEL_ALLOW_SWITCHED=0
+  return 0
+}
+
+# R-01 (maintainer decision D-01): a self-connected gate authenticates the kernel with its own
+# connection secret, never the platform gate token. mint_gate_secret <ownerKey> <step> prints a
+# fresh one (`mint_connection_secret` stores nothing); it runs inside a command substitution, so
+# the caller checks for an empty result. write_gate_secret <secret> <file> puts it where the gate's
+# GATE_KERNEL_TOKEN_FILE points (docker-compose.yml), readable by the gate's uid 10001 — a
+# throwaway acceptance directory, like the store.key beside it.
+mint_gate_secret() {
+  out=$(cap "$1" mint_connection_secret "{}" "d.result.connectionSecret")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  if [ "$status" != "200" ]; then
+    echo "$2: mint_connection_secret HTTP $status: $(parse_kv "$out" BODY)" >&2
+    return 1
+  fi
+  parse_kv "$out" EXTRACTED
+}
+
+write_gate_secret() {
+  (umask 077 && printf '%s\n' "$1" >"$2") || return 1
+  chmod 0644 "$2"
 }
 
 # leftover 63 (host egress / DNS jitter): retry_http_code <max_attempts> <backoff_seconds>

@@ -20,6 +20,7 @@ import {
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
+import { resolveGateTarget } from './gate-target.js';
 import { writeObservedFacts } from './observed-facts.js';
 
 /**
@@ -233,7 +234,7 @@ export function createGatekeeperActionExecutor(
 
   return {
     async execute(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const { gatekeeper, disabled } = await deps.withTransaction(
+      const { gate, disabled } = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
         async (client) => {
@@ -249,12 +250,15 @@ export function createGatekeeperActionExecutor(
             ? await readGateLinkPolicy(client, actionRequest.workspaceId, record.gatekeeperId)
             : null;
           return {
-            gatekeeper: record,
+            // R-01 / D-01: which credential this gate gets (gate-target.ts).
+            gate: record
+              ? await resolveGateTarget(client, actionRequest.workspaceId, record)
+              : null,
             disabled: operationPlatformStatus(link, actionRequest.actionKind).disabled,
           };
         },
       );
-      if (!gatekeeper) {
+      if (!gate) {
         return {
           ok: false,
           reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered`,
@@ -269,10 +273,7 @@ export function createGatekeeperActionExecutor(
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(
-          gatekeeper.endpoint,
-          applyInput(actionRequest),
-        );
+        applyResult = await deps.gatekeeperClient.apply(gate, applyInput(actionRequest));
       } catch (err) {
         const verdict = applyErrorVerdict(err);
         if (verdict.kind === 'in_doubt') {
@@ -308,12 +309,19 @@ export function createGatekeeperActionExecutor(
      * free, so this replay runs the effect fresh — `apply` is the only lookup the gate protocol has.
      */
     async replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const gatekeeper = await deps.withTransaction(
+      const gate = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
-        (client) => getGatekeeper(client, actionRequest.workspaceId, actionRequest.gatekeeperId),
+        async (client) => {
+          const record = await getGatekeeper(
+            client,
+            actionRequest.workspaceId,
+            actionRequest.gatekeeperId,
+          );
+          return record ? resolveGateTarget(client, actionRequest.workspaceId, record) : null;
+        },
       );
-      if (!gatekeeper) {
+      if (!gate) {
         return {
           ok: false,
           indeterminate: true,
@@ -323,10 +331,7 @@ export function createGatekeeperActionExecutor(
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(
-          gatekeeper.endpoint,
-          applyInput(actionRequest),
-        );
+        applyResult = await deps.gatekeeperClient.apply(gate, applyInput(actionRequest));
       } catch (err) {
         const verdict = applyErrorVerdict(err);
         if (verdict.kind === 'outcome_unknown') {

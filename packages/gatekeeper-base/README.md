@@ -35,6 +35,16 @@ that composes `GatekeeperBase`/`createGatekeeperServer` directly (rather than us
 own `main()`) must load its own token via `loadGateKernelToken` and pass it as
 `createGatekeeperServer`'s `token` option, same as `gatekeepers/docker`/`gatekeepers/ragflow` do.
 
+**Which token** (R-01, maintainer decision D-01): the platform `gate_token` belongs only to gates
+the platform provisioned — the packaged gates on the compose network and gate-host instances, i.e.
+the platform gate-instance catalog. A **self-connected** gate (one a workspace owner registers with
+`create_connection`, wherever it runs) is never sent the platform token: the kernel presents that
+gate's own connection secret instead. The owner gets it once — the console's 直接注册门 / Register a
+gate form shows it, or `mint_connection_secret` — writes it into a file, points
+`GATE_KERNEL_TOKEN_FILE` at it, (re)starts the gate, and then connects it (passing the same secret
+as `create_connection`'s `connectionSecret`). Nothing else changes for the gate: it just holds a
+different token. `rotate_connection_secret` issues a new one (the old one stops working at once).
+
 ## Manifest format
 
 A manifest is an array of `Operation` (`@nexttime/shared`'s `OperationSchema`):

@@ -93,6 +93,11 @@ services:
     # NEXTTIME_SUBNET_WORKERS（fix/internal-plane-auth）：internal-auth 的 Worker 子网拒绝规则——
     # 即使 token 正确，来自这个子网的 internal 请求也 401（Worker 容器绝不应持有这个 token）；与
     # egress-proxy 拿到的是同一个值（networks 块下方 workers 网络的子网）。
+    # NEXTTIME_SUBNET_CONTROL + NEXTTIME_SUBNET_WORKERS（R-27）：内核对 owner 提供的 URL
+    # （create_connection 的 endpoint / manifestSource、自连门的每次调用）做出站目标判定，拒绝落进这
+    # 两个平台子网的地址（同 egress-proxy 的规则，@nexttime/shared outbound-target.ts）。
+    # NEXTTIME_CONNECTION_ALLOW_HOSTS（R-27，可选，逗号分隔）：操作员显式放行的自连门主机名——只给
+    # 跑在平台网络上的自连门用（验收夹具 scripts/accept_s2.sh 运行时设置；常规部署留空）。
     # FAKE_INVOKE_WORKER（STATUS leftover 83，测试专用）：为空（默认）时行为与此前完全一致——只有
     # deploy/ci/env.ci.template 把它设成 "1"，且只在 AGENT_RUNTIME=fake 且已配置 Handle 签名密钥时才
     # 生效（packages/kernel/src/index.ts main() 的三重门槛）；生产 .env 从不设置这个变量。
@@ -103,6 +108,8 @@ services:
         SUPERVISOR_URL: http://worker-supervisor:8081,
         FAKE_INVOKE_WORKER: "${FAKE_INVOKE_WORKER:-}",
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
+        NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}",
+        NEXTTIME_CONNECTION_ALLOW_HOSTS: "${NEXTTIME_CONNECTION_ALLOW_HOSTS:-}",
         INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
         # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —
         # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
@@ -1174,12 +1181,14 @@ services:
   accept-s2-ssh-gate:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
     profiles: ["accept-s2"]
-    # gate_token（fix/gate-protocol-hardening）：startGatekeeperServer()'s main() refuses to start
-    # without a readable GATE_KERNEL_TOKEN_FILE — same compose secret as the other three gate
-    # services, default mount path /run/secrets/gate_token.
-    secrets: [gate_token]
+    # R-01 (maintainer decision D-01): this is a *self-connected* gate (accept_s2.sh connects it with
+    # create_connection), so it never holds the platform gate_token — it reads its own connection
+    # secret, which accept_s2.sh mints (mint_connection_secret) and writes to
+    # ${NEXTTIME_DATA}/accept-s2/ssh-gate/kernel.token before starting it (startGatekeeperServer()'s
+    # main() refuses to start without a readable GATE_KERNEL_TOKEN_FILE).
     environment:
       {
+        GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token,
         GATE_TRANSPORT_KIND: ssh,
         GATE_SSH_HOST: accept-s2-sshd,
         GATE_SSH_USER: testuser,
@@ -1214,10 +1223,10 @@ services:
   accept-s2-http-gate:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
     profiles: ["accept-s2"]
-    # gate_token：见 accept-s2-ssh-gate 服务块自己的注释。
-    secrets: [gate_token]
+    # 连接密钥（R-01）：见 accept-s2-ssh-gate 服务块自己的注释——自连门，不持 gate_token。
     environment:
       {
+        GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token,
         GATE_TRANSPORT_KIND: http,
         GATE_TARGET_BASE_URL: http://accept-s2-openapi:8080,
         GATE_CREDENTIAL_MODE: connected_account,
