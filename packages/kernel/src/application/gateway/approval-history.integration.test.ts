@@ -106,6 +106,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly blastRadius: 'low' | 'medium' | 'high';
       readonly parentWorkerRunId?: string;
       readonly actionKind?: string;
+      readonly onBehalfOf?: string;
     }): Promise<string> {
       const id = randomUUID();
       await admin((client) =>
@@ -122,7 +123,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             gatekeeperId,
             input.actionKind ?? 'ah.test.action',
             input.blastRadius,
-            memberId,
+            input.onBehalfOf ?? memberId,
             input.parentWorkerRunId ?? null,
           ],
         ),
@@ -327,6 +328,54 @@ describe.runIf(DATABASE_URL !== undefined)(
         taskId,
       })) as { items: ActionRequestWire[] };
       expect(page.items).toEqual([]);
+    });
+
+    it('R-42: get_action answers 404 to an operator who neither holds the scope nor requested the row, and serves the grant holder and the requester', async () => {
+      const [outsiderId, holderId, requesterOperatorId] = [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+      ];
+      await admin(async (client) => {
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', 'operator', 'operator-outsider'),
+                  ($1, $3, 'human', 'operator', 'operator-gate-holder'),
+                  ($1, $4, 'human', 'operator', 'operator-requester')`,
+          [workspaceId, outsiderId, holderId, requesterOperatorId],
+        );
+        await client.query(
+          `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, granted_by)
+           values ($1, $2, 'gatekeeper', $3::uuid, $4)`,
+          [workspaceId, holderId, gatekeeperId, ownerId],
+        );
+      });
+      const id = await seedPendingActionRequest({
+        blastRadius: 'medium',
+        actionKind: 'ah.get_action.visibility',
+        onBehalfOf: requesterOperatorId,
+      });
+
+      await expect(
+        dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, outsiderId, 'operator'),
+          'get_action',
+          {
+            actionRequestId: id,
+          },
+        ),
+      ).rejects.toMatchObject({ name: 'ActionRequestNotFoundError' });
+
+      for (const callerId of [holderId, requesterOperatorId]) {
+        const read = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, callerId, 'operator'),
+          'get_action',
+          { actionRequestId: id },
+        )) as ActionRequestWire;
+        expect(read.id).toBe(id);
+      }
     });
   },
 );

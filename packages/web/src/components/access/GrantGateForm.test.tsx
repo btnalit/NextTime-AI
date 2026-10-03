@@ -246,4 +246,48 @@ describe('GrantGateForm', () => {
     fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
     expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(false);
   });
+
+  it('R-39: picking an operator discloses that the grant also makes them an approver of the gate; a member gets no such notice', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-1',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Bob',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+          {
+            id: 'p-2',
+            kind: 'human',
+            role: 'operator',
+            displayName: 'Carol',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+        ],
+      }),
+    });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
+        onGranted={vi.fn()}
+      />,
+    );
+    // The always-visible hint states the effect for operators too.
+    expect((await screen.findByTestId('ggf-operations-scope')).textContent).toContain(
+      '授予 operator 时，他同时成为这个门上所有动作的审批者',
+    );
+
+    await selectMember('p-1');
+    expect(screen.queryByTestId('ggf-approver-notice')).toBeNull();
+
+    await selectMember('p-2');
+    const notice = await screen.findByTestId('ggf-approver-notice');
+    expect(notice.textContent).toContain('Carol');
+    expect(notice.textContent).toContain('所有动作的审批者');
+  });
 });

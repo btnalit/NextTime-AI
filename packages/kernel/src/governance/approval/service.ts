@@ -13,7 +13,9 @@
  *                        (`SELECT ... FOR UPDATE` — every governed mutator uses these, never the
  *                        lock-free pair), `listPendingForApprover` (I14), `listActionRequestsForApprover`
  *                        (S5.5 leftover 21 — the `list_action_requests` "审批历史" read, every status,
- *                        same I14 visibility, keyset-paginated), `listExecutableQueue` (drainer.ts's
+ *                        keyset-paginated) and `getActionRequestVisibleTo` (`get_action`) — both
+ *                        under one visibility predicate (R-42: I14 or the requester),
+ *                        `roleMayDecideActionRequests` (R-38), `listExecutableQueue` (drainer.ts's
  *                        lock-free queue read), `approverHasScope` (I14 precheck), `getOperationStats`
  *                        (S3.12 catalog-usage follow-up — the `get_operation_stats` capability's own
  *                        read, `application/gateway/gatekeeper-read-handlers.ts`).
@@ -64,6 +66,7 @@ export {
   getActionRequestForUpdate,
   getActionRequestForUpdateOrThrow,
   getActionRequestOrThrow,
+  getActionRequestVisibleTo,
   getOperationStats,
   type ListActionRequestsFilter,
   listActionRequestsForApprover,
@@ -72,6 +75,7 @@ export {
   MAX_ACTION_REQUEST_LIST_LIMIT,
   type OperationStatsRow,
   readApprovalDecisions,
+  roleMayDecideActionRequests,
 } from './reads.js';
 
 export {
