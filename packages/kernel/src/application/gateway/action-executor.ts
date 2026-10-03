@@ -99,10 +99,11 @@ export function hashStableParams(params: Record<string, unknown>): string {
  * The default `request_action` idempotency key when the caller supplies none: `(sid|principal,
  * gatekeeperId, operation, stable params hash)` — a retry from the *same session* (a Worker's
  * `sid`) or the *same human principal* (no Handle, no `sid`) against the *same Operation with the
- * same arguments* collapses onto the same row. Two calls that legitimately differ in any one of
- * these (a different session, a different Operation, or even one changed param) get independent
- * ActionRequests, as they should — this is a narrow, session-scoped default, not a general
- * "dedupe this action forever" rule.
+ * same arguments* collapses onto the same row while that row is in flight (R-53 / D-12: the
+ * `auto:` prefix tells `governance/approval/request-action.ts` to ignore terminal rows). Two calls
+ * that legitimately differ in any one of these (a different session, a different Operation, or
+ * even one changed param) get independent ActionRequests, as they should — this is a narrow,
+ * session-scoped default, not a general "dedupe this action forever" rule.
  */
 export function deriveDefaultIdempotencyKey(args: {
   readonly identity: string;

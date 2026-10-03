@@ -1,6 +1,11 @@
+import { INVOKE_WORKER_SPAWN_BUDGET_SECONDS } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { runWithCorrelationId } from '../../substrate/correlation/index.js';
-import { TaskSupervisorClient, TaskSupervisorError } from './index.js';
+import {
+  DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS,
+  TaskSupervisorClient,
+  TaskSupervisorError,
+} from './index.js';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -14,6 +19,13 @@ function emptyResponse(status: number): Response {
 }
 
 describe('TaskSupervisorClient', () => {
+  // 2026-10-02 review R-54: `invoke_worker` clients size their per-call timeout from the shared
+  // spawn budget (platform-extension's `resolveInvokeWorkerCallPlan`); it must stay the timeout
+  // this client actually applies to `/task/spawn`, or a slow spawn outlasts the client again.
+  it('the default timeout is the shared invoke_worker spawn budget', () => {
+    expect(DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS).toBe(INVOKE_WORKER_SPAWN_BUDGET_SECONDS * 1000);
+  });
+
   it('spawn: posts to /task/spawn and returns {containerId, ip}', async () => {
     const fetchImpl = vi
       .fn()

@@ -18,7 +18,7 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
-import { InvokeWorkerDefinitionNotEnabledError } from '../task/index.js';
+import { InvokeWorkerDefinitionNotEnabledError, terminateTask } from '../task/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -275,6 +275,75 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('running'); // timed out still-running, never hangs (§8.2)
       expect(supervisorClient.auditVisibleOnFirstPoll).toBe(true);
+    });
+
+    // R-54 (2026-10-02 review, decision D-12): the handler derives a default idempotency key from
+    // (sid|principal, definition@version, input and gates) — `wait`/`timeout` left out — so a
+    // retry after a client timeout returns the Task already running instead of a second Worker.
+    // Each test uses its own principal, so its running Tasks stay within the default concurrency
+    // quota (5).
+    describe('R-54 — invoke_worker default idempotency key', () => {
+      it('an identical call from the same session returns the running Task; a different input or session does not', async () => {
+        configureTaskRuntime({
+          pool,
+          privateKey,
+          supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
+        });
+        const principalId = await adminInsertPrincipal('owner', 'r54-derived-owner');
+        const caller = await entryHandleCallerFor(principalId);
+        const call = (target: ResolvedCaller, params: Record<string, unknown>) =>
+          dispatchCapability({ pool }, target, 'invoke_worker', {
+            definitionId: workerDefinitionId,
+            version: 1,
+            ...params,
+          }) as Promise<{ id: string; status: string }>;
+
+        const first = await call(caller, { input: { job: 1 } });
+        expect(first.status).toBe('running');
+
+        const retry = await call(caller, { input: { job: 1 } });
+        expect(retry.id).toBe(first.id);
+        // Only how long it waits differs — still the same intent.
+        const retryWaiting = await call(caller, { input: { job: 1 }, wait: true, timeout: 1 });
+        expect(retryWaiting.id).toBe(first.id);
+
+        const otherInput = await call(caller, { input: { job: 2 } });
+        expect(otherInput.id).not.toBe(first.id);
+
+        const otherSession = await call(await entryHandleCallerFor(principalId), {
+          input: { job: 1 },
+        });
+        expect(otherSession.id).not.toBe(first.id);
+      });
+
+      it('once the Task is terminal an identical call starts a new one; a fresh explicit key starts one alongside', async () => {
+        configureTaskRuntime({
+          pool,
+          privateKey,
+          supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
+        });
+        const principalId = await adminInsertPrincipal('owner', 'r54-terminal-owner');
+        const caller = await entryHandleCallerFor(principalId);
+        const call = (params: Record<string, unknown>) =>
+          dispatchCapability({ pool }, caller, 'invoke_worker', {
+            definitionId: workerDefinitionId,
+            version: 1,
+            input: { job: 'terminal' },
+            ...params,
+          }) as Promise<{ id: string; status: string }>;
+
+        const first = await call({});
+        const nonce = await call({ idempotencyKey: 'second-run' });
+        expect(nonce.id).not.toBe(first.id);
+        expect((await call({ idempotencyKey: 'second-run' })).id).toBe(nonce.id);
+
+        await terminateTask(workspaceId, principalId, first.id);
+
+        const repeat = await call({});
+        expect(repeat.id).not.toBe(first.id);
+        expect(repeat.id).not.toBe(nonce.id);
+        expect(repeat.status).toBe('running');
+      });
     });
 
     describe('S3.13 runtime consumer — AgentProfile.excludedWorkerDefinitions', () => {

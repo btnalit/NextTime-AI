@@ -203,6 +203,28 @@ describe('registerInteractiveMode', () => {
     expect(invokeCall?.params).toMatchObject({ wait: false });
   });
 
+  // R-54 (2026-10-02 review): same rule as entry mode — every invoke_worker call's client timeout
+  // covers the kernel's 30s spawn budget + 10s headroom, wait:false included.
+  it('invoke_worker wait:false still gets a per-call timeout covering the kernel spawn budget (30s) + 10s headroom', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+    const callSpy = vi.spyOn(kernelClient, 'call');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {} },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 40_000);
+  });
+
   it('invoke_worker honours an explicit wait:true, with a per-call timeout computed to outlast the kernel wait', async () => {
     kernel.setHandler('invoke_worker', () => ({
       ok: true,
@@ -220,7 +242,7 @@ describe('registerInteractiveMode', () => {
       fakeCtx(),
     );
 
-    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 55_000);
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 85_000);
   });
 
   it('context injects get_entry_context as a non-persisted custom message', async () => {

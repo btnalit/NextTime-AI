@@ -1471,8 +1471,10 @@ const governanceCapabilities: readonly Capability[] = [
         // P1-1 fix (review job 652a4abc): scoped to (workspace, on_behalf_of, sid, key) by the
         // handler before it reaches the DB's (workspace_id, idempotency_key) unique index — a
         // repeat call with the same key returns the existing ActionRequest instead of creating a
-        // second one. Omitted, a default is derived from (sid|principal, gatekeeperId, operation,
-        // stable params hash) so an unmarked retry still collapses onto the same row.
+        // second one, whatever its status. Omitted, a default is derived from (sid|principal,
+        // gatekeeperId, operation, stable params hash) so an unmarked retry still collapses onto
+        // the same row — but only while that row is in flight (2026-10-02 review R-53, D-12):
+        // once it is terminal, an identical call is a new intent.
         idempotencyKey: z.string().min(1).optional(),
       })
       .strict(),
@@ -1839,6 +1841,18 @@ const governanceCapabilities: readonly Capability[] = [
  */
 export const INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS = 90;
 
+/**
+ * Upper bound (seconds) on `invoke_worker`'s phase 1 — creating the Task and spawning its Worker,
+ * which waits on worker-supervisor's `/task/spawn`. The kernel's supervisor client gives up after
+ * this long (`adapters/supervisor-client`'s `DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS`; a kernel unit
+ * test pins the two to the same value), and the Task then fails `spawn_failed`. A client's per-call
+ * timeout for `invoke_worker` must cover this phase plus the `wait:true` window plus some headroom
+ * (2026-10-02 review R-54): counting only the wait window, a slow spawn made
+ * `@nexttime/platform-extension`'s `KernelClient` give up while the kernel was still starting the
+ * Worker, and the model's retry started a second.
+ */
+export const INVOKE_WORKER_SPAWN_BUDGET_SECONDS = 30;
+
 const taskCapabilities: readonly Capability[] = [
   {
     name: 'get_entry_context',
@@ -1905,6 +1919,14 @@ const taskCapabilities: readonly Capability[] = [
         // definition itself does not declare — see application/task/invoke.ts's
         // `computeChildHandleScope`.
         gates: z.array(id).optional(),
+        // 2026-10-02 review R-54 (decision D-12), the same two kinds `request_action` uses: an
+        // explicit key is scoped to (on_behalf_of, sid) by the handler and returns the Task first
+        // created with it, whatever its status — and a fresh one is a per-call nonce that starts a
+        // new Task even while an identical one is running. Omitted, a default is derived from
+        // (sid|principal, definition@version, hash of input and gates), so a retry after a client
+        // timeout returns the Task already running instead of starting a second Worker — but only
+        // while that Task is not yet terminal; after it is, an identical call starts a new Task.
+        idempotencyKey: z.string().min(1).optional(),
       })
       .strict(),
     resultSchema: wire.InvokeWorkerResultWireSchema,
@@ -1917,8 +1939,12 @@ const taskCapabilities: readonly Capability[] = [
       'Gatekeepers (it can only narrow, never widen) — each entry is a Gatekeeper id; a ' +
       'Gatekeeper’s name is also accepted when it names exactly one Gatekeeper this ' +
       'WorkerDefinition declares (ambiguous or unknown names are rejected with the declared ' +
-      'ids/names listed). The outcome — completion, failure, or an ' +
-      'approval that landed — is delivered later: entry agents receive it in a later turn’s ' +
+      'ids/names listed). An identical call (same definition, version, `input` and `gates`) ' +
+      'made while an earlier one is still unfinished returns that earlier Task instead of ' +
+      'starting a second Worker; once it has finished, an identical call starts a new one. To ' +
+      'run a second identical Worker alongside the first, pass a fresh `idempotencyKey`; a ' +
+      'repeat with the same key returns the Task it first created. The outcome — completion, ' +
+      'failure, or an approval that landed — is delivered later: entry agents receive it in a later turn’s ' +
       'context; other callers read it with `get_task`. The Worker acts on behalf of the calling ' +
       'principal.',
   },
