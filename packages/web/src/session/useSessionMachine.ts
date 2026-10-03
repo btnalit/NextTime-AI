@@ -25,6 +25,27 @@ import { wsUrl } from '../lib/ws-url.js';
 import { isDefaultLanding } from '../routes.js';
 import type { PreSessionState, Session } from './types.js';
 
+/** R-64: a workspace switch that did not happen — the current session is still the one shown.
+ *  `seq` changes per failure so the same workspace failing twice is announced twice; `generation`
+ *  is the session it happened in, so a later session never announces it again. */
+export interface WorkspaceSwitchFailure {
+  readonly seq: number;
+  readonly generation: number;
+  readonly workspaceId: string;
+  readonly workspaceName: string | undefined;
+  readonly error: unknown;
+}
+
+/** How one `openCookieSession` attempt ended. `superseded`: a later attempt, a logout or a newer
+ *  session took over first (nothing to report). `kept`: it failed, and — asked to — left the
+ *  session it was replacing published (R-64). `fellBack`: it failed and the machine fell back to
+ *  a pre-session state. */
+type OpenCookieSessionOutcome =
+  | { readonly kind: 'opened' }
+  | { readonly kind: 'superseded' }
+  | { readonly kind: 'kept'; readonly error: unknown }
+  | { readonly kind: 'fellBack' };
+
 /** What `App` renders from and wires into the login / pre-session / routed pages. */
 export interface SessionMachine {
   readonly session: Session | null;
@@ -32,6 +53,8 @@ export interface SessionMachine {
   readonly apiKeyConnecting: boolean;
   readonly apiKeyError: unknown | null;
   readonly switchingWorkspace: boolean;
+  /** R-64: the last workspace switch that failed (the current session stayed), or `null`. */
+  readonly workspaceSwitchFailure: WorkspaceSwitchFailure | null;
   /** `LoginPage`'s API-key channel. */
   readonly connectApiKey: (apiKey: string) => Promise<void>;
   /** `LoginPage`'s password channel and every other cookie entry (`/api/auth/*` result). */
@@ -44,6 +67,11 @@ export interface SessionMachine {
   /** "Sign out" (cookie session or pre-session) — closes the socket, revokes server-side. */
   readonly cookieLogout: () => Promise<void>;
   readonly switchWorkspace: (workspaceId: string, destination?: string) => Promise<void>;
+  /** R-64: re-reads `GET /api/auth/me` into the published cookie session's `user`/`memberships` —
+   *  after the signed-in user's own memberships changed (an admin delegating themselves owner, a
+   *  workspace created with them as its owner) or a switch failed. The membership list is
+   *  otherwise a login-time snapshot. */
+  readonly refreshMemberships: () => Promise<void>;
   readonly userChanged: (user: WireUser) => void;
   readonly keyBound: (result: MeResult) => void;
   readonly claimed: (result: SessionResult) => void;
@@ -88,6 +116,9 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
   const [apiKeyConnecting, setApiKeyConnecting] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<unknown | null>(null);
   const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
+  const [workspaceSwitchFailure, setWorkspaceSwitchFailure] =
+    useState<WorkspaceSwitchFailure | null>(null);
+  const switchFailureSeq = useRef(0);
   const generation = useRef(0);
   // Fence for every in-flight connect/authenticate continuation (review finding, S4.1): each
   // attempt takes the next number, and only a continuation whose number is still current may
@@ -170,14 +201,17 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
    *  so any capability call a just-rendered page fires (or a same-tab Explorer navigation) always
    *  sees it. `replacing` is the previous session's socket on a workspace switch: it stays open
    *  (pages still hold it) until the new one is authenticated, then is closed — on success or
-   *  failure — by whichever continuation is still current. */
+   *  failure — by whichever continuation is still current. R-64: with `keepReplacedOnFailure` (a
+   *  user's own workspace switch) a failure closes only the new socket and leaves the session that
+   *  owns `replacing` published; the caller reports the error. */
   const openCookieSession = useCallback(
     async (
       user: WireUser,
       memberships: readonly WireMembership[],
       workspaceId: string,
       replacing?: WsClient,
-    ): Promise<void> => {
+      keepReplacedOnFailure = false,
+    ): Promise<OpenCookieSessionOutcome> => {
       const myAttempt = ++attempt.current;
       const ws = new WsClient({ url: wsUrl() });
       try {
@@ -185,7 +219,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         await ws.authenticate({ workspaceId });
         if (attempt.current !== myAttempt) {
           ws.close();
-          return;
+          return { kind: 'superseded' };
         }
         replacing?.close();
         setWorkspaceCookie(workspaceId);
@@ -204,9 +238,15 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
           memberships,
           selectedWorkspaceId: workspaceId,
         });
+        return { kind: 'opened' };
       } catch (err) {
         ws.close();
-        if (attempt.current !== myAttempt) return;
+        if (attempt.current !== myAttempt) return { kind: 'superseded' };
+        if (keepReplacedOnFailure && replacing && sessionRef.current?.ws === replacing) {
+          // R-64: the session being switched away from is still valid — keep it, and say why
+          // the switch did not happen, instead of signing a working session out.
+          return { kind: 'kept', error: err };
+        }
         replacing?.close();
         // The named membership disappeared, or some other race lost the cookie session between
         // GET /api/auth/me and this WS authenticate — fall back to an always-renderable state
@@ -216,6 +256,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         setPreSession(
           memberships.length === 0 ? { kind: 'noWorkspace', user, memberships } : { kind: 'login' },
         );
+        return { kind: 'fellBack' };
       }
     },
     [sessionInvalid],
@@ -414,6 +455,23 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     }
   }, [session]);
 
+  const refreshMemberships = useCallback(async (): Promise<void> => {
+    const current = sessionRef.current;
+    if (!current || current.authMode !== 'cookie') return;
+    const gen = current.generation;
+    let me: MeResult;
+    try {
+      me = await getMe();
+    } catch {
+      // The snapshot stays; a session the kernel ended is R-16's to handle, not this read's.
+      return;
+    }
+    if (!currentSession(gen)) return;
+    setSession((s) =>
+      s && s.generation === gen ? { ...s, user: me.user, memberships: me.memberships } : s,
+    );
+  }, [currentSession]);
+
   /** `destination` is where to land *after* the new workspace is authenticated — the Sidebar's own
    *  switcher takes the default (`#/work/chats`), P-A2's "打开工作区配置" passes `#/govern/members`.
    *  It has to be navigated here rather than by the caller: the caller's `navigate` would run
@@ -424,17 +482,39 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         return;
       if (workspaceId === session.selectedWorkspaceId || switchingWorkspace) return;
       setSwitchingWorkspace(true);
+      setWorkspaceSwitchFailure(null);
       try {
         // The old socket is handed over, not closed here: pages keep a working `ws` until the
         // new workspace is authenticated (or the switch fails), and a switch that loses to a
         // later attempt never publishes.
-        await openCookieSession(session.user, session.memberships, workspaceId, session.ws);
-        navigate(destination);
+        const outcome = await openCookieSession(
+          session.user,
+          session.memberships,
+          workspaceId,
+          session.ws,
+          true,
+        );
+        if (outcome.kind === 'opened') {
+          navigate(destination);
+        } else if (outcome.kind === 'kept') {
+          // R-64: still in the current workspace — say so, and re-read the membership list (the
+          // usual cause is a membership removed or a workspace disabled since sign-in).
+          switchFailureSeq.current += 1;
+          setWorkspaceSwitchFailure({
+            seq: switchFailureSeq.current,
+            generation: session.generation,
+            workspaceId,
+            workspaceName: session.memberships.find((m) => m.workspaceId === workspaceId)
+              ?.workspaceName,
+            error: outcome.error,
+          });
+          void refreshMemberships();
+        }
       } finally {
         setSwitchingWorkspace(false);
       }
     },
-    [session, switchingWorkspace, openCookieSession],
+    [session, switchingWorkspace, openCookieSession, refreshMemberships],
   );
 
   const userChanged = useCallback((user: WireUser): void => {
@@ -490,11 +570,13 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     apiKeyConnecting,
     apiKeyError,
     switchingWorkspace,
+    workspaceSwitchFailure,
     connectApiKey,
     proceedAfterCookieAuth,
     forgetKey,
     cookieLogout,
     switchWorkspace,
+    refreshMemberships,
     userChanged,
     keyBound,
     claimed,

@@ -41,6 +41,8 @@ const stubs = vi.hoisted(() => ({
     end: (reason: WsSessionEndReason) => void;
   }[],
   httpOptions: [] as HttpClientOptions[],
+  /** R-64: workspaces whose WS `authenticate` the (stub) kernel refuses. */
+  refusedWorkspaces: new Set<string>(),
 }));
 
 vi.mock('../lib/auth-api.js', async (importOriginal) => ({
@@ -61,6 +63,10 @@ vi.mock('../lib/ws-client.js', async (importOriginal) => {
     }
     async connect(): Promise<void> {}
     async authenticate(credential: unknown): Promise<void> {
+      const workspaceId = (credential as { workspaceId?: string }).workspaceId;
+      if (workspaceId !== undefined && stubs.refusedWorkspaces.has(workspaceId)) {
+        throw new Error('forbidden: no active membership in the requested workspace');
+      }
       this.authenticatedWith = credential;
     }
     close(): void {
@@ -110,6 +116,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   stubs.sockets.length = 0;
   stubs.httpOptions.length = 0;
+  stubs.refusedWorkspaces.clear();
 });
 
 afterEach(cleanup);
@@ -202,6 +209,73 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
 
     expect(result.current.session?.selectedWorkspaceId).toBe('ws-2');
     expect(lastSocket().closed).toBe(false);
+  });
+});
+
+describe('useSessionMachine: a failed workspace switch keeps the session (R-64)', () => {
+  it('the switch fails → still signed in to the current workspace, only the new socket closed, the failure reported, memberships re-read, no navigation', async () => {
+    const { result } = await bootCookieSession([membership('ws-1'), membership('ws-2')]);
+    const before = result.current.session;
+    const current = lastSocket();
+    window.location.hash = '#/work/tasks';
+
+    stubs.refusedWorkspaces.add('ws-2');
+    // The workspace the switch failed on is gone from the user's memberships.
+    stubs.getMe.mockResolvedValueOnce({ user: BOB, memberships: [membership('ws-1')] });
+    await act(() => result.current.switchWorkspace('ws-2'));
+
+    expect(result.current.session?.generation).toBe(before?.generation);
+    expect(result.current.session?.selectedWorkspaceId).toBe('ws-1');
+    expect(result.current.session?.ws).toBe(before?.ws);
+    expect(current.closed).toBe(false);
+    expect(lastSocket()).not.toBe(current);
+    expect(lastSocket().closed).toBe(true);
+    expect(result.current.preSession.kind).not.toBe('login');
+    expect(result.current.workspaceSwitchFailure).toMatchObject({
+      workspaceId: 'ws-2',
+      workspaceName: 'ws-2',
+    });
+    expect(String(result.current.workspaceSwitchFailure?.error)).toMatch(/no active membership/);
+    await waitFor(() =>
+      expect(result.current.session?.memberships?.map((m) => m.workspaceId)).toEqual(['ws-1']),
+    );
+    expect(window.location.hash).toBe('#/work/tasks');
+  });
+
+  it('a later successful switch clears the reported failure and lands on its destination', async () => {
+    const { result } = await bootCookieSession([membership('ws-1'), membership('ws-2')]);
+    stubs.refusedWorkspaces.add('ws-2');
+    stubs.getMe.mockResolvedValueOnce({
+      user: BOB,
+      memberships: [membership('ws-1'), membership('ws-2')],
+    });
+    await act(() => result.current.switchWorkspace('ws-2'));
+    expect(result.current.workspaceSwitchFailure).not.toBeNull();
+
+    stubs.refusedWorkspaces.clear();
+    await act(() => result.current.switchWorkspace('ws-2', '#/govern/members'));
+    expect(result.current.session?.selectedWorkspaceId).toBe('ws-2');
+    expect(result.current.workspaceSwitchFailure).toBeNull();
+    expect(window.location.hash).toBe('#/govern/members');
+  });
+
+  it('refreshMemberships re-reads /api/auth/me into the same session — no new socket', async () => {
+    const { result } = await bootCookieSession([membership('ws-1')]);
+    const generation = result.current.session?.generation;
+    const sockets = stubs.sockets.length;
+
+    stubs.getMe.mockResolvedValueOnce({
+      user: BOB,
+      memberships: [membership('ws-1'), membership('ws-new')],
+    });
+    await act(() => result.current.refreshMemberships());
+
+    expect(result.current.session?.memberships?.map((m) => m.workspaceId)).toEqual([
+      'ws-1',
+      'ws-new',
+    ]);
+    expect(result.current.session?.generation).toBe(generation);
+    expect(stubs.sockets).toHaveLength(sockets);
   });
 });
 

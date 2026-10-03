@@ -61,7 +61,10 @@ export interface ApprovalQueueState {
  * session-local "decided" set immediately and reconciles that one row with `get_action` (C7: no
  * full `list_pending` reload on top — the push already names the row, and the queue itself only
  * ever loses rows on `action.updated`). Decisions are optimistic — the row leaves Pending on click
- * and comes back with the kernel's error if the call fails.
+ * and comes back with the kernel's error if the call fails. R-63: after a WS reconnect (pushes sent
+ * while the socket was down are lost) the queue is re-read, and the open request plus every row
+ * decided in this session is re-read with `get_action`, so a request someone else decided during
+ * the outage is no longer offered as decidable.
  *
  * S8 W1-A7: the drawer's own confirm state (`pendingConfirm`) is owned here rather than inside
  * `ApprovalDetail` — that component can remount mid-decision, and state kept there would be lost
@@ -125,6 +128,11 @@ export function useApprovalQueue({
   // `setDecided` inside one is a side effect even when it happens to be idempotent).
   const pendingRowsRef = useRef(pendingRows);
   pendingRowsRef.current = pendingRows;
+  // R-63: what the resync handler below re-reads, read at call time.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const decidedRef = useRef(decided);
+  decidedRef.current = decided;
 
   useEffect(() => {
     const unsubPending = pushes.onActionPending(() => void pending.reload());
@@ -147,9 +155,22 @@ export function useApprovalQueue({
         }
       });
     });
+    const unsubResynced = pushes.onResynced(() => {
+      void pending.reload();
+      const ids = new Set(Object.keys(decidedRef.current));
+      if (selectedIdRef.current !== undefined) ids.add(selectedIdRef.current);
+      for (const id of ids) {
+        void refreshRow(id).then((fresh) => {
+          if (fresh && fresh.status !== 'pending_approval') {
+            setDecided((prev) => ({ ...prev, [fresh.id]: fresh }));
+          }
+        });
+      }
+    });
     return () => {
       unsubPending();
       unsubUpdated();
+      unsubResynced();
     };
   }, [pushes, pending.reload, pending.mutate, refreshRow]);
 

@@ -176,6 +176,9 @@ export function useCapability<T = unknown>(
     if (kinds.has('actionPending')) unsubs.push(pushes.onActionPending(() => void run()));
     if (kinds.has('actionUpdated')) unsubs.push(pushes.onActionUpdated(() => void run()));
     if (kinds.has('taskUpdated')) unsubs.push(pushes.onTaskUpdated(() => void run()));
+    // R-63: whatever kind of push this read follows, the ones sent while the socket was down are
+    // lost — a reconnect reloads it too.
+    unsubs.push(pushes.onResynced(() => void run()));
     return () => {
       for (const unsub of unsubs) unsub();
     };
