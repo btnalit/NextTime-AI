@@ -225,8 +225,9 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     // Real-model regression 2026-10-02: a gate `apply` timeout is "outcome unknown", not failure —
     // the row must stay `executing` (for the stale-executing reaper's idempotent replay), never be
-    // written `failed` while the gate may still be completing the effect.
-    it('an indeterminate executor result writes no terminal state: the row stays executing and the drain continues', async () => {
+    // written `failed` while the gate may still be completing the effect. R-50 (D-10): that row is
+    // then a barrier — the drain stops, and nothing later on the same Gatekeeper runs past it.
+    it('an indeterminate executor result writes no terminal state: the row stays executing and the drain stops behind it', async () => {
       const gatekeeperId = await insertGatekeeperObject();
 
       const unknown = await createAutoApproved(gatekeeperId, 'test.drain.unknown');
@@ -247,8 +248,9 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
 
-      expect(result.processed).toBe(2);
-      expect(calls).toEqual(['test.drain.unknown', 'test.drain.after-unknown']);
+      expect(result.processed).toBe(1);
+      expect(result.stoppedAtExecuting).toBe(true);
+      expect(calls).toEqual(['test.drain.unknown']);
 
       const unknownAfter = await withWorkspace(
         pool,
@@ -260,7 +262,76 @@ describe.runIf(DATABASE_URL !== undefined)(
       const nextAfter = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         getActionRequest(client, workspaceId, next.id),
       );
-      expect(nextAfter?.status).toBe('executed');
+      expect(nextAfter?.status).toBe('auto_approved');
+
+      // A later drain (another trigger, a later tick) stops at the same barrier.
+      const again = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      expect(again).toMatchObject({ processed: 0, stoppedAtExecuting: true });
+      expect(calls).toEqual(['test.drain.unknown']);
+    });
+
+    // R-50 (D-10): per-Gatekeeper serial order is a guarantee across drainer instances — the
+    // request path's phase 2, the outbox consumer and the periodic tick each have their own, so an
+    // in-memory single-flight set cannot provide it. The `executing` row is the barrier.
+    it('barrier: a second drainer does not start r2 while r1 is executing on the first; the first picks r2 up after r1', async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+      const r1 = await createAutoApproved(gatekeeperId, 'test.barrier.r1');
+
+      let releaseR1: (() => void) | undefined;
+      const r1Running = new Promise<void>((resolve) => {
+        releaseR1 = resolve;
+      });
+      let r1Started: (() => void) | undefined;
+      const r1HasStarted = new Promise<void>((resolve) => {
+        r1Started = resolve;
+      });
+      const firstCalls: string[] = [];
+      const firstDrainer = new ApprovalDrainer({
+        executor: {
+          async execute(actionRequest) {
+            firstCalls.push(actionRequest.actionKind);
+            if (actionRequest.id === r1.id) {
+              r1Started?.();
+              await r1Running;
+            }
+            return { ok: true };
+          },
+        },
+        withTransaction,
+      });
+      const firstDrain = firstDrainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      await r1HasStarted;
+
+      // r2 is approved while r1 is applying; its own trigger drains on a different instance.
+      const r2 = await createAutoApproved(gatekeeperId, 'test.barrier.r2');
+      const secondCalls: string[] = [];
+      const secondDrainer = new ApprovalDrainer({
+        executor: fakeExecutor({}, secondCalls),
+        withTransaction,
+      });
+      const secondResult = await secondDrainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      expect(secondResult).toEqual({
+        processed: 0,
+        stoppedAtPending: false,
+        stoppedAtExecuting: true,
+        skippedInFlight: false,
+      });
+      expect(secondCalls).toEqual([]);
+      const r2During = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, r2.id),
+      );
+      expect(r2During?.status).toBe('auto_approved');
+
+      releaseR1?.();
+      const firstResult = await firstDrain;
+      expect(firstResult).toMatchObject({ processed: 2, stoppedAtExecuting: false });
+      expect(firstCalls).toEqual(['test.barrier.r1', 'test.barrier.r2']);
+      for (const row of [r1, r2]) {
+        const after = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequest(client, workspaceId, row.id),
+        );
+        expect(after?.status).toBe('executed');
+      }
     });
 
     it('single-flight: a concurrent drain call for the same gatekeeper is skipped, not queued', async () => {
@@ -289,6 +360,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(secondResult).toEqual({
         processed: 0,
         stoppedAtPending: false,
+        stoppedAtExecuting: false,
         skippedInFlight: true,
       });
 

@@ -328,7 +328,7 @@ flowchart TB
 | graph | Object / Link / Fact 写入与查询；`traverse` / `search` / `state_at`；`find_operations` / `find_workers` / `find_procedures` | Object / Link |
 | epistemic | Activity / Observation / Evidence / Conflict / Decision；`explain`；可见性 | 同名对象 |
 | policy | 数据化规则；`evaluate`；双信号；`requester_can_approve` | Policy |
-| approval | ActionRequest 状态机；drain（每 Gatekeeper 单飞、升序、遇 pending 停）；`approve` 同事务写 Approval Decision | ActionRequest |
+| approval | ActionRequest 状态机；drain（每 Gatekeeper 单飞、升序、遇 pending 或 executing 停——串行是保证）；`approve` 同事务写 Approval Decision | ActionRequest |
 | capability | Grant；Handle 签发 / 验证 / 撤销 / 衰减；`on_behalf_of` | Grant / Handle |
 | task | Task / WorkerRun；`invoke_worker`；调用 supervisor；崩溃回队；超时 | Task / WorkerRun |
 | host-bridge | `AgentRuntime` 接口（`start / prompt / stop` + 平台事件词表）与 agent-host 的内部 RPC；把 pi 事件翻译为平台事件后发布 | 无 |
