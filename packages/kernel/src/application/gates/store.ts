@@ -229,6 +229,15 @@ export async function readDisabledOperations(
 // gate instances
 // -------------------------------------------------------------------------------------------
 
+/**
+ * Which kind of gate process announced — the caller class the internal-plane guard authenticated
+ * (R-03, D-02): `gate` is every packaged gate (one shared credential, `internal_gate_to_kernel`),
+ * `gate-host` the generic gate host (`internal_gate_host_to_kernel`). A packaged gate owns only
+ * the instances it announced itself (`hosted = false`); the gate host only the ones an
+ * administrator created for it (`hosted = true`).
+ */
+export type GateAnnouncer = 'gate' | 'gate-host';
+
 export interface AnnounceOutcome {
   readonly gateId: string;
   readonly created: boolean;
@@ -240,29 +249,34 @@ export interface AnnounceOutcome {
    *  than its own definition — nothing was written (the host derives both from the definition, so
    *  this can only be a stray or hostile announcement). */
   readonly rejected?: boolean;
+  /** R-03 review: the announcing class does not own this instance — a packaged gate announced a
+   *  gate-host (`hosted`) instance, or the gate host announced one that is not hosted (or does not
+   *  exist: the host serves only instances an administrator created). Nothing was written. */
+  readonly announcerMismatch?: boolean;
 }
 
 /**
- * Upsert from `POST /internal/gates/announce`. A new id lands as `discovered`. An instance the
+ * Upsert from `POST /internal/gates/announce`, as `announcer` (the caller class the internal-plane
+ * guard authenticated). First the class must own the instance (R-03 review, D-02 — no gate →
+ * gate-host crossing): a packaged gate may announce only non-hosted instances, the gate host only
+ * hosted ones that already exist; anything else is refused with nothing written
+ * (`announcerMismatch`). A new id lands as `discovered`. An instance the
  * administrator already decided on (`enabled` / `disabled`) keeps that status **and its identity**
  * — connector, transport kind and endpoint are frozen once decided, so a second container reusing
  * an enabled `GATE_ID` cannot redirect where later enables point (design §6.3 "防止第二个容器用同名
- * 顶替已启用的门"; the announcing token is shared by the whole internal plane, not per gate). Such
- * an announcement still counts as a heartbeat but marks health `unknown` and is reported to the
- * caller (`identityMismatch`) for the log. The manifest (`operations`) and the human-readable
- * `target` may change on every announce: a newer gate build legitimately adds Operations. A `lost`
- * instance that reappears returns to the status it had before it was lost (`status_before_lost`).
+ * 顶替已启用的门"; every packaged gate shares one announce credential, so the credential does not
+ * tell two packaged gates apart). Such an announcement still counts as a heartbeat but marks health
+ * `unknown`, changes nothing else (not the manifest, not the `target`) and is reported to the
+ * caller (`identityMismatch`) for the log. From a matching identity, the manifest (`operations`)
+ * and the human-readable `target` may change on every announce: a newer gate build legitimately
+ * adds Operations. A `lost` instance that reappears returns to the status it had before it was
+ * lost (`status_before_lost`).
  */
 export async function upsertAnnouncement(
   client: PoolClient,
   body: AnnounceBody,
+  announcer: GateAnnouncer,
 ): Promise<AnnounceOutcome> {
-  await client.query(
-    `insert into connectors (name, kind, packaged, mode)
-     values ($1, $2, $3, 'platform_preset')
-     on conflict (name) do nothing`,
-    [body.connector, body.transportKind, !GENERIC_CONNECTOR_NAMES.includes(body.connector)],
-  );
   const existing = await client.query<{
     status: GateInstanceStatus;
     status_before_lost: GateInstanceStatus | null;
@@ -277,6 +291,15 @@ export async function upsertAnnouncement(
     [body.gateId],
   );
   const before = existing.rows[0];
+  if ((announcer === 'gate-host') !== (before?.hosted === true)) {
+    return {
+      gateId: body.gateId,
+      created: false,
+      identityMismatch: false,
+      status: before?.status ?? 'discovered',
+      announcerMismatch: true,
+    };
+  }
   const decided =
     before !== undefined && (before.status === 'enabled' || before.status === 'disabled');
   const restoredStatus =
@@ -315,6 +338,16 @@ export async function upsertAnnouncement(
       ? (restoredStatus ?? 'discovered')
       : before.status;
   const displayName = body.displayName ?? body.gateId;
+  if (!frozen) {
+    // Only where the announced connector is about to be written (`gate_instances.connector`
+    // references it) — never for a refused or a frozen announcement.
+    await client.query(
+      `insert into connectors (name, kind, packaged, mode)
+       values ($1, $2, $3, 'platform_preset')
+       on conflict (name) do nothing`,
+      [body.connector, body.transportKind, !GENERIC_CONNECTOR_NAMES.includes(body.connector)],
+    );
+  }
   if (!before) {
     await client.query(
       `insert into gate_instances
@@ -335,8 +368,8 @@ export async function upsertAnnouncement(
   } else if (frozen) {
     await client.query(
       `update gate_instances
-          set target = $2,
-              operations = $3::jsonb,
+          set target = case when $4 then target else $2 end,
+              operations = case when $4 then operations else $3::jsonb end,
               health_endpoint = case when $4 then health_endpoint else $5 end,
               status = $6,
               status_before_lost = null,

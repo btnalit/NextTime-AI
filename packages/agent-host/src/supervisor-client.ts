@@ -18,9 +18,11 @@
  * `internal-auth.ts`, lane-6 review P1-3: worker-supervisor is `control`-network only, but an
  * unauthenticated `/resident/*` was reachable from any other `control`-network service, not just
  * this process). `authorizationHeader` — `internalAuthorizationHeader(token)` from
- * `@nexttime/shared`, the same value `index.ts`'s `main()` already computes for the kernel
- * WebSocket link — is sent on every request below; never logged, matching this client's existing
- * rule for the Capability Handle in the body.
+ * `@nexttime/shared` over agent-host's own credential for worker-supervisor (`index.ts`'s
+ * `loadSupervisorToken`; R-03: a different credential from the one the kernel WebSocket link
+ * presents, and worker-supervisor admits it only on the routes agent-host calls) — is sent on
+ * every request below; never logged, matching this client's existing rule for the Capability
+ * Handle in the body.
  *
  * Leftover 87: `spawn` and `touch` take an optional per-call `correlationId` (host.ts passes the
  * Turn id) sent as `x-correlation-id` — a header, since `/resident/spawn`'s body schema is strict.

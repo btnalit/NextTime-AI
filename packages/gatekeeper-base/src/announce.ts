@@ -12,8 +12,10 @@ import {
  * docs/development-tasks.md P-B 决定 ⑤). On start, and then every `GATE_ANNOUNCE_INTERVAL_SEC`
  * as a heartbeat, a gate tells the kernel who it is — its stable `GATE_ID`, connector, transport
  * kind, human-readable target, the URL the kernel should call it at, and the manifest it serves
- * from `describe_operations` — via `POST /internal/gates/announce` on the internal plane (the
- * compose secret `internal_token`, the same token worker-supervisor and agent-host hold).
+ * from `describe_operations` — via `POST /internal/gates/announce` on the internal plane, with
+ * the gate's own credential (R-03: compose mounts `internal_gate_to_kernel` — gate-host:
+ * `internal_gate_host_to_kernel` — at `/run/secrets/internal_token`; the kernel admits it on
+ * announce only, plus gate-host's instance pull, never on another service's route).
  *
  * Opt-in: without `GATE_ID`, `GATE_CONNECTOR` and `KERNEL_URL` this is a no-op (accept fixtures,
  * ad-hoc gates and P-B2's host mode keep working unchanged). Never a credential: the body has no
@@ -115,7 +117,7 @@ export function loadInternalToken(env: NodeJS.ProcessEnv): string {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'error';
     throw new Error(
-      `announce: cannot read the internal token file "${file}" (GATE_INTERNAL_TOKEN_FILE; ${code}) — mount the compose secret internal_token or unset GATE_ID to disable self-registration`,
+      `announce: cannot read the internal token file "${file}" (GATE_INTERNAL_TOKEN_FILE; ${code}) — mount the compose secret internal_gate_to_kernel there (target internal_token; scripts/gen-handle-keys.sh derives it) or unset GATE_ID to disable self-registration`,
     );
   }
   return normalizeInternalToken(raw, file);

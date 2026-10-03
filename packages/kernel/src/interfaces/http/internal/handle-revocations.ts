@@ -8,8 +8,8 @@ import type { PoolLike } from '../../../adapters/db/pool.js';
  * polls this every `REVOCATION_SYNC_INTERVAL_MS` and keeps an in-memory revoked-`jti` set, instead
  * of a per-request callback to the kernel.
  *
- * Trust boundary: behind `interfaces/internal-auth`'s shared-secret guard like every `/internal/*`
- * route (`llm-proxy` sends `Authorization: Bearer <internal token>` on each poll); this file
+ * Trust boundary: behind `interfaces/internal-auth`'s credential guard like every `/internal/*`
+ * route (`llm-proxy` sends `Authorization: Bearer <its own credential>` on each poll); this file
  * performs no authentication of its own — see llm-usage.ts's doc comment.
  *
  * Cross-workspace query (task brief: "reads capability_handles across workspaces — a kernel-

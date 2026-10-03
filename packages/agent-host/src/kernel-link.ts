@@ -28,6 +28,11 @@ import { WebSocket as NodeWebSocket } from 'ws';
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
 
+/** The kernel's close code for a refused second link (`LINK_REFUSED_CLOSE_CODE` in
+ *  packages/kernel/src/interfaces/ws/agent-host.ts, RFC 6455 1013 "Try Again Later"): another
+ *  link is registered, so retrying at the base delay would only spin until it goes away. */
+const LINK_REFUSED_CLOSE_CODE = 1013;
+
 export interface KernelLinkOptions {
   /** e.g. `ws://kernel:8080/internal/agent-host`. */
   readonly kernelWsUrl: string;
@@ -105,9 +110,13 @@ export function createKernelLink(options: KernelLinkOptions): KernelLink {
       headers: { authorization: options.authorizationHeader },
     });
     socket = ws;
+    let opened = false;
 
     ws.on('open', () => {
-      attempt = 0;
+      // The backoff is reset on close, not here: the kernel accepts the upgrade of a refused
+      // second link before closing it with 1013, so resetting on `open` would retry it every
+      // `baseDelayMs` forever.
+      opened = true;
       log(
         JSON.stringify({
           level: 'info',
@@ -131,9 +140,22 @@ export function createKernelLink(options: KernelLinkOptions): KernelLink {
       else options.onStopTurn(result.data);
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code) => {
       if (socket === ws) socket = undefined;
-      log(JSON.stringify({ level: 'warn', msg: 'kernel-link: disconnected — will reconnect' }));
+      const refused = code === LINK_REFUSED_CLOSE_CODE;
+      // A link that was up and then dropped reconnects promptly; a refused one (another link is
+      // registered — the kernel probes it and drops it if dead) and a connection that never opened
+      // keep backing off.
+      if (opened && !refused) attempt = 0;
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: refused
+            ? 'kernel-link: refused — another agent-host link is registered; will retry with backoff'
+            : 'kernel-link: disconnected — will reconnect',
+          code,
+        }),
+      );
       scheduleReconnect();
     });
     ws.on('error', (err) => {

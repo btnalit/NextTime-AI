@@ -99,11 +99,11 @@ parse_kv() {
 }
 
 # GET /resident/<principalId> via the kernel image's own fetch() against worker-supervisor
-# (control-network-only — no host port), presenting the kernel's own internal-plane token — the
+# (control-network-only — no host port), presenting the kernel's own worker-supervisor credential — the
 # exact pattern scripts/accept_s1.sh's own `resident_status()` helper already established.
 resident_status() {
   docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: 'Bearer ' + token } }).then(async (r) => {
   if (r.status === 404) { console.log('FOUND=0'); return; }
   if (!r.ok) { console.log('FOUND=error status=' + r.status); return; }

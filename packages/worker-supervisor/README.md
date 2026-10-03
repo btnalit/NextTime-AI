@@ -6,15 +6,17 @@ S1.5a）与一次性 Task/Worker 容器（`/task/*`，S2.8）。两者共享同�
 （`docker-client.ts`）、同一套安全基线（`--read-only`、`--cap-drop ALL`、`no-new-privileges`、
 tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网代理来源映射文件
 （`egress-map.ts`）。`control` 网络内部服务，不发布主机端口，也从不挂 `workers` 网络（不像
-kernel/llm-proxy/egress-proxy）——所以没有任何 agent 容器能直接到达它。但 `POST /task/spawn` 与全部
-`/resident/*` 路由现在要求 `Authorization: Bearer <internal_token>`（`src/internal-auth.ts`，
+kernel/llm-proxy/egress-proxy）——所以没有任何 agent 容器能直接到达它。但除 `GET /healthz` 外的每条
+路由现在都要求 `Authorization: Bearer <调用方自己的凭证>`（`src/internal-auth.ts`，
 fix/runtime-hardening，lane-6 review P1-3）：早前这两组路由完全不鉴权，"信任调用方"只是约定，任何
-`control` 网络上的其它服务都能直接调用；token 与 kernel/agent-host 共用同一份
-`${NEXTTIME_DATA}/secrets/internal.token`（`@nexttime/shared` `DEFAULT_INTERNAL_TOKEN_FILE`）。
-kernel 自己的 `packages/kernel/src/adapters/supervisor-client`（`TaskSupervisorClient`）已同步更新
-带上这个头（复用 kernel 自己 `/internal/*` 守卫已经加载的同一份 token，见该文件顶部注释）。
-`GET /healthz`、`POST /task/:workerRunId/terminate`、`GET /task/:workerRunId` 不受影响，仍不需要
-token。
+`control` 网络上的其它服务都能直接调用。R-03 起它只有两个调用方、只持这两份凭证（都由
+`scripts/gen-handle-keys.sh` 从 `secrets/internal.token` 派生，本服务不持根）：kernel 的
+（`internal_kernel_to_worker_supervisor`，挂在 `/run/secrets/internal_token`）与 agent-host 的
+（`internal_agent_host_to_worker_supervisor`，挂在 `/run/secrets/internal_token_agent_host`）；每条
+路由只放行用它的那一方（见 `src/server.ts` 路由表的 `[agent-host]` / `[kernel]` 标注）。
+`POST /task/:workerRunId/terminate`、`GET /task/:workerRunId` 也只认 kernel 的凭证（R-03 复审：此前
+不鉴权，任何 `control` 网络上的服务都能杀掉任意 Task 容器）。只有 `GET /healthz` 不需要 token；
+`server.ts` 的 `onRoute` 钩子拒绝注册任何不在 `PUBLIC_ROUTES` 里却没挂守卫的路由，新路由默认关闭。
 
 ## 常驻模式（S1.5a）
 

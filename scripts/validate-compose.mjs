@@ -40,7 +40,20 @@ const expectedServices = [
 // (not just "services present") because a secret silently dropped from the top-level `secrets:`
 // block, or from a service's own `secrets:` list, fails a container at runtime in a way this
 // static parse is the only pre-host check for (§10.2, docs/runbooks/host-gatekeepers.md).
-const expectedSecrets = ['pg_password', 'handle_key', 'internal_token', 'gate_token'];
+// R-03 adds the per-service internal-plane credentials (scripts/derive-internal-tokens.sh).
+const expectedSecrets = [
+  'pg_password',
+  'handle_key',
+  'internal_token',
+  'gate_token',
+  'internal_agent_host_to_kernel',
+  'internal_llm_proxy_to_kernel',
+  'internal_egress_proxy_to_kernel',
+  'internal_gate_to_kernel',
+  'internal_gate_host_to_kernel',
+  'internal_kernel_to_worker_supervisor',
+  'internal_agent_host_to_worker_supervisor',
+];
 
 console.log(`docker-compose.yml parsed OK: ${composePath}`);
 console.log(`services (${services.length}): ${services.join(', ')}`);
@@ -61,4 +74,21 @@ if (missingSecrets.length > 0) {
   process.exitCode = 1;
 } else {
   console.log('All expected top-level secrets are declared.');
+}
+
+// R-03: the internal-plane root reaches the kernel only, and every secret a service names is
+// declared at the top level.
+const sourceOf = (entry) => (typeof entry === 'string' ? entry : entry?.source);
+for (const [name, service] of Object.entries(doc.services ?? {})) {
+  for (const entry of service.secrets ?? []) {
+    const source = sourceOf(entry);
+    if (source === 'internal_token' && name !== 'kernel') {
+      console.error(`service ${name} mounts the internal-plane root internal_token (kernel only)`);
+      process.exitCode = 1;
+    }
+    if (!secrets.includes(source)) {
+      console.error(`service ${name} names undeclared secret ${source}`);
+      process.exitCode = 1;
+    }
+  }
 }

@@ -194,13 +194,17 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const gateId = `linked-gate-instance-${randomUUID().slice(0, 8)}`;
       await asAdmin((client) =>
-        upsertAnnouncement(client, {
-          gateId,
-          connector: 'http',
-          transportKind: 'http',
-          endpoint: `https://gate-${randomUUID()}.example.invalid`,
-          operations: [...announcedOperations],
-        }),
+        upsertAnnouncement(
+          client,
+          {
+            gateId,
+            connector: 'http',
+            transportKind: 'http',
+            endpoint: `https://gate-${randomUUID()}.example.invalid`,
+            operations: [...announcedOperations],
+          },
+          'gate',
+        ),
       );
       await inTx((client) =>
         insertGateLink(client, {

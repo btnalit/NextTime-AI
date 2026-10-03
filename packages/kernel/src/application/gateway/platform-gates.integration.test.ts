@@ -49,6 +49,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
+import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { upsertAnnouncement } from '../gates/index.js';
@@ -243,14 +244,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((thrown as PlatformAdminError).code).toBe(code);
     }
 
-    async function announce(body: Record<string, unknown>) {
+    /** Announces as a packaged gate by default; `'gate-host'` for a hosted instance (R-03 review:
+     *  each class may announce only its own kind of instance). */
+    async function announce(body: Record<string, unknown>, caller: 'gate' | 'gate-host' = 'gate') {
       const server = app();
       const response = await server.inject({
         method: 'POST',
         url: '/internal/gates/announce',
         headers: {
           'content-type': 'application/json',
-          authorization: internalAuthorizationHeader(INTERNAL_TOKEN),
+          authorization: internalAuthorizationHeader(
+            deriveInternalCredential(INTERNAL_TOKEN, caller),
+          ),
         },
         payload: body,
       });
@@ -345,24 +350,62 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(generic).toMatchObject({ packaged: false, mode: 'self_serve' });
       });
 
-      it('an announcement with a different identity for an enabled instance keeps the stored endpoint (review finding)', async () => {
+      it('an announcement with a different identity for an enabled instance keeps the stored endpoint, manifest and target (review finding; R-03 review)', async () => {
         await callAsAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
+        const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+          gateId: GATE_ID,
+        });
         const impostor = await announce({
           ...announceBody,
           endpoint: 'http://impostor:9999',
           connector: 'fixture-mcp',
+          target: 'http://impostor-target:9000',
+          operations: [OBSERVE_OP],
         });
         expect(impostor.statusCode).toBe(200);
         const after = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: GATE_ID });
         expect(after.endpoint).toBe(announceBody.endpoint);
         expect(after.health).toBe('unknown');
         expect(after.status).toBe('enabled');
+        expect(after.target).toBe(announceBody.target);
+        expect(after.operations).toEqual(before.operations);
+        expect(after.operations.map((o) => o.name).sort()).toEqual(
+          [OBSERVE_OP.name, EXECUTE_OP.name].sort(),
+        );
         // A matching heartbeat restores health.
         await announce(announceBody);
         const restored = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
           gateId: GATE_ID,
         });
         expect(restored.health).toBe('ok');
+      });
+
+      it('R-03 review (D-02): the gate host cannot announce a packaged instance nor create one — 403, nothing written', async () => {
+        const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+          gateId: GATE_ID,
+        });
+        const crossed = await announce(
+          { ...announceBody, target: 'http://elsewhere:9000', operations: [OBSERVE_OP] },
+          'gate-host',
+        );
+        expect(crossed.statusCode).toBe(403);
+        expect(crossed.json().error.code).toBe('forbidden');
+        const after = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: GATE_ID });
+        expect(after.target).toBe(before.target);
+        expect(after.operations).toEqual(before.operations);
+        expect(after.lastSeenAt).toBe(before.lastSeenAt);
+
+        const fresh = await announce(
+          { ...announceBody, gateId: 'fixture-mcp-from-gate-host', connector: 'gate-host-made-up' },
+          'gate-host',
+        );
+        expect(fresh.statusCode).toBe(403);
+        await expectPlatformError(
+          () => callAsAdmin('get_gate_instance', { gateId: 'fixture-mcp-from-gate-host' }),
+          'gate_not_found',
+        );
+        const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
+        expect(connectors.items.map((c) => c.name)).not.toContain('gate-host-made-up');
       });
 
       it('a heartbeat keeps the administrator’s status and refreshes lastSeenAt', async () => {
@@ -1149,15 +1192,18 @@ describe.runIf(DATABASE_URL !== undefined)(
           // instance over, the announce below stands in for the host.
           manifestSource: 'http://system.internal.test/openapi.json',
         });
-        const announced = await announce({
-          gateId: HOSTED_ID,
-          connector: 'http',
-          transportKind: 'http',
-          target: 'http://system.internal.test/',
-          endpoint: `http://gate-host:8083/i/${HOSTED_ID}`,
-          displayName: 'Hosted HTTP',
-          operations: [OBSERVE_OP],
-        });
+        const announced = await announce(
+          {
+            gateId: HOSTED_ID,
+            connector: 'http',
+            transportKind: 'http',
+            target: 'http://system.internal.test/',
+            endpoint: `http://gate-host:8083/i/${HOSTED_ID}`,
+            displayName: 'Hosted HTTP',
+            operations: [OBSERVE_OP],
+          },
+          'gate-host',
+        );
         expect(announced.statusCode).toBe(200);
 
         await expect(
@@ -1428,17 +1474,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         const endpoint = `http://127.0.0.1:${address.port}`;
 
         // Announce + enable directly through `application/gates/store.ts` — same effect as a real
-        // gate-host heartbeat plus an administrator's `update_gate_instance`, without needing the
+        // packaged gate's heartbeat plus an administrator's `update_gate_instance`, without needing the
         // `/internal/gates/announce` HTTP route this file's own `announce()` helper exercises
         // elsewhere (already covered by the `announce` describe block above).
         await withPlatform(pool, { userId: admin.id }, (client) =>
-          upsertAnnouncement(client, {
-            gateId: CONSISTENCY_GATE_ID,
-            connector: CONSISTENCY_CONNECTOR,
-            transportKind: 'http',
-            endpoint,
-            operations: [OP_A, OP_B],
-          }),
+          upsertAnnouncement(
+            client,
+            {
+              gateId: CONSISTENCY_GATE_ID,
+              connector: CONSISTENCY_CONNECTOR,
+              transportKind: 'http',
+              endpoint,
+              operations: [OP_A, OP_B],
+            },
+            'gate',
+          ),
         );
         await callAsAdmin('update_gate_instance', {
           gateId: CONSISTENCY_GATE_ID,

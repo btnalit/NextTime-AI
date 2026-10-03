@@ -60,8 +60,10 @@
 #   3. checkout v(n)         — git fetch origin --tags && git checkout <to>, then layout_step:
 #                              reconcile ${NEXTTIME_DATA}/models/ vs config/models.json and
 #                              ${NEXTTIME_DATA}/llm-proxy/ against whatever v(n)'s own
-#                              docker-compose.yml mounts expect (docs/runbooks/release.md §3.2) —
-#                              detected from the checked-out tree, not from TO_TAG/FROM_TAG.
+#                              docker-compose.yml mounts expect (docs/runbooks/release.md §3.2),
+#                              and derive the per-service internal-plane credentials when the tree
+#                              ships scripts/derive-internal-tokens.sh (R-03) — detected from the
+#                              checked-out tree, not from TO_TAG/FROM_TAG.
 #   4. build v(n)            — docker compose --profile test build (every default-profile service
 #                              + fake-llm) + docker compose build worker-runtime (build-only
 #                              profile, named explicitly — docs/runbooks/host-worker-runtime.md §2's
@@ -346,7 +348,8 @@ checkout_ref_step() {
 # layout_step <label>: idempotent host-directory-layout reconciliation for the two filesystem
 # moves a checkout can straddle — models.json (S7-A, docs/runbooks/release.md §3.2: config/ ->
 # its own models/ directory) and ${NEXTTIME_DATA}/llm-proxy/ (S6-B: llm-proxy's own read-write
-# state dir, providers.json/keys.json). Run right after every checkout in this script (both
+# state dir, providers.json/keys.json) — plus R-03's derived internal-plane credential files.
+# Run right after every checkout in this script (both
 # directions, and around the PROBE checkout) so the on-disk layout always matches whatever code
 # is currently checked out. Detected from the checked-out tree's own docker-compose.yml mount
 # lines, never by parsing TO_TAG/FROM_TAG version strings.
@@ -387,7 +390,20 @@ layout_step() {
     llm_proxy_state="not needed (pre-S6-B tree)"
   fi
 
-  pass "layout-$label" "models.json -> $models_state; llm-proxy/: $llm_proxy_state"
+  # R-03: a tree whose compose file mounts the per-service internal-plane credentials needs them
+  # on disk before anything below creates a container (the migration's `run` included — compose
+  # refuses a missing secret file). Same step apply-release.sh runs after its checkout; detected
+  # by the checked-out tree shipping the script. Idempotent, touches only secrets/internal-*-to-*.
+  if [ -f scripts/derive-internal-tokens.sh ]; then
+    if ! sh scripts/derive-internal-tokens.sh </dev/null >"$DRILL_LOG" 2>&1; then
+      fail "layout-$label" "scripts/derive-internal-tokens.sh failed: $(tail -20 "$DRILL_LOG")"
+    fi
+    internal_credentials_state="derived (secrets/internal-*-to-*.token)"
+  else
+    internal_credentials_state="not needed (pre-R-03 tree)"
+  fi
+
+  pass "layout-$label" "models.json -> $models_state; llm-proxy/: $llm_proxy_state; internal credentials: $internal_credentials_state"
 }
 
 # build_step <label>: docker compose --profile test build + explicit worker-runtime build.

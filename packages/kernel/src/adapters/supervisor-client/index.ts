@@ -20,14 +20,14 @@
  *
  * Trust boundary (lane-6 review follow-up, 2026-09 — supersedes the "no auth of its own" note this
  * doc comment used to carry): `worker-supervisor`'s `POST /task/spawn` now requires the
- * internal-plane shared secret (`packages/worker-supervisor/src/internal-auth.ts`) — this client
- * sends it as `Authorization: Bearer <authorizationHeader>` (already the full header value, e.g.
+ * kernel's own credential for it (`packages/worker-supervisor/src/internal-auth.ts`) — this
+ * client sends it as `Authorization: Bearer <authorizationHeader>` (already the full header value, e.g.
  * `@nexttime/shared`'s `internalAuthorizationHeader(token)`) on every request it makes, not only
  * the currently-guarded `spawn`, so it never needs revisiting if `terminate`/`status` are ever
- * guarded too. `index.ts`'s `createBackgroundServices` reuses the exact token `main()` already
- * loads via `loadInternalToken()` for the kernel's own `/internal/*` guard — no second env var, no
- * second file read. This client's own other secret is the `capabilityHandle` string it forwards in
- * `spawn`'s body, which — like the internal-plane token — it never logs.
+ * guarded too. `main()` loads the kernel's own credential for worker-supervisor
+ * (`loadSupervisorToken()`, R-03 — never the internal-plane root) and `createBackgroundServices`
+ * hands it here. This client's own other secret is the `capabilityHandle` string it forwards in
+ * `spawn`'s body, which — like the credential — it never logs.
  *
  * Leftover 87: every request also carries an `x-correlation-id` header — the current call's id
  * (substrate/correlation), or for `spawn` the caller's explicit `options.correlationId` (the

@@ -4,7 +4,7 @@ import { createDockerClient } from './docker-client.js';
 import type { ContainerLifecycleEvent } from './docker-events.js';
 import { subscribeToContainerEvents } from './docker-events.js';
 import { createEgressMapStore } from './egress-map.js';
-import { loadInternalToken } from './internal-auth.js';
+import { loadAgentHostToken, loadInternalToken } from './internal-auth.js';
 import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
 import { createServer } from './server.js';
@@ -31,7 +31,8 @@ export { subscribeToContainerEvents } from './docker-events.js';
 export type { ContainerEventsSubscriber, ContainerLifecycleEvent } from './docker-events.js';
 export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
-export { loadInternalToken, requireInternalToken } from './internal-auth.js';
+export { loadAgentHostToken, loadInternalToken, requireInternalCaller } from './internal-auth.js';
+export type { SupervisorCaller, SupervisorCallerTokens } from './internal-auth.js';
 export { createResidentService } from './resident-service.js';
 export type { ResidentService, ResidentStatus, SpawnOutcome } from './resident-service.js';
 export { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
@@ -79,8 +80,10 @@ const TASK_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 export async function main(): Promise<void> {
   const config = loadConfig();
   // Fail-fast, before opening the Docker socket or binding a port — this process cannot serve
-  // POST /task/spawn or any /resident/* route without it (internal-auth.ts's own doc comment).
+  // POST /task/spawn or any /resident/* route without its two callers' credentials (the kernel's,
+  // agent-host's — internal-auth.ts's own doc comment).
   const internalToken = loadInternalToken();
+  const agentHostToken = loadAgentHostToken();
   const docker = createDockerClient({ connection: config.dockerConnection });
   // v0.16.2 (fix/supervisor-images-proxy): a second, read-only client for GET /images
   // (listImages/inspectImage) — see `config.ts`'s `dockerImagesConnection` doc comment for why
@@ -167,6 +170,7 @@ export async function main(): Promise<void> {
     taskService,
     config,
     internalToken,
+    agentHostToken,
     logger: true,
     metrics,
   });

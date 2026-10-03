@@ -157,9 +157,12 @@ sample}`）——干净时（每条都是 0）不打印任何行，不是刷屏�
 读取——`docker compose logs kernel` 之外的第二个观测面：
 
 ```
-curl -sk -H "Authorization: Bearer $(cat "${NEXTTIME_DATA}/secrets/internal.token")" \
-  "https://<host>:8443/internal/metrics"
+printf 'Authorization: Bearer %s\n' "$(cat "${NEXTTIME_DATA}/secrets/internal.token")" |
+  curl -sk -H @- "https://<host>:8443/internal/metrics"
 ```
+
+（请求头从 stdin 读入：`printf` 是 shell 内建命令，根密钥不会出现在任何进程的 argv 里——直接写进
+`curl -H "..."` 的话，同机任何用户都能从进程表读到它。`/internal/metrics` 是唯一仍认根的路由，R-03。）
 
 （若 caddy 未反代 `/internal/*` 到宿主机，改在 kernel 容器所在的 `control` 网络内直接探测，同
 `docs/runbooks/operations.md` 记录的其它 `/internal/*` 探测方式。）

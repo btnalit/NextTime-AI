@@ -2,13 +2,32 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_INTERNAL_TOKEN_FILE,
+  DEFAULT_SUPERVISOR_TOKEN_FILE,
   INTERNAL_TOKEN_FILE_ENV,
   INTERNAL_TOKEN_MIN_LENGTH,
   InternalTokenError,
+  SUPERVISOR_TOKEN_FILE_ENV,
   internalAuthorizationHeader,
   normalizeInternalToken,
   resolveInternalTokenFile,
+  resolveSupervisorTokenFile,
 } from './internal-token.js';
+
+describe('resolveSupervisorTokenFile', () => {
+  it('defaults to its own compose mount path, distinct from the kernel credential', () => {
+    expect(resolveSupervisorTokenFile({})).toBe(DEFAULT_SUPERVISOR_TOKEN_FILE);
+    expect(DEFAULT_SUPERVISOR_TOKEN_FILE).not.toBe(DEFAULT_INTERNAL_TOKEN_FILE);
+    expect(resolveSupervisorTokenFile({ [SUPERVISOR_TOKEN_FILE_ENV]: '' })).toBe(
+      DEFAULT_SUPERVISOR_TOKEN_FILE,
+    );
+  });
+
+  it('honours the env override', () => {
+    expect(resolveSupervisorTokenFile({ [SUPERVISOR_TOKEN_FILE_ENV]: '/custom/sup' })).toBe(
+      '/custom/sup',
+    );
+  });
+});
 
 describe('resolveInternalTokenFile', () => {
   it('defaults to the compose secret mount path', () => {

@@ -88,20 +88,23 @@ fetch('http://localhost:8081/healthz').then(r=>r.text()).then(t=>console.log(t))
 期望 `{"status":"ok"}`。下面的每个 `/resident/*` 调用都用这个 `node -e fetch(...)` 模式
 （`-T` 关掉伪 TTY，避免 `docker compose exec` 吞掉后续脚本的 stdin）。
 
-**内部认证**（fix/runtime-hardening，lane-6 review P1-3）：`POST /task/spawn` 与全部
-`/resident/*` 路由现在都要求 `Authorization: Bearer <internal_token>`（`GET /healthz`、
-`GET /task/:workerRunId`、`POST /task/:workerRunId/terminate` 不受影响，仍不需要）——`worker-
-supervisor` 自己容器里挂了同一份 `${NEXTTIME_DATA}/secrets/internal.token`
-（`/run/secrets/internal_token`，与 kernel/agent-host 共用），下面每个会命中这两组路由的示例都用
-`require('fs').readFileSync('/run/secrets/internal_token','utf8').trim()` 现读现拼，不需要额外
-一步导出成 shell 变量。缺这个头或 token 不对 → `401 {"error":{"code":"unauthorized",...}}`。
+**内部认证**（fix/runtime-hardening，lane-6 review P1-3）：除 `GET /healthz` 外的每条路由现在都
+要求 `Authorization: Bearer <调用方凭证>`。R-03 起每条
+路由只放行用它的调用方：`/resident/spawn`、`/resident/:id/touch` 只认 agent-host 的凭证；
+`/task/spawn`、`/task/:workerRunId`、`/task/:workerRunId/terminate`、`/resident/reclaim`、
+`/residents`、`/images` 只认 kernel 的；`/resident/stop`、
+`GET /resident/:id` 两者都认。`worker-supervisor` 自己容器里正好挂着这两份（都由
+`scripts/derive-internal-tokens.sh` 派生，不是根）：kernel 的在 `/run/secrets/internal_token`，
+agent-host 的在 `/run/secrets/internal_token_agent_host`——下面的示例按路由选其一，
+`require('fs').readFileSync(...)` 现读现拼，不需要额外一步导出成 shell 变量。缺这个头、token 不对
+或用错了调用方的凭证 → `401 {"error":{"code":"unauthorized",...}}`。
 
 ## 5. 拉起两个用户的入口容器
 
 ```bash
 cd <CODE_DIR>
 docker compose exec -T worker-supervisor node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_agent_host','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
@@ -109,7 +112,7 @@ fetch('http://localhost:8081/resident/spawn', {
 }).then(r => r.text()).then(t => console.log(t))
 "
 docker compose exec -T worker-supervisor node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_agent_host','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
@@ -165,7 +168,7 @@ docker exec nexttime-entry-demo-alice sh -c 'touch /ok' && echo "UNEXPECTED: roo
 ```bash
 docker kill nexttime-entry-demo-alice
 docker compose exec -T worker-supervisor node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_agent_host','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
@@ -205,7 +208,8 @@ git checkout main
 
 - `POST /resident/spawn` `{workspaceId, principalId, handle, kernelUrl?, llmUrl?}` →
   `{containerId, ip, status, created, restarts}`。幂等：已在跑则复用（`created:false`）。**要求**
-  `Authorization: Bearer <internal_token>`（fix/runtime-hardening），下同一组 `/resident/*`。
+  `Authorization: Bearer <agent-host 给 supervisor 的凭证>`（fix/runtime-hardening；R-03 起按路由
+  只认对应调用方，见 §4 末"内部认证"），下同一组 `/resident/*`。
 - `POST /resident/stop` `{principalId}` → `204`。**要求内部 token**。
 - `GET /resident/:principalId` → `{principalId, containerId, ip, running, status, startedAt,
   restarts, lastTouchedAt}` 或 `404`。**要求内部 token**。
@@ -307,7 +311,8 @@ docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/${WORKER_RUN_ID}')
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}', {headers: {authorization: 'Bearer ' + token}})
   .then(r => r.text()).then(t => console.log(t))
 "
 ```
@@ -326,7 +331,8 @@ ls "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}"   # 目录还在（entrypoint.
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST'})
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST', headers: {authorization: 'Bearer ' + token}})
   .then(r => console.log(r.status))
 "
 ```

@@ -21,11 +21,13 @@
  * each of the four gate services, so there is no need for a shared env var name, only a shared
  * default path and validation rule.
  *
- * Deliberately a *different* secret from `@nexttime/shared`'s `internal_token`: that token closes
- * the kernel's own internal plane (agent-host/llm-proxy/egress-proxy → kernel); this one closes
- * every deployed gate's HTTP surface (kernel → gate). Reusing one token across both would collapse
- * two distinct blast radii into a single credential — a compromised gate container would then also
- * be able to reach the kernel's internal plane, and vice versa.
+ * Deliberately a *different* secret from the internal-plane credentials (`@nexttime/shared`'s
+ * `internal-token.ts`): those close the kernel's own internal plane (callers → kernel); this one
+ * closes every deployed gate's HTTP surface (kernel → gate). A gate does hold an internal-plane
+ * credential of its own — to announce itself (gate-host also pulls its instance definitions) — but
+ * it is a per-service credential the kernel admits on those routes only (R-03), never the
+ * credential agent-host, llm-proxy or egress-proxy present; so a compromised gate container
+ * cannot act as any of them on the internal plane, and holding `gate_token` gives nothing there.
  */
 
 /** Where the compose secret `gate_token` lands inside every container that declares it. */

@@ -25,7 +25,7 @@ import {
  * schema — keep the two in sync by hand if either changes.
  *
  * Trust boundary: same as `llm-usage.ts` and `handle-revocations.ts` — behind
- * `interfaces/internal-auth`'s shared-secret guard (installed once at the composition root, keyed
+ * `interfaces/internal-auth`'s credential guard (installed once at the composition root, keyed
  * on the `/internal/` route prefix); this file performs no authentication of its own. See
  * llm-usage.ts's doc comment for why the earlier "control-network-only" assumption was retired.
  */

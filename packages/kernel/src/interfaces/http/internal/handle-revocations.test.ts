@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { registerInternalPlaneGuard } from '../../internal-auth/index.js';
+import { deriveInternalCredential, registerInternalPlaneGuard } from '../../internal-auth/index.js';
 import { registerHandleRevocationRoutes } from './handle-revocations.js';
 
 /**
@@ -128,13 +128,13 @@ describe('GET /internal/handle-revocations behind the internal-plane guard', () 
     expect(built.listRevokedSince).not.toHaveBeenCalled();
   });
 
-  it('200s with the right token and serves the route normally', async () => {
+  it('200s with llm-proxy’s credential and serves the route normally', async () => {
     const built = await guardedApp();
     app = built.app;
     const res = await app.inject({
       method: 'GET',
       url: '/internal/handle-revocations',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${deriveInternalCredential(token, 'llm-proxy')}` },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z' });

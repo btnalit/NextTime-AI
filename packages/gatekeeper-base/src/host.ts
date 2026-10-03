@@ -35,8 +35,8 @@ import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tl
  * docs/development-tasks.md P-B 决定 ⑥–⑬).
  *
  * Loop (`GATE_ANNOUNCE_INTERVAL_SEC`, default 60; 1 s → 30 s backoff while the kernel is unreachable):
- *   pull `GET /internal/gate-host/instances` (internal token — the same trust direction as announce,
- *   决定 ⑥) → reconcile the in-memory table (build a transport + credential resolver + Operations for
+ *   pull `GET /internal/gate-host/instances` (gate-host's own internal-plane credential — the same
+ *   trust direction as announce, 决定 ⑥; the kernel admits no other caller there, R-03) → reconcile the in-memory table (build a transport + credential resolver + Operations for
  *   each new or changed definition, drop the ones the kernel no longer lists) → announce every built
  *   instance as `${GATE_PUBLIC_ENDPOINT}/i/<gateId>` so the kernel's P-B1 liveness / links / deny
  *   lists apply unchanged (决定 ⑦). An instance whose target cannot be reached (OpenAPI document or

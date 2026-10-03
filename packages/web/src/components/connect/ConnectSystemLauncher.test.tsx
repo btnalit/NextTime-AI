@@ -542,7 +542,11 @@ describe('ConnectSystemLauncher — packaged path (ssh / cli)', () => {
     const compose = within(checklist).getByTestId('packaged-gate-compose');
     expect(compose.textContent).toContain('GATE_ID: <gate-id>');
     expect(compose.textContent).toContain('GATE_TRANSPORT_KIND: ssh');
-    expect(compose.textContent).toContain('secrets: [gate_token, internal_token]');
+    // R-03: a packaged gate mounts the gates' own announce credential, never the root.
+    expect(compose.textContent).toContain(
+      '- { source: internal_gate_to_kernel, target: internal_token }',
+    );
+    expect(compose.textContent).not.toContain('[gate_token, internal_token]');
     expect(compose.textContent).toContain('KERNEL_URL: http://kernel:8080');
     expect(compose.textContent).toContain('${NEXTTIME_DATA}/secrets/<system>:/data/secrets:ro');
     expect(within(checklist).getByTestId('packaged-gate-notice').textContent).toContain('未启用');

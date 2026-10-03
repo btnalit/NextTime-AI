@@ -71,22 +71,26 @@ agent-host 经 `/internal/agent-host` WS 上报的事件、以及在 preHandler 
 
 全部是 Prometheus 文本格式（`@nexttime/shared` 的 `metrics.ts`），**都不经 caddy 发布**（caddy 只反代
 `/api/* /ws /mcp /llm/*`、`/api/llm-admin/*`→`/admin/*`，以及 gate-host 唯一的浏览器路由
-`/gate-host/i/<id>/gate/connected-accounts`（POST / DELETE）；`/gate-host/` 下其余路径一律 404）。从 kernel 容器里读最省事——它在 `control` 网络上，也挂着 `internal_token` 与 `gate_token`：
+`/gate-host/i/<id>/gate/connected-accounts`（POST / DELETE）；`/gate-host/` 下其余路径一律 404）。
+每个服务只认自己持有的那份凭证（R-03：internal plane 每个服务一份派生凭证，根 `internal_token` 只在
+kernel 里），所以在一个本来就挂着对的凭证的容器里读：kernel 容器里有根（kernel 自己的
+`/internal/metrics` 只认根）、kernel 给 worker-supervisor 的凭证与 `gate_token`；agent-host 与
+llm-proxy 进它们自己的容器、用自己的 `/run/secrets/internal_token`：
 
 ```sh
-metrics() {  # $1 = token 文件名（internal_token | gate_token），$2 = URL
-  docker compose exec -T kernel node -e '
+metrics() {  # $1 = 在哪个服务的容器里读，$2 = 该容器里的 token 文件名，$3 = URL
+  docker compose exec -T "$1" node -e '
     const t = require("fs").readFileSync("/run/secrets/" + process.argv[1], "utf8").trim();
     fetch(process.argv[2], { headers: { authorization: "Bearer " + t } })
-      .then((r) => r.text()).then((s) => process.stdout.write(s));' "$1" "$2"
+      .then((r) => r.text()).then((s) => process.stdout.write(s));' "$2" "$3"
 }
-metrics internal_token http://localhost:8080/internal/metrics          # kernel（不变量）
-metrics internal_token http://worker-supervisor:8081/internal/metrics
-metrics internal_token http://agent-host:8090/internal/metrics
-metrics internal_token http://llm-proxy:8082/internal/metrics
-metrics gate_token     http://gatekeeper-docker:8083/internal/metrics
-metrics gate_token     http://gatekeeper-ragflow:8083/internal/metrics
-metrics gate_token     http://gate-host:8083/internal/metrics
+metrics kernel     internal_token                   http://localhost:8080/internal/metrics   # kernel（不变量）
+metrics kernel     internal_token_worker_supervisor http://worker-supervisor:8081/internal/metrics
+metrics agent-host internal_token                   http://localhost:8090/internal/metrics
+metrics llm-proxy  internal_token                   http://localhost:8082/internal/metrics
+metrics kernel     gate_token                       http://gatekeeper-docker:8083/internal/metrics
+metrics kernel     gate_token                       http://gatekeeper-ragflow:8083/internal/metrics
+metrics kernel     gate_token                       http://gate-host:8083/internal/metrics
 # egress-proxy 的管理口只绑 127.0.0.1（不让 workers 网络碰到），所以进它自己的容器读，无需令牌：
 docker compose exec -T egress-proxy node -e \
   'fetch("http://127.0.0.1:3129/internal/metrics").then((r)=>r.text()).then((s)=>process.stdout.write(s))'
@@ -94,10 +98,10 @@ docker compose exec -T egress-proxy node -e \
 
 | 服务 | 认证 | 指标（标签） |
 |---|---|---|
-| kernel | internal_token | `nexttime_invariant_violations{invariant}` 等（`host-chaos.md` §5） |
-| worker-supervisor | internal_token | `nexttime_supervisor_operations_total{operation,outcome}`、`nexttime_supervisor_operation_duration_seconds{operation}`、`nexttime_supervisor_task_exits_total{state}` |
-| agent-host | internal_token | `nexttime_agent_host_turns_started_total`、`nexttime_agent_host_turns_ended_total{status}`、`nexttime_agent_host_turn_duration_seconds{status}`、`nexttime_agent_host_active_turns`、`nexttime_agent_host_kernel_link_up` |
-| llm-proxy | internal_token（未配 `KERNEL_URL` 时恒 401） | `nexttime_llm_proxy_requests_total{provider,model,status}`、`nexttime_llm_proxy_upstream_duration_seconds{provider,model,outcome}`、`nexttime_llm_proxy_tokens_total{provider,model,direction}` |
+| kernel | 根 `internal_token`（kernel 容器内） | `nexttime_invariant_violations{invariant}` 等（`host-chaos.md` §5） |
+| worker-supervisor | kernel 给它的凭证（kernel 容器的 `internal_token_worker_supervisor`） | `nexttime_supervisor_operations_total{operation,outcome}`、`nexttime_supervisor_operation_duration_seconds{operation}`、`nexttime_supervisor_task_exits_total{state}` |
+| agent-host | 它自己的凭证（agent-host 容器的 `internal_token`） | `nexttime_agent_host_turns_started_total`、`nexttime_agent_host_turns_ended_total{status}`、`nexttime_agent_host_turn_duration_seconds{status}`、`nexttime_agent_host_active_turns`、`nexttime_agent_host_kernel_link_up` |
+| llm-proxy | 它自己的凭证（llm-proxy 容器的 `internal_token`；未配 `KERNEL_URL` 时恒 401） | `nexttime_llm_proxy_requests_total{provider,model,status}`、`nexttime_llm_proxy_upstream_duration_seconds{provider,model,outcome}`、`nexttime_llm_proxy_tokens_total{provider,model,direction}` |
 | egress-proxy | 仅 loopback | `nexttime_egress_requests_total{protocol,decision,reason}`、`nexttime_egress_bytes_total{protocol,direction}` |
 | 门（单门 / gate-host） | gate_token | `nexttime_gate_calls_total{gate,route,operation,status}`、`nexttime_gate_call_duration_seconds{gate,route,operation}` |
 
@@ -111,4 +115,5 @@ docker compose exec -T egress-proxy node -e \
   请求铸一个 ID，只是和 Turn 对不上；按 `sessionId`（Handle 的 `sid`）找。重建 worker-runtime 镜像
   （`sh scripts/build-images.sh`）后生效。
 - **kernel 日志里还是 `reqId`**：kernel 镜像未重建；新镜像的请求日志键名是 `correlationId`。
-- **`/internal/metrics` 401**：token 文件名对错（门用 `gate_token`，其余用 `internal_token`）。
+- **`/internal/metrics` 401**：容器或 token 文件名对错（门用 `gate_token`；其余见 §2 表"认证"列——
+  R-03 起每个服务只认自己那份，kernel 容器里的根读不了 agent-host / llm-proxy / worker-supervisor）。

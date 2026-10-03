@@ -72,6 +72,9 @@ jobs:
       - name: CSS token guard (S6-A0, docs/console-completion-plan.md §5.9 — no colour / px font-size literals outside tokens.css)
         run: node scripts/guards/css-tokens.mjs
 
+      - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
+        run: node scripts/validate-compose.mjs
+
       - name: fake-llm scenario self-test (S2.12; spawns deploy/fake-llm/server.mjs on a local port)
         run: node deploy/accept-s2/fake-llm-scenario-selftest.mjs
 

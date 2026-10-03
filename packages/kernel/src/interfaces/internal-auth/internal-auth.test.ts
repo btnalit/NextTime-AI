@@ -2,26 +2,40 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { INTERNAL_TOKEN_FILE_ENV, InternalTokenError } from '@nexttime/shared';
+import {
+  INTERNAL_TOKEN_FILE_ENV,
+  InternalTokenError,
+  SUPERVISOR_TOKEN_FILE_ENV,
+} from '@nexttime/shared';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   INTERNAL_PLANE_ROUTE_PREFIX,
+  INTERNAL_ROUTE_CALLERS,
+  type InternalCaller,
+  deriveInternalCredential,
   loadInternalToken,
+  loadSupervisorToken,
   registerInternalPlaneGuard,
 } from './internal-auth.js';
 
 /**
- * interfaces/internal-auth/internal-auth.test: the guard on a bare Fastify instance with one
- * internal and one non-internal route (Fastify `inject`, no network, no database), plus the token
- * loader against temp files. The composition-root wiring (`createServer`'s `internalAuth` option)
- * is covered by packages/kernel/src/index.test.ts, the WebSocket upgrade by
+ * interfaces/internal-auth/internal-auth.test: the guard on a bare Fastify instance with internal
+ * and non-internal routes (Fastify `inject`, no network, no database), plus the token loaders
+ * against temp files. The composition-root wiring (`createServer`'s `internalAuth` option) is
+ * covered by packages/kernel/src/index.test.ts, the WebSocket upgrade by
  * interfaces/ws/agent-host.test.ts.
  */
 
+/** The root. Presented as-is it identifies the `kernel` caller, which the first describe's test
+ *  routes admit — those tests are about the credential checks, not the allow-list. */
 const TOKEN = randomBytes(32).toString('hex');
 const UNAUTHORIZED = { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } };
+const TEST_ROUTE_CALLERS: Readonly<Record<string, readonly InternalCaller[]>> = {
+  [`${INTERNAL_PLANE_ROUTE_PREFIX}ping`]: ['kernel'],
+  [`${INTERNAL_PLANE_ROUTE_PREFIX}echo`]: ['kernel'],
+};
 
 interface LogLine {
   level?: number;
@@ -58,7 +72,7 @@ async function buildApp(
   logStream?: { write(chunk: string): void },
 ): Promise<FastifyInstance> {
   const instance = Fastify(logStream ? { logger: { level: 'warn', stream: logStream } } : {});
-  registerInternalPlaneGuard(instance, config);
+  registerInternalPlaneGuard(instance, config, TEST_ROUTE_CALLERS);
   instance.get(`${INTERNAL_PLANE_ROUTE_PREFIX}ping`, async () => ({ ok: true, result: 'pong' }));
   instance.post(`${INTERNAL_PLANE_ROUTE_PREFIX}echo`, async (request) => ({
     ok: true,
@@ -196,9 +210,7 @@ describe('registerInternalPlaneGuard', () => {
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual(UNAUTHORIZED);
-    expect(
-      logs.lines.some((l) => String(l.msg).includes('no shared-secret token configured')),
-    ).toBe(true);
+    expect(logs.lines.some((l) => String(l.msg).includes('no root token configured'))).toBe(true);
     expect(logs.lines.at(-1)).toMatchObject({ reason: 'no_token_configured' });
 
     const health = await app.inject({ method: 'GET', url: '/api/health' });
@@ -210,6 +222,180 @@ describe('registerInternalPlaneGuard', () => {
     expect(() =>
       registerInternalPlaneGuard(instance, { token: TOKEN, workersSubnet: 'not-a-cidr' }),
     ).toThrow(/invalid CIDR/);
+  });
+});
+
+/** Every caller whose credential the host derives from the root (scripts/derive-internal-tokens.sh). */
+const DERIVED: readonly Exclude<InternalCaller, 'kernel'>[] = [
+  'agent-host',
+  'llm-proxy',
+  'egress-proxy',
+  'gate',
+  'gate-host',
+];
+
+/** The production allow-list on a bare instance: one stub handler per listed route pattern (the
+ *  WebSocket one included — the guard decides on the upgrade request before any handler runs). */
+async function buildProductionTableApp(logStream?: {
+  write(chunk: string): void;
+}): Promise<FastifyInstance> {
+  const instance = Fastify(logStream ? { logger: { level: 'warn', stream: logStream } } : {});
+  registerInternalPlaneGuard(instance, { token: TOKEN });
+  for (const route of Object.keys(INTERNAL_ROUTE_CALLERS)) {
+    instance.post(route, async (request) => ({
+      ok: true,
+      result: route,
+      caller: request.internalCaller,
+    }));
+  }
+  instance.get('/api/health', async (request) => ({ caller: request.internalCaller }));
+  await instance.ready();
+  return instance;
+}
+
+function credentialOf(caller: InternalCaller): string {
+  return caller === 'kernel' ? TOKEN : deriveInternalCredential(TOKEN, caller);
+}
+
+describe('per-caller credentials and the per-route allow-list (R-03)', () => {
+  it('derives the same credential scripts/derive-internal-tokens.sh does (openssl dgst -sha256 -hmac <label> over the root)', () => {
+    // Known answer, computed with: printf %s <64 zeros> | openssl dgst -sha256 -hmac 'nexttime-internal:gate-host->kernel'
+    expect(deriveInternalCredential('0'.repeat(64), 'gate-host')).toBe(
+      'dd562c30dcc116bbd7034a083920be13b6be96a2ccb810382a236934561617dc',
+    );
+    const all = DERIVED.map((caller) => deriveInternalCredential(TOKEN, caller));
+    expect(new Set([...all, TOKEN]).size).toBe(DERIVED.length + 1);
+    expect(deriveInternalCredential(randomBytes(32).toString('hex'), 'agent-host')).not.toBe(
+      deriveInternalCredential(TOKEN, 'agent-host'),
+    );
+  });
+
+  it('admits each caller exactly on the routes listed for it, and refuses it everywhere else', async () => {
+    app = await buildProductionTableApp();
+    for (const caller of ['kernel', ...DERIVED] as const) {
+      for (const [route, allowed] of Object.entries(INTERNAL_ROUTE_CALLERS)) {
+        const res = await app.inject({
+          method: 'POST',
+          url: route,
+          headers: { authorization: `Bearer ${credentialOf(caller)}` },
+        });
+        expect(res.statusCode, `${caller} on ${route}`).toBe(allowed.includes(caller) ? 200 : 401);
+      }
+    }
+  });
+
+  it('hands the admitted caller to the route as request.internalCaller (null outside the plane)', async () => {
+    app = await buildProductionTableApp();
+    for (const caller of ['gate', 'gate-host'] as const) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/gates/announce',
+        headers: { authorization: `Bearer ${credentialOf(caller)}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().caller).toBe(caller);
+    }
+    const outside = await app.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { authorization: `Bearer ${credentialOf('gate')}` },
+    });
+    expect(outside.json().caller).toBeNull();
+  });
+
+  it('pins the allow-list itself: who may call what', () => {
+    expect(INTERNAL_ROUTE_CALLERS).toEqual({
+      '/internal/agent-host': ['agent-host'],
+      '/internal/llm-usage': ['llm-proxy'],
+      '/internal/llm-budget-exhausted': ['llm-proxy'],
+      '/internal/handle-revocations': ['llm-proxy'],
+      '/internal/llm-admin-audit': ['llm-proxy'],
+      '/internal/egress': ['egress-proxy'],
+      '/internal/gates/announce': ['gate', 'gate-host'],
+      '/internal/gate-host/instances': ['gate-host'],
+      '/internal/metrics': ['kernel'],
+    });
+  });
+
+  it('refuses a gate credential on the agent-host link, llm-usage and llm-admin-audit, logging route_not_allowed with the caller and no token', async () => {
+    const logs = captureLogs();
+    app = await buildProductionTableApp(logs.stream);
+    for (const gate of ['gate', 'gate-host'] as const) {
+      for (const route of [
+        '/internal/agent-host',
+        '/internal/llm-usage',
+        '/internal/llm-admin-audit',
+        '/internal/egress',
+      ]) {
+        const res = await app.inject({
+          method: 'POST',
+          url: route,
+          headers: { authorization: `Bearer ${credentialOf(gate)}` },
+        });
+        expect(res.statusCode, `${gate} on ${route}`).toBe(401);
+        expect(res.json()).toEqual(UNAUTHORIZED);
+      }
+    }
+    const rejected = logs.lines.filter((l) => l.msg === 'internal plane: request rejected');
+    expect(rejected[0]).toMatchObject({
+      reason: 'route_not_allowed',
+      caller: 'gate',
+      route: '/internal/agent-host',
+    });
+    const everything = JSON.stringify(logs.lines);
+    expect(everything).not.toContain(TOKEN);
+    expect(everything).not.toContain(credentialOf('gate'));
+  });
+
+  it('refuses the root (the old shared token) on every service route — it identifies only the kernel, for /internal/metrics', async () => {
+    app = await buildProductionTableApp();
+    for (const route of Object.keys(INTERNAL_ROUTE_CALLERS)) {
+      const res = await app.inject({
+        method: 'POST',
+        url: route,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode, route).toBe(route === '/internal/metrics' ? 200 : 401);
+    }
+  });
+
+  it('refuses a credential derived from a different root as invalid_token', async () => {
+    const logs = captureLogs();
+    app = await buildProductionTableApp(logs.stream);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/llm-usage',
+      headers: {
+        authorization: `Bearer ${deriveInternalCredential(randomBytes(32).toString('hex'), 'llm-proxy')}`,
+      },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(logs.lines.at(-1)).toMatchObject({ reason: 'invalid_token' });
+    expect(logs.lines.at(-1)?.caller).toBeUndefined();
+  });
+
+  it('still applies the workers-subnet rule to a valid derived credential', async () => {
+    app = Fastify();
+    registerInternalPlaneGuard(app, { token: TOKEN, workersSubnet: '203.0.113.0/24' });
+    app.post('/internal/llm-usage', async () => ({ ok: true }));
+    await app.ready();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/llm-usage',
+      headers: { authorization: `Bearer ${credentialOf('llm-proxy')}` },
+      remoteAddress: '203.0.113.9',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuses to register an /internal/ route that has no allow-list entry', async () => {
+    const instance = Fastify();
+    registerInternalPlaneGuard(instance, { token: TOKEN });
+    expect(() => instance.get('/internal/unlisted', async () => ({ ok: true }))).toThrow(
+      /no caller allow-list entry/,
+    );
+    instance.get('/api/elsewhere', async () => ({ ok: true })); // outside the plane: untouched
+    await instance.close();
   });
 });
 
@@ -257,5 +443,36 @@ describe('loadInternalToken', () => {
     expect(() => loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: tokenFile('changeme\n') })).toThrow(
       InternalTokenError,
     );
+  });
+
+  it('loadSupervisorToken reads the kernel credential for worker-supervisor from its own file, naming that file when it is missing', () => {
+    const supervisorToken = randomBytes(32).toString('hex');
+    const file = tokenFile(`${supervisorToken}\n`);
+    expect(loadSupervisorToken({ [SUPERVISOR_TOKEN_FILE_ENV]: file })).toBe(supervisorToken);
+    let caught: unknown;
+    try {
+      loadSupervisorToken({ [SUPERVISOR_TOKEN_FILE_ENV]: join(tmpdir(), 'nexttime-no-such', 'f') });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InternalTokenError);
+    expect((caught as Error).message).toContain(SUPERVISOR_TOKEN_FILE_ENV);
+    expect((caught as Error).message).toContain('internal_kernel_to_worker_supervisor');
+  });
+
+  it('loadSupervisorToken { optional } (AGENT_RUNTIME=fake): a missing file is undefined, a present one is read, a malformed one still throws', () => {
+    const missing = { [SUPERVISOR_TOKEN_FILE_ENV]: join(tmpdir(), 'nexttime-no-such', 'f') };
+    expect(loadSupervisorToken(missing, { optional: true })).toBeUndefined();
+    expect(() => loadSupervisorToken(missing, { optional: false })).toThrow(InternalTokenError);
+
+    const supervisorToken = randomBytes(32).toString('hex');
+    const presentFile = tokenFile(`${supervisorToken}\n`);
+    const present = { [SUPERVISOR_TOKEN_FILE_ENV]: presentFile };
+    expect(loadSupervisorToken(present, { optional: true })).toBe(supervisorToken);
+
+    const emptyFile = join(presentFile, '..', 'empty.token');
+    writeFileSync(emptyFile, '\n', 'utf8');
+    const empty = { [SUPERVISOR_TOKEN_FILE_ENV]: emptyFile };
+    expect(() => loadSupervisorToken(empty, { optional: true })).toThrow(InternalTokenError);
   });
 });

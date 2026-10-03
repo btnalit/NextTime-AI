@@ -101,8 +101,9 @@ docker inspect "nexttime-task-<workerRunId>" --format '{{.State.Status}}' 2>&1
 #    （TASK_REAPER_INTERVAL_MS，默认 30s）赶上；若长时间不动，见 §6"已知缺口"
 ```
 容器还在跑但长时间没有回应：容器内是 pi 进程本身卡住（模型请求悬挂/工具调用死循环）还是网络问题——
-`docker compose exec -T worker-supervisor node -e "fetch('http://localhost:8081/task/<workerRunId>').then(r=>r.text()).then(console.log)"`
-查 supervisor 自己记录的状态；`docker logs nexttime-task-<workerRunId>` 看 pi 的 RPC 输出（若容器
+`docker compose exec -T worker-supervisor node -e "fetch('http://localhost:8081/task/<workerRunId>', {headers:{authorization:'Bearer '+require('fs').readFileSync('/run/secrets/internal_token','utf8').trim()}}).then(r=>r.text()).then(console.log)"`
+查 supervisor 自己记录的状态（这条路由只认 kernel 的凭证，worker-supervisor 容器里挂在
+`/run/secrets/internal_token`，R-03）；`docker logs nexttime-task-<workerRunId>` 看 pi 的 RPC 输出（若容器
 还没被 `docker rm`）。
 
 ### 3.4 `status = completed` 但结果内容不对——`explain` 溯源

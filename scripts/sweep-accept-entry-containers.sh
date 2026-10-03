@@ -112,7 +112,7 @@ fi
 # principalId\tworkspaceId\trunning for every resident entry container on this host, whatever
 # workspace it belongs to.
 RES_OUT=$(docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/residents', { headers: { authorization: 'Bearer ' + token } }).then(async (r) => {
   if (!r.ok) { console.error('STATUS=' + r.status); process.exitCode = 1; return; }
   const j = await r.json();
@@ -164,7 +164,7 @@ FAILED=0
 RECLAIMED=0
 while IFS="$TAB" read -r pid wname; do
 	out=$(docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/reclaim', {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },

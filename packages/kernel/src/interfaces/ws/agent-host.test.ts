@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,8 +14,11 @@ import { AgentHostRuntime } from '../../application/host-bridge/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { createServer } from '../../index.js';
 import type { InternalPlaneAuthConfig } from '../internal-auth/index.js';
+import { deriveInternalCredential, registerInternalPlaneGuard } from '../internal-auth/index.js';
 import {
+  LINK_REFUSED_CLOSE_CODE,
   _resetAgentHostRuntimeForWsRouteForTests,
+  registerAgentHostWsRoute,
   setAgentHostRuntimeForWsRoute,
 } from './agent-host.js';
 
@@ -28,10 +32,13 @@ import {
  * logic (already covered by agent-host-runtime.test.ts's unit tests).
  */
 
-/** The internal-plane shared secret the listener below is built with; every "happy path"
- *  connection presents it, the rejection tests withhold or alter it. */
+/** The internal-plane root the listener below is built with. Every "happy path" connection
+ *  presents agent-host's own credential derived from it (R-03); the rejection tests withhold or
+ *  alter it, or present another caller's. */
 const INTERNAL_TOKEN = randomBytes(32).toString('hex');
-const AUTH_HEADERS = { authorization: `Bearer ${INTERNAL_TOKEN}` };
+const AUTH_HEADERS = {
+  authorization: `Bearer ${deriveInternalCredential(INTERNAL_TOKEN, 'agent-host')}`,
+};
 
 function createFakePool(): PoolLike {
   const sessionIdByPrincipal = new Map<string, string>();
@@ -229,6 +236,28 @@ describe('GET /internal/agent-host upgrade is behind the internal-plane guard', 
     expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
   });
 
+  it('R-03: rejects the upgrade with 401 for the root (the old shared token) and for any other service’s credential', async () => {
+    listening = await listen();
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    for (const presented of [
+      INTERNAL_TOKEN,
+      deriveInternalCredential(INTERNAL_TOKEN, 'gate'),
+      deriveInternalCredential(INTERNAL_TOKEN, 'gate-host'),
+      deriveInternalCredential(INTERNAL_TOKEN, 'llm-proxy'),
+      deriveInternalCredential(INTERNAL_TOKEN, 'egress-proxy'),
+    ]) {
+      await expect(
+        attemptUpgrade(listening.url, { authorization: `Bearer ${presented}` }),
+      ).resolves.toBe(401);
+    }
+
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
+  });
+
   it('accepts the upgrade with the right token (the connection tests below all present it)', async () => {
     listening = await listen();
     const { runtime } = await buildRuntime();
@@ -346,5 +375,115 @@ describe('GET /internal/agent-host', () => {
     const input = startTurnInput();
     await runtime.startTurn(input);
     expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
+  });
+});
+
+/** Resolves with the close code the server closes `ws` with. */
+function closeCode(ws: WebSocket): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ws.once('close', (code) => resolve(code));
+    setTimeout(() => reject(new Error('did not close in time')), 3000);
+  });
+}
+
+/** A minimal listener with only the internal-plane guard and this route, so the probe timeout can
+ *  be shortened (createServer always uses the 5 s default). */
+async function listenWithProbeTimeout(probeTimeoutMs: number): Promise<Listening> {
+  const app = Fastify();
+  registerInternalPlaneGuard(app, { token: INTERNAL_TOKEN });
+  registerAgentHostWsRoute(app, { probeTimeoutMs });
+  const address = await app.listen({ port: 0, host: '127.0.0.1' });
+  return { app, url: `${address.replace('http://', 'ws://')}/internal/agent-host` };
+}
+
+describe('GET /internal/agent-host — a second link never replaces the first (R-03)', () => {
+  it('refuses a second connection (close 1013) while the first is alive; the first keeps receiving startTurn', async () => {
+    listening = await listen();
+    const { runtime } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    const first = await connect(listening.url);
+    first.send(JSON.stringify({ type: 'hello', instanceId: randomUUID() }));
+
+    const second = await connect(listening.url);
+    let secondGotFrame = false;
+    second.on('message', () => {
+      secondGotFrame = true;
+    });
+    await expect(closeCode(second)).resolves.toBe(LINK_REFUSED_CLOSE_CODE);
+
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    const received = (await nextMessage(first)) as { type: string; turnId: string };
+    expect(received).toMatchObject({ type: 'startTurn', turnId: input.turnId });
+    first.send(JSON.stringify({ type: 'turnAccepted', turnId: input.turnId }));
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(secondGotFrame).toBe(false);
+    expect(first.readyState).toBe(1); // the probe the refusal triggered was answered
+
+    first.close();
+  });
+
+  it('accepts the reconnect once the old socket has closed (an agent-host restart), and a new instanceId abandons the old turns', async () => {
+    listening = await listen();
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    const first = await connect(listening.url);
+    first.send(JSON.stringify({ type: 'hello', instanceId: randomUUID() }));
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await nextMessage(first);
+    first.send(JSON.stringify({ type: 'turnAccepted', turnId: input.turnId }));
+    await startPromise;
+
+    await new Promise<void>((resolve) => {
+      first.once('close', () => resolve());
+      first.close();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100)); // server-side close → disconnect
+
+    const restarted = await connect(listening.url);
+    restarted.send(JSON.stringify({ type: 'hello', instanceId: randomUUID() }));
+    await vi.waitFor(() =>
+      expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'interrupted' }),
+    );
+
+    const next = startTurnInput();
+    const nextStart = runtime.startTurn(next);
+    expect(await nextMessage(restarted)).toMatchObject({ type: 'startTurn', turnId: next.turnId });
+    restarted.send(JSON.stringify({ type: 'turnAccepted', turnId: next.turnId }));
+    await expect(nextStart).resolves.toBeUndefined();
+
+    restarted.close();
+  });
+
+  it('a registered link that does not answer the probe is terminated, so the replacement gets in on its next attempt', async () => {
+    listening = await listenWithProbeTimeout(150);
+    const { runtime } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    // A half-open link left by a crashed agent-host: the socket is up, nothing answers pings.
+    const stale = new WebSocket(listening.url, { headers: AUTH_HEADERS, autoPong: false });
+    await new Promise<void>((resolve, reject) => {
+      stale.once('open', () => resolve());
+      stale.once('error', reject);
+    });
+    const staleClosed = new Promise<void>((resolve) => stale.once('close', () => resolve()));
+
+    const firstAttempt = await connect(listening.url);
+    await expect(closeCode(firstAttempt)).resolves.toBe(LINK_REFUSED_CLOSE_CODE);
+    await staleClosed; // the probe timed out and the server terminated it
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const retry = await connect(listening.url);
+    retry.send(JSON.stringify({ type: 'hello', instanceId: randomUUID() }));
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    expect(await nextMessage(retry)).toMatchObject({ type: 'startTurn', turnId: input.turnId });
+    retry.send(JSON.stringify({ type: 'turnAccepted', turnId: input.turnId }));
+    await expect(startPromise).resolves.toBeUndefined();
+
+    retry.close();
   });
 });

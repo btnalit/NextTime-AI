@@ -10,7 +10,7 @@ key...每步的验证与回滚"；本文档同时覆盖 W1-E 行细化出的 `in
 | 类型 | 文件/存储 | 消费者 | 影响范围 |
 |---|---|---|---|
 | Handle 签名密钥 | `secrets/handle.key`（私钥）+ `config/handle.pub`（公钥） | `kernel`（签发/自验）、`llm-proxy`（验签） | 轮换后**立即**让当时所有已签发、仍在有效期内的 Capability Handle 失效（硬切换，无重叠期，见 §2） |
-| `internal_token` | `secrets/internal.token` | `kernel`、`agent-host`、`llm-proxy`、`egress-proxy` | 内核 internal plane（`/internal/*`、`/internal/agent-host` WS）的共享密钥；四者必须同步换 |
+| `internal_token`（根）+ 派生凭证 | `secrets/internal.token` + `secrets/internal-<调用方>-to-<被调方>.token` | 根只给 `kernel`；派生凭证各给对应服务（`agent-host`、`llm-proxy`、`egress-proxy`、各门、`gate-host`、`worker-supervisor`） | 内核 internal plane（`/internal/*`、`/internal/agent-host` WS）与 worker-supervisor 的凭证；换根即全部派生凭证一起换，所有持有者必须同步重启（§2） |
 | `gate_token` | `secrets/gate.token` | `kernel`（作为客户端）+ 每一个门服务（`gatekeeper-docker`/`gatekeeper-ragflow`/自建的 `gatekeepers/<system>`） | 内核↔门 `/gate/*` 协议的共享密钥；kernel 与每一个门服务必须同步换 |
 | Provider key（LLM 供应商） | `secrets/llm-proxy.env` 里 `config/llm-providers.yaml` 的 `api_key_env` 指向的那个变量 | 仅 `llm-proxy` | 只影响该 provider 的出站调用；不影响 Handle/内部 token |
 | 平台用户 API key | 数据库 `principals` 表（哈希存储），通过 `rotate_api_key` capability | 该 Principal 自己/持有该 key 的任何客户端 | 只影响这一个 Principal 的 API key；旧 key 立即失效 |
@@ -23,7 +23,8 @@ key...每步的验证与回滚"；本文档同时覆盖 W1-E 行细化出的 `in
 - **`scripts/gen-handle-keys.sh` 是幂等的、只在文件缺失时生成——它不会帮你做轮换**：任何一个目标
   文件只要存在（哪怕内容为空以外的任意内容）就不会被脚本覆盖（脚本自己的头注释：
   "Generated only if missing — an existing private key is never regenerated"）。轮换必须手动删除
-  旧文件（或用等价命令重新生成同名文件）再重启相应服务，本文档每一节给出具体命令。
+  旧文件（或用等价命令重新生成同名文件）再重启相应服务，本文档每一节给出具体命令。例外：
+  `secrets/internal-*-to-*.token` 每次运行都从根重新派生（§2.2）——它们跟着根走，不单独轮换。
 - 操作前建议先做一次 `docs/runbooks/backup-restore.md` 的手动备份（`docker compose run --rm -e
   BACKUP_NOW=1 backup`）——轮换失败时可以更快判断"是不是数据问题"。
 
@@ -128,21 +129,26 @@ docker compose restart kernel llm-proxy
 | 跑了 `sh scripts/gen-handle-keys.sh` 但公私钥没变 | 没有先删除旧文件（§0"脚本只在文件缺失时生成"） | 按 §1.3 步骤 2 先 `rm -f` 再重新跑脚本 |
 | 只重启了 `kernel`，没重启 `llm-proxy` | 两者都缓存了公钥/私钥，只重启一个会导致 kernel 签的新 Handle 在 `llm-proxy` 那边验签失败（用的是`llm-proxy` 还没换的旧公钥） | `docker compose restart kernel llm-proxy` 两个一起 |
 
-## 2. `internal_token`（kernel internal plane 共享密钥）
+## 2. `internal_token`（kernel internal plane 的根）与派生凭证
 
 ### 2.1 目的
 
-`/internal/*` HTTP 路由（`agent-host`/`llm-proxy`/`egress-proxy` 分别调 `/internal/agent-host`
-WS、`/internal/llm-usage`、`/internal/egress`、`/internal/handle-revocations`）与 kernel 之间的共享
-密钥（`fix/internal-plane-auth`）——kernel 双栖在 `control`/`workers` 两个网络、监听所有接口，这个
-密钥是防止 Worker 容器伪造这些内部调用的唯一屏障（连同 §11 的"来自 `NEXTTIME_SUBNET_WORKERS` 的
-连接即使 token 正确也拒绝"这条第二道防线）。
+`/internal/*` HTTP 路由与 `/internal/agent-host` WS（`agent-host`/`llm-proxy`/`egress-proxy`/各门/
+`gate-host` → kernel）以及 worker-supervisor 的 `/task/spawn`、`/resident/*`（kernel、agent-host →
+supervisor）的凭证（`fix/internal-plane-auth`；R-03 起按服务分开）——kernel 双栖在
+`control`/`workers` 两个网络、监听所有接口，这些凭证是防止 Worker 容器伪造内部调用的屏障（连同
+§11 的"来自 `NEXTTIME_SUBNET_WORKERS` 的连接即使凭证正确也拒绝"这条第二道防线）；按服务分开，则
+任何一个服务被攻破都冒充不了别的服务（例如门拿不到 agent-host 的 `startTurn`）。
 
 ### 2.2 机制
 
-单一共享密钥（32 字节随机数，hex 编码），每个消费者（`kernel` 自己 + `agent-host`/`llm-proxy`/
-`egress-proxy`）在进程启动时读一次（`loadInternalToken()`/各自 config 模块），**没有双 token/宽限
-期**——换了旧值就立即让所有仍用旧值的客户端 401，直到它们也换上新文件并重启。
+一个根（`secrets/internal.token`，32 字节随机数，hex 编码，只挂进 kernel）。
+`scripts/derive-internal-tokens.sh`（`gen-handle-keys.sh` 与 `apply-release.sh` 都会调用，幂等）
+从根派生每个服务自己的凭证：`secrets/internal-<调用方>-to-<被调方>.token` =
+HMAC-SHA256(key = `nexttime-internal:<调用方>-><被调方>`, msg = 根)，compose 只把它挂进这条边上的
+服务；kernel 从根重新派生来识别调用方，并按路由白名单放行（`interfaces/internal-auth`）。**每次运行都
+重新派生**，所以换根 = 全部派生凭证一起换。各进程在启动时读一次，**没有双 token/宽限期**——换了之后
+所有仍用旧值的服务立即 401，直到它们重启拿到新文件。
 
 ### 2.3 步骤
 
@@ -152,38 +158,49 @@ set -a; . ./.env; set +a
 
 cp "${NEXTTIME_DATA}/secrets/internal.token" "${NEXTTIME_DATA}/secrets/internal.token.bak-$(date +%s)"
 rm -f "${NEXTTIME_DATA}/secrets/internal.token"
-sh scripts/gen-handle-keys.sh   # 只会重新生成 internal.token；handle.key/gate.token 已存在，不动
+sh scripts/gen-handle-keys.sh   # 只重新生成 internal.token（handle.key/gate.token 已存在，不动），
+                                # 末尾跑 derive-internal-tokens.sh：每份派生凭证都显示 derived
 
-# 四个消费者一起重启（同一份新密钥内容通过 compose secret 挂载，重启即重新读取）：
-docker compose restart kernel agent-host llm-proxy egress-proxy
-docker compose ps kernel agent-host llm-proxy egress-proxy
+# 所有持有者一起重启（compose secret 是绑定挂载，重启即重新读取）：
+docker compose restart kernel agent-host worker-supervisor llm-proxy egress-proxy \
+  gatekeeper-docker gatekeeper-ragflow gate-host
+docker compose ps
 ```
+
+自建的打包门（`docs/runbooks/add-gatekeeper.md`）也挂着 `internal_gate_to_kernel`，一并重启。
 
 ### 2.4 验证
 
 ```bash
-# 1. 内容确实变了
-sha256sum "${NEXTTIME_DATA}/secrets/internal.token"
+# 1. 内容确实变了（根与任意一份派生凭证）
+sha256sum "${NEXTTIME_DATA}/secrets/internal.token" "${NEXTTIME_DATA}/secrets/internal-agent-host-to-kernel.token"
 
-# 2. agent-host 能重新连上内部 WS（docker compose logs 里不应有持续的 401/重连失败）：
-docker compose logs --since 2m agent-host | grep -i "unauthorized\|401" && echo "STILL FAILING" || echo "ok"
+# 2. 没有服务还在 401（agent-host 的内部 WS 重连、llm-proxy / egress-proxy 上报、门 announce）：
+docker compose logs --since 2m agent-host llm-proxy egress-proxy gatekeeper-docker gate-host \
+  | grep -i "unauthorized\|401" && echo "STILL FAILING" || echo "ok"
+docker compose logs --since 2m kernel | grep "internal plane: request rejected" || echo "ok"
 
-# 3. 端到端：走一轮对话（依赖 agent-host<->kernel 的内部 WS）；确认 llm_usage 表有新行
-#    （依赖 llm-proxy -> kernel 的 /internal/llm-usage）
+# 3. 端到端：走一轮对话（依赖 agent-host<->kernel 的内部 WS 与 agent-host -> supervisor）；确认
+#    llm_usage 表有新行（依赖 llm-proxy -> kernel 的 /internal/llm-usage）
 ```
 
 ### 2.5 回滚
 
 ```bash
 cp "${NEXTTIME_DATA}/secrets/internal.token.bak-<ts>" "${NEXTTIME_DATA}/secrets/internal.token"
-docker compose restart kernel agent-host llm-proxy egress-proxy
+sh scripts/derive-internal-tokens.sh   # 派生凭证跟着回到旧根
+docker compose restart kernel agent-host worker-supervisor llm-proxy egress-proxy \
+  gatekeeper-docker gatekeeper-ragflow gate-host
 ```
 
 ### 2.6 常见问题
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 只重启了 `kernel`，`agent-host` 的 WS 一直断线重连 | 四个消费者没有同步换新值——`agent-host` 还在用旧 token 握手，kernel 已经在用新值验证 | 补上 `docker compose restart agent-host llm-proxy egress-proxy` |
+| 只重启了 `kernel`，`agent-host` 的 WS 一直断线重连 | 持有者没有同步重启——`agent-host` 还在用旧根派生的凭证握手，kernel 已经按新根验证 | 补上 §2.3 的整组 `docker compose restart` |
+| 换了根但服务仍 401，`derive-internal-tokens.sh` 显示 `unchanged` | 派生没有重跑或没跑在新根上 | `sh scripts/derive-internal-tokens.sh`，确认显示 `derived` 后重启 |
+| `docker compose up` / `run` 报某个 `internal-*-to-*.token` 不存在 | 派生凭证还没生成（新主机，或升级前没跑过派生） | `sh scripts/derive-internal-tokens.sh`（`apply-release.sh` 会自动跑） |
+| kernel 日志 `internal plane: request rejected`，`reason: route_not_allowed` | 凭证有效但用在了别的服务的路由上——多半是某个服务挂错了凭证（`caller` 字段说明是谁的） | 对照 `docker-compose.yml` 各服务的 `secrets:` 修正挂载 |
 | `docker compose logs kernel` 出现 `no_token_configured` | `secrets/internal.token` 被删除后没有成功重新生成（比如 `openssl` 不可用），kernel 是 fail-closed（拒绝一切 `/internal/*` 请求，而不是回退成"不校验"） | 确认 `sh scripts/gen-handle-keys.sh` 真的成功生成了文件（`stat` 检查 mode/非空），再重启 |
 
 ## 3. `gate_token`（内核↔门共享密钥）
