@@ -33,6 +33,7 @@ function renderPage(
   options: {
     readonly memberships?: readonly WireMembership[];
     readonly onOpenWorkspaceConfig?: (workspaceId: string) => void;
+    readonly onMembershipsChanged?: () => void;
     readonly initialHash?: string;
   } = {},
 ) {
@@ -43,6 +44,7 @@ function renderPage(
           http={http}
           memberships={options.memberships ?? []}
           onOpenWorkspaceConfig={options.onOpenWorkspaceConfig ?? vi.fn()}
+          onMembershipsChanged={options.onMembershipsChanged}
           initialHash={options.initialHash ?? '#/platform/workspaces'}
         />
       </ToastProvider>
@@ -395,7 +397,10 @@ describe('PlatformWorkspacesPage', () => {
         };
       },
     });
-    renderPage(http);
+    // R-64: the administrator may have just delegated themselves — the session re-reads its own
+    // memberships so "打开工作区配置" and the switcher follow without a re-login.
+    const onMembershipsChanged = vi.fn();
+    renderPage(http, { onMembershipsChanged });
     await screen.findByTestId('platform-workspaces-table');
 
     fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
@@ -413,6 +418,7 @@ describe('PlatformWorkspacesPage', () => {
       expect(http.calls.some((call) => call.name === 'add_membership')).toBe(true),
     );
     await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+    expect(onMembershipsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('an already-a-member user is promoted in place: add_membership 409 → set_membership_role', async () => {

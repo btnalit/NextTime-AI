@@ -352,6 +352,8 @@ export class WsClient {
   private readonly actionPendingListeners = new Set<(event: ActionPendingPush) => void>();
   private readonly actionUpdatedListeners = new Set<(event: ActionUpdatedPush) => void>();
   private readonly taskUpdatedListeners = new Set<(event: TaskUpdatedPush) => void>();
+  /** R-63: told after a reconnect re-authenticated (see `onResynced`). */
+  private readonly resyncedListeners = new Set<() => void>();
 
   private status: WsConnectionStatus = 'closed';
   private readonly statusListeners = new Set<(status: WsConnectionStatus) => void>();
@@ -558,6 +560,31 @@ export class WsClient {
     return () => this.taskUpdatedListeners.delete(handler);
   }
 
+  /** R-63 (review 2026-10-02, L7b-2): registers a listener for "the socket dropped and is
+   *  authenticated again". The principal-scoped pushes above are delivered once, live, and never
+   *  replayed: an `action.pending`, `action.updated` or `task.updated` the kernel sent while the
+   *  socket was down is gone. Everything a page derives from those pushes — the pending-count
+   *  badge, the approvals queue, the Tasks list, a `useCapability` with `reloadOn` — reloads on this
+   *  signal instead. It fires once per successful reconnect, after the new socket's
+   *  `authenticate` (the kernel re-subscribes the principal before answering it, so a read issued
+   *  now misses nothing and anything later arrives as a push); never on the first connect, and
+   *  never after `close()` or a session the kernel ended. Returns an `Unsubscribe`. */
+  onResynced(handler: () => void): Unsubscribe {
+    this.resyncedListeners.add(handler);
+    return () => this.resyncedListeners.delete(handler);
+  }
+
+  /** One listener's failure must not keep the others from reloading, nor fail the reconnect. */
+  private emitResynced(): void {
+    for (const fn of this.resyncedListeners) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn('WsClient: resynced listener failed', err);
+      }
+    }
+  }
+
   /** The current connection status (see `WsConnectionStatus`). */
   getStatus(): WsConnectionStatus {
     return this.status;
@@ -750,6 +777,9 @@ export class WsClient {
       await this.connect();
       if (credential) await this.authenticate(credential);
       this.reconnectAttempts = 0;
+      // R-63: pushes sent while the socket was down are lost — consumers reload now, before (and
+      // independently of) the chat re-page below.
+      this.emitResynced();
       if (subscription) {
         subscription.caughtUp = false;
         subscription.seenSequences = new Set<number>();

@@ -22,6 +22,9 @@ export interface PushSource {
   onTaskUpdated(handler: (event: TaskUpdatedPush) => void): Unsubscribe;
   getStatus(): WsConnectionStatus;
   onStatusChange(handler: (status: WsConnectionStatus) => void): Unsubscribe;
+  /** R-63: the socket reconnected and re-authenticated — pushes sent while it was down were lost,
+   *  so reload whatever is derived from them (`WsClient.onResynced`). */
+  onResynced(handler: () => void): Unsubscribe;
 }
 
 /** A `PushSource` that never pushes — for tests and for pages rendered without a socket. */
@@ -31,4 +34,5 @@ export const SILENT_PUSH_SOURCE: PushSource = {
   onTaskUpdated: () => () => undefined,
   getStatus: () => 'closed',
   onStatusChange: () => () => undefined,
+  onResynced: () => () => undefined,
 };

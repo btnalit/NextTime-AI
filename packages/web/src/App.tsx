@@ -39,6 +39,8 @@ export function App() {
                 void machine.switchWorkspace(workspaceId, destination)
               }
               switchingWorkspace={machine.switchingWorkspace}
+              workspaceSwitchFailure={machine.workspaceSwitchFailure}
+              onMembershipsChanged={() => void machine.refreshMemberships()}
               onUserChanged={machine.userChanged}
               onKeyBound={machine.keyBound}
               onClaimed={machine.claimed}
