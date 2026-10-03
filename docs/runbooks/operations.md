@@ -305,7 +305,10 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 ```
 
 - `--actor <login>`：审计行记录的管理员。不传时取 `.env` 里 `NEXTTIME_PLATFORM_ADMINS` 的第一个；
-  两者都解析不到用户时**不写审计行**，内核在 stderr 打一行 `workspace_purged` 事件并明说。
+  两者都解析不到用户时审计行**照写**，记为未署名的主机操作（`actor_user_id` 为空、
+  `payload.attributedActor: false`，迁移 core 0032），内核另在 stderr 打一行 `workspace_purged` 事件并明说。
+  `create-workspace` / `add-principal` / `issue-service-handle` / `create-platform-admin` / `set-password`
+  同样接受 `--actor`，各写一条 `cli.*` 平台审计行，规则相同（2026-10-02 复审 R-28 / L1-14，迁移 core 0036）。
 - `--force`（仅 `delete-workspace.sh` / 正则模式）：操作员越权，走旧的 `delete-workspace` 子命令跳过
   前置条件——只用于"建错了、不想等 7 天"的情形；审计行 `forced: true`。
 - 从未激活且已无活跃成员资格的残留用户（例如已 `remove_membership` 的），控制台用户页的"清理待激活用户"

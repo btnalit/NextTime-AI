@@ -42,6 +42,7 @@ import {
   publishOperation,
   registerGatekeeper,
 } from '../governance/gatekeepers/index.js';
+import { writeAudit } from '../substrate/audit/index.js';
 import { endActivity, startActivity } from '../substrate/epistemic/index.js';
 import {
   publishOntologyDomainPack,
@@ -54,14 +55,19 @@ import {
  * `create-workspace`). Wired to the kernel package.json `bootstrap` script.
  *
  * Usage:
- *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] [--purpose standard|ephemeral] [--ttl <n>h]
- *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>]
+ *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] [--purpose standard|ephemeral] [--ttl <n>h] [--actor <login>]
+ *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>] [--actor <login>]
  *   node dist/cli/bootstrap.js list-workspaces
  *   node dist/cli/bootstrap.js purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>] [--actor <login>]
  *   node dist/cli/bootstrap.js purge-expired-workspaces [--yes] [--include-disabled] [--actor <login>]
  *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>] [--actor <login>]
  *   node dist/cli/bootstrap.js seed-domain-pack --workspace <id> --principal <id> --pack-name <name> [--file-name <file>] [--dir <dir>]
- *   node dist/cli/bootstrap.js issue-service-handle --workspace <id> --name <name> --scope <cap1,cap2,...> [--ttl-days <n>]
+ *   node dist/cli/bootstrap.js issue-service-handle --workspace <id> --name <name> --scope <cap1,cap2,...> [--ttl-days <n>] [--actor <login>]
+ *
+ * `create-workspace` / `add-principal` / `issue-service-handle` / `create-platform-admin` /
+ * `set-password` (review 2026-10-02 R-28 / L1-14) each write a platform audit row (`cli.*`),
+ * attributed to `--actor <login>` or the first `NEXTTIME_PLATFORM_ADMINS` login, else recorded as
+ * an unattributed host-operator action — see `writeCliIdentityAudit`.
  *
  * `seed-domain-pack`/`issue-service-handle` (S3.3, docs/development-tasks.md S3.3 "collector auth
  * seam"): the operator-run bootstrap steps a collector needs before its first run — see this
@@ -777,6 +783,54 @@ async function resolveCliActor(
   return user ? { id: user.id, login: user.login } : undefined;
 }
 
+/** The platform audit actions of the CLI's identity and credential mutations (R-28 / L1-14) —
+ *  exactly the list migration core 0036 admits without an `actor_user_id`. */
+export type CliIdentityAuditAction =
+  | 'cli.workspace_created'
+  | 'cli.principal_added'
+  | 'cli.service_handle_issued'
+  | 'cli.platform_admin_created'
+  | 'cli.password_set';
+
+/**
+ * Review 2026-10-02 R-28 / P3 L1-14: `create-workspace`, `add-principal`, `issue-service-handle`,
+ * `create-platform-admin` and `set-password` change who can reach the platform, and used to leave
+ * no audit row. Each now writes one platform row (`workspace_id` null) once its mutation has
+ * committed, attributed the way a CLI purge is: `--actor <login>`, else the first
+ * `NEXTTIME_PLATFORM_ADMINS` login ({@link resolveCliActor}, called before the mutation so a
+ * mistyped `--actor` changes nothing). When neither resolves the row is still written, as an
+ * unattributed host-operator action (`actor_user_id` null, `payload.attributedActor: false`) — the
+ * shape migration core 0036 admits for exactly these `cli.*` actions. The payload never carries a
+ * key, a token or a password.
+ */
+export async function writeCliIdentityAudit(
+  pool: PoolLike,
+  actor: { readonly id: string } | undefined,
+  entry: {
+    readonly action: CliIdentityAuditAction;
+    readonly resourceType: string;
+    readonly resourceId: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  },
+): Promise<void> {
+  await withWorkspace(
+    pool,
+    { workspaceId: randomUUID(), principalId: randomUUID() },
+    async (client) => {
+      await writeAudit(client, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        ...(actor !== undefined ? { actorUserId: actor.id } : {}),
+        action: entry.action,
+        resourceType: entry.resourceType,
+        resourceId: entry.resourceId,
+        payload: { ...entry.payload, attributedActor: actor !== undefined },
+      });
+    },
+    { skipRoleSwitch: true },
+  );
+}
+
 // -------------------------------------------------------------------------------------------
 // CLI plumbing
 // -------------------------------------------------------------------------------------------
@@ -915,10 +969,23 @@ async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
 
   const pool = createPool();
   try {
+    const actor = await resolveCliActor(pool, flags.actor);
     const result = await createWorkspace(pool, name, owner, {
       entryModel: flags['entry-model'],
       purpose,
       expiresAt,
+    });
+    await writeCliIdentityAudit(pool, actor, {
+      action: 'cli.workspace_created',
+      resourceType: 'workspace',
+      resourceId: result.workspaceId,
+      payload: {
+        name,
+        purpose,
+        ownerPrincipalId: result.ownerPrincipalId,
+        ownerLogin: result.ownerLogin,
+        apiKeyIssued: true,
+      },
     });
     console.log(`workspace created: ${result.workspaceId}`);
     console.log(`owner principal:   ${result.ownerPrincipalId}`);
@@ -953,7 +1020,20 @@ async function runAddPrincipal(argv: readonly string[]): Promise<void> {
 
   const pool = createPool();
   try {
+    const actor = await resolveCliActor(pool, flags.actor);
     const result = await addPrincipal(pool, workspaceId, name, roleResult.data);
+    await writeCliIdentityAudit(pool, actor, {
+      action: 'cli.principal_added',
+      resourceType: 'principal',
+      resourceId: result.principalId,
+      payload: {
+        workspaceId,
+        kind: 'human',
+        role: roleResult.data,
+        login: result.login,
+        apiKeyIssued: true,
+      },
+    });
     console.log(`principal created: ${result.principalId}`);
     console.log(`principal login:   ${result.login}`);
     console.log('');
@@ -1070,7 +1150,20 @@ async function runIssueServiceHandle(argv: readonly string[]): Promise<void> {
 
   const pool = createPool();
   try {
+    const actor = await resolveCliActor(pool, flags.actor);
     const result = await issueServiceHandleFromCli(pool, { workspaceId, name, scope, ttlSeconds });
+    await writeCliIdentityAudit(pool, actor, {
+      action: 'cli.service_handle_issued',
+      resourceType: 'session',
+      resourceId: result.sessionId,
+      payload: {
+        workspaceId,
+        principalId: result.principalId,
+        jti: result.jti,
+        scope,
+        expiresAt: result.expiresAt.toISOString(),
+      },
+    });
     console.log(`service principal: ${result.principalId}`);
     console.log(`session:            ${result.sessionId}`);
     console.log(`handle jti:         ${result.jti}`);
@@ -1108,7 +1201,7 @@ async function readStdinPassword(): Promise<string> {
 
 const CREATE_PLATFORM_ADMIN_USAGE =
   'usage: bootstrap create-platform-admin --login <login> [--display-name <name>] ' +
-  '[--temporary] (password is read from stdin)';
+  '[--temporary] [--actor <login>] (password is read from stdin)';
 
 /** `create-platform-admin --login <login> [--display-name <name>] [--temporary]`: the CLI
  *  fallback for minting the first (or an additional) platform administrator without going
@@ -1131,11 +1224,18 @@ async function runCreatePlatformAdmin(argv: readonly string[]): Promise<void> {
 
   const pool = createPool();
   try {
+    const actor = await resolveCliActor(pool, flags.actor);
     const user = await createPlatformAdmin(pool, {
       login,
       displayName: displayName ?? login,
       password,
       mustChangePassword: temporary,
+    });
+    await writeCliIdentityAudit(pool, actor, {
+      action: 'cli.platform_admin_created',
+      resourceType: 'user',
+      resourceId: user.id,
+      payload: { login: user.login, mustChangePassword: temporary },
     });
     console.log(`platform admin created: ${user.id}`);
     console.log(`login: ${login}`);
@@ -1145,7 +1245,7 @@ async function runCreatePlatformAdmin(argv: readonly string[]): Promise<void> {
 }
 
 const SET_PASSWORD_USAGE =
-  'usage: bootstrap set-password --login <login> [--temporary] (password is read from stdin)';
+  'usage: bootstrap set-password --login <login> [--temporary] [--actor <login>] (password is read from stdin)';
 
 /** `set-password --login <login> [--temporary]`: gives an existing user (e.g. a backfilled or
  *  CLI-created passwordless one — `ensureUserForHumanPrincipal`'s own doc comment) a first, or
@@ -1166,11 +1266,18 @@ async function runSetPassword(argv: readonly string[]): Promise<void> {
 
   const pool = createPool();
   try {
+    const actor = await resolveCliActor(pool, flags.actor);
     const user = await findUserByLogin(pool, login);
     if (!user) {
       throw new Error(`no such user: ${login}`);
     }
     await setUserPassword(pool, user.id, password, { mustChangePassword: temporary });
+    await writeCliIdentityAudit(pool, actor, {
+      action: 'cli.password_set',
+      resourceType: 'user',
+      resourceId: user.id,
+      payload: { login: user.login, mustChangePassword: temporary },
+    });
     console.log(`password set for: ${login}`);
     if (temporary) {
       console.log('must_change_password: true');
@@ -1592,8 +1699,8 @@ async function run(): Promise<void> {
       '   or: bootstrap issue-service-handle --workspace <id> --name <name> ' +
       '--scope <cap1,cap2,...> [--ttl-days <n>]\n' +
       '   or: bootstrap create-platform-admin --login <login> [--display-name <name>] ' +
-      '[--temporary] (password is read from stdin)\n' +
-      '   or: bootstrap set-password --login <login> [--temporary] (password is read from stdin)',
+      '[--temporary] [--actor <login>] (password is read from stdin)\n' +
+      '   or: bootstrap set-password --login <login> [--temporary] [--actor <login>] (password is read from stdin)',
   );
 }
 

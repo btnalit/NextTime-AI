@@ -1491,6 +1491,8 @@
   - 一次性令牌 + `SetupPage` 这条路径由 P-A1（预置 `admin`、无令牌无初始化页）作废，见
     `platform-admin-design.md` §4。
   - **R-13 / R-15 更正（2026-10-02 复审）**：①`POST /api/auth/password` 原来什么都不吊销、按常量 8 位校验（不读平台 `passwordMinLength`）、当前密码可无限猜。现在 `identity/credentials.ts` 的 `changeOwnPassword` 先按平台设置校验新密码（与管理员重置同一条规则 `passwordPolicyViolation`：平台下限、不低于 8、不超过 256），再经 `checkPassword` 校验当前密码（错误计入登录锁定，锁定时 423 `locked`），成功后在同一事务里写入并调 `revokeUserCredentials`——保留本次请求的控制台会话与用户正在运行的 Worker（`keepWorkerRuns`：自己改密不能让进行中的 Task 断掉 LLM），其余控制台会话、成员资格的 API key 以及 `mcp_session` / entry 等其余会话的 Handle 全部吊销（管理员重置、停用、移出仍连 `worker_run` 一起吊销）；路由提交后按被吊销的控制台会话逐个踢出，另以新的 `apiKeyPrincipalIds` 踢掉 API key socket（不碰本会话的 socket）。CLI `set-password` 同样按平台规则校验并吊销该用户全部控制台会话，但不动 key 与 Handle（运维路径；验收与 e2e 给 CLI 建的成员设密码后照用其 key）。②`POST /api/auth/logout` 在 CSRF 检查之后的每条路径（含吊销失败的 500）都下发清 cookie 的 `Set-Cookie`。web：`cookieLogout` 本地立即登出，请求前在 `localStorage` 置"登出待确认"标记、成功后清除；标记在时启动不问 `/api/auth/me`，先重试登出再到登录页；新的登录 / claim 换掉 cookie 时清除标记。登录页上不做周期性后台重试：登出响应会清掉同名 cookie，若晚于新登录到达会连新会话一起清掉。测试：`auth-routes.integration.test.ts`（另一控制台会话 401、本会话 200、key 401、`mcp_session` 与 entry Handle 吊销而 `worker_run` Handle 不动；低于平台下限 400；当前密码错 5 次后 423；吊销失败仍清 cookie）、`interfaces/ws/server.test.ts`（改密踢其他会话与 API key socket、不踢本会话）、`useSessionMachine.test.tsx`。
+  - **R-43 更正（2026-10-02 复审）——并发登录绕不过锁定**：`checkPassword` 原来先读"未锁定"、再做慢的 scrypt 校验、失败后才加计数，C 个并发请求都读到未锁定，5 分钟里能猜 C 次而不是 5 次。现在每次尝试先**预占**一次：一条带条件的 `UPDATE … RETURNING` 自增 `failed_login_count`、自增到上限时同时写 `locked_until`、只在未锁定时命中；语句提交后才校验密码，校验通过再归零。行锁让并发尝试串行，后一个在前一个提交后重新检查锁，所以 N 个并发错误密码恰好得到 `LOGIN_MAX_FAILURES` 次校验，其余返回 `locked`。没命中的（已锁定、无此登录名或尚无密码）再读一次区分出锁定，其余照旧走假哈希等时。改密校验当前密码也走这里（R-13）。没有另加 `/api/auth/login` 的限流。测试：`auth-routes.integration.test.ts`（12 个并发错误密码恰好 5 个 `bad_credentials`、7 个 `locked`，随后正确密码也是 `locked`）。
+  - **R-28 更正（2026-10-02 复审）——绑定 API key 与认领身份留审计**：`bindPrincipalToUser` 把成员资格挪到调用者账户、`claimIdentityOnClient` 把一把 API key 变成平台登录，原来都不写审计行——泄露的 owner key 被绑到别人账户后，轮换 key 也撤不回，也查不到何时挪给了谁。现在两者在各自事务里写平台审计行（`workspace_id` 为空）：`principal.user_rebound`（操作者 = 调用者，`payload {workspaceId, from, to, formerUserDeleted}`）、`user.identity_claimed`（操作者 = 认领的用户，`payload {workspaceId, principalId, login}`）。运维 CLI 的身份与凭证变更（P3 L1-14：`create-workspace`、`add-principal`、`issue-service-handle`、`create-platform-admin`、`set-password`）各写一条 `cli.*` 平台行：操作者照 CLI 清除的办法解析（`--actor <login>`，否则 `NEXTTIME_PLATFORM_ADMINS` 的第一个登录名；在变更之前解析，写错的 `--actor` 什么都不改）；解析不出时仍写，记为未署名的主机操作（`actor_user_id` 为空、`payload.attributedActor: false`），迁移 core 0036 只为这五个动作放宽 `audit_records_actor_shape`（同 0032 的写法）。CLI 的行在变更提交后、打印 key 之前写（`createWorkspaceWithOwner` 与 `setUserPassword` 自带事务），payload 不含 key、token 或密码。`register-gatekeeper --publish` 不是身份变更，未纳入。测试：`auth-routes.integration.test.ts`（绑定与认领各一条行、字段正确）、`cli/bootstrap.test.ts`（有操作者署名、无操作者未署名）、`substrate/audit/writer.test.ts`（0036 的放宽与边界）。
 
 ### P-A1 身份、用户与管理面骨架
 
@@ -1800,6 +1802,14 @@
     给一个活跃的 service Principal 开 `service` 会话并按能力名列表签 Handle（`assertValidScope` 仍拒绝
     human-only 能力），token 只返回一次；平台 `list_external_runtimes` 跨工作区列 service Principal 的活跃
     会话，`revoke_external_runtime` 吊销。CLI 保留（无浏览器场景，`docs/runbooks/host-collector.md`）。
+    **R-36 更正（2026-10-02 复审，遗留 88 的内核半）**：`issue_service_handle` 原来接受平台自己的内部 service
+    Principal（`__gatekeeper_service__` 等，遗留 88 只在页面上隐藏了它们）——给 `__gatekeeper_service__` 签一把带
+    `assert_fact` 的 Handle，写出的 Fact 与门自己的观察无法区分；也不看 service Principal 的角色，`member` 角色的
+    key 能拿到只有 builder 才有的 `propose_*`。现在内部 Principal 以 `PrincipalOperationRefusedError`
+    `platform_managed`（409）拒绝、不开会话；请求的能力按该 Principal 的角色过滤（`roleSatisfiesMinRole`，与
+    `entryScope({ role })` 同一规则），超出的静默丢弃（同 `issue_handle`），返回的 `scope` 即 Handle 实际携带的范围。
+    `authorize.ts` 里"两个签发点都带角色"的说法改为三个（CLI `issue-service-handle` 是唯一不收窄的签发点）。测试：
+    `platform-gates.integration.test.ts` 的 "issue_service_handle (R-36)" 组。
   - **web**：`#/platform/integrations`（"管理 → 集成"，仅管理员；`PlatformIntegrationsPage` 三个标签：接入包——
     三态下拉 + 展开后按 Operation 的禁用勾选清单；门实例——列表 + 抽屉（改名、启用 / 禁用、只对 mcp 显示
     的 `vetted` 开关、"测试连接"、公告的 Operation 表）；外部运行时——跨工作区列表 + 二次确认吊销）；

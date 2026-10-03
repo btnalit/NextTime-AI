@@ -330,6 +330,41 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ).rejects.toThrow(/audit_records_actor_shape/);
       });
+
+      // R-28 / L1-14 (migration core 0036): the operator CLI's identity mutations get the same
+      // narrow allowance, under the same marker, and nothing else does.
+      it('accepts an actor-less cli.* identity row with attributedActor: false; rejects it without the marker', async () => {
+        const row = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            writeAudit(client, {
+              workspaceId: null,
+              actorPrincipalId: null,
+              action: 'cli.principal_added',
+              resourceType: 'principal',
+              resourceId: randomUUID(),
+              payload: { attributedActor: false },
+            }),
+          { skipRoleSwitch: true },
+        );
+        expect(row.actorUserId).toBeNull();
+
+        await expect(
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                action: 'cli.password_set',
+                payload: {},
+              }),
+            { skipRoleSwitch: true },
+          ),
+        ).rejects.toThrow(/audit_records_actor_shape/);
+      });
     });
 
     it('a failing audit write rolls back a prior write in the same transaction (S1.3 acceptance)', async () => {

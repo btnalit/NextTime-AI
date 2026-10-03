@@ -48,6 +48,7 @@ import {
   registerGatekeeperFromCli,
   resolveDomainPackDir,
   seedDomainPackFromCli,
+  writeCliIdentityAudit,
 } from './bootstrap.js';
 import type { WorkspaceScopedSchema } from './bootstrap.js';
 
@@ -926,6 +927,80 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
       const after = await findUserByLogin(pool, owner.ownerLogin);
       expect(after?.hasPassword).toBe(true);
       expect(after?.mustChangePassword).toBe(true);
+    });
+  });
+
+  describe('R-28 / L1-14: the audit row of a CLI identity mutation (writeCliIdentityAudit)', () => {
+    async function auditRowsFor(resourceId: string) {
+      return withWorkspace(
+        pool,
+        { workspaceId: randomUUID(), principalId: randomUUID() },
+        async (client) =>
+          (
+            await client.query<{
+              workspace_id: string | null;
+              actor_user_id: string | null;
+              action: string;
+              payload: Record<string, unknown>;
+            }>(
+              `select workspace_id, actor_user_id, action, payload from audit_records
+                where resource_id = $1 and action like 'cli.%'`,
+              [resourceId],
+            )
+          ).rows,
+        { skipRoleSwitch: true },
+      );
+    }
+
+    it('with a resolved operator: a platform row attributed to that user', async () => {
+      const operator = await createPlatformAdmin(pool, {
+        login: `cli-audit-op-${randomUUID().slice(0, 8)}`,
+        displayName: 'CLI Audit Operator',
+        password: 'a-strong-enough-password',
+      });
+      const created = await createWorkspace(pool, 'bootstrap-test-workspace-cli-audit', 'Dana');
+
+      await writeCliIdentityAudit(pool, operator, {
+        action: 'cli.workspace_created',
+        resourceType: 'workspace',
+        resourceId: created.workspaceId,
+        payload: { ownerLogin: created.ownerLogin, apiKeyIssued: true },
+      });
+
+      const rows = await auditRowsFor(created.workspaceId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        workspace_id: null,
+        actor_user_id: operator.id,
+        action: 'cli.workspace_created',
+        payload: { ownerLogin: created.ownerLogin, apiKeyIssued: true, attributedActor: true },
+      });
+      // No secret ever lands in the row.
+      expect(JSON.stringify(rows[0])).not.toContain(created.apiKey);
+    });
+
+    it('with no operator resolved: still written, as an unattributed host-operator action (core 0036)', async () => {
+      const user = await createPlatformAdmin(pool, {
+        login: `cli-audit-pw-${randomUUID().slice(0, 8)}`,
+        displayName: 'CLI Audit Password',
+        password: 'a-strong-enough-password',
+      });
+
+      await writeCliIdentityAudit(pool, undefined, {
+        action: 'cli.password_set',
+        resourceType: 'user',
+        resourceId: user.id,
+        payload: { login: user.login, mustChangePassword: false },
+      });
+
+      const rows = await auditRowsFor(user.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        workspace_id: null,
+        actor_user_id: null,
+        action: 'cli.password_set',
+        payload: { attributedActor: false },
+      });
     });
   });
 });
