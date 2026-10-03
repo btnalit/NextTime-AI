@@ -16,7 +16,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { revokeOnBehalfOfSessionHandles } from '../../governance/capability/index.js';
+import { revokeSession } from '../../governance/capability/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { readPlatformSettings } from '../platform/settings.js';
 import { revokeAllUserSessions } from './console-session.js';
@@ -43,6 +43,10 @@ export interface RevokeUserCredentialsOptions {
   /** Keep this one console session (a self-service password change keeps the browser that made
    *  it); every other one is revoked. */
   readonly keepConsoleSessionId?: string;
+  /** Leave the user's running Workers alone: `worker_run` sessions and their Handles are not
+   *  touched. A self-service password change sets it — the person changing their own password
+   *  must not see their Tasks lose LLM access mid-run. Resets, disables and removals never do. */
+  readonly keepWorkerRuns?: boolean;
 }
 
 /**
@@ -51,8 +55,9 @@ export interface RevokeUserCredentialsOptions {
  * to one workspace) `remove_membership` all call this, and nothing else revokes a user's access in
  * bulk. For each of the user's human membership Principals: its API key is cleared, every session
  * on its behalf is marked revoked, and every Handle minted under those sessions is revoked
- * (`revokeOnBehalfOfSessionHandles`, the same primitive `disable_principal` uses — llm-proxy picks
- * the revocations up through its sync). Plus the console sessions (see the options).
+ * (`revokeSession` per session — what `revokeOnBehalfOfSessionHandles`, the primitive
+ * `disable_principal` uses, does — and llm-proxy picks the revocations up through its sync).
+ * Plus the console sessions; `keepWorkerRuns` spares the `worker_run` sessions (see the options).
  *
  * Works on a platform transaction (`nexttime_app` with `app.platform = on`: `user_sessions`,
  * `principals` and `sessions` through their `*_platform_admin` policies) and on the admin client.
@@ -89,12 +94,22 @@ export async function revokeUserCredentials(
           where workspace_id = $1 and id = $2 and api_key_hash is not null`,
         [principal.workspace_id, principal.id],
       );
+      const params = [principal.workspace_id, principal.id, options.keepWorkerRuns === true];
+      // Every session's Handles — a session already marked revoked included: its status never
+      // stopped a Handle, and `revokeSession` is idempotent.
+      const sessions = await client.query<{ id: string }>(
+        `select id from sessions
+          where workspace_id = $1 and on_behalf_of = $2
+            and ($3::boolean is false or kind <> 'worker_run')`,
+        params,
+      );
       await client.query(
         `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-          where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'`,
-        [principal.workspace_id, principal.id],
+          where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'
+            and ($3::boolean is false or kind <> 'worker_run')`,
+        params,
       );
-      await revokeOnBehalfOfSessionHandles(client, principal.workspace_id, principal.id);
+      for (const session of sessions.rows) await revokeSession(client, session.id);
     }
   } finally {
     await client.query("select set_config('app.workspace_id', $1, true)", [
@@ -156,8 +171,10 @@ export type ChangeOwnPasswordOutcome =
  * reset applies (the platform's `passwordMinLength`). The current password is verified through
  * `checkPassword`, so wrong guesses count toward the login lockout — a stolen cookie cannot be used
  * to brute-force it. On success the password is stored, `must_change_password` cleared, and the
- * user's other credentials are revoked exactly as a reset revokes them (`revokeUserCredentials`),
- * except for the console session making the change.
+ * user's other credentials are revoked as a reset revokes them (`revokeUserCredentials`) — other
+ * console sessions, membership API keys, `mcp_session` and entry Handles — except for the console
+ * session making the change and the user's running Workers (`keepWorkerRuns`): a person changing
+ * their own password must not see their Tasks lose LLM access mid-run.
  */
 export async function changeOwnPassword(
   pool: PoolLike,
@@ -182,6 +199,7 @@ export async function changeOwnPassword(
     );
     return revokeUserCredentials(client, user.id, {
       keepConsoleSessionId: input.consoleSessionId,
+      keepWorkerRuns: true,
     });
   });
   const updated = await findUserById(pool, user.id);
