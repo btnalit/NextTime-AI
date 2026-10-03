@@ -3,7 +3,11 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS, getCapability } from '@nexttime/shared';
+import {
+  INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
+  INVOKE_WORKER_SPAWN_BUDGET_SECONDS,
+  getCapability,
+} from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
@@ -136,18 +140,18 @@ function buildCapabilityTool(
   };
 }
 
-/** Extra headroom (ms) layered on top of the kernel's own wait window (see
- *  `resolveInvokeWorkerCallPlan` below) when this client's per-call HTTP timeout must outlast a
- *  `wait:true` invoke_worker call — enough slack for response transit/serialization after the
- *  kernel-side wait itself elapses, without making the client wait meaningfully longer than the
- *  kernel already promises to. */
+/** Extra headroom (ms) layered on top of the kernel's own spawn budget and wait window (see
+ *  `resolveInvokeWorkerCallPlan` below) for this client's per-call HTTP timeout on an
+ *  invoke_worker call — enough slack for the kernel's own database work and response
+ *  transit/serialization, without making the client wait meaningfully longer than the kernel
+ *  already promises to. */
 const WAIT_TIMEOUT_HEADROOM_MS = 10_000;
 
 interface InvokeWorkerCallPlan {
   readonly params: unknown;
-  /** `KernelClient.call`'s per-call timeout override — set only when this call needs one to
-   *  outlast the kernel's own `wait:true` window; `undefined` otherwise (the client's own
-   *  constructor default applies, same as every other capability). */
+  /** `KernelClient.call`'s per-call timeout override — set on every invoke_worker call so it
+   *  outlasts the kernel's phase 1 plus its `wait:true` window; `undefined` otherwise (the
+   *  client's own constructor default applies, same as every other capability). */
   readonly timeoutMs?: number;
 }
 
@@ -166,9 +170,17 @@ interface InvokeWorkerCallPlan {
  * follow-up turn is the right UX for a blocking tool call, not blocking the whole turn on it; a
  * caller that wants completion status polls `get_task`), but an agent that explicitly asks for
  * `wait:true` now gets it, honoured with a per-call `KernelClient` timeout override
- * (`min(params.timeout ?? 90, 90) + 10s`, `kernel-client.ts`'s `call()`) computed to always
- * outlast the kernel's own wait — rather than being silently downgraded to `wait:false`. Every
- * other capability's params pass through unmodified, no timeout override.
+ * (`kernel-client.ts`'s `call()`) computed to always outlast the kernel's own wait — rather than
+ * being silently downgraded to `wait:false`. Every other capability's params pass through
+ * unmodified, no timeout override.
+ *
+ * 2026-10-02 review R-54: the override also counts the kernel's phase 1 — creating the Task and
+ * waiting up to `INVOKE_WORKER_SPAWN_BUDGET_SECONDS` (30s) for worker-supervisor to start the
+ * Worker — and applies to `wait:false` too: `30s + (wait ? min(params.timeout ?? 90, 90) : 0) +
+ * 10s`. Before, a `wait:false` call used the flat 30s default and a `wait:true` call only the wait
+ * window, so a slow spawn made the client give up while the kernel was still starting the Worker,
+ * and the model's retry started a second one. (A retry that does happen now collapses onto the
+ * running Task — the kernel's derived `idempotencyKey`, `capabilities.ts`.)
  */
 function resolveInvokeWorkerCallPlan(
   capabilityName: string,
@@ -176,7 +188,13 @@ function resolveInvokeWorkerCallPlan(
 ): InvokeWorkerCallPlan {
   if (capabilityName !== 'invoke_worker') return { params };
   const base = params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
-  if (base.wait !== true) return { params: { ...base, wait: false } };
+  const spawnBudgetMs = INVOKE_WORKER_SPAWN_BUDGET_SECONDS * 1000;
+  if (base.wait !== true) {
+    return {
+      params: { ...base, wait: false },
+      timeoutMs: spawnBudgetMs + WAIT_TIMEOUT_HEADROOM_MS,
+    };
+  }
 
   const requestedTimeoutSeconds =
     typeof base.timeout === 'number' ? base.timeout : INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS;
@@ -184,7 +202,10 @@ function resolveInvokeWorkerCallPlan(
     requestedTimeoutSeconds,
     INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
   );
-  return { params: base, timeoutMs: clampedTimeoutSeconds * 1000 + WAIT_TIMEOUT_HEADROOM_MS };
+  return {
+    params: base,
+    timeoutMs: spawnBudgetMs + clampedTimeoutSeconds * 1000 + WAIT_TIMEOUT_HEADROOM_MS,
+  };
 }
 
 /** Loose shape of a `get_entry_context` result (§7.4 `context` column, S1 scope). The kernel side

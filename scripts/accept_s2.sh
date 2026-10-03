@@ -857,8 +857,11 @@ step4_step5_ssh_always_allow() {
   out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
   pending_before_second=$(parse_kv "$out" EXTRACTED)
 
+  # A fresh idempotencyKey makes this a deliberate second run: the first Task may still be
+  # finishing (only its ActionRequest was awaited above), and an identical invoke_worker without a
+  # key collapses onto a Task that is not yet terminal (R-54 / D-12).
   out=$(cap "$ALICE_KEY" invoke_worker \
-    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"ACCEPT_S2_SCENARIO=ssh_run COMMAND=$ssh_command\",\"wait\":true,\"timeout\":90,\"gates\":[\"$GATEKEEPER_ID_SSH\"]}" \
+    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"ACCEPT_S2_SCENARIO=ssh_run COMMAND=$ssh_command\",\"wait\":true,\"timeout\":90,\"gates\":[\"$GATEKEEPER_ID_SSH\"],\"idempotencyKey\":\"accept-s2-step4-second-run-$(date +%s)\"}" \
     "d.result.status")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-invoke-worker-2" "invoke_worker (second run) HTTP $status: $(parse_kv "$out" BODY)"

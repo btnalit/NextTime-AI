@@ -1063,7 +1063,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     // below) deliberately — that test leaves a permanent, never-resolved pending_approval row on
     // this shared Gatekeeper, and P2-2's drainer-ordering fix means every later auto_approved
     // request on the same Gatekeeper would otherwise queue forever behind it.
-    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
+    //
+    // R-53 (2026-10-02 review, decision D-12): the derived default key only dedupes against a row
+    // still in flight. Once the first row is terminal an identical call is a new intent — a
+    // legitimate repeat (restart, check, restart) must apply again, not replay the first result.
+    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey, after the first one executed, is a new ActionRequest that applies again', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const params = { qty: 4200 };
 
@@ -1082,11 +1086,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
       })) as { status: string; id: string };
 
-      expect(second.id).toBe(first.id);
+      expect(second.id).not.toBe(first.id);
       expect(second.status).toBe('executed');
-      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // applied again
     });
 
+    it('an identical call made while the first one still awaits approval collapses onto the same ActionRequest', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const params = { qty: 4300 };
+      const before = transport.calls[PENDING_OP.name] ?? 0;
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params,
+      })) as { status: string; id: string };
+      expect(first.status).toBe('pending_approval');
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params,
+      })) as { status: string; id: string };
+      expect(second.id).toBe(first.id);
+      expect(second.status).toBe('pending_approval');
+
+      // Approve and drain it, so no pending row is left to hold up later tests' requests on this
+      // shared Gatekeeper — and it applies exactly once.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId: first.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      expect(transport.calls[PENDING_OP.name]).toBe(before + 1);
+    });
+
+    // The explicit key keeps its meaning (D-12): one ActionRequest per key, whatever its status —
+    // here a replay of an already-`executed` row.
     it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const idempotencyKey = randomUUID();

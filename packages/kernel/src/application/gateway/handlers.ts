@@ -25,6 +25,7 @@ import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
+  DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
   TaskNotFoundError,
@@ -92,6 +93,7 @@ import {
   setActiveRuntimeImageHandler,
   setPlatformDefaultModelHandler,
 } from '../platform/index.js';
+import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
   getAgentPolicyHandler,
@@ -1245,6 +1247,25 @@ function toWireInvokeWorkerResult(created: InvokeWorkerResult) {
   };
 }
 
+/**
+ * `invoke_worker`'s default idempotency key when the caller supplies none (2026-10-02 review R-54,
+ * decision D-12): `(sid|principal, definition@version, stable hash of input and gates)` — `wait`
+ * and `timeout` are left out, so a retry that changes only how long it waits still collapses.
+ * `application/task/invoke.ts` dedupes a key with this prefix only against a Task that is not yet
+ * terminal. Same shape and hash as `request_action`'s `deriveDefaultIdempotencyKey`
+ * (action-executor.ts).
+ */
+export function deriveDefaultInvokeWorkerIdempotencyKey(args: {
+  readonly identity: string;
+  readonly definitionId: string;
+  readonly version: number;
+  readonly input: unknown;
+  readonly gates?: readonly string[];
+}): string {
+  const intentHash = hashStableParams({ input: args.input ?? null, gates: args.gates ?? null });
+  return `${DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX}${args.identity}:${args.definitionId}@${args.version}:${intentHash}`;
+}
+
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
   const principalId = ctx?.principalId ?? '';
   const attributedTurn = principalId
@@ -1253,10 +1274,24 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
   const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
   const input = params as InvokeWorkerInput;
 
+  // R-54 (D-12): the stored key — an explicit `idempotencyKey` scoped to (on_behalf_of, sid) the
+  // same way `request_action` scopes its own, or the derived default. `input.idempotencyKey` is the
+  // caller's raw param; `invokeWorkerCreate` receives only the stored form.
+  const sid = ctx?.claims?.sid;
+  const idempotencyKey = input.idempotencyKey
+    ? scopeExplicitIdempotencyKey({ onBehalfOf: principalId, sid, key: input.idempotencyKey })
+    : deriveDefaultInvokeWorkerIdempotencyKey({
+        identity: sid ?? principalId,
+        definitionId: input.definitionId,
+        version: input.version,
+        input: input.input,
+        gates: input.gates,
+      });
+
   const created = await invokeWorkerCreate(
     workspaceId,
     { principalId, channel: ctx?.channel ?? 'handle', claims: ctx?.claims, turnId },
-    input,
+    { ...input, idempotencyKey },
     getConfiguredTaskRuntime(),
   );
 

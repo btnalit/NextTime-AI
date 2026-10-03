@@ -9,7 +9,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { approveActionRequest } from './decide.js';
 import { getActionRequest } from './reads.js';
-import { requestAction } from './request-action.js';
+import { DERIVED_IDEMPOTENCY_KEY_PREFIX, requestAction } from './request-action.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { ActionRequestConcurrentTransitionError } from './types.js';
 
@@ -190,6 +190,44 @@ describe.runIf(DATABASE_URL !== undefined)(
           requestAction(client, workspaceId, {
             gatekeeperId,
             actionKind: 'test.concurrent_idempotent',
+            blastRadius: 'low',
+            operationAutoApprovable: true,
+            awaitDecision: false,
+            onBehalfOf: ownerId,
+            actorRuntime: 'pi',
+            idempotencyKey,
+            requesterScope: scopeCovering(gatekeeperId),
+          }),
+        );
+
+      const [first, second] = await Promise.all([callRequestAction(), callRequestAction()]);
+
+      expect(second.id).toBe(first.id);
+
+      const count = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ n: number }>(
+            'select count(*)::int as n from action_requests where workspace_id = $1 and idempotency_key = $2',
+            [workspaceId, idempotencyKey],
+          );
+          return result.rows[0]?.n ?? 0;
+        },
+      );
+      expect(count).toBe(1);
+    });
+
+    // 2026-10-02 review R-53 (D-12): the same race for a derived key, whose uniqueness comes from
+    // governance 0014's in-flight partial index — the loser must recognise that index's 23505 too.
+    it('requestAction: concurrent calls sharing one derived (auto:) key produce exactly one row', async () => {
+      const idempotencyKey = `${DERIVED_IDEMPOTENCY_KEY_PREFIX}${ownerId}:${gatekeeperId}:test.concurrent_derived:${randomUUID()}`;
+
+      const callRequestAction = () =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: 'test.concurrent_derived',
             blastRadius: 'low',
             operationAutoApprovable: true,
             awaitDecision: false,
