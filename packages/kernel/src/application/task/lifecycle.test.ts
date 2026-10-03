@@ -550,7 +550,15 @@ describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STA
     const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
       createTerminateRaceFakeClient({ initialStatus: 'suspended', updateRowCount: 1 });
 
-    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+    const moved = await terminateWorkerRunRow(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      workerRunId,
+      'requested',
+    );
+
+    expect(moved).toBe(true); // R-58: this call moved the run
 
     expect(queries.some((q) => q.toLowerCase().includes('insert into audit_records'))).toBe(true);
     expect(
@@ -568,7 +576,15 @@ describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STA
         rereadStatus: 'running', // `spawn.ts`'s own `provisioning -> running` write landed first
       });
 
-    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+    const moved = await terminateWorkerRunRow(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      workerRunId,
+      'requested',
+    );
+
+    expect(moved).toBe(true); // the retry against the new status is still this call's move
 
     // First attempt guarded on the status first read, the retry on the re-read one.
     expect(updateStatusParams).toEqual(['provisioning', 'running']);
@@ -589,7 +605,16 @@ describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STA
         rereadStatus: 'terminated',
       });
 
-    await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested');
+    const moved = await terminateWorkerRunRow(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      workerRunId,
+      'requested',
+    );
+
+    // R-58: the concurrent call moved it, not this one — a crash-retry caller must not requeue.
+    expect(moved).toBe(false);
 
     // No second `worker_run.terminate` audit row — the concurrent call that actually won the race
     // already wrote its own.
@@ -600,5 +625,21 @@ describe('terminateWorkerRunRow — status-guarded UPDATE (leftover 90, docs/STA
         q.toLowerCase().includes('where workspace_id = $1 and parent_worker_run_id = $2'),
       ),
     ).toBe(true);
+  });
+
+  it('returns false, without an UPDATE, for a run already terminated when first read (R-58)', async () => {
+    const { client, queries, workspaceId, workerRunId, actorPrincipalId } =
+      createTerminateRaceFakeClient({ initialStatus: 'terminated', updateRowCount: 1 });
+
+    const moved = await terminateWorkerRunRow(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      workerRunId,
+      'failed',
+    );
+
+    expect(moved).toBe(false);
+    expect(queries.some((q) => q.toLowerCase().includes('update worker_runs'))).toBe(false);
   });
 });
