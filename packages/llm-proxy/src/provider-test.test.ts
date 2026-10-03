@@ -234,4 +234,26 @@ describe('runProviderTest', () => {
     expect(result.error).toContain('completion request failed');
     expect(result.latency_ms).toBeGreaterThanOrEqual(0);
   });
+
+  it('a redirecting upstream fails the test; the x-api-key is never resent to the named host (R-23, L6-19)', async () => {
+    const { port: elsewherePort, captured: elsewhere } = await start(() => ({
+      status: 200,
+      body: { content: [{ type: 'text', text: 'OK' }] },
+    }));
+    const redirecting = http.createServer((_req, res) => {
+      res.writeHead(307, { location: `http://127.0.0.1:${elsewherePort}/v1/messages` });
+      res.end();
+    });
+    const port = await listen(redirecting);
+    cleanup.push(() => new Promise<void>((resolve) => redirecting.close(() => resolve())));
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result.completion).toBe('error');
+    expect(result.error).toContain('completion request failed');
+    expect(elsewhere).toEqual([]);
+  });
 });
