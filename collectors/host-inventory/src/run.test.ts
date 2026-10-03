@@ -344,13 +344,13 @@ describe('runOnce', () => {
           if (params.operation === 'kb.list') {
             return {
               status: 'ok',
-              data: { code: 0, data: [{ id: 'ds1', name: 'kb-1' }] },
+              data: { code: 0, data: [{ id: 'ds1', name: 'kb-1' }], total_datasets: 1 },
               observedFactCount: 1,
             };
           }
           return {
             status: 'ok',
-            data: { code: 0, data: { docs: [{ id: 'doc1', name: 'a.pdf' }] } },
+            data: { code: 0, data: { docs: [{ id: 'doc1', name: 'a.pdf' }], total: 1 } },
             observedFactCount: 1,
           };
         },
@@ -427,6 +427,129 @@ describe('runOnce', () => {
       expect(phase4?.window).toEqual({
         complete: true,
         objectTypes: ['KnowledgeBase', 'Document'],
+      });
+    });
+
+    describe('R-70: the window is committed only after a complete read', () => {
+      interface RagflowState {
+        kbs: Array<{ id: string }>;
+        docs: Record<string, Array<{ id: string }>>;
+        /** A raw RAGFlow body to answer one call with instead of the listing. */
+        failWith?: (params: ObserveOperationParams) => unknown;
+      }
+
+      /** RAGFlow behind `observe_operation`, paged like the real server (totals included). */
+      function ragflow(state: RagflowState) {
+        return async (params: ObserveOperationParams): Promise<ObserveOperationResult> => {
+          const failure = state.failWith?.(params);
+          if (failure !== undefined) return { status: 'ok', data: failure, observedFactCount: 0 };
+          const page = Number(params.params?.page ?? 1);
+          const size = Number(params.params?.page_size ?? 30);
+          const slice = <T>(all: T[]) => all.slice((page - 1) * size, page * size);
+          if (params.operation === 'kb.list') {
+            return {
+              status: 'ok',
+              data: { code: 0, data: slice(state.kbs), total_datasets: state.kbs.length },
+              observedFactCount: 0,
+            };
+          }
+          const docs = state.docs[String(params.params?.dataset_id)] ?? [];
+          return {
+            status: 'ok',
+            data: { code: 0, data: { docs: slice(docs), total: docs.length } },
+            observedFactCount: 0,
+          };
+        };
+      }
+
+      /** The kernel's S5.2 window, for phase 4's types: a `complete` window retires every live
+       *  Fact of its ObjectTypes (this Source) that the same submission did not re-observe. */
+      function windowedFacts(client: KernelClient) {
+        const live = new Set<string>();
+        const retired: string[] = [];
+        const key = (o: { objectType: string; identity: Record<string, unknown> }) =>
+          `${o.objectType}:${Object.values(o.identity).slice(1).join('/')}`;
+        const inner = client.submitObservations.bind(client);
+        client.submitObservations = async (params) => {
+          const result = await inner(params);
+          const types = params.window?.complete ? params.window.objectTypes : [];
+          if (!types.includes('KnowledgeBase')) return result;
+          const observed = new Set(params.observations.map(key));
+          for (const k of observed) live.add(k);
+          for (const k of [...live]) {
+            if (types.includes(k.split(':')[0] ?? '') && !observed.has(k)) {
+              live.delete(k);
+              retired.push(k);
+            }
+          }
+          return result;
+        };
+        return { live, retired };
+      }
+
+      const docs = (kb: string, n: number) =>
+        Array.from({ length: n }, (_, i) => ({ id: `${kb}-doc-${i + 1}` }));
+
+      it('a failed read leaves existing Facts untouched and commits no window; a full pass retires only what is really gone', async () => {
+        const state: RagflowState = {
+          kbs: [{ id: 'ds1' }, { id: 'ds2' }],
+          docs: { ds1: docs('ds1', 150), ds2: docs('ds2', 3) },
+        };
+        const { client: kernelClient, calls } = fakeKernelClient({
+          observeOperation: ragflow(state),
+        });
+        const facts = windowedFacts(kernelClient);
+        const runPhase4 = () =>
+          run({
+            config: baseConfig({ ragflowGatekeeperId: 'gk-1' }),
+            dockerClient: fakeDockerClient(),
+            kernelClient,
+            logger: { info: vi.fn(), warn: vi.fn() },
+          });
+        const phase4Windows = () =>
+          calls.submitObservations.filter((p) => p.window?.objectTypes.includes('KnowledgeBase'))
+            .length;
+
+        // Run 1: everything read — 2 KnowledgeBases and all 153 Documents, past the first page.
+        await runPhase4();
+        expect(facts.live.size).toBe(2 + 153);
+        expect(facts.retired).toEqual([]);
+        expect(phase4Windows()).toBe(1);
+
+        // Run 2: the RAGFlow key was rotated — kb.list answers an error in a 200 body.
+        state.failWith = (p) =>
+          p.operation === 'kb.list' ? { code: 109, message: 'Authentication error' } : undefined;
+        await runPhase4();
+        expect(facts.live.size).toBe(155);
+        expect(facts.retired).toEqual([]);
+        expect(phase4Windows()).toBe(1);
+
+        // Run 3: one page of one KnowledgeBase fails; every other page reads fine.
+        state.failWith = (p) =>
+          p.operation === 'kb.documents' && p.params?.dataset_id === 'ds1' && p.params?.page === 2
+            ? { code: 102, message: 'internal error' }
+            : undefined;
+        await runPhase4();
+        expect(facts.live.size).toBe(155);
+        expect(facts.retired).toEqual([]);
+        expect(phase4Windows()).toBe(1);
+
+        // Run 4: a complete read after a Document (on page 2) and a whole KnowledgeBase were deleted.
+        state.failWith = undefined;
+        state.docs.ds1 = (state.docs.ds1 ?? []).filter((d) => d.id !== 'ds1-doc-120');
+        state.kbs = [{ id: 'ds1' }];
+        await runPhase4();
+        expect(phase4Windows()).toBe(2);
+        expect(facts.retired.sort()).toEqual(
+          [
+            'Document:ds1/ds1-doc-120',
+            'KnowledgeBase:ds2',
+            'Document:ds2/ds2-doc-1',
+            'Document:ds2/ds2-doc-2',
+            'Document:ds2/ds2-doc-3',
+          ].sort(),
+        );
+        expect(facts.live.size).toBe(1 + 149);
       });
     });
   });
