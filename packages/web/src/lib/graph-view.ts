@@ -3,11 +3,8 @@ import type {
   ExplainResultWire,
   FactWire,
   ObjectWire,
-  OntologyActionTypeWire,
   OntologyDefinition,
-  OntologyLinkTypeWire,
   OntologyObjectTypeWire,
-  OntologyTypeWire,
 } from '@nexttime/shared';
 import type {
   ProvenanceActivity,
@@ -95,12 +92,12 @@ export function objectTypeOptions(
 }
 
 // -------------------------------------------------------------------------------------------
-// Proposal review diff (closing wave C5b, coverage gap G1 part 2): a draft's own proposed
-// `OntologyDefinition` against the currently-visible `list_types` result — no kernel capability
-// diffs an ontology version against "current published" (out of scope to invent one for a
-// console-only PR, same reasoning `OntologyTypesDrawer.tsx`'s own module doc comment already gives
-// for why this task's read side is a new capability, not a new diff engine in the kernel), so this
-// is computed client-side from two reads the drawer already has in hand.
+// Proposal review diff (closing wave C5b, coverage gap G1 part 2; R-61): a draft's own proposed
+// `OntologyDefinition` against the published version of the *same family* it was proposed
+// against (`list_ontology_versions`' `base`, R-60). Every version is a full replacement of its
+// family's definition, so this per-family diff is exactly what publishing it changes. It is never
+// computed against `list_types`: that namespace merges every family and already contains the
+// proposer's own draft, so it hid the real change and listed other families' types as removed.
 // -------------------------------------------------------------------------------------------
 
 export type OntologyProposalChangeKind = 'added' | 'changed' | 'removed';
@@ -158,83 +155,79 @@ function linkSignaturesComparable(
   return JSON.stringify(sorted);
 }
 
-/**
- * Diffs one draft's proposed `OntologyDefinition` against `currentTypes` (a `list_types` result —
- * every currently-visible ObjectType/LinkType/ActionType), per kind: `added` (the draft declares
- * it, nothing visible today does), `changed` (both declare it, with a different shape), `removed`
- * (visible today, absent from the draft). Unchanged types are omitted — this is a diff, not a full
- * listing. Object/action types are keyed by name; LinkType names are compared as their whole
- * signature set (a name may carry more than one domain/range pair, `ontology-definition.ts`'s own
- * doc comment on why) since a draft's `linkTypes` is a flat, unmerged array of signatures, not one
- * row per name.
- */
-export function ontologyProposalDiff(
-  draft: OntologyDefinition,
-  currentTypes: readonly OntologyTypeWire[],
-): readonly OntologyProposalDiffEntry[] {
-  const entries: OntologyProposalDiffEntry[] = [];
-
-  const currentObjects = new Map(
-    currentTypes
-      .filter((t): t is OntologyObjectTypeWire => t.kind === 'object')
-      .map((t) => [t.name, t] as const),
-  );
-  const draftObjectNames = new Set(draft.objectTypes.map((o) => o.name));
-  for (const objectType of draft.objectTypes) {
-    const current = currentObjects.get(objectType.name);
-    if (current === undefined) {
-      entries.push({ kind: 'object', name: objectType.name, change: 'added' });
-    } else if (objectTypeComparable(current) !== objectTypeComparable(objectType)) {
-      entries.push({ kind: 'object', name: objectType.name, change: 'changed' });
-    }
-  }
-  for (const name of currentObjects.keys()) {
-    if (!draftObjectNames.has(name)) entries.push({ kind: 'object', name, change: 'removed' });
-  }
-
-  const currentLinks = new Map(
-    currentTypes
-      .filter((t): t is OntologyLinkTypeWire => t.kind === 'link')
-      .map((t) => [t.name, t.signatures] as const),
-  );
-  const draftLinksByName = new Map<
+/** One definition's types keyed by name, per kind; a LinkType name groups every signature it
+ *  declares (a definition's `linkTypes` is a flat array of signatures, not one row per name). */
+function indexDefinition(definition: OntologyDefinition | null): {
+  readonly objects: ReadonlyMap<string, OntologyDefinition['objectTypes'][number]>;
+  readonly links: ReadonlyMap<
+    string,
+    readonly { readonly domain: string; readonly range: string; readonly description: string }[]
+  >;
+  readonly actions: ReadonlyMap<string, NonNullable<OntologyDefinition['actionTypes']>[number]>;
+} {
+  const objects = new Map(definition?.objectTypes.map((o) => [o.name, o] as const) ?? []);
+  const links = new Map<
     string,
     { readonly domain: string; readonly range: string; readonly description: string }[]
   >();
-  for (const link of draft.linkTypes) {
-    const existing = draftLinksByName.get(link.name) ?? [];
+  for (const link of definition?.linkTypes ?? []) {
+    const existing = links.get(link.name) ?? [];
     existing.push({ domain: link.domain, range: link.range, description: link.description });
-    draftLinksByName.set(link.name, existing);
+    links.set(link.name, existing);
   }
-  for (const [name, signatures] of draftLinksByName) {
-    const current = currentLinks.get(name);
-    if (current === undefined) {
-      entries.push({ kind: 'link', name, change: 'added' });
-    } else if (linkSignaturesComparable(current) !== linkSignaturesComparable(signatures)) {
+  const actions = new Map((definition?.actionTypes ?? []).map((a) => [a.name, a] as const));
+  return { objects, links, actions };
+}
+
+/**
+ * Diffs one draft's proposed `OntologyDefinition` against `base` — the published definition of
+ * the same family it was proposed against, or `null` when the family had nothing published (every
+ * type in the draft is then `added`). Per kind: `added` (the draft declares it, the base does
+ * not), `changed` (both declare it, with a different shape), `removed` (the base declares it, the
+ * draft does not — publishing removes it from this family). Unchanged types are omitted — this is
+ * a diff, not a full listing. Object/action types are keyed by name; LinkType names are compared
+ * as their whole signature set (a name may carry more than one domain/range pair,
+ * `ontology-definition.ts`'s own doc comment on why).
+ */
+export function ontologyProposalDiff(
+  draft: OntologyDefinition,
+  base: OntologyDefinition | null,
+): readonly OntologyProposalDiffEntry[] {
+  const entries: OntologyProposalDiffEntry[] = [];
+  const before = indexDefinition(base);
+  const after = indexDefinition(draft);
+
+  for (const [name, objectType] of after.objects) {
+    const previous = before.objects.get(name);
+    if (previous === undefined) entries.push({ kind: 'object', name, change: 'added' });
+    else if (objectTypeComparable(previous) !== objectTypeComparable(objectType)) {
+      entries.push({ kind: 'object', name, change: 'changed' });
+    }
+  }
+  for (const name of before.objects.keys()) {
+    if (!after.objects.has(name)) entries.push({ kind: 'object', name, change: 'removed' });
+  }
+
+  for (const [name, signatures] of after.links) {
+    const previous = before.links.get(name);
+    if (previous === undefined) entries.push({ kind: 'link', name, change: 'added' });
+    else if (linkSignaturesComparable(previous) !== linkSignaturesComparable(signatures)) {
       entries.push({ kind: 'link', name, change: 'changed' });
     }
   }
-  for (const name of currentLinks.keys()) {
-    if (!draftLinksByName.has(name)) entries.push({ kind: 'link', name, change: 'removed' });
+  for (const name of before.links.keys()) {
+    if (!after.links.has(name)) entries.push({ kind: 'link', name, change: 'removed' });
   }
 
-  const currentActions = new Map(
-    currentTypes
-      .filter((t): t is OntologyActionTypeWire => t.kind === 'action')
-      .map((t) => [t.name, t] as const),
-  );
-  const draftActionTypes = draft.actionTypes ?? [];
-  const draftActionNames = new Set(draftActionTypes.map((a) => a.name));
-  for (const actionType of draftActionTypes) {
-    const current = currentActions.get(actionType.name);
-    if (current === undefined) {
-      entries.push({ kind: 'action', name: actionType.name, change: 'added' });
-    } else if (actionTypeComparable(current) !== actionTypeComparable(actionType)) {
-      entries.push({ kind: 'action', name: actionType.name, change: 'changed' });
+  for (const [name, actionType] of after.actions) {
+    const previous = before.actions.get(name);
+    if (previous === undefined) entries.push({ kind: 'action', name, change: 'added' });
+    else if (actionTypeComparable(previous) !== actionTypeComparable(actionType)) {
+      entries.push({ kind: 'action', name, change: 'changed' });
     }
   }
-  for (const name of currentActions.keys()) {
-    if (!draftActionNames.has(name)) entries.push({ kind: 'action', name, change: 'removed' });
+  for (const name of before.actions.keys()) {
+    if (!after.actions.has(name)) entries.push({ kind: 'action', name, change: 'removed' });
   }
 
   return entries.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
