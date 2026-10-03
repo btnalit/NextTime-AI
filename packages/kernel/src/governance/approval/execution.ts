@@ -202,6 +202,34 @@ export async function listStaleExecutingActionRequests(
   }
 }
 
+/** R-48: how many times the stale-executing reaper replays one row's `apply` without getting an
+ *  answer about it (the gate still applying, unreachable, or timing out again) before it marks the
+ *  row `failed` with an `outcome_unknown` reason for a person to reconcile. At the default 5-minute
+ *  reaper tick this is about 15 minutes of replays after the row first went stale. */
+export const DEFAULT_MAX_REPLAY_ATTEMPTS = 3;
+
+/**
+ * R-48: counts one reaper replay of an `executing` row (migrations/governance/
+ * 0013_action_request_replay_attempts.sql) and returns the new count — persisted *before* the
+ * replay runs, so a replay that throws still counts and the bound survives a kernel restart.
+ * Returns `null` without counting when the row is no longer `executing` (another path resolved it
+ * since the scan — the same benign race the reaper already tolerates). Not a state transition: no
+ * audit or outbox write; the terminal `fail` the cap leads to is audited with its reason.
+ */
+export async function recordActionRequestReplayAttempt(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+): Promise<number | null> {
+  const result = await client.query<{ replay_attempts: number }>(
+    `update action_requests set replay_attempts = replay_attempts + 1
+     where workspace_id = $1 and id = $2 and status = 'executing'
+     returning replay_attempts`,
+    [workspaceId, actionRequestId],
+  );
+  return result.rows[0]?.replay_attempts ?? null;
+}
+
 // -------------------------------------------------------------------------------------------
 // start_execution / mark_executed / mark_failed / compensate
 // -------------------------------------------------------------------------------------------
