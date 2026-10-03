@@ -126,9 +126,10 @@ export class KernelClient {
    * `{ok:false}`).
    *
    * `timeoutMsOverride` (fix/invoke-worker-wait-and-outbox-prune) replaces the constructor's own
-   * `timeoutMs` for this one call only — needed by `invoke_worker(wait:true)`, whose kernel-side
-   * wait window (up to `INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS`, `@nexttime/shared`) can exceed
-   * this client's flat default (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, 30s) — see `modes/entry.ts`'s
+   * `timeoutMs` for this one call only — needed by `invoke_worker`, whose kernel-side spawn
+   * budget plus wait window (`INVOKE_WORKER_SPAWN_BUDGET_SECONDS` + up to
+   * `INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS`, `@nexttime/shared`) can exceed this client's flat
+   * default (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, 30s) — see `modes/entry.ts`'s
    * `resolveInvokeWorkerCallPlan` for how the override is computed. `undefined` (every other call
    * site, today) keeps the constructor default.
    */

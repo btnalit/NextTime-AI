@@ -147,8 +147,12 @@ import { writeObservedFacts } from './observed-facts.js';
  * `(sid|principal, gatekeeperId, operation, stable params hash)`
  * (`deriveDefaultIdempotencyKey`). A retry — from a caller-side timeout, an aborted connection, or
  * simple redelivery — that reuses the same key returns the *existing* row instead of creating a
- * second one (`governance/approval/request-action.ts` owns the storage half: a partial unique
- * index plus a SAVEPOINT-guarded INSERT for the concurrent-callers case). Because of this, the
+ * second one (`governance/approval/request-action.ts` owns the storage half: partial unique
+ * indexes plus a SAVEPOINT-guarded INSERT for the concurrent-callers case). The two kinds differ
+ * in how long they dedupe (2026-10-02 review R-53, decision D-12): an explicit key replays its row
+ * whatever its status — the caller asked for exactly-once; the derived default replays only a row
+ * still in flight, so once that row is terminal (`executed`, `failed`, `rejected`, `expired`, …)
+ * an identical call is a new intent with a new row. Because of this, the
  * decision table above is necessary but not sufficient — `runGovernedRequest`'s switch handles
  * every `ActionRequestStatus`, not just the three a *fresh* resolution can produce, since a replay
  * can return a row already carried to any status (including terminal) by an earlier call.
@@ -1171,8 +1175,10 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   // (workspace_id, idempotency_key) unique index (workspace scoping is the DB's own job — see
   // `scopeExplicitIdempotencyKey`'s doc comment); omitted, a default is derived from (sid|
   // principal, gatekeeperId, operation, stable params hash) so an unmarked retry still collapses
-  // onto the same row. Only `mode:'execute'` calls reach `runGovernedRequest` (an ActionRequest is
-  // only ever created there) — the observe path below never needs one.
+  // onto the same row — while that row is in flight; after it is terminal an identical call is a
+  // new intent (R-53 / D-12, this module's doc comment). Only `mode:'execute'` calls reach
+  // `runGovernedRequest` (an ActionRequest is only ever created there) — the observe path below
+  // never needs one.
   const idempotencyKey = callerIdempotencyKey
     ? scopeExplicitIdempotencyKey({ onBehalfOf, sid, key: callerIdempotencyKey })
     : deriveDefaultIdempotencyKey({

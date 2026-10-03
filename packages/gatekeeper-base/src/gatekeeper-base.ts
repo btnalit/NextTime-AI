@@ -1,15 +1,18 @@
 import type { Operation } from '@nexttime/shared';
 import type { CredentialResolver } from './credentials/index.js';
 import {
+  ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
   IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
   OperationRefusedError,
   RevertNotSupportedError,
+  TransportInvokeError,
+  TransportTimeoutError,
 } from './errors.js';
 import { hashIdempotencyParams } from './idempotency-store.js';
-import type { IdempotencyStore } from './idempotency-store.js';
+import type { IdempotencyStore, StoredApplyFailure } from './idempotency-store.js';
 import type { Transport, TransportInvokeResult } from './kinds/types.js';
 import { assertParamsValid } from './params-validation.js';
 import type { ObservedFactCandidate } from './protocol.js';
@@ -53,6 +56,14 @@ export interface HealthResult {
 
 export interface GatekeeperBaseCallContext {
   readonly onBehalfOf?: string;
+}
+
+/** The error a stored failed `apply` answers with on every later call for its key (R-51): the
+ *  same transport failure (502), or "outcome unknown" (409) when a timeout killed the call. */
+function storedFailureError(key: string, failure: StoredApplyFailure): Error {
+  return failure.outcomeUnknown
+    ? new ApplyOutcomeUnknownError(key, failure.message)
+    : new TransportInvokeError(failure.message);
 }
 
 export interface GatekeeperBaseOptions {
@@ -154,9 +165,17 @@ export class GatekeeperBase {
       paramsHash: hashIdempotencyParams(params),
       onBehalfOf: ctx.onBehalfOf,
     };
-    const reservation = await this.options.idempotencyStore.reserve(actionRequestId, descriptor);
+    const store = this.options.idempotencyStore;
+    const reservation = await store.reserve(actionRequestId, descriptor);
     if (reservation.status === 'conflict') {
       throw new IdempotencyConflictError(actionRequestId);
+    }
+    if (reservation.status === 'unknown') {
+      // R-51 / D-11: reserved by a gate process that died mid-call — never re-run.
+      throw new ApplyOutcomeUnknownError(actionRequestId);
+    }
+    if (reservation.status === 'failed') {
+      throw storedFailureError(actionRequestId, reservation.failure);
     }
     if (reservation.status === 'replay') {
       const entry = reservation.entry;
@@ -167,7 +186,15 @@ export class GatekeeperBase {
       };
     }
 
-    const credential = await this.resolveCredential(ctx.onBehalfOf);
+    let credential: unknown;
+    try {
+      credential = await this.resolveCredential(ctx.onBehalfOf);
+    } catch (err) {
+      // R-51: nothing ran yet — free the key, so a retry once the credential is fixed is a clean
+      // first attempt rather than 409 forever.
+      await store.release(actionRequestId);
+      throw err;
+    }
     let result: TransportInvokeResult;
     try {
       result = await this.options.transport.invoke(operation, params, {
@@ -175,12 +202,23 @@ export class GatekeeperBase {
         credential,
       });
     } catch (err) {
-      // R-04: a refusal ran nothing — free the key so a retry is refused again, not 409. Any other
-      // failure keeps the key reserved: the transport may have acted before it failed.
+      // R-04: a refusal ran nothing — free the key so a retry is refused again, not 409.
       if (err instanceof OperationRefusedError) {
-        await this.options.idempotencyStore.release(actionRequestId);
+        await store.release(actionRequestId);
+        throw err;
       }
-      throw err;
+      // R-51: any other failure may have acted before it failed — record it under the key, so a
+      // retry (the kernel reaper's replay) gets this same answer instead of 409 forever or a
+      // second run. A timeout killed the command mid-call: its outcome is unknown, not failed.
+      const failure: StoredApplyFailure = {
+        message:
+          err instanceof TransportInvokeError
+            ? err.message
+            : `apply for "${name}" failed inside the gate`,
+        outcomeUnknown: err instanceof TransportTimeoutError,
+      };
+      await store.fail(actionRequestId, failure);
+      throw failure.outcomeUnknown ? storedFailureError(actionRequestId, failure) : err;
     }
     const observedFacts = this.toObservedFacts(operation, result.data);
     await this.options.idempotencyStore.complete(actionRequestId, {

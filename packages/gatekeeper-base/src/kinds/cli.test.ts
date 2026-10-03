@@ -1,5 +1,6 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
+import { TransportTimeoutError } from '../errors.js';
 import { CliTransport, renderCommandTemplate } from './cli.js';
 
 describe('renderCommandTemplate', () => {
@@ -64,6 +65,43 @@ describe('CliTransport', () => {
     const result = await transport.invoke(operation, { container: 'c1' }, {});
     expect(result.data).toEqual({ stdout: 'restarted', stderr: '' });
     expect(execFileImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // R-51, against a real child process (the default execFile path): a command blocked on stdin
+  // gets EOF instead of hanging, and one that never exits is killed at the exec timeout.
+  describe('exec bounds (real child process)', () => {
+    const nodeOperation: Operation = {
+      ...operation,
+      name: 'node.script',
+      binding: { kind: 'cli', command_template: '{node} -e {script}' },
+    };
+
+    it('a command that reads stdin to the end sees EOF and completes', async () => {
+      const transport = new CliTransport({ execTimeoutMs: 10_000 });
+      const result = await transport.invoke(
+        nodeOperation,
+        {
+          node: process.execPath,
+          script:
+            "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('eof'));",
+        },
+        {},
+      );
+      expect(result.data).toEqual({ stdout: 'eof', stderr: '' });
+    });
+
+    it('a command that never exits is killed at the exec timeout and fails with TransportTimeoutError', async () => {
+      const transport = new CliTransport({ execTimeoutMs: 300 });
+      const startedAt = Date.now();
+      await expect(
+        transport.invoke(
+          nodeOperation,
+          { node: process.execPath, script: 'setInterval(() => {}, 1000);' },
+          {},
+        ),
+      ).rejects.toBeInstanceOf(TransportTimeoutError);
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    });
   });
 
   it('simulate describes the argv without executing', async () => {

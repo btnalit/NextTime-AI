@@ -32,11 +32,22 @@ import {
  * `request_action` call (no other transaction can see the row before this one commits), so
  * persisting them as separate durable rows would add write volume without adding information.
  *
+ * Idempotency window (2026-10-02 review R-53, maintainer decision D-12): a key the caller did not
+ * supply — `application/gateway/action-executor.ts`'s `deriveDefaultIdempotencyKey`, prefixed
+ * `auto:` — dedupes only against a row that is still in flight (`IN_FLIGHT_ACTION_REQUEST_STATUSES`).
+ * Once that row is terminal, a repeat is a new intent and gets a new row: a retry after `failed`,
+ * `rejected` or `expired` is evaluated again, and a legitimate repeat (restart, check, restart)
+ * applies again instead of replaying the first `executed` result. Any other key is explicit (the
+ * caller's own `idempotencyKey`, scoped by `scopeExplicitIdempotencyKey`) and keeps its original
+ * meaning: one row per key, whatever its status. migrations/governance/
+ * 0014_action_request_idempotency_window.sql holds the two matching partial unique indexes.
+ *
  * Idempotency race (I6/I11 concurrency hardening): the check-first read above is not itself the
  * enforcement mechanism — two concurrent `requestAction` calls sharing one `idempotencyKey` can
- * both see "no existing row" and both attempt to INSERT. The partial unique index
- * `action_requests_idempotency_key_uidx` (migrations/governance/0003_action_requests.sql) is what
- * actually prevents two rows: Postgres detects the conflict at INSERT time — the second inserter
+ * both see "no existing row" and both attempt to INSERT. The partial unique indexes
+ * (`action_requests_idempotency_key_uidx` for explicit keys,
+ * `action_requests_derived_idempotency_key_inflight_uidx` for derived ones) are what actually
+ * prevent two rows: Postgres detects the conflict at INSERT time — the second inserter
  * blocks until the first commits or rolls back, then either proceeds (rollback) or raises
  * SQLSTATE 23505 (commit) — and 23505 aborts the rest of the *whole* transaction unless the failed
  * statement was wrapped in its own `SAVEPOINT`. So the INSERT below always runs inside one: on a
@@ -83,7 +94,27 @@ const RESOLUTION_EVENT_BY_DECISION: Record<PolicyDecision, ActionRequestEvent> =
   deny: 'deny',
 };
 
-const IDEMPOTENCY_KEY_CONSTRAINT = 'action_requests_idempotency_key_uidx';
+/** D-12: the prefix `application/gateway/action-executor.ts`'s `deriveDefaultIdempotencyKey` puts
+ *  on a key the caller did not supply. Must match the `like 'auto:%'` predicates in
+ *  migrations/governance/0014_action_request_idempotency_window.sql. */
+export const DERIVED_IDEMPOTENCY_KEY_PREFIX = 'auto:';
+
+/** D-12: the statuses a derived key still dedupes against — the non-terminal states of
+ *  `ACTION_REQUEST_TRANSITIONS` (`executed` counts as terminal: the operation has run, even though
+ *  `verify` can follow). Must match governance 0014's in-flight index predicate. */
+export const IN_FLIGHT_ACTION_REQUEST_STATUSES: readonly ActionRequestStatus[] = [
+  'proposed',
+  'policy_evaluated',
+  'auto_approved',
+  'pending_approval',
+  'approved',
+  'executing',
+];
+
+const IDEMPOTENCY_KEY_CONSTRAINTS: ReadonlySet<string> = new Set([
+  'action_requests_idempotency_key_uidx',
+  'action_requests_derived_idempotency_key_inflight_uidx',
+]);
 
 /** Same detection pattern `application/chat/service.ts` already uses for its own partial-unique-
  *  index race (`activities_one_running_turn_per_chat_uidx`) — matches on both SQLSTATE 23505 and
@@ -91,7 +122,45 @@ const IDEMPOTENCY_KEY_CONSTRAINT = 'action_requests_idempotency_key_uidx';
 function isIdempotencyKeyConflict(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const candidate = err as { code?: unknown; constraint?: unknown };
-  return candidate.code === '23505' && candidate.constraint === IDEMPOTENCY_KEY_CONSTRAINT;
+  return (
+    candidate.code === '23505' &&
+    typeof candidate.constraint === 'string' &&
+    IDEMPOTENCY_KEY_CONSTRAINTS.has(candidate.constraint)
+  );
+}
+
+/**
+ * The row a call with `idempotencyKey` replays, if any. An explicit key matches its one row in any
+ * status (unchanged). A derived key matches only an in-flight row (D-12) — except after losing the
+ * INSERT race (`afterConflict`): the unique violation proves a concurrent in-flight row with this
+ * key existed a moment ago, so the newest row with the key is the one this call collapses onto,
+ * even if the winner has gone terminal since.
+ */
+async function findReplayableActionRequest(
+  client: PoolClient,
+  workspaceId: string,
+  idempotencyKey: string,
+  options: { readonly afterConflict: boolean },
+): Promise<ActionRequestRow | null> {
+  if (!idempotencyKey.startsWith(DERIVED_IDEMPOTENCY_KEY_PREFIX)) {
+    return findActionRequestByIdempotencyKey(client, workspaceId, idempotencyKey);
+  }
+  const result = options.afterConflict
+    ? await client.query<ActionRequestDbRow>(
+        `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
+         where workspace_id = $1 and idempotency_key = $2
+         order by requested_at desc
+         limit 1`,
+        [workspaceId, idempotencyKey],
+      )
+    : await client.query<ActionRequestDbRow>(
+        `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
+         where workspace_id = $1 and idempotency_key = $2 and status = any($3::text[])
+         limit 1`,
+        [workspaceId, idempotencyKey, IN_FLIGHT_ACTION_REQUEST_STATUSES],
+      );
+  const row = result.rows[0];
+  return row ? mapActionRequestRow(row) : null;
 }
 
 async function insertActionRequestRow(
@@ -135,8 +204,9 @@ async function insertActionRequestRow(
  * Idempotent: a repeat call with the same `idempotencyKey` returns the existing row unchanged — no
  * new insert, no new audit/outbox writes (a true no-op replay, not merely "the same resulting
  * state"), whether the duplicate is detected by the fast-path read or by the INSERT's own unique
- * violation (concurrent callers — see this module's own doc comment). I18 quota checks (§8.1
- * "policy + 配额(I18)") are S2.7 scope, not performed here.
+ * violation (concurrent callers — see this module's own doc comment). For a derived key that holds
+ * only while the existing row is in flight (D-12, this module's own doc comment). I18 quota checks
+ * (§8.1 "policy + 配额(I18)") are S2.7 scope, not performed here.
  */
 export async function requestAction(
   client: PoolClient,
@@ -144,11 +214,9 @@ export async function requestAction(
   input: RequestActionInput,
 ): Promise<ActionRequestRow> {
   if (input.idempotencyKey) {
-    const existing = await findActionRequestByIdempotencyKey(
-      client,
-      workspaceId,
-      input.idempotencyKey,
-    );
+    const existing = await findReplayableActionRequest(client, workspaceId, input.idempotencyKey, {
+      afterConflict: false,
+    });
     if (existing) return existing;
   }
 
@@ -195,10 +263,11 @@ export async function requestAction(
     } catch (err) {
       if (!isIdempotencyKeyConflict(err)) throw err;
       await client.query('ROLLBACK TO SAVEPOINT request_action_insert');
-      const existing = await findActionRequestByIdempotencyKey(
+      const existing = await findReplayableActionRequest(
         client,
         workspaceId,
         input.idempotencyKey,
+        { afterConflict: true },
       );
       // The unique violation means a row with this key exists (or existed a moment ago, within
       // the same still-committed transaction) — not finding it now would mean the winner rolled

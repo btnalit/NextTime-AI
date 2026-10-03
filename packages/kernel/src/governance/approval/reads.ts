@@ -309,11 +309,15 @@ export async function readApprovalDecisions(
 }
 
 /**
- * Every ActionRequest for one Gatekeeper not yet in a terminal/execution-started state
- * (`auto_approved`/`approved`/`pending_approval`), ascending `requested_at` — `drainer.ts`'s queue:
- * it processes `auto_approved`/`approved` rows and stops at the first `pending_approval` one, so a
- * later row never executes ahead of an earlier one still awaiting a human decision (design doc
- * S2.3 "drain 每 Gatekeeper 单飞、升序、遇 pending 停").
+ * Every ActionRequest for one Gatekeeper not yet in a terminal state
+ * (`auto_approved`/`approved`/`pending_approval`/`executing`), ascending `requested_at` —
+ * `drainer.ts`'s queue: it processes `auto_approved`/`approved` rows and stops at the first
+ * `pending_approval` one, so a later row never executes ahead of an earlier one still awaiting a
+ * human decision (design doc S2.3 "drain 每 Gatekeeper 单飞、升序、遇 pending 停"). R-50 (maintainer
+ * decision D-10: per-Gatekeeper serial order is a guarantee): an `executing` row is in the queue
+ * too and stops the drain the same way — an earlier `apply` still in flight on another drain
+ * trigger, or one whose outcome is unknown and awaits the stale-executing reaper, is a barrier
+ * nothing later on the same Gatekeeper may pass.
  */
 export async function listExecutableQueue(
   client: PoolClient,
@@ -323,7 +327,7 @@ export async function listExecutableQueue(
   const result = await client.query<ActionRequestDbRow>(
     `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
      where workspace_id = $1 and gatekeeper_id = $2
-       and status in ('auto_approved', 'approved', 'pending_approval')
+       and status in ('auto_approved', 'approved', 'pending_approval', 'executing')
      order by requested_at asc`,
     [workspaceId, gatekeeperId],
   );
