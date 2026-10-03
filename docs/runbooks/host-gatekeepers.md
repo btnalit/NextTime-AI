@@ -602,8 +602,12 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
 3. 需要凭证的实例：详情抽屉 → **录入共享凭证** → "获取 5 分钟令牌"（`issue_gate_host_token`）→ 填 Bearer
    token 或原始 JSON → 提交。浏览器把凭证 `POST` 到 `/gate-host/i/<id>/gate/connected-accounts`，caddy 转
    给宿主，宿主验 JWT（`aud` / `typ` / `gate` = 路径 id / 5 分钟）后按 JWT 里的槽位（`__shared__`）落盘。
+   R-69：实例还没被接管也能录入（凭证路由按宿主内存表解析，不要求已建成）；`mcp` 实例的共享凭证落盘后，宿主
+   **在应答前**立刻带着它重新握手（`tools/list`）并 announce——`tools/list` 本身要认证的目标就是这样接管的，
+   不必等下一轮。凭证被目标拒绝时照样落盘（应答仍是 `stored`），实例保持未接管，`/healthz` 的 `buildError`
+   给出原因（如 `responded 401`）；已接管的实例换错凭证时保留原有构建，不会掉线。
    `connected_account` 实例由每个成员在工作区"系统接入"页 **录入我的凭证**（`issue_gate_credential_token`，
-   槽位 = 自己的 Principal）。
+   槽位 = 自己的 Principal）；成员凭证不参与握手，所以 `tools/list` 要认证的目标目前只能用 `shared` 模式接入。
 4. 宿主接管后（有心跳、有 Operation 数、端点是 `http://gate-host:8083/i/<id>`）在详情抽屉 **启用** 实例——
    与打包门同一步，管理员复核过端点再放行；接入包 `mcp` / `http` 设为 **平台预置**（P-B2a 起允许；`cli` / `ssh`
    仍不能）→ 工作区"系统接入"从平台目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
