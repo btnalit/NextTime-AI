@@ -8,9 +8,12 @@
 # shell variable and are only ever printed via redact() (first 6 characters).
 #
 # Usage:
-#   sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey> [pollTimeoutSeconds]
+#   sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKeyFile> [pollTimeoutSeconds]
 #
-#   <apiKey>              — a human-channel API key for the target workspace holding at least
+#   <apiKeyFile>          — a file (keep it chmod 600) holding the API key; R-34: the key itself is
+#                            never a command-line argument — every local user can read
+#                            /proc/<pid>/cmdline, and shell history keeps it. The key: a
+#                            human-channel API key for the target workspace holding at least
 #                            `builder` role (`propose_worker_definition`'s own minRole — this
 #                            script also calls `publish_worker_definition`, channel:'human' with
 #                            no additional minRole, and `invoke_worker`/`get_task`/`list_tasks`,
@@ -55,18 +58,29 @@
 # after the restart — this script FAILs with a message to re-run rather than guessing; the race is
 # probabilistic by nature, the same way any chaos experiment against a real timing window is.
 #
-# Confidentiality (repo is public): the API key lives only in a shell variable and curl arguments
-# for this process's lifetime, never written to a file, only ever printed via redact() (first 6
-# characters) — same convention as chaos-kill-worker.sh / chaos-kill-entry.sh.
+# Confidentiality (repo is public): the API key is read from <apiKeyFile> into a shell variable for
+# this process's lifetime, reaches curl only on stdin (`-H @-`, fed by the printf builtin — never
+# an argument of any process), and is only ever printed via redact() (first 6 characters) — same
+# convention as chaos-kill-worker.sh / chaos-kill-entry.sh.
 
 set -u
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey> [pollTimeoutSeconds]" >&2
+  echo "usage: sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKeyFile> [pollTimeoutSeconds]" >&2
   exit 1
 fi
 
-API_KEY="$1"
+API_KEY_FILE="$1"
+# Never echo the argument back: an old-style call passes the key itself here.
+if [ ! -f "$API_KEY_FILE" ] || [ ! -r "$API_KEY_FILE" ]; then
+  echo "chaos-kill-kernel-mid-invoke: <apiKeyFile> must be a readable file holding the API key (chmod 600) — the key is no longer taken on the command line" >&2
+  exit 1
+fi
+API_KEY=$(tr -d '[:space:]' <"$API_KEY_FILE")
+if [ -z "$API_KEY" ]; then
+  echo "chaos-kill-kernel-mid-invoke: <apiKeyFile> is empty" >&2
+  exit 1
+fi
 POLL_TIMEOUT_SECONDS="${2:-150}"
 POLL_INTERVAL_SECONDS=5
 KERNEL_RESTART_TIMEOUT_SECONDS=60
@@ -107,12 +121,18 @@ redact() {
   printf '%s...(redacted)' "$prefix"
 }
 
+# The Authorization header for `curl -H @-`: printf is a shell builtin, so the key is never an
+# argument of any process.
+auth_header() {
+  printf 'Authorization: Bearer %s\n' "$API_KEY"
+}
+
 # One capability call — human channel, through caddy (same transport chaos-kill-worker.sh's own
 # `get_task()` helper and docs/runbooks/troubleshoot-task.md's own examples use). Prints the raw
 # JSON response on stdout.
 cap() {
-  curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/$1" \
-    -H "Authorization: Bearer $API_KEY" \
+  auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/$1" \
+    -H @- \
     -H 'content-type: application/json' \
     -d "$2"
 }
@@ -170,8 +190,9 @@ pass "publish-worker-definition" "published $definition_id@$definition_version"
 
 # --- 2. fire invoke_worker in the background, kill the kernel without waiting for a response ---
 
-curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/invoke_worker" \
-  -H "Authorization: Bearer $API_KEY" \
+# (The pipe is explicit, so curl's stdin is the header even though the list runs in the background.)
+auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/invoke_worker" \
+  -H @- \
   -H 'content-type: application/json' \
   --max-time 20 \
   -d "{\"definitionId\":\"$definition_id\",\"version\":$definition_version,\"input\":{},\"wait\":false}" \

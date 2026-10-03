@@ -47,8 +47,9 @@
 #
 # Confidentiality (repo is public): API keys are held only in shell variables and container env
 # vars for this process's lifetime, never written to a file, and only ever printed via redact()
-# (first 6 characters). Keys are passed to the driver as CLI arguments at each `docker compose run`
-# invocation, never baked into a file.
+# (first 6 characters). They are never an argument of any process (R-34): run_driver hands them to
+# the driver through the environment, and the curl calls read the Authorization header from stdin
+# (`auth_header … | curl -H @-`).
 
 set -u
 
@@ -267,8 +268,8 @@ entry_worker_definition_step() {
 
   # Propose v2 via the human channel, through caddy — same transport explain_step already uses
   # (task brief: "POST /api/cap/propose_worker_definition through caddy with the owner's key").
-  propose_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/propose_worker_definition" \
-    -H "Authorization: Bearer $ALICE_KEY" \
+  propose_resp=$(auth_header "$ALICE_KEY" | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/propose_worker_definition" \
+    -H @- \
     -H 'content-type: application/json' \
     -d "{\"definitionId\":\"$entry_def_id\",\"kind\":\"entry\",\"definition\":{\"systemPrompt\":\"accept_s1 v2 entry prompt\",\"capabilities\":[\"get_object\"]}}")
   rc=$?
@@ -286,8 +287,8 @@ entry_worker_definition_step() {
   pass "entry-worker-definition-propose-v2" "proposed $entry_def_id@$v2_version (draft)"
 
   # Publish v2, same transport.
-  publish_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/publish_worker_definition" \
-    -H "Authorization: Bearer $ALICE_KEY" \
+  publish_resp=$(auth_header "$ALICE_KEY" | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/publish_worker_definition" \
+    -H @- \
     -H 'content-type: application/json' \
     -d "{\"definitionId\":\"$entry_def_id\",\"version\":$v2_version}")
   rc=$?
@@ -397,8 +398,8 @@ kill_and_continue_step() {
 # deliberately goes through caddy's published, self-signed-TLS port rather than the internal
 # control-network path everything else in this script uses, per the task brief's own wording.
 explain_step() {
-  resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/explain" \
-    -H "Authorization: Bearer $ALICE_KEY" \
+  resp=$(auth_header "$ALICE_KEY" | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/explain" \
+    -H @- \
     -H 'content-type: application/json' \
     -d "{\"nodeId\":\"$ALICE_TURN2_ID\"}")
   rc=$?
