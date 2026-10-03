@@ -56,6 +56,8 @@ const CODE_TITLES: Readonly<Record<string, string>> = {
   manifest_fetch_failed: 'Manifest fetch failed',
   meta_ontology_write_forbidden: 'Not permitted',
   attenuation_denied: 'Not permitted',
+  // D-24: someone else proposed this row — only its proposer or the owner may publish/deprecate.
+  not_proposer: 'Not the proposer',
   not_published: 'Not published',
   invalid_step_reference: 'Invalid reference',
   unknown_quota_key: 'Unknown quota key',

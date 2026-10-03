@@ -7,7 +7,11 @@ import {
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { ENTRY_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import {
+  ENTRY_CEILING_CAPABILITIES,
+  type PublishActor,
+  assertPublishAuthority,
+} from '../../governance/capability/index.js';
 import { projectWorkerDefinitionObject } from '../../substrate/ontology/index.js';
 
 /**
@@ -267,19 +271,42 @@ async function getForUpdate(
   return mapRow(row);
 }
 
+/** D-24 (`governance/capability/publish-authority.ts`): the locked row's proposer or the owner.
+ *  Someone else's draft is invisible to the caller (I16), so it is not found — the same answer
+ *  `discard_draft` gives; a published/deprecated version everyone can see is a 403. */
+function requireWorkerDefinitionAuthority(
+  action: 'publish_worker_definition' | 'deprecate_worker_definition',
+  actor: PublishActor | undefined,
+  row: WorkerDefinitionRow,
+): void {
+  assertPublishAuthority(
+    action,
+    actor,
+    row,
+    `WorkerDefinition ${row.id}@${row.version}`,
+    () => new WorkerDefinitionNotFoundError(row.workspaceId, row.id, row.version),
+  );
+}
+
 /** Publishes a draft version (human channel only — enforced at the gateway, see this module's
  *  doc comment): validates the transition via `PUBLISHABLE_TRANSITIONS` (`IllegalTransition` on
  *  anything but `draft -> published`), validates `definition` against its kind-specific schema
  *  (entry: capabilities ⊆ entryScope()), sets `published_by`/`published_at`, and projects the
  *  WorkerDefinition into the graph (`substrate/ontology`'s `projectWorkerDefinitionObject`) so
- *  `find_workers` (S2.7) has something to traverse. */
+ *  `find_workers` (S2.7) has something to traverse.
+ *
+ *  `actor` (D-24): the `publish_worker_definition` caller — `actor.principalId` is
+ *  `publisherPrincipalId` — checked against the locked row; omitted by internal callers
+ *  (workspace creation's default entry definition). */
 export async function publishWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   publisherPrincipalId: string,
   ref: WorkerDefinitionVersionRef,
+  actor?: PublishActor,
 ): Promise<WorkerDefinitionRow> {
   const row = await getForUpdate(client, workspaceId, ref);
+  requireWorkerDefinitionAuthority('publish_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish'); // throws IllegalTransition if illegal
 
   validateWorkerDefinitionContent(row.kind, row.definition);
@@ -313,13 +340,15 @@ export async function publishWorkerDefinition(
 /** Deprecates a published version (human channel only — enforced at the gateway). Validates the
  *  transition via `PUBLISHABLE_TRANSITIONS` (`published -> deprecated` is its only edge out of
  *  `published`; `IllegalTransition` otherwise, e.g. deprecating a draft or an already-deprecated
- *  version). */
+ *  version). `actor` (D-24): as for `publishWorkerDefinition`. */
 export async function deprecateWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   ref: WorkerDefinitionVersionRef,
+  actor?: PublishActor,
 ): Promise<WorkerDefinitionRow> {
   const row = await getForUpdate(client, workspaceId, ref);
+  requireWorkerDefinitionAuthority('deprecate_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'deprecate');
 
   const result = await client.query<WorkerDefinitionDbRow>(

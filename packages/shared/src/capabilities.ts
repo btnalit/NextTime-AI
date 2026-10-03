@@ -1072,31 +1072,38 @@ const metaCapabilities: readonly Capability[] = [
     // style only if absent"). Params identify one Operation by its `{gatekeeperId, name}` identity
     // (governance/gatekeepers/manifest.ts — an Operation has no dedicated id column, unlike
     // WorkerDefinition/Skill/Procedure, design doc §9.2 "operations 作为平台元本体存于 objects /
-    // links"). No `minRole` — same as `publish_skill`/`publish_procedure`/
-    // `publish_worker_definition` below, human-channel-only is the actual gate (I16). Distinct
-    // from the *connection flow*'s (S2.13) owner-scoped `publish_manifest`, which publishes a
-    // whole newly-imported manifest at once (design doc §7.5 "owner 发布清单") — this capability
-    // publishes one already-drafted Operation, the same granularity `publish_skill` operates at.
+    // links"). Distinct from the *connection flow*'s (S2.13) owner-scoped `publish_manifest`,
+    // which publishes a whole newly-imported manifest at once (design doc §7.5 "owner 发布清单") —
+    // this capability publishes one already-drafted Operation, the same granularity
+    // `publish_skill` operates at.
+    // D-24 (review 2026-10-02, the leftover 100 family): every meta-ontology `publish_*` /
+    // `deprecate_*` is `minRole: 'builder'`, and only the row's proposer or the workspace owner may
+    // act on it (kernel `governance/capability/publish-authority.ts`, checked on the locked row).
     name: 'publish_operation',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder',
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
     resultSchema: wire.OperationPublishResultWireSchema,
-    description: 'Publish a draft Operation (I16).',
+    description:
+      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise).',
   },
   {
     name: 'deprecate_operation',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder', // D-24 — see publish_operation above.
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
     resultSchema: wire.OperationDeprecateResultWireSchema,
-    description: 'Deprecate a published Operation.',
+    description:
+      'Deprecate a published Operation. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
-    // S8 W3-K1 (leftover 81): same minRole as publish_operation/deprecate_operation right above —
-    // §9.3 names no role for this family, so none is invented here either. `mode:'write'` (not
+    // S8 W3-K1 (leftover 81): no minRole — §9.3 names no role for this family, and D-24 (which
+    // raised publish_operation/deprecate_operation to `builder`) covered lifecycle transitions
+    // only, not this documentation edit. `mode:'write'` (not
     // `execute`, unlike publish/deprecate): an immediate, audited in-platform change with no
     // approval gate — editing documentation is not a lifecycle transition.
     name: 'update_operation_description',
@@ -1135,40 +1142,50 @@ const metaCapabilities: readonly Capability[] = [
     description: 'Propose a private draft Procedure distilled from a successful Task.',
   },
   {
+    // D-24 — see publish_operation. Someone else's draft is not visible to the caller (I16), so it
+    // is not found; a published version that is not the caller's is 403 not_proposer.
     name: 'publish_skill',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder',
     paramsSchema: z.object({ skillId: id }).strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
-    description: 'Publish a draft Skill (I16).',
+    description:
+      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
   },
   {
     name: 'publish_procedure',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder', // D-24 — see publish_skill.
     paramsSchema: z.object({ procedureId: id }).strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
-    description: 'Publish a draft Procedure (I16).',
+    description:
+      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
   },
   {
     name: 'deprecate_skill',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder', // D-24 — see publish_skill.
     paramsSchema: z.object({ skillId: id }).strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
-    description: 'Deprecate a published Skill.',
+    description:
+      'Deprecate a published Skill. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
     name: 'deprecate_procedure',
     group: 'meta',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder', // D-24 — see publish_skill.
     paramsSchema: z.object({ procedureId: id }).strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
-    description: 'Deprecate a published Procedure.',
+    description:
+      'Deprecate a published Procedure. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
     // S2.14 addition, same style as `list_worker_definitions` (worker group, below): observe,
@@ -2182,29 +2199,35 @@ const workerCapabilities: readonly Capability[] = [
       'Propose a private draft WorkerDefinition version (definitionId omitted starts a new family).',
   },
   {
+    // D-24 (review 2026-10-02) — see publish_operation (meta group) for the rule.
     name: 'publish_worker_definition',
     group: 'worker',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder',
     paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
-    description: 'Publish a draft WorkerDefinition (I12: immutable once published).',
+    description:
+      'Publish your draft WorkerDefinition version (I12: immutable once published). Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
   },
   {
     name: 'deprecate_worker_definition',
     group: 'worker',
     mode: 'execute',
     channel: 'human',
+    minRole: 'builder', // D-24 — see publish_worker_definition.
     paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
-    description: 'Deprecate a published WorkerDefinition version.',
+    description:
+      'Deprecate a published WorkerDefinition version. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
     // S8 W3 K2 (leftover 82; ontology_version added by leftover 99): drafts of
     // WorkerDefinition/Skill/Procedure/OntologyVersion had `draft -> published`
     // as their only exit (I16 "提议者私有" — nobody else can even see it, so no owner-override
-    // exists either). Human-channel-only, same as publish_*/deprecate_* right above/below — no
-    // `minRole`, I16's channel split is the actual gate. Deletes the row outright (never a fourth
+    // exists either). Human-channel-only, no `minRole` — I16's channel split and the "own draft
+    // only" predicate are the gate (D-24 raised publish_*/deprecate_* to `builder`; discarding
+    // one's own draft was left as is). Deletes the row outright (never a fourth
     // `PublishableStatus`); a published/deprecated version is never reachable through this
     // (`application/worker/draft-lifecycle.ts`'s own `DraftNotDiscardableError`). The kernel also
     // runs a periodic sweep that discards drafts past a staleness threshold, attributed to a

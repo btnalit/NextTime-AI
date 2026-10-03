@@ -897,13 +897,19 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
   };
 };
 
+// D-24: `publish_worker_definition`/`deprecate_worker_definition` are `minRole: 'builder'`, and
+// the service checks the locked row's proposer against the caller (owner exempt) —
+// `governance/capability/publish-authority.ts`.
 const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { definitionId, version } = params as { definitionId: string; version: number };
-  const principalId = await currentPrincipalId(client);
-  const row = await publishWorkerDefinition(client, workspaceId, principalId, {
-    definitionId,
-    version,
-  });
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const row = await publishWorkerDefinition(
+    client,
+    workspaceId,
+    caller.id,
+    { definitionId, version },
+    { principalId: caller.id, role: caller.role },
+  );
   return {
     result: toWireWorkerDefinition(row),
     resourceType: 'worker_definition',
@@ -913,7 +919,13 @@ const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
 
 const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { definitionId, version } = params as { definitionId: string; version: number };
-  const row = await deprecateWorkerDefinition(client, workspaceId, { definitionId, version });
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const row = await deprecateWorkerDefinition(
+    client,
+    workspaceId,
+    { definitionId, version },
+    { principalId: caller.id, role: caller.role },
+  );
   return {
     result: toWireWorkerDefinition(row),
     resourceType: 'worker_definition',

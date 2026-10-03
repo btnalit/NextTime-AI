@@ -3554,6 +3554,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "deprecate_operation",
     "params": {
@@ -3606,6 +3607,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "deprecate_procedure",
     "params": {
@@ -3654,6 +3656,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "deprecate_skill",
     "params": {
@@ -3702,6 +3705,7 @@
   {
     "channel": "human",
     "group": "worker",
+    "minRole": "builder",
     "mode": "execute",
     "name": "deprecate_worker_definition",
     "params": {
@@ -14525,6 +14529,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "publish_operation",
     "params": {
@@ -14815,6 +14820,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "publish_procedure",
     "params": {
@@ -14863,6 +14869,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "execute",
     "name": "publish_skill",
     "params": {
@@ -14911,6 +14918,7 @@
   {
     "channel": "human",
     "group": "worker",
+    "minRole": "builder",
     "mode": "execute",
     "name": "publish_worker_definition",
     "params": {
