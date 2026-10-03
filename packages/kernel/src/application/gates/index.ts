@@ -53,6 +53,13 @@ export {
   isReviewedManifestChange,
   manifestDigest,
 } from './manifest-review.js';
+export type { ExecuteAccess } from './execute-access.js';
+export {
+  entryGatekeeperIds,
+  executableGatekeepers,
+  narrowScopeToExecutableGates,
+  readExecuteAccess,
+} from './execute-access.js';
 export type {
   ObserveExclusions,
   ObserveGateExclusion,

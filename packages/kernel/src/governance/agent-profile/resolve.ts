@@ -150,6 +150,23 @@ export function modelPolicyViolation(
   return null;
 }
 
+/**
+ * `effective.enabledGatekeepers`: the gates `principal`'s agents may carry execute authority for
+ * — their active gate Grants minus their own AgentProfile exclusions, capped by the workspace
+ * AgentPolicy gate cap. Review 2026-10-02 R-37 / decision D-20: this is the one rule the read
+ * models (`resolveEffectiveAgentProfile` → My Agent's "当前生效", `execution_readiness`), Handle
+ * issuance (the entry Handle, `issue_handle`) and enforcement at call time (`request_action` and
+ * `list_allowed_operations` for a Handle caller — `application/gates/execute-access.ts`) all
+ * resolve through.
+ */
+export function resolveEnabledGatekeepers(
+  profile: Pick<AgentProfileRow, 'excludedGatekeepers'> | undefined,
+  policy: Pick<AgentPolicyRow, 'allowedGatekeepers'>,
+  grantedGatekeeperIds: readonly string[],
+): readonly string[] {
+  return resolveList(profile?.excludedGatekeepers, grantedGatekeeperIds, policy.allowedGatekeepers);
+}
+
 export function resolveEffectiveAgentProfile(
   profile: AgentProfileRow | undefined,
   policy: AgentPolicyRow,
@@ -162,11 +179,7 @@ export function resolveEffectiveAgentProfile(
       available.publishedSkillIds,
       policy.allowedSkills,
     ),
-    enabledGatekeepers: resolveList(
-      profile?.excludedGatekeepers,
-      available.grantedGatekeeperIds,
-      policy.allowedGatekeepers,
-    ),
+    enabledGatekeepers: resolveEnabledGatekeepers(profile, policy, available.grantedGatekeeperIds),
     enabledWorkerDefinitions: resolveList(
       profile?.excludedWorkerDefinitions,
       available.publishedWorkerDefinitionIds,

@@ -1,10 +1,6 @@
 import type { CapabilityScope } from '@nexttime/shared';
-import {
-  entryScope,
-  issueHandle,
-  listActiveGrantResourceScopes,
-} from '../../governance/capability/index.js';
-import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
+import { entryScope, issueHandle } from '../../governance/capability/index.js';
+import { entryGatekeeperIds, readExecuteAccess } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
@@ -18,10 +14,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  *
  * **Scope computation reuses the exact building blocks `agent-host-runtime.ts`'s
  * `ensureEntryHandle` already uses for the resident entry agent's own Handle**
- * (`listActiveGrantResourceScopes` + `entryScope()`, governance/capability/handles.ts): an
- * interactive Handle's ceiling is, by construction, never wider than an entry Handle's — same
- * fixed `ENTRY_CEILING_CAPABILITIES` (entry-only; structurally never contains an execute-class
- * name), same Grant-derived `resources.gatekeeper`. The caller's own `params.scope` (optional)
+ * (`effective.enabledGatekeepers` — Grants minus AgentProfile exclusions, capped by the
+ * AgentPolicy, `entryGatekeeperIds` since R-37 / D-20 — + `entryScope()`,
+ * governance/capability/handles.ts): an interactive Handle's ceiling is, by construction, never
+ * wider than an entry Handle's — same fixed `ENTRY_CEILING_CAPABILITIES` (entry-only; structurally
+ * never contains an execute-class name), same `resources.gatekeeper`. The caller's own
+ * `params.scope` (optional)
  * further narrows that ceiling via a pure intersection (`intersectScope` below) — never a request
  * that can widen it (§5.3 item 8 "Handle 范围大于其来源").
  *
@@ -90,14 +88,17 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
   const input = params as IssueHandleParams;
   const onBehalfOf = ctx?.principalId ?? '';
 
-  const grantedGatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
-    principalId: onBehalfOf,
-    resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
-  });
+  // R-37 / D-20: the same gate set the entry Handle carries — the caller's active Grants minus
+  // their own My Agent exclusions, capped by the workspace AgentPolicy (`effective.enabledGatekeepers`).
+  // Until then this read Grants alone, so an MCP Handle carried a gate the owner had excluded for
+  // their agent and could delegate execute on it through `invoke_worker`.
+  const gatekeeperIds = entryGatekeeperIds(
+    await readExecuteAccess(client, workspaceId, onBehalfOf),
+  );
   // W5.5 (STATUS leftover 18): narrow the ceiling by the calling Principal's role. `issue_handle`
   // is `minRole:'owner'` today, so this is a no-op here, but the rule is applied at every issuer.
   const ceiling = entryScope(
-    grantedGatekeeperIds.length > 0 ? { resources: { gatekeeper: grantedGatekeeperIds } } : {},
+    gatekeeperIds.length > 0 ? { resources: { gatekeeper: [...gatekeeperIds] } } : {},
     ctx?.principal ? { role: ctx.principal.role } : {},
   );
   const scope = intersectScope(ceiling, input.scope);

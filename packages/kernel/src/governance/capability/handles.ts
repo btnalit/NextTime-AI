@@ -762,6 +762,27 @@ export async function revokeEntrySessionHandles(
 }
 
 /**
+ * R-37 / D-20: `revokeEntrySessionHandles` for every principal of the workspace at once — a
+ * workspace-wide change to what an entry Handle may carry (the AgentPolicy gate cap,
+ * `set_agent_policy`) reaches every member's entry agent. Each entry agent mints a fresh Handle on
+ * its next Turn (`ensureEntryHandle`); a revoked `jti` fails every Handle verifier immediately.
+ * Idempotent, a no-op for a workspace with no entry session yet.
+ */
+export async function revokeWorkspaceEntrySessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from sessions
+     where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+    [workspaceId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}
+
+/**
  * W5.5 (STATUS leftover 18): every Handle whose ceiling was narrowed by `principalId`'s role at
  * issuance — the resident entry agent's `kind='entry'` session(s) *and* every `kind='mcp_session'`
  * session `issue_handle` (application/gateway/issue-handle-handler.ts) opened on their behalf. A

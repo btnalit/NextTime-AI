@@ -19,6 +19,7 @@ import {
   GATEKEEPER_GRANT_CAPABILITY,
   listActiveGrantResourceScopes,
   revokeEntrySessionHandles,
+  revokeWorkspaceEntrySessionHandles,
 } from '../../governance/capability/index.js';
 import { listGatekeepers } from '../../governance/gatekeepers/index.js';
 import type { ObserveExclusions } from '../gates/index.js';
@@ -69,7 +70,10 @@ import { readModelCatalog } from './models-catalog-handler.js';
  * invalidated it. `application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` mints a
  * fresh Handle on the target's very next Turn, which `worker-supervisor`'s existing jti-rotation
  * recreate logic (`resident-service.ts`) picks up automatically — no second, bespoke propagation
- * mechanism for this task to invent.
+ * mechanism for this task to invent. `set_agent_policy` does the same for every member's entry
+ * session when the gate cap changes (R-37 / D-20), and running Workers / MCP Handles are re-checked
+ * against the current `effective.enabledGatekeepers` at call time (application/gates/
+ * execute-access.ts), so neither change waits for a Handle to expire.
  */
 
 export class AgentProfileValidationError extends Error {
@@ -394,6 +398,12 @@ export const getAgentPolicyHandler: CapabilityHandler = async (client, workspace
 
 const SetAgentPolicyParams = (params: unknown) => params as SetAgentPolicyFields;
 
+function sameIdSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
+
 export const setAgentPolicyHandler: CapabilityHandler = async (
   client,
   workspaceId,
@@ -429,6 +439,16 @@ export const setAgentPolicyHandler: CapabilityHandler = async (
   if (violation) throw new AgentProfileValidationError(`set_agent_policy: ${violation}`);
 
   const updated = await setAgentPolicy(client, workspaceId, ctx.principal.id, params);
+
+  // R-37 / D-20: the gate cap is the one policy field an entry Handle's scope depends on
+  // (`resources.gatekeeper` = `effective.enabledGatekeepers`). When it changes, every member's
+  // entry Handle is revoked in this same transaction — as `set_agent_profile` does for its target
+  // — so an in-flight Turn cannot keep delegating on a gate the cap now leaves out. Running
+  // Workers and MCP Handles are re-checked at call time (application/gates/execute-access.ts).
+  if (!sameIdSet(current.allowedGatekeepers, updated.allowedGatekeepers)) {
+    await revokeWorkspaceEntrySessionHandles(client, workspaceId);
+  }
+
   return {
     result: toWireAgentPolicy(updated),
     resourceType: 'agent_policy',
