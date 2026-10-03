@@ -19,6 +19,8 @@ export interface AgentProfileRow {
   readonly excludedGatekeepers: readonly string[];
   readonly excludedWorkerDefinitions: readonly string[];
   readonly promptAddendum: string | null;
+  /** `false` narrows this principal's low-blast-radius auto-approval; `null` (inherit) and `true`
+   *  follow the AgentPolicy (`resolve.ts` `resolveAutoApproveLow`, D-16). */
   readonly autoApproveLow: boolean | null;
   readonly updatedBy: string | null;
   readonly updatedAt: Date | null;
@@ -32,6 +34,8 @@ export interface AgentPolicyRow {
   readonly maxPromptAddendumChars: number;
   readonly allowedSkills: readonly string[];
   readonly allowedGatekeepers: readonly string[];
+  /** R-21 / D-16: an enforced narrowing — `false` turns low-blast-radius auto-approval off for
+   *  every requester in the workspace, whatever their AgentProfile says. Default `true`. */
   readonly allowMemberAutoApproveLow: boolean;
   readonly updatedBy: string | null;
   readonly updatedAt: Date | null;

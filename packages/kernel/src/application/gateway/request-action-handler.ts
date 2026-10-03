@@ -13,7 +13,11 @@ import {
   recordWorkerGateObservation,
 } from '../../application/task/index.js';
 import type { WorkerRunRow } from '../../application/task/index.js';
-import { readAgentProfile } from '../../governance/agent-profile/index.js';
+import {
+  readAgentPolicy,
+  readAgentProfile,
+  resolveAutoApproveLow,
+} from '../../governance/agent-profile/index.js';
 import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   awaitActionRequestResolution,
@@ -1253,26 +1257,21 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     );
   }
 
-  // S3.13: `onBehalfOf`'s own *raw* AgentProfile.autoApproveLow — not the resolved
-  // `effective.autoApproveLow`. This is deliberate, not an oversight: the task's own runtime-
-  // projection instruction is specifically about "per-principal false" ("per-principal false
-  // disables auto-approve for that requester even when the workspace default allows it") — the
-  // *principal's own explicit choice*, not the workspace AgentPolicy's compiled-in/defaulted
-  // stance flowing through on its own. Using the fully-resolved `effective.autoApproveLow`
-  // instead (as an earlier version of this code did) meant every workspace that has never
-  // written an `agent_policies` row — i.e. every workspace that predates this feature entirely —
-  // got `allowMemberAutoApproveLow`'s own compiled-in default (`false`) fed straight into this
-  // narrowing check, silently disabling auto-approval for every low-blast-radius action across
-  // the whole platform the moment this shipped (caught by `request-action.integration.test.ts`
-  // failing in CI — real Postgres, not reproducible on this machine). A principal with no
-  // AgentProfile row (`profile` `undefined`) or one that has never touched this field
-  // (`autoApproveLow: null`) resolves to `true` here — "not narrowed" — reproducing the exact
-  // pre-S3.13 behavior; only an *explicit* `false` on the principal's own profile narrows.
+  // S3.13 / R-21 (decision D-16): `onBehalfOf`'s resolved `effective.autoApproveLow` — the same
+  // predicate (`resolveAutoApproveLow`) the "当前生效" read model shows. The workspace AgentPolicy's
+  // `allowMemberAutoApproveLow: false` is an enforced narrowing for every requester; the
+  // principal's own AgentProfile `false` narrows further; `null` / `true` follow the policy. Until
+  // D-16 this read only the profile (`profile ?? true`), so an owner's narrowing displayed as
+  // effective but was ignored. The policy's compiled-in default is `true` since the same change
+  // (`defaultAgentPolicy`), so a workspace with no policy row keeps auto-approving low — the
+  // regression an earlier version of S3.13 hit when it resolved against a `false` default.
   // Resolved once, here, so both `runGovernedRequest` call sites below narrow identically (a
   // no-op on the I17 unclassified path, whose `blastRadius` is always `'medium'`, but threaded
   // through uniformly rather than special-cased).
-  const principalAutoApproveLowEnabled =
-    (await readAgentProfile(client, workspaceId, onBehalfOf))?.autoApproveLow ?? true;
+  const principalAutoApproveLowEnabled = resolveAutoApproveLow(
+    await readAgentProfile(client, workspaceId, onBehalfOf),
+    await readAgentPolicy(client, workspaceId),
+  );
 
   if (!published) {
     // I17: draft/unknown Operation → unclassified, always require_approval, never execute.

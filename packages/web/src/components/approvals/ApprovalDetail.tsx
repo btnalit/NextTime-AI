@@ -102,23 +102,29 @@ export function ApprovalDetail({
   const decided = row.decidedBy !== undefined && row.decidedBy !== null;
   const decisionReason = row.decisionReason ?? null;
   const reasonRequired = row.blastRadius === 'high';
+  // R-20 / D-15: a `high` blast radius is never auto-approved (kernel I8 refuses the rule too), so
+  // there is no rule to offer — the chat card already hid it.
+  const offerAlwaysAllow = canAlwaysAllow && row.blastRadius !== 'high';
+  const alwaysAllowChosen = offerAlwaysAllow && alwaysAllow;
+  const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId;
   const provenance = auditHref({
     actionRequestId: row.id,
     ...(row.approvalDecisionId ? { nodeId: row.approvalDecisionId } : {}),
   });
 
-  /** low / medium → straight to the call (§5.9 principle 4 "中 · 可逆 → 一键批准"); high → the
-   *  confirm first. Resolves immediately either way (never awaits the real call) so `decide`'s own
-   *  busy flag never sits spinning for however long the confirm stays open — the page-owned
-   *  `error` prop is the one channel for a direct call's rejection; a confirmed call instead lets
-   *  `runConfirm` re-throw into `Confirm`, which shows the error inline and keeps the popover
-   *  open. */
+  /** low / medium → straight to the call (§5.9 principle 4 "中 · 可逆 → 一键批准"); high, or any
+   *  approval that also writes the "总是允许" rule (R-20: it outlives this request and covers every
+   *  requester, so it is never one click) → the confirm first. Resolves immediately either way
+   *  (never awaits the real call) so `decide`'s own busy flag never sits spinning for however long
+   *  the confirm stays open — the page-owned `error` prop is the one channel for a direct call's
+   *  rejection; a confirmed call instead lets `runConfirm` re-throw into `Confirm`, which shows
+   *  the error inline and keeps the popover open. */
   function requestApprove(reasonValue: string | undefined): void {
-    if (row.blastRadius === 'high') {
-      onPendingChange({ kind: 'approve', reason: reasonValue, alwaysAllow });
+    if (row.blastRadius === 'high' || alwaysAllowChosen) {
+      onPendingChange({ kind: 'approve', reason: reasonValue, alwaysAllow: alwaysAllowChosen });
       return;
     }
-    onApprove({ actionRequestId: row.id, reason: reasonValue, alwaysAllow }).catch(() => {});
+    onApprove({ actionRequestId: row.id, reason: reasonValue, alwaysAllow: false }).catch(() => {});
   }
 
   function requestReject(reasonValue: string | undefined): void {
@@ -406,7 +412,7 @@ export function ApprovalDetail({
                 />
               </Field>
 
-              {canAlwaysAllow ? (
+              {offerAlwaysAllow ? (
                 <label className="checkbox" data-testid="approval-always-allow-option">
                   <input
                     type="checkbox"
@@ -415,8 +421,8 @@ export function ApprovalDetail({
                   />
                   <span>
                     {t(
-                      `总是允许 ${row.actionKindTag}：批准时一并写入自动批准规则。`,
-                      `Always allow ${row.actionKindTag}: approving also writes the auto-approval rule.`,
+                      `总是允许门「${gateName}」上的 ${row.actionKindTag}：今后任何人发起都自动批准，不只是这次请求。`,
+                      `Always allow ${row.actionKindTag} on gate “${gateName}”: from now on it is auto-approved for every requester, not only this request.`,
                     )}
                   </span>
                 </label>
@@ -458,10 +464,15 @@ export function ApprovalDetail({
                 `拒绝 ${humanizeKind(row.actionKindTag)}`,
                 `Reject: ${humanizeKind(row.actionKindTag)}`,
               )
-            : t(
-                `批准高影响动作 ${humanizeKind(row.actionKindTag)}`,
-                `Approve a high-impact action: ${humanizeKind(row.actionKindTag)}`,
-              )
+            : pending?.alwaysAllow
+              ? t(
+                  `批准并总是允许 ${humanizeKind(row.actionKindTag)}`,
+                  `Approve and always allow: ${humanizeKind(row.actionKindTag)}`,
+                )
+              : t(
+                  `批准高影响动作 ${humanizeKind(row.actionKindTag)}`,
+                  `Approve a high-impact action: ${humanizeKind(row.actionKindTag)}`,
+                )
         }
         description={
           pending?.kind === 'reject'
@@ -469,19 +480,32 @@ export function ApprovalDetail({
                 '拒绝后 Worker 不会执行该动作；请求进入历史，理由写入审计。',
                 'The Worker will not run this action; the request moves to History and the reason is audited.',
               )
-            : t(
-                '批准后门立即执行该动作，无法撤回；理由写入审计。',
-                'The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.',
-              )
+            : pending?.alwaysAllow
+              ? t(
+                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${row.actionKindTag} 不论谁发起都直接执行，不再进入审批队列。其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
+                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${row.actionKindTag} on gate “${gateName}” runs without approval for every requester. The same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
+                )
+              : t(
+                  '批准后门立即执行该动作，无法撤回；理由写入审计。',
+                  'The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.',
+                )
         }
         target={scopeLabel ?? nameOf(gatekeeperNames, row.gatekeeperId) ?? row.actionKindTag}
         impact={
           pending ? confirmImpact(pending, row, principalNames, gatekeeperNames, t) : undefined
         }
         confirmLabel={
-          pending?.kind === 'reject' ? t('确认拒绝', 'Reject') : t('确认批准', 'Approve')
+          pending?.kind === 'reject'
+            ? t('确认拒绝', 'Reject')
+            : pending?.alwaysAllow
+              ? t('批准并总是允许', 'Approve and always allow')
+              : t('确认批准', 'Approve')
         }
-        danger={pending?.kind === 'reject' || row.blastRadius === 'high'}
+        danger={
+          pending?.kind === 'reject' ||
+          row.blastRadius === 'high' ||
+          (pending?.kind === 'approve' && pending.alwaysAllow)
+        }
         onConfirm={runConfirm}
         testId="approval-confirm"
       >
@@ -508,9 +532,13 @@ export function ApprovalDetail({
                       key: 'alwaysAllow',
                       label: t('总是允许', 'Always allow'),
                       value: (
-                        <span>
+                        <span data-testid="approval-confirm-always-allow-scope">
+                          {t(`门「${gateName}」上的 `, `On gate “${gateName}”, `)}
                           <code>{row.actionKindTag}</code>{' '}
-                          {t('今后自动批准', 'will be auto-approved')}
+                          {t(
+                            '今后对所有发起人自动批准',
+                            'will be auto-approved for every requester',
+                          )}
                         </span>
                       ),
                     },

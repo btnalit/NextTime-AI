@@ -57,7 +57,7 @@ describe('evaluate — deny (I13/coverage)', () => {
         requesterScope: NON_COVERING_SCOPE,
         blastRadius: 'low',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
       }),
     );
     expect(result.decision).toBe('deny');
@@ -76,7 +76,7 @@ describe('evaluate — allow (I8 double signal)', () => {
       baseInput({
         blastRadius: 'medium',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
       }),
     );
     expect(result.decision).toBe('allow');
@@ -88,7 +88,7 @@ describe('evaluate — allow (I8 double signal)', () => {
       baseInput({
         blastRadius: 'high',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
       }),
     );
     expect(result.decision).toBe('require_approval');
@@ -119,11 +119,71 @@ describe('evaluate — require_approval (medium/high/unclassified/opted-out)', (
       baseInput({
         blastRadius: 'low',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: false },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: false },
       }),
     );
     expect(result.decision).toBe('require_approval');
     expect(result.reason).toBe('workspace_policy_disables_auto_approve');
+  });
+});
+
+describe('evaluate — R-20 / D-15: only a gate-scoped rule can opt in to auto-approval', () => {
+  it('a workspace-wide autoApprove:true is no opinion — a medium Operation still requires approval', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        operationAutoApprovable: true,
+        workspacePolicy: { scope: 'workspace', autoApprove: true },
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('no_workspace_policy_and_not_low_blast_radius');
+  });
+
+  it('a workspace-wide autoApprove:true leaves a low Operation on the compiled-in default', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: true,
+        workspacePolicy: { scope: 'workspace', autoApprove: true },
+      }),
+    );
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('auto_approved_by_operation_and_low_blast_radius_default');
+  });
+
+  it('a workspace-wide autoApprove:false still opts a low Operation out', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: true,
+        workspacePolicy: { scope: 'workspace', autoApprove: false },
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('workspace_policy_disables_auto_approve');
+  });
+
+  it("a workspace-wide row's requesterCanApprove still applies", () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        workspacePolicy: { scope: 'workspace', autoApprove: true, requesterCanApprove: false },
+      }),
+    );
+    expect(result.requesterCanApprove).toBe(false);
+  });
+
+  it('a gate-scoped autoApprove:true opts a medium Operation in', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        operationAutoApprovable: true,
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
+      }),
+    );
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('auto_approved_by_operation_and_workspace_policy');
   });
 });
 
@@ -142,7 +202,7 @@ describe('evaluate — requesterCanApprove (§5.8)', () => {
     const result = evaluate(
       baseInput({
         blastRadius: 'high',
-        workspacePolicy: { autoApprove: false, requesterCanApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: false, requesterCanApprove: true },
       }),
     );
     expect(result.requesterCanApprove).toBe(true);
@@ -152,7 +212,7 @@ describe('evaluate — requesterCanApprove (§5.8)', () => {
     const result = evaluate(
       baseInput({
         blastRadius: 'low',
-        workspacePolicy: { autoApprove: true, requesterCanApprove: false },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true, requesterCanApprove: false },
       }),
     );
     expect(result.requesterCanApprove).toBe(false);
@@ -162,7 +222,7 @@ describe('evaluate — requesterCanApprove (§5.8)', () => {
     const result = evaluate(
       baseInput({
         blastRadius: 'high',
-        workspacePolicy: { autoApprove: false, requesterCanApprove: null },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: false, requesterCanApprove: null },
       }),
     );
     expect(result.requesterCanApprove).toBe(false);
@@ -212,7 +272,7 @@ describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoAp
       baseInput({
         blastRadius: 'low',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
         principalAutoApproveLowEnabled: false,
       }),
     );
@@ -225,7 +285,7 @@ describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoAp
       baseInput({
         blastRadius: 'low',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
         principalAutoApproveLowEnabled: true,
       }),
     );
@@ -237,7 +297,7 @@ describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoAp
       baseInput({
         blastRadius: 'low',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
       }),
     );
     expect(result.decision).toBe('allow');
@@ -249,7 +309,7 @@ describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoAp
       baseInput({
         blastRadius: 'medium',
         operationAutoApprovable: true,
-        workspacePolicy: { autoApprove: true },
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
         principalAutoApproveLowEnabled: false,
       }),
     );

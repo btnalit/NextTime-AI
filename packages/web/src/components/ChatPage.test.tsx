@@ -144,7 +144,7 @@ function pendingCardMessage(sequence: number, actionRequestId: string): ChatMess
 }
 
 describe('ChatPage inline approval card (C8)', () => {
-  it('"always allow" writes the rule with the kind tag read from the persisted card', async () => {
+  it('"always allow" confirms, then writes the rule keyed by the gate and kind tag read from the persisted card', async () => {
     const fake = fakeClient();
     const http = scriptedHttp({
       approve: () => ({ status: 'approved' }),
@@ -159,6 +159,10 @@ describe('ChatPage inline approval card (C8)', () => {
 
     const card = await screen.findByTestId('action-request-card');
     fireEvent.click(within(card).getByRole('button', { name: /总是允许/ }));
+    // R-20 / D-15: the rule outlives this request and covers every requester — confirmed first.
+    const confirm = await screen.findByTestId('action-card-always-allow-confirm');
+    expect(http.decisions()).toEqual([]);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.decisions().map((call) => call.name)).toEqual([
@@ -167,10 +171,13 @@ describe('ChatPage inline approval card (C8)', () => {
       ]),
     );
     expect(http.decisions()[0]?.params).toEqual({ actionRequestId: 'ar-1' });
-    expect(http.decisions()[1]?.params).toEqual({ actionKindTag: 'docker.container_restart' });
+    expect(http.decisions()[1]?.params).toEqual({
+      gatekeeperId: 'gk-1',
+      actionKindTag: 'docker.container_restart',
+    });
     // S8 W4 i18n baseline fix: the toast now goes through `t()` (one language, default zh-CN
     // here), no more always-glued zh/en text.
-    await screen.findByText(/今后将自动批准/);
+    await screen.findByText(/对所有发起人自动批准/);
     // The card left `pending_approval` in place (the `approve` result's status) — the outcome
     // line sits beside the shared card inside the `.action-card` wrapper.
     const wrapper = card.closest('.action-card') as HTMLElement;

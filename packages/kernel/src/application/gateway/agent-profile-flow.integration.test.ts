@@ -304,7 +304,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           enabledGatekeepers: [],
           enabledWorkerDefinitions: [],
           promptAddendum: '',
-          autoApproveLow: false,
+          autoApproveLow: true, // R-21 / D-16: the compiled-in AgentPolicy default is true
         });
       });
 
@@ -601,24 +601,49 @@ describe.runIf(DATABASE_URL !== undefined)(
         const owner = humanCaller(policyWs, policyOwnerId, 'owner');
         const member = humanCaller(policyWs, memberId, 'member');
 
-        // Compiled-in default is already false — confirm the rejection with no policy row too.
+        // R-21 / D-16: the compiled-in default is true — no policy row allows it, and the
+        // effective value follows.
+        const byDefault = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          autoApproveLow: true,
+        })) as WireAgentProfile;
+        expect(byDefault.autoApproveLow).toBe(true);
+        expect(byDefault.effective.autoApproveLow).toBe(true);
+
+        const policy = (await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          allowMemberAutoApproveLow: false,
+        })) as WireAgentPolicy;
+        expect(policy.allowMemberAutoApproveLow).toBe(false);
         await expect(
           dispatchCapability({ pool }, member, 'set_agent_profile', { autoApproveLow: true }),
         ).rejects.toThrow(AgentProfileValidationError);
 
-        await dispatchCapability({ pool }, owner, 'set_agent_policy', {
-          allowMemberAutoApproveLow: true,
-        });
-        const ok = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
-          autoApproveLow: true,
-        })) as WireAgentProfile;
-        expect(ok.autoApproveLow).toBe(true);
+        // D-16: the policy is enforced — the stored `true` from before no longer takes effect.
+        const forced = (await dispatchCapability(
+          { pool },
+          member,
+          'get_agent_profile',
+          {},
+        )) as WireAgentProfile;
+        expect(forced.autoApproveLow).toBe(true);
+        expect(forced.effective.autoApproveLow).toBe(false);
 
-        // autoApproveLow:false always allowed, regardless of the policy.
+        // Saving anything else does not touch the field — no lock-out (the console form omits it
+        // unless the checkbox was changed).
+        const unrelated = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          promptAddendum: 'still saveable',
+        })) as WireAgentProfile;
+        expect(unrelated.promptAddendum).toBe('still saveable');
+
+        // autoApproveLow:false always allowed, regardless of the policy; null resets to inherit.
         const narrowed = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
           autoApproveLow: false,
         })) as WireAgentProfile;
         expect(narrowed.autoApproveLow).toBe(false);
+        const inherit = (await dispatchCapability({ pool }, member, 'set_agent_profile', {
+          autoApproveLow: null,
+        })) as WireAgentProfile;
+        expect(inherit.autoApproveLow).toBeNull();
+        expect(inherit.effective.autoApproveLow).toBe(false);
       });
 
       it('allowedModels: narrows the effective model whitelist beyond the raw llm-proxy list', async () => {
@@ -717,7 +742,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           maxPromptAddendumChars: 2000,
           allowedSkills: [],
           allowedGatekeepers: [],
-          allowMemberAutoApproveLow: false,
+          allowMemberAutoApproveLow: true, // R-21 / D-16 flipped the compiled-in default
           updatedAt: null,
           updatedBy: null,
         });

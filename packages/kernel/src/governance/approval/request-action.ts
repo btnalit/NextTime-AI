@@ -8,7 +8,7 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { evaluate, readWorkspacePolicy } from '../policy/index.js';
+import { evaluate, readEffectivePolicy, toPolicyEvaluationInput } from '../policy/index.js';
 import { findActionRequestByIdempotencyKey } from './reads.js';
 import { recordTransition } from './transition-log.js';
 import {
@@ -82,9 +82,9 @@ export interface RequestActionInput {
    *  `resources['gatekeeper']` from this (see that module's `GATEKEEPER_RESOURCE_SCOPE_KEY` doc
    *  comment for the exact convention). */
   readonly requesterScope: CapabilityScope;
-  /** S3.13: threaded straight through to `evaluate()`'s own field of the same name — see that
-   *  module's doc comment. Omitted (the default, `true` inside `evaluate()`) reproduces this
-   *  function's exact pre-S3.13 behavior for every caller that has not resolved an AgentProfile. */
+  /** S3.13 / D-16: the requester's resolved `effective.autoApproveLow`, threaded straight through
+   *  to `evaluate()`'s own field of the same name — see that module's doc comment. Omitted (the
+   *  default, `true` inside `evaluate()`) never narrows. */
   readonly principalAutoApproveLowEnabled?: boolean;
 }
 
@@ -220,18 +220,19 @@ export async function requestAction(
     if (existing) return existing;
   }
 
-  const workspacePolicyRow = await readWorkspacePolicy(client, workspaceId, input.actionKind);
+  // R-20 / D-15: the rule for this gate's action kind, else the workspace-wide one.
+  const policyRow = await readEffectivePolicy(
+    client,
+    workspaceId,
+    input.gatekeeperId,
+    input.actionKind,
+  );
   const evaluation = evaluate({
     gatekeeperId: input.gatekeeperId,
     blastRadius: input.blastRadius,
     operationAutoApprovable: input.operationAutoApprovable,
     mcpTrustBlocked: input.mcpTrustBlocked,
-    workspacePolicy: workspacePolicyRow
-      ? {
-          autoApprove: workspacePolicyRow.autoApprove,
-          requesterCanApprove: workspacePolicyRow.requesterCanApprove,
-        }
-      : undefined,
+    workspacePolicy: policyRow ? toPolicyEvaluationInput(policyRow) : undefined,
     requesterScope: input.requesterScope,
     principalAutoApproveLowEnabled: input.principalAutoApproveLowEnabled,
   });

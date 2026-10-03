@@ -68,9 +68,29 @@ export interface EffectiveAgentProfile {
   readonly enabledGatekeepers: readonly string[];
   readonly enabledWorkerDefinitions: readonly string[];
   readonly promptAddendum: string;
-  /** Always a concrete boolean — `AgentPolicyRow.allowMemberAutoApproveLow` is never itself
-   *  nullable, so there is always a definite fallback once the profile's own `null` is resolved. */
+  /** `resolveAutoApproveLow` below — the value `request_action` enforces, so what "当前生效" shows
+   *  is what the runtime does. */
   readonly autoApproveLow: boolean;
+}
+
+/**
+ * R-21 / maintainer decision D-16: whether low-blast-radius auto-approval stays on for this
+ * principal. `AgentPolicy.allowMemberAutoApproveLow` is an **enforced narrowing** for every
+ * requester — `false` turns it off whatever the profile says — and the profile can only narrow
+ * further: its own `false` turns it off, `null` (inherit) and `true` follow the policy. The one
+ * predicate both the read model (`resolveEffectiveAgentProfile`, "当前生效") and enforcement
+ * (`application/gateway/request-action-handler.ts` → `governance/policy/engine.ts`'s
+ * `principalAutoApproveLowEnabled`) call. Before D-16 the runtime read only the profile
+ * (`profile ?? true`) while this read model showed `profile ?? policy`, so an owner's narrowing
+ * displayed as effective but was ignored; the policy's compiled-in default became `true` in the
+ * same change (`store.ts` `defaultAgentPolicy`, migration governance/0016), so a workspace with no
+ * policy row keeps auto-approving low-blast-radius actions.
+ */
+export function resolveAutoApproveLow(
+  profile: Pick<AgentProfileRow, 'autoApproveLow'> | undefined,
+  policy: Pick<AgentPolicyRow, 'allowMemberAutoApproveLow'>,
+): boolean {
+  return policy.allowMemberAutoApproveLow && profile?.autoApproveLow !== false;
 }
 
 /**
@@ -153,6 +173,6 @@ export function resolveEffectiveAgentProfile(
       [],
     ),
     promptAddendum: profile?.promptAddendum ?? '',
-    autoApproveLow: profile?.autoApproveLow ?? policy.allowMemberAutoApproveLow,
+    autoApproveLow: resolveAutoApproveLow(profile, policy),
   };
 }

@@ -1,6 +1,7 @@
 import { BLAST_RADIUS_VALUES, type BlastRadius, type PolicyWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -12,6 +13,8 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../ki
 
 const UNSET = '__unset__';
 const REQUESTER_INHERIT = '__inherit__';
+/** The scope select's "every gate" value — a workspace-wide rule (`gatekeeperId` omitted). */
+const ALL_GATES = '__all_gates__';
 
 function blastRadiusLabel(value: BlastRadius, t: Translate): string {
   const label = BLAST_RADIUS_TONES[value].label;
@@ -23,9 +26,12 @@ export interface PolicyEditSheetProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** `undefined` — create a new Policy row, `actionKindTag` is a free-text field. Given — edit
-   *  this existing row, `actionKindTag` is read-only (`set_policy` upserts by actionKindTag, so
-   *  changing it would silently create a second, unrelated row instead of editing this one). */
+   *  this existing row, `actionKindTag` and the gate are read-only (`set_policy` upserts by
+   *  `(gatekeeperId, actionKindTag)`, so changing either would silently create a second, unrelated
+   *  row instead of editing this one). */
   readonly editing?: PolicyWire;
+  /** The gates a new rule may be scoped to (R-20 / D-15) — also names an edited row's gate. */
+  readonly gatekeepers: readonly GatekeeperListRow[];
   readonly onSaved: (policy: PolicyWire) => void;
 }
 
@@ -39,17 +45,24 @@ export interface PolicyEditSheetProps {
  * (or any change to `blastRadius` alone) confirms at `medium` — mirrors the same "放松 / 收紧"
  * split `RegisteredSystemsSection`'s "按公告刷新治理字段" flow already established for a materially
  * identical decision (turning human review off is the one irreversible-tier action here).
+ *
+ * R-20 / D-15: a rule applies either to one gate's action kind or to the name on every gate. Only
+ * a gate rule can turn auto-approval on (the kernel refuses it workspace-wide — the approver must
+ * see which gate, since Operation names collide across gates), so the checkbox is disabled while
+ * "every gate" is selected.
  */
 export function PolicyEditSheet({
   http,
   open,
   onOpenChange,
   editing,
+  gatekeepers,
   onSaved,
 }: PolicyEditSheetProps) {
   const t = useT();
   const isEdit = editing !== undefined;
 
+  const [gateScope, setGateScope] = useState<string>(editing?.gatekeeperId ?? ALL_GATES);
   const [actionKindTag, setActionKindTag] = useState(editing?.actionKindTag ?? '');
   const [blastRadius, setBlastRadius] = useState<BlastRadius | typeof UNSET>(
     editing?.blastRadius ?? UNSET,
@@ -71,7 +84,12 @@ export function PolicyEditSheet({
   // `autoApprove:true` at `blastRadius:'high'` — mirrored client-side so the confirm never opens
   // on a request the kernel will 400 anyway.
   const autoApproveBlockedByBlastRadius = blastRadius === 'high';
-  const effectiveAutoApprove = autoApproveBlockedByBlastRadius ? false : autoApprove;
+  const workspaceWide = gateScope === ALL_GATES;
+  const gateName = workspaceWide
+    ? null
+    : (gatekeepers.find((gate) => gate.id === gateScope)?.name ?? gateScope);
+  const effectiveAutoApprove =
+    autoApproveBlockedByBlastRadius || workspaceWide ? false : autoApprove;
 
   const prevAutoApprove = editing?.autoApprove ?? false;
   const prevRequesterCanApprove = editing?.requesterCanApprove ?? null;
@@ -93,6 +111,7 @@ export function PolicyEditSheet({
       actionKindTag: actionKindTag.trim(),
       autoApprove: effectiveAutoApprove,
     };
+    if (!workspaceWide) policy.gatekeeperId = gateScope;
     if (blastRadius !== UNSET) policy.blastRadius = blastRadius;
     if (nextRequesterCanApprove !== null) policy.requesterCanApprove = nextRequesterCanApprove;
 
@@ -139,6 +158,40 @@ export function PolicyEditSheet({
           </Field>
 
           <Field
+            id="pe-gate-scope"
+            label={t('适用范围', 'Applies to')}
+            hint={
+              isEdit
+                ? t('已有策略的键，不可修改。', 'The existing policy’s key — cannot be changed.')
+                : t(
+                    '选一个门：规则只作用于该门上的这个动作，对所有发起人生效。选「所有门」：作用于每个门上的同名动作，只能收紧（要求审批），不能开启自动批准。',
+                    'Pick a gate: the rule covers this action on that gate only, for every requester. “Every gate” covers the same name on every gate and can only tighten (require approval) — it cannot turn auto-approval on.',
+                  )
+            }
+          >
+            <Select
+              id="pe-gate-scope"
+              aria-label={t('适用范围', 'Applies to')}
+              value={gateScope}
+              onChange={(event) => setGateScope(event.target.value)}
+              disabled={isEdit || submitting}
+              data-testid="policy-edit-gate-scope"
+            >
+              <option value={ALL_GATES}>
+                {t('所有门（只能收紧）', 'Every gate (tighten only)')}
+              </option>
+              {isEdit && !workspaceWide && !gatekeepers.some((gate) => gate.id === gateScope) ? (
+                <option value={gateScope}>{gateScope}</option>
+              ) : null}
+              {gatekeepers.map((gate) => (
+                <option key={gate.id} value={gate.id}>
+                  {gate.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field
             id="pe-blast-radius"
             label={t('影响', 'Blast radius')}
             hint={t(
@@ -167,15 +220,21 @@ export function PolicyEditSheet({
               type="checkbox"
               checked={effectiveAutoApprove}
               onChange={(event) => setAutoApprove(event.target.checked)}
-              disabled={submitting || autoApproveBlockedByBlastRadius}
+              disabled={submitting || autoApproveBlockedByBlastRadius || workspaceWide}
+              data-testid="policy-edit-auto-approve"
             />
             <span>{t('自动批准', 'Auto-approve')}</span>
           </label>
           <p className="field-hint">
-            {t(
-              '开启后，匹配这个动作种类的新请求会被自动批准，不再进入人工审批队列。',
-              'When on, new requests matching this action kind are approved automatically and never reach the human approval queue.',
-            )}
+            {workspaceWide
+              ? t(
+                  '自动批准只能按门开启：先在「适用范围」里选一个门。',
+                  'Auto-approval is turned on per gate: pick a gate under “Applies to” first.',
+                )
+              : t(
+                  `开启后，门「${gateName}」上这个动作的新请求，不论谁发起都会被自动批准，不再进入人工审批队列。`,
+                  `When on, new requests for this action on gate “${gateName}” are approved automatically for every requester and never reach the human approval queue.`,
+                )}
           </p>
           {autoApproveBlockedByBlastRadius ? (
             <Notice tone="warn">
@@ -243,6 +302,7 @@ export function PolicyEditSheet({
             }
             target={actionKindTag.trim() || undefined}
             impact={[
+              `${t('适用范围', 'Applies to')}: ${gateName === null ? t('所有门上的同名动作', 'the same name on every gate') : t(`门「${gateName}」· 所有发起人`, `gate “${gateName}” · every requester`)}`,
               `${t('自动批准', 'Auto-approve')}: ${prevAutoApprove ? t('开', 'on') : t('关', 'off')} → ${effectiveAutoApprove ? t('开', 'on') : t('关', 'off')}`,
             ]}
             danger={isLoosening}
