@@ -150,7 +150,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
    `sudo`，因为这些脚本按设计把 `secrets/*.env`/`secrets/*.key` 写成 `0600`/`0640` 且 root 拥有，
    之后每一条 `docker compose` 调用因此也带 `sudo`），再把 `config/llm-providers.fake.example.yaml`
    复制成 `${NEXTTIME_DATA}/config/llm-providers.yaml` 并给 `secrets/llm-proxy.env` 追加
-   `FAKE_LLM_API_KEY=fake`（与 `docs/runbooks/host-agent-host.md` §3 的手工步骤一致）。`.env` 里
+   `FAKE_LLM_API_KEY=fake`（CI 走 llm-proxy 的 env 兼容回退；主机上按 `docs/runbooks/host-agent-host.md` §3 写成 key 文件，R-24）。`.env` 里
    `AGENT_RUNTIME=fake`——见下方"为什么只需要三个常驻容器"。
 3. `docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml build kernel caddy
    llm-proxy`，然后一次性 `docker compose run --rm --no-deps llm-proxy node dist/cli/gen-models.js`

@@ -16,6 +16,7 @@ import {
 } from './gen-models-json.js';
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
+import { createProviderKeyResolver, loadProviderKeyFiles } from './provider-keys.js';
 import { ProviderStore } from './provider-store.js';
 import { runProviderTest } from './provider-test.js';
 import { createProxyServer } from './proxy.js';
@@ -126,6 +127,15 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
   await keyStore.load();
   const catalog = new ProviderCatalog(providersFile.providers, store);
   const log = (line: string) => console.log(line);
+  // R-24: `api_key_env` reads a key file first, the env var only as a deprecated fallback
+  // (provider-keys.ts) — the same resolver for the proxy and the admin API, so the console's
+  // credential source never disagrees with what the proxy sends.
+  const resolveApiKey = createProviderKeyResolver({
+    files: config.providerKeysDir
+      ? await loadProviderKeyFiles(config.providerKeysDir, log)
+      : new Map(),
+    log,
+  });
 
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(
@@ -185,6 +195,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
       runProviderTest({ provider, model, realKey, timeoutMs: config.providerTestTimeoutMs }),
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     log,
+    resolveApiKey,
   });
 
   const server = createProxyServer({
@@ -198,6 +209,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
     upstreamIdleTimeoutMs: config.upstreamIdleTimeoutMs,
     resolveConsoleKey: (providerId: string) => keyStore.get(providerId),
+    resolveApiKey,
     // Leftover 87: `GET /internal/metrics` requires the same internal-plane token this process
     // presents to the kernel (none configured → the route always 401s).
     internalAuthorizationHeader: authorizationHeader,

@@ -119,7 +119,8 @@ docker compose build kernel agent-host llm-proxy fake-llm
 
 ```bash
 cp config/llm-providers.fake.example.yaml "${NEXTTIME_DATA}/config/llm-providers.yaml"
-echo 'FAKE_LLM_API_KEY=fake' >> "${NEXTTIME_DATA}/secrets/llm-proxy.env"
+printf 'fake' | sudo tee "${NEXTTIME_DATA}/secrets/llm-provider-keys/FAKE_LLM_API_KEY" >/dev/null   # R-24：key 文件
+sudo NEXTTIME_DATA="${NEXTTIME_DATA}" sh scripts/host-env-init.sh   # 0640、组 10001
 make gen-models   # 容器化生成 models.json——见 Makefile 自己的注释；本机不需要 corepack/node
 ```
 
