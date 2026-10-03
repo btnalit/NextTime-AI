@@ -1,13 +1,22 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ApplyOutcomeUnknownError,
   CredentialResolutionError,
   IdempotencyConflictError,
   OperationRefusedError,
   TransportInvokeError,
+  TransportTimeoutError,
 } from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
-import { InMemoryIdempotencyStore } from './idempotency-store.js';
+import {
+  InMemoryIdempotencyStore,
+  JsonFileIdempotencyStore,
+  hashIdempotencyParams,
+} from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
 
 function observeOp(overrides: Partial<Operation> = {}): Operation {
@@ -136,7 +145,7 @@ describe('GatekeeperBase', () => {
     );
   });
 
-  it('a transport refusal releases the reservation; any other transport failure keeps it (R-04)', async () => {
+  it('a transport refusal releases the reservation; any other transport failure is stored and answered again, never re-run (R-04, R-51)', async () => {
     let refuse = true;
     const invoke = vi.fn(async () => {
       if (refuse) throw new OperationRefusedError('not served by this gate');
@@ -159,10 +168,106 @@ describe('GatekeeperBase', () => {
     await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
       TransportInvokeError,
     );
-    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toBeInstanceOf(
-      IdempotencyConflictError,
-    );
+    // R-51: the retry gets the same stored failure — not 409 forever, and not a second run.
+    await expect(gate.apply('stock.adjust', {}, 'req-1')).rejects.toThrow('target failed mid-call');
     expect(invoke).toHaveBeenCalledTimes(3);
+  });
+
+  it('a credential that cannot be resolved frees the key: a retry once it is fixed runs (R-51)', async () => {
+    let credentialMissing = true;
+    const invoke = vi.fn(async () => ({ data: { applied: true } }));
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: {
+        resolve: async () => {
+          if (credentialMissing) throw new CredentialResolutionError('no credential');
+          return {};
+        },
+      },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    await expect(gate.apply('stock.adjust', {}, 'req-cred')).rejects.toBeInstanceOf(
+      CredentialResolutionError,
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    credentialMissing = false;
+    await expect(gate.apply('stock.adjust', {}, 'req-cred')).resolves.toMatchObject({
+      replayed: false,
+      data: { applied: true },
+    });
+  });
+
+  it('a transport timeout records the key as outcome unknown: every call for it answers unknown, never re-runs (R-51)', async () => {
+    const invoke = vi.fn(async () => {
+      throw new TransportTimeoutError('cli transport: command timed out after 50000 ms');
+    });
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(gate.apply('stock.adjust', {}, 'req-timeout')).rejects.toSatisfy(
+        (err) =>
+          err instanceof ApplyOutcomeUnknownError &&
+          /timed out after 50000 ms/.test((err as Error).message),
+      );
+    }
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-transport error inside the gate is stored too, with a generic message (R-51)', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('internal detail');
+    });
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    await expect(gate.apply('stock.adjust', {}, 'req-plain')).rejects.toThrow('internal detail');
+    const retry = gate.apply('stock.adjust', {}, 'req-plain');
+    await expect(retry).rejects.toBeInstanceOf(TransportInvokeError);
+    await expect(retry).rejects.toThrow('apply for "stock.adjust" failed inside the gate');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  // D-11: a gate that dies mid-apply restarts with the key still pending on disk — it answers
+  // "outcome unknown" from then on instead of freeing the key for the replay to re-execute.
+  it('a key left pending by a crashed gate process answers outcome unknown after a restart, never re-runs (D-11)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gatekeeper-base-restart-'));
+    try {
+      const invoke = vi.fn(async () => ({ data: { applied: true } }));
+      // The first process reserved the key and died before the transport returned.
+      await new JsonFileIdempotencyStore(dir).reserve('req-crash', {
+        operation: 'stock.adjust',
+        paramsHash: hashIdempotencyParams({ qty: 1 }),
+        onBehalfOf: 'user-a',
+      });
+
+      const restarted = new GatekeeperBase({
+        manifest: [executeOp()],
+        transport: fakeTransport(invoke),
+        credentialResolver: { resolve: async () => ({}) },
+        idempotencyStore: new JsonFileIdempotencyStore(dir),
+      });
+      await expect(
+        restarted.apply('stock.adjust', { qty: 1 }, 'req-crash', { onBehalfOf: 'user-a' }),
+      ).rejects.toBeInstanceOf(ApplyOutcomeUnknownError);
+      // A different call reusing the key is still a conflict, not "unknown".
+      await expect(
+        restarted.apply('stock.adjust', { qty: 2 }, 'req-crash', { onBehalfOf: 'user-a' }),
+      ).rejects.toBeInstanceOf(IdempotencyConflictError);
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('validates params against the operation params_schema and rejects invalid input', async () => {

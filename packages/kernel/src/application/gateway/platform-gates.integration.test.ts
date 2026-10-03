@@ -31,7 +31,7 @@ import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { ApprovalDrainer } from '../../governance/approval/index.js';
+import { ApprovalDrainer, getActionRequest } from '../../governance/approval/index.js';
 import {
   type CapabilityScope,
   HANDLE_SIGNING_ALG,
@@ -62,7 +62,11 @@ import {
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
-import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
+import {
+  createAdminWithTransaction,
+  createGatekeeperActionExecutor,
+  reapStaleExecutingActionRequests,
+} from './action-executor.js';
 import { withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityReachability } from './capability-reachability.js';
@@ -534,6 +538,76 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId,
         });
         expect(restored.items.map((o) => o.name).sort()).toEqual(['list_things', 'restart_thing']);
+      });
+
+      // R-48: an `apply` timed out (outcome unknown, row left `executing`), and an administrator
+      // disabled the Operation before the reaper came round. The deny list stops *new* executions
+      // only — the effect may already have happened, so the replay must still ask the gate rather
+      // than end the row `failed: operation_disabled` without asking.
+      it('the reaper replay still asks the gate after the Operation was disabled; a first execution is refused', async () => {
+        const applied: { actionRequestId: string; operation: string }[] = [];
+        const gatekeeperClient = {
+          apply: async (
+            _endpoint: string,
+            input: { actionRequestId: string; operation: string },
+          ) => {
+            applied.push({ actionRequestId: input.actionRequestId, operation: input.operation });
+            return { data: { restarted: true }, observedFacts: [], replayed: true };
+          },
+        } as unknown as GatekeeperClient;
+        const actionExecutor = createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: createAdminWithTransaction(pool),
+        });
+        const actionRequestId = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const result = await client.query<{ id: string }>(
+              `insert into action_requests (
+                 workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+                 await_decision, on_behalf_of, actor_runtime, executing_at, params
+               ) values ($1, 'executing', $2, 'restart_thing', 'medium', 'allow', false, $3, 'pi',
+                 now() - interval '1 hour', '{}'::jsonb)
+               returning id`,
+              [workspaceId, gatekeeperId, ownerPrincipalId],
+            );
+            return result.rows[0]?.id as string;
+          },
+        );
+        await callAsAdmin('set_connector_mode', {
+          name: 'fixture-mcp',
+          disabledOperations: ['restart_thing'],
+        });
+        try {
+          const row = await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerPrincipalId },
+            (client) => getActionRequest(client, workspaceId, actionRequestId),
+          );
+          if (!row) throw new Error('seeded action request not found');
+
+          // A first execution is refused before the gate is asked …
+          const refused = await actionExecutor.execute(row);
+          expect(refused).toMatchObject({ ok: false });
+          expect(refused.reason).toMatch(/^operation_disabled: /);
+          expect(applied).toEqual([]);
+
+          // … the replay asks the gate (this file's database is private: only this row is stale).
+          const reaped = await reapStaleExecutingActionRequests(pool, actionExecutor, {
+            staleAfterMs: 30 * 60 * 1000,
+          });
+          expect(reaped).toEqual({ scanned: 1, reaped: 1 });
+          expect(applied).toEqual([{ actionRequestId, operation: 'restart_thing' }]);
+          const after = await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerPrincipalId },
+            (client) => getActionRequest(client, workspaceId, actionRequestId),
+          );
+          expect(after?.status).toBe('executed');
+        } finally {
+          await callAsAdmin('set_connector_mode', { name: 'fixture-mcp', disabledOperations: [] });
+        }
       });
 
       // P-B1 propagation fix (production incident 2026-09-26): a deny-list edit must reach an
