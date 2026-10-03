@@ -143,7 +143,36 @@ export interface InvokeWorkerInput {
   /** Seconds — design doc §8.2 "默认 90 秒". */
   readonly timeout?: number;
   readonly gates?: readonly string[];
+  /**
+   * 2026-10-02 review R-54 (decision D-12): the *stored* key, already scoped or derived by the
+   * caller — `application/gateway/handlers.ts`'s `invokeWorkerHandler` always passes one
+   * (`explicit:…` for a caller-supplied `idempotencyKey`, `auto:…` derived otherwise), the same
+   * two kinds `request_action` stores. A call whose key matches an existing Task returns that Task
+   * instead of creating one: an explicit key in any status, a derived key (`auto:` prefix) only
+   * while the Task is not yet terminal (`replayableTaskByIdempotencyKey`). Omitted (direct callers
+   * such as tests and `fake-invoke-worker.ts`), nothing is deduped — the behaviour before R-54.
+   */
+  readonly idempotencyKey?: string;
 }
+
+/** D-12: the prefix `invokeWorkerHandler` puts on a key the caller did not supply. Must match the
+ *  `like 'auto:%'` predicates in migrations/task/0005_task_idempotency_key.sql. */
+export const DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX = 'auto:';
+
+/** D-12: the Task statuses a derived key still dedupes against — every status before a terminal
+ *  one. Must match task 0005's in-flight index predicate. */
+const IN_FLIGHT_TASK_STATUSES: readonly TaskRow['status'][] = [
+  'created',
+  'queued',
+  'running',
+  'waiting_approval',
+];
+
+/** A collapsed duplicate waits at most this many polls for the original call's WorkerRun row — see
+ *  `replayExistingTask`. Attempt-counted rather than clock-based so an injected fixed `deps.now`
+ *  cannot make it spin. */
+const REPLAY_WORKER_RUN_POLL_ATTEMPTS = 50;
+const REPLAY_WORKER_RUN_POLL_INTERVAL_MS = 100;
 
 export interface InvokeWorkerResult {
   readonly taskId: string;
@@ -168,23 +197,123 @@ async function resolveCallerWorkerRun(
 }
 
 /**
+ * The Task a call with `idempotencyKey` returns instead of creating one, if any (R-54 / D-12): an
+ * explicit key matches its one Task in any status; a derived key (`auto:` prefix) matches only a
+ * Task that is not yet terminal. Run inside `insertQueuedTaskWithQuotaCheck`'s per-principal
+ * advisory lock — every key embeds the principal (explicit: `on_behalf_of`; derived: the session,
+ * which belongs to one principal, or the principal itself), so no other call can be inserting a
+ * row with this key concurrently, and the read is exact. Task 0005's partial unique indexes
+ * enforce the same invariant in the database.
+ */
+async function replayableTaskByIdempotencyKey(
+  client: PoolClient,
+  workspaceId: string,
+  idempotencyKey: string,
+): Promise<TaskRow | null> {
+  const result = idempotencyKey.startsWith(DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX)
+    ? await client.query(
+        `select ${TASK_ROW_COLUMNS} from tasks
+         where workspace_id = $1 and idempotency_key = $2 and status = any($3::text[])
+         limit 1`,
+        [workspaceId, idempotencyKey, IN_FLIGHT_TASK_STATUSES],
+      )
+    : await client.query(
+        `select ${TASK_ROW_COLUMNS} from tasks
+         where workspace_id = $1 and idempotency_key = $2
+         limit 1`,
+        [workspaceId, idempotencyKey],
+      );
+  const row = result.rows[0];
+  return row ? mapTaskRow(row) : null;
+}
+
+/**
+ * The result a collapsed duplicate returns: the existing Task, its newest WorkerRun, and — when
+ * the Task is already terminal (an explicit key's replay) — its result. The original call commits
+ * its `queued` Task a moment before `spawnWorkerRun` commits the WorkerRun row (two transactions,
+ * see `insertQueuedTaskWithQuotaCheck`'s doc comment), so a duplicate arriving in that gap (two
+ * identical calls sent together) polls briefly for the row. A Task that still has none afterwards
+ * — its call failed before creating one, or a kernel crash left it `queued` until the reaper's
+ * `spawn_lost` sweep fails it — is reported as an error rather than collapsed onto silently.
+ */
+async function replayExistingTask(
+  deps: TaskRuntimeDeps,
+  workspaceId: string,
+  onBehalfOf: string,
+  taskId: string,
+): Promise<InvokeWorkerResult> {
+  const sleep = deps.sleep ?? defaultSleep;
+  for (let attempt = 1; ; attempt += 1) {
+    const { task, workerRunId } = await withWorkspace(
+      deps.pool,
+      { workspaceId, principalId: onBehalfOf },
+      async (client) => {
+        const runResult = await client.query<{ id: string }>(
+          `select id from worker_runs where workspace_id = $1 and task_id = $2
+           order by attempt desc, started_at desc
+           limit 1`,
+          [workspaceId, taskId],
+        );
+        return {
+          task: await readTask(client, workspaceId, taskId),
+          workerRunId: runResult.rows[0]?.id,
+        };
+      },
+    );
+    if (task && workerRunId) {
+      const terminal = TERMINAL_TASK_STATUSES.includes(task.status);
+      return {
+        taskId,
+        workerRunId,
+        status: task.status,
+        ...(terminal ? { result: task.result, failureReason: task.failureReason } : {}),
+      };
+    }
+    if (
+      !task ||
+      TERMINAL_TASK_STATUSES.includes(task.status) ||
+      attempt >= REPLAY_WORKER_RUN_POLL_ATTEMPTS
+    ) {
+      throw new Error(
+        `invoke_worker: an identical earlier call created Task ${taskId}, which has no WorkerRun ` +
+          `(status ${task?.status ?? 'unknown'}) — read it with get_task`,
+      );
+    }
+    await sleep(REPLAY_WORKER_RUN_POLL_INTERVAL_MS);
+  }
+}
+
+/**
  * The quota-gated "insert one queued Task row" step of `invokeWorkerCreate` (which goes on to
  * spawn a WorkerRun for it). Kept as its own function so the I18 depth/concurrency/cost-budget
  * checks and the INSERT stay inside one advisory-locked transaction (P2-6 fix's own reasoning,
  * below). It used to be shared with `create_task`'s "create only, never spawn" `createTask`, retired
  * in W5 (docs/code-review-2026-09-10.md §3.2) — a second caller must keep running these checks
  * inside this same locked transaction, never around it.
+ *
+ * R-54: with an `idempotencyKey`, a matching Task (`replayableTaskByIdempotencyKey`) is looked up
+ * first under the same lock, and when found it is returned as `replay` — no quota check (nothing
+ * new is created), no insert, no audit row.
  */
 async function insertQueuedTaskWithQuotaCheck(
   workspaceId: string,
   caller: InvokeWorkerCallerCtx,
-  input: { readonly definitionId: string; readonly version: number; readonly input: unknown },
+  input: {
+    readonly definitionId: string;
+    readonly version: number;
+    readonly input: unknown;
+    readonly idempotencyKey?: string;
+  },
   deps: TaskRuntimeDeps,
-): Promise<{
-  readonly newDepth: number;
-  readonly parentWorkerRun: WorkerRunRow | null;
-  readonly task: TaskRow;
-}> {
+): Promise<
+  | { readonly kind: 'replay'; readonly task: TaskRow }
+  | {
+      readonly kind: 'created';
+      readonly newDepth: number;
+      readonly parentWorkerRun: WorkerRunRow | null;
+      readonly task: TaskRow;
+    }
+> {
   // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
   // exceed maxConcurrentWorkerRunsPerUser"): the I18 quota checks and the Task INSERT that makes
   // the *next* caller's own concurrency count accurate now share one transaction, serialized per
@@ -214,6 +343,15 @@ async function insertQueuedTaskWithQuotaCheck(
       await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
         `${workspaceId}:${caller.principalId}`,
       ]);
+
+      if (input.idempotencyKey) {
+        const existing = await replayableTaskByIdempotencyKey(
+          client,
+          workspaceId,
+          input.idempotencyKey,
+        );
+        if (existing) return { kind: 'replay' as const, task: existing };
+      }
 
       const callerWorkerRun = caller.claims
         ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
@@ -259,8 +397,8 @@ async function insertQueuedTaskWithQuotaCheck(
       const taskResult = await client.query(
         `insert into tasks (
            workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
-           worker_definition_version, input, token_budget, duration_limit_sec
-         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8)
+           worker_definition_version, input, token_budget, duration_limit_sec, idempotency_key
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
          returning ${TASK_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -271,6 +409,7 @@ async function insertQueuedTaskWithQuotaCheck(
           JSON.stringify(input.input ?? null),
           resolvedQuotas.defaultTokenBudget,
           resolvedQuotas.defaultDurationLimitSec,
+          input.idempotencyKey ?? null,
         ],
       );
       const row = taskResult.rows[0];
@@ -286,7 +425,12 @@ async function insertQueuedTaskWithQuotaCheck(
         resultingStatus: 'queued',
       });
 
-      return { newDepth: depth, parentWorkerRun: callerWorkerRun, task: mappedTask };
+      return {
+        kind: 'created' as const,
+        newDepth: depth,
+        parentWorkerRun: callerWorkerRun,
+        task: mappedTask,
+      };
     },
   );
 }
@@ -427,12 +571,13 @@ export async function invokeWorkerCreate(
   // I18 quota checks (depth/concurrency/daily cost) + the Task INSERT itself, in one
   // advisory-locked transaction — see `insertQueuedTaskWithQuotaCheck`'s own doc comment (P2-6 fix,
   // review job 652a4abc) for the full "why one shared locked transaction, not per-call" rationale.
-  const { newDepth, parentWorkerRun, task } = await insertQueuedTaskWithQuotaCheck(
-    workspaceId,
-    caller,
-    input,
-    deps,
-  );
+  // R-54: a call whose idempotency key matches an existing Task gets that Task back, never a
+  // second Worker.
+  const inserted = await insertQueuedTaskWithQuotaCheck(workspaceId, caller, input, deps);
+  if (inserted.kind === 'replay') {
+    return replayExistingTask(deps, workspaceId, caller.principalId, inserted.task.id);
+  }
+  const { newDepth, parentWorkerRun, task } = inserted;
 
   const parentClaimsForLineage: MintWorkerRunHandleInput['parentClaims'] = caller.claims
     ? { jti: caller.claims.jti, exp: caller.claims.exp }

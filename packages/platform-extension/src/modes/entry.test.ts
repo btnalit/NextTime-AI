@@ -250,6 +250,49 @@ describe('registerEntryMode', () => {
     expect(invokeCall?.params).toMatchObject({ wait: false });
   });
 
+  // R-54 (2026-10-02 review): phase 1 alone (Task + Worker spawn) may take up to the kernel's
+  // 30s spawn budget, the same as the client's flat default — so a wait:false call now gets a
+  // per-call timeout of spawn budget + headroom too, not the flat default.
+  it('invoke_worker wait:false still gets a per-call timeout covering the kernel spawn budget (30s) + 10s headroom', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+    const callSpy = vi.spyOn(kernelClient, 'call');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {} },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 40_000);
+  });
+
+  it('invoke_worker passes a caller idempotencyKey through unmodified', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, idempotencyKey: 'retry-of-call-7' },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
+    expect(invokeCall?.params).toMatchObject({ idempotencyKey: 'retry-of-call-7', wait: false });
+  });
+
   it('invoke_worker honours an explicit wait:true, with a per-call timeout computed to outlast the kernel wait', async () => {
     kernel.setHandler('invoke_worker', () => ({
       ok: true,
@@ -275,8 +318,8 @@ describe('registerEntryMode', () => {
       wait: true,
       timeout: 45,
     });
-    // 45s (unclamped, below the 90s max) + the 10s headroom.
-    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 55_000);
+    // The 30s spawn budget + 45s (unclamped, below the 90s max) + the 10s headroom.
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 85_000);
   });
 
   it('invoke_worker wait:true with no explicit timeout is treated as the max (90s) for the computed client timeout', async () => {
@@ -296,7 +339,7 @@ describe('registerEntryMode', () => {
       fakeCtx(),
     );
 
-    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 100_000);
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 130_000);
   });
 
   it('invoke_worker wait:true clamps a caller timeout above the max down to 90s for the computed client timeout', async () => {
@@ -316,7 +359,7 @@ describe('registerEntryMode', () => {
       fakeCtx(),
     );
 
-    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 100_000);
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 130_000);
   });
 
   it('does not force wait:false on any other capability (get_task params pass through unmodified)', async () => {

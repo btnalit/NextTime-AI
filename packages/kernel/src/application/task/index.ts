@@ -15,6 +15,7 @@
 
 export {
   DEFAULT_WAIT_TIMEOUT_SECONDS,
+  DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerCallerCtx,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
