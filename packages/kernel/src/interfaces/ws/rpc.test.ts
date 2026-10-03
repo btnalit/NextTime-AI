@@ -6,6 +6,7 @@ import {
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   SupersedeIdentityMismatchError,
@@ -88,6 +89,11 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('OntologyDraftNotFoundError (publish_ontology_version) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new OntologyDraftNotFoundError('ont-1', 2));
     expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('OntologyBaseMovedError (publish_ontology_version, R-60) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    const mapped = mapDispatchError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {

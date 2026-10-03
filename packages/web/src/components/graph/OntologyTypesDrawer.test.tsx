@@ -482,6 +482,41 @@ describe('OntologyTypesDrawer — publish a proposal', () => {
     // A denial recorded for the session hides the entry point on this next visit.
     expect(screen.queryByTestId('graph-proposal-publish')).toBeNull();
   });
+
+  it('R-60: a 409 ontology_base_moved reads as "propose again from the current version", keeps the code, and leaves the button', async () => {
+    const http = proposalsHttp({
+      publish_ontology_version: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            "draft … proposed against published version 1, but the family's published version is now 2",
+            'ontology_base_moved',
+          ),
+        ),
+    });
+    render(
+      <PermissionsProvider>
+        <Harness http={http} startTab="proposals" />
+      </PermissionsProvider>,
+    );
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    fireEvent.click(rows[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+
+    fireEvent.click(screen.getByTestId('graph-proposal-publish'));
+    const confirm = await screen.findByTestId('graph-proposal-publish-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    const banner = await within(confirm).findByTestId('confirm-error');
+    expect(banner.getAttribute('data-error-code')).toBe('ontology_base_moved');
+    expect(banner.textContent).toContain('重新提议');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('graph-proposal-publish-confirm')).toBeNull());
+    // Not a permission problem — the publish entry point stays.
+    expect(screen.getByTestId('graph-proposal-publish')).toBeTruthy();
+  });
 });
 
 describe('OntologyTypesDrawer — discard a proposal', () => {

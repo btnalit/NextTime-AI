@@ -34,6 +34,7 @@ import {
   InvalidCapabilityParamsError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyViolationError,
@@ -307,6 +308,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // mirrors HTTP 409 `conflict` (capability-route.ts), the same state-conflict code as
   // IllegalTransition / WorkerDefinitionNotPublishedError below.
   if (err instanceof OperationIdentityConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // R-60 `publish_ontology_version`: mirrors HTTP 409 `ontology_base_moved` (capability-route.ts).
+  if (err instanceof OntologyBaseMovedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S5.3 `register_source`: mirrors HTTP 409 `source_identity_conflict` (capability-route.ts).
