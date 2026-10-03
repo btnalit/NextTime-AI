@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.41.0](https://github.com/btnalit/NextTime-AI/compare/v0.40.0...v0.41.0) (2026-10-03)
+
+
+### Bug Fixes
+
+* **collector:** the RAGFlow phase commits its window only after a complete read (R-70) ([#456](https://github.com/btnalit/NextTime-AI/issues/456)) ([526bf62](https://github.com/btnalit/NextTime-AI/commit/526bf625120dc7b6da46f785913c5a05c62895f0))
+* **gate-host:** a hosted MCP gate whose tools/list needs auth can be taken over (R-69) ([#453](https://github.com/btnalit/NextTime-AI/issues/453)) ([5ffaad7](https://github.com/btnalit/NextTime-AI/commit/5ffaad7061983dbece8c18a4c68d0dd1a25e721d))
+* **kernel:** builder floor and proposer-or-owner for every publish/deprecate (D-24) ([#460](https://github.com/btnalit/NextTime-AI/issues/460)) ([c931b98](https://github.com/btnalit/NextTime-AI/commit/c931b98b9f7fa0df760f0b6c42018c3ae8a12b68))
+* **kernel:** narrow Task reads and Operation drafts to who may see them (D-21, D-26) ([#455](https://github.com/btnalit/NextTime-AI/issues/455)) ([f9746e4](https://github.com/btnalit/NextTime-AI/commit/f9746e43c232faa636450b1e06de191644bcacb0))
+* **kernel:** owners and builders can review Worker-proposed Skill and Procedure drafts ([#462](https://github.com/btnalit/NextTime-AI/issues/462)) ([c481fd5](https://github.com/btnalit/NextTime-AI/commit/c481fd5ab534e023d53efc4b5980a263c7e1eff6))
+* **kernel:** platform_status shows real backup freshness from the last-success marker (D-28) ([#461](https://github.com/btnalit/NextTime-AI/issues/461)) ([4fcb580](https://github.com/btnalit/NextTime-AI/commit/4fcb580fb3e631484143abf14b68512a9fe0cc4d))
+* **kernel:** workspace purge takes no table lock; index provenance lookups (R-65, R-66) ([#458](https://github.com/btnalit/NextTime-AI/issues/458)) ([61dbc0b](https://github.com/btnalit/NextTime-AI/commit/61dbc0b3999b77e554789645c49653ff5bbb5b6c))
+* **llm-usage:** dedupe usage on a per-request id; one workspace group never stalls the batch (R-67, R-68) ([#459](https://github.com/btnalit/NextTime-AI/issues/459)) ([e97acb4](https://github.com/btnalit/NextTime-AI/commit/e97acb49a58d3c8a4cc021a7140b545069b44b68))
+* **scripts:** apply-release records the previous ref and puts the checkout back on a failure before up (R-71) ([#452](https://github.com/btnalit/NextTime-AI/issues/452)) ([24620f1](https://github.com/btnalit/NextTime-AI/commit/24620f1ec71d8d60cae6a0ae39c0f1fc5d9d8238))
+
+
+### Documentation
+
+* **status:** review wave 5 merged — leftover 122 closed ([#463](https://github.com/btnalit/NextTime-AI/issues/463)) ([81ffda6](https://github.com/btnalit/NextTime-AI/commit/81ffda6389f42519ce9dc20408312312bd9e58fb))
+
 ## [0.40.0](https://github.com/btnalit/NextTime-AI/compare/v0.39.0...v0.40.0) (2026-10-03)
 
 
