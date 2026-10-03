@@ -35,6 +35,7 @@ export {
   operationPlatformStatus,
   operationsOf,
   pendingManifestOf,
+  readConnectorMode,
   readDisabledOperations,
   readGateLinkPolicy,
   readGateLinkPoliciesForWorkspace,
