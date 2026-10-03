@@ -65,6 +65,8 @@ export type {
   ProposeProcedureInput,
 } from './procedures.js';
 
+export type { DraftViewer } from './draft-visibility.js';
+
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,
   DraftNotDiscardableError,

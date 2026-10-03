@@ -825,6 +825,107 @@ describe('CatalogPage', () => {
 
     await waitFor(() => expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(true));
   });
+
+  // Wave 5: the owner and builders see every Skill / Procedure draft (D-26 rule) — a member's
+  // Worker-proposed Skill is reviewed here. The detail names the proposer and offers Publish;
+  // Discard stays the proposer's own act, so it is not offered on someone else's draft.
+  const OWNER_WORKSPACE = {
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 3,
+    gatekeeperCount: 0,
+    caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+  };
+
+  it('Skills tab: the owner reviews a member’s draft — proposer named, Publish offered, no Discard', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-9',
+            version: 1,
+            status: 'draft',
+            name: 'worker-found-trick',
+            description: 'd',
+            proposedBy: 'p-member',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      resolve_refs: () => ({ items: [{ id: 'p-member', kind: 'principal', name: 'Mia' }] }),
+      publish_skill: () => ({ id: 'sk-9', version: 1, status: 'published' }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+
+    const proposer = within(detail).getByTestId('skill-detail-proposer');
+    expect(proposer.getAttribute('data-ref-id')).toBe('p-member');
+    await waitFor(() => expect(proposer.textContent).toContain('Mia'));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await waitFor(() => expect(within(detail).queryByRole('button', { name: /丢弃/ })).toBeNull());
+
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
+        skillId: 'sk-9',
+      }),
+    );
+  });
+
+  it('Skills tab: the proposer’s own draft still offers Discard', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-10',
+            version: 1,
+            status: 'draft',
+            name: 'my-trick',
+            description: 'd',
+            proposedBy: 'p-owner',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(within(detail).getByRole('button', { name: /丢弃/ })).toBeTruthy();
+  });
+
+  it('Procedures tab: the owner sees whose draft it is and can publish it', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-9',
+            version: 1,
+            status: 'draft',
+            name: 'approve-then-verify',
+            description: 'd',
+            steps: [],
+            proposedBy: 'p-builder',
+          },
+        ],
+      }),
+      resolve_refs: () => ({ items: [{ id: 'p-builder', kind: 'principal', name: 'Bo' }] }),
+      publish_procedure: () => ({ id: 'pr-9', version: 1, status: 'published' }),
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+
+    const proposer = within(detail).getByTestId('procedure-detail-proposer');
+    await waitFor(() => expect(proposer.textContent).toContain('Bo'));
+    await waitFor(() => expect(within(detail).queryByRole('button', { name: /丢弃/ })).toBeNull());
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_procedure')).toBe(true));
+  });
 });
 
 describe('CatalogPage master-detail (console redesign P3-5)', () => {

@@ -18,9 +18,10 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * application/gateway/publish-authority.integration.test: DB-gated (auto-skip without
  * DATABASE_URL) dispatch-level coverage of review 2026-10-02 decision D-24 — every meta-ontology
  * `publish_*` / `deprecate_*` is `minRole: 'builder'`, and only the row's proposer or the workspace
- * owner may act on it. One publish path (`publish_skill`, a draft private to its proposer: someone
- * else's reads as not found) and one deprecate path (`deprecate_operation`, a published row
- * everyone sees: 403 `not_proposer`), each at member / another builder / the proposer / the owner.
+ * owner may act on it. One publish path (`publish_skill` on a draft, which builders and the owner
+ * can see — another builder's attempt is 403 `not_proposer`) and one deprecate path
+ * (`deprecate_operation`, a published row everyone sees: 403 `not_proposer`), each at member /
+ * another builder / the proposer / the owner.
  *
  * Plus the version half: propose stays permissive (a new version may be added to anyone's family),
  * but publishing a version that would supersede a live version someone else proposed needs that
@@ -180,11 +181,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
-      it('another builder: the draft is not theirs and not visible — not found', async () => {
+      it('another builder: sees the draft (D-26 reviewer rule) but it is not theirs — 403 not_proposer', async () => {
         const skillId = await proposeSkill();
         await expect(
           call(otherBuilderId, 'builder', 'publish_skill', { skillId }),
-        ).rejects.toMatchObject({ name: 'SkillNotFoundError' });
+        ).rejects.toBeInstanceOf(NotProposerError);
         // Nothing was published by the refused call.
         const asProposer = await call<{ status: string } | null>(
           builderId,

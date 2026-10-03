@@ -7218,8 +7218,8 @@
             "name",
             "description",
             "applicable",
-            "markdown",
             "proposedBy",
+            "markdown",
             "publishedBy",
             "createdAt",
             "publishedAt"
@@ -11289,6 +11289,9 @@
               "name": {
                 "type": "string"
               },
+              "proposedBy": {
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "draft",
@@ -11403,7 +11406,8 @@
               "status",
               "name",
               "description",
-              "steps"
+              "steps",
+              "proposedBy"
             ],
             "type": "object"
           },
@@ -11647,6 +11651,9 @@
               "name": {
                 "type": "string"
               },
+              "proposedBy": {
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "draft",
@@ -11666,7 +11673,8 @@
               "status",
               "name",
               "description",
-              "applicable"
+              "applicable",
+              "proposedBy"
             ],
             "type": "object"
           },

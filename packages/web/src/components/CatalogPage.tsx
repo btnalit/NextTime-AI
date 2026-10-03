@@ -2,6 +2,7 @@ import type { SkillDetailWire } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
@@ -895,6 +896,36 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 // Skills
 // -------------------------------------------------------------------------------------------
 
+/** "Proposed by" on a Skill / Procedure detail. The owner and builders see every draft (D-26 rule,
+ *  kernel application/worker/draft-visibility.ts) — a member's Worker-proposed Skill is reviewed
+ *  here — so the detail names whose draft it is; the chip resolves the name itself. */
+function proposerItem(
+  http: CapabilityCaller,
+  proposedBy: string,
+  t: Translate,
+  testId: string,
+): KeyValueItem {
+  return {
+    key: 'proposedBy',
+    label: t('提议者', 'Proposed by'),
+    value: <RefChip kind="principal" id={proposedBy} http={http} size="s" testId={testId} />,
+  };
+}
+
+/** `discard_draft` stays the proposer's own act, so a reviewer looking at someone else's draft is
+ *  not offered it. Unknown either side (an older kernel, `get_workspace` not loaded) keeps the
+ *  action, as before. */
+function isOwnDraftOrUnknown(
+  row: { readonly proposedBy?: string },
+  callerPrincipalId: string | null,
+): boolean {
+  return (
+    row.proposedBy === undefined ||
+    callerPrincipalId === null ||
+    row.proposedBy === callerPrincipalId
+  );
+}
+
 function SkillDetailView({
   http,
   row,
@@ -929,6 +960,9 @@ function SkillDetailView({
   const items: KeyValueItem[] = [
     { key: 'description', label: t('描述', 'Description'), value: row.description },
   ];
+  if (row.proposedBy) {
+    items.push(proposerItem(http, row.proposedBy, t, 'skill-detail-proposer'));
+  }
   const gateKinds = row.applicable?.gateKinds as readonly string[] | undefined;
   const objectTypes = row.applicable?.objectTypes as readonly string[] | undefined;
   if (gateKinds && gateKinds.length > 0) {
@@ -1019,6 +1053,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const skills = useCapabilityList<SkillRow>(http, 'list_skills');
+  const { principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<SkillRow>>(null);
 
@@ -1206,7 +1241,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canPropose={canPropose}
       canPublish={canPublish}
       canDeprecate={canDeprecate}
-      canDiscard={canDiscard}
+      canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_skill')}
@@ -1245,6 +1280,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 // -------------------------------------------------------------------------------------------
 
 function ProcedureDetailView({
+  http,
   row,
   canPropose,
   canPublish,
@@ -1256,6 +1292,7 @@ function ProcedureDetailView({
   onDeprecate,
   onDiscard,
 }: {
+  readonly http: CapabilityCaller;
   readonly row: ProcedureRow;
   readonly canPropose: boolean;
   readonly canPublish: boolean;
@@ -1285,7 +1322,12 @@ function ProcedureDetailView({
       </header>
 
       <KeyValue
-        items={[{ key: 'description', label: t('描述', 'Description'), value: row.description }]}
+        items={[
+          { key: 'description', label: t('描述', 'Description'), value: row.description },
+          ...(row.proposedBy
+            ? [proposerItem(http, row.proposedBy, t, 'procedure-detail-proposer')]
+            : []),
+        ]}
       />
 
       <div className="stack-s">
@@ -1342,6 +1384,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const procedures = useCapabilityList<ProcedureRow>(http, 'list_procedures');
+  const { principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
 
@@ -1528,11 +1571,12 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     editorPane
   ) : selected ? (
     <ProcedureDetailView
+      http={http}
       row={selected}
       canPropose={canPropose}
       canPublish={canPublish}
       canDeprecate={canDeprecate}
-      canDiscard={canDiscard}
+      canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}

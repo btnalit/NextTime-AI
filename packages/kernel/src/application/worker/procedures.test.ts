@@ -217,12 +217,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
 
         const ownList = await inTx(proposerId, (client) =>
-          listProcedures(client, workspaceId, proposerId),
+          listProcedures(client, workspaceId, { principalId: proposerId, role: 'member' }),
         );
         expect(ownList.items.some((p) => p.name === unique)).toBe(true);
 
         const otherList = await inTx(otherPrincipalId, (client) =>
-          listProcedures(client, workspaceId, otherPrincipalId),
+          listProcedures(client, workspaceId, { principalId: otherPrincipalId, role: 'member' }),
         );
         expect(otherList.items.some((p) => p.name === unique)).toBe(false);
       });
@@ -235,7 +235,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id));
 
         const otherList = await inTx(otherPrincipalId, (client) =>
-          listProcedures(client, workspaceId, otherPrincipalId),
+          listProcedures(client, workspaceId, { principalId: otherPrincipalId, role: 'member' }),
         );
         expect(otherList.items.some((p) => p.name === unique && p.status === 'published')).toBe(
           true,
@@ -340,7 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(ProcedureStepReferenceError);
 
         const stillDraft = await inTx(ownerId, (client) =>
-          listProcedures(client, workspaceId, ownerId),
+          listProcedures(client, workspaceId, { principalId: ownerId, role: 'member' }),
         );
         expect(stillDraft.items.find((p) => p.id === draft.id)).toBeUndefined(); // draft, not owned by ownerId
       });

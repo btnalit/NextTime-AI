@@ -30,8 +30,9 @@ import { SkillNotFoundError } from './skills.js';
  * propose gets the exact same `*NotFoundError` a caller naming an id that does not exist at all
  * gets — never a 403 — reusing `getSkill`/`listSkills`'s own "not visible = not found" convention
  * (skills.ts's own doc comment) rather than confirming a draft's existence to a non-owner. Do not
- * add an owner/admin override here: I16 already establishes that nobody but the proposer can even
- * see a draft, so there is no "owner" concept for this table to defer to.
+ * add an owner/admin override here: discarding stays the proposer's own act. The owner and builders
+ * may *see* Skill / Procedure drafts (D-26 reviewer rule, ./draft-visibility.ts) so they can
+ * review and publish them — seeing a draft is neither publishing nor discarding it.
  */
 
 // -------------------------------------------------------------------------------------------

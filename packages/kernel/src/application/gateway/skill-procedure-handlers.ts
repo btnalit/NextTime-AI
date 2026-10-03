@@ -1,5 +1,10 @@
-import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
-import type { SkillRow } from '../../application/worker/index.js';
+import {
+  ProposeProcedureContentSchema,
+  ProposeSkillContentSchema,
+  type Role,
+} from '@nexttime/shared';
+import type { PoolClient } from 'pg';
+import type { DraftViewer, SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
   deprecateSkill,
@@ -12,7 +17,11 @@ import {
   publishSkill,
 } from '../../application/worker/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
+import {
+  type CapabilityHandler,
+  type CapabilityHandlerContext,
+  publishActorOf,
+} from './capability-handler.js';
 
 /**
  * application/gateway/skill-procedure-handlers: `propose_skill` / `publish_skill` /
@@ -28,7 +37,38 @@ import { type CapabilityHandler, publishActorOf } from './capability-handler.js'
  * cannot express a nested Zod object per capability without duplicating `@nexttime/shared`'s own
  * content schemas into the registry file) — these handlers are where that opaque payload is
  * actually parsed against `ProposeSkillContentSchema`/`ProposeProcedureContentSchema`.
+ *
+ * The three reads (`list_skills` / `get_skill` / `list_procedures`) narrow drafts for one
+ * `DraftViewer` (`draftViewerOf` below; the rule is application/worker/draft-visibility.ts's
+ * `draftVisibleTo`): a caller's own drafts, or every draft for the owner and builders.
  */
+
+/**
+ * Who a Skill / Procedure read is narrowed for. Human channel: the Principal dispatch.ts resolved.
+ * These reads are `channel: 'handle'` too, and there the viewer is the Handle's `obo` (I13,
+ * `ctx.principalId`) with that principal's own workspace role — an agent sees exactly the drafts
+ * its human may see, never more. No `ctx` (a test driving the handler directly): the RLS session
+ * principal, the same fallback `currentPrincipalId` gives every other handler here.
+ */
+async function draftViewerOf(
+  client: PoolClient,
+  workspaceId: string,
+  ctx: CapabilityHandlerContext | undefined,
+): Promise<DraftViewer> {
+  if (ctx?.principal) return { principalId: ctx.principal.id, role: ctx.principal.role };
+  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  const result = await client.query<{ role: Role }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, principalId],
+  );
+  const role = result.rows[0]?.role;
+  if (!role) {
+    throw new Error(
+      `draftViewerOf: principal ${principalId} not found in workspace ${workspaceId}`,
+    );
+  }
+  return { principalId, role };
+}
 
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skill: rawSkill } = params as { skill: unknown };
@@ -82,6 +122,7 @@ function toWireSkillSummary(row: SkillRow) {
     name: row.name,
     description: row.description,
     applicable: row.applicable,
+    proposedBy: row.proposedBy,
   };
 }
 
@@ -90,8 +131,8 @@ function toWireSkillSummary(row: SkillRow) {
 // comment).
 const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { limit, cursor } = params as { limit?: number; cursor?: string };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const page = await listSkills(client, workspaceId, principalId, { limit, cursor });
+  const viewer = await draftViewerOf(client, workspaceId, ctx);
+  const page = await listSkills(client, workspaceId, viewer, { limit, cursor });
   return {
     result: {
       items: page.items.map(toWireSkillSummary),
@@ -104,14 +145,13 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params,
 // S8 W1-C (leftover 48 "无 get_skill"): the full-body counterpart to `listSkillsHandler` above.
 const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skillId } = params as { skillId: string };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const row = await getSkill(client, workspaceId, principalId, skillId);
+  const viewer = await draftViewerOf(client, workspaceId, ctx);
+  const row = await getSkill(client, workspaceId, viewer, skillId);
   if (!row) return { result: null, resourceType: 'skill', resourceId: skillId };
   return {
     result: {
       ...toWireSkillSummary(row),
       markdown: row.markdown,
-      proposedBy: row.proposedBy,
       publishedBy: row.publishedBy,
       createdAt: row.createdAt.toISOString(),
       publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
@@ -168,8 +208,8 @@ const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId,
 // S8 W1-C (leftover 48 pagination list): same shape as `listSkillsHandler` above.
 const listProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { limit, cursor } = params as { limit?: number; cursor?: string };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const page = await listProcedures(client, workspaceId, principalId, { limit, cursor });
+  const viewer = await draftViewerOf(client, workspaceId, ctx);
+  const page = await listProcedures(client, workspaceId, viewer, { limit, cursor });
   return {
     result: {
       items: page.items.map((row) => ({
@@ -179,6 +219,7 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, par
         name: row.name,
         description: row.description,
         steps: row.steps,
+        proposedBy: row.proposedBy,
       })),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),

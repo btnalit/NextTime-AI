@@ -26,7 +26,9 @@ export const WorkerDefinitionWireSchema = z
 export type WorkerDefinitionWire = z.infer<typeof WorkerDefinitionWireSchema>;
 
 /** `list_skills` item shape (skill-procedure-handlers.ts's `listSkillsHandler` — a hand-picked
- *  subset of `SkillRow`: no `markdown`/`createdAt`/`publishedAt`/`proposedBy`/`publishedBy`). */
+ *  subset of `SkillRow`: no `markdown`/`createdAt`/`publishedAt`/`publishedBy`). `proposedBy` (the
+ *  proposer's principal id) lets the owner and builders, who see every draft (D-26 rule,
+ *  application/worker/draft-visibility.ts), tell whose draft they are reviewing. */
 export const SkillSummaryWireSchema = z
   .object({
     id: z.string(),
@@ -35,6 +37,7 @@ export const SkillSummaryWireSchema = z
     name: z.string(),
     description: z.string(),
     applicable: SkillApplicableSchema,
+    proposedBy: z.string(),
   })
   .strict();
 export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
@@ -44,7 +47,6 @@ export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
  *  out (`SkillRow`'s own shape, `application/worker/skills.ts`). */
 export const SkillDetailWireSchema = SkillSummaryWireSchema.extend({
   markdown: z.string(),
-  proposedBy: z.string(),
   publishedBy: z.string().nullable(),
   createdAt: z.string(),
   publishedAt: z.string().nullable(),
@@ -66,7 +68,8 @@ export const SkillPublishResultWireSchema = SkillSummaryWireSchema.pick({
   status: true,
 });
 
-/** `list_procedures` item shape (skill-procedure-handlers.ts's `listProceduresHandler`). */
+/** `list_procedures` item shape (skill-procedure-handlers.ts's `listProceduresHandler`).
+ *  `proposedBy`: as on `SkillSummaryWireSchema`. */
 export const ProcedureSummaryWireSchema = z
   .object({
     id: z.string(),
@@ -75,6 +78,7 @@ export const ProcedureSummaryWireSchema = z
     name: z.string(),
     description: z.string(),
     steps: z.array(ProcedureStepSchema),
+    proposedBy: z.string(),
   })
   .strict();
 export type ProcedureSummaryWire = z.infer<typeof ProcedureSummaryWireSchema>;
