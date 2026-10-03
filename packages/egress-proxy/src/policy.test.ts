@@ -110,6 +110,18 @@ describe('decideEgress', () => {
     }
   });
 
+  it('denies the unspecified "this host" addresses (0.0.0.0/8, ::), which classify as public', async () => {
+    for (const addr of ['0.0.0.0', '0.1.2.3', '::', '::ffff:0.0.0.0']) {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: undefined,
+        config: baseConfig(),
+        resolve: resolverReturning(addr),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    }
+  });
+
   it('denies CGNAT (100.64/10)', async () => {
     const decision = await decideEgress({
       hostname: 'example.com',

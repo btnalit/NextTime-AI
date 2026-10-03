@@ -27,10 +27,10 @@ import {
  * own LAN, which is the whole point of connecting one, whereas the egress proxy keeps Workers on the
  * public internet. The platform's networks are what this predicate protects.
  *
- * `allowHosts` (`NEXTTIME_CONNECTION_ALLOW_HOSTS`) is the operator's escape hatch for a self-
- * connected gate that does run on the platform's networks — the acceptance fixtures
- * (`scripts/accept_s2.sh`) or a gate an operator deliberately runs as a compose service without
- * making it a packaged gate. A listed name matches as a suffix (`matchesSuffix`, the egress proxy's
+ * `allowHosts` is the escape hatch for a self-connected gate that does run on the platform's
+ * networks: the operator's `NEXTTIME_CONNECTION_ALLOW_HOSTS` (a gate deliberately run as a compose
+ * service without making it a packaged gate) plus the kernel's fixed acceptance-fixture list
+ * `NEXTTIME_CONNECTION_FIXTURE_HOSTS` (`scripts/accept_s2.sh`). A listed name matches as a suffix (`matchesSuffix`, the egress proxy's
  * allow-list rule); a listed IP literal matches only exactly. An allowed host skips every other
  * check.
  *

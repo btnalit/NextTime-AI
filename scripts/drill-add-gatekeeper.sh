@@ -30,10 +30,10 @@
 #     checks for the full accept-s2 fixture/gate set.
 #   - The fixture gate is a *self-connected* gate (R-01, maintainer decision D-01): it never holds
 #     the platform gate_token — this drill mints its own connection secret (`mint_connection_secret`)
-#     into ${NEXTTIME_DATA}/accept-s2/http-gate/kernel.token before starting it. Because it lives on
-#     the platform's `control` network under a bare compose name, the kernel is recreated for the
-#     run with the fixture hosts on NEXTTIME_CONNECTION_ALLOW_HOSTS (R-27) and recreated from .env
-#     on exit (scripts/lib/accept-common.sh kernel_allow_hosts_up / kernel_allow_hosts_restore).
+#     into ${NEXTTIME_DATA}/accept-s2/http-gate/kernel.token before starting it. It lives on the
+#     platform's `control` network under a bare compose name, which the kernel's owner-supplied-URL
+#     predicate (R-27) refuses — except the fixed acceptance list docker-compose.yml gives the kernel
+#     (NEXTTIME_CONNECTION_FIXTURE_HOSTS), so no kernel restart is needed.
 #
 # Shared-fixture warning: accept-s2-openapi/accept-s2-http-gate and
 # ${NEXTTIME_DATA}/accept-s2/http-gate/ are the *same* fixture directory/services
@@ -90,10 +90,6 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
-# R-27: the kernel's fixture allow-list (preflight_step) is undone on every exit path.
-trap kernel_allow_hosts_restore EXIT
-trap 'exit 130' INT TERM HUP PIPE
-
 # --------------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------------
@@ -116,9 +112,6 @@ preflight_step() {
     fail "preflight-build" "docker compose --profile accept-s2 build failed: $(printf '%s' "$build_out" | tail -20)"
   fi
   pass "preflight-build" "accept-s2-openapi, accept-s2-http-gate images built"
-
-  kernel_allow_hosts_up "accept-s2-http-gate,accept-s2-openapi" || fail "preflight-kernel-allow-fixtures" "the kernel did not come back healthy with NEXTTIME_CONNECTION_ALLOW_HOSTS set for the fixtures"
-  pass "preflight-kernel-allow-fixtures" "kernel recreated with the fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)"
 }
 
 bootstrap_step() {

@@ -375,14 +375,14 @@ fixture，与 `scripts/accept_s2.sh` 自己的 http 连接那一段共用同一�
 member，不是 owner 自己），最后由 **member**（被授权的那个人，不是 owner）调用 `request_action`
 观察 `stock.get`，断言 `result.status === "ok"` 且 `observedFactCount >= 1`——真的证明了这条授权
 链本身生效，不只是"owner 反正什么都能调"。fixture 门是自连门（R-01）：脚本先给它签一把自己的连接密钥
-（`mint_connection_secret`）再起门，`create_connection` 带同一把；它跑在平台 `control` 网络上，所以脚本
-跑期间会用 `NEXTTIME_CONNECTION_ALLOW_HOSTS` 重建一次 kernel、退出时再按 `.env` 重建回来（R-27）。
+（`mint_connection_secret`）再起门，`create_connection` 带同一把；它跑在平台 `control` 网络上，靠
+`docker-compose.yml` 固定给 kernel 的验收夹具清单 `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 通过出站目标判定
+（R-27），脚本不重启 kernel。
 
 期望输出（末尾）：
 ```
 PASS preflight-services postgres, kernel running
 PASS preflight-build accept-s2-openapi, accept-s2-http-gate images built
-PASS preflight-kernel-allow-fixtures kernel recreated with the fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)
 PASS bootstrap-workspace workspace=... owner=... key=...(redacted)
 PASS bootstrap-member member=... key=...(redacted)
 PASS fixtures-store-key ...

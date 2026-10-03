@@ -4,6 +4,7 @@ import {
   isBareHostname,
   isInCidr,
   isIpLiteral,
+  isUnspecifiedAddress,
   matchesSuffix,
   normalizeHostname,
 } from '@nexttime/shared';
@@ -165,6 +166,9 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
   const targetIsLiteral = isIpLiteral(hostname);
 
   for (const address of addresses) {
+    // `classifyAddress` reports `0.0.0.0/8` and `::` as `'public'`, yet connecting to one reaches
+    // this proxy's own host — never an acceptable egress target (2026-10-02 review, R-27 follow-up).
+    if (isUnspecifiedAddress(address)) continue;
     const addressClass = classifyAddress(address, config.platformSubnets);
     if (addressClass === 'public') return { allowed: true, address };
     if (addressClass === 'loopback' && config.allowLoopbackForTests) {

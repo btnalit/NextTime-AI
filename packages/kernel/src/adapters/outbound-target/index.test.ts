@@ -21,6 +21,42 @@ describe('adapters/outbound-target (R-27)', () => {
     expect(outboundTargetPolicyFromEnv({})).toEqual({ platformSubnets: [], allowHosts: [] });
   });
 
+  it('allows the union of the operator list and the fixed acceptance-fixture list', () => {
+    const policy = outboundTargetPolicyFromEnv({
+      NEXTTIME_CONNECTION_ALLOW_HOSTS: 'lab-gate',
+      NEXTTIME_CONNECTION_FIXTURE_HOSTS: 'accept-s2-ssh-gate,accept-s2-mcp',
+    });
+    expect(policy.allowHosts).toEqual(['lab-gate', 'accept-s2-ssh-gate', 'accept-s2-mcp']);
+  });
+
+  // R-27 without a kernel restart: the compose-level fixture list alone admits the acceptance
+  // fixtures; platform services stay refused (worker-supervisor is never on it).
+  it('admits a fixture host with an empty operator list, and still refuses platform services', async () => {
+    const resolve = vi.fn(async () => [quad(10, 77, 0, 9)]);
+    const guard = createOutboundTargetGuard({
+      policy: outboundTargetPolicyFromEnv({
+        NEXTTIME_SUBNET_CONTROL: `${quad(10, 77, 0, 0)}/24`,
+        NEXTTIME_CONNECTION_ALLOW_HOSTS: '',
+        NEXTTIME_CONNECTION_FIXTURE_HOSTS:
+          'accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp',
+      }),
+      resolve,
+    });
+    await expect(guard('http://accept-s2-ssh-gate:8090', 'endpoint')).resolves.toBeUndefined();
+    await expect(guard('http://accept-s2-mcp:8080', 'manifestSource')).resolves.toBeUndefined();
+    for (const url of [
+      'http://worker-supervisor:8081/task/1/terminate',
+      'http://kernel:8080/api/health',
+      'http://localhost:8090',
+    ]) {
+      await expect(guard(url, 'manifestSource')).rejects.toMatchObject({
+        code: 'connection_target_refused',
+        reason: 'bare-hostname',
+      });
+    }
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it('refuses a malformed subnet loudly instead of dropping the rule', () => {
     expect(() => outboundTargetPolicyFromEnv({ NEXTTIME_SUBNET_CONTROL: 'not-a-cidr' })).toThrow();
   });

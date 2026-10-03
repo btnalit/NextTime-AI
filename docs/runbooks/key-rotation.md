@@ -237,8 +237,8 @@ rm -f "${NEXTTIME_DATA}/secrets/gate.token"
 sh scripts/gen-handle-keys.sh   # 只会重新生成 gate.token
 
 # kernel + 每一个当前部署的门服务一起重启（按实际部署的门服务列表调整）：
-docker compose restart kernel gatekeeper-docker gatekeeper-ragflow
-docker compose ps kernel gatekeeper-docker gatekeeper-ragflow
+docker compose restart kernel gatekeeper-docker gatekeeper-ragflow gate-host
+docker compose ps kernel gatekeeper-docker gatekeeper-ragflow gate-host
 ```
 
 ### 3.4 验证
@@ -259,7 +259,7 @@ fetch('http://gatekeeper-ragflow:8083/gate/health', {headers:{authorization:'Bea
 
 ```bash
 cp "${NEXTTIME_DATA}/secrets/gate.token.bak-<ts>" "${NEXTTIME_DATA}/secrets/gate.token"
-docker compose restart kernel gatekeeper-docker gatekeeper-ragflow
+docker compose restart kernel gatekeeper-docker gatekeeper-ragflow gate-host
 ```
 
 ### 3.6 常见问题

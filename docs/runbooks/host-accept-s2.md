@@ -32,10 +32,12 @@
   的 key 调 `mint_connection_secret` 给每个门各签一把连接密钥，写进
   `${NEXTTIME_DATA}/accept-s2/<门>/kernel.token`（门的 `GATE_KERNEL_TOKEN_FILE`）再起门，健康检查用这把
   密钥，并断言平台 `gate_token` 被这个门拒绝；`create_connection` 带同一把 `connectionSecret`。验收夹具都
-  在平台自己的 `control` 网络上、用裸服务名，内核的出站目标判定默认拒绝这种地址，所以脚本在 preflight
-  末尾用 `NEXTTIME_CONNECTION_ALLOW_HOSTS=<.env 原值,>accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp`
-  **重建一次 kernel**（等 healthcheck 变 healthy），退出时（EXIT trap）再按 `.env` 原值重建回来——跑验收期间
-  kernel 会各重启一次，进行中的会话会断开重连。
+  在平台自己的 `control` 网络上、用裸服务名，内核的出站目标判定默认拒绝这种地址——除了 `docker-compose.yml`
+  固定写给 kernel 的验收夹具清单 `NEXTTIME_CONNECTION_FIXTURE_HOSTS`（`accept-s2-ssh-gate,accept-s2-http-gate,
+  accept-s2-openapi,accept-s2-mcp`，常量，`validate-compose.mjs` 保证全是 `accept-*` 夹具、都不挂
+  `gate_token`）。永久放行它们不授予任何东西：名字只在 `accept-s2` profile 起着时才解析得到，夹具门只认绑定到
+  验收工作区的连接密钥。**脚本不重启 kernel**；`worker-supervisor` 等平台服务不在清单里，照样被拒
+  （`connect-mcp-target-refused` 验的就是这个）。
 - 主机上有 `docker`、`docker compose`、`curl`、`psql`（经 `docker compose exec postgres`）；**没有**
   `node`/`corepack`/`ssh-keygen`——脚本把每一次 JSON-RPC 交互、每一次密钥生成都放进一次性容器里跑
   （见脚本头注释）。
@@ -88,7 +90,6 @@ PASS preflight-fake-provider fake provider configured in .../config/llm-provider
 PASS preflight-migrations up to date
 PASS preflight-worker-runtime-image nexttime-ai-worker-runtime present
 PASS preflight-accept-s2-build accept-s2 fixture/gate images built
-PASS preflight-kernel-allow-fixtures kernel recreated with the accept-s2 fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)
 PASS bootstrap-workspace workspace=<uuid> alice=<uuid> key=abc123...(redacted)
 PASS bootstrap-bob bob=<uuid> (member) key=def456...(redacted)
 PASS fixtures-ssh-keygen keypair generated into ${NEXTTIME_DATA}/accept-s2/ssh/

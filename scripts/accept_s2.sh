@@ -142,7 +142,6 @@ on_exit() {
   if [ "$REAL" -eq 0 ]; then
     accept_provider_restore
   fi
-  kernel_allow_hosts_restore
   exit "$rc"
 }
 trap on_exit EXIT
@@ -196,12 +195,6 @@ fetch('http://worker-supervisor:8081/resident/reclaim', {
 " </dev/null 2>&1
 }
 
-# R-27 / R-01 (2026-10-02 review): every accept-s2 fixture this script connects through
-# `create_connection` is a self-connected gate on the platform's own `control` network, which the
-# kernel's owner-supplied-URL predicate refuses — preflight recreates the kernel with these hosts
-# allowed for this run (kernel_allow_hosts_up, scripts/lib/accept-common.sh) and on_exit restores it.
-ACCEPT_S2_CONNECTION_HOSTS="accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp"
-
 # --------------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------------
@@ -245,9 +238,6 @@ preflight_step() {
     fail "preflight-accept-s2-build" "docker compose --profile accept-s2 build failed: $(printf '%s' "$build_out" | tail -20)"
   fi
   pass "preflight-accept-s2-build" "accept-s2 fixture/gate images built"
-
-  kernel_allow_hosts_up "$ACCEPT_S2_CONNECTION_HOSTS" || fail "preflight-kernel-allow-fixtures" "the kernel did not come back healthy with NEXTTIME_CONNECTION_ALLOW_HOSTS set for the accept-s2 fixtures"
-  pass "preflight-kernel-allow-fixtures" "kernel recreated with the accept-s2 fixtures on NEXTTIME_CONNECTION_ALLOW_HOSTS (restored on exit)"
 }
 
 bootstrap_step() {
@@ -339,7 +329,10 @@ fixtures_up_step() {
   pass "fixtures-up" "accept-s2-sshd, accept-s2-openapi, accept-s2-restart-target up"
 
   # R-01: each gate holds its own connection secret before it starts — and before
-  # create_connection first calls it (connections_step passes the same secret).
+  # create_connection first calls it (connections_step passes the same secret). The fixtures live
+  # on the platform's `control` network under bare compose names, which the kernel's owner-supplied-
+  # URL predicate (R-27) refuses — except the fixed acceptance list docker-compose.yml gives the
+  # kernel (NEXTTIME_CONNECTION_FIXTURE_HOSTS), so no kernel restart is needed.
   SSH_GATE_SECRET=$(mint_gate_secret "$ALICE_KEY" "fixtures-gate-secrets")
   HTTP_GATE_SECRET=$(mint_gate_secret "$ALICE_KEY" "fixtures-gate-secrets")
   # (`fail` inside the command substitution only ends that subshell — check the result here.)

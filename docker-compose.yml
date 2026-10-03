@@ -97,7 +97,12 @@ services:
     # （create_connection 的 endpoint / manifestSource、自连门的每次调用）做出站目标判定，拒绝落进这
     # 两个平台子网的地址（同 egress-proxy 的规则，@nexttime/shared outbound-target.ts）。
     # NEXTTIME_CONNECTION_ALLOW_HOSTS（R-27，可选，逗号分隔）：操作员显式放行的自连门主机名——只给
-    # 跑在平台网络上的自连门用（验收夹具 scripts/accept_s2.sh 运行时设置；常规部署留空）。
+    # 跑在平台网络上的自连门用（常规部署留空）。
+    # NEXTTIME_CONNECTION_FIXTURE_HOSTS（R-27，常量，不读 .env）：验收夹具（scripts/accept_s2.sh、
+    # scripts/drill-add-gatekeeper.sh 经 create_connection 接入的 accept-s2-* 服务）。永久放行它们不授予
+    # 任何东西：这些名字只在 accept-s2 profile 起着时才解析得到；夹具门不持 gate_token，只认绑定到验收
+    # 工作区的连接密钥；accept-s2-openapi / accept-s2-mcp 只是导入用的清单源。判定放行两个列表的并集；
+    # scripts/validate-compose.mjs 断言这里每个名字都以 accept- 开头、对应的服务都不挂 gate_token。
     # FAKE_INVOKE_WORKER（STATUS leftover 83，测试专用）：为空（默认）时行为与此前完全一致——只有
     # deploy/ci/env.ci.template 把它设成 "1"，且只在 AGENT_RUNTIME=fake 且已配置 Handle 签名密钥时才
     # 生效（packages/kernel/src/index.ts main() 的三重门槛）；生产 .env 从不设置这个变量。
@@ -110,6 +115,7 @@ services:
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
         NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}",
         NEXTTIME_CONNECTION_ALLOW_HOSTS: "${NEXTTIME_CONNECTION_ALLOW_HOSTS:-}",
+        NEXTTIME_CONNECTION_FIXTURE_HOSTS: "accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp",
         INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
         # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —
         # the console cannot disable or demote them. Optional, comma-separated. Kept in env on

@@ -327,6 +327,10 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
    目录，用 `gate_token`）；或把主机名加进 `.env` 的 `NEXTTIME_CONNECTION_ALLOW_HOSTS`（逗号分隔）后
    `docker compose up -d --no-deps --force-recreate kernel`，再按第 3 步重签密钥。
 
+验收夹具（`accept-s2-*`）不需要任何操作：`docker-compose.yml` 固定把它们写进 kernel 的
+`NEXTTIME_CONNECTION_FIXTURE_HOSTS`（与操作员的 `NEXTTIME_CONNECTION_ALLOW_HOSTS` 取并集），主机验收
+`accept_s2.sh` / `drill-add-gatekeeper.sh` 不重启 kernel。
+
 **回滚**：切回上一版代码即可（无 schema 变化）。旧代码不认识 salt，会重新把 `gate_token` 发给自连门——
 已经换成连接密钥的门会 401，直到把门的 `GATE_KERNEL_TOKEN_FILE` 指回平台 `gate.token`。
 

@@ -19,8 +19,14 @@ import {
  *     test, which then simply has no subnet rule; a malformed value throws at construction, never
  *     a rule that quietly turned itself off.
  *   - `NEXTTIME_CONNECTION_ALLOW_HOSTS` — optional, comma-separated: hosts an operator allows as a
- *     self-connected gate even though they live on the platform's networks (the acceptance
- *     fixtures; see the shared module's doc comment).
+ *     self-connected gate even though they live on the platform's networks.
+ *   - `NEXTTIME_CONNECTION_FIXTURE_HOSTS` — a constant the compose file sets: the acceptance
+ *     fixtures (`accept-s2-*`) `scripts/accept_s2.sh` / `drill-add-gatekeeper.sh` connect through
+ *     `create_connection`. Allowing them permanently grants nothing — they resolve only while their
+ *     compose profile runs, hold no `gate_token`, and accept only a connection secret bound to the
+ *     acceptance workspace — and it means a host acceptance run never restarts the kernel.
+ *     `scripts/validate-compose.mjs` keeps every name on it an `accept-*` fixture service.
+ *   The policy allows the union of the two lists.
  *
  * Callers: `create_connection` (its `endpoint` and `manifestSource`, before any fetch) and
  * `HttpGatekeeperClient` (every call to a self-connected gate — a `connection` / `none` credential
@@ -64,7 +70,10 @@ export function outboundTargetPolicyFromEnv(
     .filter((value): value is string => value !== undefined && value.length > 0);
   return {
     platformSubnets: subnets.map((cidr) => parseCidr(cidr)),
-    allowHosts: splitList(env.NEXTTIME_CONNECTION_ALLOW_HOSTS),
+    allowHosts: [
+      ...splitList(env.NEXTTIME_CONNECTION_ALLOW_HOSTS),
+      ...splitList(env.NEXTTIME_CONNECTION_FIXTURE_HOSTS),
+    ],
   };
 }
 
