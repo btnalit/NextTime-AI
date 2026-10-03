@@ -175,7 +175,7 @@ describe('/internal/* routes are wired into the composition root (S1.7 → main)
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ revoked: [], now });
+    expect(response.json()).toEqual({ revoked: [], now, hasMore: false });
   });
 
   it('POST /internal/llm-usage rejects a malformed batch with 400 before touching the database', async () => {
