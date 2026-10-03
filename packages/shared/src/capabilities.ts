@@ -2448,17 +2448,18 @@ const membersCapabilities: readonly Capability[] = [
   {
     name: 'rotate_api_key',
     group: 'members',
-    // minRole:'member' is the registry-level floor only (every principal may rotate their own
-    // key); the handler additionally enforces "owner, or the caller’s own principalId" — the same
-    // "minRole gates entry, the handler narrows further" shape `set_auto_approved_action_kind`
-    // already established (packages/shared/src/capabilities.ts governance group, above).
+    // minRole:'member' is the registry-level floor only (a service principal may rotate its own
+    // key); the handler additionally enforces "owner, or the caller’s own principalId", and
+    // refuses a human target (D-25) — the same "minRole gates entry, the handler narrows
+    // further" shape `set_auto_approved_action_kind` already established
+    // (packages/shared/src/capabilities.ts governance group, above).
     mode: 'write',
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ principalId: id }).strict(),
     resultSchema: wire.RotateApiKeyResultWireSchema,
     description:
-      'Rotate a Principal’s API key — the old key stops working immediately; the new plaintext key is returned once.',
+      'Rotate a service Principal’s API key — the old key stops working immediately; the new plaintext key is returned once. A person’s membership is never issued a key (409 conflict): people sign in with a password, and personal automation uses a service Principal or an MCP Handle.',
   },
   {
     name: 'disable_principal',
@@ -2721,7 +2722,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ userId: platformUserId, status: wire.UserStatusWireSchema }).strict(),
     resultSchema: wire.UserWireSchema,
     description:
-      'Disable or re-enable a user. Disabling revokes every console session and every workspace session of the user’s Principals immediately; the row, its memberships and its conversations are kept (audit only grows). The last active administrator cannot be disabled, nor can a workspace’s last active human owner (409 last_owner).',
+      'Disable or re-enable a user. Disabling revokes every console session, every session and Handle of the user’s Principals and any API key on them immediately; the row, its memberships and its conversations are kept (audit only grows). The last active administrator cannot be disabled, nor can a workspace’s last active human owner (409 last_owner).',
   },
   {
     name: 'reset_user_password',
@@ -2739,7 +2740,7 @@ const platformCapabilities: readonly Capability[] = [
     resultSchema: wire.ResetUserPasswordResultWireSchema,
     redactedParamKeys: ['password'],
     description:
-      'Set a temporary password (returned exactly once, must be changed on first login) and clear any login lock. Also the activation path for a user without a password. Revokes the user’s console sessions.',
+      'Set a temporary password (returned exactly once, must be changed on first login) and clear any login lock. Also the activation path for a user without a password. Revokes every credential the user holds: console sessions, the sessions and Handles of every membership (an issue_handle MCP Handle included) and any API key on a membership.',
   },
   {
     name: 'list_user_memberships',
@@ -2786,7 +2787,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ userId: platformUserId, workspaceId: z.string().min(1) }).strict(),
     resultSchema: wire.RemoveMembershipResultWireSchema,
     description:
-      'Remove a user from a workspace: disables the membership Principal and revokes its sessions. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner).',
+      'Remove a user from a workspace: disables the membership Principal and revokes its sessions, their Handles and any API key on it. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner).',
   },
   {
     name: 'merge_user',
@@ -3174,7 +3175,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ workspaceId: z.string().min(1).optional() }).strict(),
     resultSchema: listEnvelope(wire.ExternalRuntimeWireSchema),
     description:
-      'Every live session held by a `service` Principal across workspaces — external runtimes such as Claude Code, a local pi over /mcp, or a collector — for inventory and revocation.',
+      'Every live session held by a `service` Principal, and every MCP session a member opened with `issue_handle`, across workspaces — external runtimes such as Claude Code, a local pi over /mcp, or a collector — for inventory and revocation.',
   },
   {
     name: 'revoke_external_runtime',
@@ -3187,7 +3188,7 @@ const platformCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.RevokeExternalRuntimeResultWireSchema,
     description:
-      'Revoke one external runtime’s session (and every Handle issued under it) immediately.',
+      'Revoke one external runtime’s session — a service Principal’s, or a member’s MCP session — and every Handle issued under it, immediately.',
   },
   // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
   // console's only kernel-side piece of provider management. The provider records live in

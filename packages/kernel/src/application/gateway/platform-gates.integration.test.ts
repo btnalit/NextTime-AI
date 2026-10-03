@@ -1333,6 +1333,53 @@ describe.runIf(DATABASE_URL !== undefined)(
           'runtime_not_found',
         );
       });
+
+      it('R-12 (D-25): a member’s issue_handle MCP session is listed while its Handle lives, and revocable', async () => {
+        const issued = await callAsOwner<{ sessionId: string; handle: string; expiresAt: string }>(
+          'issue_handle',
+          { sessionKind: 'interactive', ttlSeconds: 3600 },
+        );
+        const runtimes =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(runtimes.items.find((r) => r.sessionId === issued.sessionId)).toMatchObject({
+          workspaceId,
+          principalId: ownerPrincipalId,
+          sessionKind: 'mcp_session',
+          expiresAt: issued.expiresAt,
+        });
+
+        // A session opened before issue_handle recorded an expiry is listed only for the longest
+        // a Handle can live (30 days) after it was opened.
+        const legacySessionId = await withAdminClient(pool, async (client) => {
+          const inserted = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status, created_at)
+             values ($1, $2, 'mcp_session', $2, 'active', now() - interval '31 days')
+             returning id`,
+            [workspaceId, ownerPrincipalId],
+          );
+          return inserted.rows[0]?.id;
+        });
+        const withLegacy =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(withLegacy.items.find((r) => r.sessionId === legacySessionId)).toBeUndefined();
+
+        const revoked = await callAsAdmin<{ revoked: boolean }>('revoke_external_runtime', {
+          workspaceId,
+          sessionId: issued.sessionId,
+        });
+        expect(revoked.revoked).toBe(true);
+        const handles = await withAdminClient(pool, (client) =>
+          client.query<{ revoked_at: Date | null }>(
+            'select revoked_at from capability_handles where session_id = $1',
+            [issued.sessionId],
+          ),
+        );
+        expect(handles.rows.length).toBeGreaterThan(0);
+        expect(handles.rows.every((row) => row.revoked_at !== null)).toBe(true);
+        const after =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(after.items.find((r) => r.sessionId === issued.sessionId)).toBeUndefined();
+      });
     });
 
     describe('liveness', () => {

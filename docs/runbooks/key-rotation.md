@@ -13,7 +13,7 @@ key...每步的验证与回滚"；本文档同时覆盖 W1-E 行细化出的 `in
 | `internal_token`（根）+ 派生凭证 | `secrets/internal.token` + `secrets/internal-<调用方>-to-<被调方>.token` | 根只给 `kernel`；派生凭证各给对应服务（`agent-host`、`llm-proxy`、`egress-proxy`、各门、`gate-host`、`worker-supervisor`） | 内核 internal plane（`/internal/*`、`/internal/agent-host` WS）与 worker-supervisor 的凭证；换根即全部派生凭证一起换，所有持有者必须同步重启（§2） |
 | `gate_token` | `secrets/gate.token` | `kernel`（作为客户端）+ 每一个门服务（`gatekeeper-docker`/`gatekeeper-ragflow`/自建的 `gatekeepers/<system>`） | 内核↔门 `/gate/*` 协议的共享密钥；kernel 与每一个门服务必须同步换 |
 | Provider key（LLM 供应商） | `secrets/llm-proxy.env` 里 `config/llm-providers.yaml` 的 `api_key_env` 指向的那个变量 | 仅 `llm-proxy` | 只影响该 provider 的出站调用；不影响 Handle/内部 token |
-| 平台用户 API key | 数据库 `principals` 表（哈希存储），通过 `rotate_api_key` capability | 该 Principal 自己/持有该 key 的任何客户端 | 只影响这一个 Principal 的 API key；旧 key 立即失效 |
+| 服务凭证 API key | 数据库 `principals` 表（哈希存储），通过 `rotate_api_key` capability | 该服务 Principal 自己/持有该 key 的任何客户端 | 只影响这一个服务 Principal 的 API key；旧 key 立即失效 |
 
 ## 0. 通用前置条件
 
@@ -321,26 +321,32 @@ docker compose up -d --force-recreate llm-proxy
 | 改了 `secrets/llm-proxy.env` 但对话仍然用旧 key 失败 | 用了 `docker compose restart` 而不是 `--force-recreate`（env_file 是创建时固化的） | `docker compose up -d --force-recreate llm-proxy` |
 | 想确认新 key 有没有真的生效，但不想等一轮真实对话 | 没有独立的"测试 provider key"端点 | 用 `docs/runbooks/host-agent-host.md` 描述的 fake-llm 链路验证其余部分工作正常，再单独走一轮真实 provider 对话确认这一个变量 |
 
-## 5. 平台用户 API key（`rotate_api_key`）
+## 5. 服务凭证 API key（`rotate_api_key`）
 
 ### 5.1 目的
 
-一个人类 Principal（owner/operator/member/...）登录 web 控制台或直接调 `/api/cap/*` 用的那把 API
-key——与前面四种系统级密钥完全不同的轮换路径：**capability 驱动，无需重启任何服务，无需
+一个服务 Principal（`create_principal` 建的自动化凭证：脚本、CI、验收工具）调 `/api/cap/*` 用的那把
+API key——与前面四种系统级密钥完全不同的轮换路径：**capability 驱动，无需重启任何服务，无需
 `docker compose`**。
+
+**人不再有 API key**（2026-10-02 复审 D-25）：人用登录名 + 密码登录控制台；`rotate_api_key` 对人类
+Principal 一律拒绝（409 `conflict`，本人或 owner 都不行——owner 给成员签 key 等于能冒充该成员）。个人
+自动化走服务凭证或「我的账户」里签发的 MCP Handle（`docs/howto-connect-claude-code.md`）。运维 CLI
+（`create-workspace` / `add-principal`）仍给它创建的人类 Principal 一把 key（验收套件按 key 认证）；
+这类遗留 key 在该用户被重置密码、改密、停用或移出该工作区时清除，之后不再补发。
 
 ### 5.2 机制
 
 `rotate_api_key{principalId}`（`packages/shared/src/capabilities.ts`，`group: 'members'`,
-`mode: 'write'`, `channel: 'human'`）：注册表层 `minRole: 'member'`（每个人至少能转自己的），
-handler 再收紧为"owner，或本人"。旧 key 立即停止工作（数据库里只存哈希，`rotate_api_key` 直接
+`mode: 'write'`, `channel: 'human'`）：注册表层 `minRole: 'member'`（服务凭证能转自己的），
+handler 再收紧为"owner，或本人"，且只接受服务 Principal。旧 key 立即停止工作（数据库里只存哈希，`rotate_api_key` 直接
 把旧哈希换成新哈希，同一次写入内完成，没有宽限期）；新明文 key **只在这一次响应里出现一次**，
 之后无法再找回，只能再次轮换。
 
 ### 5.3 步骤——Web 控制台
 
 1. 登录 web 控制台，进入"治理 → 成员与授权"（`#/govern/members`，owner/operator 可见）。
-2. 点开目标 Principal 的详情抽屉。
+2. 点开目标服务凭证的详情抽屉（人类成员的抽屉没有这个按钮，只有一行说明）。
 3. 点击"Rotate API key"。
 4. 立即复制显示出来的新 key（关闭抽屉前，抽屉只显示这一次；忘记复制需要再次点击 rotate 生成新的
    一把，旧的这把届时也已经失效——见 `docs/runbooks/web-console.md`"排障"表"成员页创建/轮换后密钥
@@ -353,7 +359,7 @@ handler 再收紧为"owner，或本人"。旧 key 立即停止工作（数据库
 `rotate-api-key`）——`rotate_api_key` 只能经 HTTP capability 调用：
 
 ```bash
-# 用 owner 自己的 key，或该 principal 自己的 key（handler 允许 owner 改任何人、本人改自己）：
+# 用 owner 的 key，或该服务凭证自己的 key（handler 允许 owner 改任何服务凭证、服务凭证改自己）：
 curl -s https://<kernel-or-caddy-host>:8443/api/cap/rotate_api_key \
   -H "Authorization: Bearer ${CALLER_KEY}" -H 'content-type: application/json' \
   -d '{"principalId":"<principal-uuid>"}'
@@ -388,5 +394,6 @@ curl -s https://<host>:8443/api/cap/get_workspace \
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 调用 `rotate_api_key` 返回 403 | 调用方既不是 owner 也不是目标 Principal 本人 | 用 owner 的 key，或让该 Principal 本人调用 |
+| 调用 `rotate_api_key` 返回 409 `conflict`（"is a person"） | 目标是人类成员——人不签发 API key（D-25） | 自动化改用服务凭证（`create_principal`）或 MCP Handle；人用密码登录 |
 | 关闭了抽屉/丢失了终端输出，找不到新 key 了 | 明文只显示一次，设计如此（S3.11 决策） | 再次调用 `rotate_api_key`——生成新的一把，之前那把（无论是否已经被使用过）同样失效 |
 | 轮换后某个自动化脚本/CI 用旧 key 调用平台开始报 401 | 预期行为——旧 key 立即失效，没有宽限期 | 轮换前先确认哪些自动化在用这把 key，轮换后同步更新它们持有的 key |

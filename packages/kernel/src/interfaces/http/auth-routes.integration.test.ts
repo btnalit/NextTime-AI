@@ -3,16 +3,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { withAdminClient } from '../../application/gateway/auth.js';
 import {
   CONSOLE_SESSION_COOKIE,
   createUser,
   findUserByLogin,
   setUserPassword,
 } from '../../application/identity/index.js';
+import { readPlatformSettings, updatePlatformSettings } from '../../application/platform/index.js';
 import { addPrincipal, createWorkspace } from '../../cli/bootstrap.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
@@ -35,6 +37,28 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
 const CSRF_HEADERS = { 'x-requested-with': 'nexttime', 'content-type': 'application/json' };
+
+/** The shared pool, except that every statement starting with `failingSql` rejects — a simulated
+ *  database fault in exactly one step of a route (R-15). */
+function poolFailingOn(pool: Pool, failingSql: string): PoolLike {
+  return {
+    connect: async (): Promise<PoolClient> => {
+      const client = await pool.connect();
+      return new Proxy(client, {
+        get(target, prop, receiver) {
+          if (prop === 'query') {
+            return (text: unknown, ...rest: unknown[]) =>
+              typeof text === 'string' && text.startsWith(failingSql)
+                ? Promise.reject(new Error('simulated database fault'))
+                : (target.query as (...args: unknown[]) => unknown).call(target, text, ...rest);
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+}
 
 describe.runIf(DATABASE_URL !== undefined)(
   'auth-routes — integration (real Postgres, HTTP via app.inject)',
@@ -719,6 +743,178 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(me.statusCode).toBe(401);
       });
+
+      it('R-15: a revocation that fails (500) still clears the cookie', async () => {
+        const cookie = await loginAs(appWithKeys(), login, password);
+        // Same database, but the one statement that revokes the session fails.
+        const failing = createServer({
+          pool: poolFailingOn(pool, 'update user_sessions set revoked_at = now() where id = $1'),
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => privateKey,
+        });
+
+        const response = await failing.inject({
+          method: 'POST',
+          url: '/api/auth/logout',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: {},
+        });
+        expect(response.statusCode).toBe(500);
+        expect(setCookieHeader(response.headers)).toMatch(
+          new RegExp(`^${CONSOLE_SESSION_COOKIE}=; Max-Age=0;`),
+        );
+      });
+
+      it('R-15: no cookie at all → 200, and the browser is still told to drop it', async () => {
+        const response = await appWithKeys().inject({
+          method: 'POST',
+          url: '/api/auth/logout',
+          headers: CSRF_HEADERS,
+          payload: {},
+        });
+        expect(response.statusCode).toBe(200);
+        expect(setCookieHeader(response.headers)).toMatch(/Max-Age=0/);
+      });
+    });
+
+    // ---- POST /api/auth/password: revocation and policy (R-13) ----------------------------------
+
+    describe('POST /api/auth/password revokes the user’s other credentials (R-13)', () => {
+      const password = 'correct horse battery staple';
+      let workspaceId: string;
+      let ownerPrincipalId: string;
+      let ownerApiKey: string;
+      let login: string;
+
+      beforeAll(async () => {
+        const created = await createWorkspace(pool, `auth-routes-r13-ws-${randomUUID()}`, 'Owner');
+        workspaceId = created.workspaceId;
+        ownerPrincipalId = created.ownerPrincipalId;
+        ownerApiKey = created.apiKey;
+        login = created.ownerLogin;
+        await setPasswordForLogin(login, password);
+      });
+
+      function changePassword(
+        app: ReturnType<typeof createServer>,
+        cookie: string,
+        currentPassword: string,
+        newPassword: string,
+      ) {
+        return app.inject({
+          method: 'POST',
+          url: '/api/auth/password',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { currentPassword, newPassword },
+        });
+      }
+
+      function me(app: ReturnType<typeof createServer>, cookie: string) {
+        return app.inject({
+          method: 'GET',
+          url: '/api/auth/me',
+          headers: { cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+        });
+      }
+
+      it('a new password under the platform minimum is refused (400 weak_password), the same rule the reset applies', async () => {
+        const previous = await withAdminClient(pool, (client) => readPlatformSettings(client));
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { passwordMinLength: 40 }, null),
+        );
+        try {
+          const app = appWithKeys();
+          const cookie = await loginAs(app, login, password);
+          const response = await changePassword(
+            app,
+            cookie,
+            password,
+            'only-thirty-characters-long!!!',
+          );
+          expect(response.statusCode).toBe(400);
+          expect(response.json()).toMatchObject({ ok: false, error: { code: 'weak_password' } });
+        } finally {
+          await withAdminClient(pool, (client) =>
+            updatePlatformSettings(
+              client,
+              { passwordMinLength: previous.settings.passwordMinLength },
+              null,
+            ),
+          );
+        }
+      });
+
+      it('keeps the session making the change; revokes the other console session, the membership’s Handles and its API key', async () => {
+        const app = appWithKeys();
+        const making = await loginAs(app, login, password);
+        const other = await loginAs(app, login, password);
+        const handle = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const session = await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'mcp_session', $2, 'active') returning id`,
+              [workspaceId, ownerPrincipalId],
+            );
+            const sessionId = session.rows[0]?.id;
+            if (!sessionId) throw new Error('no session row');
+            return issueHandle(client, {
+              sessionId,
+              scope: { capabilities: ['search'], resources: {} },
+              ttlSeconds: 3600,
+              privateKey,
+            });
+          },
+          { skipRoleSwitch: true },
+        );
+        const keyBefore = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${ownerApiKey}`, 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(keyBefore.statusCode).toBe(200);
+
+        const response = await changePassword(
+          app,
+          making,
+          password,
+          'correct horse battery staple, changed',
+        );
+        expect(response.statusCode).toBe(200);
+
+        expect((await me(app, making)).statusCode).toBe(200);
+        expect((await me(app, other)).statusCode).toBe(401);
+        const keyAfter = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${ownerApiKey}`, 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(keyAfter.statusCode).toBe(401);
+        const revoked = await withAdminClient(pool, (client) =>
+          client.query<{ revoked_at: Date | null }>(
+            'select revoked_at from capability_handles where jti = $1',
+            [handle.jti],
+          ),
+        );
+        expect(revoked.rows[0]?.revoked_at).not.toBeNull();
+      }, 30_000);
+
+      it('wrong current passwords count toward the login lockout: the 5th locks, then 423 even with the right one', async () => {
+        const user = `r13-lock-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login: user, displayName: 'R13 Lock', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, user, password);
+        for (let i = 0; i < 5; i++) {
+          const wrong = await changePassword(app, cookie, `wrong-${i}-password`, `${password} new`);
+          expect(wrong.statusCode).toBe(401);
+        }
+        const locked = await changePassword(app, cookie, password, `${password} new`);
+        expect(locked.statusCode).toBe(423);
+        expect(locked.json()).toMatchObject({ ok: false, error: { code: 'locked' } });
+      }, 30_000);
     });
 
     // ---- a disabled user --------------------------------------------------------------------------

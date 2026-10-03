@@ -14,6 +14,7 @@
  */
 import { SignJWT, jwtVerify } from 'jose';
 import type { CryptoKey } from 'jose';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
@@ -193,12 +194,23 @@ export async function revokeUserSession(pool: PoolLike, sessionId: string): Prom
   );
 }
 
-export async function revokeAllUserSessions(pool: PoolLike, userId: string): Promise<number> {
-  return withAdminClient(pool, async (client) => {
-    const result = await client.query(
-      'update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null',
-      [userId],
-    );
-    return result.rowCount ?? 0;
-  });
+/** Revokes a user's console sessions on `client`, inside the caller's transaction — every one, or
+ *  all but `exceptSessionId` (a self-service password change keeps the browser that made it;
+ *  review 2026-10-02 R-13). Returns the revoked `user_sessions` ids so the caller can close the
+ *  sockets they opened (application/gateway/session-revocation.ts). The one place a user's console
+ *  sessions are revoked in bulk: `revokeUserCredentials` (credentials.ts) and `set-password` call
+ *  it. Reaches `user_sessions` on the admin client or under a platform transaction's
+ *  `user_sessions_platform_admin` policy. */
+export async function revokeAllUserSessions(
+  client: PoolClient,
+  userId: string,
+  options: { readonly exceptSessionId?: string } = {},
+): Promise<string[]> {
+  const result = await client.query<{ id: string }>(
+    `update user_sessions set revoked_at = now()
+      where user_id = $1 and revoked_at is null and ($2::uuid is null or id <> $2::uuid)
+      returning id`,
+    [userId, options.exceptSessionId ?? null],
+  );
+  return result.rows.map((row) => row.id);
 }

@@ -28,9 +28,9 @@ import { publishSessionKick } from './session-revocation.js';
  *     (`application/task/agent-principal.ts`, `governance/gatekeepers/service-principal.ts`,
  *     `application/worker/draft-lifecycle.ts`), never through a capability — so
  *     `create_principal` refuses the reserved `__…__` display name those internal ones carry.
- *   - `set_principal_role`/`rotate_api_key`/`disable_principal` manage `human` and `service`
- *     Principals alike — a leaked service key can always be disabled, re-keyed or re-roled from
- *     the workspace. They refuse an `agent` Principal or an internal service Principal
+ *   - `set_principal_role`/`disable_principal` manage `human` and `service` Principals alike, and
+ *     `rotate_api_key` re-keys a `service` one — a leaked service key can always be disabled,
+ *     re-keyed or re-roled from the workspace. They refuse an `agent` Principal or an internal service Principal
  *     (`PrincipalOperationRefusedError` `platform_managed`): an agent's role is inert
  *     (migrations/core/0014) and it holds no key; an internal one is platform plumbing.
  *   - A workspace always keeps at least one active (`disabled_at is null`) **human** owner; a
@@ -41,10 +41,12 @@ import { publishSessionKick } from './session-revocation.js';
  *     row first, so two concurrent demote/disable calls against the same last two owners cannot
  *     both read "2 owners remain" and both proceed.
  *   - `disable_principal` additionally refuses disabling the caller's own principal.
- *   - `rotate_api_key`'s registry `minRole` is `'member'` (anyone may rotate their own key); this
+ *   - `rotate_api_key`'s registry `minRole` is `'member'` (a service key may rotate itself); this
  *     handler is what actually enforces "owner, or the caller's own id" — the same "minRole gates
  *     entry, the handler narrows further" shape `set_auto_approved_action_kind` (handlers.ts)
- *     already established for I14.
+ *     already established for I14. It never mints a key for a `human` Principal
+ *     (`PrincipalOperationRefusedError` `human_api_key`; review 2026-10-02 D-25): people sign in
+ *     with a password. Only the operator CLI (`cli/bootstrap.ts`) still provisions a person's key.
  */
 
 export class PrincipalNotFoundError extends Error {
@@ -477,6 +479,17 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'rotate_api_key');
+  // Review 2026-10-02 R-12 / L8a-11 (D-25): people sign in with a password and get no API key.
+  // A key minted here for a person would be a second credential that outlives a password reset
+  // (self-service, with a stolen password) or that lets an owner act as the member. Personal
+  // automation goes through a service Principal or an MCP Handle; a key a member still holds
+  // from the operator CLI keeps working until a reset or disable clears it.
+  if (target.kind === 'human') {
+    throw new PrincipalOperationRefusedError(
+      'human_api_key',
+      `rotate_api_key: principal ${target.id} is a person — people sign in with a password; issue automation keys to a service Principal`,
+    );
+  }
 
   const apiKey = generateApiKey();
   await client.query(
@@ -492,9 +505,8 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
     // R-06: the old key stops resolving at once (`lookupPrincipalByApiKeyHash`), but a `/ws`
     // socket authenticates only at connect — so when someone else re-keys a service credential,
     // its open sockets (every one of them rode the old key) close too
-    // (application/gateway/session-revocation.ts). Not for a person: their console sockets ride
-    // the cookie, not the key, and a principal kick would close those as well. Not on
-    // self-rotation either: the socket asking may be the one waiting for the new key.
+    // (application/gateway/session-revocation.ts). Not on self-rotation: the socket asking may be
+    // the one waiting for the new key.
     ...(target.kind === 'service' && callerId !== principalId
       ? {
           afterCommit: async () => {

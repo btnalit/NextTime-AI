@@ -20,7 +20,8 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
-import { hashPassword } from '../identity/password.js';
+import { revokeUserCredentials } from '../identity/credentials.js';
+import { hashPassword, passwordPolicyViolation } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
   PurgeWorkspaceRefusedError,
@@ -315,13 +316,10 @@ function generateTemporaryPassword(): string {
   return randomBytes(12).toString('base64url');
 }
 
+/** R-13: the same rule a self-service password change applies (identity/password.ts). */
 function assertPasswordPolicy(password: string, settings: PlatformSettings): void {
-  if (password.length < settings.passwordMinLength) {
-    throw new PlatformAdminError(
-      'weak_password',
-      `password must be at least ${settings.passwordMinLength} characters`,
-    );
-  }
+  const violation = passwordPolicyViolation(password, settings.passwordMinLength);
+  if (violation !== null) throw new PlatformAdminError('weak_password', violation);
 }
 
 interface WorkspaceDbRow {
@@ -489,24 +487,6 @@ export const updateUserHandler: CapabilityHandler = async (client, _workspaceId,
   };
 };
 
-async function revokeConsoleSessions(client: PoolClient, userId: string): Promise<void> {
-  await client.query(
-    'update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null',
-    [userId],
-  );
-}
-
-async function revokeWorkspaceSessions(client: PoolClient, userId: string): Promise<void> {
-  await client.query(
-    `update sessions s
-        set status = 'revoked', expires_at = now()
-       from principals p
-      where p.workspace_id = s.workspace_id and p.id = s.principal_id
-        and p.user_id = $1 and s.status = 'active'`,
-    [userId],
-  );
-}
-
 /** R-06: a disabled user signs in nowhere, so disabling one who is a workspace's last active
  *  human owner would leave that workspace with no person able to own it — the same outcome
  *  `remove_membership` refuses. Checked per workspace the user owns, with the shared
@@ -553,8 +533,9 @@ export const setUserStatusHandler: CapabilityHandler = async (
   ]);
   let principalIds: string[] = [];
   if (input.status === 'disabled') {
-    await revokeConsoleSessions(client, input.userId);
-    await revokeWorkspaceSessions(client, input.userId);
+    // R-12 (D-25): console sessions, every membership's sessions and Handles, and any legacy
+    // API key of the user's — identity's one revocation.
+    await revokeUserCredentials(client, input.userId);
     principalIds = await listHumanPrincipalIds(client, { userId: input.userId });
   }
   const result = await loadUser(client, input.userId);
@@ -602,19 +583,20 @@ export const resetUserPasswordHandler: CapabilityHandler = async (
       where id = $1`,
     [input.userId, passwordHash],
   );
-  // A reset ends every existing session, console and workspace alike: whoever held the old
-  // password (or a stolen cookie) is out until they log in with the new temporary one.
-  await revokeConsoleSessions(client, input.userId);
-  await revokeWorkspaceSessions(client, input.userId);
+  // A reset ends every existing credential of the user's: whoever held the old password (or a
+  // stolen cookie) is out until they log in with the new temporary one — and, R-12 (D-25), so is
+  // anything they minted with it: the Handles of every membership's sessions (an `issue_handle`
+  // `mcp_session` included) and the memberships' API keys, which people are no longer issued.
+  const { principalIds } = await revokeUserCredentials(client, input.userId);
   const result = { userId: input.userId, temporaryPassword };
   return {
     result,
     resourceType: 'user',
     resourceId: input.userId,
-    // R-05: once committed, the console sockets those sessions opened close too. API-key
-    // sockets stay: a password reset does not invalidate a key.
+    // R-05: once committed, the console sockets those sessions opened close too, and so do the
+    // API-key sockets of the memberships — their key is gone.
     afterCommit: async () => {
-      publishSessionKick({ userId: input.userId });
+      publishSessionKick({ userId: input.userId, principalIds });
       return result;
     },
   };
@@ -702,8 +684,8 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
   // sessions of this Principal are ended so no stale-role session outlives the change.
   await setWorkspaceContext(client, input.workspaceId, membership.principalId);
   await client.query(
-    `update sessions set status = 'revoked', expires_at = now()
-      where workspace_id = $1 and principal_id = $2 and status = 'active'`,
+    `update sessions set status = 'revoked', expires_at = least(expires_at, now())
+      where workspace_id = $1 and principal_id = $2 and status <> 'revoked'`,
     [input.workspaceId, membership.principalId],
   );
   if (input.role !== membership.role) {
@@ -733,15 +715,19 @@ export const removeMembershipHandler: CapabilityHandler = async (client, _worksp
       where workspace_id = $1 and id = $2`,
     [input.workspaceId, membership.principalId],
   );
-  await client.query(
-    `update sessions set status = 'revoked', expires_at = now()
-      where workspace_id = $1 and principal_id = $2 and status = 'active'`,
-    [input.workspaceId, membership.principalId],
-  );
+  // R-12 (D-25): the membership's sessions, their Handles and any legacy API key go with it —
+  // identity's one revocation, scoped to this workspace.
+  await revokeUserCredentials(client, input.userId, { workspaceId: input.workspaceId });
+  const result = { userId: input.userId, workspaceId: input.workspaceId, removed: true };
   return {
-    result: { userId: input.userId, workspaceId: input.workspaceId, removed: true },
+    result,
     resourceType: 'principal',
     resourceId: membership.principalId,
+    // R-05: the membership's open /ws sockets close once committed (session-revocation.ts).
+    afterCommit: async () => {
+      publishSessionKick({ principalIds: [membership.principalId] });
+      return result;
+    },
   };
 };
 
@@ -1299,9 +1285,10 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
       );
     }
     // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
+    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`.
     await client.query(
-      `update sessions set status = 'revoked', expires_at = now()
-        where workspace_id = $1 and status = 'active'`,
+      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
+        where workspace_id = $1 and status <> 'revoked'`,
       [input.workspaceId],
     );
     principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });

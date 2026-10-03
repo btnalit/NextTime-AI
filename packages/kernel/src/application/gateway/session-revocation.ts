@@ -11,14 +11,15 @@ import type { ResolvedCaller } from './caller.js';
  * halves, both consumed by `interfaces/ws/server.ts`:
  *
  *   - {@link recheckHumanSession}: one indexed read per WS call — the Principal is not disabled,
- *     its platform user is active, and (cookie sockets) the console `user_sessions` row is still
- *     unrevoked and unexpired. A disabled workspace is already refused per call by
- *     `dispatchCapability` itself.
+ *     its platform user is active, (cookie sockets) the console `user_sessions` row is still
+ *     unrevoked and unexpired, and (API-key sockets) the Principal still has a key. A disabled
+ *     workspace is already refused per call by `dispatchCapability` itself.
  *   - the kick bus ({@link publishSessionKick} / {@link subscribeToSessionKicks}): logout,
- *     `reset_user_password`, `set_user_status` → disabled and `disable_principal` publish to it
- *     after their transaction commits, so matching sockets close and stop receiving pushes at once
- *     instead of at their next call. In-process only, for the same reason
- *     `application/chat/push.ts` is: there is one kernel instance.
+ *     `reset_user_password`, `set_user_status` → disabled, a self-service password change,
+ *     `disable_principal` and `remove_membership` publish to it after their transaction commits,
+ *     so matching sockets close and stop receiving pushes at once instead of at their next call.
+ *     In-process only, for the same reason `application/chat/push.ts` is: there is one kernel
+ *     instance.
  *
  * Both answer with the verdict a fresh first-frame `authenticate` would give right now
  * (resolve-caller.ts): `session_invalid` — the credential itself is gone (UNAUTHORIZED; the
@@ -37,6 +38,7 @@ interface SessionLivenessRow {
   principal_active: boolean;
   user_active: boolean;
   console_session_live: boolean;
+  has_api_key: boolean;
 }
 
 /**
@@ -55,6 +57,7 @@ export async function recheckHumanSession(
     const result = await client.query<SessionLivenessRow>(
       `select p.disabled_at is null as principal_active,
               (u.id is null or u.status = 'active') as user_active,
+              p.api_key_hash is not null as has_api_key,
               ($3::uuid is null or exists (
                  select 1 from user_sessions s
                   where s.id = $3::uuid and s.user_id = $4::uuid
@@ -74,6 +77,10 @@ export async function recheckHumanSession(
     return result.rows[0];
   });
   if (row && (!row.console_session_live || !row.user_active)) return 'session_invalid';
+  // R-12 / R-13: an API-key socket whose Principal no longer has a key (a reset, a disable or a
+  // password change cleared it) has lost its credential, like an API-key socket of a disabled
+  // Principal.
+  if (row && !consoleUser && !row.has_api_key) return 'session_invalid';
   if (!row || !row.principal_active) return consoleUser ? 'membership_gone' : 'session_invalid';
   return 'live';
 }
@@ -88,8 +95,13 @@ export interface SessionKick {
    *  `set_user_status` → disabled. */
   readonly userId?: string;
   /** Sockets acting as one of these Principals, whatever the credential — `disable_principal`,
-   *  and the API-key half of `set_user_status` → disabled. */
+   *  `remove_membership`, and the API-key half of `set_user_status` → disabled and
+   *  `reset_user_password`. */
   readonly principalIds?: readonly string[];
+  /** Sockets that authenticated with an API key as one of these Principals — never a cookie
+   *  socket. A self-service password change clears the user's membership keys (R-13) but keeps
+   *  the console session making the change, so it cannot use `principalIds`. */
+  readonly apiKeyPrincipalIds?: readonly string[];
 }
 
 /** Whether `kick` reaches a socket authenticated as `caller`, and with which verdict (see this
@@ -107,6 +119,9 @@ export function sessionKickVerdict(
   }
   if (kick.principalIds?.includes(caller.principal.id)) {
     return consoleUser ? 'membership_gone' : 'session_invalid';
+  }
+  if (!consoleUser && kick.apiKeyPrincipalIds?.includes(caller.principal.id)) {
+    return 'session_invalid';
   }
   return undefined;
 }

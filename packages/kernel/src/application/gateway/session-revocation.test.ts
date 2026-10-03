@@ -90,6 +90,13 @@ describe('sessionKickVerdict', () => {
     expect(sessionKickVerdict(cookieCaller('p-1', 'u-1', 'cs-1'), kick)).toBe('session_invalid');
     expect(sessionKickVerdict(apiKeyCaller('p-1'), kick)).toBe('session_invalid');
   });
+
+  it('R-13 an API-key kick (self-service password change) reaches the API-key sockets only, never the cookie socket making the change', () => {
+    const kick = { apiKeyPrincipalIds: ['p-1'] };
+    expect(sessionKickVerdict(apiKeyCaller('p-1'), kick)).toBe('session_invalid');
+    expect(sessionKickVerdict(cookieCaller('p-1', 'u-1', 'cs-1'), kick)).toBeUndefined();
+    expect(sessionKickVerdict(apiKeyCaller('p-2'), kick)).toBeUndefined();
+  });
 });
 
 describe('session kick bus', () => {

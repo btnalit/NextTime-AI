@@ -843,6 +843,12 @@ export async function listAvailableGateInstances(
 // external runtimes (design §6.3 "外部运行时"): service Principals' live sessions, across workspaces
 // -------------------------------------------------------------------------------------------
 
+// Review 2026-10-02 R-12 (D-25): a member's `issue_handle` session (`kind='mcp_session'`, a Handle
+// of up to 30 days for Claude Code or a local pi) is an external runtime too, so it is listed and
+// revocable here. `issue_handle` sets the session's `expires_at` to its Handle's; a session opened
+// before that has none, and is listed for the longest a Handle can live (`ISSUE_HANDLE_MAX_TTL_
+// SECONDS`, 30 days) after it was opened.
+
 export async function listExternalRuntimes(
   client: PoolClient,
   filter: { workspaceId?: string } = {},
@@ -863,8 +869,10 @@ export async function listExternalRuntimes(
        from sessions s
        join principals p on p.workspace_id = s.workspace_id and p.id = s.principal_id
        join workspaces w on w.id = s.workspace_id
-      where p.kind = 'service' and s.status = 'active'
+      where (p.kind = 'service' or s.kind = 'mcp_session') and s.status = 'active'
         and (s.expires_at is null or s.expires_at > now())
+        and (s.kind <> 'mcp_session' or s.expires_at is not null
+             or s.created_at > now() - interval '30 days')
         ${filter.workspaceId ? 'and s.workspace_id = $1' : ''}
       order by s.created_at desc`,
     filter.workspaceId ? [filter.workspaceId] : [],
@@ -891,7 +899,8 @@ export async function revokeExternalRuntime(
     `update sessions s
         set status = 'revoked', expires_at = now()
        from principals p
-      where p.workspace_id = s.workspace_id and p.id = s.principal_id and p.kind = 'service'
+      where p.workspace_id = s.workspace_id and p.id = s.principal_id
+        and (p.kind = 'service' or s.kind = 'mcp_session')
         and s.workspace_id = $1 and s.id = $2 and s.status = 'active'`,
     [workspaceId, sessionId],
   );

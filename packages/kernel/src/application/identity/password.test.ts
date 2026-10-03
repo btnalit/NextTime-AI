@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashPassword, verifyPassword } from './password.js';
+import { hashPassword, passwordPolicyViolation, verifyPassword } from './password.js';
 
 describe('application/identity/password', () => {
   it('hashes and verifies; two hashes of the same password differ (random salt)', async () => {
@@ -43,5 +43,12 @@ describe('application/identity/password', () => {
       derived.toString('base64'),
     ].join('$');
     await expect(verifyPassword('pw', older)).resolves.toBe(true);
+  });
+
+  it('R-13 passwordPolicyViolation: one rule for every path — the configured minimum, the 8 floor, the 256 ceiling', () => {
+    expect(passwordPolicyViolation('a'.repeat(12), 12)).toBeNull();
+    expect(passwordPolicyViolation('a'.repeat(11), 12)).toBe('password must be 12–256 characters');
+    expect(passwordPolicyViolation('a'.repeat(7), 1)).toBe('password must be 8–256 characters');
+    expect(passwordPolicyViolation('a'.repeat(257), 8)).not.toBeNull();
   });
 });

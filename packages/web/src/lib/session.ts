@@ -61,3 +61,39 @@ export function saveSelectedWorkspaceId(workspaceId: string): void {
     // Best-effort — see module doc comment.
   }
 }
+
+/**
+ * Review 2026-10-02 R-15: "this browser signed out, but the kernel may not have heard it". The
+ * console session cookie is HttpOnly — only `POST /api/auth/logout`'s response can drop it — and
+ * it outlives the tab (8 h), so when that request fails (kernel briefly unreachable) the next
+ * person to open the console here would otherwise be signed straight back in by `GET
+ * /api/auth/me`. The marker is set before the logout request and cleared once it succeeds or a
+ * new sign-in replaces the cookie; while it is set, boot retries the logout instead of trusting
+ * the cookie. `localStorage`, unlike the stores above: it must outlive the tab exactly as long as
+ * the cookie does. It holds no credential — only "do not resume".
+ */
+const SIGN_OUT_PENDING_STORAGE_KEY = 'nexttime.signOutPending';
+
+export function markSignOutPending(): void {
+  try {
+    localStorage.setItem(SIGN_OUT_PENDING_STORAGE_KEY, '1');
+  } catch {
+    // Best-effort — see module doc comment.
+  }
+}
+
+export function clearSignOutPending(): void {
+  try {
+    localStorage.removeItem(SIGN_OUT_PENDING_STORAGE_KEY);
+  } catch {
+    // Best-effort — see module doc comment.
+  }
+}
+
+export function isSignOutPending(): boolean {
+  try {
+    return localStorage.getItem(SIGN_OUT_PENDING_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}

@@ -119,6 +119,14 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
     ttlSeconds: input.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     privateKey,
   });
+  // Review 2026-10-02 R-12: the session lives exactly as long as its Handle, so the platform's
+  // external-runtime inventory (`list_external_runtimes`, application/gates/store.ts) lists it
+  // while it can be used and drops it afterwards.
+  await client.query('update sessions set expires_at = $3 where workspace_id = $1 and id = $2', [
+    workspaceId,
+    sessionId,
+    issued.expiresAt,
+  ]);
 
   return {
     result: {
