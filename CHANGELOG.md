@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.40.0](https://github.com/btnalit/NextTime-AI/compare/v0.39.0...v0.40.0) (2026-10-03)
+
+
+### Bug Fixes
+
+* **connections:** enforce connector self-serve on new connections; honest disable confirm (R-40, R-41) ([#443](https://github.com/btnalit/NextTime-AI/issues/443)) ([824467b](https://github.com/btnalit/NextTime-AI/commit/824467b4b5f1e5449f0e475db7ed2656ff59085d))
+* **console:** reload push-derived state after a WS reconnect; a failed workspace switch keeps the session (R-63, R-64) ([#448](https://github.com/btnalit/NextTime-AI/issues/448)) ([205642d](https://github.com/btnalit/NextTime-AI/commit/205642d91b85018d50f9f27fcb6568d7c4e30321))
+* **epistemic:** bad Fact ids no longer break decision reads; Conflicts are decided with both Facts in view (R-62, R-47) ([#445](https://github.com/btnalit/NextTime-AI/issues/445)) ([2df7dcc](https://github.com/btnalit/NextTime-AI/commit/2df7dcc832bcc8881b61564616d57ae3dc9acd8b))
+* **governance:** approval holders = approvers; disclose gate-grant approval; get_action visibility (R-38, R-39, R-42) ([#441](https://github.com/btnalit/NextTime-AI/issues/441)) ([8029fb1](https://github.com/btnalit/NextTime-AI/commit/8029fb12726d72ffcabbc0d534af43f6d593ca21))
+* **governance:** auditor is strictly read-only; explicit sideEffects flag on the registry (R-35) ([#449](https://github.com/btnalit/NextTime-AI/issues/449)) ([cb89533](https://github.com/btnalit/NextTime-AI/commit/cb89533874ace947a4a97c66ae78fad9d88f94a4))
+* **governance:** key "always allow" by gate; enforce allowMemberAutoApproveLow (R-20, R-21) ([#444](https://github.com/btnalit/NextTime-AI/issues/444)) ([cee321d](https://github.com/btnalit/NextTime-AI/commit/cee321d210613f6420a9f1dd1d8981afef4f1d07))
+* **governance:** re-check AgentProfile/AgentPolicy gate narrowing at execution (R-37) ([#447](https://github.com/btnalit/NextTime-AI/issues/447)) ([ad5cdce](https://github.com/btnalit/NextTime-AI/commit/ad5cdce9f03d5a3ccbf8d5e8e8f75552ab82b556))
+* **ontology:** a draft records its base; publishing over a moved head is refused (R-60) ([#439](https://github.com/btnalit/NextTime-AI/issues/439)) ([5e326e8](https://github.com/btnalit/NextTime-AI/commit/5e326e8e7c403482365bb0dc9d6400ebf0286a63))
+* **ontology:** a proposal is diffed against its own family's published base (R-61) ([#442](https://github.com/btnalit/NextTime-AI/issues/442)) ([3e5a2d0](https://github.com/btnalit/NextTime-AI/commit/3e5a2d02347330871702480ad151b4e18620048f))
+* **web:** irreversible confirms start clean; merge_user and gate delete behind them; gate-scoped approval target (R-44, R-45, R-46, L8a-10) ([#446](https://github.com/btnalit/NextTime-AI/issues/446)) ([cfc74cd](https://github.com/btnalit/NextTime-AI/commit/cfc74cdc5876183bb34950b97b3a61b3d30a9171))
+
+
+### Documentation
+
+* **status:** review wave 4 merged — leftovers 118, 119, 121 closed ([#450](https://github.com/btnalit/NextTime-AI/issues/450)) ([22cfe4a](https://github.com/btnalit/NextTime-AI/commit/22cfe4a538522e7a9fe8ce19c7b3bfadaa898797))
+
 ## [0.39.0](https://github.com/btnalit/NextTime-AI/compare/v0.38.0...v0.39.0) (2026-10-03)
 
 
