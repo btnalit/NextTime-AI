@@ -12,7 +12,7 @@ key...每步的验证与回滚"；本文档同时覆盖 W1-E 行细化出的 `in
 | Handle 签名密钥 | `secrets/handle.key`（私钥）+ `config/handle.pub`（公钥） | `kernel`（签发/自验）、`llm-proxy`（验签） | 轮换后**立即**让当时所有已签发、仍在有效期内的 Capability Handle 失效（硬切换，无重叠期，见 §2） |
 | `internal_token`（根）+ 派生凭证 | `secrets/internal.token` + `secrets/internal-<调用方>-to-<被调方>.token` | 根只给 `kernel`；派生凭证各给对应服务（`agent-host`、`llm-proxy`、`egress-proxy`、各门、`gate-host`、`worker-supervisor`） | 内核 internal plane（`/internal/*`、`/internal/agent-host` WS）与 worker-supervisor 的凭证；换根即全部派生凭证一起换，所有持有者必须同步重启（§2） |
 | `gate_token` | `secrets/gate.token` | `kernel`（作为客户端）+ 每一个门服务（`gatekeeper-docker`/`gatekeeper-ragflow`/自建的 `gatekeepers/<system>`） | 内核↔门 `/gate/*` 协议的共享密钥；kernel 与每一个门服务必须同步换 |
-| Provider key（LLM 供应商） | `secrets/llm-proxy.env` 里 `config/llm-providers.yaml` 的 `api_key_env` 指向的那个变量 | 仅 `llm-proxy` | 只影响该 provider 的出站调用；不影响 Handle/内部 token |
+| Provider key（LLM 供应商） | `secrets/llm-provider-keys/<NAME>`，`<NAME>` 是 `config/llm-providers.yaml` 里该 provider 的 `api_key_env`（R-24 起；0640 组 10001。仍写在 `secrets/llm-proxy.env` 的同名变量照样生效，但能被容器 inspect 看到，`llm-proxy` 会打弃用告警） | 仅 `llm-proxy` | 只影响该 provider 的出站调用；不影响 Handle/内部 token |
 | 服务凭证 API key | 数据库 `principals` 表（哈希存储），通过 `rotate_api_key` capability | 该服务 Principal 自己/持有该 key 的任何客户端 | 只影响这一个服务 Principal 的 API key；旧 key 立即失效 |
 
 ## 0. 通用前置条件
@@ -285,11 +285,14 @@ set -a; . ./.env; set +a
 # 1. 确认 config/llm-providers.yaml 里该 provider 的 api_key_env 指向哪个变量名
 grep -A3 "^  <provider-name>:" "${NEXTTIME_DATA}/config/llm-providers.yaml"
 
-# 2. 编辑 secrets/llm-proxy.env，把该变量名对应的值换成新 key（vi/sed 均可，不要打印到终端）：
-#    <VAR_NAME>=<new-key>
+# 2. 把新 key 写进 secrets/llm-provider-keys/<VAR_NAME>（R-24；文件名 = 变量名，内容只有 key，
+#    不要打印到终端），再修正权限（0640、组 10001——llm-proxy 以 uid 10001 运行）：
+#    sudo sh -c 'umask 027; cat > "${NEXTTIME_DATA}/secrets/llm-provider-keys/<VAR_NAME>"'   # 粘贴 key 后 Ctrl-D
+#    sudo NEXTTIME_DATA="${NEXTTIME_DATA}" sh scripts/host-env-init.sh
+#    若 secrets/llm-proxy.env 里还有同名变量，删掉它（文件优先，env 只是兼容回退）。
 
-# 3. env_file 改动必须 --force-recreate（普通 restart 不会重新读 env_file 内容——
-#    docs/runbooks/operations.md §4.2）：
+# 3. llm-proxy 只在启动时读 key 文件；改了 llm-proxy.env 的话必须 --force-recreate（env_file 是
+#    创建时固化的——docs/runbooks/operations.md §4.2），只改了 key 文件时 restart 也够：
 docker compose up -d --force-recreate llm-proxy
 docker compose ps llm-proxy
 ```
@@ -308,7 +311,7 @@ docker compose exec -T postgres psql -U nexttime -d nexttime -c \
 ### 4.4 回滚
 
 ```bash
-# 把 secrets/llm-proxy.env 里的值改回旧 key（若旧 key 还未在供应商侧吊销）：
+# 把 secrets/llm-provider-keys/<VAR_NAME> 的内容改回旧 key（若旧 key 还未在供应商侧吊销）：
 docker compose up -d --force-recreate llm-proxy
 ```
 若旧 key 已经吊销，回滚意味着"这个 provider 暂时不可用"，不是简单的文件回滚——需要联系供应商或换
@@ -318,7 +321,7 @@ docker compose up -d --force-recreate llm-proxy
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 改了 `secrets/llm-proxy.env` 但对话仍然用旧 key 失败 | 用了 `docker compose restart` 而不是 `--force-recreate`（env_file 是创建时固化的） | `docker compose up -d --force-recreate llm-proxy` |
+| 改了 key 但对话仍然用旧 key 失败 | key 文件改了但没重启 `llm-proxy`（它只在启动时读文件）；或改的是 `secrets/llm-proxy.env` 却用了 `restart`（env_file 是创建时固化的）；或文件权限不对、`llm-proxy` 退回读了 env 里的旧值（日志有 `provider key read from the environment` / `could not be read`） | 修正 `secrets/llm-provider-keys/` 下文件的 0640 / 组 10001（重跑 `scripts/host-env-init.sh`），删掉 env 里的旧值，`docker compose up -d --force-recreate llm-proxy` |
 | 想确认新 key 有没有真的生效，但不想等一轮真实对话 | 没有独立的"测试 provider key"端点 | 用 `docs/runbooks/host-agent-host.md` 描述的 fake-llm 链路验证其余部分工作正常，再单独走一轮真实 provider 对话确认这一个变量 |
 
 ## 5. 服务凭证 API key（`rotate_api_key`）

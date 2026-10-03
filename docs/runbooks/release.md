@@ -107,7 +107,7 @@ Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检
 签名；历史版本可在 Actions 手动跑 `publish-images` 补发）。检出切到同一个 tag 后：
 
 ```
-sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（身份钉到本仓库 main 上的 publish-images.yml）→ 重打成 compose 的本地名
+sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（精确匹配：本仓库 main 上的 publish-images.yml，且由本仓库 main 上的运行签出）→ 重打成 compose 的本地名
 docker compose up -d --no-build
 ```
 
@@ -334,6 +334,48 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
 **回滚**：切回上一版代码即可（无 schema 变化）。旧代码不认识 salt，会重新把 `gate_token` 发给自连门——
 已经换成连接密钥的门会 401，直到把门的 `GATE_KERNEL_TOKEN_FILE` 指回平台 `gate.token`。
 
+### 3.6 provider key 与 RAGFlow key 改为文件（R-24）
+
+**变化**：容器 env 能被只读的采集器 socket 代理 `inspect` 看到，所以两类密钥改从文件读：
+
+| 密钥 | 主机文件（目录 0750 root:10001，文件 0640 root:10001） | 容器内路径（只读目录挂载） | 谁读（uid） |
+|---|---|---|---|
+| LLM provider key | `${NEXTTIME_DATA}/secrets/llm-provider-keys/<NAME>`，`<NAME>` = provider 的 `api_key_env` | `/run/secrets/llm-provider-keys/<NAME>`（`LLM_PROVIDER_KEYS_DIR`） | `llm-proxy`，uid 10001 / gid 10001，**启动时**读 |
+| RAGFlow API key | `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow/api_key` | `/run/secrets/gatekeeper-ragflow/api_key`（`GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE`） | `gatekeeper-ragflow`，uid 10001 / gid 10001，**每次调用**读 |
+
+**升级不会断**：目录不存在时 Docker 建一个空目录，服务照常起；没有文件的 key 退回读 `secrets/llm-proxy.env` /
+`secrets/gatekeeper-ragflow.env` 里的原变量，并打一行弃用告警（`provider key read from the environment` /
+`credential GATE_CREDENTIAL_RAGFLOW_API_KEY read from the environment`，只有变量名，从不打印值）。迁移步骤（在主机上，
+不要把 key 打到终端）：
+
+1. 照常应用发布（§3）。
+2. 建目录并定权限：`sudo NEXTTIME_DATA="$NEXTTIME_DATA" sh scripts/host-env-init.sh`（幂等；它也把两个目录下已有
+   文件改成 0640、组 10001——服务以 uid/gid 10001 运行，读不了的文件会被跳过并在日志里报 `could not be read`）。
+3. 每个 provider key 搬一个文件（`NAME` 逐个取 `config/llm-providers.yaml` 与控制台里各 provider 的
+   `api_key_env`；env 文件里的值若带引号，文件里不要引号）：
+
+   ```bash
+   NAME=EXAMPLE_API_KEY
+   sudo sh -c "umask 027; sed -n 's/^$NAME=//p' '$NEXTTIME_DATA/secrets/llm-proxy.env' | tr -d '\n' > '$NEXTTIME_DATA/secrets/llm-provider-keys/$NAME'"
+   ```
+
+   RAGFlow 同理：`GATE_CREDENTIAL_RAGFLOW_API_KEY` 的值 → `secrets/gatekeeper-ragflow/api_key`。
+4. 再跑一次第 2 步修正新文件的权限，然后从两个 env 文件里删掉已搬走的变量，
+   `docker compose up -d --force-recreate llm-proxy gatekeeper-ragflow`。
+5. 验证：`docker compose logs llm-proxy gatekeeper-ragflow | grep -E 'read from the environment|could not be read'`
+   为空；`docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' <容器> | cut -d= -f1` 只列变量名，
+   其中不再有 key；走一轮对话 / 一次 RAGFlow 调用。记结果到 `docs/private/`。
+
+`scripts/validate-compose.mjs` 现在拒绝在 `docker-compose.yml` 的任何服务 `environment` 里出现
+`GATE_CREDENTIAL_*` / `*_API_KEY`（`*_FILE` 除外），并要求上面两项文件接线；操作员自己的 env 文件不在它的检查范围内，
+靠第 5 步的日志确认。
+
+**回滚**：上一版只读 env——在确认新版本工作前先别删 env 文件里的变量；若已删、又要回滚，按 key 文件的内容把变量
+写回 env 文件再 `--force-recreate`。无 schema 变化。
+
+**不在本次范围**：worker / 入口容器的 `CAPABILITY_HANDLE` 仍以容器 env 传入（短时、按 scope 收窄的 Handle，
+不是 provider key），见 R-24 的后续项。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -416,6 +458,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.36.0 之后的下一版 | task `0005_task_idempotency_key`（R-54 / 决定 D-12）：`tasks` 新增可空 `idempotency_key`（不回填）+ 两个部分唯一索引：`tasks_idempotency_key_uidx`（非派生键，任何状态）、`tasks_derived_idempotency_key_inflight_uidx`（`invoke_worker` 派生的 `auto:` 键，仅 `created` / `queued` / `running` / `waiting_approval`） | 可逆 | 读了 v0.36.0 的 `insertQueuedTaskWithQuotaCheck`：`insert into tasks (…)` 是显式列清单，不写新列，旧代码插入的行恒为 NULL，两个索引的 `where` 都不覆盖 NULL，不会拒绝任何旧写入；`TASK_ROW_COLUMNS` 同样是显式列清单，不读新列。回退后 `invoke_worker` 退回没有幂等键的旧行为（客户端超时后的重试会再起一个 Worker，即 R-54 本身） | 只需回退代码；若要连 schema 一起撤：`drop index tasks_derived_idempotency_key_inflight_uidx; drop index tasks_idempotency_key_uidx; alter table tasks drop column idempotency_key`（不撤也无害） |
 | v0.36.0 之后的下一版 | linkage `0002_context_item_chat_lease`（R-57 / 决定 D-23）：`pending_context_items` 新增可空 `chat_id`（外键 `chats`）与 `lease_turn_id`（外键 `activities`），不回填。`get_entry_context` 带 `turnId` 时把该 Turn 所在对话的条目租给这个 Turn，同一 Turn 的每次调用返回同一批，`report_turn` 时才置 `delivered_at`（即确认）；不带 `turnId` 是只读 peek（`entry` 会话例外：归到它正在运行的 Turn，给 `turnId` 之前构建的入口镜像用） | 可逆 | 只加两列，可空、无默认值；既有行两列为 NULL，复合外键含 NULL 不检查，加约束不会失败。读了 v0.36.0 的 `application/linkage/store.ts`：`insertPendingContextItem` 的插入是显式列清单，不写新列；`drainPendingContextItems` 只按 `principal_id`、`delivered_at is null` 读、只写 `delivered_at`，不读新列。回退后旧代码回到读即消费、不分对话（即 R-57 本身）：新代码期间已租未确认的条目在旧代码看来就是未投递，下一次读取投递一次，不丢。线上契约只多了可选参数 `turnId`：回退后若新的运行时镜像仍是活动镜像，旧内核以 `invalid_params` 拒绝它，扩展随即改发 `{}`（旧内核唯一接受的形式），注入不中断 | 只需回退代码；若要连 schema 一起撤：`alter table pending_context_items drop column lease_turn_id, drop column chat_id`（外键随列删除；不撤也无害） |
 | v0.38.0 之后的下一版 | core `0036_audit_unattributed_cli_identity`（R-28 / L1-14）：把 `audit_records_actor_shape` 里 0032 给 `platform.workspace_purged` 的无操作者例外（`actor_user_id` 为空且 `payload -> 'attributedActor'` 是 JSON 布尔 `false`）扩到运维 CLI 的五个身份动作 `cli.workspace_created` / `cli.principal_added` / `cli.service_handle_issued` / `cli.platform_admin_created` / `cli.password_set`，其余无操作者的平台行照旧拒绝 | 可逆 | 只放宽（widening）：凡满足 0032 约束的行必然满足新约束，重新加约束校验既有行不会失败，无需回填。读了 v0.38.0 的 `cli/bootstrap.ts`：这五个子命令不写任何审计行，`cli.*` 是新动作名，旧代码从不触发新加的合法分支；旧测试 `writer.test.ts` 断言"其他动作（`platform.user_purged`）的无操作者行被拒"在新约束下仍成立。回退后这五个子命令退回不留审计行（L1-14 本身），已写入的 `cli.*` 行留在表里、旧代码的读路径（`platform_audit_query`）照常列出 | 只需回退代码；若要连 schema 一起撤：按 0032 的定义重建 `audit_records_actor_shape`（前提是先删掉无操作者的 `cli.*` 行，否则重建失败；不撤也无害） |
+| v0.38.0 之后的下一版 | core `0037_gate_manifest_pending`（R-18 / 决定 D-18）：`gate_instances` 新增可空 `pending_operations`（jsonb）与 `pending_announced_at`（timestamptz），不回填、无默认值——既有行读作"没有待确认的清单"，与事实一致。已被决定（启用 / 禁用）的实例再 announce 出改变 Operation 集合或需审阅字段的清单时存这里，`operations` 保持到管理员 `confirm_gate_manifest`（按摘要）；清单不变的再 announce 清空它 | 可逆 | 只加两列，可空。读了 v0.38.0 的 `application/gates/store.ts`：`GATE_INSTANCE_SELECT`、`upsertAnnouncement` 的 select / insert / 三条 update、`listAvailableGateInstances` 与 `createHostedGateInstance` 全是显式列清单，不读不写新列；RLS 策略按行，覆盖新列不变，`nexttime_app` 在 0023 已有 select / insert / update。回退后旧代码回到"匹配身份的每次 announce 直接覆盖 `operations`"（即 R-18 本身），新代码期间挂起的清单留在列里、旧代码看不见；重新升级后下一次 announce 会重新算出待确认项（同则清空、异则覆盖），`confirm_gate_manifest` 只认当时的摘要，不会采用过期的那一份 | 只需回退代码；若要连 schema 一起撤：`alter table gate_instances drop column pending_announced_at, drop column pending_operations`（不撤也无害） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

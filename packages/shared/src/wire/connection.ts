@@ -6,6 +6,7 @@ import {
   PublishableStatusSchema,
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
+import { OperationGovernanceChangeWireSchema } from './platform.js';
 
 /**
  * wire/connection: Gatekeeper / ConnectionRequest / Operation wire shapes
@@ -70,6 +71,11 @@ export const OperationSummaryWireSchema = z
     /** S8 W3-K1 (leftover 81): absent (never an empty string) for an Operation with no description
      *  — mirrors `OperationSchema.description`'s own optionality (action-description.ts). */
     description: z.string().optional(),
+    /** R-19 (D-17): present only on a `draft` whose identity has a `published` version — what
+     *  publishing this draft would change on the version in effect (`before` = that version,
+     *  `after` = this draft), with the kernel's direction. The catalog confirms a non-`neutral`
+     *  change before it publishes. */
+    governanceChange: OperationGovernanceChangeWireSchema.optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
@@ -101,6 +107,10 @@ export const OperationProposeResultWireSchema = z
     version: z.number().int().positive(),
     status: PublishableStatusSchema,
     draftOf: z.string().nullable(),
+    /** R-19 (D-17): what publishing this draft would change on the identity's `published` version
+     *  (`null` when there is none). The onboarding wizard confirms a non-`neutral` change before
+     *  its `publish_operation` step. */
+    governanceChange: OperationGovernanceChangeWireSchema.nullable(),
   })
   .strict();
 

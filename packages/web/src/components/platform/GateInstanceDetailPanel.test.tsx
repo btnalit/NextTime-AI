@@ -291,4 +291,85 @@ describe('GateInstanceDetailPanel', () => {
     expect(table.textContent).toContain('影响级');
     expect(table.textContent).toContain('提示');
   });
+  // R-18 (decision D-18): a decided gate's changed re-announce waits for an administrator.
+  describe('held announced manifest (R-18)', () => {
+    const pendingManifest = {
+      digest: 'd'.repeat(64),
+      announcedAt: '2026-10-02T08:00:00.000Z',
+      operationCount: 2,
+      added: [
+        {
+          name: 'container_remove',
+          mode: 'execute' as const,
+          blastRadius: 'high',
+          autoApprovable: false,
+          readOnlyHint: null,
+          destructiveHint: true,
+          idempotentHint: null,
+        },
+      ],
+      removed: [],
+      changed: [
+        {
+          name: 'container_restart',
+          before: {
+            mode: 'execute' as const,
+            blastRadius: 'medium' as const,
+            autoApprovable: false,
+          },
+          after: { mode: 'execute' as const, blastRadius: 'low' as const, autoApprovable: true },
+          direction: 'loosened' as const,
+          otherChangedFields: ['binding'],
+        },
+      ],
+    };
+
+    it('renders nothing when nothing is held', () => {
+      renderPanel(scriptedHttp({}), gateInstance({ status: 'enabled', pendingManifest: null }));
+      expect(screen.queryByTestId('gate-instance-pending-manifest')).toBeNull();
+    });
+
+    it('lists added / changed Operations old → new and adopts exactly the shown digest on confirm', async () => {
+      const adopted = gateInstance({ status: 'enabled', pendingManifest: null, operationCount: 2 });
+      const http = scriptedHttp({
+        confirm_gate_manifest: (params) => {
+          expect(params).toEqual({ gateId: 'gate-1', digest: 'd'.repeat(64) });
+          return adopted;
+        },
+      });
+      const { onChanged } = renderPanel(http, gateInstance({ status: 'enabled', pendingManifest }));
+      const block = screen.getByTestId('gate-instance-pending-manifest');
+      expect(block.textContent).toContain('container_remove');
+      expect(block.textContent).toContain('container_restart: 影响级');
+      expect(block.textContent).toContain('binding');
+
+      fireEvent.click(within(block).getByTestId('gate-instance-pending-manifest-review'));
+      const confirm = await screen.findByTestId('gate-instance-pending-manifest-confirm');
+      expect(http.calls.some((c) => c.name === 'confirm_gate_manifest')).toBe(false);
+      // Adds an Operation and loosens one: danger, with what the loosening means.
+      expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
+      expect(
+        within(confirm).getByTestId('gate-instance-pending-manifest-loosens').textContent,
+      ).toContain('container_restart');
+      expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+        'loosened',
+      );
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith(adopted));
+    });
+
+    it('a manifest replaced since the page loaded is refused with its own copy', async () => {
+      const http = scriptedHttp({
+        confirm_gate_manifest: () => {
+          throw new HttpError('capability_error', 'newer manifest', 'manifest_changed');
+        },
+      });
+      renderPanel(http, gateInstance({ status: 'enabled', pendingManifest }));
+      fireEvent.click(screen.getByTestId('gate-instance-pending-manifest-review'));
+      const confirm = await screen.findByTestId('gate-instance-pending-manifest-confirm');
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      const error = await within(confirm).findByTestId('confirm-error');
+      expect(error.textContent).toContain('门的清单在你查看之后变了');
+    });
+  });
 });

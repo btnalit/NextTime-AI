@@ -5,6 +5,7 @@ import type {
   GateHostedDefinitionWire,
   GateInstanceWire,
   Operation,
+  PendingGateManifestWire,
 } from '@nexttime/shared';
 import { GateHostedDefinitionWireSchema, OperationSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -12,6 +13,14 @@ import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import { revokeEntrySessionHandles, revokeSession } from '../../governance/capability/index.js';
 import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
+import {
+  type AnnouncedManifestDiff,
+  canonicalJson,
+  diffAnnouncedManifest,
+  isReviewedManifestChange,
+  manifestDigest,
+  toWireGateOperation,
+} from './manifest-review.js';
 
 /**
  * application/gates/store: the P-B1 integration catalog — `connectors`, `gate_instances`,
@@ -81,12 +90,15 @@ interface GateInstanceDbRow {
   enabled_workspace_count: number;
   hosted: boolean;
   definition: unknown;
+  pending_operations: unknown;
+  pending_announced_at: Date | null;
 }
 
 const GATE_INSTANCE_SELECT = `
   select g.gate_id, g.connector, g.display_name, g.transport_kind, g.target, g.endpoint,
          g.health_endpoint, g.operations, g.status, g.trust, g.health, g.last_seen_at,
          g.last_checked_at, g.created_at, g.updated_at, g.hosted, g.definition,
+         g.pending_operations, g.pending_announced_at,
          (select count(*)::int from workspace_gate_links l where l.gate_id = g.gate_id)
            as enabled_workspace_count
     from gate_instances g`;
@@ -124,6 +136,24 @@ export function hostedDefinitionOf(value: unknown): GateHostedDefinitionWire | n
   return parsed.success ? parsed.data : null;
 }
 
+/** R-18 (D-18): the held announcement as the administrator reviews it — `null` when nothing is
+ *  pending. The digest is over the stored value, the one `confirmPendingManifest` checks. */
+export function pendingManifestOf(row: {
+  operations: unknown;
+  pending_operations: unknown;
+  pending_announced_at: Date | null;
+  updated_at: Date;
+}): PendingGateManifestWire | null {
+  if (row.pending_operations === null || row.pending_operations === undefined) return null;
+  const pending = operationsOf(row.pending_operations);
+  return {
+    digest: manifestDigest(row.pending_operations),
+    announcedAt: (row.pending_announced_at ?? row.updated_at).toISOString(),
+    operationCount: pending.length,
+    ...diffAnnouncedManifest(operationsOf(row.operations), pending),
+  };
+}
+
 /** S8 W1-C (leftover 48 "GateInstanceWire 只有 enabledWorkspaceCount 无工作区列表"): the bound on
  *  `enablingWorkspaces` — `enabledWorkspaceCount` stays the true, untruncated total either way. */
 export const ENABLING_WORKSPACES_LIMIT = 20;
@@ -150,15 +180,8 @@ export function toWireGateInstance(
     enablingWorkspaces: enablingWorkspaces.map((w) => ({ id: w.id, name: w.name })),
     hosted: row.hosted,
     definition: hostedDefinitionOf(row.definition),
-    operations: operations.map((op) => ({
-      name: op.name,
-      mode: op.mode,
-      blastRadius: op.blast_radius,
-      autoApprovable: op.auto_approvable,
-      readOnlyHint: op.read_only_hint ?? null,
-      destructiveHint: op.destructive_hint ?? null,
-      idempotentHint: op.idempotent_hint ?? null,
-    })),
+    operations: operations.map(toWireGateOperation),
+    pendingManifest: pendingManifestOf(row),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -253,6 +276,10 @@ export interface AnnounceOutcome {
    *  gate-host (`hosted`) instance, or the gate host announced one that is not hosted (or does not
    *  exist: the host serves only instances an administrator created). Nothing was written. */
   readonly announcerMismatch?: boolean;
+  /** R-18 (D-18): the announced manifest changes what this already-decided instance can do, so it
+   *  was stored as `pending_operations` (newly, or replacing a different pending one) and the
+   *  manifest in effect was kept. Not set when the same pending manifest was simply re-announced. */
+  readonly manifestHeld?: boolean;
 }
 
 /**
@@ -267,10 +294,21 @@ export interface AnnounceOutcome {
  * 顶替已启用的门"; every packaged gate shares one announce credential, so the credential does not
  * tell two packaged gates apart). Such an announcement still counts as a heartbeat but marks health
  * `unknown`, changes nothing else (not the manifest, not the `target`) and is reported to the
- * caller (`identityMismatch`) for the log. From a matching identity, the manifest (`operations`)
- * and the human-readable `target` may change on every announce: a newer gate build legitimately
- * adds Operations. A `lost` instance that reappears returns to the status it had before it was
- * lost (`status_before_lost`).
+ * caller (`identityMismatch`) for the log. From a matching identity, the human-readable `target`
+ * may change on every announce. A `lost` instance that reappears returns to the status it had
+ * before it was lost (`status_before_lost`).
+ *
+ * The manifest (R-18, decision D-18): until the administrator decides, every announce replaces
+ * `operations`. Once the instance is decided (`enabled` / `disabled`, also across a `lost` spell
+ * and for a gate-host instance decided before its host first spoke), an announcement that changes
+ * the Operation set or a reviewed field (`isReviewedManifestChange` — everything but
+ * `description`) does not take effect: it is held as `pending_operations` and the manifest in
+ * effect stays until an administrator confirms that exact version (`confirmPendingManifest`,
+ * by digest). A re-announce of the manifest in effect (a gate restart) writes it as before and
+ * drops any pending one — the gate no longer announces it — so the normal case never creates a
+ * pending item. A newer build that legitimately adds Operations is exactly what the administrator
+ * is asked to look at: the credential proves who announced, the confirmation that someone looked
+ * at what changed.
  */
 export async function upsertAnnouncement(
   client: PoolClient,
@@ -285,8 +323,11 @@ export async function upsertAnnouncement(
     endpoint: string;
     hosted: boolean;
     last_seen_at: Date | null;
+    operations: unknown;
+    pending_operations: unknown;
   }>(
-    `select status, status_before_lost, connector, transport_kind, endpoint, hosted, last_seen_at
+    `select status, status_before_lost, connector, transport_kind, endpoint, hosted, last_seen_at,
+            operations, pending_operations
        from gate_instances where gate_id = $1 for update`,
     [body.gateId],
   );
@@ -338,6 +379,21 @@ export async function upsertAnnouncement(
       ? (restoredStatus ?? 'discovered')
       : before.status;
   const displayName = body.displayName ?? body.gateId;
+  // R-18 (D-18): which manifest this announce writes. `liveManifest` replaces `operations` (`null`
+  // keeps it); `pendingManifest` becomes `pending_operations` (`null` clears it). Neither is
+  // written on an identity mismatch (the frozen statement below ignores both then).
+  const announcedManifest = JSON.stringify(body.operations);
+  const manifestPinned = decided || decidedAfterLost;
+  const held =
+    manifestPinned &&
+    before !== undefined &&
+    isReviewedManifestChange(operationsOf(before.operations), body.operations);
+  const liveManifest = held ? null : announcedManifest;
+  const pendingManifest = held ? announcedManifest : null;
+  const manifestHeld =
+    held &&
+    !identityMismatch &&
+    canonicalJson(before?.pending_operations ?? null) !== canonicalJson(body.operations);
   if (!frozen) {
     // Only where the announced connector is about to be written (`gate_instances.connector`
     // references it) — never for a refused or a frozen announcement.
@@ -369,7 +425,13 @@ export async function upsertAnnouncement(
     await client.query(
       `update gate_instances
           set target = case when $4 then target else $2 end,
-              operations = case when $4 then operations else $3::jsonb end,
+              operations = case when $4 or $3::jsonb is null then operations else $3::jsonb end,
+              pending_operations = case when $4 then pending_operations else $7::jsonb end,
+              pending_announced_at = case
+                when $4 then pending_announced_at
+                when $7::jsonb is null then null
+                when pending_operations is not distinct from $7::jsonb then pending_announced_at
+                else now() end,
               health_endpoint = case when $4 then health_endpoint else $5 end,
               status = $6,
               status_before_lost = null,
@@ -380,10 +442,11 @@ export async function upsertAnnouncement(
       [
         body.gateId,
         body.target ?? '',
-        JSON.stringify(body.operations),
+        liveManifest,
         identityMismatch,
         body.healthEndpoint ?? null,
         status,
+        pendingManifest,
       ],
     );
   } else {
@@ -394,7 +457,12 @@ export async function upsertAnnouncement(
               target = $4,
               endpoint = $5,
               health_endpoint = $6,
-              operations = $7::jsonb,
+              operations = coalesce($7::jsonb, operations),
+              pending_operations = $9::jsonb,
+              pending_announced_at = case
+                when $9::jsonb is null then null
+                when pending_operations is not distinct from $9::jsonb then pending_announced_at
+                else now() end,
               status = $8,
               status_before_lost = null,
               health = 'ok',
@@ -408,12 +476,19 @@ export async function upsertAnnouncement(
         body.target ?? '',
         body.endpoint,
         body.healthEndpoint ?? null,
-        JSON.stringify(body.operations),
+        liveManifest,
         status,
+        pendingManifest,
       ],
     );
   }
-  return { gateId: body.gateId, created: !before, identityMismatch, status };
+  return {
+    gateId: body.gateId,
+    created: !before,
+    identityMismatch,
+    status,
+    ...(manifestHeld ? { manifestHeld: true } : {}),
+  };
 }
 
 /** Liveness (决定 ⑤): instances whose heartbeat is older than `thresholdSeconds` become `lost`
@@ -519,6 +594,45 @@ export async function updateGateInstance(
       where gate_id = $1`,
     [gateId, patch.displayName ?? null, patch.status ?? null, patch.trust ?? null],
   );
+}
+
+export type ConfirmPendingManifestOutcome =
+  | { readonly kind: 'confirmed'; readonly diff: AnnouncedManifestDiff }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'nothing_pending' }
+  | { readonly kind: 'stale' };
+
+/** R-18 (D-18): adopts the held announcement as the manifest in effect — only when `digest` is the
+ *  digest of the pending manifest as stored right now (row-locked), so a newer announce that
+ *  replaced what the administrator was shown refuses (`stale`) instead of being adopted unseen. */
+export async function confirmPendingManifest(
+  client: PoolClient,
+  gateId: string,
+  digest: string,
+): Promise<ConfirmPendingManifestOutcome> {
+  const result = await client.query<{ operations: unknown; pending_operations: unknown }>(
+    'select operations, pending_operations from gate_instances where gate_id = $1 for update',
+    [gateId],
+  );
+  const row = result.rows[0];
+  if (!row) return { kind: 'not_found' };
+  if (row.pending_operations === null || row.pending_operations === undefined) {
+    return { kind: 'nothing_pending' };
+  }
+  if (manifestDigest(row.pending_operations) !== digest) return { kind: 'stale' };
+  await client.query(
+    `update gate_instances
+        set operations = pending_operations,
+            pending_operations = null,
+            pending_announced_at = null,
+            updated_at = now()
+      where gate_id = $1`,
+    [gateId],
+  );
+  return {
+    kind: 'confirmed',
+    diff: diffAnnouncedManifest(operationsOf(row.operations), operationsOf(row.pending_operations)),
+  };
 }
 
 export async function recordGateInstanceCheck(

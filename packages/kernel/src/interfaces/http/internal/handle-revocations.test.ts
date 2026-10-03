@@ -30,7 +30,7 @@ describe('GET /internal/handle-revocations', () => {
 
     const res = await app.inject({ method: 'GET', url: '/internal/handle-revocations' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z' });
+    expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z', hasMore: false });
     expect(listRevokedSince).toHaveBeenCalledTimes(1);
   });
 
@@ -53,6 +53,7 @@ describe('GET /internal/handle-revocations', () => {
     expect(res.json()).toEqual({
       revoked: [{ jti: 'jti-1', revokedAt: '2026-06-01T12:00:01.000Z' }],
       now: '2026-06-01T12:00:02.000Z',
+      hasMore: false,
     });
   });
 
@@ -85,6 +86,62 @@ describe('GET /internal/handle-revocations', () => {
     const body = res.json();
     expect(body.ok).toBe(false);
     expect(JSON.stringify(body)).not.toContain('db exploded');
+  });
+
+  it('R-14: a full page answers hasMore with a nextCursor that, passed back, reaches the lister unchanged', async () => {
+    app = Fastify();
+    const exactCursor = {
+      revokedAt: '2026-06-01T12:00:01.123456Z',
+      jti: '0b6f7c1e-2f5d-4a8b-9c3e-1d2e3f4a5b6c',
+    };
+    const listRevokedSince = vi.fn(
+      async (_since: Date, limit: number, after: typeof exactCursor | undefined) => {
+        expect(limit).toBe(2);
+        return after === undefined
+          ? {
+              revoked: [
+                { jti: 'jti-1', revokedAt: '2026-06-01T12:00:01.123Z' },
+                { jti: exactCursor.jti, revokedAt: '2026-06-01T12:00:01.123Z' },
+              ],
+              now: '2026-06-01T12:00:02.000Z',
+              next: exactCursor,
+            }
+          : { revoked: [], now: '2026-06-01T12:00:03.000Z' };
+      },
+    );
+    await registerHandleRevocationRoutes(app, {
+      pool: {} as never,
+      listRevokedSince,
+      revocationPageSize: 2,
+    });
+
+    const first = (
+      await app.inject({ method: 'GET', url: '/internal/handle-revocations' })
+    ).json() as { hasMore: boolean; nextCursor?: string };
+    expect(first.hasMore).toBe(true);
+    expect(typeof first.nextCursor).toBe('string');
+
+    const second = await app.inject({
+      method: 'GET',
+      url: `/internal/handle-revocations?cursor=${first.nextCursor}`,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ revoked: [], now: '2026-06-01T12:00:03.000Z', hasMore: false });
+    // The microseconds survive the round trip — a millisecond cursor would replay the page.
+    expect(listRevokedSince.mock.calls[1]?.[2]).toEqual(exactCursor);
+  });
+
+  it('R-14: 400s on a cursor the route did not issue', async () => {
+    app = Fastify();
+    const listRevokedSince = vi.fn();
+    await registerHandleRevocationRoutes(app, { pool: {} as never, listRevokedSince });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/internal/handle-revocations?cursor=not-a-cursor',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(listRevokedSince).not.toHaveBeenCalled();
   });
 });
 
@@ -137,7 +194,7 @@ describe('GET /internal/handle-revocations behind the internal-plane guard', () 
       headers: { authorization: `Bearer ${deriveInternalCredential(token, 'llm-proxy')}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z' });
+    expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z', hasMore: false });
     expect(built.listRevokedSince).toHaveBeenCalledTimes(1);
   });
 });

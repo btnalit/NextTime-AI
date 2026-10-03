@@ -1,6 +1,7 @@
 export type {
   AnnounceBody,
   AnnounceOutcome,
+  ConfirmPendingManifestOutcome,
   ConnectorMode,
   GateHealth,
   GateInstanceStatus,
@@ -16,6 +17,7 @@ export {
   CONNECTOR_NAME_PATTERN,
   GATE_ID_PATTERN,
   GENERIC_CONNECTOR_NAMES,
+  confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,
   findGateLinkByGate,
@@ -32,6 +34,7 @@ export {
   markLostGateInstances,
   operationPlatformStatus,
   operationsOf,
+  pendingManifestOf,
   readDisabledOperations,
   readGateLinkPolicy,
   readGateLinkPoliciesForWorkspace,
@@ -42,6 +45,13 @@ export {
   updateGateInstance,
   upsertAnnouncement,
 } from './store.js';
+export type { AnnouncedManifestDiff } from './manifest-review.js';
+export {
+  canonicalJson,
+  diffAnnouncedManifest,
+  isReviewedManifestChange,
+  manifestDigest,
+} from './manifest-review.js';
 export type {
   ObserveExclusions,
   ObserveGateExclusion,

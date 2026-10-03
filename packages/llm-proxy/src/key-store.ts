@@ -16,9 +16,12 @@ import { Mutex } from './mutex.js';
  * `secrets/llm-proxy.env` — a deliberate, scoped exception to "agent / kernel 进程不持凭证": it is
  * still only llm-proxy's own process, never the kernel or an agent container, and the value never
  * leaves this file except into an outbound request to the provider's own upstream (proxy.ts,
- * provider-test.ts). It must never appear in a log line, an error message, an HTTP response, an
- * audit row, or `models.json` (whose own `apiKey` field is always the literal template string
- * `$CAPABILITY_HANDLE` — gen-models-json.ts).
+ * provider-test.ts) — the upstream it was entered for: that upstream is admin-mutable, so
+ * admin-api.ts clears the key before a provider's `upstream_base_url` changes and when a new
+ * provider reuses an id (R-23), and both outbound paths refuse redirects rather than resend the
+ * key to whatever host a 3xx names. It must never appear in a log line, an error message, an HTTP
+ * response, an audit row, or `models.json` (whose own `apiKey` field is always the literal
+ * template string `$CAPABILITY_HANDLE` — gen-models-json.ts).
  *
  * Resolution order (admin-api.ts `credentialSource`, proxy.ts `resolveConsoleKey`): a console key
  * for a provider's id always wins over that provider's `api_key_env` (file or store) — "console

@@ -313,6 +313,25 @@
   `POST /v1/responses`、`anthropic-messages`→`POST /v1/messages`），`GET /v1/models` 继续走既有的
   白名单合成路径；其余一律 404/405，请求体连读都不读，更不会转发到上游。同时把"非 JSON 请求体静默
   透传、不做 model 校验"的口子堵上——请求体现在必须是合法 JSON 对象且带非空字符串 `model`，否则 400。
+- **R-30 更正（2026-10-02 复审，维护者决定 D-29）——供应商侧工具不再是出网通道**：`proxy.ts` 原来除一张短的剥离表外
+  原样转发入站头，请求体只校验 `model`：agent 声明一个供应商执行的工具（MCP 连接器指向攻击者 `server_url`、web
+  fetch / search、代码执行）再配上对应的 `anthropic-beta`，供应商就替它出网——绕过 egress-proxy 与 WorkerDefinition
+  的出网清单，记成一次 LLM 调用而不是出网；`openai-organization` / `openai-project` 头能把花费挪到同一 key 的别的
+  项目。现在由新模块 `outbound-policy.ts` 在这一处收窄：①入站头改白名单——`accept`，Anthropic 另加
+  `anthropic-version` 与按值白名单的 `anthropic-beta`（恰为 pi 0.99 API key 鉴权会发的六个值；其余值丢弃并记日志，
+  pi 升级发新值时能在日志里看到），`content-type`、`accept-encoding: identity` 与供应商鉴权头由代理自己设；其余
+  （任何 agent 自带鉴权、`x-*`、org / project、逐跳头、关联 id）一律不转发。②查询串只留 SDK 会发的参数（Anthropic
+  的 `beta=true`）。③请求体里的工具只留客户端工具（两种 OpenAI 种类 `function` / `custom`，Anthropic 无 `type` 或
+  `custom`），其余类型一律剥离，嵌在 `messages[]` / Responses `input[]` 里的工具表同样过滤；另剥离不带工具条目就能
+  打开供应商侧工具的参数（`web_search_options`、`plugins`、`enable_search`、`search_parameters`、`mcp_servers`、
+  `container`）。剥离而不是拒绝：请求照常执行，只是没有供应商侧工具；每次收窄记一行 warn（剥掉的工具类型、参数、
+  beta 值，带 workspace / session / jti / 关联 id）。什么都没剥的请求仍按原字节转发。**D-29 的按 WorkerDefinition
+  开启（opt-in）未做**：llm-proxy 只看得到 Handle，其 claims 里没有任何 WorkerDefinition 关于供应商工具的信息；要承载
+  开关需要给 WorkerDefinition 加字段、并让内核在签发入口 / WorkerRun Handle 时把它写进 scope（无需迁移，但改领域
+  schema 与 Handle 签发），留作后续；在那之前一律剥离。无迁移。测试：`outbound-policy.test.ts`（每种 api 的头白名单、
+  beta 值、查询串、工具与参数剥离、pi 形状的请求原样不动、日志值有界）、`proxy.test.ts` 的 R-30 组（三种 api 端到端：
+  假上游收到的头 / 查询串 / 请求体、剥离日志；只有客户端工具的请求逐字节转发且不记日志；上游重定向 502）。
+- **R-14 更正（2026-10-02 复审）——吊销同步分页**：`GET /internal/handle-revocations` 原来一次最多回 5000 行就静默截断，llm-proxy 随即把 `since` 移到内核的 `now`；冷启动时若吊销但未过期的 Handle 超过 5000 条，最新的吊销永远同步不到，那些 Handle 在 llm-proxy 一直可用到过期。现在按 `(revoked_at, jti)` 稳定排序分页：满页时回 `hasMore: true` 与 `nextCursor`，调用方带同一个 `since` 加 `cursor` 取下一页；不满页 `hasMore: false`。游标里的 `revoked_at` 精确到微秒（不是线上 `revokedAt` 的毫秒）——一次 `revokeSession` 给它吊销的所有 Handle 同一个 `revoked_at`，毫秒游标会让这样的整页无限重放。llm-proxy 的 `revocation.ts` 一次同步把所有页取完（上限 1000 页，游标不前进即停）；走完最后一页才前移 `lastSyncAt`，且前移到**第一页**的 `now`（后面的页是更晚的快照，期间提交、`revoked_at` 更早的吊销排在游标之前，重叠窗口要从第一页的时钟算起）；中途失败则保留已收到的 `jti`，只前移到实际收到的最后一行的 `revokedAt`，绝不前移到 `now`。#411 给这条路由加的 llm-proxy 专用凭证不变。线上只多了可选字段与参数：旧 llm-proxy 忽略 `hasMore`，新 llm-proxy 遇到不带 `hasMore` 的旧内核按一页处理。测试：`handle-revocations.test.ts`（游标往返保留微秒、非法游标 400）、`handle-revocations.integration.test.ts`（真库：同一瞬间吊销的 7 个 Handle 在页大小 3 下各出现一次、三页后 `hasMore: false`）、llm-proxy `revocation.test.ts`（翻完所有页、下次从第一页的 `now` 起、中途失败只前移到最后收到的行、游标不前进即停、旧内核一页）。
 
 ### S1.8 web：登录与对话
 - 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
@@ -1213,6 +1232,23 @@
   - **`get_operation_stats` 的 observe 类归因缺口**（S3.12 遗留，见该 capability 注册表条目自己此前的文档注释）：`substrate/audit/writer.ts` 新增 `queryAuditActionOperationStats`（按 `action` + `payload.params` 里的 `gatekeeperId`/`operation` 做日期范围分组读，通用，不写死单一 capability 名）；`governance/approval/reads.ts` 的 `getOperationStats` 用它查 `observe_operation` 的审计轨迹，按 `{gatekeeperId, operationName}` 与既有 execute 类查询结果合并——`calls` 变成两侧之和，新增 `observeCalls` 字段单独承载 observe 侧计数，`approved`/`rejected`/`autoApproved`/`failed` 仍只来自 execute 侧。已知遗留缺口（文档化，未近似）：Worker 经 `request_action` 调用、恰好解析成 observe 模式的少见兜底路径，审计 `action` 记的是 `request_action` 不是 `observe_operation`，不参与这次归因——真正的 `<gate>.<op>` observe 路径固定走 `observe_operation`，不受影响。`packages/shared/src/capabilities.ts` 的 `get_operation_stats` 条目同步补了 `resultSchema.observeCalls` 与说明文字，`docs/contracts/capabilities.json` 已重新生成。
   - **`scripts/chaos-kill-worker.sh` / `scripts/chaos-kill-entry.sh`**：POSIX sh 操作员脚本，同 `scripts/accept_s1.sh`/`scripts/restore.sh` 的既有约定（从检出根跑、`docker compose config` 探活、`</dev/null`、API key 只打印前 6 位）。前者用 `get_task`（human 通道也能调——`authorize.ts` 的 `channel:'handle'` 分支对两个通道都放行，只有 `channel:'human'` 才排斥非 human 调用方）定位当前 `running` 的 WorkerRun，按 `taskContainerName` 约定算出容器名直接 `docker kill`（不是 `docker compose kill`——Worker 容器不是 compose 服务），轮询到 `queued`（attempt 增，reaper 已重试）或 `failed` 记 PASS。后者 `docker kill nexttime-entry-<principalId>`，用 `send_chat_message` 触发"下一轮"，轮询 worker-supervisor 的 `/resident/<principalId>`（同 accept_s1.sh 的 `resident_status()` 助手同一条路径）等 `restarts` 增且 `running=true`。两者的期望输出、常见故障、与 `/internal/metrics` 的运维读法写进新 runbook `docs/runbooks/host-chaos.md`（`docs/runbooks/README.md` 排障表已加一行；`docs/runbooks/operations.md` 两处"`invariant-checks.ts` 未实现"的旧记录已更新）。
   - **测试**：`substrate/audit/invariant-checks.integration.test.ts`（新增，DB-gated，`describe.runIf(DATABASE_URL)`）——I13 插入/清理的前后差值断言、I4/I12 触发器存在性、`runInvariantChecks` 返回形状与固定顺序；`governance/approval/reads.integration.test.ts`（新增，DB-gated）——纯 observe 行、`days` 窗口截断、`gatekeeperId` 过滤、与 execute 类行合并四例。**本机（Windows，无 docker/psql）没有条件跑通这两份 DB-gated 测试**，同 S3.11/S3.13 PR 的先例，只做了对照既有 `substrate/invariants.test.ts`/`writer.test.ts`/`members-flow.integration.test.ts` 写法的仔细人工核对，需要 CI 的真实 Postgres 服务确认一遍。`packages/kernel/src/index.test.ts` 原有一例断言"`outboxPruneDays: 0` 时 `setTimeout` 一次都不该被调用"，因为本任务给 `setTimeout` 加了第二个使用者（不变量检查的首次 tick 延时）而需要同时传 `invariantCheckIntervalMs: 0` 才能继续成立，已同步修——不是新缺陷，是同一个断言语义下必须的连带更新。
+
+- **R-34 更正（2026-10-02 复审）——密钥与 Handle 不再出现在任何进程的 argv 里**：验收套件在生产主机上跑
+  （`apply-release.sh` 第 7 步），原来 `run_driver` / `cap` 把 key、Handle 作为 `docker compose run … node
+  /tmp/driver.mjs cap <token> …` 的参数，同机任何用户都能从 `/proc/*/cmdline` 读到（验收工作区留 7 天、S4 的工作区
+  启用并授予了全部平台门）；`cap` 的 params JSON 里还带着门的 `connectionSecret` 与凭证；accept_s1 的三处 curl 与
+  三个混沌脚本用 `curl -H "Authorization: Bearer $KEY"`，混沌脚本还把 key 当位置参数（进 shell 历史）。现在：
+  ①`scripts/lib/accept-common.sh` 的 `run_driver`（子 shell 函数体）把每个带 token 的子命令的 token 移进
+  `NT_ACCEPT_TOKEN`、`cap` / `mcp` 的 params 移进 `NT_ACCEPT_PARAMS`，以 `docker compose run -e NAME`（不带值，
+  从调用方环境取）带进容器，驱动收到的是 `env:NAME`——`deploy/accept/driver.mjs` 的 `resolveArg` 把任何
+  `env:<大写名>` 参数换成该环境变量的值（未设为空串，字面值照旧可用）；调用方不改。②新增 `auth_header <token>`
+  （printf 内建 → `curl -H @-`），accept_s1 的三处 curl 改用它。③accept_s2 的 S2.13 泄露检查不再
+  `psql -v token=…`，改为同一 stdin 上一行 `\set token …`（token 已校验为 40 位十六进制）。④三个混沌脚本的
+  `<apiKey>` 换成 `<apiKeyFile>`（0600 文件路径，`host-chaos.md` 给了不进历史的建法），读入后经 `auth_header |
+  curl -H @-` 发出；参数不是可读文件时报错且不回显参数（旧式调用传的就是 key 本身）。所有 PASS / FAIL 行不变。
+  验证：主机上无法跑验收，只做了 `sh -n`、shellcheck 0.11.0（无新增告警，既有的 info / warning 与 main 相同）
+  与逐行核对；驱动的 `env:` 解析由 `packages/kernel/src/interfaces/accept-driver.test.ts` 新增用例覆盖（HTTP
+  Bearer、params、未设变量、WS authenticate）。未做：收尾时吊销验收 key（复审 L9-5 的另一条建议），留作后续。
 
 ### S3.9 S3 验收脚本
 - 交付物：`scripts/accept_s3.sh`：采集 → 入口 agent 回答「哪个服务依赖哪个」并 explain → Explorer 端点返回图 → Claude Code 经 MCP 观察同一图。
@@ -3048,6 +3084,23 @@ store 供应商的 `apiKeyEnv` 变为可选；GET 只回 `credentialPresent` + `
   改窄为 `action = 'platform.workspace_purged'` 且 `payload -> 'attributedActor' is not distinct from 'false'::jsonb`
   （最初写成 `->> … = 'false'`，键缺失时整式为 NULL、CHECK 放行，被 CI 上的负向集成测试抓出）；wire
   `PlatformAuditRecordWire.actorUserId` 可空，页面经 `formatAuditActor` 显示"主机操作员（未署名）"。
+  - **R-23 更正（2026-10-02 复审）——密钥只发往它所属的上游**：上面的 key-store 说密钥"只发往供应商自己的上游"，
+    但上游是管理员可改的：`PUT` 把 `upstream_base_url` 指向任意主机再 `/test`，控制台密钥就发了出去；新建一个
+    `apiKeyEnv` 写成别家变量名（如另一个供应商的 key）的供应商同样能把运维的环境变量 key 带走（gate-host 对同一概念
+    的规则相反：目标一变就清凭证）。现在（`admin-api.ts`）：①`PUT` 改了上游（`upstreamKey` 比较：WHATWG 规范化，
+    忽略末尾斜杠；路径不同也算不同上游）先清控制台密钥再写供应商——清不掉（密钥目录不可写）整笔 503，绝不会出现
+    "上游已改、密钥还在"；审计 `provider_updated` 带 `upstreamBaseUrl: {from, to}` 与 `secretCleared`，另记
+    `provider_secret_cleared`（`reason: upstream_changed`）；改 `api` / 鉴权头不清（仍是同一主机）。`POST` 新建时
+    该 id 下残留的密钥（DELETE 的尽力清除失败才会有）一并清掉（`reason: new_provider`）。②`assertEnvKeyPairing`：
+    `apiKeyEnv` 指向的变量**已有值**时，只能与 yaml（含被覆盖遮住的条目——运维自己的声明）或另一个 store 供应商
+    已经为它配置的同一上游配对，否则 409 `api_key_env_not_allowed` 并记一行 warn；变量尚无值照旧允许（运维手册的
+    传统路径：先建供应商、再由运维加环境变量）；只在本供应商的（变量，上游）对真的变化时检查，改模型 / 显示名 /
+    启停不受影响。③`proxy.ts` 与 `provider-test.ts` 的上游 fetch 加 `redirect: 'error'`（L6-19：`follow` 会把
+    `x-api-key` 带到 3xx 指向的主机）。只在写入时检查：本修复之前已写入的 store 行不回溯校验。无迁移、无 wire 形状
+    变化（shared `wire/llm-admin.ts` 只改注释）。测试：`admin-api.test.ts` 的 R-23 组（改上游清密钥与审计、不改
+    上游保留、yaml 供应商的控制台密钥不随覆盖走、清不掉时 503 且不变、POST 清残留、已有值的变量配陌生上游 409、
+    改 yaml 供应商上游但保留其变量 409、同上游可共用、未设置的变量名允许、`upstreamKey`）、`proxy.test.ts` 与
+    `provider-test.test.ts` 的重定向用例。
 
 ### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
 
@@ -3405,6 +3458,27 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `apply-release.sh` 以管道 `| sed` 判断拉取成败，取到的是 sed 的退出码，失败被当成成功、没有退回源码构建
   （三遍式设计让验签失败发生在重打 tag 之前，本地镜像未被改动，栈不受影响）。修为匿名优先、失败且有配置时以
   uid 0 挂配置重试并打印 cosign 报错；拉取退出码直接取自脚本。
+- **R-33 更正（2026-10-02 复审）——签名 job 里不再跑第三方扫描**：原来一个 job 同时持有 `packages: write` 与
+  `id-token: write`，并依次跑 docker login（`GITHUB_TOKEN` 留在 `~/.docker/config.json` 直到 post 步骤）、cosign、
+  `aquasecurity/trivy-action`（`TRIVY_PASSWORD` 就是 `GITHUB_TOKEN`）、`codeql-action/upload-sarif`；其中任何一步
+  被换成恶意提交，都能重推某个发布 tag 并以本工作流身份 keyless 签名，主机 `pull-images.sh` 照样验过。现在拆成两个
+  job：`build-sign`（`contents: read` + `packages: write` + `id-token: write`）只跑检出、Docker 自家的 buildx /
+  login / build-push、sigstore 的 cosign-installer 与 `cosign sign`，签名之后把 `<image>@<digest>` 作为 artifact
+  `digest-<service>` 交出（`actions/upload-artifact`，保留 1 天）；`scan`（`contents: read` +
+  `security-events: write`，无 `packages`、无 `id-token`、不给 Trivy 任何 registry 凭证——包是公开的，匿名拉取）
+  `needs: build-sign`、`if: !cancelled()`，按服务下载 digest（`actions/download-artifact` v8，摘要不符即失败），
+  校验形如 `ghcr.io/*/nexttime-ai-<service>@sha256:*` 后跑 Trivy 并上传 SARIF（分类 `publish-<service>` 不变，仍只
+  报告）；某个服务构建失败时它的扫描跳过，不影响其它。所有 action 仍钉完整提交 SHA（带版本注释）。`build-sign`
+  另拒绝在 `refs/heads/main` 以外运行：从别的分支 dispatch 会用主机验不过的签名覆盖发布 tag。`pull-images.sh`
+  验签从身份正则改为全部精确匹配：issuer、`--certificate-identity`
+  `https://github.com/<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`，外加
+  `--certificate-github-workflow-repository <owner>/<repo>` 与 `--certificate-github-workflow-ref refs/heads/main`
+  ——证书身份是被调用的可复用工作流，这两项是发起运行的那次调用（release-please 在 main 上、或从 main dispatch），
+  于是别的分支或别的仓库以 `…/publish-images.yml@main` 调用它签出的东西也不再通过。已发布的 v0.35–v0.38 都由
+  main 上的 release-please 调用签名，满足新条件。没有在 Docker 自家 action 与 cosign-installer 之外再换成手写 CLI：
+  gha 缓存只对 JS action 暴露运行时令牌，attestation 需要 docker-container builder，这些在 PR 上都无法实跑验证。
+  验证：本地 actionlint 1.7.12（带 shellcheck 0.11.0）对 `publish-images.yml` / `release-please.yml` 无告警，
+  `pull-images.sh` 过 `sh -n` 与 shellcheck；真实发布只在下一次发版发生。
 
 ### D2 实现说明
 

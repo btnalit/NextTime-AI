@@ -29,7 +29,14 @@ export interface RevokedHandleRow {
 interface HandleRevocationsResponse {
   readonly revoked: readonly RevokedHandleRow[];
   readonly now: string;
+  /** R-14: more rows follow this page — request them with `cursor = nextCursor`. Absent from a
+   *  kernel that predates paging, which then answers in one page. */
+  readonly hasMore?: boolean;
+  readonly nextCursor?: string;
 }
+
+/** A guard against a kernel whose cursor never runs out: 1000 pages of 5000 rows. */
+const MAX_PAGES_PER_SYNC = 1000;
 
 export interface RevocationSyncOptions {
   /** Base URL for `GET ${kernelUrl}/internal/handle-revocations`. When unset, sync is a no-op —
@@ -67,24 +74,52 @@ export function startRevocationSync(options: RevocationSyncOptions): RevocationS
   const log = options.log ?? ((line: string) => console.log(line));
   const fetchImpl = options.fetchImpl ?? fetch;
 
+  /**
+   * One sync: every page from `since` on (review 2026-10-02 R-14 — the kernel answers 5000 rows a
+   * page, oldest revocation first, and says when more follow). Only a sync that reached the last
+   * page moves `lastSyncAt`, and then to the *first* page's server `now`: a later page is a later
+   * snapshot, and a revocation that committed in between with an earlier `revoked_at` sorted
+   * before the cursor — the overlap re-covers it from the first page's clock, not from the last.
+   * A sync that stops part-way keeps every `jti` it received and advances only as far as the last
+   * row it actually received, never to `now`, so the rows it did not reach are requested again.
+   */
   async function sync(): Promise<void> {
     if (!options.kernelUrl) return;
 
     const since = lastSyncAt ? new Date(lastSyncAt.getTime() - options.overlapMs) : new Date(0);
+    let firstNow: Date | undefined;
+    let lastReceived: Date | undefined;
+    let cursor: string | undefined;
 
     try {
-      const url = new URL('/internal/handle-revocations', options.kernelUrl);
-      url.searchParams.set('since', since.toISOString());
-      const res = await fetchImpl(url.toString(), {
-        headers: options.authorizationHeader
-          ? { authorization: options.authorizationHeader }
-          : undefined,
-      });
-      if (!res.ok) throw new Error(`kernel responded ${res.status}`);
-      const body = (await res.json()) as HandleRevocationsResponse;
-      for (const row of body.revoked) revoked.add(row.jti);
-      lastSyncAt = new Date(body.now);
+      for (let page = 1; ; page += 1) {
+        if (page > MAX_PAGES_PER_SYNC) {
+          throw new Error(`more than ${MAX_PAGES_PER_SYNC} pages of revocations in one sync`);
+        }
+        const url = new URL('/internal/handle-revocations', options.kernelUrl);
+        url.searchParams.set('since', since.toISOString());
+        if (cursor !== undefined) url.searchParams.set('cursor', cursor);
+        const res = await fetchImpl(url.toString(), {
+          headers: options.authorizationHeader
+            ? { authorization: options.authorizationHeader }
+            : undefined,
+        });
+        if (!res.ok) throw new Error(`kernel responded ${res.status}`);
+        const body = (await res.json()) as HandleRevocationsResponse;
+        firstNow ??= new Date(body.now);
+        for (const row of body.revoked) {
+          revoked.add(row.jti);
+          lastReceived = new Date(row.revokedAt);
+        }
+        if (!body.hasMore || body.nextCursor === undefined) break;
+        if (body.nextCursor === cursor) throw new Error('the revocation cursor did not advance');
+        cursor = body.nextCursor;
+      }
+      lastSyncAt = firstNow;
     } catch (err) {
+      if (lastReceived !== undefined && (lastSyncAt === undefined || lastReceived > lastSyncAt)) {
+        lastSyncAt = lastReceived;
+      }
       log(
         JSON.stringify({
           level: 'warn',

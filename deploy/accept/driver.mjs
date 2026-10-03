@@ -66,6 +66,10 @@
 //     read-only by the caller; no kernel call). Prints ASSISTANT_MESSAGES=, MODEL= and the same
 //     TOOL_* fields as send-and-wait. See cmdTranscriptStats for the pinned pi entry shape.
 //
+// Secrets (R-34): any argument may be given as `env:<NAME>` (upper-case name), meaning "the value
+// of <NAME> in my environment". accept-common.sh's run_driver passes tokens and capability params
+// that way, never as literal arguments — see resolveArg below.
+//
 // Extraction: when `extractExpr` is given it is evaluated as a JS expression with `d` bound to the
 // parsed response (or the messages array for get-history) and printed as EXTRACTED=<value>
 // (strings verbatim, everything else JSON-stringified; undefined/null or any failure prints an
@@ -555,11 +559,21 @@ const COMMANDS = {
   'wait-task': cmdWaitTask,
 };
 
+/** R-34 (2026-10-02 review): an argument `env:<NAME>` stands for the value of <NAME> in the
+ *  driver's environment (empty when unset). scripts/lib/accept-common.sh's run_driver passes every
+ *  key, Handle and capability params JSON that way (`docker compose run -e <NAME>` copies the value
+ *  into the container without naming it), so none of them is an argument of a process the host can
+ *  list — `/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is not. A literal value is
+ *  still accepted. */
+function resolveArg(arg) {
+  return /^env:[A-Z_][A-Z0-9_]*$/.test(arg) ? (process.env[arg.slice(4)] ?? '') : arg;
+}
+
 async function main() {
   const [, , cmd, ...rest] = process.argv;
   const fn = COMMANDS[cmd];
   if (!fn) throw new Error(`unknown subcommand: ${cmd}`);
-  await fn(rest);
+  await fn(rest.map(resolveArg));
 }
 
 // Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and

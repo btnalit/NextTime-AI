@@ -1,6 +1,5 @@
 import type {
   GateInstanceEnablePreviewOperationPresentWire,
-  OperationGovernanceFieldsWire,
   PreviewGateInstanceEnableResultWire,
   RefreshOperationGovernanceResultWire,
 } from '@nexttime/shared';
@@ -8,13 +7,18 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
 import { HttpError } from '../../lib/http-client.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
-import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { Notice } from '../kit/notice.js';
-import { StatusChip } from '../kit/status-chip.js';
+import {
+  type GovernanceChangeItem,
+  GovernanceChangeList,
+  governanceChangeSummary,
+  governanceConsequences,
+  isLoosening,
+} from './GovernanceChange.js';
 
 export interface RefreshOperationGovernanceConfirmProps {
   readonly http: CapabilityCaller;
@@ -44,17 +48,19 @@ export interface RefreshOperationGovernanceConfirmProps {
  * not this one's) → a `medium` `Confirm` lists what would change → `refresh_operation_governance`
  * applies it to exactly the drifting names.
  *
- * **Tier is `medium`, not `irreversible`, even when a diff loosens auto-approval** (the case that
- * most looks like "widening what an agent may do without approval"): the write only re-syncs an
- * already-published, already-granted Operation's governance fields to match what its own gate is
- * announcing *right now* — it grants no Handle anything new (grants are per-Gatekeeper, not
- * per-field) and creates no new capability. The owner who could grant execute on this gate a moment
- * ago could already do so; this changes only whether a future `request_action` on it needs a human
- * to approve. It is also trivially reversible (run it again after the gate's own manifest changes
- * back, or hand-edit the Operation) and every change is visible here before confirming and in its
- * own AuditRecord (`before`/`after`) after — exactly `kit/confirm`'s own "reversible, needs a look
- * before it runs" definition of `medium`, the same tier its siblings on this page-family use
- * (`EnableGateConfirm`, `set_active_runtime_image`).
+ * **Tier is `medium`, not `irreversible`**: the write only re-syncs already-published Operations'
+ * governance fields to the manifest in effect, it is reversible (align again after the manifest
+ * changes back, or reclassify in the catalog) and every change is shown here before confirming and
+ * recorded in its own AuditRecord (`before`/`after`) after — `kit/confirm`'s "reversible, needs a
+ * look before it runs". **But a loosening is the danger case and is said plainly** (R-19, D-17):
+ * the kernel's own `direction` per Operation (never a ranking of this component's) drives the
+ * danger styling, and `governanceConsequences` spells out what it means — execute → observe needs
+ * neither approval nor a grant (so it *does* change who may call the system), leaving `high` drops
+ * the mandatory human approval and lets the requester approve their own request, and so on.
+ *
+ * **Exactly the reviewed manifest** (R-18, D-18): the confirm sends back the preview's
+ * `manifestDigest`; the kernel refuses `manifest_changed` (mapped below) if the manifest in effect
+ * is no longer the one these rows were computed from, so a newer manifest is never applied unseen.
  */
 export function RefreshOperationGovernanceConfirm({
   http,
@@ -72,10 +78,11 @@ export function RefreshOperationGovernanceConfirm({
   >(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [alignedNotice, setAlignedNotice] = useState(false);
-  // The one direction worth stopping on: an Operation that needed a person's approval and would no
-  // longer (auto-approve switched on, or execute re-announced as observe). Still `medium` — see the
-  // doc comment above — but called out and styled as a danger action, never one chip among many.
-  const loosened = (diffs ?? []).filter((op) => loosensApproval(op)).map((op) => op.name);
+  const [manifestDigest, setManifestDigest] = useState<string | null>(null);
+  const items = (diffs ?? []).map(changeItem);
+  // R-19 (D-17): the kernel's direction decides the danger case; the consequences say what it means.
+  const consequences = items.flatMap((item) => governanceConsequences(item, t));
+  const loosens = items.some((item) => isLoosening(item.direction));
   const [lastResult, setLastResult] = useState<RefreshOperationGovernanceResultWire | null>(null);
 
   async function loadPreviewAndOpen(): Promise<void> {
@@ -91,6 +98,7 @@ export function RefreshOperationGovernanceConfirm({
       );
       const drifting = preview.operationsAlreadyPresent.filter((op) => op.differs);
       setDiffs(drifting);
+      setManifestDigest(preview.manifestDigest);
       if (drifting.length === 0) setAlignedNotice(true);
       else setConfirmOpen(true);
     } catch (err) {
@@ -101,12 +109,12 @@ export function RefreshOperationGovernanceConfirm({
   }
 
   async function confirmRefresh(): Promise<void> {
-    if (diffs === null) return;
+    if (diffs === null || manifestDigest === null) return;
     let result: RefreshOperationGovernanceResultWire;
     try {
       result = await http.call<RefreshOperationGovernanceResultWire>(
         'refresh_operation_governance',
-        { gatekeeperId, operationNames: diffs.map((op) => op.name) },
+        { gatekeeperId, operationNames: diffs.map((op) => op.name), manifestDigest },
       );
     } catch (err) {
       const mapped = platformErrorMessage(err, t);
@@ -165,140 +173,42 @@ export function RefreshOperationGovernanceConfirm({
         anchor={trigger}
         title={t('与门公告对齐', "Align with the gate's announcement")}
         description={t(
-          '按门当前公告的模式 / 影响级 / 是否可自动批准，就地修正下列已发布 Operation 的治理字段——不产生新版本，不改变谁能调用这个系统。',
-          'Corrects the mode/blast-radius/auto-approvable fields of the operations below in place, to match what the gate announces right now — no new Operation version, and it never changes who may call this system.',
+          '按门当前生效清单的模式 / 影响级 / 是否可自动批准，就地修正下列已发布 Operation 的治理字段（不产生新版本）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
+          'Corrects the mode / blast radius / auto-approvable of the published operations below in place, to the manifest in effect (no new Operation version). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
         )}
         target={gateDisplayName}
-        impact={(diffs ?? []).map((op) => governanceDiffSummary(op, t))}
+        impact={items.map((item) => governanceChangeSummary(item, t))}
         confirmLabel={t('对齐', 'Align')}
-        danger={loosened.length > 0}
+        danger={loosens}
         onConfirm={confirmRefresh}
         testId={testId ? `${testId}-confirm` : undefined}
       >
-        {loosened.length > 0 ? (
+        {consequences.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-loosens` : undefined}>
-            {t(
-              `对齐后，${loosened.join('、')} 以后执行时不再需要人工审批。`,
-              `Once aligned, ${loosened.join(', ')} will no longer need a person's approval to run.`,
-            )}
+            <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+              {consequences.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
           </Notice>
         ) : null}
-        {diffs !== null && diffs.length > 0 ? <GovernanceDiffList diffs={diffs} /> : null}
+        {items.length > 0 ? <GovernanceChangeList items={items} /> : null}
       </Confirm>
     </div>
   );
 }
 
-function governanceDiffSummary(
-  op: GateInstanceEnablePreviewOperationPresentWire,
-  t: Translate,
-): string {
-  const changed = fieldChanges(op.existing, op.announced, t);
-  return `${op.name}: ${changed.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ')}`;
-}
-
-interface FieldChange {
-  readonly label: string;
-  readonly before: string;
-  readonly after: string;
-}
-
-function modeLabel(status: OperationGovernanceFieldsWire['mode'], t: Translate): string {
-  return labelText(statusChipStyle('operationMode', status), t);
-}
-
-function blastRadiusLabel(
-  status: OperationGovernanceFieldsWire['blastRadius'],
-  t: Translate,
-): string {
-  return labelText(statusChipStyle('blastRadius', status), t);
-}
-
-function autoApprovableLabel(autoApprovable: boolean, t: Translate): string {
-  return labelText(statusChipStyle('autoApprovable', String(autoApprovable)), t);
-}
-
-/** Only the fields that actually differ — `differs` is already true for every row this renders,
- *  but a governance change rarely touches all three fields at once, and listing an unchanged one
- *  as "x → x" would misreport the diff. */
-function fieldChanges(
-  existing: OperationGovernanceFieldsWire,
-  announced: OperationGovernanceFieldsWire,
-  t: Translate,
-): readonly FieldChange[] {
-  const changes: FieldChange[] = [];
-  if (existing.mode !== announced.mode) {
-    changes.push({
-      label: t('模式', 'Mode'),
-      before: modeLabel(existing.mode, t),
-      after: modeLabel(announced.mode, t),
-    });
-  }
-  if (existing.blastRadius !== announced.blastRadius) {
-    changes.push({
-      label: t('影响级', 'Blast radius'),
-      before: blastRadiusLabel(existing.blastRadius, t),
-      after: blastRadiusLabel(announced.blastRadius, t),
-    });
-  }
-  if (existing.autoApprovable !== announced.autoApprovable) {
-    changes.push({
-      label: t('自动批准', 'Auto-approve'),
-      before: autoApprovableLabel(existing.autoApprovable, t),
-      after: autoApprovableLabel(announced.autoApprovable, t),
-    });
-  }
-  return changes;
-}
-
-function loosensApproval(op: GateInstanceEnablePreviewOperationPresentWire): boolean {
-  return (
-    (!op.existing.autoApprovable && op.announced.autoApprovable) ||
-    (op.existing.mode === 'execute' && op.announced.mode === 'observe')
-  );
-}
-
-function GovernanceDiffList({
-  diffs,
-}: {
-  readonly diffs: readonly GateInstanceEnablePreviewOperationPresentWire[];
-}) {
-  const t = useT();
-  return (
-    <div className="stack-s" data-testid="governance-diff-list">
-      <span className="text-12 font-medium text-text-2">
-        {t(`将对齐 ${diffs.length} 个 Operation`, `Will align ${diffs.length}`)}
-      </span>
-      <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {diffs.map((op) => (
-          <li key={op.name} className="stack-s">
-            <span className="mono">{op.name}</span>
-            <div className="row-wrap">
-              <StatusChip machine="operationMode" status={op.existing.mode} size="s" />
-              <span aria-hidden="true">→</span>
-              <StatusChip machine="operationMode" status={op.announced.mode} size="s" />
-            </div>
-            <div className="row-wrap">
-              <StatusChip machine="blastRadius" status={op.existing.blastRadius} size="s" />
-              <span aria-hidden="true">→</span>
-              <StatusChip machine="blastRadius" status={op.announced.blastRadius} size="s" />
-            </div>
-            <div className="row-wrap">
-              <StatusChip
-                machine="autoApprovable"
-                status={String(op.existing.autoApprovable)}
-                size="s"
-              />
-              <span aria-hidden="true">→</span>
-              <StatusChip
-                machine="autoApprovable"
-                status={String(op.announced.autoApprovable)}
-                size="s"
-              />
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+/** A drifting row as the shared confirm list reads it — `existing` → `announced`, with the
+ *  kernel's direction. */
+function changeItem(op: GateInstanceEnablePreviewOperationPresentWire): GovernanceChangeItem {
+  return {
+    name: op.name,
+    before: {
+      mode: op.existing.mode,
+      blastRadius: op.existing.blastRadius,
+      autoApprovable: op.existing.autoApprovable,
+    },
+    after: op.announced,
+    direction: op.direction,
+  };
 }

@@ -41,7 +41,7 @@
 | 用户（`/platform/users`，P-A1，仅管理员） | `list_users{…, hideResidual}`（S6-A A6：缺省 `true`，可切换）`pendingOnly`（"清理待激活用户"候选） | `create_user` `update_user` `set_user_status`（对自己 409 `self_disable`）`reset_user_password` `merge_user` `set_user_budget`；`purge_user{userIds}`（批量 ≤ 200，`ConfirmTier high`，逐行 outcome） | 无 |
 | 模型与供应商（`/platform/models`，S6-B / S7-A，仅管理员） | `issue_llm_admin_token`（5 分钟平台 JWT，每次动作簇取一次、到期前 60 s 内重取）→ 直接调 caddy `/api/llm-admin/providers`（GET 列表：`credentialPresent` 布尔、`credentialSource: console\|env\|none`、`source: file\|store`、`overridesFile`、`lastTest`）——**不经 `/api/cap`**，内核不存供应商记录、不见密钥 | `/api/llm-admin/providers`（POST 新增）`/providers/:id`（PUT 编辑 / 覆盖 yaml 条目 / 停用，DELETE 仅 store 条目）`/providers/:id/test`（一次补全 + 一次工具调用往返）；`/providers/:id/secret`（S7-A，2026-09-22 维护者决定 ①：不走审批）—— `PUT`/`POST` 设置或更换控制台密钥，`DELETE` 清除（回退到 `apiKeyEnv`，详情抽屉里的表单，清除走 `ConfirmTier medium`）；每次供应商变更 llm-proxy 重写 `models.json`（密钥变更不重写），本表下一行的工作区页随之看到新模型 | 无 |
 | 图谱（`/work/graph`，S6-D） | `list_types{kind:'object'}` `search{query, objectType?, limit, cursor}` `state_at{objectId, at}`（对象 + 两向全部 Fact；`at` 按页面挂载冻结）`get_object`（邻居名称，去重、并发 4）`list_conflicts{status:'open'}` `explain{nodeId}`（溯源抽屉） | 无 | 无 |
-| 集成（`/platform/integrations`，P-B1/P-B2a，仅管理员） | `list_connectors` `list_gate_instances` `get_gate_instance` `list_external_runtimes` | `set_connector_mode`（三态 + 按 Operation 禁用；`platform_preset` 现在对 http/mcp 也放开，仅 cli/ssh 仍被拒）`update_gate_instance`（改名 / 启用 / 禁用 / `vetted`）`test_gate_instance` `revoke_external_runtime`；门实例 tab 新增"新建门宿主实例"（`create_gate_instance`，http/mcp，从不携带凭证）、详情抽屉的"删除"（`delete_gate_instance`，`gate_in_use` 时提示先禁用）与共享凭证实例的"录入共享凭证"（`issue_gate_host_token` 拿 5 分钟令牌 → 浏览器直接 POST 给门宿主，内核不经手） | 无 |
+| 集成（`/platform/integrations`，P-B1/P-B2a，仅管理员） | `list_connectors` `list_gate_instances` `get_gate_instance` `list_external_runtimes` | `set_connector_mode`（三态 + 按 Operation 禁用；`platform_preset` 现在对 http/mcp 也放开，仅 cli/ssh 仍被拒）`update_gate_instance`（改名 / 启用 / 禁用 / `vetted`）`confirm_gate_manifest`（R-18：已决定的门再 announce 出不同的清单时，详情抽屉列出新增 / 移除 / 变更的 Operation，确认后才生效）`test_gate_instance` `revoke_external_runtime`；门实例 tab 新增"新建门宿主实例"（`create_gate_instance`，http/mcp，从不携带凭证）、详情抽屉的"删除"（`delete_gate_instance`，`gate_in_use` 时提示先禁用）与共享凭证实例的"录入共享凭证"（`issue_gate_host_token` 拿 5 分钟令牌 → 浏览器直接 POST 给门宿主，内核不经手） | 无 |
 | 侧栏徽标 | `list_pending`（计数） | — | `action.pending` `action.updated` |
 | 侧栏工作区名 + 角色徽标 | `get_workspace`（S3.11，`caller` 字段是角色的权威来源，S3.13 起启用） | — | 无 |
 
@@ -151,7 +151,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
    `sudo`，因为这些脚本按设计把 `secrets/*.env`/`secrets/*.key` 写成 `0600`/`0640` 且 root 拥有，
    之后每一条 `docker compose` 调用因此也带 `sudo`），再把 `config/llm-providers.fake.example.yaml`
    复制成 `${NEXTTIME_DATA}/config/llm-providers.yaml` 并给 `secrets/llm-proxy.env` 追加
-   `FAKE_LLM_API_KEY=fake`（与 `docs/runbooks/host-agent-host.md` §3 的手工步骤一致）。`.env` 里
+   `FAKE_LLM_API_KEY=fake`（CI 走 llm-proxy 的 env 兼容回退；主机上按 `docs/runbooks/host-agent-host.md` §3 写成 key 文件，R-24）。`.env` 里
    `AGENT_RUNTIME=fake`——见下方"为什么只需要三个常驻容器"。
 3. `docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml build kernel caddy
    llm-proxy`，然后一次性 `docker compose run --rm --no-deps llm-proxy node dist/cli/gen-models.js`

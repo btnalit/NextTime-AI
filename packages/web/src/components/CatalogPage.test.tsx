@@ -147,6 +147,97 @@ describe('CatalogPage', () => {
     expect(toast.textContent).toContain('operation docker.restart is not a draft');
   });
 
+  it('R-19 (D-17): publishing a draft that loosens the published classification asks first, old → new, danger-styled', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'published',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: true,
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            mode: 'execute',
+            blastRadius: 'low',
+            autoApprovable: true,
+            governanceChange: {
+              before: { mode: 'execute', blastRadius: 'high', autoApprovable: true },
+              after: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+              direction: 'loosened',
+            },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1', name: 'docker.restart' });
+        return {};
+      },
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    expect(rows).toHaveLength(2);
+    // The revision draft is selectable on its own (its key differs from the published row's).
+    const detail = await selectRow(rows[1] as HTMLElement);
+    fireEvent.click(
+      within(detail).getByTestId('operation-publish-confirm-gk-1::docker.restart@draft-trigger'),
+    );
+    const confirm = await screen.findByTestId(
+      'operation-publish-confirm-gk-1::docker.restart@draft',
+    );
+    expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
+    expect(confirm.textContent).toContain('docker.restart: 影响级');
+    expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
+    expect(
+      within(confirm).getByTestId('operation-publish-confirm-gk-1::docker.restart@draft-loosens')
+        .textContent,
+    ).toContain('不再是高影响');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
+  });
+
+  it('R-19: a tightening draft still shows old → new before it publishes, without danger styling', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.stop',
+            status: 'draft',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: false,
+            governanceChange: {
+              before: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              direction: 'tightened',
+            },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(
+      within(detail).getByTestId('operation-publish-confirm-gk-1::docker.stop@draft-trigger'),
+    );
+    const confirm = await screen.findByTestId('operation-publish-confirm-gk-1::docker.stop@draft');
+    expect(within(confirm).getByTestId('confirm-button').className).not.toContain('text-danger');
+    expect(
+      within(confirm).queryByTestId('operation-publish-confirm-gk-1::docker.stop@draft-loosens'),
+    ).toBeNull();
+    expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+      'tightened',
+    );
+  });
+
   it('Operations: renders usage counters from get_operation_stats, degrading to "—" for a row with no matching stats', async () => {
     const http = scriptedHttp({
       list_operations: () => ({
