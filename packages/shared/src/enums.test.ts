@@ -35,7 +35,9 @@ import {
   SESSION_KIND_VALUES,
   SessionKindSchema,
   TASK_STATUS_VALUES,
+  TURN_STATUS_VALUES,
   TaskStatusSchema,
+  TurnStatusSchema,
   WORKER_DEFINITION_KIND_VALUES,
   WORKER_RUN_STATUS_VALUES,
   WorkerDefinitionKindSchema,
@@ -124,6 +126,12 @@ const enumsUnderTest = [
     ['starting', 'ready', 'busy', 'crashed', 'stopped'],
   ],
   [
+    'TurnStatus',
+    TURN_STATUS_VALUES,
+    TurnStatusSchema,
+    ['running', 'completed', 'interrupted', 'failed'],
+  ],
+  [
     'PublishableStatus',
     PUBLISHABLE_STATUS_VALUES,
     PublishableStatusSchema,
@@ -155,8 +163,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 20 domain enums required by R4 + S2.2 + S2.6', () => {
-    expect(enumsUnderTest).toHaveLength(20);
+  it('covers all 21 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus)', () => {
+    expect(enumsUnderTest).toHaveLength(21);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

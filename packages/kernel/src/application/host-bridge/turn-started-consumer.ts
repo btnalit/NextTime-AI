@@ -29,6 +29,17 @@ export interface TurnStartedSource {
 export type ResolveTurnPrompt = (event: TurnStartedEvent) => Promise<string>;
 
 /**
+ * Whether the event's Turn is still `running` (2026-10-02 review R-55). A `TurnStarted` row can be
+ * delivered after its Turn already ended: Stop pressed before delivery (`stop_agent` ends a Turn
+ * the runtime has never heard of `interrupted`), or a row left undelivered by a crash and replayed
+ * after `interruptStaleRunningTurns` marked its Turn `interrupted`. Starting the agent for such a
+ * Turn would run it — auto-approved tools included — under a status that says it stopped. Injected
+ * for the same reason as `ResolveTurnPrompt`: the caller (`packages/kernel/src/index.ts`) reads the
+ * Activity row under the originating principal's own RLS context.
+ */
+export type IsTurnRunning = (event: TurnStartedEvent) => Promise<boolean>;
+
+/**
  * application/host-bridge/turn-started-consumer: subscribes an `AgentRuntime` to the outbox's
  * `TurnStarted` events (design doc §7.10 host-bridge row "把 pi 事件翻译为平台事件后发布"; §8.1 data
  * flow; docs/development-tasks.md S1.4 deliverable 5 "host-bridge subscribes to TurnStarted via
@@ -70,16 +81,22 @@ function withTurnIdMarker(turnId: string, prompt: string): string {
 
 /** Registers `runtime` to receive every `TurnStarted` domain event from `dispatcher`, resolving
  *  each event's `chatMessageId` to prompt text via `resolvePrompt` before handing it to the
- *  runtime. Returns an unsubscribe function (see `OutboxDispatcher.subscribe`). */
+ *  runtime. An event whose Turn is no longer running (`isTurnRunning`) is acknowledged without
+ *  starting anything. Returns an unsubscribe function (see `OutboxDispatcher.subscribe`). */
 export function registerTurnStartedConsumer(
   dispatcher: TurnStartedSource,
   runtime: AgentRuntime,
   resolvePrompt: ResolveTurnPrompt,
+  isTurnRunning: IsTurnRunning,
 ): () => void {
   const seenOutboxIds = new Set<string>();
 
   return dispatcher.subscribe('TurnStarted', async (event, meta) => {
     if (seenOutboxIds.has(meta.outboxId)) return;
+    if (!(await isTurnRunning(event))) {
+      seenOutboxIds.add(meta.outboxId);
+      return;
+    }
 
     const prompt = await resolvePrompt(event);
     await runtime.startTurn({

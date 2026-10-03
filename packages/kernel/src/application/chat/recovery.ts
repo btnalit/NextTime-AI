@@ -6,26 +6,30 @@ import { publishChatPushEvent } from './push.js';
  * executing 超时项与 running Turn"; docs/development-tasks.md S1.4 deliverable 7). On startup,
  * marks *every* `agent_turn` Activity still `status = 'running'` — left running by a kernel
  * process that died or was killed mid-Turn, since the only writer that ever sets `status =
- * 'running'` (`application/chat`'s `sendChatMessage`) and the only writers that ever move it out
- * of `running` (`application/chat/event-sink.ts`'s `turnEnded` handler;
- * `application/gateway/handlers.ts`'s `report_turn`) are both this same kernel process — as
- * `interrupted`, and pushes `chat.metadata` so a client with that chat open right now finds out
+ * 'running'` (`application/chat`'s `sendChatMessage`) and the only writer that ever moves it out
+ * of `running` (`application/chat/turn-recovery.ts`'s `endTurn`, called by the event sink's
+ * `turnEnded` handler, `stop_agent` and `report_turn`) are both this same kernel process — as
+ * `interrupted` (`TURN_TRANSITIONS`' `interrupt` edge, the one this bulk UPDATE takes), and pushes
+ * `chat.metadata` so a client with that chat open right now finds out
  * immediately rather than only on its next `get_chat_history` read.
  *
  * Lane-4 P1 fix (docs/development-tasks.md): this used to only touch rows older than a configurable
  * timeout (default 15 minutes), on the theory that a Turn less than 15 minutes old "might still be
  * legitimately in progress". That reasoning does not hold at *startup* specifically — this function
  * is called once, from `packages/kernel/src/index.ts`'s `createBackgroundServices().start()`,
- * strictly *before* the outbox dispatcher starts and before any request traffic is served (see that
- * module's own doc comment: "Recovery runs first so a client cannot observe a Turn this process
- * considers freshly `running` when it is actually a leftover from a previous one"). By construction,
- * *this* process has not started a single Turn by the time this function runs — so every `running`
- * row it finds, regardless of age, was left behind by a now-dead prior process, and none of them
- * will ever receive a `turnEnded` from anywhere (the prior process is gone; this one never started
- * them). Age-gating a subset of them left the Chat wedged behind
- * `activities_one_running_turn_per_chat_uidx` (`send_chat_message` → `TurnAlreadyRunningError`
- * forever) for up to the configured timeout after every kernel restart — the exact P1 this fix
- * closes. There is exactly one call site in this codebase (`index.ts`'s `start()`); a periodic
+ * strictly *before* the outbox dispatcher starts, so *this* process has not handed a single Turn to
+ * its runtime by the time this function runs: every `running` row it finds was either left behind
+ * by a now-dead prior process (none of them will ever receive a `turnEnded` from anywhere) or
+ * created by a `send_chat_message` that reached this process before the scan. The HTTP/WS port is
+ * already open by then — `main()` calls `app.listen` before it builds and starts the background
+ * services (2026-10-02 review R-55 corrected the earlier claim that no request is served first;
+ * `GET /api/health` answers 503 `starting` until `start()` returns). Such a Turn is interrupted
+ * here with the rest; its `TurnStarted` is delivered only after this scan, and the consumer skips a
+ * Turn that is no longer running (`application/host-bridge/turn-started-consumer.ts`), so the agent
+ * never runs for it and the Chat accepts the user's next message. Age-gating a subset left the Chat
+ * wedged behind `activities_one_running_turn_per_chat_uidx` (`send_chat_message` →
+ * `TurnAlreadyRunningError` forever) for up to the configured timeout after every kernel restart —
+ * the exact P1 this fix closes. There is exactly one call site in this codebase (`index.ts`'s `start()`); a periodic
  * re-scan mid-lifetime, which *would* need an age threshold to avoid touching a Turn its own,
  * still-live process is legitimately running, is not implemented (design doc §13's "扫描 executing
  * 超时项" covers ActionRequest/Gatekeeper `executing` rows via a separate mechanism, not this one).

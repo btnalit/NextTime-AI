@@ -11,12 +11,14 @@ import {
   chatMessageKind,
   chatMessageText,
   currentPrincipalId,
+  endTurn,
   endUnknownRuntimeTurn,
   findRunningTurn,
   getChatHistory,
   listChats,
   newChat,
   renameChat,
+  requestTurnStop,
   requireChatAccess,
   sendChatMessage,
   setChatArchived,
@@ -473,6 +475,10 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
     // it before this call) and will never independently emit the `turnEnded` that would otherwise
     // end it — end it here instead, so the Chat is not wedged behind
     // `activities_one_running_turn_per_chat_uidx` forever.
+    //
+    // R-55: the stop intent is recorded on the Turn first, so whichever report of its end lands
+    // first — agent-host's `turnEnded` or the extension's `report_turn` — it ends `interrupted`.
+    await requestTurnStop(client, workspaceId, running.id);
     const runtimeKnowsTurn = await agentRuntime?.stopTurn(running.id);
     if (runtimeKnowsTurn === false) {
       await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
@@ -657,17 +663,14 @@ export class TurnNotFoundError extends Error {
 }
 
 /**
- * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends the Turn Activity (idempotent — a
- * second `report_turn` for an already-ended Turn re-merges the same metadata rather than erroring,
- * matching entry.ts's own retry-tolerant `agent_settled` handler) and records `summary`/
- * `decisions` in `activities.metadata`. Written as a direct parameterized query rather than
- * extending `substrate/epistemic/activities.ts`'s `endActivity` — this task's ownership permits
- * adding to gateway/handlers.ts but not modifying substrate/epistemic (unlike substrate/graph,
- * which has an explicit carve-out for a small additive method); see the PR body "假设与偏离".
- * Visibility/ownership is enforced by `activities`' own RLS policy (`activities_visibility`,
- * migrations/core/0003_chat.sql) — a `turnId` outside the caller's own chats simply matches no
- * row, indistinguishable from a nonexistent one, same masking convention as
- * application/chat/service.ts's `requireChatAccess`.
+ * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends a still-running Turn Activity
+ * `completed` through `endTurn` (R-55 — a Turn already ended keeps its status) and records
+ * `summary`/`decisions` in `activities.metadata` (idempotent — a second `report_turn` for an
+ * already-ended Turn re-merges the same metadata rather than erroring, matching entry.ts's own
+ * retry-tolerant `agent_settled` handler). Visibility/ownership is enforced by `activities`' own
+ * RLS policy (`activities_visibility`, migrations/core/0003_chat.sql) — a `turnId` outside the
+ * caller's own chats simply matches no row, indistinguishable from a nonexistent one, same masking
+ * convention as application/chat/service.ts's `requireChatAccess`.
  */
 const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { turnId, summary, decisions } = params as {
@@ -678,11 +681,14 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   const metadataPatch: Record<string, unknown> = { summary };
   if (decisions !== undefined) metadataPatch.decisions = decisions;
 
+  // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a
+  // Turn that already ended (Stop, accept timeout, agent-host's own `turnEnded`) keeps its status,
+  // one whose stop was requested ends `interrupted`, and the writer that moves it enqueues
+  // `TurnCompleted` and pushes `chat.metadata`.
+  await endTurn(client, workspaceId, turnId, 'completed');
   const result = await client.query<{ id: string; status: string }>(
     `update activities
-     set status = case when status = 'running' then 'completed' else status end,
-         ended_at = coalesce(ended_at, now()),
-         metadata = metadata || $3::jsonb
+     set metadata = metadata || $3::jsonb
      where workspace_id = $1 and id = $2 and kind = 'agent_turn'
      returning id, status`,
     [workspaceId, turnId, JSON.stringify(metadataPatch)],

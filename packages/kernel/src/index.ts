@@ -33,6 +33,7 @@ import type { GatekeeperActionExecutorDeps } from './application/gateway/index.j
 import type {
   AgentRuntime,
   FakeDelegateOutcome,
+  IsTurnRunning,
   ResolveTurnPrompt,
   StartTurnInput,
 } from './application/host-bridge/index.js';
@@ -350,7 +351,9 @@ export interface CreateBackgroundServicesOptions {
    *  `ENTRY_HANDLE_TTL_SECONDS` (design doc S1.5b architecture point 2: "default 86400"). */
   readonly entryHandleTtlSeconds?: number;
   /** `AgentHostRuntime`'s `turnAccepted`/`turnRejected` wait timeout override — `main()` reads
-   *  this from `AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS` (architecture point 2: "e.g. 30s"). */
+   *  this from `AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS`. Default 60 s — agent-host's spawn budget plus
+   *  pi's startup (R-55; `DEFAULT_TURN_ACCEPTED_TIMEOUT_MS`); keep an override above the spawn
+   *  budget, or a slow spawn that succeeds is marked `failed` first. */
   readonly turnAcceptedTimeoutMs?: number;
   /** `expireOverduePendingApprovals`'s cutoff (default `DEFAULT_APPROVAL_TIMEOUT_MS`, 24h) —
    *  `main()` reads this from `APPROVAL_TIMEOUT_MS` (docs/development-tasks.md S2.3 "expire（reaper，
@@ -680,10 +683,26 @@ export function createBackgroundServices(
     }
     return chatMessageText(row.content);
   };
+  // R-55: a TurnStarted delivered after its Turn ended (Stop before delivery, or a row replayed
+  // after the startup recovery scan) starts nothing — same RLS context as the prompt read above.
+  const isTurnRunning: IsTurnRunning = (event) =>
+    withWorkspace(
+      options.pool,
+      { workspaceId: event.workspaceId, principalId: event.principalId },
+      async (client) => {
+        const result = await client.query<{ status: string }>(
+          `select status from activities
+           where workspace_id = $1 and id = $2 and kind = 'agent_turn'`,
+          [event.workspaceId, event.turnId],
+        );
+        return result.rows[0]?.status === 'running';
+      },
+    );
   const unsubscribeTurnStarted = registerTurnStartedConsumer(
     dispatcher,
     runtime,
     resolveTurnPrompt,
+    isTurnRunning,
   );
 
   // S2.11: application/linkage's TaskUpdated/ActionRequestPending/ActionRequestUpdated/

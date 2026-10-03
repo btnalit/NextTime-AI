@@ -155,5 +155,7 @@ send_chat_message → 观察 chat.stream/chat.message/chat.metadata`），验证
   文档注释。
 - **`prompt` 的确认口径**：agent-host 不是"字节写进容器 stdin 就算 accepted"，而是等 pi 自己对
   那条 `prompt` 命令（用 `id=turnId` 关联）的 `{"success":true}` 响应——更贴近"pi 真的接受了这个
-  提示"，代价是多一跳往返，仍在内核侧 30s 的 `turnAccepted` 超时预算内（`AgentHostRuntime` 的
-  `turnAcceptedTimeoutMs`，架构点 2 原文的"e.g. 30s"）。
+  提示"，代价是多一跳往返，仍在内核侧 60s 的 `turnAccepted` 超时预算内（`AgentHostRuntime` 的
+  `turnAcceptedTimeoutMs`：agent-host 的 30s 起容器预算加 30s pi 启动余量，`@nexttime/shared` 的
+  `AGENT_HOST_SPAWN_TIMEOUT_MS + AGENT_HOST_TURN_STARTUP_MS`；R-55 之前两者都是 30s，起容器慢一点就会
+  先被判 `failed`、随后 agent 仍然作答。超时时内核还会发 `stopTurn`，agent-host 不会再跑它）。

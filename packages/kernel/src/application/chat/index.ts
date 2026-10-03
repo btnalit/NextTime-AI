@@ -76,4 +76,4 @@ export type { PrincipalPushEvent, PrincipalPushListener } from './push.js';
 export { interruptStaleRunningTurns } from './recovery.js';
 export type { InterruptStaleRunningTurnsOptions } from './recovery.js';
 
-export { endUnknownRuntimeTurn } from './turn-recovery.js';
+export { endTurn, endUnknownRuntimeTurn, requestTurnStop } from './turn-recovery.js';

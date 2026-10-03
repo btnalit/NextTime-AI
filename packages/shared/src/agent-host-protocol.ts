@@ -30,6 +30,16 @@ import { z } from 'zod';
  * type for this task's sake).
  */
 
+/** agent-host's budget for one worker-supervisor `/resident/spawn` call (its supervisor client's
+ *  default timeout) — the first part of starting a Turn. */
+export const AGENT_HOST_SPAWN_TIMEOUT_MS = 30_000;
+
+/** What a Turn gets after the spawn returns, before agent-host can send `turnAccepted`: attach to
+ *  the container, a cold pi process booting, the `switch_session` round trip and pi's answer to the
+ *  `prompt`. The kernel's accept timeout is the spawn budget plus this (2026-10-02 review R-55:
+ *  both used to be 30 s, so a slow spawn that succeeded still had its Turn marked `failed`). */
+export const AGENT_HOST_TURN_STARTUP_MS = 30_000;
+
 const CorrelationFieldsSchema = {
   workspaceId: z.string(),
   chatId: z.string(),

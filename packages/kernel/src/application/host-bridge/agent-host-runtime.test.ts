@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentHostToKernelFrame, KernelToAgentHostFrame, Role } from '@nexttime/shared';
+import { AGENT_HOST_SPAWN_TIMEOUT_MS, AGENT_HOST_TURN_STARTUP_MS } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
-import { type AgentHostLink, AgentHostRuntime } from './agent-host-runtime.js';
+import {
+  type AgentHostLink,
+  AgentHostRuntime,
+  DEFAULT_TURN_ACCEPTED_TIMEOUT_MS,
+} from './agent-host-runtime.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink, StartTurnInput } from './agent-runtime.js';
 
 /**
@@ -1242,6 +1247,141 @@ describe('AgentHostRuntime — stopTurn', () => {
 
     await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
     expect(sent).toHaveLength(1); // only the original startTurn — no stopTurn was sent
+  });
+});
+
+describe('AgentHostRuntime — R-55 a stopped, failed or ended Turn never starts or finishes again', () => {
+  async function newRuntime(overrides: { turnAcceptedTimeoutMs?: number } = {}) {
+    const { pool } = createFakePool();
+    const { sink, events } = createFakeSink();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+      ...overrides,
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    return { runtime, pool, events, sent };
+  }
+
+  function turnEnded(
+    input: StartTurnInput,
+    status: 'completed' | 'interrupted' | 'failed',
+  ): AgentHostToKernelFrame {
+    return {
+      type: 'runtimeEvent',
+      event: {
+        type: 'turnEnded',
+        status,
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    };
+  }
+
+  it('Stop before TurnStarted delivery: stopTurn reports false, and the later startTurn sends nothing and reports nothing', async () => {
+    const { runtime, pool, events, sent } = await newRuntime();
+    const input = startTurnInput();
+
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
+    await runtime.startTurn(input);
+
+    expect(sent).toEqual([]);
+    expect(events).toEqual([]);
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it('Stop while startTurn is still preparing: the frame is never sent and the Turn ends interrupted', async () => {
+    const { runtime, events, sent } = await newRuntime();
+    const input = startTurnInput();
+
+    const startPromise = runtime.startTurn(input); // suspended at its first read
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    await startPromise;
+
+    expect(sent).toEqual([]);
+    expect(events).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'interrupted',
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    ]);
+  });
+
+  it('accept timeout: sends stopTurn so agent-host does not run it, ends it failed, and drops its late frames', async () => {
+    const { runtime, events, sent } = await newRuntime({ turnAcceptedTimeoutMs: 10 });
+    const input = startTurnInput();
+
+    await runtime.startTurn(input);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ type: 'turnEnded', status: 'failed', turnId: input.turnId });
+    expect(sent.map((frame) => frame.type)).toEqual(['startTurn', 'stopTurn']);
+    expect(sent[1]).toEqual({
+      type: 'stopTurn',
+      turnId: input.turnId,
+      principalId: input.principalId,
+    });
+
+    // agent-host answers anyway: nothing it says reaches the sink — no `completed` over `failed`.
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: {
+        type: 'message',
+        role: 'assistant',
+        content: { text: 'late' },
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    });
+    runtime.handleFrame(turnEnded(input, 'completed'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toHaveLength(1);
+  });
+
+  it('a turnRejected after Stop (stopped before the session switch) ends the Turn interrupted, not failed', async () => {
+    const { runtime, events, sent } = await newRuntime();
+    const input = startTurnInput();
+
+    await runtime.startTurn(input);
+    expect(sent.map((frame) => frame.type)).toEqual(['startTurn']);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    expect(sent.map((frame) => frame.type)).toEqual(['startTurn', 'stopTurn']);
+
+    runtime.handleFrame({
+      type: 'turnRejected',
+      turnId: input.turnId,
+      reason: 'turn stopped before the session switch completed',
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ type: 'turnEnded', status: 'interrupted' });
+  });
+
+  it('the default accept timeout outlasts agent-host’s spawn budget plus pi’s startup', () => {
+    expect(DEFAULT_TURN_ACCEPTED_TIMEOUT_MS).toBe(
+      AGENT_HOST_SPAWN_TIMEOUT_MS + AGENT_HOST_TURN_STARTUP_MS,
+    );
+    expect(DEFAULT_TURN_ACCEPTED_TIMEOUT_MS).toBeGreaterThan(AGENT_HOST_SPAWN_TIMEOUT_MS);
+  });
+
+  it('drops runtime events for a turnId it does not track (never started here, or already ended)', async () => {
+    const { runtime, events } = await newRuntime();
+    const input = startTurnInput();
+
+    runtime.handleFrame(turnEnded(input, 'completed'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(events).toEqual([]);
   });
 });
 

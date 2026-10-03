@@ -107,7 +107,10 @@ export async function startActivity(
   return mapActivityRow(row);
 }
 
-/** Ends an Activity: sets `status` (caller-chosen, e.g. `'completed'`/`'failed'`) and `ended_at`. */
+/** Ends an Activity: sets `status` (caller-chosen, e.g. `'completed'`/`'failed'`) and `ended_at`.
+ *  Never a Turn (`kind = 'agent_turn'`): a Turn's status moves only through `application/chat`'s
+ *  `endTurn`, guarded by `TURN_TRANSITIONS` (2026-10-02 review R-55 — this unguarded UPDATE was how
+ *  a late `completed` overwrote an `interrupted` Turn); a Turn id reads as not found here. */
 export async function endActivity(
   client: PoolClient,
   workspaceId: string,
@@ -116,7 +119,7 @@ export async function endActivity(
 ): Promise<ActivityRow> {
   const result = await client.query<ActivityDbRow>(
     `update activities set status = $3, ended_at = now()
-     where workspace_id = $1 and id = $2
+     where workspace_id = $1 and id = $2 and kind <> 'agent_turn'
      returning workspace_id, id, kind, chat_id, sequence, status, metadata, started_by, created_at, ended_at`,
     [workspaceId, id, status],
   );
