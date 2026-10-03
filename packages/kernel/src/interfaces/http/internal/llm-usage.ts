@@ -49,10 +49,25 @@ import {
  * (a Worker session ahead of S2, or a report delayed past the window) resolves to `null` and is
  * logged at `debug` — `recordUsage`'s own insert already treats a `null` `turn_id` as normal, and
  * this route's job is only to try to fill it in, never to reject a report over it (usage must
- * always be recorded, task brief). Idempotency is unaffected: `recordUsage`'s
- * `on conflict (workspace_id, jti, started_at) do nothing` already means a replayed report that
- * matches an existing row never touches that row's columns, `turn_id` included — this route does
- * not need its own replay guard on top of that.
+ * always be recorded, task brief). Idempotency is unaffected: `recordUsage` skips a replayed
+ * report (same `requestId`, or the legacy `(workspace_id, jti, started_at)` key for a record
+ * without one — R-67) and never touches the existing row's columns, `turn_id` included — this
+ * route does not need its own replay guard on top of that.
+ *
+ * One group never stalls another (R-68, review 2026-10-02 L1-11). Each workspace group is its
+ * own transaction with its own outcome, returned per group:
+ *   - `recorded` — committed: `inserted` new rows, `rejected` records whose session or Handle no
+ *     longer exists (`recordUsage` skips them instead of hitting the foreign key; the workspace
+ *     was purged while llm-proxy still held its usage — acknowledged so the proxy drops them, and
+ *     logged here at `warn`);
+ *   - `rejected` — the group hit a foreign-key violation and its workspace is gone (a purge that
+ *     committed between `recordUsage`'s check and its insert): acknowledged and logged, never
+ *     retried, since nothing can ever make it insertable again;
+ *   - `retry` — any other failure, rolled back; transient by assumption.
+ * Any `retry` group makes the response a 500 whose `error.details.groups` carries every group's
+ * outcome: an llm-proxy that reads it requeues only the `retry` groups, and one that predates
+ * R-68 requeues the whole batch, which is safe because every recorded group replays as a no-op.
+ * Otherwise the response is 200 with the same `groups` in `result`.
  *
  * Per-Task budget accounting (docs/development-tasks.md S2.7 "usage reports carry sessionId; a
  * Worker session's usage must count against its Task's budget ... same layer-legal shape as the
@@ -74,6 +89,45 @@ export interface LlmUsageRoutesDeps {
     records: readonly LlmUsageRecord[],
     options?: RecordUsageOptions,
   ) => Promise<RecordUsageResult>;
+}
+
+/** One workspace group's outcome in a `/internal/llm-usage` response (R-68 — see the module doc
+ *  comment). llm-proxy's `report.ts` mirrors this shape. */
+export type LlmUsageGroupResult =
+  | {
+      readonly workspaceId: string;
+      readonly outcome: 'recorded';
+      readonly inserted: number;
+      readonly rejected: number;
+    }
+  | {
+      readonly workspaceId: string;
+      readonly outcome: 'rejected';
+      readonly reason: 'workspace_not_found';
+    }
+  | { readonly workspaceId: string; readonly outcome: 'retry' };
+
+const FOREIGN_KEY_VIOLATION = '23503';
+
+function isForeignKeyViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === FOREIGN_KEY_VIOLATION
+  );
+}
+
+/** Whether the workspace row still exists — read in its own transaction (the group's has rolled
+ *  back); `workspaces` is readable from every transaction (core 0035 `workspaces_read_all`). */
+async function workspaceExists(
+  pool: PoolLike,
+  workspaceId: string,
+  principalId: string,
+): Promise<boolean> {
+  return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+    const result = await client.query('select 1 from workspaces where id = $1', [workspaceId]);
+    return (result.rowCount ?? 0) > 0;
+  });
 }
 
 /** Groups a validated batch by `workspaceId` — `recordUsage` requires every record in one call to
@@ -106,15 +160,15 @@ export async function registerLlmUsageRoutes(
     }
 
     const groups = groupByWorkspace(parsed.data);
-    let inserted = 0;
+    const results: LlmUsageGroupResult[] = [];
 
-    try {
-      for (const [workspaceId, records] of groups) {
-        const first = records[0];
-        if (!first) continue;
-        // Idempotent inserts (unique (workspace_id, jti, started_at), on conflict do nothing) —
-        // a group that fails partway through is safe to retry as a whole on the caller's next
-        // flush attempt; nothing here needs to roll back a sibling group's already-committed work.
+    for (const [workspaceId, records] of groups) {
+      const first = records[0];
+      if (!first) continue;
+      try {
+        // Idempotent inserts — a group that fails partway through rolls back and is safe to
+        // retry as a whole on the caller's next flush; a sibling group's committed work is
+        // never touched, and a sibling group's failure never stops this one (R-68).
         const result = await withWorkspace(
           deps.pool,
           { workspaceId, principalId: first.sessionId },
@@ -150,14 +204,53 @@ export async function registerLlmUsageRoutes(
             return record(client, records, { resolveTurnId, onRecordInserted });
           },
         );
-        inserted += result.inserted;
+        if (result.rejected > 0) {
+          app.log?.warn?.(
+            { workspaceId, rejected: result.rejected },
+            'llm-usage: dropped usage records whose session or Handle no longer exists (workspace purged)',
+          );
+        }
+        results.push({
+          workspaceId,
+          outcome: 'recorded',
+          inserted: result.inserted,
+          rejected: result.rejected,
+        });
+      } catch (err) {
+        if (
+          isForeignKeyViolation(err) &&
+          !(await workspaceExists(deps.pool, workspaceId, first.sessionId).catch(() => true))
+        ) {
+          app.log?.warn?.(
+            { workspaceId, records: records.length },
+            'llm-usage: dropped a usage group whose workspace no longer exists',
+          );
+          results.push({ workspaceId, outcome: 'rejected', reason: 'workspace_not_found' });
+          continue;
+        }
+        app.log?.error?.(
+          { err, workspaceId, records: records.length },
+          'llm-usage: failed to record a workspace group; llm-proxy retries it',
+        );
+        results.push({ workspaceId, outcome: 'retry' });
       }
-    } catch (err) {
-      app.log?.error?.(err, 'llm-usage: failed to record a batch');
-      reply.code(500);
-      return { ok: false, error: { code: 'internal_error', message: 'failed to record usage' } };
     }
 
-    return { ok: true, result: { inserted } };
+    const inserted = results.reduce(
+      (sum, group) => sum + (group.outcome === 'recorded' ? group.inserted : 0),
+      0,
+    );
+    if (results.some((group) => group.outcome === 'retry')) {
+      reply.code(500);
+      return {
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: 'failed to record usage for some workspaces — retry those groups',
+          details: { groups: results },
+        },
+      };
+    }
+    return { ok: true, result: { inserted, groups: results } };
   });
 }
