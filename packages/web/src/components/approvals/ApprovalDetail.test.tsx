@@ -76,6 +76,16 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-policy').textContent).toContain('require_approval');
   });
 
+  it('L8a-10: a gate-scoped request (scope = the gate’s own id) reads as the whole gate, never the raw id', () => {
+    const gatekeeperId = '3f2a9c1e-0b4d-4e6f-8a7b-1c2d3e4f5a6b';
+    renderDetail(
+      { gatekeeperId, resourceScope: gatekeeperId },
+      { gatekeeperNames: new Map([[gatekeeperId, 'docker-prod']]) },
+    );
+    expect(screen.getByTestId('approval-target').textContent).toBe('整个门');
+    expect(screen.getByTestId('approval-detail').textContent).not.toContain(gatekeeperId);
+  });
+
   it('reports the decision with the reason and the always-allow choice; Reject opens a confirm carrying the reason (S8 W1-A7: every Reject confirms)', async () => {
     const { onApprove, onReject } = renderDetail();
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: ' why ' } });

@@ -12,7 +12,7 @@ import { List, ListRow } from '../kit/list-row.js';
 import { Notice } from '../kit/notice.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { nameOf } from './useDirectoryNames.js';
+import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
 export interface LinkedApprovalsProps {
   readonly http: CapabilityCaller;
@@ -126,9 +126,9 @@ function LinkedApprovalsList({
                 ) : null}
               </span>
               <span className="row-wrap text-3">
-                {row.resourceScope ? (
+                {resourceScopeLabel(row, undefined) ? (
                   <>
-                    <span className="mono truncate">{row.resourceScope}</span>
+                    <span className="mono truncate">{resourceScopeLabel(row, undefined)}</span>
                     <span className="meta-sep" />
                   </>
                 ) : null}

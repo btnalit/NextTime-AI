@@ -134,10 +134,12 @@ function LowTier({ anchor, open, onOpenChange, onConfirm, notify, undo, title }:
   return <>{anchor}</>;
 }
 
-/** Shared confirm-button state machine for the `medium`/`irreversible` tiers. */
+/** Shared confirm-button state machine for the `medium`/`irreversible` tiers. `clearError` lets a
+ *  tier start a fresh attempt without a stale banner (R-44). */
 function useConfirmRun(onConfirm: () => void | Promise<void>, onDone: () => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const clearError = () => setError(null);
   async function run(): Promise<void> {
     setBusy(true);
     setError(null);
@@ -150,7 +152,7 @@ function useConfirmRun(onConfirm: () => void | Promise<void>, onDone: () => void
       setBusy(false);
     }
   }
-  return { busy, error, run };
+  return { busy, error, run, clearError };
 }
 
 function TargetLine({ target }: { readonly target: string | undefined }) {
@@ -357,10 +359,24 @@ function IrreversibleTier({
   const t = useT();
   const resolvedConfirmLabel = confirmLabel ?? t('确认', 'Confirm');
   const resolvedCancelLabel = cancelLabel ?? t('取消', 'Cancel');
-  const { busy, error, run } = useConfirmRun(onConfirm, () => onOpenChange(false));
+  const { busy, error, run, clearError } = useConfirmRun(onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
   const [typed, setTyped] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
+  // R-44 (review 2026-10-02): this tier stays mounted for as long as its caller renders it (only
+  // the portal depends on `open`), so the retyped name, the acknowledgement and a failed attempt's
+  // error would otherwise survive a Cancel — and the next open would arrive pre-filled, one click
+  // from an irreversible action. Reset all three whenever `open` turns true, during render (React's
+  // "adjust state when a prop changes" pattern), so the dialog never paints with the old values.
+  const [openSeen, setOpenSeen] = useState(open);
+  if (open !== openSeen) {
+    setOpenSeen(open);
+    if (open) {
+      setTyped('');
+      setAcknowledged(false);
+      clearError();
+    }
+  }
   const typedId = useId();
   const titleId = useId();
   const descriptionId = useId();

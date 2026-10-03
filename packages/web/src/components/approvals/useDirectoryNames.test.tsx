@@ -3,7 +3,11 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
-import { useGatekeeperDirectory, useGatekeeperNames } from './useDirectoryNames.js';
+import {
+  resourceScopeLabel,
+  useGatekeeperDirectory,
+  useGatekeeperNames,
+} from './useDirectoryNames.js';
 
 /**
  * useDirectoryNames.test.tsx (closing wave C6, G7 — `kernel-console-coverage-2026-09-26.md`'s
@@ -84,5 +88,26 @@ describe('useGatekeeperDirectory / useGatekeeperNames', () => {
     render(<NamesOnlyProbe http={http} />);
     await waitFor(() => expect(screen.getByTestId('names-probe').textContent).toBe('RagFlow'));
     expect(http.calls).toEqual(['list_gatekeepers']);
+  });
+});
+
+describe('resourceScopeLabel (L8a-10)', () => {
+  const names = new Map([
+    ['gk-1', 'docker-prod'],
+    ['gk-2', 'ragflow'],
+  ]);
+
+  it('hides a scope that is the row’s own gate (shown by name already), names another known gate, keeps free text', () => {
+    expect(resourceScopeLabel({ resourceScope: 'gk-1', gatekeeperId: 'gk-1' }, names)).toBeNull();
+    expect(resourceScopeLabel({ resourceScope: 'gk-2', gatekeeperId: 'gk-1' }, names)).toBe(
+      'ragflow',
+    );
+    expect(resourceScopeLabel({ resourceScope: 'web-1', gatekeeperId: 'gk-1' }, names)).toBe(
+      'web-1',
+    );
+    expect(resourceScopeLabel({ resourceScope: null, gatekeeperId: 'gk-1' }, names)).toBeNull();
+    expect(
+      resourceScopeLabel({ resourceScope: 'gk-1', gatekeeperId: 'gk-1' }, undefined),
+    ).toBeNull();
   });
 });

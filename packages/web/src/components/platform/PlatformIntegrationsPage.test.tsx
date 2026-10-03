@@ -611,17 +611,23 @@ describe('PlatformIntegrationsPage', () => {
     const detail = await screen.findByTestId('gate-instance-detail');
 
     fireEvent.click(within(detail).getByTestId('gate-instance-delete'));
-    fireEvent.click(within(detail).getByTestId('gate-instance-delete-confirm'));
+    // R-46: the irreversible confirm — retype the gate id, acknowledge.
+    const confirm = await screen.findByTestId('gate-instance-delete-confirm');
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: instance.gateId },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.filter((call) => call.name === 'delete_gate_instance')).toHaveLength(1),
     );
-    // The row is still there (delete failed with gate_in_use) — detail stays open, with the
-    // mapped message shown inline.
-    const deleteError = await screen.findByTestId('gate-instance-delete-error');
+    // The row is still there (delete failed with gate_in_use — a workspace enabled it after the
+    // drawer was read) — the confirm stays open with the mapped message inline.
+    const deleteError = await within(confirm).findByTestId('confirm-error');
     expect(deleteError.textContent).toContain('还有工作区启用着这个实例');
 
-    // Still in the confirm step (the failed attempt leaves it open) — confirm again.
-    fireEvent.click(within(detail).getByTestId('gate-instance-delete-confirm'));
+    // Still in the confirm (the failed attempt leaves it open) — confirm again.
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.filter((call) => call.name === 'delete_gate_instance')).toHaveLength(2),
     );

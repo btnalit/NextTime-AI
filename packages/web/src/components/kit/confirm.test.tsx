@@ -273,6 +273,32 @@ describe('kit/Confirm — irreversible', () => {
     expect(button.hasAttribute('disabled')).toBe(false);
   });
 
+  it('R-44: reopening after Cancel starts clean — no retyped name, no acknowledgement, no stale error', async () => {
+    let attempt = 0;
+    const onConfirm = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('kernel said no');
+    });
+    renderTier('irreversible', { onConfirm, target: 'acme-prod' });
+
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByRole('alertdialog');
+    fireEvent.change(screen.getByTestId('confirm-typed-name'), { target: { value: 'acme-prod' } });
+    fireEvent.click(screen.getByTestId('confirm-acknowledge'));
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    expect((await screen.findByTestId('confirm-error')).textContent).toContain('kernel said no');
+    fireEvent.click(screen.getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByRole('alertdialog');
+    expect((screen.getByTestId('confirm-typed-name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('confirm-acknowledge') as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByTestId('confirm-error')).toBeNull();
+    expect(screen.getByTestId('confirm-button').hasAttribute('disabled')).toBe(true);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it('Escape cancels; focus returns to the trigger', async () => {
     renderTier('irreversible');
     const trigger = screen.getByTestId('trigger');
