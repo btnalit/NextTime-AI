@@ -10,10 +10,11 @@ import type {
   UserMembershipWire,
   UserWire,
 } from '@nexttime/shared';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { PoolLike } from '../../adapters/db/pool.js';
 import type {
   ResidentInventoryEntry,
   RuntimeImageInfo,
@@ -24,7 +25,12 @@ import type {
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { createPlatformAdmin, createUser } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
-import { discoverWorkspaceScopedSchema, updatePlatformSettings } from '../platform/index.js';
+import {
+  PurgeCascadeForeignKeyError,
+  discoverWorkspaceScopedSchema,
+  purgeWorkspace,
+  updatePlatformSettings,
+} from '../platform/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { withAdminClient } from './auth.js';
@@ -712,6 +718,199 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
       });
       expect(result.executed).toBe(true);
       expect(supervisor.reclaimedPrincipalIds).toEqual([]);
+    });
+  });
+
+  // ---- the cascade takes no table lock, and keeps its referential guarantee (R-65) ---------------
+
+  describe('the cascade takes no table lock, and keeps its referential guarantee (R-65)', () => {
+    /** `pool`, except that whenever the purge's own client has just run a statement, `onStatement`
+     *  runs with that client while its transaction is still open — a seam to look at the purge
+     *  mid-transaction from inside it and from a second connection. */
+    function observingPool(
+      onStatement: (sql: string, purgeClient: PoolClient) => Promise<void>,
+    ): PoolLike {
+      return {
+        async connect(): Promise<PoolClient> {
+          const client = await pool.connect();
+          const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+          return new Proxy(client, {
+            get(target, prop) {
+              if (prop === 'query') {
+                return async (...args: unknown[]) => {
+                  const result = await query(...args);
+                  if (typeof args[0] === 'string') await onStatement(args[0], target);
+                  return result;
+                };
+              }
+              const value: unknown = Reflect.get(target, prop, target);
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    }
+
+    async function replicationRole(client: PoolClient): Promise<string | undefined> {
+      const { rows } = await client.query<{ role: string }>(
+        "select current_setting('session_replication_role') as role",
+      );
+      return rows[0]?.role;
+    }
+
+    it('another workspace writes audit rows while a purge transaction is open', async () => {
+      const target = await seedWorkspace({
+        name: `purge-r65-target-${randomUUID().slice(0, 8)}`,
+        purpose: 'ephemeral',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await seedRows(target);
+      const other = await seedWorkspace({ name: `purge-r65-other-${randomUUID().slice(0, 8)}` });
+
+      const seen: {
+        roleWhileDeleting?: string;
+        strongLocks?: { relname: string; mode: string }[];
+        concurrentAuditId?: string;
+        roleAfterCascade?: string;
+      } = {};
+      const observed = observingPool(async (sql, purgeClient) => {
+        if (sql.startsWith('delete from "audit_records"')) {
+          seen.roleWhileDeleting = await replicationRole(purgeClient);
+          // The purge backend's own table locks on the two append-only tables: a DELETE takes
+          // ROW EXCLUSIVE, which no other workspace's INSERT conflicts with. `alter table …
+          // disable trigger` (before R-65) held SHARE ROW EXCLUSIVE here until COMMIT.
+          seen.strongLocks = (
+            await purgeClient.query<{ relname: string; mode: string }>(
+              `select c.relname, l.mode
+                 from pg_locks l join pg_class c on c.oid = l.relation
+                where l.pid = pg_backend_pid() and c.relname in ('links', 'audit_records')
+                  and l.mode not in ('AccessShareLock', 'RowShareLock', 'RowExclusiveLock')
+                order by 1, 2`,
+            )
+          ).rows;
+          // A second connection writes an ordinary audit row for another workspace while the
+          // purge transaction is still open. Before R-65 this waited for the purge's COMMIT; the
+          // lock timeout turns such a wait into a failure instead of a hung test.
+          seen.concurrentAuditId = await withWorkspace(
+            pool,
+            { workspaceId: other.workspaceId, principalId: other.ownerPrincipalId },
+            async (client) => {
+              await client.query("set local lock_timeout = '2s'");
+              const { rows } = await client.query<{ id: string }>(
+                `insert into audit_records (workspace_id, actor_principal_id, action)
+                 values ($1, $2, 'purge.r65.concurrent_write') returning id`,
+                [other.workspaceId, other.ownerPrincipalId],
+              );
+              return rows[0]?.id;
+            },
+          );
+        }
+        if (sql.startsWith('delete from workspaces')) {
+          seen.roleAfterCascade = await replicationRole(purgeClient);
+        }
+      });
+
+      const result = await purgeWorkspace(observed, {
+        workspaceId: target.workspaceId,
+        confirm: true,
+      });
+
+      expect(result.executed).toBe(true);
+      expect(result.counts.auditRecords).toBeGreaterThanOrEqual(1);
+      expect(seen.roleWhileDeleting).toBe('replica');
+      expect(seen.strongLocks).toEqual([]);
+      expect(seen.concurrentAuditId).toEqual(expect.any(String));
+      // The workspace row, the users and the platform audit row run with every trigger and
+      // foreign-key check again.
+      expect(seen.roleAfterCascade).toBe('origin');
+
+      // Everything of the target is gone; the other workspace's concurrent row is committed.
+      for (const table of ['audit_records', 'links', 'principals', 'capability_handles']) {
+        expect(await countRows(target.workspaceId, table)).toBe(0);
+      }
+      const concurrent = await adminQuery<{ id: string }>(
+        'select id from audit_records where workspace_id = $1 and id = $2',
+        [other.workspaceId, seen.concurrentAuditId],
+      );
+      expect(concurrent).toHaveLength(1);
+
+      // The append-only triggers were never touched in the catalog, and still refuse a delete.
+      const triggers = await adminQuery<{ tgname: string; tgenabled: string }>(
+        `select tgname, tgenabled from pg_trigger
+          where tgname in ('links_immutable_delete', 'audit_records_no_delete') order by tgname`,
+      );
+      expect(triggers).toEqual([
+        { tgname: 'audit_records_no_delete', tgenabled: 'O' },
+        { tgname: 'links_immutable_delete', tgenabled: 'O' },
+      ]);
+      await expect(
+        adminQuery('delete from audit_records where workspace_id = $1', [other.workspaceId]),
+      ).rejects.toThrow(/append-only/);
+    });
+
+    it('refuses, before deleting anything, when a foreign key into the cascade is not workspace-scoped', async () => {
+      const ws = await seedWorkspace({
+        name: `purge-r65-guard-${randomUUID().slice(0, 8)}`,
+        purpose: 'ephemeral',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await seedRows(ws);
+      // Two shapes the cascade's deletes would leave dangling, now that they skip Postgres's own
+      // foreign-key checks: a table outside the cascade (no workspace_id), and a workspace-scoped
+      // table whose key does not pair its workspace_id with the parent's.
+      await adminQuery(
+        `create table r65_probe_platform (
+           id uuid primary key default gen_random_uuid(),
+           principal_workspace_id uuid not null,
+           principal_id uuid not null,
+           foreign key (principal_workspace_id, principal_id) references principals (workspace_id, id)
+         )`,
+      );
+      await adminQuery(
+        `create table r65_probe_cross (
+           workspace_id uuid not null,
+           id uuid not null default gen_random_uuid(),
+           principal_workspace_id uuid not null,
+           principal_id uuid not null,
+           primary key (workspace_id, id),
+           foreign key (principal_workspace_id, principal_id) references principals (workspace_id, id)
+         )`,
+      );
+      try {
+        const refusal = await purgeWorkspace(pool, {
+          workspaceId: ws.workspaceId,
+          confirm: true,
+        }).then(
+          () => {
+            throw new Error('expected PurgeCascadeForeignKeyError, but the purge resolved');
+          },
+          (err: unknown) => err,
+        );
+        expect(refusal).toBeInstanceOf(PurgeCascadeForeignKeyError);
+        expect(
+          (refusal as PurgeCascadeForeignKeyError).foreignKeys.map((fk) => fk.childTable),
+        ).toEqual(['r65_probe_cross', 'r65_probe_platform']);
+        // The preview refuses the same way.
+        await expect(
+          purgeWorkspace(pool, { workspaceId: ws.workspaceId, confirm: false }),
+        ).rejects.toBeInstanceOf(PurgeCascadeForeignKeyError);
+
+        // Nothing was deleted or revoked.
+        expect(await countRows(ws.workspaceId, 'principals')).toBe(2);
+        expect(await countRows(ws.workspaceId, 'audit_records')).toBeGreaterThanOrEqual(1);
+        const live = await adminQuery<{ n: string }>(
+          'select count(*)::text as n from capability_handles where workspace_id = $1 and revoked_at is null',
+          [ws.workspaceId],
+        );
+        expect(live[0]?.n).toBe('2');
+      } finally {
+        await adminQuery('drop table if exists r65_probe_platform, r65_probe_cross');
+      }
+
+      // With the probes gone the same workspace purges normally.
+      const result = await purgeWorkspace(pool, { workspaceId: ws.workspaceId, confirm: true });
+      expect(result.executed).toBe(true);
+      expect(await countRows(ws.workspaceId, 'principals')).toBe(0);
     });
   });
 

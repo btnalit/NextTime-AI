@@ -23,8 +23,9 @@ import {
  * (discovered the same way `deleteWorkspace` itself does, via `discoverWorkspaceScopedSchema` —
  * not a hand-maintained table list that could drift from it) while a second, untouched Workspace
  * keeps all of its own rows. Also confirms the `links`/`audit_records` append-only triggers this
- * function deliberately disables mid-transaction (I4/I11 — see `deleteWorkspace`'s own doc
- * comment in bootstrap.ts) are back to enabled once the transaction commits, and that
+ * function deliberately bypasses mid-transaction (I4/I11 — `session_replication_role = replica`
+ * since R-65, see application/platform/purge-workspace.ts) are enabled and still refuse a delete
+ * once the transaction commits, and that
  * `computeWorkspaceTableDeletionOrder` accepts the *real* live schema without throwing (the pure
  * unit tests in bootstrap.test.ts only exercise it against fabricated schemas).
  */
@@ -252,8 +253,8 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     expect(await countFor(control.workspaceId, 'ontology_versions')).toBeGreaterThan(0);
     expect(await countFor(control.workspaceId, 'worker_definitions')).toBeGreaterThan(0);
 
-    // The append-only triggers `deleteWorkspace` disabled mid-transaction to delete `links`/
-    // `audit_records` rows are back to enabled now that the transaction has committed — the one
+    // The append-only triggers `deleteWorkspace` bypassed mid-transaction to delete `links`/
+    // `audit_records` rows are enabled now that the transaction has committed — the one
     // deliberate override of I4/I11 never outlives this single call.
     const triggerStates = await withWorkspace(
       pool,
@@ -270,7 +271,7 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     expect(triggerStates.get('links_immutable_delete')).toBe('O');
     expect(triggerStates.get('audit_records_no_delete')).toBe('O');
 
-    // The re-enabled trigger actually still blocks a direct delete attempt against a real row
+    // The trigger actually still blocks a direct delete attempt against a real row
     // (not merely "enabled" in the catalog but somehow inert) — seed one in the untouched control
     // workspace and confirm deleting it is refused exactly as it would be for any ordinary write
     // path (I11).
