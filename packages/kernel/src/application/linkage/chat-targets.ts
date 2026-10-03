@@ -6,12 +6,15 @@ import {
   newChat,
   requireChatAccess,
 } from '../chat/index.js';
+import { taskForWorkerRun } from '../task/index.js';
 
 /**
  * application/linkage/chat-targets: "which Chat does this system message go into" — the two rules
  * `application/linkage`'s consumers need (docs/development-tasks.md S2.11 deliverable 1: "a system
  * message into the on_behalf_of user's Chat that generated the Task (find the chat via the Task's
- * originating Turn)"; "into each holder's most recent (or a new) Chat").
+ * originating Turn)"; "into each holder's most recent (or a new) Chat"). The same Chat is the one
+ * the matching `pending_context_items` row belongs to (R-57 / D-23), and an ActionRequest's
+ * requester gets the Chat of the Task whose Worker raised it (`resolveRequesterChat`).
  *
  * Reads `activities.chat_id` directly with parameterized SQL rather than adding a new
  * `substrate/epistemic` read method — the same precedent `application/host-bridge/
@@ -39,17 +42,40 @@ export async function resolveDefaultChat(
  * `system.action_pending` message for `actionRequestId` (`findChatIdForActionPending`) — never
  * re-derived per event the way `resolveDefaultChat`'s "most recently created Chat" rule is, which
  * can drift to a different Chat if `principalId` creates a new one between the `pending` and
- * `updated` events. Falls back to `resolveDefaultChat` only when no pending message is found
- * (e.g. a pre-fix ActionRequest that has no `system.action_pending` row to pin to).
+ * `updated` events. Falls back to `resolveRequesterChat` (the requester) / `resolveDefaultChat`
+ * (anyone else: pass `parentWorkerRunId: null`) only when no pending message is found (e.g. a
+ * pre-fix ActionRequest that has no `system.action_pending` row to pin to).
  */
 export async function resolveActionRequestChat(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
   actionRequestId: string,
+  parentWorkerRunId: string | null,
 ): Promise<ChatRow> {
   const pinnedChatId = await findChatIdForActionPending(client, workspaceId, actionRequestId);
   if (pinnedChatId) return requireChatAccess(client, workspaceId, pinnedChatId);
+  return resolveRequesterChat(client, workspaceId, principalId, parentWorkerRunId);
+}
+
+/**
+ * The Chat an ActionRequest belongs to for its requester (2026-10-02 review R-57, decision D-23:
+ * "items belong to the chat that started them"): a Worker raises it (`parent_worker_run_id`), so it
+ * is the Chat of that Worker's Task — `resolveTaskChat`, the Chat whose Turn invoked the Worker.
+ * `resolveDefaultChat` when there is no Worker parent (a human-channel `request_action`), when the
+ * Task is not `principalId`'s own, or when `parentWorkerRunId` is `null` because the caller is
+ * resolving for a holder rather than the requester. Same caller contract as `resolveTaskChat`.
+ */
+export async function resolveRequesterChat(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  parentWorkerRunId: string | null,
+): Promise<ChatRow> {
+  if (parentWorkerRunId) {
+    const task = await taskForWorkerRun(client, workspaceId, parentWorkerRunId);
+    if (task && task.onBehalfOf === principalId) return resolveTaskChat(client, workspaceId, task);
+  }
   return resolveDefaultChat(client, workspaceId, principalId);
 }
 

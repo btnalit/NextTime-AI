@@ -562,6 +562,92 @@ Hi`,
 
     expect(result).toBeUndefined();
   });
+
+  function handlerFor(event: string): Handler {
+    const registered = fake.handlers.get(event);
+    if (!registered) throw new Error(`${event} handler not registered`);
+    return registered;
+  }
+
+  // 2026-10-02 review R-57 (decision D-23). The fake kernel below models the kernel's delivery
+  // rule (application/linkage/store.ts — DB-backed, covered by the kernel's integration tests): a
+  // `get_entry_context` with a `turnId` leases the pending items to that Turn and returns them on
+  // every call until `report_turn` for the Turn acknowledges them. What this test pins is the
+  // extension's half: every context call of a Turn names that Turn, and report_turn follows.
+  function modelKernelDelivery(pending: Array<Record<string, unknown>>): void {
+    const leases = new Map<string, Array<Record<string, unknown>>>();
+    kernel.setHandler('get_entry_context', (request) => {
+      const { turnId } = request.params as { turnId?: string };
+      if (!turnId) return { ok: true, result: { tasks: [...pending] } };
+      const leased = leases.get(turnId) ?? [];
+      leased.push(...pending.splice(0));
+      leases.set(turnId, leased);
+      return { ok: true, result: { tasks: [...leased] } };
+    });
+    kernel.setHandler('report_turn', (request) => {
+      leases.delete((request.params as { turnId: string }).turnId);
+      return { ok: true, result: {} };
+    });
+  }
+
+  it('R-57: both LLM calls of a Turn get the batch (same turnId); after report_turn the next Turn does not', async () => {
+    modelKernelDelivery([{ taskId: 't-done', status: 'completed' }]);
+    const inputHandler = handlerFor('input');
+    const contextHandler = handlerFor('context');
+    const agentSettledHandler = handlerFor('agent_settled');
+
+    inputHandler({ text: '<!--nexttime:turn_id=turn-a-->\nHi', source: 'rpc' }, fakeCtx());
+    const firstCall = await contextHandler({ messages: [] }, fakeCtx());
+    // The second LLM call of the Turn — or pi's retry after a provider error.
+    const secondCall = await contextHandler({ messages: [] }, fakeCtx());
+    expect(firstCall?.messages[0]?.content).toContain('t-done');
+    expect(secondCall?.messages[0]?.content).toContain('t-done');
+
+    await agentSettledHandler({}, fakeCtx());
+    inputHandler({ text: '<!--nexttime:turn_id=turn-b-->\nNext', source: 'rpc' }, fakeCtx());
+    expect(await contextHandler({ messages: [] }, fakeCtx())).toBeUndefined();
+
+    expect(
+      kernel.requests
+        .filter((request) => request.capability !== 'list_allowed_operations')
+        .map((request) => [request.capability, request.params]),
+    ).toEqual([
+      ['get_entry_context', { turnId: 'turn-a' }],
+      ['get_entry_context', { turnId: 'turn-a' }],
+      ['report_turn', { turnId: 'turn-a', summary: '' }],
+      ['get_entry_context', { turnId: 'turn-b' }],
+    ]);
+  });
+
+  it('R-57: with no known Turn the context call sends no turnId', async () => {
+    kernel.setHandler('get_entry_context', () => ({ ok: true, result: {} }));
+    await handlerFor('context')({ messages: [] }, fakeCtx());
+
+    const call = kernel.requests.find((request) => request.capability === 'get_entry_context');
+    expect(call?.params).toEqual({});
+  });
+
+  it('R-57: a kernel that rejects turnId as invalid_params gets {} from then on (rolled-back kernel)', async () => {
+    kernel.setHandler('get_entry_context', (request) =>
+      (request.params as { turnId?: string }).turnId
+        ? { ok: false, error: { code: 'invalid_params', message: 'unrecognized key turnId' } }
+        : { ok: true, result: { tasks: [{ taskId: 't-old-kernel' }] } },
+    );
+    const inputHandler = handlerFor('input');
+    const contextHandler = handlerFor('context');
+
+    inputHandler({ text: '<!--nexttime:turn_id=turn-c-->\nHi', source: 'rpc' }, fakeCtx());
+    const first = await contextHandler({ messages: [] }, fakeCtx());
+    const second = await contextHandler({ messages: [] }, fakeCtx());
+    expect(first?.messages[0]?.content).toContain('t-old-kernel');
+    expect(second?.messages[0]?.content).toContain('t-old-kernel');
+
+    expect(
+      kernel.requests
+        .filter((request) => request.capability === 'get_entry_context')
+        .map((request) => request.params),
+    ).toEqual([{ turnId: 'turn-c' }, {}, {}]);
+  });
 });
 
 /**

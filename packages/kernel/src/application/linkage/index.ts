@@ -8,8 +8,9 @@
  *      `application/chat`'s public `insertChatMessage`) plus live pushes (`application/chat`'s
  *      `publishChatPushEvent` for the persisted message, `publishPrincipalPushEvent` for the S2.11
  *      wire frames `action.pending`/`action.updated`/`task.updated`).
- *   2. `pending_context_items` (migrations/linkage/0001_pending_context_items.sql) — the "deliver
- *      once" store `get_entry_context` (application/gateway/handlers.ts) drains from.
+ *   2. `pending_context_items` (migrations/linkage/0001_pending_context_items.sql, 0002) — the
+ *      per-Chat delivery store `get_entry_context` (application/gateway/handlers.ts) leases to a
+ *      Turn and `report_turn` acknowledges (`store.ts`, 2026-10-02 review R-57 / D-23).
  *   3. Nothing else — this module owns no Task/ActionRequest/Chat *state* of its own beyond that
  *      one delivery-tracking table; it is pure orchestration over three other modules' public
  *      surfaces.
@@ -48,8 +49,18 @@ export type { ActionRequestEventSource } from './action-request-consumer.js';
 export { registerBudgetWarningConsumer } from './budget-consumer.js';
 export type { BudgetWarningSource } from './budget-consumer.js';
 
-export { drainPendingContextItems, insertPendingContextItem } from './store.js';
-export type { DrainedContextItems, InsertPendingContextItemInput } from './store.js';
+export {
+  PEEK_CONTEXT_ITEM_LIMIT,
+  acknowledgeTurnContextItems,
+  insertPendingContextItem,
+  leaseContextItemsToTurn,
+  peekContextItems,
+} from './store.js';
+export type {
+  EntryContextItems,
+  EntryContextTurn,
+  InsertPendingContextItemInput,
+} from './store.js';
 
 export { CONTEXT_ITEM_KIND_VALUES, contextItemBucket } from './types.js';
 export type { ContextItemKind, PendingContextItemRow } from './types.js';

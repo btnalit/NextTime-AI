@@ -365,7 +365,7 @@ flowchart TB
 |------|--------|-----------|---------------|---------|
 | `entry` | 每用户入口容器 | 图的 observe 组（含 `get_task`）、Handle 内各门的 **observe 类 Operation**（投影为 `<gate>.<op>` 工具）、`find_operations` / `find_workers` / `find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；与 §5.1.4 能力上限一致；S1 只注册图的 observe 组 | 该用户的待审批、进行中 Task 及其结果、相关 Fact、先例、可用的门与 Procedure 摘要 | 每轮回传 Turn 与决策 |
 | `worker` | Worker 容器 | 门的 Operation（observe 经 `observe_operation` 直接调、不看门范围，§11"门上的观察"；execute 经 `request_action`、限 Handle 内的门）、图的 observe 与 `assert_fact`、`propose_*` | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
-| `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry` | 默认不回传 |
+| `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry`，但只读不消费（无 Turn，跨对话 peek） | 默认不回传 |
 
 **接口注入的机制**：扩展启动时向内核请求 Handle 内允许的 Operation 列表（含参数 schema 与说明），逐个注册为 pi 工具 `<gate>.<op>`；工具调用 → observe 类直接经内核转门；execute 类由 `tool_call` 拦截转 `request_action`。Worker 从头到尾只看到工具名与参数，看不到传输、地址、凭证。拦截是便利闸门，安全边界在 gateway。
 
@@ -747,7 +747,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 | `action.updated` | `actionRequestId, status` | 推给同一组人（持有者 + 发起者），ActionRequest 每次进入 §5.5 状态图中一个"值得播报"的终态/中间态时（`auto_approved / approved / rejected / expired / denied / executed / failed / compensated`——`proposed`/`policy_evaluated`/`pending_approval`/`executing`/`verified` 不单独推送，前三个在 `request_action` 的实现里从不可单独观测到，后两个是内部过渡态）。 |
 | `task.updated` | `taskId, status` | 推给该 Task 的 `on_behalf_of` 用户，Task 每次状态转移（含 `queued`/`running` 这类中间态）都推送——web 端按需过滤；对话里的**持久化**系统消息（`chat_messages`）只在 `waiting_approval / completed / failed / cancelled` 时才写。 |
 
-推送与"下一轮 `context` 注入"（S2.11，见 §8.2）是同一份底层事件的两条独立投递路径：WS 推送是"当前在线才收到"的即时通知，`pending_context_items`（`application/linkage` 自己的表）是"离线也不丢、且只投递一次"的补充路径——两者互不依赖，一个连接掉线不影响下一轮 `context` 补上同样的信息。
+推送与"下一轮 `context` 注入"（S2.11，见 §8.2）是同一份底层事件的两条独立投递路径：WS 推送是"当前在线才收到"的即时通知，`pending_context_items`（`application/linkage` 自己的表）是"离线也不丢"的补充路径——两者互不依赖，一个连接掉线不影响下一轮 `context` 补上同样的信息。条目归发起它的对话（调用 Worker 的那个 Turn 所在的对话），只在该对话的 Turn 里注入：同一 Turn 的每次模型调用都看得到同一批，该 Turn 的 `report_turn` 才确认；没有 Turn 的交互 / MCP 会话只读（peek），不消费（2026-10-02 复审 R-57，决定 D-23）。
 
 ### 9.5 Explorer 契约（S3，只做这些）
 

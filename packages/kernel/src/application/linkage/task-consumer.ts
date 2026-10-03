@@ -139,6 +139,7 @@ export function registerTaskUpdatedConsumer(
 
         await insertPendingContextItem(client, event.workspaceId, {
           principalId: task.onBehalfOf,
+          chatId: chat.id,
           kind,
           subjectId: event.taskId,
           payload: content as unknown as Record<string, unknown>,
