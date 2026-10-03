@@ -313,6 +313,24 @@
   `POST /v1/responses`、`anthropic-messages`→`POST /v1/messages`），`GET /v1/models` 继续走既有的
   白名单合成路径；其余一律 404/405，请求体连读都不读，更不会转发到上游。同时把"非 JSON 请求体静默
   透传、不做 model 校验"的口子堵上——请求体现在必须是合法 JSON 对象且带非空字符串 `model`，否则 400。
+- **R-30 更正（2026-10-02 复审，维护者决定 D-29）——供应商侧工具不再是出网通道**：`proxy.ts` 原来除一张短的剥离表外
+  原样转发入站头，请求体只校验 `model`：agent 声明一个供应商执行的工具（MCP 连接器指向攻击者 `server_url`、web
+  fetch / search、代码执行）再配上对应的 `anthropic-beta`，供应商就替它出网——绕过 egress-proxy 与 WorkerDefinition
+  的出网清单，记成一次 LLM 调用而不是出网；`openai-organization` / `openai-project` 头能把花费挪到同一 key 的别的
+  项目。现在由新模块 `outbound-policy.ts` 在这一处收窄：①入站头改白名单——`accept`，Anthropic 另加
+  `anthropic-version` 与按值白名单的 `anthropic-beta`（恰为 pi 0.99 API key 鉴权会发的六个值；其余值丢弃并记日志，
+  pi 升级发新值时能在日志里看到），`content-type`、`accept-encoding: identity` 与供应商鉴权头由代理自己设；其余
+  （任何 agent 自带鉴权、`x-*`、org / project、逐跳头、关联 id）一律不转发。②查询串只留 SDK 会发的参数（Anthropic
+  的 `beta=true`）。③请求体里的工具只留客户端工具（两种 OpenAI 种类 `function` / `custom`，Anthropic 无 `type` 或
+  `custom`），其余类型一律剥离，嵌在 `messages[]` / Responses `input[]` 里的工具表同样过滤；另剥离不带工具条目就能
+  打开供应商侧工具的参数（`web_search_options`、`plugins`、`enable_search`、`search_parameters`、`mcp_servers`、
+  `container`）。剥离而不是拒绝：请求照常执行，只是没有供应商侧工具；每次收窄记一行 warn（剥掉的工具类型、参数、
+  beta 值，带 workspace / session / jti / 关联 id）。什么都没剥的请求仍按原字节转发。**D-29 的按 WorkerDefinition
+  开启（opt-in）未做**：llm-proxy 只看得到 Handle，其 claims 里没有任何 WorkerDefinition 关于供应商工具的信息；要承载
+  开关需要给 WorkerDefinition 加字段、并让内核在签发入口 / WorkerRun Handle 时把它写进 scope（无需迁移，但改领域
+  schema 与 Handle 签发），留作后续；在那之前一律剥离。无迁移。测试：`outbound-policy.test.ts`（每种 api 的头白名单、
+  beta 值、查询串、工具与参数剥离、pi 形状的请求原样不动、日志值有界）、`proxy.test.ts` 的 R-30 组（三种 api 端到端：
+  假上游收到的头 / 查询串 / 请求体、剥离日志；只有客户端工具的请求逐字节转发且不记日志；上游重定向 502）。
 - **R-14 更正（2026-10-02 复审）——吊销同步分页**：`GET /internal/handle-revocations` 原来一次最多回 5000 行就静默截断，llm-proxy 随即把 `since` 移到内核的 `now`；冷启动时若吊销但未过期的 Handle 超过 5000 条，最新的吊销永远同步不到，那些 Handle 在 llm-proxy 一直可用到过期。现在按 `(revoked_at, jti)` 稳定排序分页：满页时回 `hasMore: true` 与 `nextCursor`，调用方带同一个 `since` 加 `cursor` 取下一页；不满页 `hasMore: false`。游标里的 `revoked_at` 精确到微秒（不是线上 `revokedAt` 的毫秒）——一次 `revokeSession` 给它吊销的所有 Handle 同一个 `revoked_at`，毫秒游标会让这样的整页无限重放。llm-proxy 的 `revocation.ts` 一次同步把所有页取完（上限 1000 页，游标不前进即停）；走完最后一页才前移 `lastSyncAt`，且前移到**第一页**的 `now`（后面的页是更晚的快照，期间提交、`revoked_at` 更早的吊销排在游标之前，重叠窗口要从第一页的时钟算起）；中途失败则保留已收到的 `jti`，只前移到实际收到的最后一行的 `revokedAt`，绝不前移到 `now`。#411 给这条路由加的 llm-proxy 专用凭证不变。线上只多了可选字段与参数：旧 llm-proxy 忽略 `hasMore`，新 llm-proxy 遇到不带 `hasMore` 的旧内核按一页处理。测试：`handle-revocations.test.ts`（游标往返保留微秒、非法游标 400）、`handle-revocations.integration.test.ts`（真库：同一瞬间吊销的 7 个 Handle 在页大小 3 下各出现一次、三页后 `hasMore: false`）、llm-proxy `revocation.test.ts`（翻完所有页、下次从第一页的 `now` 起、中途失败只前移到最后收到的行、游标不前进即停、旧内核一页）。
 
 ### S1.8 web：登录与对话
@@ -3037,6 +3055,23 @@ store 供应商的 `apiKeyEnv` 变为可选；GET 只回 `credentialPresent` + `
   改窄为 `action = 'platform.workspace_purged'` 且 `payload -> 'attributedActor' is not distinct from 'false'::jsonb`
   （最初写成 `->> … = 'false'`，键缺失时整式为 NULL、CHECK 放行，被 CI 上的负向集成测试抓出）；wire
   `PlatformAuditRecordWire.actorUserId` 可空，页面经 `formatAuditActor` 显示"主机操作员（未署名）"。
+  - **R-23 更正（2026-10-02 复审）——密钥只发往它所属的上游**：上面的 key-store 说密钥"只发往供应商自己的上游"，
+    但上游是管理员可改的：`PUT` 把 `upstream_base_url` 指向任意主机再 `/test`，控制台密钥就发了出去；新建一个
+    `apiKeyEnv` 写成别家变量名（如另一个供应商的 key）的供应商同样能把运维的环境变量 key 带走（gate-host 对同一概念
+    的规则相反：目标一变就清凭证）。现在（`admin-api.ts`）：①`PUT` 改了上游（`upstreamKey` 比较：WHATWG 规范化，
+    忽略末尾斜杠；路径不同也算不同上游）先清控制台密钥再写供应商——清不掉（密钥目录不可写）整笔 503，绝不会出现
+    "上游已改、密钥还在"；审计 `provider_updated` 带 `upstreamBaseUrl: {from, to}` 与 `secretCleared`，另记
+    `provider_secret_cleared`（`reason: upstream_changed`）；改 `api` / 鉴权头不清（仍是同一主机）。`POST` 新建时
+    该 id 下残留的密钥（DELETE 的尽力清除失败才会有）一并清掉（`reason: new_provider`）。②`assertEnvKeyPairing`：
+    `apiKeyEnv` 指向的变量**已有值**时，只能与 yaml（含被覆盖遮住的条目——运维自己的声明）或另一个 store 供应商
+    已经为它配置的同一上游配对，否则 409 `api_key_env_not_allowed` 并记一行 warn；变量尚无值照旧允许（运维手册的
+    传统路径：先建供应商、再由运维加环境变量）；只在本供应商的（变量，上游）对真的变化时检查，改模型 / 显示名 /
+    启停不受影响。③`proxy.ts` 与 `provider-test.ts` 的上游 fetch 加 `redirect: 'error'`（L6-19：`follow` 会把
+    `x-api-key` 带到 3xx 指向的主机）。只在写入时检查：本修复之前已写入的 store 行不回溯校验。无迁移、无 wire 形状
+    变化（shared `wire/llm-admin.ts` 只改注释）。测试：`admin-api.test.ts` 的 R-23 组（改上游清密钥与审计、不改
+    上游保留、yaml 供应商的控制台密钥不随覆盖走、清不掉时 503 且不变、POST 清残留、已有值的变量配陌生上游 409、
+    改 yaml 供应商上游但保留其变量 409、同上游可共用、未设置的变量名允许、`upstreamKey`）、`proxy.test.ts` 与
+    `provider-test.test.ts` 的重定向用例。
 
 ### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
 

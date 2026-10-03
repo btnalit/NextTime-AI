@@ -41,7 +41,10 @@ export const LLM_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const LLM_PROVIDER_RESERVED_IDS: readonly string[] = ['admin', 'healthz', 'internal'];
 export const LlmProviderIdWireSchema = z.string().regex(LLM_PROVIDER_ID_PATTERN);
 
-/** Env-var name, never a value: `^[A-Z][A-Z0-9_]*$`. */
+/** Env-var name, never a value: `^[A-Z][A-Z0-9_]*$`. R-23: on a write, a name whose variable
+ *  already holds a key is accepted only together with an upstream `llm-providers.yaml` or another
+ *  provider already pairs it with (409 `api_key_env_not_allowed` otherwise) — the shape alone does
+ *  not decide which of llm-proxy's environment variables a provider may send. */
 export const LlmProviderApiKeyEnvWireSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
 
 const CostRates = {
@@ -145,7 +148,9 @@ export type LlmProviderListWire = z.infer<typeof LlmProviderListWireSchema>;
 /** `POST /providers` (all fields) and `PUT /providers/:id` (same, `id` must match the path).
  *  `apiKeyEnv` optional (S7-A): omitted means "no env var" — the console key (if any) is this
  *  provider's only credential source. A full replace on `PUT` clears a previously-set `apiKeyEnv`
- *  when the field is left out, same as every other field here. */
+ *  when the field is left out, same as every other field here. R-23: a `PUT` whose
+ *  `upstreamBaseUrl` differs from the provider's current one (case, default port and trailing
+ *  slashes aside) also clears the provider's console key — it was entered for the old upstream. */
 export const LlmProviderInputWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,
