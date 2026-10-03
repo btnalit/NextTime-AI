@@ -1,4 +1,4 @@
-import { CAPABILITY_REGISTRY, getCapability } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, capabilityHasSideEffects, getCapability } from '@nexttime/shared';
 import type { ExplainResultWire } from '@nexttime/shared';
 import type {
   ProvenanceActivity,
@@ -148,15 +148,19 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
 
 /**
  * S8 W4-A (ui-audit S11/PA1 — "审计流默认只显示写与决策，读另设筛选"): whether `action` is a pure
- * read — `mode:'observe'` in the capability registry (`audit_query`/`explain`/`list_*`/`search`/…
- * itself, every read a dispatched capability call audits under its own name). An action the
+ * read — a registry capability with no side effects (`capabilityHasSideEffects`, the explicit flag
+ * of review 2026-10-02 D-08: `audit_query`/`explain`/`list_*`/`search`/… itself, every read a
+ * dispatched capability call audits under its own name). Not `mode === 'observe'`: an observe
+ * call that writes — `observe_operation` recording the Facts a gate returned, `get_entry_context`
+ * leasing context items — is a write the default view must keep showing (P3 L5-10). An action the
  * registry does not recognise (every lifecycle-transition action in `AUDIT_LIFECYCLE_ACTIONS` —
  * `action_request.approve`, `task.complete`, …, none of which is a capability name) is never
  * treated as a read: those rows are exactly the "写与决策" the default view exists to keep
  * visible, so an unrecognised action fails open (shown), not hidden.
  */
 export function isReadAuditAction(action: string): boolean {
-  return getCapability(action)?.mode === 'observe';
+  const capability = getCapability(action);
+  return capability !== undefined && !capabilityHasSideEffects(capability);
 }
 
 /** Every workspace-scope capability name from `CAPABILITY_REGISTRY` (a dispatched call is

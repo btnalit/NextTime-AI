@@ -95,7 +95,9 @@ export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
  * (`observe`/`execute` only, enums.ts) even though the two share two literal tokens —
  * `CapabilityMode` and `OperationMode` are separate types, never structurally interchanged.
  *
- *   - `observe`  — read-only.
+ *   - `observe`  — a read as far as governance is concerned: no approval, no draft. Not a promise
+ *     that nothing is written — a few observe capabilities record what they read; the explicit
+ *     `Capability.sideEffects` flag (D-08, `capabilityHasSideEffects`) is the read-only test.
  *   - `write`    — an immediate, in-platform state change: audited, no human approval gate
  *     (`assert_fact`, `invoke_worker`, `report_task_result`, `cancel_task`,
  *     `register_source`, `submit_observations`, `record_decision`, `resolve_conflict`,
@@ -103,7 +105,11 @@ export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
  *     conventions doc names, previously mistagged `propose`).
  *   - `propose`  — produces a draft or request awaiting human publish/approval: `propose_*`,
  *     `request_connection`, `propose_ontology_change` only (never any other name).
- *   - `execute`  — acts through a Gatekeeper on an external system, policy-approved.
+ *   - `execute`  — a consequential effect a person deliberately triggers or a policy gates: acting
+ *     through a Gatekeeper on an external system (policy-approved), or a human-channel action with
+ *     lasting governance weight — publishing, granting, connecting, approving (D-08 widened this
+ *     text to match the registry; the labels themselves are unchanged, several consumers key on
+ *     them).
  */
 export const CAPABILITY_MODE_VALUES = ['observe', 'write', 'propose', 'execute'] as const;
 export type CapabilityMode = (typeof CAPABILITY_MODE_VALUES)[number];
@@ -125,6 +131,18 @@ export interface Capability {
   readonly name: string;
   readonly group: CapabilityGroup;
   readonly mode: CapabilityMode;
+  /**
+   * Review 2026-10-02 decision D-08: whether a call changes state anywhere — a write to the
+   * platform's own tables, an audit-relevant record, or an effect through a Gatekeeper. `mode` is a
+   * governance category, not a read-only test: a few `observe` capabilities write (they call a
+   * gate and record what it returned, lease context items, record a probe), so they declare
+   * `sideEffects: true` here explicitly. Absent means "what the mode says": `observe` has none,
+   * every other mode has some — and a non-`observe` capability may never declare `false`
+   * (`assertRegistryConsistent`). Read it through `capabilityHasSideEffects`, never through
+   * `mode === 'observe'`: the auditor role check (kernel `governance/capability/roles.ts`, D-07)
+   * and the console audit view's default "writes and decisions" filter both do.
+   */
+  readonly sideEffects?: boolean;
   readonly channel: CapabilityChannel;
   /** See `CapabilityScopeKind`; absent = `'workspace'`. */
   readonly scope?: CapabilityScopeKind;
@@ -625,6 +643,8 @@ const gateCapabilities: readonly Capability[] = [
     name: 'observe_operation',
     group: 'gate',
     mode: 'observe',
+    // D-08: calls a Gatekeeper and writes the observed Facts, Observations and an Activity.
+    sideEffects: true,
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
@@ -642,6 +662,8 @@ const gateCapabilities: readonly Capability[] = [
     name: '<gate>.<op>',
     group: 'gate',
     mode: 'observe',
+    // D-08: same as observe_operation — writes the observed Facts and an Activity.
+    sideEffects: true,
     channel: 'handle',
     minRole: 'member',
     paramsSchema: jsonRecord,
@@ -1930,6 +1952,8 @@ const taskCapabilities: readonly Capability[] = [
     name: 'get_entry_context',
     group: 'task',
     mode: 'observe',
+    // D-08: leases and acknowledges the Turn's pending context items (R-57 / D-23).
+    sideEffects: true,
     channel: 'handle',
     minRole: 'member',
     // R-57 (D-23): never consumes. With `turnId`, the Turn's Chat's items are returned for every
@@ -3205,6 +3229,8 @@ const platformCapabilities: readonly Capability[] = [
     name: 'test_gate_instance',
     group: 'platform',
     mode: 'observe',
+    // D-08: records the probe's health on the gate instance.
+    sideEffects: true,
     channel: 'human',
     scope: 'platform',
     paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
@@ -3577,6 +3603,14 @@ export function getCapability(name: string): Capability | undefined {
   return CAPABILITY_REGISTRY.find((capability) => capability.name === name);
 }
 
+/** D-08: whether calling `capability` changes state — its explicit `sideEffects` flag, else what
+ *  its `mode` implies (see `Capability.sideEffects`). The read-only test every consumer uses. */
+export function capabilityHasSideEffects(
+  capability: Pick<Capability, 'mode' | 'sideEffects'>,
+): boolean {
+  return capability.sideEffects ?? capability.mode !== 'observe';
+}
+
 /** Lists every capability available on a given channel. */
 export function listByChannel(channel: CapabilityChannel): readonly Capability[] {
   return CAPABILITY_REGISTRY.filter((capability) => capability.channel === channel);
@@ -3599,6 +3633,13 @@ export function assertRegistryConsistent(): void {
 
     if (capability.channel !== 'human' && capability.channel !== 'handle') {
       throw new Error(`capability registry: "${capability.name}" has no valid channel`);
+    }
+
+    // D-08: a write / propose / execute is never side-effect free.
+    if (capability.mode !== 'observe' && capability.sideEffects === false) {
+      throw new Error(
+        `capability registry: "${capability.name}" is ${capability.mode}-mode but declares sideEffects:false`,
+      );
     }
 
     if (HUMAN_ONLY_CAPABILITY_NAMES.has(capability.name) && capability.channel !== 'human') {

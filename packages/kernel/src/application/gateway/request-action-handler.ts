@@ -1,4 +1,4 @@
-import { IllegalTransition } from '@nexttime/shared';
+import { IllegalTransition, getCapability } from '@nexttime/shared';
 import type {
   ActionRequestStatus,
   CapabilityChannel,
@@ -27,6 +27,7 @@ import {
 import {
   hasActiveGrant,
   listActiveGrantResourceScopes,
+  roleMayUseCapability,
 } from '../../governance/capability/index.js';
 import {
   GatekeeperNotFoundError,
@@ -980,7 +981,7 @@ async function assertHumanGatekeeperAccess(
   role: Role,
   gatekeeperId: string,
 ): Promise<void> {
-  assertRoleMayReachGatekeeper(role);
+  assertRoleMayReachGatekeeper(role, 'request_action');
   if (role === 'owner') return;
 
   const allowed = await hasActiveGrant(client, workspaceId, {
@@ -996,14 +997,21 @@ async function assertHumanGatekeeperAccess(
   }
 }
 
-/** The role half of the human-channel gate, shared by `request_action` (inside
- *  `assertHumanGatekeeperAccess`) and `observe_operation` (alone — leftover 97): `auditor` is the
- *  one role scoped to read-only platform data (§5.1.1 "auditor 只读含密钥元数据"; "member 对话、调用、
- *  观察") and never reaches a Gatekeeper, observe or execute, granted or not. */
-function assertRoleMayReachGatekeeper(role: Role): void {
-  if (role === 'auditor') {
+/** The role half of the gate, shared by `request_action` (inside `assertHumanGatekeeperAccess`)
+ *  and `observe_operation` (alone — leftover 97), on both channels (R-35: for a Handle caller the
+ *  on-behalf-of Principal's role, read per call, so a Handle minted before a role change or
+ *  before R-35 cannot reach a gate the role may not). It is the one role predicate
+ *  (`roleMayUseCapability`, governance/capability/roles.ts) that `authorizeCapabilityCall` and
+ *  `entryScope({ role })` also apply, asked about the capability being called — so `auditor`, the
+ *  read-only role (§5.1.1 "auditor 只读含密钥元数据"; D-07), never reaches a Gatekeeper, observe or
+ *  execute, granted or not, and no other rule decides that here. */
+function assertRoleMayReachGatekeeper(
+  role: Role,
+  capabilityName: 'request_action' | 'observe_operation',
+): void {
+  if (!roleMayUseCapability(role, getCapability(capabilityName))) {
     throw new ForbiddenError(
-      'request_action/observe_operation: role "auditor" may never call a Gatekeeper (read-only role)',
+      `${capabilityName}: role "${role}" may not call a Gatekeeper (${role === 'auditor' ? 'read-only role, R-35 / D-07' : 'role'})`,
     );
   }
 }
@@ -1067,7 +1075,9 @@ async function resolveRequesterScope(
  *
  *   - **handle**: any Handle in the workspace may observe a registered gate's published,
  *     not-platform-disabled observe-class Operation unless the workspace AgentPolicy gate cap or
- *     the calling member's own AgentProfile excludes the gate. A Worker's call (worker mode routes
+ *     the calling member's own AgentProfile excludes the gate — and unless the member's role may
+ *     not reach a Gatekeeper at all (R-35: an `auditor`'s agent never does, whatever its Handle
+ *     carries; `assertRoleMayReachGatekeeper`, both channels). A Worker's call (worker mode routes
  *     observe-class tools here, leftover 98) is also recorded on its WorkerRun
  *     (`recordWorkerGateObservation`, S8 W5-A) exactly as `request_action`'s observe branch does.
  *   - **human** (leftover 97, maintainer 2026-09-27 "也放开吧"): a person observing from the
@@ -1096,9 +1106,11 @@ export const observeOperationHandler: CapabilityHandler = async (
   }
 
   const channel: CapabilityChannel = ctx?.channel ?? 'handle';
-  if (channel === 'human') {
-    assertRoleMayReachGatekeeper(await resolvePrincipalRole(client, workspaceId, onBehalfOf));
-  }
+  // R-35: both channels — for a Handle, the role of the member it acts for.
+  assertRoleMayReachGatekeeper(
+    await resolvePrincipalRole(client, workspaceId, onBehalfOf),
+    'observe_operation',
+  );
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   const gateLink = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
@@ -1163,7 +1175,13 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   let role: Role | undefined;
   if (channel === 'human') {
     role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
-    assertRoleMayReachGatekeeper(role);
+    assertRoleMayReachGatekeeper(role, 'request_action');
+  } else {
+    // R-35: a Handle caller is held to the role of the member it acts for, read now.
+    assertRoleMayReachGatekeeper(
+      await resolvePrincipalRole(client, workspaceId, onBehalfOf),
+      'request_action',
+    );
   }
 
   const requesterScope = await resolveRequesterScope(

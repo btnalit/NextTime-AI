@@ -14,7 +14,8 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": {},
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -30,7 +31,8 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": {},
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -124,7 +126,8 @@
         "internal"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -204,7 +207,8 @@
         "disabled"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -381,7 +385,8 @@
         "requesterCanApprove"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -449,7 +454,8 @@
         "hasRunningTurn"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -630,7 +636,8 @@
         "lastObservedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -707,7 +714,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -796,7 +804,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -882,7 +891,8 @@
         "completedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -929,7 +939,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -1657,7 +1668,8 @@
         "truncated"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -2133,7 +2145,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -2223,7 +2236,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -2315,7 +2329,8 @@
         "connectionRequestId"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -2825,7 +2840,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -2932,7 +2948,8 @@
         "apiKey"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3131,7 +3148,8 @@
         "temporaryPassword"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3290,7 +3308,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -3490,7 +3509,8 @@
         "taskIds"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -3528,7 +3548,8 @@
         "deleted"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3579,7 +3600,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3626,7 +3648,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3673,7 +3696,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3760,7 +3784,8 @@
         "publishedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3843,7 +3868,8 @@
         "internal"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -3906,7 +3932,8 @@
         "version"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -4020,7 +4047,8 @@
         "linkedExisting"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -4235,7 +4263,8 @@
         "workers"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -4929,7 +4958,8 @@
         "activity"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -5074,7 +5104,8 @@
         "document"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -5190,7 +5221,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -5299,7 +5331,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -5363,7 +5396,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -5431,7 +5465,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -5605,7 +5640,8 @@
         "requesterCanApprove"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -5686,7 +5722,8 @@
         "updatedBy"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -5839,7 +5876,8 @@
         "effective"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -5929,7 +5967,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -6108,7 +6147,8 @@
         "precedents"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -6579,7 +6619,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -6780,7 +6821,8 @@
         "health"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -6857,7 +6899,8 @@
           "type": "null"
         }
       ]
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -6952,7 +6995,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -7071,7 +7115,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -7181,7 +7226,8 @@
           "type": "null"
         }
       ]
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -7347,7 +7393,8 @@
         "workerRuns"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -7497,7 +7544,8 @@
           "type": "null"
         }
       ]
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -7581,7 +7629,8 @@
         "caller"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -7676,7 +7725,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -7748,7 +7798,8 @@
         "sources"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -7841,7 +7892,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -7993,7 +8045,8 @@
         "lastObservedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -8076,7 +8129,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8134,7 +8188,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8191,7 +8246,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8293,7 +8349,8 @@
         "scope"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8330,7 +8387,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8418,7 +8476,8 @@
         "scope"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -8666,7 +8725,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -8720,7 +8780,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -8827,7 +8888,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -8882,7 +8944,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -8965,7 +9028,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -9092,7 +9156,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -9198,7 +9263,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -9289,7 +9355,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -9376,7 +9443,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -9872,7 +9940,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -9944,7 +10013,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10052,7 +10122,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10105,7 +10176,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10188,7 +10260,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -10555,7 +10628,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10729,7 +10803,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10914,7 +10989,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -10966,7 +11042,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -11061,7 +11138,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -11167,7 +11245,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -11338,7 +11417,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -11408,7 +11488,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -11502,7 +11583,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -11598,7 +11680,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -11783,7 +11866,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -11947,7 +12031,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -12030,7 +12115,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -12216,7 +12302,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -12328,7 +12415,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -12429,7 +12517,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -12592,7 +12681,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -12744,7 +12834,8 @@
         "memberships"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -12770,7 +12861,8 @@
         "connectionSecret"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -12834,7 +12926,8 @@
         "hasRunningTurn"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -12884,7 +12977,8 @@
         "observedFactCount"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -12946,7 +13040,8 @@
         "checkedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -13057,7 +13152,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -13107,7 +13203,8 @@
         "checkedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -13348,7 +13445,8 @@
         "recentAudit"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -13512,7 +13610,8 @@
         "checkedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -13771,7 +13870,8 @@
         "manifestDigest"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -13949,7 +14049,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -14099,7 +14200,8 @@
         "governanceChange"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -14151,7 +14253,8 @@
         "name"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -14203,7 +14306,8 @@
         "name"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -14298,7 +14402,8 @@
         "publishedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14346,7 +14451,8 @@
         "skippedDraftOperationNames"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14413,7 +14519,8 @@
         "publishedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14702,7 +14809,8 @@
         "supersedes"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14749,7 +14857,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14796,7 +14905,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14883,7 +14993,8 @@
         "publishedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -14967,7 +15078,8 @@
         "purgedCount"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -15120,7 +15232,8 @@
         "taskIds"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -15232,7 +15345,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -15496,7 +15610,8 @@
         "auditRecords"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -15549,7 +15664,8 @@
         "turnId"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -15687,7 +15803,8 @@
         "unchanged"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -15783,7 +15900,8 @@
         "created"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -15960,7 +16078,8 @@
         "requesterCanApprove"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -16006,7 +16125,8 @@
         "removed"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -16081,7 +16201,8 @@
         "hasRunningTurn"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -16541,7 +16662,8 @@
         "factIds"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -16591,7 +16713,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -16837,7 +16960,8 @@
           "type": "object"
         }
       ]
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -16911,7 +17035,8 @@
         "requestedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -16952,7 +17077,8 @@
         "temporaryPassword"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17056,7 +17182,8 @@
         "resolution"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17135,7 +17262,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -17220,7 +17348,8 @@
         "expiresAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17266,7 +17395,8 @@
         "revoked"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17330,7 +17460,8 @@
         "stoppedCount"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17449,7 +17580,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17487,7 +17619,8 @@
         "apiKey"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17525,7 +17658,8 @@
         "connectionSecret"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -17766,7 +17900,8 @@
         "checkedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -17864,7 +17999,8 @@
         "items"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -17912,7 +18048,8 @@
         "turnId"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18039,7 +18176,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18163,7 +18301,8 @@
         "updatedBy"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18360,7 +18499,8 @@
         "effective"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18503,7 +18643,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18592,7 +18733,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18689,7 +18831,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18820,7 +18963,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -18900,7 +19044,8 @@
         "disabled"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19034,7 +19179,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19118,7 +19264,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19212,7 +19359,8 @@
         "internal"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19261,7 +19409,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19430,7 +19579,8 @@
         "memberships"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19585,7 +19735,8 @@
         "memberships"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -19727,7 +19878,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -19948,7 +20100,8 @@
         "facts"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -19982,7 +20135,8 @@
         "stopped"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -20157,7 +20311,8 @@
         "objects"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -20194,7 +20349,8 @@
         "subscribed"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "handle",
@@ -20380,7 +20536,8 @@
         "lastObservedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -20439,7 +20596,8 @@
         "checkedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -20547,7 +20705,8 @@
         "edges"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -20615,7 +20774,8 @@
         "hasRunningTurn"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21105,7 +21265,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21157,7 +21318,8 @@
         "description"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21335,7 +21497,8 @@
         "updatedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21494,7 +21657,8 @@
         "memberships"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21644,7 +21808,8 @@
         "createdAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -21737,7 +21902,8 @@
         "status"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   },
   {
     "channel": "handle",
@@ -21795,7 +21961,8 @@
         "valid"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": false
   },
   {
     "channel": "human",
@@ -21944,6 +22111,7 @@
         "lastObservedAt"
       ],
       "type": "object"
-    }
+    },
+    "sideEffects": true
   }
 ]
