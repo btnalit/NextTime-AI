@@ -5,17 +5,19 @@
 # ./docker-compose.yml and ./.env from cwd — same convention as scripts/restore.sh/accept_s1.sh).
 #
 # Usage:
-#   sh scripts/chaos-kill-worker.sh <taskId> <apiKey> [pollTimeoutSeconds]
+#   sh scripts/chaos-kill-worker.sh <taskId> <apiKeyFile> [pollTimeoutSeconds]
 #
 #   <taskId>   — an existing Task's id, currently running a Worker (e.g. from `get_task`/
 #                `list_tasks`, the web console's Task view, or an accept_s2.sh run).
-#   <apiKey>   — a human-channel API key for the same workspace as <taskId>, holding at least
+#   <apiKeyFile> — a file (keep it chmod 600) holding a human-channel API key for the same
+#                workspace as <taskId>. R-34: the key itself is never a command-line argument —
+#                every local user can read /proc/<pid>/cmdline, and shell history keeps it. At least
 #                `member` role (`get_task`'s own minRole) — `list_tasks`/`get_task` are both
 #                dispatchable on the human channel: `application/gateway/authorize.ts`'s own doc
 #                comment — "channel:'handle' capabilities are available to *both* channels" — a
 #                `channel:'human'` guard only ever blocks the opposite direction. This is the same
-#                "curl + API key from args" transport docs/runbooks/troubleshoot-task.md's own
-#                `get_task` example already uses.
+#                "curl + API key" transport docs/runbooks/troubleshoot-task.md's own `get_task`
+#                example already uses.
 #   [pollTimeoutSeconds] — how long to wait for the reaper to notice and requeue/fail the Task
 #                after the kill. Default 90 (application/task's own reaper runs on a 30s tick by
 #                default, TASK_REAPER_INTERVAL_MS — 90s gives it up to 3 ticks).
@@ -38,21 +40,32 @@
 # Every docker compose run below carries </dev/null (same reasoning as accept_s1.sh's own header
 # comment: non-interactive over ssh, no stdin to hang on).
 #
-# Confidentiality (repo is public): the API key lives only in a shell variable and one curl
-# argument for this process's lifetime, never written to a file, and only ever printed via
-# redact() (first 6 characters) — same convention as accept_s1.sh.
+# Confidentiality (repo is public): the API key is read from <apiKeyFile> into a shell variable for
+# this process's lifetime, reaches curl only on stdin (`-H @-`, fed by the printf builtin — never
+# an argument of any process), and is only ever printed via redact() (first 6 characters).
 
 set -u
 
 if [ "$#" -lt 2 ]; then
-  echo "usage: sh scripts/chaos-kill-worker.sh <taskId> <apiKey> [pollTimeoutSeconds]" >&2
+  echo "usage: sh scripts/chaos-kill-worker.sh <taskId> <apiKeyFile> [pollTimeoutSeconds]" >&2
   exit 1
 fi
 
 TASK_ID="$1"
-API_KEY="$2"
+API_KEY_FILE="$2"
 POLL_TIMEOUT_SECONDS="${3:-90}"
 POLL_INTERVAL_SECONDS=5
+
+# Never echo the argument back: an old-style call passes the key itself here.
+if [ ! -f "$API_KEY_FILE" ] || [ ! -r "$API_KEY_FILE" ]; then
+  echo "chaos-kill-worker: <apiKeyFile> must be a readable file holding the API key (chmod 600) — the key is no longer taken on the command line" >&2
+  exit 1
+fi
+API_KEY=$(tr -d '[:space:]' <"$API_KEY_FILE")
+if [ -z "$API_KEY" ]; then
+  echo "chaos-kill-worker: <apiKeyFile> is empty" >&2
+  exit 1
+fi
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "chaos-kill-worker: run this from the checkout root (where docker-compose.yml lives)" >&2
@@ -90,13 +103,19 @@ redact() {
   printf '%s...(redacted)' "$prefix"
 }
 
+# The Authorization header for `curl -H @-`: printf is a shell builtin, so the key is never an
+# argument of any process.
+auth_header() {
+  printf 'Authorization: Bearer %s\n' "$API_KEY"
+}
+
 # One `get_task` call — human channel, through caddy (same transport docs/runbooks/
 # troubleshoot-task.md's own §3.4 example uses). Prints the raw JSON response on stdout; caller
 # extracts what it needs with sed/grep (no jq/node JSON parser assumed on the host — same
 # constraint scripts/accept_s1.sh's own header comment documents).
 get_task() {
-  curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/get_task" \
-    -H "Authorization: Bearer $API_KEY" \
+  auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/get_task" \
+    -H @- \
     -H 'content-type: application/json' \
     -d "{\"taskId\":\"$TASK_ID\"}"
 }

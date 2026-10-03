@@ -242,8 +242,12 @@ Network / Endpoint 固定；Repository 只在配置了仓库路径时；SystemdS
   是受支持的配置——`systemd.ts` 检测不到该路径就跳过，不报错。
 - **`Container` 之外的对象没有 `owned_by Owner` 边**：`ontology/ops-assets-v1.yaml` 自己的文件头
   已经写明——`Owner` 身份解析不在本采集器范围内，留给未来任务或人工/CLI 直接断言。
-- **`repository.ts` 只观察 `HOST_INVENTORY_REPOSITORY_PATHS` 里配置的路径**：不会自动发现主机上的
-  git 仓库，默认这个环境变量为空（无 Repository 观察）。
+- **Repository 观察在交付的部署里是关闭的**（2026-10-02 复审 R-25，维护者决定 D-27）：
+  `repository.ts` 只观察 `HOST_INVENTORY_REPOSITORY_PATHS` 里配置的路径，不会自动发现主机上的 git
+  仓库；`docker-compose.yml` 既不把这个变量传给采集器、也不挂载任何仓库，所以标准主机上没有 Repository
+  观察。代码保留、不接线；要启用须同时加 env 透传与只读挂载。无论启用与否，remote URL 在成为 Repository
+  身份键之前都会脱敏：去掉 userinfo（`https://user:token@host/…`、scp 式 `token@host:path`）、查询串
+  与片段（`sanitizeRemoteUrl`）；进程命令行里 URL 的 userinfo 也一律替换为 `***`（`redact.ts`）。
 - **S3.4 phase 4 无分页循环**：`ragflow.ts` 对 `kb.list`/`kb.documents` 各只调用一次（一个较大的
   `page_size`），不会翻页——一个 workspace 的 KnowledgeBase 或某个 KnowledgeBase 的 Document 数量
   超过一页时，这次运行只观察到部分，不是崩溃。

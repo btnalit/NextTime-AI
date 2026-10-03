@@ -126,16 +126,11 @@ chmod 600 "$KERNEL_ENV"
 LLM_PROXY_ENV="$SECRETS_DIR/llm-proxy.env"
 if [ ! -f "$LLM_PROXY_ENV" ]; then
 	cat >"$LLM_PROXY_ENV" <<'EOF'
-# llm-proxy secrets template (design doc §7.7; docs/development-tasks.md S1.7). Real provider API
-# keys go here — never commit. Each var name must exactly match some provider entry's
-# `api_key_env` in config/llm-providers.yaml (see config/llm-providers.example.yaml for the full
-# schema) — llm-proxy reads the real key from process.env[api_key_env], never from this file's
-# key names themselves.
-#
-# Example (uncomment and fill in when connecting a real provider — names must match
-# llm-providers.yaml's own `api_key_env` values, these two are only an example pairing):
-# EXAMPLE_OPENAI_API_KEY=
-# EXAMPLE_ANTHROPIC_API_KEY=
+# llm-proxy env template (design doc §7.7; docs/development-tasks.md S1.7). Provider API keys do
+# NOT go here any more (R-24): put each one in its own file, secrets/llm-provider-keys/<NAME>,
+# where <NAME> is the provider's `api_key_env` in config/llm-providers.yaml (mode 0640, group
+# 10001 — re-run scripts/host-env-init.sh to fix both). A key still set here keeps working but is
+# visible to container inspect, and llm-proxy logs a deprecation warning for it.
 EOF
 	CREATED="$CREATED secrets/llm-proxy.env"
 else
@@ -153,9 +148,12 @@ if [ ! -f "$RAGFLOW_ENV" ]; then
 # gatekeeper instance go here — never commit. The platform keeps its own copy; it does not share
 # a credentials file with any other RAGFlow client on this host.
 #
+# The RAGFlow API key does NOT go here any more (R-24): put it in secrets/gatekeeper-ragflow/api_key
+# (mode 0640, group 10001 — re-run scripts/host-env-init.sh to fix both). A key still set here as
+# GATE_CREDENTIAL_RAGFLOW_API_KEY keeps working, with a deprecation warning.
+#
 # Example (uncomment and fill in when connecting):
 # RAGFLOW_BASE_URL=
-# GATE_CREDENTIAL_RAGFLOW_API_KEY=
 EOF
 	CREATED="$CREATED secrets/gatekeeper-ragflow.env"
 else
@@ -253,6 +251,24 @@ mkdir -p "$CONFIG_DIR/ontology"
 mkdir -p "$SECRETS_DIR/setup"
 chown "${CONTAINER_UID}:${CONTAINER_GID}" "$SECRETS_DIR/setup"
 chmod 0700 "$SECRETS_DIR/setup"
+
+# --- secrets/llm-provider-keys/ and secrets/gatekeeper-ragflow/: key FILES (R-24, review
+# 2026-10-02) — llm-proxy reads one file per `api_key_env` name from the first, gatekeeper-ragflow
+# its RAGFlow key from the second's `api_key`; both bind-mount the directory read-only
+# (docker-compose.yml), so a key never sits in container env. Both services run as uid:gid
+# 10001:10001: directories root-owned, group 10001, 0750; every file in them 0640, group 10001 —
+# the same convention as handle.key / gate.token (gen-handle-keys.sh). Re-run after adding a key
+# file to fix its mode/group. Best-effort chgrp, reported like pg_password's below.
+for d in llm-provider-keys gatekeeper-ragflow; do
+	mkdir -p "$SECRETS_DIR/$d"
+	chmod 750 "$SECRETS_DIR/$d"
+	chgrp "$CONTAINER_GID" "$SECRETS_DIR/$d" 2>/dev/null || echo "host-env-init: WARNING: could not chgrp $SECRETS_DIR/$d to gid $CONTAINER_GID — the service reading it will not see its key files" >&2
+	for f in "$SECRETS_DIR/$d"/*; do
+		[ -f "$f" ] || continue
+		chmod 640 "$f"
+		chgrp "$CONTAINER_GID" "$f" 2>/dev/null || echo "host-env-init: WARNING: could not chgrp $f to gid $CONTAINER_GID" >&2
+	done
+done
 
 # --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/
 # models/ must be usable by the platform's non-root containers (uid:gid 10001:10001 —

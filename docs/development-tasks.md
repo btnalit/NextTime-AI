@@ -1233,6 +1233,23 @@
   - **`scripts/chaos-kill-worker.sh` / `scripts/chaos-kill-entry.sh`**：POSIX sh 操作员脚本，同 `scripts/accept_s1.sh`/`scripts/restore.sh` 的既有约定（从检出根跑、`docker compose config` 探活、`</dev/null`、API key 只打印前 6 位）。前者用 `get_task`（human 通道也能调——`authorize.ts` 的 `channel:'handle'` 分支对两个通道都放行，只有 `channel:'human'` 才排斥非 human 调用方）定位当前 `running` 的 WorkerRun，按 `taskContainerName` 约定算出容器名直接 `docker kill`（不是 `docker compose kill`——Worker 容器不是 compose 服务），轮询到 `queued`（attempt 增，reaper 已重试）或 `failed` 记 PASS。后者 `docker kill nexttime-entry-<principalId>`，用 `send_chat_message` 触发"下一轮"，轮询 worker-supervisor 的 `/resident/<principalId>`（同 accept_s1.sh 的 `resident_status()` 助手同一条路径）等 `restarts` 增且 `running=true`。两者的期望输出、常见故障、与 `/internal/metrics` 的运维读法写进新 runbook `docs/runbooks/host-chaos.md`（`docs/runbooks/README.md` 排障表已加一行；`docs/runbooks/operations.md` 两处"`invariant-checks.ts` 未实现"的旧记录已更新）。
   - **测试**：`substrate/audit/invariant-checks.integration.test.ts`（新增，DB-gated，`describe.runIf(DATABASE_URL)`）——I13 插入/清理的前后差值断言、I4/I12 触发器存在性、`runInvariantChecks` 返回形状与固定顺序；`governance/approval/reads.integration.test.ts`（新增，DB-gated）——纯 observe 行、`days` 窗口截断、`gatekeeperId` 过滤、与 execute 类行合并四例。**本机（Windows，无 docker/psql）没有条件跑通这两份 DB-gated 测试**，同 S3.11/S3.13 PR 的先例，只做了对照既有 `substrate/invariants.test.ts`/`writer.test.ts`/`members-flow.integration.test.ts` 写法的仔细人工核对，需要 CI 的真实 Postgres 服务确认一遍。`packages/kernel/src/index.test.ts` 原有一例断言"`outboxPruneDays: 0` 时 `setTimeout` 一次都不该被调用"，因为本任务给 `setTimeout` 加了第二个使用者（不变量检查的首次 tick 延时）而需要同时传 `invariantCheckIntervalMs: 0` 才能继续成立，已同步修——不是新缺陷，是同一个断言语义下必须的连带更新。
 
+- **R-34 更正（2026-10-02 复审）——密钥与 Handle 不再出现在任何进程的 argv 里**：验收套件在生产主机上跑
+  （`apply-release.sh` 第 7 步），原来 `run_driver` / `cap` 把 key、Handle 作为 `docker compose run … node
+  /tmp/driver.mjs cap <token> …` 的参数，同机任何用户都能从 `/proc/*/cmdline` 读到（验收工作区留 7 天、S4 的工作区
+  启用并授予了全部平台门）；`cap` 的 params JSON 里还带着门的 `connectionSecret` 与凭证；accept_s1 的三处 curl 与
+  三个混沌脚本用 `curl -H "Authorization: Bearer $KEY"`，混沌脚本还把 key 当位置参数（进 shell 历史）。现在：
+  ①`scripts/lib/accept-common.sh` 的 `run_driver`（子 shell 函数体）把每个带 token 的子命令的 token 移进
+  `NT_ACCEPT_TOKEN`、`cap` / `mcp` 的 params 移进 `NT_ACCEPT_PARAMS`，以 `docker compose run -e NAME`（不带值，
+  从调用方环境取）带进容器，驱动收到的是 `env:NAME`——`deploy/accept/driver.mjs` 的 `resolveArg` 把任何
+  `env:<大写名>` 参数换成该环境变量的值（未设为空串，字面值照旧可用）；调用方不改。②新增 `auth_header <token>`
+  （printf 内建 → `curl -H @-`），accept_s1 的三处 curl 改用它。③accept_s2 的 S2.13 泄露检查不再
+  `psql -v token=…`，改为同一 stdin 上一行 `\set token …`（token 已校验为 40 位十六进制）。④三个混沌脚本的
+  `<apiKey>` 换成 `<apiKeyFile>`（0600 文件路径，`host-chaos.md` 给了不进历史的建法），读入后经 `auth_header |
+  curl -H @-` 发出；参数不是可读文件时报错且不回显参数（旧式调用传的就是 key 本身）。所有 PASS / FAIL 行不变。
+  验证：主机上无法跑验收，只做了 `sh -n`、shellcheck 0.11.0（无新增告警，既有的 info / warning 与 main 相同）
+  与逐行核对；驱动的 `env:` 解析由 `packages/kernel/src/interfaces/accept-driver.test.ts` 新增用例覆盖（HTTP
+  Bearer、params、未设变量、WS authenticate）。未做：收尾时吊销验收 key（复审 L9-5 的另一条建议），留作后续。
+
 ### S3.9 S3 验收脚本
 - 交付物：`scripts/accept_s3.sh`：采集 → 入口 agent 回答「哪个服务依赖哪个」并 explain → Explorer 端点返回图 → Claude Code 经 MCP 观察同一图。
 - 验收：退出 0 打印 `S3 OK`。
@@ -3429,6 +3446,27 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `apply-release.sh` 以管道 `| sed` 判断拉取成败，取到的是 sed 的退出码，失败被当成成功、没有退回源码构建
   （三遍式设计让验签失败发生在重打 tag 之前，本地镜像未被改动，栈不受影响）。修为匿名优先、失败且有配置时以
   uid 0 挂配置重试并打印 cosign 报错；拉取退出码直接取自脚本。
+- **R-33 更正（2026-10-02 复审）——签名 job 里不再跑第三方扫描**：原来一个 job 同时持有 `packages: write` 与
+  `id-token: write`，并依次跑 docker login（`GITHUB_TOKEN` 留在 `~/.docker/config.json` 直到 post 步骤）、cosign、
+  `aquasecurity/trivy-action`（`TRIVY_PASSWORD` 就是 `GITHUB_TOKEN`）、`codeql-action/upload-sarif`；其中任何一步
+  被换成恶意提交，都能重推某个发布 tag 并以本工作流身份 keyless 签名，主机 `pull-images.sh` 照样验过。现在拆成两个
+  job：`build-sign`（`contents: read` + `packages: write` + `id-token: write`）只跑检出、Docker 自家的 buildx /
+  login / build-push、sigstore 的 cosign-installer 与 `cosign sign`，签名之后把 `<image>@<digest>` 作为 artifact
+  `digest-<service>` 交出（`actions/upload-artifact`，保留 1 天）；`scan`（`contents: read` +
+  `security-events: write`，无 `packages`、无 `id-token`、不给 Trivy 任何 registry 凭证——包是公开的，匿名拉取）
+  `needs: build-sign`、`if: !cancelled()`，按服务下载 digest（`actions/download-artifact` v8，摘要不符即失败），
+  校验形如 `ghcr.io/*/nexttime-ai-<service>@sha256:*` 后跑 Trivy 并上传 SARIF（分类 `publish-<service>` 不变，仍只
+  报告）；某个服务构建失败时它的扫描跳过，不影响其它。所有 action 仍钉完整提交 SHA（带版本注释）。`build-sign`
+  另拒绝在 `refs/heads/main` 以外运行：从别的分支 dispatch 会用主机验不过的签名覆盖发布 tag。`pull-images.sh`
+  验签从身份正则改为全部精确匹配：issuer、`--certificate-identity`
+  `https://github.com/<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`，外加
+  `--certificate-github-workflow-repository <owner>/<repo>` 与 `--certificate-github-workflow-ref refs/heads/main`
+  ——证书身份是被调用的可复用工作流，这两项是发起运行的那次调用（release-please 在 main 上、或从 main dispatch），
+  于是别的分支或别的仓库以 `…/publish-images.yml@main` 调用它签出的东西也不再通过。已发布的 v0.35–v0.38 都由
+  main 上的 release-please 调用签名，满足新条件。没有在 Docker 自家 action 与 cosign-installer 之外再换成手写 CLI：
+  gha 缓存只对 JS action 暴露运行时令牌，attestation 需要 docker-container builder，这些在 PR 上都无法实跑验证。
+  验证：本地 actionlint 1.7.12（带 shellcheck 0.11.0）对 `publish-images.yml` / `release-please.yml` 无告警，
+  `pull-images.sh` 过 `sh -n` 与 shellcheck；真实发布只在下一次发版发生。
 
 ### D2 实现说明
 

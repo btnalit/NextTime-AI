@@ -52,6 +52,32 @@ function scriptedHttp(
   };
 }
 
+/** Steps ① – ③ with the scripted connection, ending on the review table. */
+async function walkToReview(): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+  const connectStep = await screen.findByTestId('wizard-step-connect');
+  await within(connectStep).findByTestId('cc-connection-secret-reveal');
+  fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
+    target: { value: 'accept_s2_mcp' },
+  });
+  fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
+    target: { value: 'http://accept-s2-mcp:8080' },
+  });
+  fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
+  const publishStep = await screen.findByTestId('wizard-step-publish');
+  fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
+  await screen.findByTestId('wizard-review-table');
+}
+
+const CONNECTION_HANDLERS = {
+  create_connection: () => ({
+    gatekeeperId: 'gk-1',
+    importedOperationNames: ['accept_s2_mcp_echo'],
+    connectionRequestId: null,
+  }),
+  publish_manifest: () => ({ publishedOperationNames: ['accept_s2_mcp_echo'] }),
+};
+
 describe('OnboardingWizard', () => {
   it('walks kind → connect → publish → review → done, calling create_connection/publish_manifest', async () => {
     const onFinished = vi.fn();
@@ -106,7 +132,7 @@ describe('OnboardingWizard', () => {
     expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true);
   });
 
-  it('review step: "propose reclassification" calls propose_operation then publish_operation with the overridden fields', async () => {
+  it('review step: "propose reclassification" proposes, shows old → new behind a confirm, and publishes only on confirm (R-19, D-17)', async () => {
     const http = scriptedHttp({
       create_connection: () => ({
         gatekeeperId: 'gk-1',
@@ -123,7 +149,18 @@ describe('OnboardingWizard', () => {
         expect(p.operation.mode).toBe('execute');
         // Untouched fields pass through verbatim.
         expect(p.operation.binding).toEqual({ kind: 'mcp', tool_name: 'accept_s2_mcp_echo' });
-        return { gatekeeperId: 'gk-1', name: 'accept_s2_mcp_echo', status: 'draft' };
+        return {
+          gatekeeperId: 'gk-1',
+          name: 'accept_s2_mcp_echo',
+          version: 2,
+          status: 'draft',
+          draftOf: 'obj-echo',
+          governanceChange: {
+            before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            after: { mode: 'execute', blastRadius: 'medium', autoApprovable: true },
+            direction: 'tightened',
+          },
+        };
       },
       publish_operation: (params) => {
         expect(params).toEqual({ gatekeeperId: 'gk-1', name: 'accept_s2_mcp_echo' });
@@ -154,9 +191,94 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
 
+    // Proposed, not yet published: the confirm shows the change first.
+    const confirm = await screen.findByTestId('wizard-review-reclassify-confirm');
+    expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
+    expect(confirm.textContent).toContain('accept_s2_mcp_echo: 模式');
+    expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+      'tightened',
+    );
+    // A tightening: no loosening warning, no danger styling.
+    expect(within(confirm).queryByTestId('wizard-review-reclassify-loosens')).toBeNull();
+    expect(within(confirm).getByTestId('confirm-button').className).not.toContain('text-danger');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     const names = http.calls.map((c) => c.name);
     expect(names.indexOf('propose_operation')).toBeLessThan(names.indexOf('publish_operation'));
+  });
+
+  it('review step: a loosening reclassification is danger-styled with what it means; cancelling keeps the draft unpublished', async () => {
+    const http = scriptedHttp({
+      ...CONNECTION_HANDLERS,
+      search: () => [
+        operationObject({ mode: 'execute', blast_radius: 'high', auto_approvable: false }),
+      ],
+      propose_operation: () => ({
+        gatekeeperId: 'gk-1',
+        name: 'accept_s2_mcp_echo',
+        version: 2,
+        status: 'draft',
+        draftOf: 'obj-echo',
+        governanceChange: {
+          before: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+          after: { mode: 'observe', blastRadius: 'high', autoApprovable: false },
+          direction: 'loosened',
+        },
+      }),
+    });
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    await walkToReview();
+
+    fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    fireEvent.change(within(form).getByLabelText('Mode'), { target: { value: 'observe' } });
+    fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
+
+    const confirm = await screen.findByTestId('wizard-review-reclassify-confirm');
+    expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
+    const warning = within(confirm).getByTestId('wizard-review-reclassify-loosens');
+    expect(warning.textContent).toContain('不再需要授权');
+    expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
+      'loosened',
+    );
+
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    await screen.findByTestId('wizard-review-draft-kept');
+    expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
+  });
+
+  it('review step: a proposal with no classification change publishes without a confirm', async () => {
+    const http = scriptedHttp({
+      ...CONNECTION_HANDLERS,
+      search: () => [operationObject()],
+      propose_operation: () => ({
+        gatekeeperId: 'gk-1',
+        name: 'accept_s2_mcp_echo',
+        version: 2,
+        status: 'draft',
+        draftOf: 'obj-echo',
+        governanceChange: {
+          before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+          after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+          direction: 'neutral',
+        },
+      }),
+      publish_operation: () => ({
+        gatekeeperId: 'gk-1',
+        name: 'accept_s2_mcp_echo',
+        status: 'published',
+      }),
+    });
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    await walkToReview();
+
+    fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
+
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
+    expect(screen.queryByTestId('wizard-review-reclassify-confirm')).toBeNull();
   });
 
   it('review step: a 409 conflict on an imported operation surfaces via ErrorBanner, not a crash', async () => {

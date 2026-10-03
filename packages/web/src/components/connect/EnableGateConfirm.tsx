@@ -86,7 +86,12 @@ export function EnableGateConfirm({
   async function confirmEnable(): Promise<void> {
     let result: EnableGateInstanceResultWire;
     try {
-      result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', { gateId });
+      // R-18 (D-18): bind the enable to the manifest this preview showed — the kernel refuses
+      // `manifest_changed` if an administrator confirmed a newer one in between.
+      result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
+        gateId,
+        ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
+      });
     } catch (err) {
       // Re-map a known platform wire code (e.g. connector_not_preset, gate_not_enabled,
       // ambiguous_existing_gatekeeper) to its bilingual copy before `kit/confirm`'s own error

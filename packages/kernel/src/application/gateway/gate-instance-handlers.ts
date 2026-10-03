@@ -7,6 +7,7 @@ import {
   findGatekeepersByEndpoint,
   getOperation,
   importManifest,
+  operationGovernanceChangeDirection,
   publishOperation,
   refreshOperationGovernance,
   registerGatekeeper,
@@ -21,6 +22,7 @@ import {
   getGateInstance,
   insertGateLink,
   listAvailableGateInstances,
+  manifestDigest,
   operationsOf,
 } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
@@ -60,8 +62,15 @@ import { gateHostCredentialUrl } from './platform-gates-handlers.js';
  *
  * `previewGateInstanceEnableHandler` below is the read-only twin the console's ConfirmTier calls
  * first (audit J3 "一键写入 ... 没有预览或确认"): it calls `resolveGateLinkTarget` and the same
- * manifest-parse (`operationsOf(await rawOperations(...))`) this handler does, never a parallel
- * reimplementation, and never writes.
+ * manifest read (`readManifestInEffect`) this handler does, never a parallel reimplementation,
+ * and never writes.
+ *
+ * **The manifest in effect (R-18, D-18)**: `gate_instances.operations` only changes when the gate
+ * announces before the administrator decides, or when the administrator confirms a held
+ * announcement (`confirm_gate_manifest`). The preview returns that manifest's digest; `enable`
+ * (optionally) and `refresh_operation_governance` (always) take it back and refuse
+ * `manifest_changed` when the manifest moved in between, so neither applies values the owner did
+ * not see.
  */
 
 export class GateInstanceNotAvailableError extends Error {
@@ -78,7 +87,10 @@ export class GateInstanceNotAvailableError extends Error {
     | 'ambiguous_existing_gatekeeper'
     // S8 W3-K1 (leftover 79): `refresh_operation_governance`'s target Gatekeeper has no linked
     // platform gate instance (`findGateLinkByGatekeeper` returned null) — nothing to refresh from.
-    | 'no_announced_manifest';
+    | 'no_announced_manifest'
+    // R-18 (D-18): the caller's `manifestDigest` (from `preview_gate_instance_enable`) is not the
+    // digest of the manifest in effect any more — an administrator confirmed a newer one since.
+    | 'manifest_changed';
   constructor(code: GateInstanceNotAvailableError['code'], message: string) {
     super(message);
     this.name = 'GateInstanceNotAvailableError';
@@ -163,6 +175,25 @@ function computeGateLinkDrift(
 export const listAvailableGateInstancesHandler: CapabilityHandler = async (client, workspaceId) => {
   return { result: { items: await listAvailableGateInstances(client, workspaceId) } };
 };
+
+/** R-18 (D-18): the manifest in effect and its digest, read once — the caller applies exactly
+ *  these operations after checking `expectedDigest` (when given) against this digest, so what it
+ *  writes is always the version the human previewed. */
+async function readManifestInEffect(
+  client: PoolClient,
+  gateId: string,
+  expectedDigest: string | undefined,
+): Promise<{ operations: Operation[]; digest: string }> {
+  const raw = await rawOperations(client, gateId);
+  const digest = manifestDigest(raw);
+  if (expectedDigest !== undefined && expectedDigest !== digest) {
+    throw new GateInstanceNotAvailableError(
+      'manifest_changed',
+      `gate instance "${gateId}"'s manifest changed since it was previewed — preview it again`,
+    );
+  }
+  return { operations: operationsOf(raw), digest };
+}
 
 async function requireAvailable(client: PoolClient, gateId: string) {
   const instance = await getGateInstance(client, gateId);
@@ -251,7 +282,10 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   if (!ctx?.principal) {
     throw new Error('enable_gate_instance: no resolved human principal in context');
   }
-  const { gateId } = params as { gateId: string };
+  const { gateId, manifestDigest: expectedDigest } = params as {
+    gateId: string;
+    manifestDigest?: string;
+  };
   // Serialize concurrent enables of the same (workspace, gate) so the idempotency check below is
   // exact — the same advisory-lock shape `application/task/invoke.ts` uses (review finding).
   await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
@@ -273,6 +307,8 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     };
   }
   const instance = await requireAvailable(client, gateId);
+  // Checked before anything is written; the same read supplies what is imported below.
+  const { operations } = await readManifestInEffect(client, gateId, expectedDigest);
   const actor = { id: ctx.principal.id, kind: ctx.principal.kind };
 
   const resolution = await resolveGateLinkTarget(client, workspaceId, instance);
@@ -311,7 +347,6 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     gatekeeperId = registered.gatekeeperId;
   }
 
-  const operations = operationsOf(await rawOperations(client, gateId));
   const imported = await importManifest(client, workspaceId, {
     gatekeeperId,
     operations,
@@ -360,7 +395,9 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
  * still a `draft` (any origin) → `operationsToImport` (this is exactly what `importManifest`
  * would write over — see that function's own doc comment on which rows a draft-write replaces);
  * `published`/`deprecated` → `operationsAlreadyPresent`, with `differs` flagging a mismatch
- * against the announced manifest (audit CO2) that this preview surfaces but never corrects.
+ * against the announced manifest (audit CO2) that this preview surfaces but never corrects, and
+ * `direction` (R-19, D-17) the kernel's classification of that change. `manifestDigest` names the
+ * manifest every row was computed from (module doc comment).
  */
 export const previewGateInstanceEnableHandler: CapabilityHandler = async (
   client,
@@ -373,7 +410,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
   const targetGatekeeperId =
     resolution.kind === 'link' ? resolution.existing.gatekeeperId : undefined;
 
-  const operations = operationsOf(await rawOperations(client, gateId));
+  const { operations, digest } = await readManifestInEffect(client, gateId, undefined);
   const operationsToImport: {
     name: string;
     mode: Operation['mode'];
@@ -395,6 +432,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       autoApprovable: boolean;
     };
     differs: boolean;
+    direction: ReturnType<typeof operationGovernanceChangeDirection>;
   }[] = [];
 
   for (const operation of operations) {
@@ -430,6 +468,8 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       existing: existingFields,
       announced,
       differs: diffOperationGovernanceFields(existingFields, announced).differs,
+      // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
+      direction: operationGovernanceChangeDirection(existingFields, announced),
     });
   }
 
@@ -446,6 +486,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       ambiguousCandidates: resolution.kind === 'ambiguous' ? resolution.candidateIds : [],
       operationsToImport,
       operationsAlreadyPresent,
+      manifestDigest: digest,
     },
     resourceType: 'gate_instance',
     resourceId: gateId,
@@ -464,7 +505,9 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
  * this workspace never enabled through the platform catalog) → `GateInstanceNotAvailableError`
  * (`no_announced_manifest`), before any write. The domain write itself
  * (`governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`) is in-place, not a new
- * Operation version — see that module's own doc comment for why.
+ * Operation version — see that module's own doc comment for why. R-18 (D-18): `manifestDigest`
+ * is the preview's digest; a different manifest in effect refuses `manifest_changed` before any
+ * write, and the values applied come from the same read the digest was checked against.
  *
  * One AuditRecord per refreshed Operation, in the same transaction as its write — complementary to
  * `application/gateway/dispatch.ts`'s own per-call audit row (which only carries `params`, not the
@@ -480,9 +523,14 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   if (!ctx?.principal) {
     throw new Error('refresh_operation_governance: no resolved human principal in context');
   }
-  const { gatekeeperId, operationNames } = params as {
+  const {
+    gatekeeperId,
+    operationNames,
+    manifestDigest: expectedDigest,
+  } = params as {
     gatekeeperId: string;
     operationNames?: readonly string[];
+    manifestDigest: string;
   };
 
   const link = await findGateLinkByGatekeeper(client, workspaceId, gatekeeperId);
@@ -493,7 +541,13 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     );
   }
 
-  const announcedOperations = operationsOf(await rawOperations(client, link.gateId));
+  // R-18 (D-18): apply exactly the reviewed manifest — the digest the owner's preview showed must
+  // still be the manifest in effect, and the operations applied come from that same read.
+  const { operations: announcedOperations } = await readManifestInEffect(
+    client,
+    link.gateId,
+    expectedDigest,
+  );
   const outcome = await refreshOperationGovernance(client, workspaceId, {
     gatekeeperId,
     announcedOperations,

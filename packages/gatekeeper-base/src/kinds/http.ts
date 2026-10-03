@@ -22,8 +22,59 @@ export interface HttpTransportOptions {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** Substitutes `{name}` path segments from `params`; returns the rendered path and the set of
- *  param names consumed (so callers can put the rest on the query string / JSON body). */
+/** Decodes every `%XX` escape byte-wise (never throws on a malformed sequence, unlike
+ *  `decodeURIComponent`) — enough to see an encoded `.`, `/` or a backslash. */
+function decodePercentEscapes(value: string): string {
+  return value.replace(/%([0-9a-fA-F]{2})/g, (_match, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+}
+
+/** At most this many rounds of decoding are looked through; a value still encoded after that is
+ *  refused rather than guessed at. */
+const MAX_DECODE_ROUNDS = 4;
+
+/** `true` when `raw` can only ever name one path segment, however many times a server decodes
+ *  it: not empty, not `.` / `..`, no `/` or backslash — in the raw value or in any decoding of it. */
+function isSinglePathSegment(raw: string): boolean {
+  let current = raw;
+  for (let round = 0; round < MAX_DECODE_ROUNDS; round += 1) {
+    if (current.length === 0 || current === '.' || current === '..' || /[/\\]/.test(current)) {
+      return false;
+    }
+    const decoded = decodePercentEscapes(current);
+    if (decoded === current) return true;
+    current = decoded;
+  }
+  return false;
+}
+
+/**
+ * R-22 (review 2026-10-02): one templated path parameter, encoded as exactly one path segment —
+ * or refused before any request is made. `encodeURIComponent` alone leaves `.` and `..` as they
+ * are, so `{dataset_id: '..'}` turned `/api/v1/datasets/{dataset_id}/documents` into
+ * `/api/v1/documents`: an endpoint no Operation publishes, called with the gate's own credential
+ * under an approval that named another target (I17, RL2). An empty value collapses a segment the
+ * same way (and `//host` at the start of a path would even change the host). Refused: a missing
+ * or empty value, `.`, `..`, and anything containing `/` or a backslash — in the raw value or after any
+ * percent-decoding (`%2e%2e`, `%252F`, …), since the target may decode more than once.
+ */
+export function encodePathSegment(name: string, value: unknown): string {
+  if (value === undefined || value === null) {
+    throw new TransportInvokeError(`http transport: path parameter "${name}" is required`);
+  }
+  const raw = String(value);
+  if (!isSinglePathSegment(raw)) {
+    throw new TransportInvokeError(
+      `http transport: path parameter "${name}" must be a single path segment — no "/", "\\", "." or ".." in any encoding`,
+    );
+  }
+  return encodeURIComponent(raw);
+}
+
+/** Substitutes `{name}` path segments from `params` (each through `encodePathSegment`); returns
+ *  the rendered path and the set of param names consumed (so callers can put the rest on the query
+ *  string / JSON body). */
 function renderPath(
   path: string,
   params: Record<string, unknown>,
@@ -31,10 +82,34 @@ function renderPath(
   const used = new Set<string>();
   const rendered = path.replace(/\{([^}]+)\}/g, (_match, name: string) => {
     used.add(name);
-    const value = params[name];
-    return encodeURIComponent(value === undefined ? '' : String(value));
+    return encodePathSegment(name, params[name]);
   });
   return { path: rendered, used };
+}
+
+/**
+ * R-22: the request URL for a binding path under the target's base URL. The binding path is
+ * appended to the base URL's own path — `new URL('/api/v1/x', 'https://host/ragflow/')` used to
+ * drop `/ragflow` for every absolute binding path — and set through `pathname`, so no rendered
+ * path can ever change the scheme or host. A `?query` in the binding path is kept.
+ */
+export function resolveBindingUrl(baseUrl: string, bindingPath: string): URL {
+  const url = new URL(baseUrl);
+  const queryAt = bindingPath.indexOf('?');
+  const pathPart = queryAt === -1 ? bindingPath : bindingPath.slice(0, queryAt);
+  const basePath = url.pathname.replace(/\/+$/, '');
+  url.pathname = `${basePath}/${pathPart.replace(/^\/+/, '')}`;
+  url.search = queryAt === -1 ? '' : bindingPath.slice(queryAt + 1);
+  url.hash = '';
+  return url;
+}
+
+/** The part of a binding path template before its first `{param}` — what every rendering of it
+ *  must still start with. */
+function staticPrefix(template: string): string {
+  const brace = template.indexOf('{');
+  const beforeQuery = template.split('?')[0] ?? template;
+  return brace === -1 ? beforeQuery : template.slice(0, brace);
 }
 
 /**
@@ -96,7 +171,18 @@ export class HttpTransport implements Transport {
     }
     const bag = (params ?? {}) as Record<string, unknown>;
     const { path, used } = renderPath(operation.binding.path, bag);
-    const url = new URL(path, this.options.baseUrl);
+    const url = resolveBindingUrl(this.options.baseUrl, path);
+    // R-22, defense in depth: whatever the parameters were, the request stays under the template's
+    // own static prefix — never an ancestor endpoint the manifest does not publish.
+    const prefix = resolveBindingUrl(
+      this.options.baseUrl,
+      staticPrefix(operation.binding.path),
+    ).pathname;
+    if (!url.pathname.startsWith(prefix)) {
+      throw new TransportInvokeError(
+        `http transport: operation "${operation.name}" rendered a path outside its template`,
+      );
+    }
     const method = operation.binding.method.toUpperCase();
 
     const remaining: Record<string, unknown> = {};

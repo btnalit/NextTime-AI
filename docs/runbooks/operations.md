@@ -123,8 +123,10 @@ docker compose up -d --force-recreate <service>
 
 | 改了什么 | 服务 | 命令 |
 |---|---|---|
-| `secrets/llm-proxy.env`（换 provider key） | `llm-proxy` | `docker compose up -d --force-recreate llm-proxy` |
+| `secrets/llm-provider-keys/<NAME>`（换 provider key，R-24） | `llm-proxy` | `docker compose restart llm-proxy`（启动时读文件） |
+| `secrets/llm-proxy.env` | `llm-proxy` | `docker compose up -d --force-recreate llm-proxy` |
 | `secrets/gatekeeper-ragflow.env` | `gatekeeper-ragflow` | `docker compose up -d --force-recreate gatekeeper-ragflow` |
+| `secrets/gatekeeper-ragflow/api_key`（RAGFlow key，R-24） | `gatekeeper-ragflow` | 无需重启（每次调用读文件） |
 | `config/llm-providers.yaml`（换 provider，随后必须 `make gen-models` 重生成 `models.json`——见 §6 常见问题） | `worker-supervisor` 消费的是重新生成的 `models.json` 文件本身（bind mount 内容变了，不需要重建容器），但换 provider 后新拉起的入口/Worker 容器才会用上新值 | 见 `docs/runbooks/host-worker-runtime.md` §3（验收脚本 `accept_s1/s2/s3.sh` 不走这条路径——它们经 `deploy/accept/docker-compose.fake.yml` 自行切到 fake provider，不改这份生产文件，见 `docs/runbooks/accept-s1.md` §1） |
 | `deploy/caddy/Caddyfile` | `caddy` | 普通 `docker compose restart caddy` 即可（bind mount，不需要重建镜像） |
 | `packages/web` 代码改动 | `caddy`（静态产物随镜像走，见 `docs/runbooks/host-caddy.md` §E8.5） | `docker compose build caddy && docker compose up -d caddy` |
@@ -386,14 +388,16 @@ docker compose up -d caddy                                 # 新镜像（Caddyfi
 
 **密钥（S7-A，2026-09-22 维护者决定 ①：不走审批，优先可用性）**：控制台现在可以直接写供应商密钥——详情
 抽屉里的密钥表单：设置 / 更换是普通提交（不需要二次确认），清除走 `ConfirmTier` 的 `medium` 级（一次点击
-确认，不需要重新输入密钥）。解析顺序：**控制台密钥 → `apiKeyEnv` 指向的环境变量 → 无**（同一优先级用于
+确认，不需要重新输入密钥）。解析顺序：**控制台密钥 → `apiKeyEnv` 名下的 key 文件（`secrets/llm-provider-keys/<apiKeyEnv>`，R-24）→ 同名环境变量（已弃用）→ 无**（同一优先级用于
 真实转发请求、「测试调用」与页面显示的 `credentialSource`）。密钥环境变量名现在是**可选**字段——纯控制台
 密钥的供应商可以完全不配置它。传统路径仍然可用（会被控制台密钥覆盖）：
 
 ```bash
-# 主机上，追加一行到 secrets/llm-proxy.env（变量名 = 页面里该供应商的 apiKeyEnv，若配置了的话）
-ACME_API_KEY=...
-docker compose up -d --force-recreate llm-proxy   # §4.2：restart 不重读 env_file
+# 主机上，key 写成一个文件（文件名 = 页面里该供应商的 apiKeyEnv，若配置了的话；R-24：不再写进
+# secrets/llm-proxy.env——那里的值仍生效但能被容器 inspect 看到，llm-proxy 会打弃用告警）
+sudo sh -c 'umask 027; cat > "${NEXTTIME_DATA}/secrets/llm-provider-keys/ACME_API_KEY"'   # 粘贴 key 后 Ctrl-D
+sudo NEXTTIME_DATA="${NEXTTIME_DATA}" sh scripts/host-env-init.sh   # 0640、组 10001
+docker compose restart llm-proxy   # 启动时读 key 文件
 ```
 
 接口：`PUT /api/llm-admin/providers/:id/secret {key}`（设置/替换；`POST` 同义，兼容原设计）、
@@ -435,7 +439,7 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 |---|---|---|
 | 页面顶部「状态目录不可写」 / 写入 503 `store_unwritable` | `${NEXTTIME_DATA}/llm-proxy` 不存在或不归 10001（Docker 代建的是 root） | 运行 `scripts/host-llm-proxy-init.sh`，`--force-recreate llm-proxy` |
 | 保存成功但列表显示 `modelsJsonError: EACCES` | `${NEXTTIME_DATA}/models` 不存在或不归 10001（Docker 代建的是 root） | 重跑 `scripts/host-env-init.sh`，`--force-recreate llm-proxy`；临时用 `make gen-models` 手动重写 |
-| 「测试调用」409 `credential_missing` | 该供应商既没有控制台密钥，`apiKeyEnv`（若配置了）在 `secrets/llm-proxy.env` 里也没设 | 在详情抽屉设置控制台密钥，或加一行环境变量并 `--force-recreate llm-proxy` |
+| 「测试调用」409 `credential_missing` | 该供应商既没有控制台密钥，`apiKeyEnv`（若配置了）既没有 key 文件、`secrets/llm-proxy.env` 里也没设 | 在详情抽屉设置控制台密钥，或按上面写 key 文件并 `restart llm-proxy`（文件读不了时日志有 `could not be read`：重跑 `scripts/host-env-init.sh`） |
 | 测试：补全 ok、工具调用 error | 上游不支持函数调用 / 该模型不支持 `tool_choice` | Worker 与门工具依赖工具调用，换模型或换端点；补全 ok 只说明鉴权与路由对了 |
 | 新供应商在工作区「模型与配额」里看不到 | models.json 未重写（见 `modelsJsonError`）或浏览器缓存 | 刷新平台页看 `models.json 已于 … 重写`；内核每次调用都重读该文件，无需重启 |
 | `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |

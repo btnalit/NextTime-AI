@@ -79,6 +79,7 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
   let gateTokenFile: string;
   const capRequests: RecordedCapRequest[] = [];
   const mcpRequests: RecordedMcpRequest[] = [];
+  const wsAuthTokens: unknown[] = [];
   let listTasksCallCount = 0;
   let listTasksMode: 'progress' | 'always-running' = 'progress';
 
@@ -200,6 +201,7 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
 
         switch (method) {
           case 'authenticate':
+            wsAuthTokens.push(params?.token);
             reply({ ok: true });
             return;
           case 'new_chat':
@@ -341,6 +343,41 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     if (!recorded) throw new Error('fixture: expected a recorded /api/cap request');
     expect(recorded.authorization).toBe('Bearer tok1');
     expect(recorded.body).toEqual({ q: 1 });
+  });
+
+  it('cap: env:<NAME> arguments read the token and params from the environment, never argv (R-34)', async () => {
+    const before = capRequests.length;
+    const { code, kv } = await runDriver(
+      ['cap', 'env:NT_ACCEPT_TOKEN', 'list_things', 'env:NT_ACCEPT_PARAMS', 'd.result.echo.q'],
+      env({ NT_ACCEPT_TOKEN: 'tok-from-env', NT_ACCEPT_PARAMS: '{"q":"from-env"}' }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('EXTRACTED')).toBe('from-env');
+    const recorded = capRequests[before];
+    if (!recorded) throw new Error('fixture: expected a recorded /api/cap request');
+    expect(recorded.authorization).toBe('Bearer tok-from-env');
+    expect(recorded.body).toEqual({ q: 'from-env' });
+
+    // An unset variable is an empty token: no authorization header, params `{}`.
+    const unset = capRequests.length;
+    const anonymous = await runDriver(
+      ['cap', 'env:NT_ACCEPT_UNSET_TOKEN', 'list_things', 'env:NT_ACCEPT_UNSET_PARAMS'],
+      env(),
+    );
+    expect(anonymous.code).toBe(0);
+    expect(capRequests[unset]?.authorization).toBeUndefined();
+    expect(capRequests[unset]?.body).toEqual({});
+  });
+
+  it('get-history: an env: token is what authenticates the WS session (R-34)', async () => {
+    const before = wsAuthTokens.length;
+    const { code, kv } = await runDriver(
+      ['get-history', 'env:NT_ACCEPT_TOKEN', 'chat-1', 'd.length'],
+      env({ NT_ACCEPT_TOKEN: 'ws-tok-from-env' }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('EXTRACTED')).toBe('2');
+    expect(wsAuthTokens[before]).toBe('ws-tok-from-env');
   });
 
   it('cap: empty token omits the authorization header and empty params send {}; error capability returns 400', async () => {
