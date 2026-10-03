@@ -39,6 +39,7 @@ export {
   listDraftOperationsForGatekeeper,
   listOperations,
   countOperationsByGatekeeper,
+  operationVisibleTo,
   publishOperation,
   publishManifest,
   deprecateOperation,
@@ -58,6 +59,7 @@ export {
 } from './manifest.js';
 export type {
   OperationRecord,
+  OperationViewer,
   ImportManifestInput,
   ImportManifestResult,
   SkippedOperation,

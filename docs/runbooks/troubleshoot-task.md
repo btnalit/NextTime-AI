@@ -32,6 +32,8 @@ worker-supervisor 日志，定位到具体是哪一层出的问题——而不�
         │
         ▼
 ③ get_task{taskId} —— 看 status/failureReason，对照 §4 根因表
+   （D-21：只有 owner、该 Task 的请求者和它自己的 WorkerRun Handle 读得到；
+    别人的 key 拿到的是 404，和不存在的 id 一样——排查用 owner 的 key）
         │
         ├─ status = waiting_approval → 见 §3.2（审批链路）
         ├─ status = failed → 按 failureReason 查 §4 对应行
