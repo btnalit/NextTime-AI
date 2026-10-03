@@ -72,9 +72,10 @@ a concrete gate"与"Manifest format"两节；`accept-s2-ssh-gate`/`accept-s2-htt
                                                                               # `accept-s2-http-gate`
                                                                               # 两个 compose 服务块
                                                                               # 就是这么复用它的
-    secrets: [gate_token]
+    # 自连门（R-01，见下方说明）：不挂平台 gate_token，读自己的连接密钥
     environment:
       {
+        GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token,
         GATE_TRANSPORT_KIND: http,                       # 或 mcp / cli / ssh
         GATE_TARGET_BASE_URL: http://<system>:8080,       # http 用这个；mcp 换成 GATE_TARGET_ENDPOINT
         GATE_CREDENTIAL_MODE: shared,                     # 或 connected_account（见 §3 判断）
@@ -90,14 +91,24 @@ a concrete gate"与"Manifest format"两节；`accept-s2-ssh-gate`/`accept-s2-htt
     restart: unless-stopped
 ```
 
-3. 主机侧建数据目录（`GATE_DATA_DIR` 承载幂等 apply 存储/`ConnectedAccountStore`）：
+3. 主机侧建数据目录（`GATE_DATA_DIR` 承载幂等 apply 存储/`ConnectedAccountStore`），并放进这个门
+   自己的连接密钥——owner 调 `mint_connection_secret`（控制台"直接注册门"表单打开时显示的那一把同样可用），
+   §7 第 3 步 `create_connection` 带同一把：
    ```bash
    mkdir -p "${NEXTTIME_DATA}/gatekeepers/<system>"
+   printf '%s\n' '<ntgc1_...>' > "${NEXTTIME_DATA}/gatekeepers/<system>/kernel.token"
+   chmod 0640 "${NEXTTIME_DATA}/gatekeepers/<system>/kernel.token"
+   chgrp 10001 "${NEXTTIME_DATA}/gatekeepers/<system>/kernel.token"
    ```
-4. 起服务并验证协议端点（`GATE_TOKEN` 取值见 `docs/runbooks/key-rotation.md` §3）：
+   **这样起的门是自连门**（R-01，维护者决定 D-01）：它不 announce（没有 `GATE_ID`），不在平台目录里，
+   内核给它的只会是它自己的连接密钥，**绝不是**平台 `gate_token`。它跑在平台 `control` 网络上、用裸服务名，
+   内核的出站目标判定（R-27）默认拒绝这种地址：把 `gatekeeper-<system>` 加进 `.env` 的
+   `NEXTTIME_CONNECTION_ALLOW_HOSTS`（逗号分隔）后 `docker compose up -d --no-deps --force-recreate kernel`。
+   想让 compose 里的门用平台 `gate_token`、走平台目录，就按 §4b 的打包门路径（`GATE_ID` + announce）起。
+4. 起服务并验证协议端点（用的是这个门自己的连接密钥）：
    ```bash
    docker compose up -d gatekeeper-<system>
-   GATE_TOKEN=$(cat "${NEXTTIME_DATA}/secrets/gate.token")
+   GATE_TOKEN=$(cat "${NEXTTIME_DATA}/gatekeepers/<system>/kernel.token")
    docker compose exec -T kernel node -e "
    fetch('http://gatekeeper-<system>:8090/gate/health', {headers:{authorization:'Bearer ${GATE_TOKEN}'}}).then(r=>r.text()).then(console.log)
    "
@@ -267,7 +278,7 @@ curl -s https://<host>:8443/api/cap/list_connection_requests \
 #    (a) 省略 manifestSource：直接问门要 describe_operations（§2 的"保证一致"路径，推荐）
 curl -s https://<host>:8443/api/cap/create_connection \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d "{\"connectionRequestId\":\"<cr-uuid>\",\"kind\":\"http\",\"target\":\"<system>\",\"endpoint\":\"http://gatekeeper-<system>:8090\",\"credentialKind\":\"shared\"}"
+  -d "{\"connectionRequestId\":\"<cr-uuid>\",\"kind\":\"http\",\"target\":\"<system>\",\"endpoint\":\"http://gatekeeper-<system>:8090\",\"connectionSecret\":\"<ntgc1_...>\",\"credentialKind\":\"shared\"}"
 #    (b) 给 manifestSource（http: OpenAPI 文档 URL；mcp: tools/list 端点）——从目标系统直接导入，
 #        见 §9 的一致性陷阱，只在你确认门自己的 GATE_MANIFEST_FILE 与这份导入结果一致时才用：
 #    -d "{...,\"manifestSource\":\"http://<system>:8080/openapi.json\"}"
@@ -363,7 +374,10 @@ fixture，与 `scripts/accept_s2.sh` 自己的 http 连接那一段共用同一�
 `openapi.json`，走§2 的自动导入路径）→ `publish_manifest` → `connect_gatekeeper`（把门授权给
 member，不是 owner 自己），最后由 **member**（被授权的那个人，不是 owner）调用 `request_action`
 观察 `stock.get`，断言 `result.status === "ok"` 且 `observedFactCount >= 1`——真的证明了这条授权
-链本身生效，不只是"owner 反正什么都能调"。
+链本身生效，不只是"owner 反正什么都能调"。fixture 门是自连门（R-01）：脚本先给它签一把自己的连接密钥
+（`mint_connection_secret`）再起门，`create_connection` 带同一把；它跑在平台 `control` 网络上，靠
+`docker-compose.yml` 固定给 kernel 的验收夹具清单 `NEXTTIME_CONNECTION_FIXTURE_HOSTS` 通过出站目标判定
+（R-27），脚本不重启 kernel。
 
 期望输出（末尾）：
 ```
@@ -373,6 +387,7 @@ PASS bootstrap-workspace workspace=... owner=... key=...(redacted)
 PASS bootstrap-member member=... key=...(redacted)
 PASS fixtures-store-key ...
 PASS fixtures-api-token bearer token generated: ...(redacted)
+PASS fixtures-gate-secret the gate's own connection secret minted: ntgc1_...(redacted)
 PASS fixtures-up accept-s2-openapi, accept-s2-http-gate up and healthy
 PASS request-connection connectionRequestId=...
 PASS create-connection gatekeeperId=... (imported stock.get from OpenAPI manifest)

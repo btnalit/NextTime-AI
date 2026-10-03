@@ -90,5 +90,46 @@ for (const [name, service] of Object.entries(doc.services ?? {})) {
       console.error(`service ${name} names undeclared secret ${source}`);
       process.exitCode = 1;
     }
+    // R-01 (D-01): the accept-s2 gates are self-connected — they authenticate the kernel with their
+    // own connection secret and must never be handed the platform gate token.
+    if (source === 'gate_token' && (service.profiles ?? []).includes('accept-s2')) {
+      console.error(
+        `service ${name} is a self-connected acceptance gate and must not mount gate_token`,
+      );
+      process.exitCode = 1;
+    }
   }
+}
+
+// R-27: the kernel's fixed acceptance-fixture allow-list (NEXTTIME_CONNECTION_FIXTURE_HOSTS) is
+// allowed past the owner-supplied-URL predicate permanently, which is only harmless while every
+// name on it is an acceptance fixture: `accept-`-prefixed, an existing service, and never handed
+// the platform gate token.
+const fixtureHostsRaw = doc.services?.kernel?.environment?.NEXTTIME_CONNECTION_FIXTURE_HOSTS;
+if (typeof fixtureHostsRaw !== 'string' || fixtureHostsRaw.includes('$')) {
+  console.error(
+    'kernel NEXTTIME_CONNECTION_FIXTURE_HOSTS must be a literal list (no interpolation)',
+  );
+  process.exitCode = 1;
+} else {
+  for (const host of fixtureHostsRaw.split(',').map((entry) => entry.trim())) {
+    if (!host.startsWith('accept-')) {
+      console.error(`NEXTTIME_CONNECTION_FIXTURE_HOSTS: "${host}" is not an accept-* fixture`);
+      process.exitCode = 1;
+      continue;
+    }
+    const fixture = doc.services?.[host];
+    if (!fixture) {
+      console.error(`NEXTTIME_CONNECTION_FIXTURE_HOSTS: "${host}" names no service`);
+      process.exitCode = 1;
+      continue;
+    }
+    if ((fixture.secrets ?? []).some((entry) => sourceOf(entry) === 'gate_token')) {
+      console.error(
+        `NEXTTIME_CONNECTION_FIXTURE_HOSTS: fixture "${host}" must not mount gate_token`,
+      );
+      process.exitCode = 1;
+    }
+  }
+  console.log(`kernel fixture allow-list (R-27): ${fixtureHostsRaw}`);
 }

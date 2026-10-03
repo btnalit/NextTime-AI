@@ -84,6 +84,10 @@ export interface RegisterGatekeeperObjectInput {
    *  object's properties for now (S2.13 will store connection details)"). Never a credential —
    *  those stay inside the gate process (I9). */
   readonly endpoint?: string;
+  /** R-01 / D-01: the non-secret salt a self-connected gate's connection secret is derived from
+   *  (`adapters/gatekeeper-client/connection-secret.ts`) — `create_connection` sets it; a gate the
+   *  kernel provisioned has none. Never the secret itself. */
+  readonly connectionSecretSalt?: string;
   /** The Object id of the connected system (§5.1.4 Connection "产生 Gatekeeper 实例对象、系统对象与
    *  connects_to 边") — already created by the caller before this call. */
   readonly systemObjectId: string;
@@ -115,6 +119,9 @@ export async function registerGatekeeperObject(
       target: input.target,
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.endpoint !== undefined ? { endpoint: input.endpoint } : {}),
+      ...(input.connectionSecretSalt !== undefined
+        ? { connectionSecretSalt: input.connectionSecretSalt }
+        : {}),
     },
   });
 
@@ -131,6 +138,26 @@ export async function registerGatekeeperObject(
   );
 
   return { gatekeeperObjectId: gatekeeperObject.id, connectsToFactId: connectsToFact.id };
+}
+
+/** R-01 / D-01 `rotate_connection_secret`: replaces a Gatekeeper Object's `connectionSecretSalt`
+ *  in place (a Gatekeeper registered without an identity key cannot be re-upserted). `false` when
+ *  no `Gatekeeper` Object with that id exists in the workspace. */
+export async function setGatekeeperConnectionSecretSaltObject(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperObjectId: string,
+  salt: string,
+): Promise<boolean> {
+  const result = await client.query(
+    `update objects
+     set properties = properties || jsonb_build_object('connectionSecretSalt', $3::text),
+         updated_at = now()
+     where workspace_id = $1 and id = $2 and object_type = 'Gatekeeper'
+     returning id`,
+    [workspaceId, gatekeeperObjectId, salt],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // -------------------------------------------------------------------------------------------

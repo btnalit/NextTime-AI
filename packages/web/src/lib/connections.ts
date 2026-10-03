@@ -29,6 +29,8 @@ export interface CreateConnectionParams {
   readonly kind: ConnectionKind;
   readonly target: string;
   readonly endpoint: string;
+  /** R-01 (D-01): the gate's own secret from `mint_connection_secret`, already in its config. */
+  readonly connectionSecret: string;
   readonly credentials?: unknown;
   readonly credentialKind?: 'shared' | 'connected_account';
   readonly onBehalfOf?: string;

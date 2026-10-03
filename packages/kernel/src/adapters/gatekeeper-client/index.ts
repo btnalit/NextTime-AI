@@ -12,6 +12,22 @@ import {
 } from '@nexttime/gatekeeper-base';
 import { correlationHeaders } from '@nexttime/shared';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
+import {
+  type OutboundTargetGuard,
+  OutboundTargetRefusedError,
+  createOutboundTargetGuard,
+  withoutRedirects,
+} from '../outbound-target/index.js';
+import { deriveConnectionSecret } from './connection-secret.js';
+
+export {
+  CONNECTION_SECRET_PREFIX,
+  GateConnectionSecretsUnavailableError,
+  type GateConnectionSecrets,
+  createGateConnectionSecrets,
+  deriveConnectionSecret,
+  isConnectionSecretSalt,
+} from './connection-secret.js';
 
 /**
  * adapters/gatekeeper-client: HTTP client implementing the gatekeeper protocol port
@@ -37,6 +53,19 @@ import { currentCorrelationId } from '../../substrate/correlation/index.js';
  * with code `unauthorized`), diagnosable from the same place a real credential/network failure
  * would be.
  *
+ * Which credential, per call (R-01, maintainer decision D-01, 2026-10-02 review): every method
+ * takes a `GateTarget` — the endpoint *and* the `GateCredential` to present — instead of a bare
+ * endpoint string, so no call site can reach a gate without saying which credential it means:
+ *   - `platform`: `gate_token`, and only for a gate the kernel provisioned (a `gate_instances` row —
+ *     `application/gateway/gate-target.ts` decides, from the catalog, never from the caller);
+ *   - `connection`: a self-connected gate's own secret, derived here from `gate_token` and the
+ *     Gatekeeper's salt (`connection-secret.ts`) — `gate_token` itself never leaves for such a gate;
+ *   - `none`: a self-connected gate with no secret on record (connected before D-01) — refused here
+ *     with `connection_secret_missing` (status 401) without contacting the gate.
+ * A `connection` / `none` target is owner-supplied, so before the fetch its URL also passes the
+ * outbound-target predicate (`adapters/outbound-target`, R-27) and the fetch never follows a
+ * redirect; a refusal is a `GatekeeperClientError` with code `target_refused`.
+ *
  * Leftover 87: every request also carries the current call's `x-correlation-id`
  * (substrate/correlation) when there is one, so the gate's own log line for this call has the same
  * id as the kernel's. A gate call made outside any inbound call (the approval drainer's background
@@ -50,7 +79,9 @@ function resolveGateTokenFile(env: NodeJS.ProcessEnv): string {
   return configured && configured.length > 0 ? configured : DEFAULT_GATE_TOKEN_FILE;
 }
 
-function loadGateToken(env: NodeJS.ProcessEnv): string | undefined {
+/** The kernel's `gate_token` from `NEXTTIME_GATE_TOKEN_FILE` (default `DEFAULT_GATE_TOKEN_FILE`),
+ *  or `undefined` when it is missing or unusable (best-effort — see this module's doc comment). */
+export function loadGateToken(env: NodeJS.ProcessEnv): string | undefined {
   const file = resolveGateTokenFile(env);
   try {
     return normalizeGateToken(readFileSync(file, 'utf8'), file);
@@ -82,6 +113,23 @@ export class GatekeeperTimeoutError extends Error {
   }
 }
 
+/** What the kernel presents to a gate — see this module's doc comment. */
+export type GateCredential =
+  | { readonly kind: 'platform' }
+  | { readonly kind: 'connection'; readonly workspaceId: string; readonly salt: string }
+  | { readonly kind: 'none' };
+
+/** One gate as a call addresses it: where, and with which credential. */
+export interface GateTarget {
+  readonly endpoint: string;
+  readonly credential: GateCredential;
+}
+
+/** A gate the kernel provisioned (packaged gate, gate-host instance) — `gate_token`. */
+export function platformGateTarget(endpoint: string): GateTarget {
+  return { endpoint, credential: { kind: 'platform' } };
+}
+
 export interface GatekeeperCallInput {
   readonly operation: string;
   readonly params?: unknown;
@@ -107,20 +155,20 @@ export interface GatekeeperStoreConnectedAccountInput {
 /** The port `application/gateway`'s `request_action` handler and `action-executor.ts` depend on
  *  — declared so tests can supply a fake without any HTTP involved. */
 export interface GatekeeperClient {
-  describeOperations(endpoint: string): Promise<DescribeOperationsResponse>;
-  observe(endpoint: string, input: GatekeeperCallInput): Promise<ObserveResponse>;
-  simulate(endpoint: string, input: GatekeeperCallInput): Promise<SimulateResponse>;
-  apply(endpoint: string, input: GatekeeperApplyInput): Promise<ApplyResponse>;
-  revert(endpoint: string, input: GatekeeperRevertInput): Promise<RevertResponse>;
-  health(endpoint: string): Promise<HealthResponse>;
+  describeOperations(target: GateTarget): Promise<DescribeOperationsResponse>;
+  observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse>;
+  simulate(target: GateTarget, input: GatekeeperCallInput): Promise<SimulateResponse>;
+  apply(target: GateTarget, input: GatekeeperApplyInput): Promise<ApplyResponse>;
+  revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse>;
+  health(target: GateTarget): Promise<HealthResponse>;
   /** S2.13: stores a ConnectedAccount credential on the gate instance, keyed by `onBehalfOf` —
    *  the kernel never persists the credential itself (design doc §11 "凭证只在门"). */
   storeConnectedAccount(
-    endpoint: string,
+    target: GateTarget,
     input: GatekeeperStoreConnectedAccountInput,
   ): Promise<void>;
   /** S2.13: removes a ConnectedAccount credential from the gate instance. */
-  deleteConnectedAccount(endpoint: string, onBehalfOf: string): Promise<void>;
+  deleteConnectedAccount(target: GateTarget, onBehalfOf: string): Promise<void>;
 }
 
 export interface HttpGatekeeperClientOptions {
@@ -139,6 +187,9 @@ export interface HttpGatekeeperClientOptions {
   readonly token?: string;
   /** Injectable for tests — defaults to `process.env`. Only consulted when `token` is omitted. */
   readonly env?: NodeJS.ProcessEnv;
+  /** The owner-supplied-URL predicate applied to every `connection` / `none` target (R-27) —
+   *  defaults to `createOutboundTargetGuard()` over `process.env`. */
+  readonly outboundTargetGuard?: OutboundTargetGuard;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -200,34 +251,74 @@ export class HttpGatekeeperClient implements GatekeeperClient {
   private readonly timeoutMs: number;
   private readonly applyTimeoutMs: number;
   private readonly token: string | undefined;
+  private readonly outboundTargetGuard: OutboundTargetGuard;
 
   constructor(options: HttpGatekeeperClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.applyTimeoutMs = options.applyTimeoutMs ?? DEFAULT_APPLY_TIMEOUT_MS;
     this.token = options.token ?? loadGateToken(options.env ?? process.env);
+    this.outboundTargetGuard = options.outboundTargetGuard ?? createOutboundTargetGuard();
+  }
+
+  /** The `Authorization` value for `credential` — `gate_token` only for `platform` (D-01). */
+  private authorizationFor(credential: GateCredential, path: string): string | undefined {
+    switch (credential.kind) {
+      case 'platform':
+        return this.token !== undefined ? gateAuthorizationHeader(this.token) : undefined;
+      case 'connection':
+        if (this.token === undefined) {
+          throw new GatekeeperClientError(
+            `gatekeeper client: ${path} cannot be authenticated — the kernel has no gate token to derive this gate's connection secret from`,
+            { code: 'gate_token_unavailable', status: 0 },
+          );
+        }
+        return gateAuthorizationHeader(
+          deriveConnectionSecret(this.token, credential.workspaceId, credential.salt),
+        );
+      case 'none':
+        throw new GatekeeperClientError(
+          `gatekeeper client: ${path} not sent — this self-connected gate has no connection secret yet (it was connected before per-connection secrets): the workspace owner issues one (rotate_connection_secret) and puts it in the gate's GATE_KERNEL_TOKEN_FILE`,
+          { code: 'connection_secret_missing', status: 401 },
+        );
+    }
   }
 
   private async request(
-    endpoint: string,
+    target: GateTarget,
     path: string,
     method: 'GET' | 'POST' | 'DELETE',
     body?: unknown,
     timeoutMs: number = this.timeoutMs,
   ): Promise<unknown> {
+    const { endpoint, credential } = target;
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
+    const authorization = this.authorizationFor(credential, path);
+    const ownerSupplied = credential.kind !== 'platform';
+    if (ownerSupplied) {
+      try {
+        await this.outboundTargetGuard(endpoint, 'gate endpoint');
+      } catch (err) {
+        if (!(err instanceof OutboundTargetRefusedError)) throw err;
+        throw new GatekeeperClientError(`gatekeeper client: ${path} not sent — ${err.message}`, {
+          code: 'target_refused',
+          status: 0,
+        });
+      }
+    }
+    const fetchImpl = ownerSupplied ? withoutRedirects(this.fetchImpl) : this.fetchImpl;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const headers: Record<string, string> = { ...correlationHeaders(currentCorrelationId()) };
     if (body !== undefined) headers['content-type'] = 'application/json';
-    if (this.token !== undefined) headers.authorization = gateAuthorizationHeader(this.token);
+    if (authorization !== undefined) headers.authorization = authorization;
     const timedOut = (): GatekeeperTimeoutError =>
       new GatekeeperTimeoutError(`gatekeeper client: ${path} timed out after ${timeoutMs}ms`, path);
     let response: Response;
     let text: string;
     try {
       try {
-        response = await this.fetchImpl(url, {
+        response = await fetchImpl(url, {
           method,
           headers: Object.keys(headers).length > 0 ? headers : undefined,
           body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -281,25 +372,25 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     return envelope.result;
   }
 
-  async describeOperations(endpoint: string): Promise<DescribeOperationsResponse> {
+  async describeOperations(target: GateTarget): Promise<DescribeOperationsResponse> {
     return (await this.request(
-      endpoint,
+      target,
       'gate/describe_operations',
       'GET',
     )) as DescribeOperationsResponse;
   }
 
-  async observe(endpoint: string, input: GatekeeperCallInput): Promise<ObserveResponse> {
-    return (await this.request(endpoint, 'gate/observe', 'POST', input)) as ObserveResponse;
+  async observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse> {
+    return (await this.request(target, 'gate/observe', 'POST', input)) as ObserveResponse;
   }
 
-  async simulate(endpoint: string, input: GatekeeperCallInput): Promise<SimulateResponse> {
-    return (await this.request(endpoint, 'gate/simulate', 'POST', input)) as SimulateResponse;
+  async simulate(target: GateTarget, input: GatekeeperCallInput): Promise<SimulateResponse> {
+    return (await this.request(target, 'gate/simulate', 'POST', input)) as SimulateResponse;
   }
 
-  async apply(endpoint: string, input: GatekeeperApplyInput): Promise<ApplyResponse> {
+  async apply(target: GateTarget, input: GatekeeperApplyInput): Promise<ApplyResponse> {
     return (await this.request(
-      endpoint,
+      target,
       'gate/apply',
       'POST',
       input,
@@ -307,22 +398,22 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     )) as ApplyResponse;
   }
 
-  async revert(endpoint: string, input: GatekeeperRevertInput): Promise<RevertResponse> {
-    return (await this.request(endpoint, 'gate/revert', 'POST', input)) as RevertResponse;
+  async revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse> {
+    return (await this.request(target, 'gate/revert', 'POST', input)) as RevertResponse;
   }
 
-  async health(endpoint: string): Promise<HealthResponse> {
-    return (await this.request(endpoint, 'gate/health', 'GET')) as HealthResponse;
+  async health(target: GateTarget): Promise<HealthResponse> {
+    return (await this.request(target, 'gate/health', 'GET')) as HealthResponse;
   }
 
   async storeConnectedAccount(
-    endpoint: string,
+    target: GateTarget,
     input: GatekeeperStoreConnectedAccountInput,
   ): Promise<void> {
-    await this.request(endpoint, 'gate/connected-accounts', 'POST', input);
+    await this.request(target, 'gate/connected-accounts', 'POST', input);
   }
 
-  async deleteConnectedAccount(endpoint: string, onBehalfOf: string): Promise<void> {
-    await this.request(endpoint, 'gate/connected-accounts', 'DELETE', { onBehalfOf });
+  async deleteConnectedAccount(target: GateTarget, onBehalfOf: string): Promise<void> {
+    await this.request(target, 'gate/connected-accounts', 'DELETE', { onBehalfOf });
   }
 }

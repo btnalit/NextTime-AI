@@ -13,7 +13,7 @@ import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
-import { HttpGatekeeperClient } from '../adapters/gatekeeper-client/index.js';
+import { HttpGatekeeperClient, platformGateTarget } from '../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import {
@@ -309,7 +309,11 @@ export async function registerGatekeeperFromCli(
   options: { readonly gatekeeperClient?: GatekeeperClient } = {},
 ): Promise<RegisterGatekeeperCliResult> {
   const client = options.gatekeeperClient ?? new HttpGatekeeperClient();
-  const described = await client.describeOperations(input.endpoint);
+  // The host operator's own path, for the packaged gates (docs/runbooks/host-gatekeepers.md §5):
+  // the operator holds `gate.token` anyway, so presenting it to the endpoint they typed discloses
+  // nothing new. Calls the kernel makes later go through `gate-target.ts` like every other
+  // Gatekeeper's — the platform token only while the endpoint is a catalog instance's (R-01).
+  const described = await client.describeOperations(platformGateTarget(input.endpoint));
 
   return withWorkspace(
     pool,

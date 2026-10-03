@@ -9,7 +9,7 @@ import {
   parseIPv4,
   parseIPv4Literal,
   parseIPv6,
-} from './net-utils.js';
+} from './net-address.js';
 
 /**
  * Builds a dotted-quad string from octets at runtime instead of writing it as literal source

@@ -27,6 +27,9 @@ import { ConnectionRequestNotFoundError } from './types.js';
  * `find_operations` visibility) is application/gateway/connection-flow.integration.test.ts.
  */
 
+/** R-01: the (non-secret) connection-secret salt `create_connection` hands `completeConnection`. */
+const TEST_SALT = 'd'.repeat(32);
+
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -131,6 +134,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         kind: 'http',
         target: 'example-system',
         endpoint: 'https://gate.example.invalid',
+        connectionSecretSalt: TEST_SALT,
         operations: [SAMPLE_OBSERVE_OP],
         activityId: act,
         completedBy: { id: ownerId, kind: 'human' },
@@ -141,6 +145,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
 
     const gate = await inTx((client) => getGatekeeper(client, workspaceId, result.gatekeeperId));
     expect(gate?.endpoint).toBe('https://gate.example.invalid');
+    expect(gate?.connectionSecretSalt).toBe(TEST_SALT);
 
     const operation = await inTx((client) =>
       getOperation(client, workspaceId, result.gatekeeperId, 'stock.get'),
@@ -166,6 +171,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         kind: 'http',
         target: 'example-system-2',
         endpoint: 'https://gate-2.example.invalid',
+        connectionSecretSalt: TEST_SALT,
         operations: [],
         activityId: act,
         completedBy: { id: ownerId, kind: 'human' },
@@ -184,6 +190,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
           kind: 'http',
           target: 'example-system-2',
           endpoint: 'https://gate-2.example.invalid',
+          connectionSecretSalt: TEST_SALT,
           operations: [],
           activityId: act2,
           completedBy: { id: ownerId, kind: 'human' },
@@ -201,6 +208,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
           kind: 'http',
           target: 'x',
           endpoint: 'https://gate.example.invalid',
+          connectionSecretSalt: TEST_SALT,
           operations: [],
           activityId: act,
           completedBy: { id: ownerId, kind: 'human' },
@@ -229,6 +237,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         kind: 'http',
         target: 'example-system-3',
         endpoint: 'https://gate-3.example.invalid',
+        connectionSecretSalt: TEST_SALT,
         operations: [],
         activityId: act,
         completedBy: { id: ownerId, kind: 'human' },

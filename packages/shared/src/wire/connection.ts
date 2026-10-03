@@ -150,6 +150,20 @@ export const PublishManifestResultWireSchema = z
   })
   .strict();
 
+/** `mint_connection_secret`'s result (R-01) — shown once, never audited. */
+export const MintConnectionSecretResultWireSchema = z
+  .object({ connectionSecret: z.string() })
+  .strict();
+export type MintConnectionSecretResultWire = z.infer<typeof MintConnectionSecretResultWireSchema>;
+
+/** `rotate_connection_secret`'s result (R-01) — shown once, never audited. */
+export const RotateConnectionSecretResultWireSchema = z
+  .object({ gatekeeperId: z.string(), connectionSecret: z.string() })
+  .strict();
+export type RotateConnectionSecretResultWire = z.infer<
+  typeof RotateConnectionSecretResultWireSchema
+>;
+
 /** `create_connection`'s result (connection-handlers.ts's `createConnectionHandler`). */
 export const CreateConnectionResultWireSchema = z
   .object({

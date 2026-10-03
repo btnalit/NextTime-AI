@@ -56,9 +56,11 @@
 //     GET <path> with `x-api-key` (the Explorer API key). Prints HTTP_STATUS= and BODY=.
 //   mcp <token> <method> <paramsJson> [extractExpr]
 //     One MCP JSON-RPC request to POST /mcp. Prints HTTP_STATUS=, BODY= and the extraction.
-//   gate-health <gateUrl>
+//   gate-health <gateUrl> [tokenFile]
 //     GET <gateUrl>/gate/health with the kernel container's own /run/secrets/gate_token as
 //     Bearer (every gate route needs it since the gate-protocol hardening). Prints OK=true|false.
+//     `tokenFile` (R-01): read the Bearer from that file instead — a self-connected gate holds its
+//     own connection secret, never the platform gate token (scripts/accept_s2.sh mounts it).
 //   transcript-stats <path>
 //     (W7) Tool-call outcomes of one Worker run, read from its pi session JSONL (mounted
 //     read-only by the caller; no kernel call). Prints ASSISTANT_MESSAGES=, MODEL= and the same
@@ -531,8 +533,8 @@ async function cmdMcp(args) {
 }
 
 async function cmdGateHealth(args) {
-  const [gateUrl] = args;
-  const token = readFileSync(GATE_TOKEN_FILE, 'utf8').trim();
+  const [gateUrl, tokenFile] = args;
+  const token = readFileSync(tokenFile || GATE_TOKEN_FILE, 'utf8').trim();
   const res = await fetch(`${gateUrl}/gate/health`, {
     headers: { authorization: `Bearer ${token}` },
   });

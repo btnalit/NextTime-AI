@@ -328,19 +328,39 @@ fixtures_up_step() {
   fi
   pass "fixtures-up" "accept-s2-sshd, accept-s2-openapi, accept-s2-restart-target up"
 
-  up_out=$(docker compose --profile accept-s2 up -d accept-s2-ssh-gate accept-s2-http-gate 2>&1)
+  # R-01: each gate holds its own connection secret before it starts — and before
+  # create_connection first calls it (connections_step passes the same secret). The fixtures live
+  # on the platform's `control` network under bare compose names, which the kernel's owner-supplied-
+  # URL predicate (R-27) refuses — except the fixed acceptance list docker-compose.yml gives the
+  # kernel (NEXTTIME_CONNECTION_FIXTURE_HOSTS), so no kernel restart is needed.
+  SSH_GATE_SECRET=$(mint_gate_secret "$ALICE_KEY" "fixtures-gate-secrets")
+  HTTP_GATE_SECRET=$(mint_gate_secret "$ALICE_KEY" "fixtures-gate-secrets")
+  # (`fail` inside the command substitution only ends that subshell — check the result here.)
+  [ -n "$SSH_GATE_SECRET" ] && [ -n "$HTTP_GATE_SECRET" ] || fail "fixtures-gate-secrets" "mint_connection_secret returned no secret"
+  SSH_GATE_TOKEN_FILE="${NEXTTIME_DATA}/accept-s2/ssh-gate/kernel.token"
+  HTTP_GATE_TOKEN_FILE="${NEXTTIME_DATA}/accept-s2/http-gate/kernel.token"
+  write_gate_secret "$SSH_GATE_SECRET" "$SSH_GATE_TOKEN_FILE" || fail "fixtures-gate-secrets" "could not write $SSH_GATE_TOKEN_FILE"
+  write_gate_secret "$HTTP_GATE_SECRET" "$HTTP_GATE_TOKEN_FILE" || fail "fixtures-gate-secrets" "could not write $HTTP_GATE_TOKEN_FILE"
+  pass "fixtures-gate-secrets" "ssh/http gates' own connection secrets minted: $(redact "$SSH_GATE_SECRET"), $(redact "$HTTP_GATE_SECRET")"
+
+  # --force-recreate: a gate left running by an earlier --keep run read an older token at start.
+  up_out=$(docker compose --profile accept-s2 up -d --force-recreate accept-s2-ssh-gate accept-s2-http-gate 2>&1)
   up_rc=$?
   if [ "$up_rc" -ne 0 ]; then
     fail "fixtures-gates-up" "docker compose up failed: $(printf '%s' "$up_out" | tail -20)"
   fi
 
-  if ! wait_for_gate_health "http://accept-s2-ssh-gate:8090"; then
+  if ! wait_for_gate_health "http://accept-s2-ssh-gate:8090" "$SSH_GATE_TOKEN_FILE"; then
     fail "fixtures-gates-up" "accept-s2-ssh-gate /gate/health never came back ok — docker compose logs accept-s2-ssh-gate"
   fi
-  if ! wait_for_gate_health "http://accept-s2-http-gate:8090"; then
+  if ! wait_for_gate_health "http://accept-s2-http-gate:8090" "$HTTP_GATE_TOKEN_FILE"; then
     fail "fixtures-gates-up" "accept-s2-http-gate /gate/health never came back ok — docker compose logs accept-s2-http-gate"
   fi
-  pass "fixtures-gates-up" "accept-s2-ssh-gate, accept-s2-http-gate healthy"
+  # D-01's other half: the platform gate token is refused by a self-connected gate.
+  case "$(run_driver gate-health "http://accept-s2-ssh-gate:8090")" in
+    *OK=true*) fail "fixtures-gates-up" "accept-s2-ssh-gate accepted the platform gate token — a self-connected gate must hold only its own connection secret" ;;
+  esac
+  pass "fixtures-gates-up" "accept-s2-ssh-gate, accept-s2-http-gate healthy on their own connection secrets; the platform gate token is refused"
 
   restart_target_id=$(docker compose ps -q accept-s2-restart-target)
   if [ -z "$restart_target_id" ]; then
@@ -374,7 +394,7 @@ connections_step() {
   pass "connect-ssh-request" "connectionRequestId=$CR_ID_SSH"
 
   out=$(cap "$ALICE_KEY" create_connection \
-    "{\"connectionRequestId\":\"$CR_ID_SSH\",\"kind\":\"ssh\",\"target\":\"accept_s2_ssh\",\"endpoint\":\"http://accept-s2-ssh-gate:8090\",\"credentialKind\":\"shared\"}" \
+    "{\"connectionRequestId\":\"$CR_ID_SSH\",\"kind\":\"ssh\",\"target\":\"accept_s2_ssh\",\"endpoint\":\"http://accept-s2-ssh-gate:8090\",\"connectionSecret\":\"$SSH_GATE_SECRET\",\"credentialKind\":\"shared\"}" \
     "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-ssh-create" "create_connection(ssh) HTTP $status: $(parse_kv "$out" BODY)"
@@ -401,7 +421,7 @@ connections_step() {
   pass "connect-http-request" "connectionRequestId=$CR_ID_HTTP"
 
   out=$(cap "$ALICE_KEY" create_connection \
-    "{\"connectionRequestId\":\"$CR_ID_HTTP\",\"kind\":\"http\",\"target\":\"accept_s2_api\",\"endpoint\":\"http://accept-s2-http-gate:8090\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"http://accept-s2-openapi:8080/openapi.json\"}" \
+    "{\"connectionRequestId\":\"$CR_ID_HTTP\",\"kind\":\"http\",\"target\":\"accept_s2_api\",\"endpoint\":\"http://accept-s2-http-gate:8090\",\"connectionSecret\":\"$HTTP_GATE_SECRET\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"http://accept-s2-openapi:8080/openapi.json\"}" \
     "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-http-create" "create_connection(http) HTTP $status: $(parse_kv "$out" BODY)"
@@ -1034,8 +1054,25 @@ step8_mcp_connect() {
   [ -n "$CR_ID_MCP" ] || fail "connect-mcp-request" "no connectionRequestId in response: $(parse_kv "$out" BODY)"
   pass "connect-mcp-request" "connectionRequestId=$CR_ID_MCP"
 
+  # R-01: a connection secret even here — the kernel would present it on any later call to this
+  # endpoint (the MCP fixture itself has no gate in front, so nothing needs to hold it).
+  MCP_SECRET=$(mint_gate_secret "$ALICE_KEY" "connect-mcp-create")
+  [ -n "$MCP_SECRET" ] || fail "connect-mcp-create" "mint_connection_secret returned no secret"
+
+  # R-27 (2026-10-02 review): an owner-supplied manifestSource aimed at a platform service is
+  # refused by the outbound-target predicate before the kernel fetches anything.
   out=$(cap "$ALICE_KEY" create_connection \
-    "{\"connectionRequestId\":\"$CR_ID_MCP\",\"kind\":\"mcp\",\"target\":\"accept_s2_mcp\",\"endpoint\":\"http://accept-s2-mcp:8080\",\"credentialKind\":\"shared\",\"manifestSource\":\"http://accept-s2-mcp:8080\"}" \
+    "{\"kind\":\"mcp\",\"target\":\"accept_s2_mcp_r27\",\"endpoint\":\"http://accept-s2-mcp:8080\",\"connectionSecret\":\"$MCP_SECRET\",\"credentialKind\":\"shared\",\"manifestSource\":\"http://worker-supervisor:8081/task/00000000-0000-4000-8000-000000000000/terminate\"}" \
+    "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "400" ] || fail "connect-mcp-target-refused" "create_connection with a worker-supervisor manifestSource must be refused (400), got HTTP $status: $(parse_kv "$out" BODY)"
+  case "$(parse_kv "$out" BODY)" in
+    *connection_target_refused*) pass "connect-mcp-target-refused" "manifestSource http://worker-supervisor:8081/... refused with connection_target_refused, nothing fetched" ;;
+    *) fail "connect-mcp-target-refused" "400 but not connection_target_refused: $(parse_kv "$out" BODY)" ;;
+  esac
+
+  out=$(cap "$ALICE_KEY" create_connection \
+    "{\"connectionRequestId\":\"$CR_ID_MCP\",\"kind\":\"mcp\",\"target\":\"accept_s2_mcp\",\"endpoint\":\"http://accept-s2-mcp:8080\",\"connectionSecret\":\"$MCP_SECRET\",\"credentialKind\":\"shared\",\"manifestSource\":\"http://accept-s2-mcp:8080\"}" \
     "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-mcp-create" "create_connection(mcp) HTTP $status: $(parse_kv "$out" BODY)"

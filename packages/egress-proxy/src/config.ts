@@ -1,12 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import {
+  type CidrRange,
   INTERNAL_TOKEN_FILE_ENV,
   InternalTokenError,
   normalizeInternalToken,
+  parseCidr,
   resolveInternalTokenFile,
 } from '@nexttime/shared';
-import type { CidrRange } from './net-utils.js';
-import { parseCidr } from './net-utils.js';
 
 /** Default `DENY_HOSTS` (design doc §7.9 task spec): internal platform service names. */
 export const DEFAULT_DENY_HOSTS = [

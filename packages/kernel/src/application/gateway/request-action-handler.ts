@@ -54,6 +54,7 @@ import {
 import { toWireActionRequest } from './action-request-wire.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerResult } from './capability-handler.js';
+import { resolveGateTarget } from './gate-target.js';
 import { writeObservedFacts } from './observed-facts.js';
 
 /**
@@ -300,7 +301,8 @@ async function runObserve(
     metadata: { gatekeeperId: gatekeeper.gatekeeperId, operation: operationName },
   });
   try {
-    const observeResult = await requireDeps().gatekeeperClient.observe(gatekeeper.endpoint, {
+    const gate = await resolveGateTarget(client, workspaceId, gatekeeper);
+    const observeResult = await requireDeps().gatekeeperClient.observe(gate, {
       operation: operationName,
       params: operationParams,
       onBehalfOf,
@@ -863,7 +865,8 @@ async function runGovernedRequest(
         // this on a replay is harmless — read-only, and its result is decoration only.
         let simulate: unknown;
         try {
-          simulate = await requireDeps().gatekeeperClient.simulate(args.gatekeeper.endpoint, {
+          const gate = await resolveGateTarget(client, workspaceId, args.gatekeeper);
+          simulate = await requireDeps().gatekeeperClient.simulate(gate, {
             operation: args.operationName,
             params: args.operationParams,
             onBehalfOf: args.onBehalfOf,

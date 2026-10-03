@@ -19,7 +19,11 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import {
+  HttpGatekeeperClient,
+  createGateConnectionSecrets,
+} from '../../adapters/gatekeeper-client/index.js';
+import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
 import { listActiveGrantResourceScopes } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
@@ -46,6 +50,12 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * own fixture) and a *real* `@nexttime/gatekeeper-base` gate server in front of it (real
  * `HttpTransport` + real `ConnectedAccountStore`), exercising the actual wire protocol this task
  * added (`POST /gate/connected-accounts`) rather than an in-process fake.
+ *
+ * R-01 / maintainer decision D-01: the gate is a *self-connected* one, so it is configured — like
+ * an owner would configure theirs — with the connection secret `mint_connection_secret` hands out,
+ * never with the platform gate token; it accepts the kernel's calls with that secret and refuses the
+ * platform token. Both servers are on loopback, which the owner-supplied-URL predicate (R-27)
+ * refuses, so this suite allows `127.0.0.1` explicitly — the predicate's own cases are unit tests.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -56,6 +66,7 @@ const CREDENTIAL_SECRET = 'super-secret-connection-token-value';
 // review lane 5, P1-1: every /gate/* route now requires Authorization: Bearer <token> — this
 // test's own real gate server and the HttpGatekeeperClient it talks to share this fixed value.
 const GATE_TEST_TOKEN = 'gate-integration-test-token-0123456789abcdef';
+const CONNECTION_SECRETS = createGateConnectionSecrets(GATE_TEST_TOKEN);
 
 function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
@@ -135,6 +146,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let targetSystemEndpoint: string;
     let gateApp: FastifyInstance;
     let gateEndpoint: string;
+    let connectionSecret: string;
     let connectedAccountStore: ConnectedAccountStore;
     let connectedAccountDir: string;
 
@@ -191,11 +203,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialResolver: new ConnectedAccountCredentialResolver(connectedAccountStore),
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
-      gateApp = createGatekeeperServer({ gate, connectedAccountStore, token: GATE_TEST_TOKEN });
+      // The owner's one copy (D-01): the gate holds its own connection secret, not GATE_TEST_TOKEN.
+      connectionSecret = CONNECTION_SECRETS.mint(workspaceId).secret;
+      gateApp = createGatekeeperServer({ gate, connectedAccountStore, token: connectionSecret });
       gateEndpoint = await listen(gateApp);
 
+      const outboundTargetGuard = createOutboundTargetGuard({
+        policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+      });
       setConnectionHandlerDeps({
-        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN, outboundTargetGuard }),
+        connectionSecrets: CONNECTION_SECRETS,
+        outboundTargetGuard,
       });
     });
 
@@ -233,6 +252,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         kind: 'http',
         target: 'example-system',
         endpoint: gateEndpoint,
+        connectionSecret,
         manifestSource: `${targetSystemEndpoint}/openapi.json`,
         credentials: { token: CREDENTIAL_SECRET },
         credentialKind: 'connected_account',
@@ -329,6 +349,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       }
       expect(offendingTables).toEqual([]);
+
+      // 9. R-01 / D-01: the connection secret is redacted from the audit row and stored nowhere
+      //    (only its salt is, on the Gatekeeper) — and the self-connected gate, configured with it,
+      //    refuses the platform gate token outright.
+      expect(
+        (auditRows[0]?.payload as { params?: { connectionSecret?: unknown } }).params
+          ?.connectionSecret,
+      ).toBe('[redacted]');
+      const secretTables: string[] = [];
+      for (const table of tables) {
+        if (await tableContainsSubstring(pool, table, connectionSecret)) secretTables.push(table);
+      }
+      expect(secretTables).toEqual([]);
+      const withPlatformToken = await fetch(`${gateEndpoint}/gate/health`, {
+        headers: { authorization: `Bearer ${GATE_TEST_TOKEN}` },
+      });
+      expect(withPlatformToken.status).toBe(401);
+      const withConnectionSecret = await fetch(`${gateEndpoint}/gate/health`, {
+        headers: { authorization: `Bearer ${connectionSecret}` },
+      });
+      expect(withConnectionSecret.status).toBe(200);
     });
   },
 );

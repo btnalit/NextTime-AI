@@ -288,6 +288,52 @@ frontend 镜像）。如果主机的 Docker 版本异常老旧、`docker compose
 `--mount=type=cache` 会直接报语法错误而不是静默忽略——下次主机应用前先跑一次
 `docker compose build kernel`确认不报错,再跑全量 `sh scripts/build-images.sh`。
 
+### 3.5 自连门改用自己的连接密钥（R-01 / R-27，维护者决定 D-01）
+
+**变化**：内核只把平台 `gate_token` 发给平台目录里的实例（`gate_instances`：打包门、门宿主实例，按
+endpoint 的 host 判定）。经 `create_connection` 接入的**自连门**改用它自己的连接密钥——由
+`mint_connection_secret` 签发、写进门的 `GATE_KERNEL_TOKEN_FILE`；内核只在 Gatekeeper 上存一个非秘密
+salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`create_connection` 的 `endpoint` /
+`manifestSource`、自连门的每次调用）还要过出站目标判定：裸服务名、`localhost`、回环、链路本地、平台
+两个子网一律拒绝。没有新迁移（salt 存在 Gatekeeper 对象的 `properties` 里）。
+
+**升级后既有自连门会停用，直到 owner 重签一次密钥**——这是有意的：它们此前持有的就是平台 `gate_token`，
+继续发给 owner 填的地址正是 R-01 要关掉的口子。内核不会再碰它们（调用直接报
+`connection_secret_missing`，不联系门），健康探测显示 `unauthorized`。操作员在升级时：
+
+1. **升级前**列出受影响的自连门（Gatekeeper 的 endpoint host 不在平台目录里的）——在主机上：
+
+   ```bash
+   docker compose exec -T postgres psql -U nexttime -d nexttime -c "
+   select o.workspace_id, o.id as gatekeeper_id, o.properties->>'name' as name,
+          o.properties->>'endpoint' as endpoint
+     from objects o
+    where o.object_type = 'Gatekeeper'
+      and o.properties ? 'endpoint'
+      and not exists (
+        select 1 from gate_instances g
+         where g.endpoint <> ''
+           and lower(substring(g.endpoint from '^[a-zA-Z]+://([^/]+)'))
+             = lower(substring(o.properties->>'endpoint' from '^[a-zA-Z]+://([^/]+)')))"
+   ```
+
+   结果记 `docs/private/`；空表 = 没有要处理的。
+2. 照常应用发布（§3）。`.env` 不用改：kernel 现在也读 `NEXTTIME_SUBNET_CONTROL`（早就是必填项）。
+3. 通知每个工作区 owner：在控制台 **系统与授权 → 该门所在行的 ⋯ → 重新签发连接密钥**（或
+   `rotate_connection_secret {gatekeeperId}`），把显示一次的密钥写进门的 `GATE_KERNEL_TOKEN_FILE` 指向的
+   文件、重启门。门上原先放的平台 `gate.token` 副本此后应删掉（自连门不该再持有它）。
+4. 自连门的 endpoint 若是**平台网络上的裸服务名 / 平台子网地址**（例如操作员自己加进 compose 的门），升级后
+   连调用都会被出站目标判定拒绝（`target_refused`）。二选一：把它做成打包门（`add-gatekeeper.md`，走平台
+   目录，用 `gate_token`）；或把主机名加进 `.env` 的 `NEXTTIME_CONNECTION_ALLOW_HOSTS`（逗号分隔）后
+   `docker compose up -d --no-deps --force-recreate kernel`，再按第 3 步重签密钥。
+
+验收夹具（`accept-s2-*`）不需要任何操作：`docker-compose.yml` 固定把它们写进 kernel 的
+`NEXTTIME_CONNECTION_FIXTURE_HOSTS`（与操作员的 `NEXTTIME_CONNECTION_ALLOW_HOSTS` 取并集），主机验收
+`accept_s2.sh` / `drill-add-gatekeeper.sh` 不重启 kernel。
+
+**回滚**：切回上一版代码即可（无 schema 变化）。旧代码不认识 salt，会重新把 `gate_token` 发给自连门——
+已经换成连接密钥的门会 401，直到把门的 `GATE_KERNEL_TOKEN_FILE` 指回平台 `gate.token`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

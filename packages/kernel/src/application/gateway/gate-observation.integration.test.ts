@@ -14,7 +14,11 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import {
+  HttpGatekeeperClient,
+  deriveConnectionSecret,
+} from '../../adapters/gatekeeper-client/index.js';
+import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
 import type {
   TaskSpawnInput,
   TaskSpawnOutcome,
@@ -55,6 +59,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const GATE_TEST_TOKEN = 'gate-observation-integration-test-token-0123456789abcdef';
+// R-01 / D-01: the fake gate is self-connected (no catalog instance at its address), so it holds —
+// and the kernel presents — its own connection secret; its loopback address is allowed past the
+// owner-supplied-URL predicate (R-27) explicitly.
+const GATE_CONNECTION_SALT = 'f'.repeat(32);
 
 class RecordingTransport implements Transport {
   readonly kind = 'http' as const;
@@ -304,7 +312,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
-      fakeGateApp = createGatekeeperServer({ gate, token: GATE_TEST_TOKEN });
+      fakeGateApp = createGatekeeperServer({
+        gate,
+        token: deriveConnectionSecret(GATE_TEST_TOKEN, workspaceId, GATE_CONNECTION_SALT),
+      });
       await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
       const address = fakeGateApp.server.address() as AddressInfo;
       const endpoint = `http://127.0.0.1:${address.port}`;
@@ -319,6 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           transportKind: 'http',
           target: 'example-system',
           endpoint,
+          connectionSecretSalt: GATE_CONNECTION_SALT,
           activityId: activity.id,
           registeredBy: { id: ownerId, kind: 'human' },
         });
@@ -353,7 +365,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       workerDefinitionId = proposed.id;
 
-      const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
+      const gatekeeperClient = new HttpGatekeeperClient({
+        token: GATE_TEST_TOKEN,
+        outboundTargetGuard: createOutboundTargetGuard({
+          policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+        }),
+      });
       const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
         gatekeeperClient,

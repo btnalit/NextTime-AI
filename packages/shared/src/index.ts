@@ -27,6 +27,8 @@ export * from './worker-result.js';
 export * from './image-ref.js';
 export * from './correlation.js';
 export * from './metrics.js';
+export * from './net-address.js';
+export * from './outbound-target.js';
 export * from './wire/index.js';
 
 export const VERSION = '0.1.0';

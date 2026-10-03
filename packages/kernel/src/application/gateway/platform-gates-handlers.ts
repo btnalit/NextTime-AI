@@ -1,6 +1,7 @@
 import type { GateHostedDefinitionWire, GateInstanceWire } from '@nexttime/shared';
 import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   createHostedGateInstance,
@@ -172,11 +173,11 @@ export const testGateInstanceHandler: CapabilityHandler = async (client, _worksp
       resourceId: instance.gateId,
     };
   }
-  const health = await probeGatekeeperHealth(instance.endpoint);
+  const health = await probeGatekeeperHealth(platformGateTarget(instance.endpoint));
   let describedOperationCount: number | null = null;
   if (health === 'ok') {
     try {
-      const described = await describeGateOperations(instance.endpoint);
+      const described = await describeGateOperations(platformGateTarget(instance.endpoint));
       describedOperationCount = operationsOf(described.operations).length;
     } catch {
       describedOperationCount = null;

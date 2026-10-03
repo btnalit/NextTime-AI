@@ -8,9 +8,11 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import {
+  GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
+import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
@@ -20,6 +22,8 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
+  ConnectionSecretConflictError,
+  ConnectionSecretInvalidError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
@@ -137,6 +141,30 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
         new ConnectionEndpointIsPlatformGateError('http://gate-host:8083/i/x', 'hosted-x'),
       ),
     ).toMatchObject({ status: 400, code: 'endpoint_is_platform_gate' });
+    // R-27: an owner-supplied URL aimed at the platform — the caller's to fix, nothing contacted.
+    const refused = mapCapabilityError(
+      new OutboundTargetRefusedError(
+        'http://worker-supervisor:8081/task/x/terminate',
+        'bare-hostname',
+        'worker-supervisor',
+        'manifestSource',
+      ),
+    );
+    expect(refused).toMatchObject({ status: 400, code: 'connection_target_refused' });
+    expect(refused.message).toContain('manifestSource "worker-supervisor"');
+    // R-01 (D-01) connection secrets.
+    expect(mapCapabilityError(new ConnectionSecretInvalidError(true))).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+    });
+    expect(mapCapabilityError(new ConnectionSecretConflictError('in use'))).toMatchObject({
+      status: 409,
+      code: 'conflict',
+    });
+    expect(mapCapabilityError(new GateConnectionSecretsUnavailableError())).toMatchObject({
+      status: 503,
+      code: 'service_unavailable',
+    });
     expect(mapCapabilityError(new GatekeeperTimeoutError('gate timed out'))).toMatchObject({
       status: 504,
       code: 'gatekeeper_timeout',

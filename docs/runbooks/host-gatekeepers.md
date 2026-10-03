@@ -358,9 +358,9 @@ connection` 与 `create_connection` 都可以用 owner 自己的 key 发起（ow
 同样放行，见 §6 的既有说明）。
 
 **打包门（`gatekeeper-docker` / `gatekeeper-ragflow`）不再走这条路**（v0.10.1 后，STATUS 遗留 36 /
-S5.5）：它们启动即向内核自注册进平台目录（P-B1，`gate_instances`），而内核对每个门都用同一把
-`gate_token`，所以 owner 若把自连的门指向目录里实例的地址，得到的是一个绕过目录规则（接入包禁用名单、
-`vetted`、启用 / 禁用）的 Gatekeeper——`create_connection` 现在对命中任何 `gate_instances.endpoint`
+S5.5）：它们启动即向内核自注册进平台目录（P-B1，`gate_instances`），owner 若把自连的门指向目录里实例
+的地址，得到的是一个绕过目录规则（接入包禁用名单、`vetted`、启用 / 禁用）的 Gatekeeper——
+`create_connection` 现在对命中任何 `gate_instances.endpoint`
 的地址（按解析后的 host 比对，宿主 `gate-host:8083` 下整个 `/i/*` 一并覆盖）直接返回
 `400 endpoint_is_platform_gate`，不发起任何网络调用。打包门的工作区接入路径是目录路径：管理员在集成
 页把实例设为启用，owner 在工作区"系统接入"页一键启用（`enable_gate_instance`，同时发布其
@@ -368,11 +368,28 @@ Operation，不需要 `publish_manifest`），之后照常 `connect_gatekeeper`�
 就是这样接的（先断言旧自连被拒，再走目录路径；管理员那一步在脚本里以 SQL 只做 `discovered` →
 `enabled`，`disabled` 与非 `platform_preset` 接入包按管理员决定原样失败）。
 
-下面用一个**不在目录里**的门演示 S2.13 的四步（例如 §5 之外、你自己按 `add-gatekeeper.md` 起的一个
-`http` 门，或验收夹具 `deploy/accept-s2/` 里的 openapi 门；把 `<gate-endpoint>` 换成它在 `control`
-网络上的地址）：
+**自连门用自己的连接密钥（R-01，维护者决定 D-01，2026-10-02 评审）**：平台 `gate_token` 只发给平台
+目录里的实例（打包门、门宿主实例——内核按 `gate_instances.endpoint` 的 host 判定）；`create_connection`
+接入的自连门拿到的是它**自己的**连接密钥，内核绝不把 `gate_token` 发给 owner 填的地址。owner 先调
+`mint_connection_secret`（控制台"直接注册门"表单打开时自动做，只显示一次），把返回的 `connectionSecret`
+写进门的 `GATE_KERNEL_TOKEN_FILE` 指向的文件并重启门，再 `create_connection` 带上同一把
+`connectionSecret`；内核只存它的非秘密 salt、每次调用时重新派生。换密钥：`rotate_connection_secret`
+（控制台"系统与授权 → ⋯ → 重新签发连接密钥"），旧密钥立即失效。`endpoint` 与 `manifestSource` 都要过
+内核的出站目标判定（R-27）：裸服务名 / `localhost` / 回环 / 链路本地 / 平台两个子网一律
+`400 connection_target_refused`；确需把自连门跑在平台网络上时，由操作员把主机名加进 `.env` 的
+`NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel（更好的做法是把它做成打包门）。
+
+下面用一个**不在目录里**的门演示 S2.13 的流程（例如你自己在 `control` 网络之外起的一个 `http` 门；
+把 `<gate-endpoint>` 换成它的地址）：
 
 ```bash
+# 0. mint_connection_secret —— 这个门自己的连接密钥（只显示一次）；写进门的 GATE_KERNEL_TOKEN_FILE
+#    指向的文件并重启门，再做第 3 步
+curl -s http://kernel:8080/api/cap/mint_connection_secret \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' -d '{}'
+# {"ok":true,"result":{"connectionSecret":"ntgc1_..."}}
+CONNECTION_SECRET=<ntgc1_...>
+
 # 1. request_connection —— 产生一张连接请求卡片
 curl -s http://kernel:8080/api/cap/request_connection \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
@@ -388,10 +405,10 @@ curl -s http://kernel:8080/api/cap/list_connection_requests \
 # 3. create_connection（本仓库对派发文字 complete_connection 的实现，见 governance/connections/
 #    service.ts 头注释的命名对照表）—— 用门自己的地址完成这张请求；门只用共享 env 凭证时
 #    credentialKind 传 'shared'，不经过 ConnectedAccount 存储。地址若命中平台目录里的实例 → 400
-#    endpoint_is_platform_gate（见上）。
+#    endpoint_is_platform_gate（见上）；指向平台网络 → 400 connection_target_refused。
 curl -s http://kernel:8080/api/cap/create_connection \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d "{\"connectionRequestId\":\"${CONNECTION_REQUEST_ID}\",\"kind\":\"http\",\"target\":\"my-system\",\"endpoint\":\"<gate-endpoint>\",\"credentialKind\":\"shared\"}"
+  -d "{\"connectionRequestId\":\"${CONNECTION_REQUEST_ID}\",\"kind\":\"http\",\"target\":\"my-system\",\"endpoint\":\"<gate-endpoint>\",\"connectionSecret\":\"${CONNECTION_SECRET}\",\"credentialKind\":\"shared\"}"
 # {"ok":true,"result":{"gatekeeperId":"<gk-uuid>","importedOperationNames":[...],"connectionRequestId":"<cr-uuid>"}}
 GATEKEEPER_ID_2=<gk-uuid>
 

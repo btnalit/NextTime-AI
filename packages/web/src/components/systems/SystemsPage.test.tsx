@@ -313,4 +313,54 @@ describe('SystemsPage', () => {
     // destination is this same page.
     expect(within(detail).queryByRole('link')).toBeNull();
   });
+
+  // R-01 (maintainer decision D-01): a gate the workspace connected itself (no catalog link) gets
+  // its own connection secret; the owner issues a new one from the row's menu, shown once.
+  it('lets the owner issue a new connection secret for a self-connected gate, and shows it once', async () => {
+    const secret = `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`;
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      rotate_connection_secret: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1' });
+        return { gatekeeperId: 'gk-1', connectionSecret: secret };
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
+    const confirm = await screen.findByTestId('gatekeeper-rotate-secret-confirm');
+    expect(confirm.textContent).toContain('旧密钥立即失效');
+    expect(http.calls.some((c) => c.name === 'rotate_connection_secret')).toBe(false);
+    fireEvent.click(within(confirm).getByRole('button', { name: '签发' }));
+    const sheet = await screen.findByTestId('gatekeeper-rotated-secret');
+    expect(within(sheet).getByTestId('connection-secret-value').textContent).toBe(secret);
+    fireEvent.click(within(sheet).getByRole('button', { name: '我已复制' }));
+    await waitFor(() => expect(screen.queryByTestId('connection-secret-value')).toBeNull());
+  });
+
+  it('offers no connection secret for a gate linked from the platform catalog', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'docker',
+            displayName: 'Docker',
+            connector: 'docker',
+            transportKind: 'cli',
+            status: 'enabled',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: 'gk-1',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    expect(await screen.findByText('健康与操作')).toBeTruthy();
+    expect(screen.queryByTestId('gatekeeper-rotate-secret')).toBeNull();
+  });
 });

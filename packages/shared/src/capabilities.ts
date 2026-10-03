@@ -700,6 +700,14 @@ const connectionCapabilities: readonly Capability[] = [
     //   - `manifestSource`: an OpenAPI document URL (`http`) or MCP server endpoint (`mcp`) to
     //     import from; omitted falls back to the gate's own already-configured manifest
     //     (`describe_operations`).
+    //   - `connectionSecret` (R-01, maintainer decision D-01): the gate's own secret from
+    //     `mint_connection_secret`, already in the gate's `GATE_KERNEL_TOKEN_FILE` — the kernel
+    //     never sends the platform gate token to an owner-supplied endpoint. Optional in the schema
+    //     so a catalog address still gets its specific 400 `endpoint_is_platform_gate`; the handler
+    //     requires it for everything else (400 `invalid_params`). Redacted from the audit row.
+    //   `endpoint` and `manifestSource` are owner-supplied URLs the kernel fetches from inside the
+    //   platform's networks: both must pass the outbound-target predicate (R-27,
+    //   `outbound-target.ts`) — 400 `connection_target_refused` otherwise.
     name: 'create_connection',
     group: 'connection',
     mode: 'execute',
@@ -711,6 +719,7 @@ const connectionCapabilities: readonly Capability[] = [
         kind: z.enum(['http', 'mcp', 'cli', 'ssh']),
         target: z.string(),
         endpoint: z.string().min(1),
+        connectionSecret: z.string().min(1).optional(),
         credentials: z.unknown().optional(),
         credentialKind: z.enum(['shared', 'connected_account']).optional(),
         onBehalfOf: id.optional(),
@@ -719,8 +728,39 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.CreateConnectionResultWireSchema,
     description:
-      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance.',
-    redactedParamKeys: ['credentials'],
+      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks (400 connection_target_refused).',
+    redactedParamKeys: ['credentials', 'connectionSecret'],
+  },
+  {
+    // R-01 (maintainer decision D-01, 2026-10-02 review): a self-connected gate authenticates the
+    // kernel with its own secret, never the platform gate token. This mints one for a gate about to
+    // be connected — the gate needs it *before* `create_connection` first calls it, so it cannot be
+    // minted by `create_connection` itself. Stores nothing (the secret carries its own non-secret
+    // salt; `create_connection` records that salt); shown once — the result is never audited.
+    // `mode: 'write'`: issuing a credential belongs in the default audit view, not with the reads.
+    name: 'mint_connection_secret',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({}).strict(),
+    resultSchema: wire.MintConnectionSecretResultWireSchema,
+    description:
+      'Mint a connection secret for a gate about to be connected: put it in the gate’s GATE_KERNEL_TOKEN_FILE, then pass it to create_connection as connectionSecret. Shown once; nothing is stored until create_connection.',
+  },
+  {
+    // R-01 / D-01: replaces a self-connected gate's secret — the old one stops working at once —
+    // and is how a gate connected before per-connection secrets gets its first. 409 `conflict` for
+    // a platform-catalog gate (it has no connection secret).
+    name: 'rotate_connection_secret',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    resultSchema: wire.RotateConnectionSecretResultWireSchema,
+    description:
+      'Issue a new connection secret for a self-connected gate (the previous one stops working immediately); put it in the gate’s GATE_KERNEL_TOKEN_FILE. Shown once. 409 for a platform-catalog gate.',
   },
   {
     name: 'publish_manifest',

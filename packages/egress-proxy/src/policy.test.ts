@@ -1,9 +1,9 @@
+import { parseCidr } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { parseCidr } from './net-utils.js';
 import type { PolicyConfig, Resolver, SourcePolicy } from './policy.js';
 import { decideEgress, isBareHostname, matchesSuffix } from './policy.js';
 
-/** See net-utils.test.ts: avoids writing a literal RFC1918 address into this file's source text. */
+/** See `@nexttime/shared` net-address.test.ts: avoids writing a literal RFC1918 address into this file's source text. */
 const quad = (a: number, b: number, c: number, d: number): string => [a, b, c, d].join('.');
 
 const DEFAULT_DENY_HOSTS = [
@@ -100,6 +100,18 @@ describe('decideEgress', () => {
 
   it('denies link-local (IPv4 and IPv6)', async () => {
     for (const addr of ['169.254.1.1', 'fe80::1']) {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: undefined,
+        config: baseConfig(),
+        resolve: resolverReturning(addr),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    }
+  });
+
+  it('denies the unspecified "this host" addresses (0.0.0.0/8, ::), which classify as public', async () => {
+    for (const addr of ['0.0.0.0', '0.1.2.3', '::', '::ffff:0.0.0.0']) {
       const decision = await decideEgress({
         hostname: 'example.com',
         source: undefined,

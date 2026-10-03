@@ -41,6 +41,10 @@ function scriptedHttp(
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
+      // R-01: the connect step's form mints the gate's connection secret when it opens.
+      if (name === 'mint_connection_secret' && !handlers[name]) {
+        return { connectionSecret: `ntgc1_${'a'.repeat(32)}_${'b'.repeat(64)}` };
+      }
       const handler = handlers[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
@@ -74,6 +78,7 @@ describe('OnboardingWizard', () => {
 
     // Step ② connect (CompleteConnectionForm, kind hidden and pre-set to mcp)
     const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
     expect(within(connectStep).queryByLabelText(/^Kind/)).toBeNull();
     fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
@@ -129,6 +134,7 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
     fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
@@ -175,6 +181,7 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
     fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });

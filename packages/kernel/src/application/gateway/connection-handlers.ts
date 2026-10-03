@@ -2,7 +2,16 @@ import { McpTransport, importMcpTools, importOpenApi } from '@nexttime/gatekeepe
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
 import type { Operation, PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import type {
+  GateConnectionSecrets,
+  GateTarget,
+  GatekeeperClient,
+} from '../../adapters/gatekeeper-client/index.js';
+import {
+  type OutboundTargetGuard,
+  createOutboundTargetGuard,
+  withoutRedirects,
+} from '../../adapters/outbound-target/index.js';
 import type { ConnectionRequestKind } from '../../governance/connections/index.js';
 import {
   ConnectionRequestNotFoundError,
@@ -13,17 +22,25 @@ import {
   listConnectionRequests,
   requestConnection,
 } from '../../governance/connections/index.js';
+import {
+  GatekeeperNotFoundError,
+  findGatekeeperIdByConnectionSecretSalt,
+  getGatekeeper,
+  setGatekeeperConnectionSecretSalt,
+} from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { platformGateIdForEndpoint } from './gate-target.js';
 import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
 
 /**
  * application/gateway/connection-handlers: `request_connection`, `create_connection` (this
  * repo's `complete_connection` — governance/connections/service.ts's own doc comment has the full
  * naming crosswalk), `connect_gatekeeper`, `list_connection_requests` (design doc §5.1.4
- * Connection, §7.5, §9.3; docs/development-tasks.md S2.13 "Handlers wired").
+ * Connection, §7.5, §9.3; docs/development-tasks.md S2.13 "Handlers wired"), and the two
+ * connection-secret capabilities `mint_connection_secret` / `rotate_connection_secret` (R-01).
  *
  * **Every network I/O this flow needs lives here, not in `governance/connections`** (§7.10:
  * substrate/governance may not import adapters): resolving the manifest to import (an OpenAPI
@@ -38,18 +55,35 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * **Credential ordering (redaction + rollback)**: `createConnectionHandler` calls
  * `completeConnection` (every DB write: register the Gatekeeper, import the manifest, transition
  * the ConnectionRequest, emit `ConnectionCreated`) *before* posting the credential to the gate —
- * see `completeConnection`'s own doc comment for why. The `credentials` param itself never reaches
- * `audit_records` (`packages/shared/src/capabilities.ts`'s `create_connection.redactedParamKeys`,
- * applied generically by `dispatch.ts`) and this handler's own returned `result` never echoes it
- * back either.
+ * see `completeConnection`'s own doc comment for why. The `credentials` and `connectionSecret`
+ * params never reach `audit_records` (`packages/shared/src/capabilities.ts`'s
+ * `create_connection.redactedParamKeys`, applied generically by `dispatch.ts`) and this handler's
+ * own returned `result` never echoes either back.
  *
- * **Endpoint guard (STATUS leftover 36, S5.5)**: the kernel calls every gate with the same
- * `gate_token`, so a workspace owner who pointed a self-connected gate at a *platform-catalog*
- * instance (`gate_instances.endpoint` — a packaged gate, or `gate-host`'s `/i/<id>` prefix with the
- * administrator's shared credentials behind it) would get a Gatekeeper in their own workspace that
- * the catalog's `workspace_gate_links` rules (connector deny list, `vetted`, `enabled` /
- * `disabled`) never see. `assertEndpointIsNotAPlatformGate` refuses that before any network I/O —
- * the only door to a catalog instance is `enable_gate_instance` (gate-instance-handlers.ts).
+ * **Endpoint guard (STATUS leftover 36, S5.5)**: a workspace owner who pointed a self-connected gate
+ * at a *platform-catalog* instance (`gate_instances.endpoint` — a packaged gate, or `gate-host`'s
+ * `/i/<id>` prefix with the administrator's shared credentials behind it) would get a Gatekeeper in
+ * their own workspace that the catalog's `workspace_gate_links` rules (connector deny list,
+ * `vetted`, `enabled` / `disabled`) never see. `assertEndpointIsNotAPlatformGate` refuses that
+ * before any network I/O — the only door to a catalog instance is `enable_gate_instance`
+ * (gate-instance-handlers.ts).
+ *
+ * **Per-connection secret (R-01, maintainer decision D-01, 2026-10-02 review)**: the kernel used to
+ * send the platform `gate_token` to whatever endpoint an owner typed here — and with it the owner
+ * could call any packaged gate or gate-host instance directly, with no ActionRequest, approval or
+ * kernel audit. A self-connected gate now gets its own secret instead
+ * (`adapters/gatekeeper-client/connection-secret.ts`): the owner gets one from
+ * `mint_connection_secret` (shown once — the console's connect form does this), copies it into the
+ * gate's `GATE_KERNEL_TOKEN_FILE`, and passes it as `connectionSecret` here; the kernel verifies it
+ * was minted for this workspace, stores only its non-secret salt on the Gatekeeper, and presents the
+ * re-derived secret on every call (`gate-target.ts` decides; `gate_token` goes only to catalog
+ * instances). `rotate_connection_secret` replaces the salt.
+ *
+ * **Outbound-target predicate (R-27)**: `endpoint` and `manifestSource` are owner-supplied URLs the
+ * kernel itself fetches from inside the platform's networks, so both pass `@nexttime/shared`'s
+ * `outbound-target` predicate (bare/compose names, loopback, link-local, the platform subnets are
+ * refused — 400 `connection_target_refused`) before any fetch, and no fetch of either follows a
+ * redirect.
  */
 
 /** Upper bound on the `manifestSource` OpenAPI-document fetch — it runs inside the dispatch
@@ -60,13 +94,19 @@ const MANIFEST_FETCH_TIMEOUT_MS = 15_000;
 
 export interface ConnectionHandlerDeps {
   readonly gatekeeperClient: GatekeeperClient;
+  /** R-01: issues and verifies connection secrets (holds the gate token; the handlers never do). */
+  readonly connectionSecrets: GateConnectionSecrets;
   /** Injectable for tests — defaults to the global `fetch`. Only used for the `manifestSource`
    *  OpenAPI-document-fetch path (an `http` connection whose manifest is not already loaded into
-   *  the running gate). */
+   *  the running gate) and the `mcp` `tools/list` import. */
   readonly fetchImpl?: typeof fetch;
+  /** R-27: the owner-supplied-URL predicate — defaults to `createOutboundTargetGuard()` over
+   *  `process.env`. Injectable for tests. */
+  readonly outboundTargetGuard?: OutboundTargetGuard;
 }
 
 let deps: ConnectionHandlerDeps | undefined;
+let defaultGuard: OutboundTargetGuard | undefined;
 
 export function setConnectionHandlerDeps(next: ConnectionHandlerDeps): void {
   deps = next;
@@ -79,6 +119,12 @@ function requireDeps(): ConnectionHandlerDeps {
     );
   }
   return deps;
+}
+
+function outboundTargetGuard(current: ConnectionHandlerDeps): OutboundTargetGuard {
+  if (current.outboundTargetGuard) return current.outboundTargetGuard;
+  defaultGuard ??= createOutboundTargetGuard();
+  return defaultGuard;
 }
 
 export class ConnectionManifestFetchError extends Error {
@@ -118,41 +164,42 @@ export class ConnectionEndpointIsPlatformGateError extends Error {
   }
 }
 
-/** `host` (hostname plus a non-default port) of a URL, lower-cased; `null` when the string is not
- *  a URL at all — such an endpoint is left to `HttpGatekeeperClient` to fail on downstream. */
-function urlHost(value: string): string | null {
-  try {
-    return new URL(value).host.toLowerCase();
-  } catch {
-    return null;
+/** `create_connection` without a usable `connectionSecret` (R-01): missing, or not minted by this
+ *  kernel for this workspace. Mapped to 400 `invalid_params`. */
+export class ConnectionSecretInvalidError extends Error {
+  constructor(missing: boolean) {
+    super(
+      missing
+        ? 'create_connection: connectionSecret is required — get one with mint_connection_secret, put it in the gate’s GATE_KERNEL_TOKEN_FILE (restart the gate), then connect it'
+        : 'create_connection: connectionSecret was not issued for this workspace — get a new one with mint_connection_secret and put it in the gate’s GATE_KERNEL_TOKEN_FILE',
+    );
+    this.name = 'ConnectionSecretInvalidError';
+  }
+}
+
+/** A connection secret that cannot apply here (R-01): already used by another Gatekeeper in this
+ *  workspace, or `rotate_connection_secret` on a platform-catalog gate (the kernel authenticates to
+ *  those with the platform credential). Mapped to 409 `conflict`. */
+export class ConnectionSecretConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConnectionSecretConflictError';
   }
 }
 
 /**
  * Refuses an endpoint whose `host` matches any catalog instance's (`gate_instances.endpoint`, every
- * status — a `disabled` instance is exactly one the administrator does not want reached). Matching
- * on the parsed host rather than the string closes trailing slashes and path variants: for
- * `gate-host` one announced instance (`http://gate-host:8083/i/<id>`) covers every `/i/*` under
- * that host, including hosted rows the host has not announced yet (their own `endpoint` is still
- * `''`, which the query skips). `gate_instances` has a `*_read_all` policy (migration core 0023),
- * so the workspace transaction can read it. Residual: an address that reaches the same container
- * by another name (an IP, a network alias) is not detected — the kernel does not resolve names
- * inside a transaction; the compose networks are the remaining boundary for that case.
+ * status — a `disabled` instance is exactly one the administrator does not want reached) — the
+ * shared host rule is `gate-target.ts`'s `platformGateIdForEndpoint`. Residual: an address that
+ * reaches the same container by another name (an IP, a network alias) is not detected here; the
+ * outbound-target predicate below refuses every address inside the platform's subnets.
  */
 async function assertEndpointIsNotAPlatformGate(
   client: PoolClient,
   endpoint: string,
 ): Promise<void> {
-  const host = urlHost(endpoint);
-  if (host === null) return;
-  const catalog = await client.query<{ gate_id: string; endpoint: string }>(
-    "select gate_id, endpoint from gate_instances where endpoint <> ''",
-  );
-  for (const row of catalog.rows) {
-    if (urlHost(row.endpoint) === host) {
-      throw new ConnectionEndpointIsPlatformGateError(endpoint, row.gate_id);
-    }
-  }
+  const gateId = await platformGateIdForEndpoint(client, endpoint);
+  if (gateId !== null) throw new ConnectionEndpointIsPlatformGateError(endpoint, gateId);
 }
 
 /** `request_connection(kind, target)` — Handle channel, any member (design doc §7.5). */
@@ -196,10 +243,18 @@ interface CreateConnectionParams {
   readonly kind: ConnectionRequestKind;
   readonly target: string;
   readonly endpoint: string;
+  readonly connectionSecret?: string;
   readonly credentials?: unknown;
   readonly credentialKind?: 'shared' | 'connected_account';
   readonly onBehalfOf?: string;
   readonly manifestSource?: string;
+}
+
+/** Whether `manifestSource` is fetched at all for `kind` (`cli`/`ssh` ignore it). */
+function usesManifestSource(params: CreateConnectionParams): params is CreateConnectionParams & {
+  readonly manifestSource: string;
+} {
+  return Boolean(params.manifestSource) && (params.kind === 'http' || params.kind === 'mcp');
 }
 
 /** Resolves the manifest to import as drafts (design doc §7.5 "http 从 OpenAPI URL 导入清单草稿，
@@ -208,20 +263,22 @@ interface CreateConnectionParams {
  *  `importMcpTools`); omitted (any kind, including `cli`/`ssh`, which have no `manifestSource`
  *  concept) → the already-running gate's own `describe_operations` (same path
  *  `cli/bootstrap.ts`'s `registerGatekeeperFromCli` already uses — a gate started with
- *  `GATE_MANIFEST_FILE` set). */
+ *  `GATE_MANIFEST_FILE` set). Both `manifestSource` fetches refuse redirects (R-27). */
 async function resolveManifestOperations(
   params: CreateConnectionParams,
+  gate: GateTarget,
   gatekeeperClient: GatekeeperClient,
   fetchImpl: typeof fetch,
 ): Promise<readonly Operation[]> {
-  const { kind, endpoint, manifestSource, credentials } = params;
+  const { kind, manifestSource, credentials } = params;
+  const ownerFetch = withoutRedirects(fetchImpl);
 
   if (manifestSource && kind === 'http') {
     let document: OpenApiDocumentLike;
     try {
       // Bounded: this runs inside dispatch.ts's open DB transaction (see the module doc comment on
       // ordering), so an unresponsive manifest URL must not pin a pool connection indefinitely.
-      const response = await fetchImpl(manifestSource, {
+      const response = await ownerFetch(manifestSource, {
         signal: AbortSignal.timeout(MANIFEST_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {
@@ -237,7 +294,7 @@ async function resolveManifestOperations(
   if (manifestSource && kind === 'mcp') {
     let toolsList: McpToolsListResult;
     try {
-      const transport = new McpTransport({ endpoint: manifestSource, fetchImpl });
+      const transport = new McpTransport({ endpoint: manifestSource, fetchImpl: ownerFetch });
       toolsList = await transport.listTools(credentials);
     } catch (err) {
       throw new ConnectionManifestFetchError(manifestSource, { cause: err });
@@ -245,8 +302,23 @@ async function resolveManifestOperations(
     return importMcpTools(toolsList);
   }
 
-  const described = await gatekeeperClient.describeOperations(endpoint);
+  const described = await gatekeeperClient.describeOperations(gate);
   return described.operations;
+}
+
+/** Throws `ConnectionSecretConflictError` when another Gatekeeper in this workspace already holds
+ *  `salt` — one secret per connection, so rotating one gate never breaks another. */
+async function assertConnectionSecretUnused(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+): Promise<void> {
+  const holder = await findGatekeeperIdByConnectionSecretSalt(client, workspaceId, salt);
+  if (holder !== null) {
+    throw new ConnectionSecretConflictError(
+      `create_connection: this connectionSecret already belongs to Gatekeeper "${holder}" — every connection gets its own; get a new one with mint_connection_secret`,
+    );
+  }
 }
 
 export const createConnectionHandler: CapabilityHandler = async (
@@ -256,7 +328,8 @@ export const createConnectionHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const params = rawParams as CreateConnectionParams;
-  const { gatekeeperClient, fetchImpl } = requireDeps();
+  const current = requireDeps();
+  const { gatekeeperClient, connectionSecrets, fetchImpl } = current;
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const effectiveCredentialKind: 'shared' | 'connected_account' =
@@ -266,10 +339,32 @@ export const createConnectionHandler: CapabilityHandler = async (
   }
 
   // Before the manifest resolution below: that is the first call the kernel would make *to* the
-  // endpoint with its gate token (`describeOperations`), and the whole point is never to make it.
+  // endpoint (`describeOperations`), and the whole point is never to make it.
   await assertEndpointIsNotAPlatformGate(client, params.endpoint);
 
-  const operations = await resolveManifestOperations(params, gatekeeperClient, fetchImpl ?? fetch);
+  // R-01: the gate's own secret, verified before anything is sent to it.
+  if (params.connectionSecret === undefined || params.connectionSecret.trim() === '') {
+    throw new ConnectionSecretInvalidError(true);
+  }
+  const salt = connectionSecrets.saltOf(workspaceId, params.connectionSecret);
+  if (salt === null) throw new ConnectionSecretInvalidError(false);
+  await assertConnectionSecretUnused(client, workspaceId, salt);
+
+  // R-27: both owner-supplied URLs, before any fetch of either.
+  const guard = outboundTargetGuard(current);
+  await guard(params.endpoint, 'endpoint');
+  if (usesManifestSource(params)) await guard(params.manifestSource, 'manifestSource');
+
+  const gate: GateTarget = {
+    endpoint: params.endpoint,
+    credential: { kind: 'connection', workspaceId, salt },
+  };
+  const operations = await resolveManifestOperations(
+    params,
+    gate,
+    gatekeeperClient,
+    fetchImpl ?? fetch,
+  );
 
   const activity = await startActivity(client, workspaceId, {
     kind: 'governance.create_connection',
@@ -284,6 +379,7 @@ export const createConnectionHandler: CapabilityHandler = async (
       kind: params.kind,
       target: params.target,
       endpoint: params.endpoint,
+      connectionSecretSalt: salt,
       operations,
       activityId: activity.id,
       completedBy: { id: principalId, kind: 'human' },
@@ -300,7 +396,7 @@ export const createConnectionHandler: CapabilityHandler = async (
   if (effectiveCredentialKind === 'connected_account') {
     const onBehalfOf =
       params.onBehalfOf ?? completion.connectionRequest?.requestedBy ?? principalId;
-    await gatekeeperClient.storeConnectedAccount(params.endpoint, {
+    await gatekeeperClient.storeConnectedAccount(gate, {
       onBehalfOf,
       credential: params.credentials as Record<string, unknown>,
     });
@@ -315,6 +411,46 @@ export const createConnectionHandler: CapabilityHandler = async (
     },
     resourceType: 'gatekeeper',
     resourceId: completion.gatekeeperId,
+  };
+};
+
+// -------------------------------------------------------------------------------------------
+// mint_connection_secret / rotate_connection_secret (R-01, D-01) — the only two places a
+// connection secret is ever shown, each exactly once (the result; never the audit row).
+// -------------------------------------------------------------------------------------------
+
+/** `mint_connection_secret()` — human, owner: a fresh secret for a gate about to be connected with
+ *  `create_connection`. Stores nothing: the secret carries its own salt, and only a
+ *  `create_connection` that presents it records that salt. */
+export const mintConnectionSecretHandler: CapabilityHandler = async (_client, workspaceId) => {
+  const { secret } = requireDeps().connectionSecrets.mint(workspaceId);
+  return { result: { connectionSecret: secret } };
+};
+
+/** `rotate_connection_secret(gatekeeperId)` — human, owner: a new secret for a self-connected gate
+ *  (also how a gate connected before D-01 gets its first). The old one stops working when this
+ *  commits; the gate needs the new one in its `GATE_KERNEL_TOKEN_FILE`. Refused (409) for a
+ *  platform-catalog gate — the kernel authenticates to those with the platform credential. */
+export const rotateConnectionSecretHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+) => {
+  const { gatekeeperId } = params as { gatekeeperId: string };
+  const record = await getGatekeeper(client, workspaceId, gatekeeperId);
+  if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
+  const platformGateId = await platformGateIdForEndpoint(client, record.endpoint);
+  if (platformGateId !== null) {
+    throw new ConnectionSecretConflictError(
+      `rotate_connection_secret: Gatekeeper "${gatekeeperId}" is platform gate instance "${platformGateId}" — it has no connection secret (the kernel authenticates to it with the platform credential)`,
+    );
+  }
+  const { secret, salt } = requireDeps().connectionSecrets.mint(workspaceId);
+  await setGatekeeperConnectionSecretSalt(client, workspaceId, gatekeeperId, salt);
+  return {
+    result: { gatekeeperId, connectionSecret: secret },
+    resourceType: 'gatekeeper',
+    resourceId: gatekeeperId,
   };
 };
 

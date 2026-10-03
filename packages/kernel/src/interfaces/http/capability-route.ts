@@ -1,9 +1,11 @@
 import { IllegalTransition, getCapability } from '@nexttime/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
+  GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
+import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import {
   ChatArchivedError,
   ChatNotFoundError,
@@ -25,6 +27,8 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
+  ConnectionSecretConflictError,
+  ConnectionSecretInvalidError,
   CsrfHeaderRequiredError,
   DecisionNotFoundError,
   type DispatchDeps,
@@ -381,6 +385,22 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // platform-catalog gate instance; the caller's route to it is `enable_gate_instance`.
   if (err instanceof ConnectionEndpointIsPlatformGateError) {
     return { status: 400, code: err.code, message: err.message };
+  }
+  // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own
+  // services or networks — refused before any fetch (adapters/outbound-target).
+  if (err instanceof OutboundTargetRefusedError) {
+    return { status: 400, code: err.code, message: `create_connection: ${err.message}` };
+  }
+  // R-01 (D-01) connection secrets: missing / not minted for this workspace (400), reused or not
+  // applicable to a platform-catalog gate (409), no gate token to derive one from (503).
+  if (err instanceof ConnectionSecretInvalidError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof ConnectionSecretConflictError) {
+    return { status: 409, code: 'conflict', message: err.message };
+  }
+  if (err instanceof GateConnectionSecretsUnavailableError) {
+    return { status: 503, code: 'service_unavailable', message: err.message };
   }
   if (err instanceof ConnectionManifestFetchError) {
     return { status: 502, code: 'manifest_fetch_failed', message: err.message };

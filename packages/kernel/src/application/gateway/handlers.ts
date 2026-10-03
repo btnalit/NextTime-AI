@@ -116,7 +116,9 @@ import {
   connectGatekeeperHandler,
   createConnectionHandler,
   listConnectionRequestsHandler,
+  mintConnectionSecretHandler,
   requestConnectionHandler,
+  rotateConnectionSecretHandler,
 } from './connection-handlers.js';
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
@@ -1749,6 +1751,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['connect_gatekeeper', connectGatekeeperHandler],
   ['list_connection_requests', listConnectionRequestsHandler],
   ['cancel_connection_request', cancelConnectionRequestHandler],
+  // R-01 (maintainer decision D-01) — a self-connected gate's own secret, connection-handlers.ts.
+  ['mint_connection_secret', mintConnectionSecretHandler],
+  ['rotate_connection_secret', rotateConnectionSecretHandler],
   ['publish_manifest', publishManifestHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
   ['list_gatekeepers', listGatekeepersHandler],

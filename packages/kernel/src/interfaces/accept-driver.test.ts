@@ -542,6 +542,13 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     const bad = await runDriver(['gate-health', baseUrl], env());
     expect(bad.code).toBe(0);
     expect(bad.kv.get('OK')).toBe('false');
+
+    // R-01: a self-connected gate's own token file, passed explicitly, wins over GATE_TOKEN_FILE.
+    const ownTokenFile = `${gateTokenFile}.connection`;
+    writeFileSync(ownTokenFile, 'secret-token\n');
+    const own = await runDriver(['gate-health', baseUrl, ownTokenFile], env());
+    expect(own.code).toBe(0);
+    expect(own.kv.get('OK')).toBe('true');
   });
 
   it('unknown subcommand exits 1 with an ERROR line', async () => {

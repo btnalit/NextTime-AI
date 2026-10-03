@@ -104,12 +104,19 @@ cap() {
 # Polls one gate's /gate/health (control-network-only, no host port) from inside the kernel
 # image, sending the kernel container's own gate token as Bearer (the driver's gate-health
 # subcommand). Retries for up to ~30s — gate containers take a few seconds to bind their port
-# after `docker compose up -d`.
+# after `docker compose up -d`. Optional second argument (R-01): a host file holding a
+# self-connected gate's own connection secret — mounted read-only and sent instead of the platform
+# gate token, which such a gate never accepts.
 wait_for_gate_health() {
   gate_url="$1"
+  token_file="${2:-}"
   attempt=0
   while [ "$attempt" -lt 15 ]; do
-    out=$(run_driver gate-health "$gate_url")
+    if [ -n "$token_file" ]; then
+      out=$(run_driver_mount "$token_file" gate-health "$gate_url" /tmp/mounted)
+    else
+      out=$(run_driver gate-health "$gate_url")
+    fi
     case "$out" in
       *OK=true*) return 0 ;;
     esac
@@ -117,6 +124,27 @@ wait_for_gate_health() {
     sleep 2
   done
   return 1
+}
+
+# R-01 (maintainer decision D-01): a self-connected gate authenticates the kernel with its own
+# connection secret, never the platform gate token. mint_gate_secret <ownerKey> <step> prints a
+# fresh one (`mint_connection_secret` stores nothing); it runs inside a command substitution, so
+# the caller checks for an empty result. write_gate_secret <secret> <file> puts it where the gate's
+# GATE_KERNEL_TOKEN_FILE points (docker-compose.yml), readable by the gate's uid 10001 — a
+# throwaway acceptance directory, like the store.key beside it.
+mint_gate_secret() {
+  out=$(cap "$1" mint_connection_secret "{}" "d.result.connectionSecret")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  if [ "$status" != "200" ]; then
+    echo "$2: mint_connection_secret HTTP $status: $(parse_kv "$out" BODY)" >&2
+    return 1
+  fi
+  parse_kv "$out" EXTRACTED
+}
+
+write_gate_secret() {
+  (umask 077 && printf '%s\n' "$1" >"$2") || return 1
+  chmod 0644 "$2"
 }
 
 # leftover 63 (host egress / DNS jitter): retry_http_code <max_attempts> <backoff_seconds>

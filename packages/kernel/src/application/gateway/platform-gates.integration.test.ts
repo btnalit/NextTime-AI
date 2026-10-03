@@ -29,7 +29,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import {
+  HttpGatekeeperClient,
+  createGateConnectionSecrets,
+} from '../../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { ApprovalDrainer, getActionRequest } from '../../governance/approval/index.js';
 import {
@@ -74,6 +77,7 @@ import type { CapabilityReachability } from './capability-reachability.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 import {
   ConnectionEndpointIsPlatformGateError,
+  ConnectionSecretConflictError,
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
@@ -1147,12 +1151,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       };
 
+      // R-01: a self-connected gate needs its own connection secret; R-27's predicate is
+      // stubbed open here (these cases are about the catalog guard, which runs first anyway).
+      const connectionSecrets = createGateConnectionSecrets('platform-gates-guard-gate-token-0123');
+
       function selfConnect(endpoint: string) {
         return callAsOwner('create_connection', {
           kind: 'http',
           target: 'a-system-of-my-own',
           endpoint,
           credentialKind: 'shared',
+          connectionSecret: connectionSecrets.mint(workspaceId).secret,
         });
       }
 
@@ -1161,7 +1170,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       // every build — the hosted case below would otherwise leave the real client in place for
       // the "let through" case after it (CI run 35246480966).
       beforeEach(() => {
-        setConnectionHandlerDeps({ gatekeeperClient: unreachableGate });
+        setConnectionHandlerDeps({
+          gatekeeperClient: unreachableGate,
+          connectionSecrets,
+          outboundTargetGuard: async () => {},
+        });
       });
 
       it("refuses the packaged instance's announced address however it is spelled", async () => {
@@ -1213,6 +1226,36 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('lets an address outside the catalog through to the gate', async () => {
         await expect(selfConnect('http://byo-gate.internal.test:9999')).rejects.toBe(reached);
+      });
+
+      // R-01 (D-01): a catalog instance has no connection secret — the kernel authenticates to it
+      // with the platform credential, so rotating one is refused (409), whatever the caller.
+      it('refuses rotate_connection_secret for a Gatekeeper on a catalog address', async () => {
+        const gatekeeperId = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.legacy_registration',
+              principalId: ownerPrincipalId,
+            });
+            const registered = await registerGatekeeper(client, workspaceId, {
+              name: 'legacy-catalog-address',
+              transportKind: 'cli',
+              target: 'docker',
+              // Under the gate host the previous case announced (HOSTED_ID) — a catalog host, but
+              // not any instance's exact endpoint, so no later enable_gate_instance associates it.
+              endpoint: 'http://gate-host:8083/i/rotate-probe',
+              activityId: activity.id,
+              registeredBy: { id: ownerPrincipalId, kind: 'human' },
+            });
+            await endActivity(client, workspaceId, activity.id, 'completed');
+            return registered.gatekeeperId;
+          },
+        );
+        await expect(
+          callAsOwner('rotate_connection_secret', { gatekeeperId }),
+        ).rejects.toBeInstanceOf(ConnectionSecretConflictError);
       });
     });
 

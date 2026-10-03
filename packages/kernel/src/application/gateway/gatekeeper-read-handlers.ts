@@ -3,7 +3,7 @@ import {
   GatekeeperClientError,
   HttpGatekeeperClient,
 } from '../../adapters/gatekeeper-client/index.js';
-import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { getOperationStats } from '../../governance/approval/index.js';
 import type { OperationStatsRow } from '../../governance/approval/index.js';
 import {
@@ -18,6 +18,7 @@ import {
 import type { GateLinkPolicyView } from '../gates/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { resolveGateTarget } from './gate-target.js';
 
 /**
  * application/gateway/gatekeeper-read-handlers: the S3.11 "系统接入" directory reads
@@ -81,8 +82,8 @@ function resolveClient(): GatekeeperClient {
  * any other failure (timeout, network error, non-401 gate error) is `unreachable`. Never throws.
  */
 /** P-B1 `test_gate_instance`: the gate's live `describe_operations`, through the same client. */
-export async function describeGateOperations(endpoint: string) {
-  return resolveClient().describeOperations(endpoint);
+export async function describeGateOperations(gate: GateTarget) {
+  return resolveClient().describeOperations(gate);
 }
 
 /** P-B1 (design §6.3 "按 Operation 开关"): the connector deny-list link for a workspace Gatekeeper
@@ -97,9 +98,9 @@ async function gateLinkPolicyFor(
   return readGateLinkPolicy(client, workspaceId, gatekeeperId);
 }
 
-export async function probeGatekeeperHealth(endpoint: string): Promise<GatekeeperHealth> {
+export async function probeGatekeeperHealth(gate: GateTarget): Promise<GatekeeperHealth> {
   try {
-    const response = await resolveClient().health(endpoint);
+    const response = await resolveClient().health(gate);
     return response.status === 'ok' ? 'ok' : 'unreachable';
   } catch (err) {
     if (err instanceof GatekeeperClientError && err.status === 401) return 'unauthorized';
@@ -197,7 +198,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
 
   // The health probe is a network call, so it may overlap the reads; the two reads share one
   // client and run one after the other (S5.5 leftover 34).
-  const healthProbe = probeGatekeeperHealth(record.endpoint);
+  const healthProbe = probeGatekeeperHealth(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
   const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;

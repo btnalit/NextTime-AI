@@ -49,6 +49,7 @@ export {
   projectWorkerDefinitionObject,
   registerGatekeeperObject,
   registerOperationDraftObject,
+  setGatekeeperConnectionSecretSaltObject,
   setOperationDescriptionObject,
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,

@@ -1,4 +1,5 @@
-import { type FormEvent, useState } from 'react';
+import type { MintConnectionSecretResultWire } from '@nexttime/shared';
+import { type FormEvent, useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
@@ -10,6 +11,7 @@ import {
 } from '../lib/connections.js';
 import { describeError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
+import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from './ui/Field.js';
@@ -57,6 +59,13 @@ export function parseCredentials(text: string): unknown {
   }
 }
 
+/** The 400 codes whose message names the field it is about: `invalid_params`, and R-27's
+ *  `connection_target_refused` (an `endpoint` / `manifestSource` aimed at the platform). */
+const FIELD_ERROR_CODES: ReadonlySet<string> = new Set([
+  'invalid_params',
+  'connection_target_refused',
+]);
+
 /** Maps a kernel `invalid_params` (400) to the field it is most likely about. */
 export function fieldForInvalidParams(message: string): keyof FieldErrors | undefined {
   const lower = message.toLowerCase();
@@ -76,6 +85,12 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  * `aria-describedby` follows what `Field` actually renders (C16): the hint only while there is
  * no error (`ui/Field.tsx` swaps the hint out for the error), so no control ever points at an id
  * that is not in the DOM.
+ *
+ * R-01 (maintainer decision D-01): the gate being registered is one the workspace runs itself, so
+ * the kernel calls it with that gate's own connection secret, never the platform gate token. The
+ * form mints one when it opens (`mint_connection_secret` — nothing is stored until
+ * `create_connection`), shows it once with a copy control, and sends it as `connectionSecret`; the
+ * owner puts it in the gate's config before registering. Closing the form discards it.
  */
 export function CompleteConnectionForm({
   http,
@@ -96,6 +111,23 @@ export function CompleteConnectionForm({
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<unknown | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
+  const [secretError, setSecretError] = useState<unknown | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    http.call<MintConnectionSecretResultWire>('mint_connection_secret', {}).then(
+      (result) => {
+        if (current) setConnectionSecret(result.connectionSecret);
+      },
+      (err: unknown) => {
+        if (current) setSecretError(err);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [http]);
 
   function validate(): FieldErrors {
     const errors: { -readonly [K in keyof FieldErrors]?: string } = {};
@@ -128,12 +160,14 @@ export function CompleteConnectionForm({
     setFieldErrors(errors);
     setSubmitError(null);
     if (Object.keys(errors).length > 0) return;
+    if (connectionSecret === null) return;
 
     const params: CreateConnectionParams = {
       ...(request ? { connectionRequestId: request.id } : {}),
       kind,
       target: target.trim(),
       endpoint: endpoint.trim(),
+      connectionSecret,
       credentialKind,
       ...(credentialKind === 'connected_account'
         ? { credentials: parseCredentials(credentials) }
@@ -154,8 +188,9 @@ export function CompleteConnectionForm({
     } catch (err) {
       setCredentials('');
       const described = describeError(err);
-      const field =
-        described.code === 'invalid_params' ? fieldForInvalidParams(described.message) : undefined;
+      const field = FIELD_ERROR_CODES.has(described.code)
+        ? fieldForInvalidParams(described.message)
+        : undefined;
       if (field) {
         setFieldErrors({ [field]: described.message });
       } else {
@@ -253,6 +288,20 @@ export function CompleteConnectionForm({
           mono
         />
       </Field>
+
+      <div className="field" data-testid="cc-connection-secret">
+        <span className="field-label">{t('门的连接密钥', 'Gate connection secret')}</span>
+        {connectionSecret !== null ? (
+          <ConnectionSecretReveal secret={connectionSecret} testId="cc-connection-secret-reveal" />
+        ) : secretError !== null ? (
+          <ErrorBanner
+            error={secretError}
+            title={t('无法生成连接密钥', 'Could not generate a connection secret')}
+          />
+        ) : (
+          <span className="text-3 text-small">{t('正在生成…', 'Generating…')}</span>
+        )}
+      </div>
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field-label">{t('凭证', 'Credential')}</legend>
@@ -389,7 +438,12 @@ export function CompleteConnectionForm({
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        <Button type="submit" variant="primary" loading={submitting}>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={submitting}
+          disabled={connectionSecret === null}
+        >
           {t('注册门', 'Register Gatekeeper')}
         </Button>
       </div>
