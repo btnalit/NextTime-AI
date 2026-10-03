@@ -1,6 +1,8 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
+import { OperationRefusedError, TransportTimeoutError } from '../errors.js';
 import {
+  SshCommandRejectedError,
   type SshPolicyRule,
   SshTransport,
   assertClassificationAllowed,
@@ -109,8 +111,21 @@ describe('SshTransport', () => {
     writes: [],
   };
 
-  it('builds ssh argv with BatchMode always and host-key options only when configured', () => {
-    expect(sshConnectionArgs({ host: 'h', user: 'u' })).toEqual(['-o', 'BatchMode=yes', 'u@h']);
+  const BOUNDED_SESSION_ARGS = [
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'ServerAliveInterval=15',
+  ];
+
+  it('builds ssh argv with -n, BatchMode and connection bounds always, and host-key options only when configured', () => {
+    expect(sshConnectionArgs({ host: 'h', user: 'u' })).toEqual([
+      '-n',
+      ...BOUNDED_SESSION_ARGS,
+      'u@h',
+    ]);
     expect(
       sshConnectionArgs({
         host: 'h',
@@ -121,6 +136,7 @@ describe('SshTransport', () => {
         knownHostsFile: '/dev/null',
       }),
     ).toEqual([
+      '-n',
       '-i',
       '/k/id',
       '-p',
@@ -129,10 +145,54 @@ describe('SshTransport', () => {
       'StrictHostKeyChecking=no',
       '-o',
       'UserKnownHostsFile=/dev/null',
-      '-o',
-      'BatchMode=yes',
+      ...BOUNDED_SESSION_ARGS,
       'u@h',
     ]);
+  });
+
+  // R-51: a remote command waiting on stdin never returned, leaking the child and pinning the
+  // apply key. `-n` (above) gives it EOF; the exec timeout is the backstop for anything else that
+  // hangs — the child is killed (its signal aborted) and the call fails as a timeout.
+  it('kills a command that never returns at the exec timeout and fails with TransportTimeoutError', async () => {
+    let seenSignal: AbortSignal | undefined;
+    const execImpl = vi.fn(
+      (_target: unknown, _command: string, { signal }: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string }>(() => {
+          seenSignal = signal; // waits forever, like a command blocked on stdin
+        }),
+    );
+    const transport = new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl,
+      execTimeoutMs: 30,
+    });
+    const failure = transport.invoke(patternOperation, { command: 'read line' }, {});
+    await expect(failure).rejects.toBeInstanceOf(TransportTimeoutError);
+    await expect(failure).rejects.toThrow(/timed out after 30 ms and was killed/);
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it('a command rejected before it runs is a refusal (403 path, key released), not a transport failure', async () => {
+    const narrowOperation: Operation = {
+      ...patternOperation,
+      binding: { kind: 'ssh', command_pattern: '^show\\b' },
+    };
+    const execImpl = vi.fn();
+    const transport = new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl,
+    });
+    await expect(
+      transport.invoke(narrowOperation, { command: 'reboot now' }, {}),
+    ).rejects.toSatisfy(
+      (err) => err instanceof SshCommandRejectedError && err instanceof OperationRefusedError,
+    );
+    await expect(
+      transport.invoke(patternOperation, { command: '-oProxyCommand=id' }, {}),
+    ).rejects.toBeInstanceOf(OperationRefusedError);
+    expect(execImpl).not.toHaveBeenCalled();
   });
 
   it('surfaces ssh stderr and exit code in the transport error (diagnosable failure reason)', async () => {
@@ -165,6 +225,7 @@ describe('SshTransport', () => {
     expect(execImpl).toHaveBeenCalledWith(
       { host: '198.51.100.10', user: 'admin' },
       'show interfaces',
+      { signal: expect.any(AbortSignal) },
     );
     expect(result.data).toEqual({ stdout: 'ok', stderr: '' });
     expect((result.detail as { classification: unknown }).classification).toEqual({
@@ -205,6 +266,7 @@ describe('SshTransport', () => {
     expect(execImpl).toHaveBeenCalledWith(
       { host: '198.51.100.10', user: 'admin' },
       'show interface eth0',
+      { signal: expect.any(AbortSignal) },
     );
   });
 });

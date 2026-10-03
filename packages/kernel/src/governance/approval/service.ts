@@ -29,6 +29,7 @@
  *                        transition, and the Approval Decision write (I7 amendment, PR #33).
  *   - `execution.ts`   — `expireActionRequest`/`expireOverduePendingApprovals` (reaper),
  *                        `listStaleExecutingActionRequests` (P1-3 stale-`executing` reaper scan),
+ *                        `recordActionRequestReplayAttempt` (R-48 — the reaper's replay counter),
  *                        `startActionRequestExecution`/`markActionRequestExecuted`/
  *                        `markActionRequestFailed`/`compensateActionRequest` (called by
  *                        `drainer.ts` and `application/gateway`'s real Gatekeeper execution path).
@@ -90,6 +91,7 @@ export {
 
 export {
   DEFAULT_APPROVAL_TIMEOUT_MS,
+  DEFAULT_MAX_REPLAY_ATTEMPTS,
   DEFAULT_STALE_EXECUTING_TIMEOUT_MS,
   type ActionRequestActorOptions,
   type DrainableGatekeeper,
@@ -105,6 +107,7 @@ export {
   listStaleExecutingActionRequests,
   markActionRequestExecuted,
   markActionRequestFailed,
+  recordActionRequestReplayAttempt,
   startActionRequestExecution,
 } from './execution.js';
 

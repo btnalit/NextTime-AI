@@ -1305,4 +1305,144 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       }
     });
   });
+
+  // R-54 (2026-10-02 review, decision D-12): `invokeWorkerCreate` dedupes on the stored key the
+  // capability handler always passes — a derived (`auto:`) key only against a Task that is not yet
+  // terminal, an explicit key against its one Task whatever its status. Each test uses its own
+  // principal so its running Tasks never count against another test's concurrency quota.
+  describe('R-54 — invoke_worker idempotency key (docs/code-review-2026-10-02.md)', () => {
+    async function entryCaller(principalId: string) {
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      return { principalId, channel: 'handle' as const, claims: claimsFromIssued(issued) };
+    }
+
+    async function countTasksByKey(principalId: string, idempotencyKey: string): Promise<number> {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ n: number }>(
+          'select count(*)::int as n from tasks where workspace_id = $1 and idempotency_key = $2',
+          [workspaceId, idempotencyKey],
+        );
+        return result.rows[0]?.n ?? 0;
+      });
+    }
+
+    it('a duplicate with the same derived key returns the running Task; once that Task is terminal, an identical call starts a new one', async () => {
+      const principalId = await adminInsertPrincipal('owner', 'r54-derived');
+      const caller = await entryCaller(principalId);
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const idempotencyKey = `auto:${caller.claims.sid}:${workerDefinitionId}@1:${randomUUID()}`;
+      const input = {
+        definitionId: workerDefinitionId,
+        version: 1,
+        input: { job: 'r54-derived' },
+        wait: false,
+        idempotencyKey,
+      };
+
+      const first = await invokeWorker(workspaceId, caller, input, deps(supervisorClient));
+      const duplicate = await invokeWorker(workspaceId, caller, input, deps(supervisorClient));
+      expect(duplicate).toMatchObject({
+        taskId: first.taskId,
+        workerRunId: first.workerRunId,
+        status: 'running',
+      });
+      expect(supervisorClient.spawnCalls).toHaveLength(1);
+
+      await failTaskAndReapWorkerRuns(
+        deps(supervisorClient),
+        workspaceId,
+        principalId,
+        first.taskId,
+        'r54_test_terminal',
+      );
+
+      const next = await invokeWorker(workspaceId, caller, input, deps(supervisorClient));
+      expect(next.taskId).not.toBe(first.taskId);
+      expect(next.status).toBe('running');
+      expect(supervisorClient.spawnCalls).toHaveLength(2);
+      expect(await countTasksByKey(principalId, idempotencyKey)).toBe(2);
+    });
+
+    it('two identical calls sent together start one Task and one Worker', async () => {
+      const principalId = await adminInsertPrincipal('owner', 'r54-concurrent');
+      const caller = await entryCaller(principalId);
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const idempotencyKey = `auto:${caller.claims.sid}:${workerDefinitionId}@1:${randomUUID()}`;
+      const input = {
+        definitionId: workerDefinitionId,
+        version: 1,
+        input: { job: 'r54-concurrent' },
+        wait: false,
+        idempotencyKey,
+      };
+
+      const [a, b] = await Promise.all([
+        invokeWorker(workspaceId, caller, input, deps(supervisorClient)),
+        invokeWorker(workspaceId, caller, input, deps(supervisorClient)),
+      ]);
+      expect(b.taskId).toBe(a.taskId);
+      expect(b.workerRunId).toBe(a.workerRunId);
+      expect(supervisorClient.spawnCalls).toHaveLength(1);
+      expect(await countTasksByKey(principalId, idempotencyKey)).toBe(1);
+    });
+
+    it('an explicit key returns its Task whatever its status, and a fresh key starts a second Worker alongside a running one', async () => {
+      const principalId = await adminInsertPrincipal('owner', 'r54-explicit');
+      const caller = await entryCaller(principalId);
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const explicitKey = (key: string) => `explicit:${principalId}:${caller.claims.sid}:${key}`;
+      const input = (key: string) => ({
+        definitionId: workerDefinitionId,
+        version: 1,
+        input: { job: 'r54-explicit' },
+        wait: false,
+        idempotencyKey: explicitKey(key),
+      });
+
+      const first = await invokeWorker(
+        workspaceId,
+        caller,
+        input('call-1'),
+        deps(supervisorClient),
+      );
+      await failTaskAndReapWorkerRuns(
+        deps(supervisorClient),
+        workspaceId,
+        principalId,
+        first.taskId,
+        'r54_test_terminal',
+      );
+      const replay = await invokeWorker(
+        workspaceId,
+        caller,
+        input('call-1'),
+        deps(supervisorClient),
+      );
+      expect(replay).toMatchObject({
+        taskId: first.taskId,
+        workerRunId: first.workerRunId,
+        status: 'failed',
+        failureReason: 'r54_test_terminal',
+      });
+      expect(supervisorClient.spawnCalls).toHaveLength(1);
+
+      const running = await invokeWorker(
+        workspaceId,
+        caller,
+        input('call-2'),
+        deps(supervisorClient),
+      );
+      const alongside = await invokeWorker(
+        workspaceId,
+        caller,
+        input('call-3'),
+        deps(supervisorClient),
+      );
+      expect(running.status).toBe('running');
+      expect(alongside.status).toBe('running');
+      expect(alongside.taskId).not.toBe(running.taskId);
+      expect(supervisorClient.spawnCalls).toHaveLength(3);
+    });
+  });
 });

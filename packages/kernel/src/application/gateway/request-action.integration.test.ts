@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   GatekeeperBase,
   InMemoryIdempotencyStore,
+  TransportTimeoutError,
   createGatekeeperServer,
 } from '@nexttime/gatekeeper-base';
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
@@ -140,6 +141,11 @@ class RecordingTransport implements Transport {
     // `slowMs` simulates a long-running effect (STATUS leftover 105's inline-wait test).
     const slowMs = (params as { slowMs?: unknown } | undefined)?.slowMs;
     if (typeof slowMs === 'number') await sleep(slowMs);
+    // `gateTimeout` simulates the gate's own exec timeout killing the call (R-51): the gate
+    // records the key as outcome unknown and answers 409 `apply_outcome_unknown`.
+    if ((params as { gateTimeout?: unknown } | undefined)?.gateTimeout === true) {
+      throw new TransportTimeoutError('fake transport: command timed out and was killed');
+    }
     return { data: { ok: true, operation: operation.name, params } };
   }
 }
@@ -245,6 +251,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let ownerId: string;
     let gatekeeperId: string;
     let fakeGateApp: FastifyInstance;
+    let gateEndpoint: string;
     let transport: RecordingTransport;
     let drainer: ApprovalDrainer;
     // Item 1 fix fixtures (review job 652a4abc): a member with no grant at all, a member holding
@@ -303,6 +310,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
       const address = fakeGateApp.server.address() as AddressInfo;
       const endpoint = `http://127.0.0.1:${address.port}`;
+      gateEndpoint = endpoint;
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const activity = await startActivity(client, workspaceId, {
@@ -377,6 +385,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       await fakeGateApp.close();
       await pool.end();
     });
+
+    /** A row left `executing` an hour ago (the reaper tests' staleness window is 30 min). */
+    async function seedStaleExecutingRow(params: Record<string, unknown>): Promise<string> {
+      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const result = await client.query<{ id: string }>(
+          `insert into action_requests (
+             workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+             await_decision, on_behalf_of, actor_runtime, executing_at, params
+           ) values ($1, 'executing', $2, $3, 'low', 'allow', false, $4, 'pi',
+             now() - interval '1 hour', $5::jsonb)
+           returning id`,
+          [workspaceId, gatekeeperId, AUTO_OP.name, ownerId, JSON.stringify(params)],
+        );
+        return result.rows[0]?.id as string;
+      });
+    }
+
+    async function readReplayState(
+      actionRequestId: string,
+    ): Promise<{ status: string; replayAttempts: number } | undefined> {
+      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const result = await client.query<{ status: string; replay_attempts: number }>(
+          'select status, replay_attempts from action_requests where workspace_id = $1 and id = $2',
+          [workspaceId, actionRequestId],
+        );
+        const found = result.rows[0];
+        return found ? { status: found.status, replayAttempts: found.replay_attempts } : undefined;
+      });
+    }
 
     it('observe path calls the gate and writes an observed Fact', async () => {
       const caller = humanCaller(workspaceId, ownerId);
@@ -1026,7 +1063,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     // below) deliberately — that test leaves a permanent, never-resolved pending_approval row on
     // this shared Gatekeeper, and P2-2's drainer-ordering fix means every later auto_approved
     // request on the same Gatekeeper would otherwise queue forever behind it.
-    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
+    //
+    // R-53 (2026-10-02 review, decision D-12): the derived default key only dedupes against a row
+    // still in flight. Once the first row is terminal an identical call is a new intent — a
+    // legitimate repeat (restart, check, restart) must apply again, not replay the first result.
+    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey, after the first one executed, is a new ActionRequest that applies again', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const params = { qty: 4200 };
 
@@ -1045,11 +1086,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
       })) as { status: string; id: string };
 
-      expect(second.id).toBe(first.id);
+      expect(second.id).not.toBe(first.id);
       expect(second.status).toBe('executed');
-      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // applied again
     });
 
+    it('an identical call made while the first one still awaits approval collapses onto the same ActionRequest', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const params = { qty: 4300 };
+      const before = transport.calls[PENDING_OP.name] ?? 0;
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params,
+      })) as { status: string; id: string };
+      expect(first.status).toBe('pending_approval');
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params,
+      })) as { status: string; id: string };
+      expect(second.id).toBe(first.id);
+      expect(second.status).toBe('pending_approval');
+
+      // Approve and drain it, so no pending row is left to hold up later tests' requests on this
+      // shared Gatekeeper — and it applies exactly once.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId: first.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+      expect(transport.calls[PENDING_OP.name]).toBe(before + 1);
+    });
+
+    // The explicit key keeps its meaning (D-12): one ActionRequest per key, whatever its status —
+    // here a replay of an already-`executed` row.
     it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const idempotencyKey = randomUUID();
@@ -1287,10 +1363,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     // Real-model regression 2026-10-02: a `gate/apply` timeout is "outcome unknown" — the executor
-    // must report it as indeterminate (the drainer then leaves the row `executing`), and the
-    // reaper's replay, if it times out too, resolves the row `failed` with an honest reason
-    // instead of parking it `executing` forever.
-    it('an apply timeout is indeterminate for the executor, and a replay that times out again resolves the row failed as outcome unknown', async () => {
+    // must report it as indeterminate (the drainer then leaves the row `executing`). R-48: a replay
+    // that times out too gets no answer either, so the row stays `executing` for the next tick —
+    // bounded by the persisted attempt count, after which it is `failed: outcome_unknown` for a
+    // person to reconcile, never parked `executing` forever.
+    it('an apply timeout is indeterminate for the executor; replays that time out too stay executing until the attempt cap, then fail as outcome_unknown', async () => {
       const timingOutClient = {
         apply: async () => {
           throw new GatekeeperTimeoutError(
@@ -1333,10 +1410,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       // 30 min, not the 1 s the crash test above uses: the reaper scans every workspace and this
       // executor fails everything, so only the hand-seeded 1-hour-old rows may qualify — never a
       // row another test file running against the same database just left `executing`.
-      await reapStaleExecutingActionRequests(pool, actionExecutor, {
-        staleAfterMs: 30 * 60 * 1000,
-      });
+      const reapOptions = { staleAfterMs: 30 * 60 * 1000, maxReplayAttempts: 2 };
+      await reapStaleExecutingActionRequests(pool, actionExecutor, reapOptions);
+      const afterFirst = await readReplayState(actionRequestId);
+      expect(afterFirst).toEqual({ status: 'executing', replayAttempts: 1 });
 
+      await reapStaleExecutingActionRequests(pool, actionExecutor, reapOptions);
       const after = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         getActionRequest(client, workspaceId, actionRequestId),
       );
@@ -1349,8 +1428,99 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
       expect((audit[0]?.payload as { reason?: string } | undefined)?.reason).toMatch(
-        /^outcome unknown: /,
+        /^outcome_unknown: no answer from the gate after 2 replays \(last: gatekeeper client: gate\/apply timed out/,
       );
+    });
+
+    // R-48: 409 on a replay means the gate is still applying this key — not a failure. The row
+    // stays `executing`; once the gate finishes, the next replay gets the stored result. The effect
+    // runs exactly once.
+    it('a replay answered 409 (the gate is still applying) leaves the row executing; the next replay records the stored result', async () => {
+      const params = { slowMs: 1500, marker: randomUUID() };
+      const actionRequestId = await seedStaleExecutingRow(params);
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+      const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
+      const actionExecutor = createGatekeeperActionExecutor({
+        gatekeeperClient,
+        withTransaction: createAdminWithTransaction(pool),
+      });
+
+      // The first `apply` for this key is still running on the gate (its kernel caller gave up).
+      const firstApply = gatekeeperClient.apply(gateEndpoint, {
+        operation: AUTO_OP.name,
+        params,
+        onBehalfOf: ownerId,
+        actionRequestId,
+      });
+      await sleep(200);
+
+      const reapOptions = { staleAfterMs: 30 * 60 * 1000 };
+      await reapStaleExecutingActionRequests(pool, actionExecutor, reapOptions);
+      expect(await readReplayState(actionRequestId)).toEqual({
+        status: 'executing',
+        replayAttempts: 1,
+      });
+
+      await firstApply;
+      await reapStaleExecutingActionRequests(pool, actionExecutor, reapOptions);
+      const after = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(after?.status).toBe('executed');
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: actionRequestId,
+          action: 'action_request.complete',
+        }),
+      );
+      expect(
+        (audit[0]?.payload as { resultMetadata?: { replayed?: boolean } } | undefined)
+          ?.resultMetadata?.replayed,
+      ).toBe(true);
+    });
+
+    // R-51 / D-11: when the gate itself cannot know (its exec timeout killed the call, or a gate
+    // process died mid-call), it answers 409 `apply_outcome_unknown` on every call for the key.
+    // The first execution and the reaper's replay both record `failed: outcome_unknown` — never
+    // a re-run, never "still applying".
+    it('a gate that answers outcome unknown fails the row as outcome_unknown, on the first call and on a replay, without re-running the effect', async () => {
+      const params = { gateTimeout: true, marker: randomUUID() };
+      const actionRequestId = await seedStaleExecutingRow(params);
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+      const actionExecutor = createGatekeeperActionExecutor({
+        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+        withTransaction: createAdminWithTransaction(pool),
+      });
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      if (!row) throw new Error('seeded action request not found');
+
+      const direct = await actionExecutor.execute(row);
+      expect(direct.ok).toBe(false);
+      expect(direct.indeterminate).toBeUndefined();
+      expect(direct.reason).toMatch(/^outcome_unknown: apply for actionRequestId /);
+
+      await reapStaleExecutingActionRequests(pool, actionExecutor, {
+        staleAfterMs: 30 * 60 * 1000,
+      });
+      const after = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(after?.status).toBe('failed');
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: actionRequestId,
+          action: 'action_request.fail',
+        }),
+      );
+      expect((audit[0]?.payload as { reason?: string } | undefined)?.reason).toMatch(
+        /^outcome_unknown: apply for actionRequestId .* has an unknown outcome/,
+      );
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // the gate ran it once, never again
     });
 
     it('a draft (unpublished) operation never executes, even though its own manifest entry declares auto_approvable', async () => {

@@ -6,7 +6,7 @@
 
 | 词 | 唯一含义 | 禁止的用法 |
 |----|----------|-----------|
-| `idempotencyKey` | **调用方**为一次 capability 调用提供的去重键（`request_action` 等的参数；落库为 `action_requests.idempotency_key`）。同键重放返回同一结果。 | 不得用于门协议里由 ActionRequest 派生的执行键 |
+| `idempotencyKey` | **调用方**为一次 capability 调用提供的去重键（`request_action` / `invoke_worker` 的参数；落库为 `action_requests.idempotency_key` / `tasks.idempotency_key`，按 `(on_behalf_of, sid)` 加 `explicit:` 前缀限定）。同键重放返回同一结果，不论那个结果是否已终态；换一个新键就是一次新调用（per-call nonce）。调用方不传时内核按 (sid\|principal, 目标, 参数哈希) 派生一个 `auto:` 前缀的默认键，它只对**仍在途**的行去重——行终态后同样的调用是新意图（2026-10-02 复审 R-53 / R-54，决定 D-12）。 | 不得用于门协议里由 ActionRequest 派生的执行键 |
 | `actionRequestId` | 一个 ActionRequest 的 id。门协议 `/gate/apply` 的执行预占键就是它——字段名就叫 `actionRequestId`，不叫 `idempotencyKey`。 | — |
 | `actionKind` | **仅** ActionDescription 里的展示对象 `{ tag, label }`（cloudflare-os 类型原样）。 | 不得把裸字符串叫 `actionKind` |
 | `actionKindTag` | 动作种类的裸标识字符串（= `actionKind.tag`）。策略（`set_auto_approved_action_kind`）、事件、聊天卡片、审计里承载的都是它。 | — |

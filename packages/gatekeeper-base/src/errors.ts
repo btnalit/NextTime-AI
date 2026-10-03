@@ -42,6 +42,33 @@ export class TransportInvokeError extends Error {
   }
 }
 
+/** R-51: an exec transport (`ssh`, `cli`) killed a command that ran past its exec timeout
+ *  (`kinds/exec-timeout.ts`). The command may have partially or fully run on the target, so
+ *  `GatekeeperBase.apply` records the call's key as outcome-unknown, never as a plain failure.
+ *  Extends `TransportInvokeError`: on `observe` it maps like any other transport failure (502). */
+export class TransportTimeoutError extends TransportInvokeError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'TransportTimeoutError';
+  }
+}
+
+/** R-51 / D-11: the gate cannot say whether this `apply` took effect — an earlier gate process
+ *  reserved the key and stopped before recording a result, or the transport timed out mid-call
+ *  (`TransportTimeoutError`). The call is never re-run automatically: the kernel marks the
+ *  ActionRequest `failed` with an `outcome_unknown` reason for a person to reconcile against the
+ *  target. `server.ts` maps it to 409 `apply_outcome_unknown`. */
+export class ApplyOutcomeUnknownError extends Error {
+  constructor(key: string, detail?: string) {
+    super(
+      `apply for actionRequestId "${key}" has an unknown outcome: ${
+        detail ?? 'an earlier gate process reserved it and stopped before recording a result'
+      } — it is not re-run automatically; check the target system and reconcile by hand`,
+    );
+    this.name = 'ApplyOutcomeUnknownError';
+  }
+}
+
 /** R-04: the gate itself refuses the call — its target is outside what this gate serves (the
  *  docker gate's platform agent containers, `gatekeepers/docker/src/transport.ts`). A transport
  *  throws it *before* touching the target system, so nothing ran: `GatekeeperBase.apply` releases

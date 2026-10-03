@@ -6969,6 +6969,10 @@
           },
           "type": "array"
         },
+        "idempotencyKey": {
+          "minLength": 1,
+          "type": "string"
+        },
         "input": {},
         "timeout": {
           "exclusiveMinimum": 0,

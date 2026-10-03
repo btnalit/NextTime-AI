@@ -9,8 +9,13 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { grantCapability } from '../capability/index.js';
 import { approveActionRequest, rejectActionRequest } from './decide.js';
+import {
+  expireActionRequest,
+  markActionRequestFailed,
+  startActionRequestExecution,
+} from './execution.js';
 import { listPendingForApprover, readApprovalDecisions } from './reads.js';
-import { requestAction } from './request-action.js';
+import { DERIVED_IDEMPOTENCY_KEY_PREFIX, requestAction } from './request-action.js';
 import { ApprovalReasonRequiredError, ApprovalScopeError } from './types.js';
 
 /**
@@ -260,6 +265,114 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         );
         expect(count).toBe(1);
+      });
+    });
+
+    // 2026-10-02 review R-53 (maintainer decision D-12): a derived key — the `auto:` prefix
+    // `request_action`'s handler puts on a key the caller did not supply — dedupes only against a
+    // row still in flight; once that row is terminal, a repeat is a new intent with a new row. An
+    // explicit key keeps "one row per key, whatever its status".
+    describe('requestAction — idempotency window (R-53 / D-12)', () => {
+      function derivedKey(): string {
+        return `${DERIVED_IDEMPOTENCY_KEY_PREFIX}${ownerId}:${gatekeeperId}:test.window:${randomUUID()}`;
+      }
+
+      /** `medium` → `pending_approval`; `low` → `auto_approved`. Both in flight. */
+      async function request(idempotencyKey: string, blastRadius: 'low' | 'medium' = 'medium') {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: 'test.window',
+            blastRadius,
+            operationAutoApprovable: true,
+            awaitDecision: false,
+            onBehalfOf: ownerId,
+            actorRuntime: 'pi',
+            idempotencyKey,
+            requesterScope: scopeCovering(gatekeeperId),
+          }),
+        );
+      }
+
+      async function countByKey(idempotencyKey: string): Promise<number> {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ n: number }>(
+            'select count(*)::int as n from action_requests where workspace_id = $1 and idempotency_key = $2',
+            [workspaceId, idempotencyKey],
+          );
+          return result.rows[0]?.n ?? 0;
+        });
+      }
+
+      it('a derived key collapses a repeat onto the row while it is in flight', async () => {
+        const key = derivedKey();
+        const first = await request(key);
+        expect(first.status).toBe('pending_approval');
+
+        const second = await request(key);
+        expect(second.id).toBe(first.id);
+        expect(await countByKey(key)).toBe(1);
+      });
+
+      it('a retry after `failed` creates a new row, which then collapses repeats in turn', async () => {
+        const key = derivedKey();
+        const first = await request(key, 'low');
+        expect(first.status).toBe('auto_approved');
+        expect((await request(key, 'low')).id).toBe(first.id);
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          await startActionRequestExecution(client, workspaceId, first.id);
+          await markActionRequestFailed(client, workspaceId, first.id, { reason: 'gate error' });
+        });
+
+        const retry = await request(key, 'low');
+        expect(retry.id).not.toBe(first.id);
+        expect(retry.status).toBe('auto_approved');
+        expect((await request(key, 'low')).id).toBe(retry.id);
+        expect(await countByKey(key)).toBe(2);
+      });
+
+      it('a retry after `rejected` or `expired` is evaluated again as a new request', async () => {
+        const key = derivedKey();
+        const first = await request(key);
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          rejectActionRequest(client, workspaceId, {
+            actionRequestId: first.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+
+        const second = await request(key);
+        expect(second.id).not.toBe(first.id);
+        expect(second.status).toBe('pending_approval');
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          expireActionRequest(client, workspaceId, second.id),
+        );
+
+        const third = await request(key);
+        expect(third.id).not.toBe(second.id);
+        expect(third.id).not.toBe(first.id);
+        expect(third.status).toBe('pending_approval');
+        expect(await countByKey(key)).toBe(3);
+      });
+
+      it('an explicit key still replays its one row after that row is terminal', async () => {
+        const key = `explicit:${ownerId}::${randomUUID()}`;
+        const first = await request(key);
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          rejectActionRequest(client, workspaceId, {
+            actionRequestId: first.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+
+        const replay = await request(key);
+        expect(replay.id).toBe(first.id);
+        expect(replay.status).toBe('rejected');
+        expect(await countByKey(key)).toBe(1);
       });
     });
 

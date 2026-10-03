@@ -174,6 +174,8 @@ export {
   scopeExplicitIdempotencyKey,
 } from './action-executor.js';
 export type {
+  ActionReplayer,
+  GatekeeperActionExecutor,
   GatekeeperActionExecutorDeps,
   ReapStaleExecutingActionRequestsOptions,
   ReapStaleExecutingActionRequestsResult,

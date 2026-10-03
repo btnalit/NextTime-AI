@@ -496,6 +496,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         await insertActionRequest(fixture, { idempotencyKey: null });
         await expect(insertActionRequest(fixture, { idempotencyKey: null })).resolves.toBeDefined();
       });
+
+      // governance 0014 (2026-10-02 review R-53, decision D-12): a derived key (`auto:` prefix)
+      // is unique only among rows still in flight; any other key stays unique in every status.
+      it('a derived (auto:) key is unique among in-flight rows only', async () => {
+        const fixture = await makeActionRequestFixture();
+        const key = `auto:${randomUUID()}`;
+        await insertActionRequest(fixture, { idempotencyKey: key });
+        await expect(insertActionRequest(fixture, { idempotencyKey: key })).rejects.toThrow();
+
+        // Two terminal rows, and a terminal row next to the in-flight one, are all allowed.
+        const terminal = { status: 'denied', policyDecision: 'deny', idempotencyKey: key };
+        await expect(insertActionRequest(fixture, terminal)).resolves.toBeDefined();
+        await expect(insertActionRequest(fixture, terminal)).resolves.toBeDefined();
+      });
+
+      it('an explicit (non-auto:) key stays unique across statuses', async () => {
+        const fixture = await makeActionRequestFixture();
+        const key = `explicit:${randomUUID()}`;
+        await insertActionRequest(fixture, {
+          status: 'denied',
+          policyDecision: 'deny',
+          idempotencyKey: key,
+        });
+        await expect(insertActionRequest(fixture, { idempotencyKey: key })).rejects.toThrow();
+      });
     });
 
     describe('action_requests — RLS workspace isolation', () => {

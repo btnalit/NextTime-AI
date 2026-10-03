@@ -90,10 +90,13 @@ import { renderInvariantMetricsPrometheus, runInvariantChecks } from './substrat
  * `ActionExecutor` directly), `createBackgroundServices` wires its own into the outbox
  * consumer + periodic tick trigger paths. Two separate `ActionExecutor`/`ApprovalDrainer` instances
  * (one per caller) are behaviorally identical — neither type has meaningful internal state beyond
- * what `gatekeeperClient`/`withTransaction` already determine, and `ApprovalDrainer`'s own
- * in-memory single-flight set is an optimization, not a correctness mechanism (the DB row lock +
- * conditional UPDATE is) — so this is about having exactly one definition of *how* to build the
- * pieces, not about sharing a single JS object across the sync/async construction split below
+ * what `gatekeeperClient`/`withTransaction` already determine. `ApprovalDrainer`'s own in-memory
+ * single-flight set only saves a redundant drain within one instance; per-Gatekeeper serial order
+ * across all of them is a guarantee (R-50, maintainer decision D-10) enforced in the database — an
+ * `executing` row is a barrier every drainer stops at, and the row lock + conditional UPDATE in
+ * `start_execution` lets exactly one of them start any row. So this is about having exactly one
+ * definition of *how* to build the pieces, not about sharing a single JS object across the
+ * sync/async construction split below
  * (`createServer` has no async dependency and can build its own before the port opens;
  * `createBackgroundServices` is built later, once `AgentRuntime`'s own async bootstrap finishes).
  */
@@ -691,7 +694,9 @@ export function createBackgroundServices(
   // (skipRoleSwitch): this is background, cross-workspace machinery in the same category as the
   // outbox dispatcher itself and the approval-expiry reaper above, not a per-request path.
   // `buildGatekeeperExecutionDeps` is the same construction `createServer()` uses for
-  // `request_action`'s own phase-2 continuation — see that function's own doc comment.
+  // `request_action`'s own phase-2 continuation — see that function's own doc comment. The
+  // consumer starts the drain without awaiting it (R-52): a slow `apply` must not hold the
+  // dispatcher's single serial delivery loop, and with it every other event.
   const { actionExecutor, withTransaction: adminWithTransaction } = buildGatekeeperExecutionDeps(
     options.pool,
   );
