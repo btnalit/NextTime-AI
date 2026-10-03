@@ -84,8 +84,9 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
   不会尝试也不会失败，直接不调用。
 - 没有 `agent_start`/`agent_end`/`agent_settled` 订阅，不写 `pi.appendEntry('nexttime_turn',
   ...)`——同样是因为没有 Turn 需要关联。
-- `context` 事件仍然会注入 `get_entry_context`（待审批 / 进行中任务 / 相关 Fact）——这个读能力
-  只按你的 Principal 走，跟 Turn/Chat 无关，`interactive` 模式一样有意义、一样会注入。
+- `context` 事件仍然会注入 `get_entry_context`（待审批 / 进行中任务 / 相关 Fact）——不带 `turnId`
+  调用，是只读的 peek：覆盖你所有对话里还没被确认的条目，不消费任何东西，所以 Task 结果和审批更新
+  仍会出现在发起它们的那个对话里，由那里的入口 agent 在 `report_turn` 时确认。
 
 ## 排障
 

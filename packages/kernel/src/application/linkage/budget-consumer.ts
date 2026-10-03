@@ -2,6 +2,7 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
 import { readTask } from '../task/index.js';
+import { resolveTaskChat } from './chat-targets.js';
 import type { LinkageDeps } from './deps.js';
 import { insertPendingContextItem } from './store.js';
 
@@ -54,9 +55,13 @@ export function registerBudgetWarningConsumer(
     await withWorkspace(
       deps.pool,
       { workspaceId: event.workspaceId, principalId: task.onBehalfOf },
-      (client) =>
-        insertPendingContextItem(client, event.workspaceId, {
+      async (client) => {
+        // R-57 (D-23): the warning belongs to the Task's Chat — the one whose Turn invoked it, the
+        // same Chat its outcome message and context item go to (`task-consumer.ts`).
+        const chat = await resolveTaskChat(client, event.workspaceId, task);
+        await insertPendingContextItem(client, event.workspaceId, {
           principalId: task.onBehalfOf,
+          chatId: chat.id,
           kind: 'budget_warning',
           subjectId: taskId,
           payload: {
@@ -65,7 +70,8 @@ export function registerBudgetWarningConsumer(
             text: `Task ${taskId} has used ${event.percent}% of its token budget`,
           },
           sourceOutboxId: meta.outboxId,
-        }),
+        });
+      },
     );
 
     seenOutboxIds.add(meta.outboxId);

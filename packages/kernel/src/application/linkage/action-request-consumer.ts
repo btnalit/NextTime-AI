@@ -10,7 +10,11 @@ import {
   publishPrincipalPushEvent,
 } from '../chat/index.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
-import { resolveActionRequestChat, resolveDefaultChat } from './chat-targets.js';
+import {
+  resolveActionRequestChat,
+  resolveDefaultChat,
+  resolveRequesterChat,
+} from './chat-targets.js';
 import { buildActionPendingContent, buildActionUpdateContent } from './content.js';
 import type { LinkageDeps } from './deps.js';
 import { insertPendingContextItem } from './store.js';
@@ -106,10 +110,12 @@ async function writeActionMessage(
    *  holder", is the right condition). `subjectId` is always `actionRequestId`. */
   isRequester: boolean,
   subjectId: string,
-  /** Which Chat this message belongs to (leftover 78, docs/STATUS.md §4) — `resolveDefaultChat`
-   *  for the original `system.action_pending` message (there is nothing yet to pin to), or
-   *  `resolveActionRequestChat` for every later `system.action_update` message on the same
-   *  ActionRequest, so they land in whichever Chat the pending card did. Resolved by the caller
+  /** Which Chat this message belongs to (leftover 78, docs/STATUS.md §4) — for the original
+   *  `system.action_pending` message (there is nothing yet to pin to) `resolveRequesterChat` for
+   *  the requester (the Chat of the Task whose Worker raised it, R-57 / D-23) and
+   *  `resolveDefaultChat` for a holder; `resolveActionRequestChat` for every later
+   *  `system.action_update` message on the same ActionRequest, so they land in whichever Chat the
+   *  pending card did. The requester's context item goes to the same Chat. Resolved by the caller
    *  (not here) because the two events need different rules, and both need the same
    *  `withWorkspace`-scoped `client` this function already opens. */
   resolveChat: (client: PoolClient, workspaceId: string, principalId: string) => Promise<ChatRow>,
@@ -139,6 +145,7 @@ async function writeActionMessage(
     if (isRequester) {
       await insertPendingContextItem(client, workspaceId, {
         principalId,
+        chatId: chat.id,
         kind: 'action_request_update',
         subjectId,
         payload: content as unknown as Record<string, unknown>,
@@ -171,6 +178,7 @@ export function registerActionRequestConsumers(
 
     for (const principalId of targets) {
       const isHolder = holderIds.has(principalId);
+      const isRequester = principalId === actionRequest.onBehalfOf;
 
       publishPrincipalPushEvent(principalId, {
         type: 'action.pending',
@@ -202,9 +210,12 @@ export function registerActionRequestConsumers(
         principalId,
         content,
         meta.outboxId,
-        principalId === actionRequest.onBehalfOf,
+        isRequester,
         event.actionRequestId,
-        resolveDefaultChat,
+        isRequester
+          ? (client, ws, pid) =>
+              resolveRequesterChat(client, ws, pid, actionRequest.parentWorkerRunId)
+          : resolveDefaultChat,
       );
     }
 
@@ -237,6 +248,7 @@ export function registerActionRequestConsumers(
 
     for (const principalId of targets) {
       const isHolder = holderIds.has(principalId);
+      const isRequester = principalId === actionRequest.onBehalfOf;
 
       publishPrincipalPushEvent(principalId, {
         type: 'action.updated',
@@ -256,9 +268,16 @@ export function registerActionRequestConsumers(
         principalId,
         content,
         meta.outboxId,
-        principalId === actionRequest.onBehalfOf,
+        isRequester,
         event.actionRequestId,
-        (client, ws, pid) => resolveActionRequestChat(client, ws, pid, event.actionRequestId),
+        (client, ws, pid) =>
+          resolveActionRequestChat(
+            client,
+            ws,
+            pid,
+            event.actionRequestId,
+            isRequester ? actionRequest.parentWorkerRunId : null,
+          ),
       );
     }
 
