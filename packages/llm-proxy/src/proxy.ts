@@ -6,6 +6,12 @@ import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import { type LlmProxyMetrics, createLlmProxyMetrics, respondMetrics } from './metrics.js';
+import {
+  type ServerToolStripResult,
+  buildOutboundHeaders,
+  buildOutboundSearch,
+  stripProviderServerTools,
+} from './outbound-policy.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
 import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
 
@@ -25,18 +31,19 @@ import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } 
  * rejected with 404/405 **without ever contacting upstream** — then buffer the request body
  * (capped), require it to parse as a JSON object with a non-empty string `model` (400 otherwise —
  * this proxy is JSON-only, no passthrough for opaque/non-JSON bodies), 403 if `model` is not
- * whitelisted, and — the one deliberate body mutation (S1.7 task brief) — for an
- * `openai-completions` streaming request, force `stream_options.include_usage: true` so the final
- * chunk carries usage (an `openai-responses` stream carries it in `response.completed` unasked,
- * R-10) → strip both `authorization` and `x-api-key` from the
- * forwarded headers (never let a client sneak a Handle upstream through the header the provider
- * *isn't* configured to use) and set the provider's configured header to the real key from
- * `process.env[api_key_env]` → forward to `upstream_base_url` → stream the response back
- * **byte-for-byte untouched** while a parallel, non-mutating read extracts usage (usage.ts) →
- * report the parsed usage (report.ts).
+ * whitelisted, and apply the two deliberate body mutations: provider-side tools are removed (R-30,
+ * outbound-policy.ts), and for an `openai-completions` streaming request
+ * `stream_options.include_usage: true` is forced so the final chunk carries usage (S1.7 task
+ * brief; an `openai-responses` stream carries it in `response.completed` unasked, R-10) → build
+ * the upstream headers from an allow-list (R-30: never the inbound `authorization` / `x-api-key`,
+ * so a Handle cannot reach the provider through either name, and no other agent-chosen header) and
+ * set the provider's configured header to the real key (console key, else
+ * `process.env[api_key_env]`) → forward to `upstream_base_url`, redirects refused (R-23) → stream
+ * the response back **byte-for-byte untouched** while a parallel, non-mutating read extracts
+ * usage (usage.ts) → report the parsed usage (report.ts).
  *
- * Response bytes are never altered, streaming or not — only the outbound *request* body is ever
- * mutated, and only in the one case above.
+ * Response bytes are never altered, streaming or not — only the outbound *request* is ever
+ * narrowed or mutated, and only as above.
  *
  * Leftover 87: every request gets a correlation id — the caller's `x-correlation-id` when valid
  * (the platform extension sends the Turn id / the Worker's inherited id on every model call), else
@@ -62,47 +69,7 @@ const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
   'anthropic-messages': '/v1/messages',
 };
 
-const STRIPPED_REQUEST_HEADERS = new Set([
-  'host',
-  'content-length',
-  'transfer-encoding',
-  'connection',
-  'accept-encoding',
-  // Both possible Handle-carrying headers are always stripped, regardless of which one this
-  // provider is configured to use — a client must never be able to smuggle a Handle upstream
-  // through the *other* header name.
-  'authorization',
-  'x-api-key',
-  // Leftover 87: the platform's internal correlation id stays inside the platform.
-  CORRELATION_ID_HEADER,
-]);
-
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
-
-function buildOutboundHeaders(
-  reqHeaders: http.IncomingHttpHeaders,
-  provider: ProviderConfig,
-  realKey: string,
-): Headers {
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(reqHeaders)) {
-    if (value === undefined || STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) continue;
-    if (Array.isArray(value)) {
-      for (const v of value) headers.append(key, v);
-    } else {
-      headers.set(key, value);
-    }
-  }
-  // Always request plaintext upstream: this proxy must parse the SSE body to extract usage, and
-  // controls its own outbound request independent of what the original client's own
-  // Accept-Encoding asked for (S1.7 assumption — see PR body "假设与偏离").
-  headers.set('accept-encoding', 'identity');
-  headers.set(
-    provider.auth.header,
-    provider.auth.scheme ? `${provider.auth.scheme} ${realKey}` : realKey,
-  );
-  return headers;
-}
 
 function upstreamHeadersToNodeHeaders(headers: Headers): http.OutgoingHttpHeaders {
   const result: http.OutgoingHttpHeaders = {};
@@ -137,6 +104,8 @@ interface ParsedRequestBody {
   /** The exact bytes to forward upstream — identical to the inbound body unless mutated below. */
   readonly outboundBody: Buffer;
   readonly modelId: string;
+  /** R-30: what `stripProviderServerTools` removed (both lists empty = nothing). */
+  readonly stripped: ServerToolStripResult;
 }
 
 export class InvalidRequestBodyError extends Error {
@@ -149,9 +118,10 @@ export class InvalidRequestBodyError extends Error {
 /** Parses the buffered request body as JSON — this proxy is JSON-only for the one forwardable
  *  action route per provider (see `ACTION_PATH_BY_API`); an empty body, non-JSON content, a
  *  non-object body, or a missing/empty `model` field all throw `InvalidRequestBodyError` (400),
- *  never silently pass through to upstream. Applies the one deliberate mutation once the body is
- *  known-valid: for `openai-completions` with `stream: true`, forces
- *  `stream_options.include_usage = true`. */
+ *  never silently pass through to upstream. Applies the two deliberate mutations once the body is
+ *  known-valid: provider-side tools are removed (R-30, outbound-policy.ts), and for
+ *  `openai-completions` with `stream: true`, `stream_options.include_usage = true` is forced. A
+ *  body neither touches is forwarded as the original bytes. */
 function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedRequestBody {
   let parsed: unknown;
   try {
@@ -169,6 +139,8 @@ function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedR
     throw new InvalidRequestBodyError('request body must set a non-empty string "model"');
   }
   const isStreaming = obj.stream === true;
+  const stripped = stripProviderServerTools(provider.api, obj);
+  const strippedAny = stripped.strippedTools.length > 0 || stripped.strippedParams.length > 0;
 
   // R-10: Chat Completions only. The Responses API reports usage in its terminal stream event
   // unasked, and its `stream_options` has no `include_usage` (official reference: only
@@ -180,10 +152,14 @@ function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedR
         ? (obj.stream_options as Record<string, unknown>)
         : {};
     obj.stream_options = { ...existingStreamOptions, include_usage: true };
-    return { outboundBody: Buffer.from(JSON.stringify(obj), 'utf8'), modelId };
+    return { outboundBody: Buffer.from(JSON.stringify(obj), 'utf8'), modelId, stripped };
   }
 
-  return { outboundBody: raw, modelId };
+  return {
+    outboundBody: strippedAny ? Buffer.from(JSON.stringify(obj), 'utf8') : raw,
+    modelId,
+    stripped,
+  };
 }
 
 export interface ProxyServerOptions {
@@ -393,8 +369,9 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
 
     let outboundBody: Buffer;
     let modelId: string;
+    let stripped: ServerToolStripResult;
     try {
-      ({ outboundBody, modelId } = parseAndMaybeMutateBody(rawBody, provider));
+      ({ outboundBody, modelId, stripped } = parseAndMaybeMutateBody(rawBody, provider));
     } catch (err) {
       if (err instanceof InvalidRequestBodyError) {
         sendJson(res, 400, { error: { code: 'invalid_request_body', message: err.message } });
@@ -430,12 +407,39 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
 
-    const outboundHeaders = buildOutboundHeaders(req.headers, provider, realKey);
+    const { headers: outboundHeaders, droppedBetas } = buildOutboundHeaders(
+      req.headers,
+      provider,
+      realKey,
+    );
     if (outboundBody.length > 0) {
       outboundHeaders.set('content-length', String(outboundBody.length));
     }
+    // R-30: the trail for a narrowed request — which provider-side tools, parameters and beta
+    // values this agent asked for and the provider never saw (outbound-policy.ts).
+    if (
+      stripped.strippedTools.length > 0 ||
+      stripped.strippedParams.length > 0 ||
+      droppedBetas.length > 0
+    ) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: provider-side tools stripped from the request (tool types, parameters or beta values that would reach the network from the provider, outside egress-proxy)',
+          correlationId,
+          provider: providerName,
+          model: modelId,
+          workspaceId: claims.ws,
+          sessionId: claims.sid,
+          jti: claims.jti,
+          strippedTools: stripped.strippedTools,
+          strippedParams: stripped.strippedParams,
+          droppedBetas,
+        }),
+      );
+    }
 
-    const upstreamUrl = `${provider.upstream_base_url}${remainderPath}${url.search}`;
+    const upstreamUrl = `${provider.upstream_base_url}${remainderPath}${buildOutboundSearch(provider.api, url.searchParams)}`;
 
     const controller = new AbortController();
     let timeoutHandle: NodeJS.Timeout | undefined;
@@ -454,6 +458,9 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         headers: outboundHeaders,
         body: outboundBody.length > 0 ? outboundBody : undefined,
         signal: controller.signal,
+        // R-23 (L6-19): 'follow' would resend the real key to whatever host a 3xx names (`x-api-key`
+        // is not one of the headers fetch drops cross-origin). A redirect is a failed upstream call.
+        redirect: 'error',
       });
     } catch {
       if (timeoutHandle) clearTimeout(timeoutHandle);

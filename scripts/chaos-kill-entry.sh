@@ -9,13 +9,15 @@
 # deployment (any workspace/principal/chat), not tied to accept_s1's own bootstrap.
 #
 # Usage:
-#   sh scripts/chaos-kill-entry.sh <principalId> <apiKey> [chatId] [pollTimeoutSeconds]
+#   sh scripts/chaos-kill-entry.sh <principalId> <apiKeyFile> [chatId] [pollTimeoutSeconds]
 #
 #   <principalId>        — the human Principal whose resident entry container to kill
 #                           (`nexttime-entry-<principalId>`, packages/worker-supervisor/src/
 #                           spawn-spec.ts's `entryContainerName`).
-#   <apiKey>              — that same principal's own API key (member role or above — send_chat_
-#                           message's own minRole).
+#   <apiKeyFile>          — a file (keep it chmod 600) holding that same principal's own API key
+#                           (member role or above — send_chat_message's own minRole). R-34: the
+#                           key itself is never a command-line argument — every local user can
+#                           read /proc/<pid>/cmdline, and shell history keeps it.
 #   [chatId]              — an existing Chat owned by that principal to continue on. Omitted ->
 #                           this script creates a fresh one via `new_chat`.
 #   [pollTimeoutSeconds]  — how long to wait for the respawned container to show up with an
@@ -41,22 +43,34 @@
 #      a chaos operator tool should not assume a particular LLM backend's response shape).
 #
 # Every docker compose run below carries </dev/null (same reasoning as accept_s1.sh's own header
-# comment). Confidentiality (repo is public): the API key lives only in a shell variable and curl
-# arguments for this process's lifetime, never written to a file, only ever printed via redact()
-# (first 6 characters) — same convention as accept_s1.sh.
+# comment). Confidentiality (repo is public): the API key is read from <apiKeyFile> into a shell
+# variable for this process's lifetime, reaches curl only on stdin (`-H @-`, fed by the printf
+# builtin — never an argument of any process), and is only ever printed via redact() (first 6
+# characters).
 
 set -u
 
 if [ "$#" -lt 2 ]; then
-  echo "usage: sh scripts/chaos-kill-entry.sh <principalId> <apiKey> [chatId] [pollTimeoutSeconds]" >&2
+  echo "usage: sh scripts/chaos-kill-entry.sh <principalId> <apiKeyFile> [chatId] [pollTimeoutSeconds]" >&2
   exit 1
 fi
 
 PRINCIPAL_ID="$1"
-API_KEY="$2"
+API_KEY_FILE="$2"
 CHAT_ID="${3:-}"
 POLL_TIMEOUT_SECONDS="${4:-60}"
 POLL_INTERVAL_SECONDS=5
+
+# Never echo the argument back: an old-style call passes the key itself here.
+if [ ! -f "$API_KEY_FILE" ] || [ ! -r "$API_KEY_FILE" ]; then
+  echo "chaos-kill-entry: <apiKeyFile> must be a readable file holding the API key (chmod 600) — the key is no longer taken on the command line" >&2
+  exit 1
+fi
+API_KEY=$(tr -d '[:space:]' <"$API_KEY_FILE")
+if [ -z "$API_KEY" ]; then
+  echo "chaos-kill-entry: <apiKeyFile> is empty" >&2
+  exit 1
+fi
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "chaos-kill-entry: run this from the checkout root (where docker-compose.yml lives)" >&2
@@ -92,6 +106,12 @@ fail() {
 redact() {
   prefix=$(printf '%s' "$1" | cut -c1-6)
   printf '%s...(redacted)' "$prefix"
+}
+
+# The Authorization header for `curl -H @-`: printf is a shell builtin, so the key is never an
+# argument of any process.
+auth_header() {
+  printf 'Authorization: Bearer %s\n' "$API_KEY"
 }
 
 parse_kv() {
@@ -135,8 +155,8 @@ fi
 pass "kill-entry-container" "killed $container"
 
 if [ -z "$CHAT_ID" ]; then
-  new_chat_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/new_chat" \
-    -H "Authorization: Bearer $API_KEY" \
+  new_chat_resp=$(auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/new_chat" \
+    -H @- \
     -H 'content-type: application/json' \
     -d '{}')
   case "$new_chat_resp" in
@@ -150,8 +170,8 @@ else
   pass "new-chat" "reusing given chatId=$CHAT_ID"
 fi
 
-send_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/send_chat_message" \
-  -H "Authorization: Bearer $API_KEY" \
+send_resp=$(auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/send_chat_message" \
+  -H @- \
   -H 'content-type: application/json' \
   -d "{\"chatId\":\"$CHAT_ID\",\"text\":\"chaos-kill-entry probe (post-kill turn)\"}")
 case "$send_resp" in
@@ -187,8 +207,8 @@ if [ "$recovered" -ne 1 ]; then
 fi
 pass "entry-recovered" "restarts=$final_restarts (was $baseline_restarts), running=true — design doc §13: 入口容器崩溃 -> supervisor 以同一工作目录重拉"
 
-history_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/get_chat_history" \
-  -H "Authorization: Bearer $API_KEY" \
+history_resp=$(auth_header | curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/get_chat_history" \
+  -H @- \
   -H 'content-type: application/json' \
   -d "{\"chatId\":\"$CHAT_ID\"}")
 case "$history_resp" in

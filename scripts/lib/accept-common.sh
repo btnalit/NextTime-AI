@@ -13,8 +13,9 @@
 #   - run_driver prints the driver's stdout+stderr as one blob; callers pick `KEY=value` lines out
 #     of it with parse_kv (last matching line wins, so an ExperimentalWarning or compose noise on
 #     stderr is harmless).
-#   - Confidentiality (repo is public): keys are passed to the driver as CLI arguments per
-#     invocation, never written to a file; only ever printed through redact().
+#   - Confidentiality (repo is public): keys are held in shell variables, never written to a file
+#     and only ever printed through redact(). They reach the driver through the environment, never
+#     as an argument of any process (R-34, see run_driver).
 
 SKIP_COUNT=0
 SKIP_LOG=""
@@ -40,6 +41,13 @@ skip() {
 redact() {
   prefix=$(printf '%s' "$1" | cut -c1-6)
   printf '%s...(redacted)' "$prefix"
+}
+
+# auth_header <token>: the `Authorization: Bearer` line for `curl -H @-` (R-34). Piped into curl's
+# stdin by the printf builtin, the key is an argument of no process — `curl -H "...$KEY"` would put
+# it in curl's /proc/<pid>/cmdline, readable by every local user.
+auth_header() {
+  printf 'Authorization: Bearer %s\n' "$1"
 }
 
 # Extracts the value of the last `KEY=...` line in $1's output (blob of stdout+stderr text).
@@ -79,10 +87,40 @@ require_driver() {
 
 # Runs one driver subcommand. Combines stdout+stderr into one blob for parse_kv. `</dev/null`
 # because these scripts run non-interactively over ssh where stdin may not be a terminal.
-run_driver() {
-  docker compose run --rm --no-deps -T -v "$ACCEPT_DRIVER_PATH:/tmp/driver.mjs:ro" kernel \
+#
+# R-34: a key, Handle or capability params JSON (which can carry a connection secret or a gate
+# credential) is never an argument of `docker compose` here or of `node` in the container — any
+# local user can read /proc/<pid>/cmdline, and these suites run on the production host. Callers
+# still pass them positionally; this function moves them into the environment instead: the token
+# (first argument of every token-taking subcommand) becomes NT_ACCEPT_TOKEN, cap/mcp params become
+# NT_ACCEPT_PARAMS, `-e NAME` (no value) copies each into the container, and the driver receives
+# `env:NAME` in their place (driver.mjs resolveArg). The subshell body keeps the exports from
+# outliving the call.
+run_driver() (
+  case "$1" in
+    cap | mcp)
+      [ "$#" -ge 4 ] || { echo "run_driver: $1 needs <token> <name> <paramsJson>" >&2; exit 2; }
+      driver_cmd=$1
+      driver_name=$3
+      NT_ACCEPT_TOKEN=$2
+      NT_ACCEPT_PARAMS=$4
+      export NT_ACCEPT_TOKEN NT_ACCEPT_PARAMS
+      shift 4
+      set -- "$driver_cmd" env:NT_ACCEPT_TOKEN "$driver_name" env:NT_ACCEPT_PARAMS "$@"
+      ;;
+    send-and-wait | send-only | isolation-check | get-history | wait-task | explorer)
+      [ "$#" -ge 2 ] || { echo "run_driver: $1 needs <token>" >&2; exit 2; }
+      driver_cmd=$1
+      NT_ACCEPT_TOKEN=$2
+      export NT_ACCEPT_TOKEN
+      shift 2
+      set -- "$driver_cmd" env:NT_ACCEPT_TOKEN "$@"
+      ;;
+  esac
+  docker compose run --rm --no-deps -T -e NT_ACCEPT_TOKEN -e NT_ACCEPT_PARAMS \
+    -v "$ACCEPT_DRIVER_PATH:/tmp/driver.mjs:ro" kernel \
     node /tmp/driver.mjs "$@" </dev/null 2>&1
-}
+)
 
 # run_driver_mount <host_file> <driver args...>: like run_driver, additionally bind-mounting one
 # host file read-only at /tmp/mounted (W7: `transcript-stats /tmp/mounted` reads a Worker's pi

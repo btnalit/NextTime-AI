@@ -92,6 +92,12 @@ export class ProviderCatalog {
     return id in this.fileProviders;
   }
 
+  /** Every yaml entry as the operator wrote it, including one a store override currently shadows —
+   *  admin-api.ts reads it as the operator's own pairing of an env var with an upstream (R-23). */
+  fileEntries(): ReadonlyArray<readonly [string, ProviderConfig]> {
+    return Object.entries(this.fileProviders);
+  }
+
   /** Routing lookup for proxy.ts: the `ProviderConfig` for an *enabled* provider, else
    *  `undefined` — a disabled provider is indistinguishable from an unknown one to a caller
    *  (404 `unknown_provider`), so disabling is an immediate, complete cut-off. */

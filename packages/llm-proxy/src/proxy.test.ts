@@ -1254,3 +1254,282 @@ describe('createProxyServer — correlation id and metrics (leftover 87)', () =>
     expect(res.status).toBe(401);
   });
 });
+
+// -------------------------------------------------------------------------------------------
+// R-30 (D-29): what reaches the provider; R-23 (L6-19): no redirects with the real key
+// -------------------------------------------------------------------------------------------
+
+interface SeenUpstreamRequest {
+  url: string;
+  headers: http.IncomingHttpHeaders;
+  body: Buffer;
+}
+
+/** A fake upstream that records exactly what it receives and answers a small JSON body. */
+function startCapturingUpstream(seen: SeenUpstreamRequest[]): http.Server {
+  return http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      seen.push({ url: req.url ?? '', headers: req.headers, body: Buffer.concat(chunks) });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"id":"r1"}');
+    });
+  });
+}
+
+/** Everything an agent could add on top of what pi's SDK clients send. */
+const AGENT_CHOSEN_HEADERS = {
+  'openai-organization': 'org-other',
+  'openai-project': 'proj-other',
+  'x-stainless-os': 'Linux',
+  'x-exfil': 'data',
+  'user-agent': 'OpenAI/JS 7.19.0',
+  cookie: 'a=b',
+};
+
+describe('createProxyServer — R-30 outbound narrowing per provider kind', () => {
+  async function setup(provider: (port: number) => ProviderConfig) {
+    const seen: SeenUpstreamRequest[] = [];
+    const upstream = startCapturingUpstream(seen);
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const logLines: string[] = [];
+    const proxy = createProxyServer({
+      providers: { p: provider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: (line) => logLines.push(line),
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    const token = await signHandle(privateKey);
+    return { seen, logLines, proxyPort, token };
+  }
+
+  const narrowedLines = (logLines: string[]) =>
+    logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => String(line.msg).includes('provider-side tools stripped'));
+
+  it('openai-completions: only allow-listed headers, no query, server tools and search switches stripped, and the attempt logged', async () => {
+    const { seen, logLines, proxyPort, token } = await setup(openAiProvider);
+    const functionTool = { type: 'function', function: { name: 'read', parameters: {} } };
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/p/v1/chat/completions?api-version=1',
+      headers: {
+        ...AGENT_CHOSEN_HEADERS,
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-example',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [functionTool, { type: 'web_search', web_search: {} }],
+        web_search_options: {},
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe('/v1/chat/completions');
+    const headers = seen[0]?.headers ?? {};
+    expect(headers.authorization).toBe(`Bearer ${REAL_OPENAI_KEY}`);
+    expect(headers.accept).toBe('application/json');
+    expect(headers['content-type']).toBe('application/json');
+    for (const name of Object.keys(AGENT_CHOSEN_HEADERS)) {
+      if (name === 'user-agent') continue; // fetch sets its own
+      expect(headers[name]).toBeUndefined();
+    }
+    expect(headers['user-agent']).not.toBe('OpenAI/JS 7.19.0');
+    expect(JSON.parse(seen[0]?.body.toString('utf8') ?? '{}')).toEqual({
+      model: 'gpt-example',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [functionTool],
+    });
+    const [line] = narrowedLines(logLines);
+    expect(line).toMatchObject({
+      level: 'warn',
+      provider: 'p',
+      model: 'gpt-example',
+      strippedTools: ['web_search'],
+      strippedParams: ['web_search_options'],
+      droppedBetas: [],
+    });
+    expect(JSON.stringify(logLines)).not.toContain(REAL_OPENAI_KEY);
+  });
+
+  it('openai-responses: an MCP tool pointing at an attacker host never reaches the provider; function tools do', async () => {
+    const { seen, logLines, proxyPort, token } = await setup((port) => ({
+      ...openAiProvider(port),
+      api: 'openai-responses',
+    }));
+    const functionTool = { type: 'function', name: 'read', parameters: {} };
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/p/v1/responses',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-example',
+        input: 'hi',
+        tools: [
+          functionTool,
+          { type: 'mcp', server_label: 'x', server_url: 'https://attacker.example/mcp' },
+          { type: 'code_interpreter', container: { type: 'auto' } },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const forwarded = seen[0]?.body.toString('utf8') ?? '';
+    expect(forwarded).not.toContain('attacker.example');
+    expect(JSON.parse(forwarded)).toEqual({
+      model: 'gpt-example',
+      input: 'hi',
+      tools: [functionTool],
+    });
+    expect(narrowedLines(logLines)[0]).toMatchObject({
+      strippedTools: ['mcp', 'code_interpreter'],
+    });
+  });
+
+  it('anthropic-messages: anthropic-version, the allow-listed betas and ?beta=true pass; the MCP connector, server tools and their betas do not', async () => {
+    const { seen, logLines, proxyPort, token } = await setup(anthropicProvider);
+    const clientTool = { name: 'read', input_schema: { type: 'object' } };
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/p/v1/messages?beta=true&evil=1',
+      headers: {
+        ...AGENT_CHOSEN_HEADERS,
+        'x-api-key': token,
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'fine-grained-tool-streaming-2025-05-14,mcp-client-2025-04-04',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-example',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [clientTool, { type: 'web_fetch_20250910', name: 'web_fetch' }],
+        mcp_servers: [{ type: 'url', url: 'https://attacker.example/mcp', name: 'x' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(seen[0]?.url).toBe('/v1/messages?beta=true');
+    const headers = seen[0]?.headers ?? {};
+    expect(headers['x-api-key']).toBe(REAL_ANTHROPIC_KEY);
+    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers['anthropic-beta']).toBe('fine-grained-tool-streaming-2025-05-14');
+    expect(headers['anthropic-dangerous-direct-browser-access']).toBeUndefined();
+    expect(headers.authorization).toBeUndefined();
+    expect(headers['openai-organization']).toBeUndefined();
+    expect(JSON.parse(seen[0]?.body.toString('utf8') ?? '{}')).toEqual({
+      model: 'claude-example',
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [clientTool],
+    });
+    expect(narrowedLines(logLines)[0]).toMatchObject({
+      strippedTools: ['web_fetch_20250910'],
+      strippedParams: ['mcp_servers'],
+      droppedBetas: ['mcp-client-2025-04-04'],
+    });
+  });
+
+  it('a normal request with client-side tools only is forwarded byte-for-byte, and nothing is logged as stripped', async () => {
+    const cases: Array<{
+      provider: (port: number) => ProviderConfig;
+      path: string;
+      headers: Record<string, string>;
+      body: string;
+    }> = [
+      {
+        provider: (port) => ({ ...openAiProvider(port), api: 'openai-responses' }),
+        path: '/p/v1/responses',
+        headers: {},
+        // Odd spacing on purpose: re-serializing would change these bytes.
+        body: '{ "model":"gpt-example",  "input":"hi", "tools":[{"type":"function","name":"read","parameters":{}}] }',
+      },
+      {
+        provider: anthropicProvider,
+        path: '/p/v1/messages',
+        headers: { 'anthropic-version': '2023-06-01' },
+        body: '{ "model":"claude-example", "max_tokens":8, "messages":[{"role":"user","content":"hi"}], "tools":[{"name":"read","input_schema":{"type":"object"}}] }',
+      },
+      {
+        provider: openAiProvider,
+        path: '/p/v1/chat/completions',
+        headers: {},
+        body: '{ "model":"gpt-example", "messages":[], "tools":[] }',
+      },
+    ];
+    for (const testCase of cases) {
+      const { seen, logLines, proxyPort, token } = await setup(testCase.provider);
+      const authHeader: Record<string, string> =
+        testCase.path === '/p/v1/messages'
+          ? { 'x-api-key': token }
+          : { authorization: `Bearer ${token}` };
+      const res = await rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: testCase.path,
+        headers: { ...authHeader, ...testCase.headers, 'content-type': 'application/json' },
+        body: testCase.body,
+      });
+      expect(res.status).toBe(200);
+      expect(seen[0]?.body.toString('utf8')).toBe(testCase.body);
+      expect(narrowedLines(logLines)).toEqual([]);
+    }
+  });
+
+  it('refuses an upstream redirect (502) instead of resending the real key to the named host', async () => {
+    const elsewhere: SeenUpstreamRequest[] = [];
+    const target = startCapturingUpstream(elsewhere);
+    const targetPort = await listen(target);
+    cleanup.push(() => closeServer(target));
+    const redirecting = http.createServer((_req, res) => {
+      res.writeHead(307, { location: `http://127.0.0.1:${targetPort}/v1/messages` });
+      res.end();
+    });
+    const redirectPort = await listen(redirecting);
+    cleanup.push(() => closeServer(redirecting));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: { p: anthropicProvider(redirectPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/p/v1/messages',
+      headers: {
+        'x-api-key': await signHandle(privateKey),
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({ model: 'claude-example', max_tokens: 8, messages: [] }),
+    });
+    expect(res.status).toBe(502);
+    expect(elsewhere).toEqual([]);
+  });
+});

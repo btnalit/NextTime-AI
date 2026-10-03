@@ -406,6 +406,15 @@ docker compose restart llm-proxy   # 启动时读 key 文件
 `$CAPABILITY_HANDLE`，从不是真实密钥。密钥未配置时「测试调用」被拒绝（409 `credential_missing`），不会
 向上游发空头。密钥写入 / 清除**不**重写 `models.json`（内容不受密钥影响）。
 
+**密钥只发往它所属的上游（R-23，2026-10-02 复审）**：编辑供应商时改了上游地址（大小写、默认端口、末尾斜杠
+不算改），该供应商的控制台密钥会被**先清掉**，需要在详情抽屉重新设置（审计：`provider_updated` 带
+`upstreamBaseUrl: {from, to}`，另有一条 `provider_secret_cleared`，`reason: upstream_changed`）；改 api 种类、
+鉴权头、模型、显示名、启停不影响密钥。`apiKeyEnv` 指向一个**已经有值**的环境变量时，只能与 yaml 或另一个
+供应商已经为它配置的同一上游配对，否则 409 `api_key_env_not_allowed`——想把供应商指向别处，就清空
+`apiKeyEnv` 改用控制台密钥，或由操作员在 yaml 里声明。指向一个**尚未设置**的变量名照旧允许（上面的传统路径：
+先在页面建供应商，再由操作员按页面上的上游地址加那一行）。上游返回重定向时，转发与「测试调用」都按失败处理
+（502 / 测试 error），不会把密钥带到重定向指向的主机。
+
 **`make gen-models` 的关系**：仍然可用，且 `cli/gen-models.ts` 现在也合并 store（`docker compose run` 复用同一
 服务定义，`/data/state` 同样挂着），输出与代理自己重写的一致；不再会把控制台加的供应商丢掉。llm-proxy
 **启动时不写** models.json（只在不一致时记一行 warn 日志）——验收覆盖 `deploy/accept/docker-compose.fake.yml`
