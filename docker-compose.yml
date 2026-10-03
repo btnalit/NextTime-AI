@@ -727,8 +727,14 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # gatekeeper-ragflow: http-kind gate for a RAGFlow instance's REST API (gatekeepers/ragflow).
-  # RAGFLOW_BASE_URL / GATE_CREDENTIAL_RAGFLOW_API_KEY come from the env_file below — never
-  # hardcoded here (§11 "凭证不进内核进程", same rule applied to this gate's own compose service).
+  # RAGFLOW_BASE_URL comes from the env_file below — never hardcoded here (§11 "凭证不进内核进程",
+  # same rule applied to this gate's own compose service). The RAGFlow API key is a FILE (R-24,
+  # review 2026-10-02): ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow/api_key, 0640 root:10001 (this
+  # gate runs as uid 10001), read through GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE — never container
+  # env, which the read-only collector socket proxy can inspect. A directory bind mount rather than
+  # a compose `secrets:` file so a host that has not created the file yet still comes up (Docker
+  # creates the empty directory); the gate then falls back to GATE_CREDENTIAL_RAGFLOW_API_KEY in the
+  # env_file with a deprecation warning (docs/runbooks/release.md §3.6).
   # gate_token：见 gatekeeper-docker 服务块自己的注释。
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
@@ -745,7 +751,10 @@ services:
       GATE_CONNECTOR: ragflow
       GATE_SERVICE_NAME: gatekeeper-ragflow
       KERNEL_URL: http://kernel:8080
-    volumes: ["${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"]
+      GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE: /run/secrets/gatekeeper-ragflow/api_key
+    volumes:
+      - "${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"
+      - "${NEXTTIME_DATA}/secrets/gatekeeper-ragflow:/run/secrets/gatekeeper-ragflow:ro"
     networks: [control]
     restart: unless-stopped
     # Hardening (遗留20/S5.5 — this gate is one of the platform's two credential-holding processes,
@@ -1026,7 +1035,13 @@ services:
 
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
-    env_file: ${NEXTTIME_DATA:?}/secrets/llm-proxy.env # provider keys 只在这里
+    # R-24（复审 2026-10-02）：provider key 改为文件——${NEXTTIME_DATA}/secrets/llm-provider-keys/ 下每个
+    # `api_key_env` 名一个文件（0640 root:10001，本服务以 uid 10001 运行），只读挂到
+    # LLM_PROVIDER_KEYS_DIR（packages/llm-proxy/src/provider-keys.ts）；容器 env 能被只读的采集器 socket
+    # 代理 inspect 到，key 不再放在那里。目录挂载而非 compose `secrets:` 文件：主机还没建它时 Docker 建一个
+    # 空目录、服务照常起；没有文件的名字退回读 env_file 里的同名变量并打一行弃用告警（docs/runbooks/
+    # release.md §3.6）。env_file 仍保留（兼容未迁移的主机）。
+    env_file: ${NEXTTIME_DATA:?}/secrets/llm-proxy.env
     # S6-B / S7-A 供应商管理（docs/console-completion-plan.md §5.4；docs/STATUS.md 维护者决定
     # 2026-09-22 ①⑤；docs/runbooks/operations.md「供应商管理」):
     #   - ${NEXTTIME_DATA}/llm-proxy → /data/state（rw）：控制台写入的 providers.json
@@ -1050,6 +1065,7 @@ services:
         "${NEXTTIME_DATA:?}/config/handle.pub:/data/config/handle.pub:ro",
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro",
         "${NEXTTIME_DATA:?}/config/ontology:/data/config/ontology:ro",
+        "${NEXTTIME_DATA:?}/secrets/llm-provider-keys:/run/secrets/llm-provider-keys:ro",
       ]
     # LLM_PROVIDER_STORE_FILE / LLM_KEY_STORE_FILE / MODELS_JSON_OUT_FILE /
     # BUDGET_SYNC_INTERVAL_MS（S6-B / S7-A，packages/llm-proxy/src/config.ts）：前三个是上面两个
@@ -1064,6 +1080,7 @@ services:
         LLM_KEY_STORE_FILE: /data/state/keys.json,
         MODELS_JSON_OUT_FILE: /data/models/models.json,
         BUDGET_SYNC_INTERVAL_MS: "${BUDGET_SYNC_INTERVAL_MS:-15000}",
+        LLM_PROVIDER_KEYS_DIR: /run/secrets/llm-provider-keys,
       }
     # internal_llm_proxy_to_kernel（fix/internal-plane-auth；R-03 起是它自己的凭证，挂在
     # /run/secrets/internal_token）：revocation sync（GET /internal/handle-revocations）与 usage 上报

@@ -42,7 +42,8 @@ import { ProviderStoreError } from './provider-store.js';
  *   PUT    /providers/:id        replace a store provider, or create a store override of a file
  *                                provider (the yaml itself is never written — it is the
  *                                operator's read-only base; that is how "disable" a file
- *                                provider works too: an override with `enabled: false`)
+ *                                provider works too: an override with `enabled: false`). A new
+ *                                `upstreamBaseUrl` clears the provider's console key (R-23)
  *   DELETE /providers/:id        remove a store provider / override (409 `provider_from_file` for
  *                                a pure file provider — edit the yaml; a removed override makes
  *                                the file entry visible again)
@@ -81,6 +82,15 @@ import { ProviderStoreError } from './provider-store.js';
  * source of truth and the proxy routes the new provider; the list's `modelsJsonError` tells the
  * page what to show, and `make gen-models` (which now merges the store too) is the manual
  * fallback.
+ *
+ * R-23 (2026-10-02 review): a key only goes to the upstream it was provisioned for. A console key
+ * belongs to the upstream it was entered for, so a `PUT` that changes `upstream_base_url` clears
+ * it first (the rule gate-host applies to a hosted instance's credentials when its target
+ * changes — gatekeeper-base host.ts `wipeInstanceData`), and a new provider never inherits one
+ * left behind under its id. An environment key belongs to the upstream the configured provider
+ * set pairs it with (`assertEnvKeyPairing`). Otherwise an admin session, a stolen 5-minute token
+ * or a console XSS could point a provider at its own host — or name any variable in this
+ * process's environment as `apiKeyEnv` — and `/test` it.
  */
 
 export type KernelAuditAction =
@@ -220,6 +230,18 @@ export function inputToStoreEntry(
     enabled: input.enabled ?? true,
     ...(previous?.last_test ? { last_test: previous.last_test } : {}),
   };
+}
+
+/** R-23: the comparison key for "the same upstream" — WHATWG-normalized (scheme and host
+ *  lower-cased, default port dropped) with trailing slashes ignored. Any other difference, a path
+ *  included, counts as a different upstream: on a shared gateway host the path can select another
+ *  tenant. */
+export function upstreamKey(url: string): string {
+  try {
+    return new URL(url).href.replace(/\/+$/, '');
+  } catch {
+    return url;
+  }
 }
 
 /** Which top-level fields differ between two store entries — for the audit records (values are
@@ -380,6 +402,59 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     }
   }
 
+  /** R-23: removes the console key for `id` ahead of a write that would point that id at another
+   *  upstream (or at its first one, for a new id). Runs *before* the provider write, so a key store
+   *  that cannot be written fails the whole mutation (503) instead of leaving the key behind for
+   *  the new host; a provider write that fails afterwards only costs re-entering the key. */
+  async function clearConsoleKeyForNewUpstream(id: string): Promise<boolean> {
+    if (!options.keyStore.has(id)) return false;
+    await requireWritableKeyStore();
+    return options.keyStore.remove(id);
+  }
+
+  /** R-23: an env var that already holds a key may only be named together with an upstream the
+   *  configured provider set already pairs it with — a yaml entry (the operator's own declaration,
+   *  shadowed by an override or not) or another store provider. A name that resolves to nothing
+   *  yet is accepted: that is the documented flow (operations.md 供应商管理) where the operator adds
+   *  the line to `secrets/llm-proxy.env` afterwards, for the upstream the page shows. Checked only
+   *  when this provider's (env var, upstream) pair actually changes, so editing models, the display
+   *  name or `enabled` never trips it. */
+  function assertEnvKeyPairing(
+    claims: LlmAdminTokenClaims,
+    id: string,
+    next: { readonly api_key_env?: string; readonly upstream_base_url: string },
+    previous: ProviderConfig | undefined,
+  ): void {
+    const name = next.api_key_env;
+    if (!name) return;
+    const target = upstreamKey(next.upstream_base_url);
+    if (previous?.api_key_env === name && upstreamKey(previous.upstream_base_url) === target) {
+      return;
+    }
+    const value = resolveApiKey(name);
+    if (typeof value !== 'string' || value.length === 0) return;
+    const pairs = (config: { readonly api_key_env?: string; readonly upstream_base_url: string }) =>
+      config.api_key_env === name && upstreamKey(config.upstream_base_url) === target;
+    if (options.catalog.fileEntries().some(([, config]) => pairs(config))) return;
+    if (options.store.entries().some(([storeId, entry]) => storeId !== id && pairs(entry))) return;
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'llm-proxy: provider admin refused — an environment key may only go to an upstream it is configured for',
+        providerId: id,
+        apiKeyEnv: name,
+        upstreamBaseUrl: next.upstream_base_url,
+        sub: claims.sub,
+        jti: claims.jti,
+      }),
+    );
+    throw new AdminApiError(
+      409,
+      'api_key_env_not_allowed',
+      `${name} already holds a key in llm-proxy's environment and is not configured for this upstream — an environment key only goes to an upstream that llm-providers.yaml or another provider already pairs it with; set a console key for this provider instead`,
+    );
+  }
+
   function toWire(provider: ResolvedProvider): LlmProviderWire {
     return toWireProvider(provider, credentialPresent(provider), credentialSource(provider));
   }
@@ -429,6 +504,10 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           );
         }
         const entry = inputToStoreEntry(input);
+        assertEnvKeyPairing(claims, input.id, entry, undefined);
+        // R-23: a console key left under this id (only possible when a DELETE's best-effort clear
+        // failed) was entered for a provider that no longer exists, not for this upstream.
+        const secretCleared = await clearConsoleKeyForNewUpstream(input.id);
         await options.store.upsert(input.id, entry, now());
         await rewriteModelsJson();
         const created = requireProvider(input.id);
@@ -439,7 +518,11 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           models: entry.models.map((m) => m.id),
           enabled: entry.enabled,
           modelsJsonError,
+          ...(secretCleared ? { secretCleared } : {}),
         });
+        if (secretCleared) {
+          audit(claims, 'provider_secret_cleared', input.id, { reason: 'new_provider' });
+        }
         return { status: 201, body: toWire(created) };
       }
       throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');
@@ -466,6 +549,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         const previous = options.store.get(id);
         const before = previous ? previous : { ...existing.config, enabled: true }; // a file entry, about to be overridden
         const entry = inputToStoreEntry(parsed.data, previous);
+        assertEnvKeyPairing(claims, id, entry, existing.config);
+        // R-23: the console key was entered for the upstream this provider uses now. A change of
+        // `api` or auth header keeps it — the key still goes to the same host.
+        const fromUpstream = existing.config.upstream_base_url;
+        const upstreamChanged = upstreamKey(fromUpstream) !== upstreamKey(entry.upstream_base_url);
+        const secretCleared = upstreamChanged ? await clearConsoleKeyForNewUpstream(id) : false;
         await options.store.upsert(id, entry, now());
         await rewriteModelsJson();
         const updated = requireProvider(id);
@@ -474,7 +563,16 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           overridesFile: updated.overridesFile,
           enabled: entry.enabled,
           modelsJsonError,
+          ...(upstreamChanged
+            ? {
+                upstreamBaseUrl: { from: fromUpstream, to: entry.upstream_base_url },
+                secretCleared,
+              }
+            : {}),
         });
+        if (secretCleared) {
+          audit(claims, 'provider_secret_cleared', id, { reason: 'upstream_changed' });
+        }
         return { status: 200, body: toWire(updated) };
       }
       if (method === 'DELETE') {

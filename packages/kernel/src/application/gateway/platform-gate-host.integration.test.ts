@@ -403,6 +403,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(afterFirst.endpoint).toBe('http://gate-host:8083/i/hosted-mcp');
       expect(afterFirst.status).toBe('enabled');
       expect(afterFirst.health).toBe('ok');
+      // R-18 (D-18): the administrator enabled it before seeing any Operation, so its first
+      // manifest is held for confirmation rather than taking effect unseen.
+      expect(afterFirst.operationCount).toBe(0);
+      expect(afterFirst.pendingManifest?.added.map((op) => op.name).sort()).toEqual([
+        'list_widgets',
+        'restart_widget',
+      ]);
 
       const second = await announce(
         hostedAnnounceBody('hosted-mcp', 'http://gate-host:9999/i/hosted-mcp'),
@@ -416,6 +423,18 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('e. enable_gate_instance now succeeds and publishes both operations', async () => {
+      await expectNotAvailable(
+        () => callAsOwner('enable_gate_instance', { gateId: 'hosted-mcp' }),
+        'gate_not_ready',
+      );
+      const held = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'hosted-mcp',
+      });
+      const confirmed = await callAsAdmin<GateInstanceWire>('confirm_gate_manifest', {
+        gateId: 'hosted-mcp',
+        digest: held.pendingManifest?.digest,
+      });
+      expect(confirmed.operationCount).toBe(2);
       const enabled = await callAsOwner<{
         gatekeeperId: string;
         publishedOperationNames: string[];
@@ -467,6 +486,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         hostedAnnounceBody('hosted-mcp-ca', 'http://gate-host:8083/i/hosted-mcp-ca'),
       );
       expect(announced.statusCode).toBe(200);
+      // Enabled before its host spoke (f), so the first manifest waits for confirmation (R-18).
+      const held = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'hosted-mcp-ca',
+      });
+      await callAsAdmin('confirm_gate_manifest', {
+        gateId: 'hosted-mcp-ca',
+        digest: held.pendingManifest?.digest,
+      });
       await callAsOwner('enable_gate_instance', { gateId: 'hosted-mcp-ca' });
 
       const minted = await callAsOwner<GateHostTokenWire>('issue_gate_credential_token', {

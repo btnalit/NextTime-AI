@@ -468,6 +468,73 @@ export const GateHostedDefinitionWireSchema = z
   .strict();
 export type GateHostedDefinitionWire = z.infer<typeof GateHostedDefinitionWireSchema>;
 
+/** S8 W3-K1 (leftover 79): the three fields `refresh_operation_governance` reads/writes and
+ *  `preview_gate_instance_enable`'s own `differs` already compared — shared here so the two never
+ *  drift on what "governance fields" means (`governance/gatekeepers/manifest.ts`'s
+ *  `OperationGovernanceFields` is this same shape on the kernel side). */
+export const OperationGovernanceFieldsWireSchema = z
+  .object({
+    mode: OperationModeSchema,
+    blastRadius: BlastRadiusSchema,
+    autoApprovable: z.boolean(),
+  })
+  .strict();
+export type OperationGovernanceFieldsWire = z.infer<typeof OperationGovernanceFieldsWireSchema>;
+
+/** R-19 (decision D-17): the one direction a change to those three fields takes, decided by the
+ *  kernel (`governance/gatekeepers/manifest.ts`'s `operationGovernanceChangeDirection`, built on
+ *  `classifyOperationGovernanceChange`) and never re-derived by a client. `loosened`: every changed
+ *  field lowers the friction (a lower blast radius, auto-approvable false → true, execute →
+ *  observe); `tightened`: every changed field raises it; `mixed`: some of each, so it loosens at
+ *  least one field; `neutral`: none of the three changed. */
+export const OperationGovernanceChangeDirectionSchema = z.enum([
+  'loosened',
+  'tightened',
+  'mixed',
+  'neutral',
+]);
+export type OperationGovernanceChangeDirectionWire = z.infer<
+  typeof OperationGovernanceChangeDirectionSchema
+>;
+
+/** R-19 (D-17): an Operation's governance fields before and after a change a human is asked to
+ *  confirm (a catalog publish, the wizard's reclassification), with the kernel's direction. */
+export const OperationGovernanceChangeWireSchema = z
+  .object({
+    before: OperationGovernanceFieldsWireSchema,
+    after: OperationGovernanceFieldsWireSchema,
+    direction: OperationGovernanceChangeDirectionSchema,
+  })
+  .strict();
+export type OperationGovernanceChangeWire = z.infer<typeof OperationGovernanceChangeWireSchema>;
+
+/** R-18 (decision D-18): one Operation an already-decided gate re-announced differently from the
+ *  manifest in effect. `before` / `after` / `direction` cover the three governance fields;
+ *  `otherChangedFields` names any other changed field of the announced Operation (`binding`,
+ *  `params_schema`, `reversibility`, …; never `description`, which is not reviewed). */
+export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWireSchema.extend({
+  name: z.string(),
+  otherChangedFields: z.array(z.string()),
+}).strict();
+export type PendingGateManifestChangeWire = z.infer<typeof PendingGateManifestChangeWireSchema>;
+
+/** R-18 (D-18): a manifest an `enabled` / `disabled` gate announced that changes its Operation set
+ *  or a reviewed field. It is held here and the manifest in effect (`operations`) stays until a
+ *  platform administrator confirms it with `confirm_gate_manifest`, passing back this `digest` —
+ *  a newer announce replaces the pending one (and its digest), so a confirm only ever adopts what
+ *  was shown. An unchanged re-announce (a gate restart) never creates one. */
+export const PendingGateManifestWireSchema = z
+  .object({
+    digest: z.string(),
+    announcedAt: z.string(),
+    operationCount: z.number().int().nonnegative(),
+    added: z.array(GateOperationSummaryWireSchema),
+    removed: z.array(GateOperationSummaryWireSchema),
+    changed: z.array(PendingGateManifestChangeWireSchema),
+  })
+  .strict();
+export type PendingGateManifestWire = z.infer<typeof PendingGateManifestWireSchema>;
+
 export const GateInstanceWireSchema = z
   .object({
     /** `GATE_ID`: the stable identity the gate announces itself with (compose config, not a display
@@ -499,6 +566,9 @@ export const GateInstanceWireSchema = z
      *  packaged gate that announced itself. */
     hosted: z.boolean(),
     definition: GateHostedDefinitionWireSchema.nullable(),
+    /** R-18 (D-18): the announced manifest awaiting an administrator's confirmation, `null` when
+     *  none. Optional only so older fixtures still type-check; the real handler always sets it. */
+    pendingManifest: PendingGateManifestWireSchema.nullable().optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -615,19 +685,6 @@ export type GateInstanceEnablePreviewOperationWire = z.infer<
   typeof GateInstanceEnablePreviewOperationWireSchema
 >;
 
-/** S8 W3-K1 (leftover 79): the three fields `refresh_operation_governance` reads/writes and
- *  `preview_gate_instance_enable`'s own `differs` already compared — shared here so the two never
- *  drift on what "governance fields" means (`governance/gatekeepers/manifest.ts`'s
- *  `OperationGovernanceFields` is this same shape on the kernel side). */
-export const OperationGovernanceFieldsWireSchema = z
-  .object({
-    mode: OperationModeSchema,
-    blastRadius: BlastRadiusSchema,
-    autoApprovable: z.boolean(),
-  })
-  .strict();
-export type OperationGovernanceFieldsWire = z.infer<typeof OperationGovernanceFieldsWireSchema>;
-
 export const GateInstanceEnablePreviewOperationPresentWireSchema = z
   .object({
     name: z.string(),
@@ -644,6 +701,9 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
      *  here; `refresh_operation_governance` (leftover 79) is the owner-authorized capability that
      *  actually corrects it — never done by this preview or by `enable_gate_instance` itself. */
     differs: z.boolean(),
+    /** R-19 (D-17): which way aligning this Operation to the announcement moves its governance —
+     *  the kernel's own classification, `neutral` exactly when `differs` is `false`. */
+    direction: OperationGovernanceChangeDirectionSchema,
   })
   .strict();
 export type GateInstanceEnablePreviewOperationPresentWire = z.infer<
@@ -665,6 +725,10 @@ export const PreviewGateInstanceEnableResultWireSchema = z
     ambiguousCandidates: z.array(z.string()),
     operationsToImport: z.array(GateInstanceEnablePreviewOperationWireSchema),
     operationsAlreadyPresent: z.array(GateInstanceEnablePreviewOperationPresentWireSchema),
+    /** R-18 (D-18): the digest of the manifest in effect this preview was computed from.
+     *  `refresh_operation_governance` requires it back and `enable_gate_instance` accepts it; both
+     *  refuse `manifest_changed` when the manifest in effect is no longer the one shown. */
+    manifestDigest: z.string(),
   })
   .strict();
 export type PreviewGateInstanceEnableResultWire = z.infer<

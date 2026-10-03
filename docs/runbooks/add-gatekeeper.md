@@ -139,6 +139,14 @@ ConnectSystemLauncher.tsx`）。按第一步选的种类分两条路：
 | 能力与策略（工作区侧） | owner | **在本工作区启用**（注册 Gatekeeper、导入并**发布** announce 的 Operation、写工作区链接）→ 审核分类（同接入向导第④步，`propose_operation` / `publish_operation`）→ 授予成员（成员下拉来自 `list_principals`） | `enable_gate_instance`、`connect_gatekeeper` |
 | 握手验证 | 管理员 / owner | "测试连接"（平台侧）+ 状态 / 健康 / 本工作区的门链接 | `test_gate_instance` |
 
+**门升级后清单变了（R-18，决定 D-18）**：实例一旦被管理员启用或禁用，门（打包门或门宿主实例）再
+announce 的清单只要改了 Operation 集合或任何一项需要审阅的字段（除 `description` 外都算），就**不生效**，
+挂在实例上等管理员确认——集成页该实例详情抽屉里出现"审阅并采用"，列出新增 / 移除 / 变更（旧 → 新）的
+Operation，确认时按摘要采用恰好那一版（`confirm_gate_manifest`；期间门又 announce 了别的版本则拒绝
+`manifest_changed`，重新审阅）。清单不变的重启不产生任何待确认项。采用后，新启用的工作区导入新清单；
+已启用的工作区不会自动变，owner 在"系统接入"里用"与门公告对齐"（同样先预览再确认）对齐。管理员在门宿主
+接管前就启用的实例，第一次 announce 的清单同样要先确认。
+
 从**工作区页**打开时，非管理员在平台侧步骤看到"需要管理员在平台集成页创建实例"与链接，并可从
 平台目录（`list_available_gate_instances`——只含已启用且接入包为平台预置的实例）选一个已有实例
 继续；平台管理员则可在原地完成两侧。从**平台页**打开时，工作区侧步骤链接到"系统接入"页。
@@ -249,7 +257,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `await_decision` | `true`：调用方等到有决定（或超时）才返回；`false`：立即返回 `pending_approval` + `simulate`，调用方下一轮再看结果。执行类操作默认建议 `true`（更保守，`docs/runbooks/host-gatekeepers.md`"已知偏离"里 `compose.up`/`compose.down` 的选择） |
 | `reversibility` | 是否实现了 `/gate/revert`（门自己的 transport 是否提供 `revert`） |
 | `reads`/`writes` | 该 Operation 观察/影响哪些图 ObjectType——若这些类型还不存在，先走 `docs/runbooks/add-domain-pack.md` |
-| `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}` |
+| `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
 
 `importOpenApi(document)`/`importMcpTools(toolsListResponse)`（`@nexttime/gatekeeper-base`）能从一
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →
