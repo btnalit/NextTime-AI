@@ -67,9 +67,8 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 `scripts/apply-release.sh` 是旧 tag 的副本——它切到新 tag 后仍按旧流程往下走，新版本加进流程的步骤
 它一概不会做。R-03 起的第一次应用就是这样：旧副本没有"派生 internal-plane 凭证"这一步
 （`scripts/derive-internal-tokens.sh`），迁移的 `docker compose run` 因新 compose 文件引用的
-`secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响；
-此时检出已在新 tag 上，再跑一次 `sh scripts/apply-release.sh` 也能过）。用 `git show` 取出目标 tag 的
-副本，流程永远属于被应用的那个版本。
+`secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响）。
+用 `git show` 取出目标 tag 的副本，流程永远属于被应用的那个版本。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
@@ -77,7 +76,12 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 派生 internal-plane 凭证（新 tag 自己的 `scripts/derive-internal-tokens.sh`，只写
 `secrets/internal-*-to-*.token`，R-03）→ 拉取或构建镜像 → 迁移 dry-run 与应用 → `up -d` → S3 → S1 → S2 →
 S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 清理过期的 ephemeral 工作区。dump / 切 tag / 派生 / 镜像 /
-迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；
+迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；切 tag 之前记下原来的 ref（`STEP checkout-from`），
+切 tag 之后、`up` 之前的失败会把检出切回去（`STEP checkout restored to …`，切不回时打印要手动执行的
+`git checkout`），让检出始终与在跑的栈一致；迁移失败时先列出已提交的迁移（每个文件一个事务，
+`STEP migrate committed <module>/<version>`）和本次的发版前 dump（`STEP migrate rollback point`），
+再按 §5 / §6 决定是修好重跑还是恢复 dump（R-71）。`up` 本身失败时检出留在新 tag 上（部分容器可能已是新版本），
+按 §5 手动回滚，日志里的 `checkout-from` 就是上一版的位置；
 验收失败只计数不中止（栈已在新版本上，读各套日志后按 §5 决定是否回滚）。主机差异只来自 `.env`。
 下面各小节保留为每一步的背景与手动做法。
 
@@ -464,6 +468,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.39.0 之后的下一版 | governance `0016_auto_approval_scope`（R-20 / 决定 D-15，R-21 / 决定 D-16）：①新表 `gatekeeper_policies`（与 `policies` 同列，加 `gatekeeper_id`，唯一键 `(workspace_id, gatekeeper_id, action_kind)`，RLS + 与 `policies` 相同的授权），"总是允许"只写这里；②既有的工作区级 `policies.auto_approve = true` 行：该动作种类只在一个门上出现过 ActionRequest 的，规则移到那个门；零个或多个门的（无法确定审批人看到的是哪个门），自动批准作废；两种情况下工作区级行都不再自动批准——只说了自动批准的行删除，带 `requester_can_approve` 的保留并置 `auto_approve = false`；每行一条审计 `policy.auto_approve_rescoped`（payload 带原值与候选门）；③`agent_policies.allow_member_auto_approve_low` 列默认值改为 `true`；④仍为 `false`、且该工作区从没有任何 `set_agent_policy` 调用提交过 `allowMemberAutoApproveLow` 的行改为 `true`（这个 `false` 只是旧列默认值，没有 owner 选过），每行一条审计 `agent_policy.auto_approve_low_default_applied`；owner 提交过的保留原值 | 可逆 | 只加表、改一个列默认值、只收窄 `policies` 的数据。读了 v0.39.0 的 `governance/policy/policies.ts`：`readWorkspacePolicy` / `listPolicies` / `setPolicy` 只按显式列清单读写 `policies`，upsert 依赖的 `unique (workspace_id, action_kind)` 原样保留，从不读 `gatekeeper_policies`；回退后新代码写的门规则对旧代码不可见（等于没有规则：low 回到默认自动批准，medium 回到要人批——只会更严），被迁移删掉 / 清零的工作区级行让旧代码比迁移前更严，不会更宽。`agent_policies`：v0.39.0 运行时只读 AgentProfile（`profile ?? true`）、不读策略值，翻转对执行无影响，只让旧控制台把这些工作区显示成"允许"（与旧运行时的实际行为一致）；旧代码的 `setAgentPolicy` 写显式值，列默认值只影响平台面板（`writeWorkspaceModelPolicy`）新建的行。注意：回退期间旧代码的"总是允许"会重新写出工作区级 `auto_approve = true` 行（即 R-20 本身）；再升级时迁移不会重跑，但新引擎把工作区级的 `auto_approve = true` 当作"没有意见"（`engine.ts` `WorkspacePolicyInput.scope`），不会因此放宽，策略表里那一行仍显示"自动批准"，由 owner 在模型与配额页改掉 | 只需回退代码；若要连 schema 一起撤：`drop table gatekeeper_policies; alter table agent_policies alter column allow_member_auto_approve_low set default false`（不撤也无害）。②④改掉的数据不随回退恢复；原值在上述两类审计记录的 payload 里，合并前用 PR 描述里的 Host pre-check 查询列出将被改动的行 |
 | v0.39.0 之后的下一版 | core `0038_ontology_draft_base_version`（R-60）：`ontology_versions` 新增可空 `base_version`（int）——草稿提议时该族已发布的最高版本，新族或该族尚无发布版本时为空；只回填既有草稿（该族在草稿创建时已发布、且低于草稿自身版本的最高版本，即新代码当时会存的值），已发布行不回填；加检查约束 `ontology_versions_base_before_version`（为空，或 `1 ≤ base_version < version`）。新代码发布草稿时在族锁（`pg_advisory_xact_lock(hashtext('ontology_family:<工作区>:<族>'))`，加载器 / 模块发布同一把）下比对：族的已发布头不再是 `base_version` 就拒 409 `ontology_base_moved`，什么都不改 | 可逆 | 只加一列（可空、无默认值）和一条只约束这一列的检查。读了 v0.39.0 的 `substrate/ontology`：`proposeOntologyChange` 与 `publishOntologyVersion` 的 insert、`publishOntologyDraft` 的 update 都是显式列清单，不写新列（旧代码插入的行恒为空，约束天然满足），所有 select / `returning` 也是显式列，不读它；回填只改草稿行，`ontology_versions_block_published_definition_update` 只管 published / deprecated 行，不受影响；`discard_draft` 的删除不涉及列。回退后旧代码回到发布时不比对基线（即 R-60 本身）。回退期间旧代码提议的修订草稿（带 `id`）`base_version` 为空，重新升级后若该族已有发布版本，发布它们会按"基线已移动"拒绝——宁拒不错，提议人基于当前版本重新提议即可 | 只需回退代码；若要连 schema 一起撤：`alter table ontology_versions drop constraint ontology_versions_base_before_version, drop column base_version`（不撤也无害） |
 | v0.39.0 之后的下一版 | governance `0017_auditor_handles_revoked`（R-35 / 决定 D-07）：吊销所有代表 `auditor` 的未过期、未吊销 Handle（`capability_handles.revoked_at = now()`），每个受影响的 auditor 写一条审计 `principal.auditor_handles_revoked`（payload 带吊销数）。原因：auditor 改为严格只读（显式白名单），但旧版本签发的入口 Handle 仍列着所有 `minRole: 'member'` 能力，最长 24 小时有效；吊销后入口 agent 下一个 Turn 按新上限重签。不改 schema | 可逆 | 无 schema 变更，只置 `revoked_at`（0015 的单调吊销触发器允许）。旧代码的入口 Handle 发放路径（`ensureEntryHandle`）在发现缓存的 Handle 已吊销时照常重签，被吊销的只是会话里的旧凭证，不丢数据 | 只需回退代码；被吊销的 Handle 不随回退恢复（也不需要：下一个 Turn 会重签） |
+| v0.40.0 之后的下一版 | core `0039_provenance_lookup_indexes`（R-66 / L4-9）：只加四个索引——`observations (workspace_id, activity_id)`（`link_visible_to_caller` 的 Fact 可见性判定、`resolveFactOrigin`、指向 `activities` 的外键）、`observations (workspace_id, source_id, created_at)`（静默 Source 检查的 `max(created_at)`、观察窗口、指向 `sources` 的外键）、`links (workspace_id, last_observation_id) where last_observation_id is not null`（0026 的外键）、`activities (workspace_id, started_by, kind, created_at)`（`findAttributableTurn`、指向 `principals` 的外键）。不改数据、约束、授权，不加保留或删除策略（遗留 103 另行决定）。运行器每个文件一个事务，不能用 `concurrently`：普通 `create index` 对这三张表加 SHARE 锁直到文件提交，`apply-release.sh` 迁移时旧版本 kernel 仍在服务，采集写入、Fact 写入、Turn 记账在建索引期间排队（不报错）；主机上 `observations` 约 60 万行，预计合计不到一分钟 | 可逆 | 只加索引：任何语句的结果都不变，规划器只是多了更便宜的路径。读了 v0.40.0 对这三张表的读写：没有引用索引名、也没有依赖"没有索引"的路径；v0.40.0 的清除级联（`alter table … disable trigger`，R-65 之前的做法）在新 schema 上照常运行，外键检查反而更快 | 只需回退代码；若要连 schema 一起撤：`drop index observations_activity_idx, observations_source_idx, links_last_observation_id_idx, activities_started_by_idx`（不撤也无害，只多一点写入时的索引维护） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
