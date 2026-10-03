@@ -38,6 +38,7 @@ function createFakeKernelLink() {
   const runtimeEvents: AgentRuntimeEventWire[] = [];
   const accepted: string[] = [];
   const rejected: Array<{ turnId: string; reason: string }> = [];
+  const unknown: string[] = [];
   const link: KernelLink = {
     start: () => {},
     stop: () => {},
@@ -51,8 +52,11 @@ function createFakeKernelLink() {
     sendTurnRejected: (turnId, reason) => {
       rejected.push({ turnId, reason });
     },
+    sendTurnUnknown: (turnId) => {
+      unknown.push(turnId);
+    },
   };
-  return { link, runtimeEvents, accepted, rejected };
+  return { link, runtimeEvents, accepted, rejected, unknown };
 }
 
 interface FakeAttachment {
@@ -614,13 +618,29 @@ describe('createHost — stopTurn', () => {
     });
   });
 
-  it('is a no-op for an unknown or already-ended turnId', async () => {
-    const { host, containerIo } = setUp();
+  it('does not touch the running Turn for an unknown turnId, and answers turnUnknown (R-56)', async () => {
+    const { host, containerIo, kernelLink } = setUp();
     const cmd = startTurnCommand();
     const attachment = await startTurnAndAccept(host, containerIo, cmd);
 
-    host.handleStopTurn({ type: 'stopTurn', turnId: randomUUID(), principalId: cmd.principalId });
+    const otherTurnId = randomUUID();
+    host.handleStopTurn({ type: 'stopTurn', turnId: otherTurnId, principalId: cmd.principalId });
     expect(attachment?.written).toEqual([switchCommand(cmd), promptCommand(cmd)]);
+    expect(kernelLink.unknown).toEqual([otherTurnId]);
+  });
+
+  it('answers turnUnknown for a Turn that already ended here — the kernel may have missed its turnEnded (R-56)', async () => {
+    const { host, containerIo, kernelLink } = setUp();
+    const cmd = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, cmd);
+    attachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents).toContainEqual(
+      expect.objectContaining({ type: 'turnEnded', turnId: cmd.turnId, status: 'completed' }),
+    );
+
+    host.handleStopTurn({ type: 'stopTurn', turnId: cmd.turnId, principalId: cmd.principalId });
+    expect(kernelLink.unknown).toEqual([cmd.turnId]);
+    expect(attachment?.written).toEqual([switchCommand(cmd), promptCommand(cmd)]); // no abort
   });
 
   it('does not write the prompt when a stopTurn for it arrives while ensureAttachment is still in flight, on the direct-write path (leftover 56)', async () => {

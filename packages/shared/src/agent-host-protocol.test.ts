@@ -161,6 +161,28 @@ describe('AgentHostToKernelFrameSchema', () => {
   it('AgentHostHelloFrameSchema requires a non-empty instanceId', () => {
     expect(AgentHostHelloFrameSchema.safeParse({ type: 'hello' }).success).toBe(false);
   });
+
+  it('R-56: every frame but hello takes an optional positive integer seq; turnUnknown is a frame', () => {
+    const turnId = randomUUID();
+    for (const frame of [
+      { type: 'turnAccepted', turnId, seq: 1 },
+      { type: 'turnRejected', turnId, reason: 'busy', seq: 2 },
+      { type: 'runtimeEvent', event: { type: 'textDelta', delta: 'hi', ...correlation() }, seq: 3 },
+      { type: 'turnUnknown', turnId, seq: 4 },
+      { type: 'turnUnknown', turnId },
+    ]) {
+      expect(AgentHostToKernelFrameSchema.safeParse(frame).success).toBe(true);
+    }
+    expect(
+      AgentHostToKernelFrameSchema.safeParse({ type: 'turnAccepted', turnId, seq: 0 }).success,
+    ).toBe(false);
+    expect(
+      AgentHostToKernelFrameSchema.safeParse({ type: 'turnAccepted', turnId, seq: 1.5 }).success,
+    ).toBe(false);
+    expect(
+      AgentHostToKernelFrameSchema.safeParse({ type: 'hello', instanceId: turnId, seq: 1 }).success,
+    ).toBe(false);
+  });
 });
 
 describe('KernelToAgentHostFrameSchema', () => {
@@ -214,5 +236,11 @@ describe('KernelToAgentHostFrameSchema', () => {
     expect(
       KernelToAgentHostFrameSchema.safeParse({ type: 'hello', instanceId: randomUUID() }).success,
     ).toBe(false);
+  });
+
+  it('R-56: ack carries a required positive integer seq', () => {
+    expect(KernelToAgentHostFrameSchema.safeParse({ type: 'ack', seq: 12 }).success).toBe(true);
+    expect(KernelToAgentHostFrameSchema.safeParse({ type: 'ack' }).success).toBe(false);
+    expect(KernelToAgentHostFrameSchema.safeParse({ type: 'ack', seq: 0 }).success).toBe(false);
   });
 });

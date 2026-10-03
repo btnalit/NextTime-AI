@@ -1385,6 +1385,185 @@ describe('AgentHostRuntime — R-55 a stopped, failed or ended Turn never starts
   });
 });
 
+describe('AgentHostRuntime — R-56 frames survive a link flap; a stop agent-host cannot match ends the Turn', () => {
+  async function newRuntime() {
+    const { pool } = createFakePool();
+    const { sink, events } = createFakeSink();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    return { runtime, events };
+  }
+
+  function messageFrame(input: StartTurnInput, text: string, seq: number): AgentHostToKernelFrame {
+    return {
+      type: 'runtimeEvent',
+      seq,
+      event: {
+        type: 'message',
+        role: 'assistant',
+        content: { text },
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    };
+  }
+
+  function turnEndedFrame(input: StartTurnInput, seq: number): AgentHostToKernelFrame {
+    return {
+      type: 'runtimeEvent',
+      seq,
+      event: {
+        type: 'turnEnded',
+        status: 'completed',
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    };
+  }
+
+  it('drop the link mid-Turn and reconnect: the replayed final message and turnEnded land once, and the Turn clears', async () => {
+    const { runtime, events } = await newRuntime();
+    const instanceId = randomUUID();
+    const first = createFakeLink();
+    runtime.connect(first.link);
+    runtime.handleFrame({ type: 'hello', instanceId });
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId, seq: 1 });
+    runtime.handleFrame(messageFrame(input, 'thinking…', 2));
+    expect(first.sent.filter((f) => f.type === 'ack')).toEqual([
+      { type: 'ack', seq: 1 },
+      { type: 'ack', seq: 2 },
+    ]);
+
+    // The link flaps: frames 3 and 4 were written into the dying socket and never acknowledged.
+    runtime.disconnect(first.link);
+    const second = createFakeLink();
+    expect(runtime.connect(second.link)).toBe(true);
+    runtime.handleFrame({ type: 'hello', instanceId });
+    // agent-host sends again everything it had not seen acknowledged — 2 included, its ack lost.
+    runtime.handleFrame(messageFrame(input, 'thinking…', 2));
+    runtime.handleFrame(messageFrame(input, 'the answer', 3));
+    runtime.handleFrame(turnEndedFrame(input, 4));
+    await vi.waitFor(() => expect(events.map((e) => e.type)).toContain('turnEnded'));
+
+    expect(
+      events.map((e) => (e.type === 'message' ? `message:${e.content.text}` : e.type)),
+    ).toEqual(['message:thinking…', 'message:the answer', 'turnEnded']);
+    expect(second.sent.filter((f) => f.type === 'ack')).toEqual([
+      { type: 'ack', seq: 2 },
+      { type: 'ack', seq: 3 },
+      { type: 'ack', seq: 4 },
+    ]);
+    // Cleared: the chat's next message starts a new Turn instead of TurnAlreadyRunningError, and a
+    // Stop on the old one is reported as unknown.
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
+  });
+
+  it('a frame without seq (an older agent-host) is handled and not acknowledged', async () => {
+    const { runtime, events } = await newRuntime();
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    const { seq: _seq, ...unnumbered } = turnEndedFrame(input, 1) as Extract<
+      AgentHostToKernelFrame,
+      { type: 'runtimeEvent' }
+    >;
+    runtime.handleFrame(unnumbered);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(sent.filter((f) => f.type === 'ack')).toEqual([]);
+  });
+
+  it('a new instanceId (agent-host restarted) numbers from 1 again — its first frames are not taken for duplicates', async () => {
+    const { runtime } = await newRuntime();
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    runtime.handleFrame({ type: 'hello', instanceId: randomUUID() });
+    runtime.handleFrame({ type: 'turnUnknown', turnId: randomUUID(), seq: 7 });
+
+    runtime.handleFrame({ type: 'hello', instanceId: randomUUID() });
+    runtime.handleFrame({ type: 'turnUnknown', turnId: randomUUID(), seq: 1 });
+    expect(sent.filter((f) => f.type === 'ack')).toEqual([
+      { type: 'ack', seq: 7 },
+      { type: 'ack', seq: 1 },
+    ]);
+  });
+
+  it('turnUnknown for a Turn it asked agent-host to stop ends the Turn interrupted (its turnEnded was lost)', async () => {
+    const { runtime, events } = await newRuntime();
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId, seq: 1 });
+
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    expect(sent.filter((f) => f.type === 'stopTurn')).toHaveLength(1);
+    runtime.handleFrame({ type: 'turnUnknown', turnId: input.turnId, seq: 2 });
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toEqual({
+      type: 'turnEnded',
+      status: 'interrupted',
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      turnId: input.turnId,
+      principalId: input.principalId,
+    });
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
+  });
+
+  it('a stop issued while agent-host was disconnected is sent again once the same agent-host says hello', async () => {
+    const { runtime } = await newRuntime();
+    const instanceId = randomUUID();
+    const first = createFakeLink();
+    runtime.connect(first.link);
+    runtime.handleFrame({ type: 'hello', instanceId });
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId, seq: 1 });
+
+    runtime.disconnect(first.link);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+
+    const second = createFakeLink();
+    runtime.connect(second.link);
+    expect(second.sent).toEqual([]);
+    runtime.handleFrame({ type: 'hello', instanceId });
+    expect(second.sent).toEqual([
+      { type: 'stopTurn', turnId: input.turnId, principalId: input.principalId },
+    ]);
+  });
+
+  it('startTurn sends through the link registered when the frame goes out, not the one it started with', async () => {
+    const { runtime } = await newRuntime();
+    const first = createFakeLink();
+    runtime.connect(first.link);
+    const input = startTurnInput();
+
+    const startPromise = runtime.startTurn(input); // suspended at its first read
+    runtime.disconnect(first.link);
+    const second = createFakeLink();
+    runtime.connect(second.link);
+    await startPromise;
+
+    expect(first.sent).toEqual([]);
+    expect(second.sent.map((f) => f.type)).toEqual(['startTurn']);
+  });
+});
+
 describe('AgentHostRuntime — runtimeEvent forwarding', () => {
   it('forwards textDelta/toolCallStarted/toolCallEnded/message/turnEnded verbatim to the sink', async () => {
     const { pool } = createFakePool();

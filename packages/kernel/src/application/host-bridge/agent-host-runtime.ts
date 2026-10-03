@@ -271,6 +271,9 @@ export class AgentHostRuntime implements AgentRuntime {
 
   private link: AgentHostLink | undefined;
   private lastHelloInstanceId: string | undefined;
+  /** R-56: the highest agent-host frame `seq` handled for `lastHelloInstanceId` — a frame agent-host
+   *  sends again after a reconnect (it was not yet acknowledged) is handled once. */
+  private lastSeq = 0;
   private readonly activeTurns = new Map<string, ActiveTurn>();
   /** R-55: turnIds `stopTurn` was asked to stop before `startTurn` ever saw them — see `stopTurn`.
    *  Insertion-ordered, capped at `STOPPED_BEFORE_START_LIMIT`. */
@@ -322,8 +325,16 @@ export class AgentHostRuntime implements AgentRuntime {
     if (this.link === link) this.link = undefined;
   }
 
-  /** Handles one already-validated inbound frame. */
+  /** Handles one already-validated inbound frame. R-56: a numbered frame is acknowledged (`ack`,
+   *  cumulative) as soon as it arrives, and one at or below the highest `seq` already handled —
+   *  agent-host sending again what it had not seen acknowledged — is acknowledged and skipped. */
   handleFrame(frame: AgentHostToKernelFrame): void {
+    if (frame.type !== 'hello' && frame.seq !== undefined) {
+      const duplicate = frame.seq <= this.lastSeq;
+      if (!duplicate) this.lastSeq = frame.seq;
+      this.sendAck(this.lastSeq);
+      if (duplicate) return;
+    }
     switch (frame.type) {
       case 'hello':
         this.handleHello(frame.instanceId);
@@ -336,6 +347,9 @@ export class AgentHostRuntime implements AgentRuntime {
         return;
       case 'runtimeEvent':
         void this.handleRuntimeEvent(frame.event);
+        return;
+      case 'turnUnknown':
+        this.handleTurnUnknown(frame.turnId);
         return;
     }
   }
@@ -358,8 +372,7 @@ export class AgentHostRuntime implements AgentRuntime {
       return;
     }
 
-    const link = this.link;
-    if (!link) {
+    if (!this.link) {
       this.log(
         JSON.stringify({
           level: 'error',
@@ -457,6 +470,22 @@ export class AgentHostRuntime implements AgentRuntime {
       return;
     }
 
+    // R-56: whichever link is registered *now* — the one seen at the top may have been replaced by
+    // an agent-host reconnect during the reads above.
+    const link = this.link;
+    if (!link) {
+      this.activeTurns.delete(input.turnId);
+      this.log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'agent-host-runtime: agent-host disconnected while the turn was being prepared',
+          turnId: input.turnId,
+        }),
+      );
+      await this.emitEnded(input, 'failed');
+      return;
+    }
+
     const sent = this.sendStartTurnFrame(
       link,
       input,
@@ -522,7 +551,12 @@ export class AgentHostRuntime implements AgentRuntime {
    *  R-55: an untracked `turnId` is also remembered (bounded) — its `TurnStarted` may still be on the
    *  way, and the caller is about to end the Turn itself, so a later `startTurn` for it must start
    *  nothing. A tracked Turn whose `startTurn` frame has not gone out yet is only marked: `startTurn`
-   *  ends it `interrupted` instead of sending it. */
+   *  ends it `interrupted` instead of sending it.
+   *
+   *  R-56: `true` is never a dead end. A stop that could not reach agent-host (no link, or a link
+   *  that died under it) is sent again after the next `hello`, and agent-host answers a stop for a
+   *  Turn it has no record of with `turnUnknown`, which ends the Turn `interrupted` here
+   *  (`handleTurnUnknown`) — so a Turn whose `turnEnded` was lost no longer wedges its chat. */
   async stopTurn(turnId: string): Promise<boolean> {
     const turn = this.activeTurns.get(turnId);
     if (!turn) {
@@ -563,6 +597,45 @@ export class AgentHostRuntime implements AgentRuntime {
       const oldest = this.stoppedBeforeStart.values().next().value;
       if (oldest !== undefined) this.stoppedBeforeStart.delete(oldest);
     }
+  }
+
+  /** R-56: best effort — a link that is closing drops it, and agent-host then sends the frames
+   *  again after reconnecting (they are deduplicated by `seq`). */
+  private sendAck(seq: number): void {
+    try {
+      this.link?.send({ type: 'ack', seq });
+    } catch {
+      // Not open any more — see above.
+    }
+  }
+
+  /** R-56: agent-host has no record of a Turn this runtime asked it to stop — it ended there and
+   *  the `turnEnded` never arrived here, or its `startTurn` never reached agent-host. Nothing will
+   *  ever report on it, so it ends `interrupted` now (the user asked to stop it). */
+  private handleTurnUnknown(turnId: string): void {
+    const turn = this.activeTurns.get(turnId);
+    if (!turn || !turn.sent) return; // already ended here, or not sent yet (startTurn owns it)
+    this.activeTurns.delete(turnId);
+    this.resolvePendingAccept(turnId, {
+      ok: false,
+      reason: 'agent-host has no record of this turn',
+      alreadyEnded: true,
+    });
+    this.log(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'agent-host-runtime: agent-host has no record of a stopped turn — ending it interrupted',
+        turnId,
+      }),
+    );
+    void this.safeSinkHandle({
+      type: 'turnEnded',
+      status: 'interrupted',
+      workspaceId: turn.workspaceId,
+      chatId: turn.chatId,
+      turnId,
+      principalId: turn.principalId,
+    });
   }
 
   /**
@@ -700,8 +773,18 @@ export class AgentHostRuntime implements AgentRuntime {
   private handleHello(instanceId: string): void {
     const isRestart =
       this.lastHelloInstanceId !== undefined && this.lastHelloInstanceId !== instanceId;
+    // R-56: a new agent-host process numbers its frames from 1 again.
+    if (this.lastHelloInstanceId !== instanceId) this.lastSeq = 0;
     this.lastHelloInstanceId = instanceId;
-    if (!isRestart) return;
+    if (!isRestart) {
+      // R-56: the same process reconnected — a stop sent while the link was down (or into a link
+      // that died) never reached it; say it again. agent-host stops the Turn or answers
+      // `turnUnknown`, and a repeat is harmless either way.
+      for (const [turnId, turn] of this.activeTurns) {
+        if (turn.stopRequested && turn.sent) this.sendStopFrame(turnId, turn.principalId);
+      }
+      return;
+    }
 
     this.log(
       JSON.stringify({

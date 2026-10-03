@@ -109,7 +109,19 @@ export type AgentRuntimeEventWire = z.infer<typeof AgentRuntimeEventWireSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // agent-host -> kernel frames
+//
+// Replay (2026-10-02 review R-56; design doc §13 "事件桥重连并从最后确认的事件续读"): every frame but
+// `hello` carries `seq`, a number agent-host assigns in sending order, starting at 1, once per
+// *process* (it resets only with a new `instanceId`). agent-host keeps each frame until the kernel
+// acknowledges it (`ack`, below) and, after the `hello` of every new connection, sends the
+// unacknowledged ones again in order. The kernel processes a frame only if its `seq` is above the
+// highest it has processed for that `instanceId`, so a frame sent twice is handled once. A frame
+// sent into a half-open socket, or while no link was up, therefore still arrives — that is how a
+// Turn's final message and `turnEnded` survive a WebSocket flap. agent-host bounds what it keeps
+// per Turn (its `kernel-link.ts`); `seq` is optional so a frame without one is still accepted.
 // ---------------------------------------------------------------------------------------------
+
+const seqField = { seq: z.number().int().positive().optional() };
 
 /** Sent once, immediately after the WebSocket opens. `instanceId` is a fresh `randomUUID()`
  *  generated once per agent-host *process* (not per connection) — it lets the kernel tell a mere
@@ -133,6 +145,7 @@ export const AgentHostTurnAcceptedFrameSchema = z
   .object({
     type: z.literal('turnAccepted'),
     turnId: z.string(),
+    ...seqField,
   })
   .strict();
 
@@ -144,6 +157,7 @@ export const AgentHostTurnRejectedFrameSchema = z
     type: z.literal('turnRejected'),
     turnId: z.string(),
     reason: z.string(),
+    ...seqField,
   })
   .strict();
 
@@ -154,6 +168,19 @@ export const AgentHostRuntimeEventFrameSchema = z
   .object({
     type: z.literal('runtimeEvent'),
     event: AgentRuntimeEventWireSchema,
+    ...seqField,
+  })
+  .strict();
+
+/** R-56: agent-host's answer to a `stopTurn` for a Turn it has no record of (it already ended, or
+ *  agent-host never received it). The kernel ends a Turn it still tracks `interrupted` on this —
+ *  otherwise it would wait forever for a `turnEnded` agent-host will never send, and the chat
+ *  would stay wedged. */
+export const AgentHostTurnUnknownFrameSchema = z
+  .object({
+    type: z.literal('turnUnknown'),
+    turnId: z.string(),
+    ...seqField,
   })
   .strict();
 
@@ -162,6 +189,7 @@ export const AgentHostToKernelFrameSchema = z.discriminatedUnion('type', [
   AgentHostTurnAcceptedFrameSchema,
   AgentHostTurnRejectedFrameSchema,
   AgentHostRuntimeEventFrameSchema,
+  AgentHostTurnUnknownFrameSchema,
 ]);
 export type AgentHostToKernelFrame = z.infer<typeof AgentHostToKernelFrameSchema>;
 
@@ -256,8 +284,18 @@ export const KernelStopTurnCommandSchema = z
   })
   .strict();
 
+/** R-56: the kernel has received every agent-host frame up to and including `seq` (see the replay
+ *  note above the agent-host -> kernel frames); agent-host may forget them. */
+export const KernelAckFrameSchema = z
+  .object({
+    type: z.literal('ack'),
+    seq: z.number().int().positive(),
+  })
+  .strict();
+
 export const KernelToAgentHostFrameSchema = z.discriminatedUnion('type', [
   KernelStartTurnCommandSchema,
   KernelStopTurnCommandSchema,
+  KernelAckFrameSchema,
 ]);
 export type KernelToAgentHostFrame = z.infer<typeof KernelToAgentHostFrameSchema>;

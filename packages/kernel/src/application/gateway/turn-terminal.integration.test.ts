@@ -3,13 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KernelToAgentHostFrame } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { createBackgroundServices } from '../../index.js';
 import { createChatEventSink, interruptStaleRunningTurns } from '../chat/index.js';
-import type { AgentRuntimeEventSink } from '../host-bridge/index.js';
+import type { AgentHostLink, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { AgentHostRuntime } from '../host-bridge/index.js';
 import { dispatchCapability } from './dispatch.js';
 import { setAgentRuntimeForHandlers } from './handlers.js';
@@ -20,7 +20,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * stopped, interrupted or failed Turn can no longer start or finish, and its terminal status is
  * never overwritten. Real database because the guard is the UPDATE itself (`endTurn`'s
  * `status = any(<TURN_TRANSITIONS sources>)` and its stop-intent rule) and because the TurnStarted
- * check reads the Activity row through `createBackgroundServices`' own wiring.
+ * check reads the Activity row through `createBackgroundServices`' own wiring. Also R-56's chat-level
+ * outcome: after an agent-host link flap, the replayed terminal frames end the Turn and the chat
+ * takes the next message.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -146,6 +148,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function agentHostRuntime(): Promise<{
       runtime: AgentHostRuntime;
       sent: KernelToAgentHostFrame[];
+      link: AgentHostLink;
     }> {
       const { privateKey } = await generateEphemeralHandleKeyPair();
       const runtime = new AgentHostRuntime({
@@ -159,8 +162,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         log: () => {},
       });
       const sent: KernelToAgentHostFrame[] = [];
-      runtime.connect({ send: (frame) => sent.push(frame) });
-      return { runtime, sent };
+      const link: AgentHostLink = { send: (frame) => sent.push(frame) };
+      runtime.connect(link);
+      return { runtime, sent, link };
     }
 
     beforeAll(async () => {
@@ -262,7 +266,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         await deliverTurnStarted(background, turnId);
 
-        expect(sent.filter((frame) => frame.turnId === turnId)).toEqual([]);
+        expect(sent.filter((frame) => 'turnId' in frame && frame.turnId === turnId)).toEqual([]);
         expect((await turnRow(turnId))?.status).toBe('interrupted');
         expect(await turnCompletedStatuses(turnId)).toEqual(['interrupted']);
       } finally {
@@ -280,11 +284,68 @@ describe.runIf(DATABASE_URL !== undefined)(
         await interruptStaleRunningTurns({ pool });
         await deliverTurnStarted(background, turnId);
 
-        expect(sent.filter((frame) => frame.turnId === turnId)).toEqual([]);
+        expect(sent.filter((frame) => 'turnId' in frame && frame.turnId === turnId)).toEqual([]);
         expect((await turnRow(turnId))?.status).toBe('interrupted');
       } finally {
         background.stop();
       }
+    });
+
+    it('R-56: the agent-host link drops mid-Turn — after the reconnect the replayed answer and turnEnded land, and the chat takes the next message', async () => {
+      const { runtime, sent, link } = await agentHostRuntime();
+      const instanceId = randomUUID();
+      runtime.handleFrame({ type: 'hello', instanceId });
+      const { chatId, turnId } = await startTurn();
+      await runtime.startTurn({
+        workspaceId,
+        chatId,
+        turnId,
+        principalId: ownerId,
+        prompt: 'hello',
+      });
+      expect(sent.map((frame) => frame.type)).toContain('startTurn');
+      runtime.handleFrame({ type: 'turnAccepted', turnId, seq: 1 });
+
+      // The link flaps while agent-host is still producing the answer: the old socket closes and
+      // agent-host's reconnect registers a new one.
+      runtime.disconnect(link);
+      const replacement: KernelToAgentHostFrame[] = [];
+      expect(runtime.connect({ send: (frame) => replacement.push(frame) })).toBe(true);
+      runtime.handleFrame({ type: 'hello', instanceId });
+      // agent-host sends what it had not seen acknowledged.
+      runtime.handleFrame({
+        type: 'runtimeEvent',
+        seq: 2,
+        event: {
+          type: 'message',
+          role: 'assistant',
+          content: { text: 'the answer after the flap' },
+          workspaceId,
+          chatId,
+          turnId,
+          principalId: ownerId,
+        },
+      });
+      runtime.handleFrame({
+        type: 'runtimeEvent',
+        seq: 3,
+        event: turnEnded(chatId, turnId, 'completed'),
+      });
+
+      await vi.waitFor(async () => expect((await turnRow(turnId))?.status).toBe('completed'));
+      expect(replacement.filter((frame) => frame.type === 'ack')).toEqual([
+        { type: 'ack', seq: 2 },
+        { type: 'ack', seq: 3 },
+      ]);
+      const history = (await dispatchCapability({ pool }, human(), 'get_chat_history', {
+        chatId,
+      })) as { items: { role: string; text: string }[] };
+      expect(history.items).toContainEqual(
+        expect.objectContaining({ role: 'assistant', text: 'the answer after the flap' }),
+      );
+      await expect(
+        dispatchCapability({ pool }, human(), 'send_chat_message', { chatId, text: 'next' }),
+      ).resolves.toMatchObject({ turnId: expect.any(String) });
     });
   },
 );

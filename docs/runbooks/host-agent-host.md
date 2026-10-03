@@ -45,6 +45,15 @@ agent-host → kernel：
 - `{"type":"turnRejected","turnId":"...","reason":"..."}`
 - `{"type":"runtimeEvent","event":{...}}`：`event` 就是 `AgentRuntimeEvent`
   （`textDelta`/`toolCallStarted`/`toolCallEnded`/`message`/`turnEnded`）。
+- `{"type":"turnUnknown","turnId":"..."}`（R-56）：对一个 agent-host 没有记录的 Turn 的 `stopTurn`
+  的回答（它已经结束、`turnEnded` 却没到内核，或 `startTurn` 根本没到 agent-host）；内核据此把仍在
+  跟踪的这个 Turn 以 `interrupted` 结束，Chat 不会因此卡住。
+- 除 `hello` 外每帧都带 `seq`（R-56，同一进程内从 1 递增）：agent-host 保留内核尚未 `ack` 的帧，每次
+  重连发完 `hello` 后按序重发；内核按 `seq` 去重，所以 WS 抖动（包括写进半开连接的帧）不再丢掉
+  Turn 的最后一条回答和 `turnEnded`。每个 Turn 保留的帧有上限（256，超出先丢最早的流式增量，再丢最早
+  的 `message`，`turnEnded`/`turnAccepted`/`turnRejected` 不丢）。agent-host 每 15 秒 ping 内核，上一个
+  ping 没回 pong 就断开重连（日志 `kernel-link: no pong`）。agent-host **进程重启**会丢掉保留的帧——
+  内核看到新的 `instanceId` 后把这些 Turn 标 `interrupted`（不变）。
 
 kernel → agent-host：
 - `{"type":"startTurn","workspaceId","chatId","turnId","principalId","prompt","handle","kernelLlmUrl","systemPrompt"?,"model"?}`
@@ -58,7 +67,9 @@ kernel → agent-host：
   两步就是在做同一件事，只是那两步没有传 `model`）。没有发布过、或这次查询失败，这两个字段就都不
   出现在帧里——agent-host 原样透传给 `worker-supervisor`，后者落到 `entrypoint.sh` 的静态兜底
   prompt 与 pi 自己的默认模型选择，从不因为这次解析失败而拒绝这个 Turn。
-- `{"type":"stopTurn","turnId","principalId"}`
+- `{"type":"stopTurn","turnId","principalId"}`（R-56：链路断开期间发不出去的停止，同一 agent-host
+  重连发 `hello` 后内核会再发一次）
+- `{"type":"ack","seq"}`（R-56）：内核已收到 `seq` 及之前的全部帧（累计确认）。
 
 ### 2.2 pi 事件 → 平台事件映射表（唯一翻译点：`packages/agent-host/src/bridge.ts`）
 
