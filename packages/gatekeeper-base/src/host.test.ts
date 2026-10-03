@@ -46,7 +46,7 @@ const DEMO_MCP_ITEM = {
   definition: {
     transportKind: 'mcp' as const,
     target: 'http://mcp.test/',
-    credentialMode: 'shared' as const,
+    credentialMode: 'shared' as 'shared' | 'connected_account',
     manifestSource: null,
   },
 };
@@ -54,6 +54,9 @@ const DEMO_MCP_ITEM = {
 interface FakeState {
   items: Array<typeof DEMO_MCP_ITEM>;
   mcpListShouldFail: boolean;
+  /** R-69 fixture: when set, the fake MCP server answers every method — `tools/list` included —
+   *  with 401 unless the request carries `Authorization: Bearer <this>`. */
+  mcpRequiredToken?: string;
   announcements: Array<{ url: string; body: Record<string, unknown> }>;
   instanceListCalls: Array<{ headers: Record<string, string> }>;
 }
@@ -82,6 +85,12 @@ function makeFetch(state: FakeState): typeof fetch {
         id: number;
         method: string;
       };
+      if (
+        state.mcpRequiredToken !== undefined &&
+        headers.authorization !== `Bearer ${state.mcpRequiredToken}`
+      ) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+      }
       if (rpc.method === 'tools/list') {
         if (state.mcpListShouldFail) {
           return new Response(JSON.stringify({}), { status: 500 });
@@ -497,5 +506,228 @@ describe('createGateHost (P-B2a)', () => {
     const recovered = host.instances();
     expect(recovered).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
     expect(state.announcements.length).toBeGreaterThan(announcedBefore);
+  });
+
+  describe('R-69: a target whose tools/list needs the credential', () => {
+    async function sharedSlotToken(): Promise<string> {
+      const { token } = await mintGateHostToken({
+        privateKey,
+        gateId: 'demo-mcp',
+        onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT,
+        subject: 'admin-1',
+      });
+      return token;
+    }
+
+    function toolsListCalls(): Array<{ url: string; init: RequestInit }> {
+      return calls.filter(
+        (c) =>
+          c.url === 'http://mcp.test/' &&
+          (JSON.parse(String(c.init.body ?? '{}')) as { method?: string }).method === 'tools/list',
+      );
+    }
+
+    it('connect → store the shared credential → tools/list succeeds: taken over and announced before the response', async () => {
+      state.mcpRequiredToken = 'auth-secret-r69';
+      const lines: string[] = [];
+      host = await createGateHost({
+        env,
+        fetchImpl: recordingFetch(state, calls),
+        listen: false,
+        log: (line) => lines.push(line),
+      });
+
+      // Connect: the handshake is refused, so the instance is not taken over and not announced.
+      expect(await host.tick()).toBe(true);
+      const before = host.instances();
+      expect(before).toHaveLength(1);
+      expect(before[0]).toMatchObject({ gateId: 'demo-mcp', ready: false, operationCount: 0 });
+      expect(before[0]?.buildError).toMatch(/401/);
+      expect(state.announcements).toHaveLength(0);
+
+      // Store the credential on the not-yet-built instance — this used to 404 `gate_not_found`.
+      const stored = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: {
+          onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT,
+          credential: { token: 'auth-secret-r69' },
+        },
+      });
+      expect(stored.statusCode).toBe(200);
+      expect(stored.json().result).toEqual({ stored: true });
+
+      // Re-handshaken with the stored credential and announced — no tick needed.
+      expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
+      const lastList = toolsListCalls().at(-1);
+      expect((lastList?.init.headers as Record<string, string>).authorization).toBe(
+        'Bearer auth-secret-r69',
+      );
+      expect(state.announcements).toHaveLength(1);
+      expect(state.announcements[0]?.body).toMatchObject({ gateId: 'demo-mcp' });
+      expect(state.announcements[0]?.body.operations).toHaveLength(2);
+
+      const observed = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/observe',
+        headers: { authorization: `Bearer ${GATE_TOKEN}` },
+        payload: { operation: 'read_tool', params: {} },
+      });
+      expect(observed.statusCode).toBe(200);
+
+      // The credential stays in the gate's store: never in a log line, never in an announcement.
+      expect(lines.some((l) => l.includes('auth-secret-r69'))).toBe(false);
+      expect(JSON.stringify(state.announcements)).not.toContain('auth-secret-r69');
+    });
+
+    it('a rejected credential is still stored (200) but the instance stays not ready; DELETE works on it; the right one takes it over', async () => {
+      state.mcpRequiredToken = 'right-secret';
+      host = await createGateHost({
+        env,
+        fetchImpl: recordingFetch(state, calls),
+        listen: false,
+        log: () => {},
+      });
+      await host.tick();
+
+      const wrong = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'wrong' } },
+      });
+      expect(wrong.statusCode).toBe(200);
+      expect(wrong.json().result).toEqual({ stored: true });
+      const afterWrong = host.instances();
+      expect(afterWrong[0]).toMatchObject({ ready: false, operationCount: 0 });
+      expect(afterWrong[0]?.buildError).toMatch(/401/);
+      expect(state.announcements).toHaveLength(0);
+
+      const deleted = await host.app.inject({
+        method: 'DELETE',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json().result).toEqual({ deleted: true });
+      const accountStore = new ConnectedAccountStore({
+        dataDir: join(dir, 'data', 'demo-mcp'),
+        keyFilePath: join(dir, 'store.key'),
+      });
+      expect(await accountStore.get(GATE_SHARED_CREDENTIAL_SLOT)).toBeUndefined();
+
+      const right = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'right-secret' } },
+      });
+      expect(right.statusCode).toBe(200);
+      expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
+      expect(state.announcements).toHaveLength(1);
+    });
+
+    it('re-handshakes an instance already taken over, keeping the working gate when the new credential is rejected', async () => {
+      host = await createGateHost({
+        env,
+        fetchImpl: recordingFetch(state, calls),
+        listen: false,
+        log: () => {},
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
+      const announcedBefore = state.announcements.length;
+
+      // The target starts requiring a token; the administrator first enters a wrong one.
+      state.mcpRequiredToken = 'rotated';
+      const wrong = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'bad' } },
+      });
+      expect(wrong.statusCode).toBe(200);
+      const kept = host.instances();
+      expect(kept[0]).toMatchObject({ ready: true, operationCount: 2 });
+      expect(kept[0]?.buildError).toMatch(/401/);
+      const describe = await host.app.inject({
+        method: 'GET',
+        url: '/i/demo-mcp/gate/describe_operations',
+        headers: { authorization: `Bearer ${GATE_TOKEN}` },
+      });
+      expect(describe.json().result.operations).toHaveLength(2);
+
+      const right = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${await sharedSlotToken()}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'rotated' } },
+      });
+      expect(right.statusCode).toBe(200);
+      expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
+      expect(state.announcements.length).toBe(announcedBefore + 1);
+    });
+
+    it('a member credential on a connected_account instance never drives discovery', async () => {
+      state.items = [
+        {
+          ...DEMO_MCP_ITEM,
+          definition: {
+            ...DEMO_MCP_ITEM.definition,
+            credentialMode: 'connected_account' as const,
+          },
+        },
+      ];
+      host = await createGateHost({
+        env,
+        fetchImpl: recordingFetch(state, calls),
+        listen: false,
+        log: () => {},
+      });
+      await host.tick();
+      expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
+      const listsBefore = toolsListCalls().length;
+
+      const { token } = await mintGateHostToken({
+        privateKey,
+        gateId: 'demo-mcp',
+        onBehalfOf: 'principal-1',
+        subject: 'principal-1',
+      });
+      const stored = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { onBehalfOf: 'principal-1', credential: { token: 'member-secret' } },
+      });
+      expect(stored.statusCode).toBe(200);
+      expect(toolsListCalls()).toHaveLength(listsBefore);
+    });
+
+    it('a credential for a gate this host does not list is still 404 gate_not_found', async () => {
+      host = await createGateHost({
+        env,
+        fetchImpl: makeFetch(state),
+        listen: false,
+        log: () => {},
+      });
+      await host.tick();
+      const { token } = await mintGateHostToken({
+        privateKey,
+        gateId: 'not-listed',
+        onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT,
+        subject: 'admin-1',
+      });
+      const resp = await host.app.inject({
+        method: 'POST',
+        url: '/i/not-listed/gate/connected-accounts',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'x' } },
+      });
+      expect(resp.statusCode).toBe(404);
+      expect(resp.json().error.code).toBe('gate_not_found');
+    });
   });
 });

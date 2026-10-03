@@ -117,13 +117,22 @@ export interface CreateGatekeeperServerOptions {
   readonly token: string;
 }
 
-/** What one `/gate/*` request operates on. `forcedOnBehalfOf` (host mode, 决定 ⑩): the credential
- *  slot a verified platform token allows — the connected-account routes then ignore the body's
- *  `onBehalfOf` and write exactly that slot. */
-export interface GateRouteContext {
-  readonly gate: GatekeeperBase;
+/** What `POST`/`DELETE /gate/connected-accounts` operate on — the credential store alone, no built
+ *  gate needed (R-69). `forcedOnBehalfOf` (host mode, 决定 ⑩): the credential slot a verified
+ *  platform token allows — these routes then ignore the body's `onBehalfOf` and write exactly that
+ *  slot. */
+export interface CredentialRouteContext {
   readonly connectedAccountStore?: ConnectedAccountStore;
   readonly forcedOnBehalfOf?: string;
+  /** Runs after a successful store, before the response (gate host, R-69: re-handshake the
+   *  instance with the credential it just received). Must not throw — the credential is stored
+   *  whatever happens next, and the response says exactly that. */
+  readonly afterStore?: (slot: string) => Promise<void>;
+}
+
+/** What one `/gate/*` request operates on. */
+export interface GateRouteContext extends CredentialRouteContext {
+  readonly gate: GatekeeperBase;
 }
 
 /** The fields of one `/gate/*` call's log line (leftover 87). */
@@ -140,6 +149,10 @@ export interface RegisterGateRoutesOptions {
   readonly prefix: string;
   /** Picks the gate for a request; `undefined` → 404 `gate_not_found`. */
   readonly resolve: (request: FastifyRequest) => GateRouteContext | undefined;
+  /** Picks the credential store for the connected-account routes; default `resolve`. The gate
+   *  host resolves these on its instance table, built or not (R-69): a target whose discovery
+   *  (`tools/list`) needs the credential could otherwise never receive it. `undefined` → 404. */
+  readonly resolveCredentialRoute?: (request: FastifyRequest) => CredentialRouteContext | undefined;
   /** Leftover 87: one sample per `/gate/*` call (metrics.ts); omitted → not counted. */
   readonly metrics?: GateMetrics;
   /** Leftover 87: writes one line per `/gate/*` call. Default: `request.log.info(fields)` — the
@@ -165,6 +178,7 @@ export function gateRequestId(req: {
  */
 export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRoutesOptions): void {
   const { prefix, resolve } = options;
+  const resolveCredentialRoute = options.resolveCredentialRoute ?? resolve;
   const logCall =
     options.logCall ??
     ((request: FastifyRequest, fields: GateCallLogFields) => request.log.info(fields, 'gate call'));
@@ -321,7 +335,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
   });
 
   app.post(`${prefix}/gate/connected-accounts`, async (request, reply) => {
-    const ctx = resolve(request);
+    const ctx = resolveCredentialRoute(request);
     if (!ctx) return notFound(reply);
     const parsed = StoreConnectedAccountRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
@@ -335,6 +349,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
       if (!ctx.connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
       const slot = ctx.forcedOnBehalfOf ?? parsed.data.onBehalfOf;
       await ctx.connectedAccountStore.set(slot, parsed.data.credential);
+      await ctx.afterStore?.(slot);
       return ok(reply, { stored: true });
     } catch (err) {
       return fail(reply, err);
@@ -342,7 +357,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
   });
 
   app.delete(`${prefix}/gate/connected-accounts`, async (request, reply) => {
-    const ctx = resolve(request);
+    const ctx = resolveCredentialRoute(request);
     if (!ctx) return notFound(reply);
     const parsed = DeleteConnectedAccountRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {

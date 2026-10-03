@@ -58,6 +58,7 @@ export type {
 export { createGatekeeperServer, mapGatekeeperError, registerGateRoutes } from './server.js';
 export type {
   CreateGatekeeperServerOptions,
+  CredentialRouteContext,
   GateRouteContext,
   RegisterGateRoutesOptions,
 } from './server.js';
