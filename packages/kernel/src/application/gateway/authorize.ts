@@ -1,5 +1,5 @@
 import type { Capability } from '@nexttime/shared';
-import { roleSatisfiesMinRole } from '../../governance/capability/index.js';
+import { roleMayUseCapability, roleSatisfiesMinRole } from '../../governance/capability/index.js';
 import type { ResolvedCaller } from './caller.js';
 
 /**
@@ -34,7 +34,14 @@ import type { ResolvedCaller } from './caller.js';
  * every other role satisfies `minRole:'member'` (§5.1.1 "对话、调用、观察" — the operational floor
  * every principal needs regardless of specialization) or an exact match to its own role; nothing
  * else. This is exactly what makes "member 调 grant_capability 403" (minRole:'owner') hold, while
- * also keeping `builder`/`operator`/`auditor` able to use the base graph/chat capabilities.
+ * also keeping `builder`/`operator` able to use the base graph/chat capabilities.
+ *
+ * `auditor` (review 2026-10-02 R-35 / decision D-07): strictly read-only — not "member minus
+ * gates", which is what this comment used to say. Clearing `minRole` is not enough for it; it may
+ * use only its explicit allowlist (side-effect-free reads plus audit and provenance tools, and its
+ * own conversation with its read-only entry agent). The whole rule is `roleMayUseCapability`
+ * (governance/capability/roles.ts), the one predicate this function, `entryScope({ role })` and
+ * the gate paths share.
  */
 
 export class ForbiddenError extends Error {
@@ -58,9 +65,10 @@ export { roleSatisfiesMinRole };
  * `channel === 'handle'` branch below still checks scope membership only, on purpose: this
  * function is pure/no-IO and a Handle's claims carry no role. What changed is the *ceiling*: every
  * entry Handle is now issued through `governance/capability/handles.ts`'s `entryScope({ role })`,
- * which drops from `ENTRY_CEILING_CAPABILITIES` every capability whose `minRole` the on-behalf-of
- * Principal's role does not satisfy (the same `roleSatisfiesMinRole` rule the human branch uses,
- * moved to governance so both layers share it). All three production issuers apply the role —
+ * which drops from `ENTRY_CEILING_CAPABILITIES` every capability the on-behalf-of Principal's role
+ * may not use (the same `roleMayUseCapability` rule the human branch uses — `minRole`, plus the
+ * auditor's allowlist since R-35 — moved to governance so both layers share it). All three
+ * production issuers apply the role —
  * `application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` (resolved from the
  * principals row, and part of its cache-freshness key), `issue-handle-handler.ts` (from the
  * calling Principal) and, since review 2026-10-02 R-36, `service-handle-handler.ts` (the service
@@ -103,9 +111,12 @@ export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capa
     return;
   }
 
-  if (!roleSatisfiesMinRole(caller.principal.role, capability.minRole)) {
+  if (!roleMayUseCapability(caller.principal.role, capability)) {
     throw new ForbiddenError(
-      `principal role "${caller.principal.role}" does not satisfy capability "${capability.name}"'s minRole "${capability.minRole}"`,
+      caller.principal.role === 'auditor' &&
+        roleSatisfiesMinRole(caller.principal.role, capability.minRole)
+        ? `principal role "auditor" is read-only: capability "${capability.name}" is not on the auditor's allowlist (R-35 / D-07)`
+        : `principal role "${caller.principal.role}" does not satisfy capability "${capability.name}"'s minRole "${capability.minRole}"`,
     );
   }
 }

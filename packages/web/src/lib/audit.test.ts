@@ -10,11 +10,25 @@ import {
   downloadJson,
   downloadName,
   explainView,
+  isReadAuditAction,
   resourceHref,
 } from './audit.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('isReadAuditAction (D-08)', () => {
+  it('hides side-effect-free reads by the explicit registry flag, not by mode', () => {
+    expect(isReadAuditAction('audit_query')).toBe(true);
+    expect(isReadAuditAction('search')).toBe(true);
+    // observe-mode, but they write: kept in the default "writes and decisions" view.
+    expect(isReadAuditAction('observe_operation')).toBe(false);
+    expect(isReadAuditAction('get_entry_context')).toBe(false);
+    expect(isReadAuditAction('assert_fact')).toBe(false);
+    // Not a capability (a lifecycle transition): never treated as a read.
+    expect(isReadAuditAction('action_request.approve')).toBe(false);
+  });
 });
 
 describe('audit entry links', () => {

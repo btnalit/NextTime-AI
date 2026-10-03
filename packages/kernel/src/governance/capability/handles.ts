@@ -15,7 +15,7 @@ import { SignJWT } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import { HANDLE_SIGNING_ALG } from './keys.js';
-import { roleSatisfiesMinRole } from './roles.js';
+import { roleMayUseCapability } from './roles.js';
 
 /** Re-exported unchanged so every existing importer of `./handles.js` keeps working — the schema
  *  and type now live in `@nexttime/shared`'s `handle-token` module (S1.7 "共享 Handle-token 原语"),
@@ -307,27 +307,39 @@ export function entryScope(
   definition: EntryWorkerDefinitionInput = {},
   options: EntryScopeOptions = {},
 ): CapabilityScope {
-  const resources: Record<string, string[]> = {};
-  for (const [key, ids] of Object.entries(definition.resources ?? {})) {
-    resources[key] = [...ids];
-  }
   const role = options.role;
   const capabilities =
     role === undefined
       ? [...ENTRY_CEILING_CAPABILITIES]
       : ENTRY_CEILING_CAPABILITIES.filter((name) =>
-          roleSatisfiesMinRole(role, getCapability(name)?.minRole),
+          roleMayUseCapability(role, getCapability(name)),
         );
+  // R-35: a gate scope means nothing to a Handle with no capability that reads it (an auditor's),
+  // so it is not carried at all.
+  const carriesGates = capabilities.some((name) => GATE_SCOPE_READERS.has(name));
+  const resources: Record<string, string[]> = {};
+  for (const [key, ids] of Object.entries(definition.resources ?? {})) {
+    if (key === 'gatekeeper' && !carriesGates) continue;
+    resources[key] = [...ids];
+  }
   return { capabilities, resources };
 }
 
+/** The entry-ceiling capabilities that read `resources.gatekeeper`: `invoke_worker` attenuates a
+ *  Worker's gates from it, `list_allowed_operations` lists its execute-class tools from it. */
+const GATE_SCOPE_READERS: ReadonlySet<string> = new Set([
+  'invoke_worker',
+  'list_allowed_operations',
+]);
+
 /**
  * W5.5 (STATUS leftover 18): the on-behalf-of Principal's role, when the issuer knows it. With a
- * role, `entryScope` drops every ceiling capability whose registry `minRole` that role does not
- * satisfy (`roleSatisfiesMinRole`, roles.ts) — concretely, a `member`'s entry Handle no longer
- * carries the five `minRole:'builder'` `propose_*` capabilities the fixed ceiling includes.
- * `<gate>.<op>` (not a registry row) and every capability without `minRole` are always kept.
- * Without a role (tests, callers that only need the abstract ceiling such as
+ * role, `entryScope` keeps only the ceiling capabilities that role may use (`roleMayUseCapability`,
+ * roles.ts — the one role predicate `authorizeCapabilityCall` and the gate paths also call) —
+ * concretely, a `member`'s entry Handle does not carry the five `minRole:'builder'` `propose_*`
+ * capabilities the fixed ceiling includes, and (R-35 / D-07) an `auditor`'s carries only its
+ * read-only allowlist plus its own conversation: no gate capability, no `invoke_worker`, no
+ * graph write. Without a role (tests, callers that only need the abstract ceiling such as
  * `application/worker/definitions.ts`'s declared-capability validation) the full ceiling is
  * returned exactly as before.
  */

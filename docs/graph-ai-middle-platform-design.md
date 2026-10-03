@@ -107,7 +107,7 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 |------|------|
 | **Workspace** | 逻辑租户；所有对象归属唯一 Workspace；跨 Workspace 只能经受审批的 Share |
 | **Principal** | `human` / `agent`（一次 WorkerRun 或一个入口 agent 实例）/ `service` |
-| **Role** | 五个，粗粒度：`owner` 授权与策略；`builder` 提议本体与 WorkerDefinition；`operator` 进审批队列；`member` 对话、调用、观察；`auditor` 只读含密钥元数据。角色是「能进哪个门」，capability 范围是「能做哪件事」 |
+| **Role** | 五个，粗粒度：`owner` 授权与策略；`builder` 提议本体与 WorkerDefinition；`operator` 进审批队列；`member` 对话、调用、观察；`auditor` 只读含密钥元数据（显式白名单：无副作用的读能力加审计与溯源工具，不触达任何门、不能 `invoke_worker`；可以和自己的入口 agent 对话，入口 agent 同一上限；`authorize`、入口作用域与门路径共用一个角色谓词，复审 R-35 / 决定 D-07）。角色是「能进哪个门」，capability 范围是「能做哪件事」 |
 | **Session** | Principal 的一次会话：`entry`（入口 agent）、`worker_run`、`mcp_session`（外部运行时）、`service`、`web`（human 通道） |
 
 #### 5.1.2 World Model
