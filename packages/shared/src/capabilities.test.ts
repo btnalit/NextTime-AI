@@ -4,6 +4,7 @@ import {
   CAPABILITY_REGISTRY,
   INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
   assertRegistryConsistent,
+  capabilityHasSideEffects,
   getCapability,
   listByChannel,
 } from './capabilities.js';
@@ -215,6 +216,31 @@ describe('CAPABILITY_REGISTRY', () => {
 describe('assertRegistryConsistent', () => {
   it('passes on the real registry', () => {
     expect(() => assertRegistryConsistent()).not.toThrow();
+  });
+});
+
+describe('sideEffects (review 2026-10-02 D-08)', () => {
+  it('every non-observe capability has side effects; none declares otherwise', () => {
+    for (const capability of CAPABILITY_REGISTRY) {
+      if (capability.mode !== 'observe') {
+        expect(capabilityHasSideEffects(capability), capability.name).toBe(true);
+        expect(capability.sideEffects, capability.name).not.toBe(false);
+      }
+    }
+  });
+
+  it('pins the observe-mode capabilities that write — mode is not the read-only test', () => {
+    const writingObserves = CAPABILITY_REGISTRY.filter(
+      (capability) => capability.mode === 'observe' && capabilityHasSideEffects(capability),
+    ).map((capability) => capability.name);
+    expect(writingObserves.sort()).toEqual(
+      ['<gate>.<op>', 'get_entry_context', 'observe_operation', 'test_gate_instance'].sort(),
+    );
+  });
+
+  it('a plain read has none', () => {
+    const auditQuery = getCapability('audit_query');
+    expect(auditQuery && capabilityHasSideEffects(auditQuery)).toBe(false);
   });
 });
 

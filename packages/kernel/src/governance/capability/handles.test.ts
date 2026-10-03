@@ -27,6 +27,7 @@ import {
   verifyHandle,
 } from './handles.js';
 import { HANDLE_SIGNING_ALG, generateEphemeralHandleKeyPair } from './keys.js';
+import { roleMayUseCapability } from './roles.js';
 
 /**
  * governance/capability/handles.test: two suites in one file, following the pattern already
@@ -692,6 +693,32 @@ describe('entryScope', () => {
       expect(scope.capabilities).toContain('explain');
       expect(scope.capabilities).toContain('invoke_worker');
       expect(scope.capabilities).toContain('<gate>.<op>');
+    });
+
+    it("R-35 / D-07: an auditor's entry scope is its read-only allowlist ∩ the ceiling — no gate, no invoke_worker, no write, and no gate resources", () => {
+      const scope = entryScope({ resources: { gatekeeper: ['gk-1'] } }, { role: 'auditor' });
+      for (const name of scope.capabilities) {
+        expect(roleMayUseCapability('auditor', getCapability(name)), name).toBe(true);
+      }
+      for (const name of [
+        'invoke_worker',
+        'observe_operation',
+        '<gate>.<op>',
+        'list_allowed_operations',
+        'record_decision',
+        'request_connection',
+      ]) {
+        expect(scope.capabilities).not.toContain(name);
+      }
+      expect(scope.capabilities).toContain('explain');
+      expect(scope.capabilities).toContain('report_turn');
+      expect(scope.resources.gatekeeper).toBeUndefined();
+
+      // Every other role keeps the gate resources it was given.
+      expect(
+        entryScope({ resources: { gatekeeper: ['gk-1'] } }, { role: 'member' }).resources
+          .gatekeeper,
+      ).toEqual(['gk-1']);
     });
 
     it('owner role gets the full ceiling as a set', () => {

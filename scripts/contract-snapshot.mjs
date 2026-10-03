@@ -21,7 +21,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { CAPABILITY_REGISTRY, PlatformEventSchema } from '../packages/shared/dist/index.js';
+import {
+  CAPABILITY_REGISTRY,
+  PlatformEventSchema,
+  capabilityHasSideEffects,
+} from '../packages/shared/dist/index.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CONTRACTS_DIR = path.join(REPO_ROOT, 'docs', 'contracts');
@@ -49,6 +53,9 @@ function buildCapabilitiesSnapshot() {
     name: capability.name,
     group: capability.group,
     mode: capability.mode,
+    // Review 2026-10-02 D-08: the resolved read-only test (explicit flag, else what the mode
+    // implies) — part of the contract because role checks and the audit view key on it.
+    sideEffects: capabilityHasSideEffects(capability),
     channel: capability.channel,
     ...(capability.minRole !== undefined ? { minRole: capability.minRole } : {}),
     params: zodToJsonSchema(capability.paramsSchema, JSON_SCHEMA_OPTIONS),

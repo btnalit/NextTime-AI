@@ -24,7 +24,9 @@ export const PrincipalKindSchema = asEnum(PRINCIPAL_KIND_VALUES);
  * Role (§5.1.1): coarse "which door can you enter" gate — capability range narrows further via
  * Grant. owner = authorization & policy; builder = propose ontology & WorkerDefinition; operator
  * = enters the approval queue; member = converse, invoke, observe; auditor = read-only incl.
- * secret metadata.
+ * secret metadata — an explicit allowlist of side-effect-free reads plus audit and provenance
+ * tools, no Gatekeeper access, no `invoke_worker`; it may still talk to its own entry agent,
+ * which carries the same ceiling (review 2026-10-02 D-07, kernel `governance/capability/roles.ts`).
  */
 export const ROLE_VALUES = ['owner', 'builder', 'operator', 'member', 'auditor'] as const;
 export type Role = (typeof ROLE_VALUES)[number];

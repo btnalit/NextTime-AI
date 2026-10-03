@@ -1,6 +1,6 @@
 import { type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { issueHandle, roleSatisfiesMinRole } from '../../governance/capability/index.js';
+import { issueHandle, roleMayUseCapability } from '../../governance/capability/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -71,12 +71,13 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
   const input = params as { principalId: string; scope: string[]; ttlSeconds?: number };
   const role = await requireServicePrincipal(client, workspaceId, input.principalId);
   // R-36: the third Handle issuer applies the same role narrowing as the other two (W5.5,
-  // `entryScope({ role })` / issue-handle-handler.ts): a capability whose registry `minRole` the
-  // service Principal's role does not satisfy is dropped — a member-role key never receives
-  // builder-only `propose_*`. Dropped silently, as `issue_handle` drops what exceeds its ceiling;
-  // the returned `scope` is what the Handle carries.
+  // `entryScope({ role })` / issue-handle-handler.ts): a capability the service Principal's role
+  // may not use (`roleMayUseCapability` — its `minRole`, and since R-35 the auditor's read-only
+  // allowlist) is dropped — a member-role key never receives builder-only `propose_*`, an
+  // auditor-role key nothing that writes. Dropped silently, as `issue_handle` drops what exceeds
+  // its ceiling; the returned `scope` is what the Handle carries.
   const capabilities = [...new Set(input.scope)].filter((name) =>
-    roleSatisfiesMinRole(role, getCapability(name)?.minRole),
+    roleMayUseCapability(role, getCapability(name)),
   );
 
   const sessionResult = await client.query<{ id: string }>(
