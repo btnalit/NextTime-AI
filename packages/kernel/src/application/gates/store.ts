@@ -236,6 +236,21 @@ export async function updateConnector(
   );
 }
 
+/** R-40 (maintainer decision D-19): a connector's three-state mode as seen from any transaction
+ *  (`connectors_read_all`) — `null` for a name no connector row carries. `create_connection` and
+ *  `request_connection` (application/gateway/connection-handlers.ts) read it for the generic
+ *  connector named by the connection's `kind`. */
+export async function readConnectorMode(
+  client: PoolClient,
+  name: string,
+): Promise<ConnectorMode | null> {
+  const result = await client.query<{ mode: ConnectorMode }>(
+    'select mode from connectors where name = $1',
+    [name],
+  );
+  return result.rows[0]?.mode ?? null;
+}
+
 /** The connector's deny list as seen from any transaction (`connectors_read_all`). */
 export async function readDisabledOperations(
   client: PoolClient,

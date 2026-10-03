@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
@@ -233,6 +233,40 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
+/** R-41 (review 2026-10-02, maintainer decision D-19(a)): what a mode switch actually does — the
+ *  mode is catalog visibility plus the gate on NEW connections (`enable_gate_instance`, and for the
+ *  generic kinds `create_connection` / `request_connection`, R-40); it never touches a workspace
+ *  that already enabled the connector. The real cut-off for those is the Operation deny list, which
+ *  the same confirm offers (`useConnectorMode`'s `alsoDisableOperations`). A gate a workspace
+ *  connected itself is outside both. */
+function connectorModeDescription(
+  pendingMode: ConnectorModeWire | null,
+  packaged: boolean,
+  t: Translate,
+): string {
+  if (pendingMode === 'disabled') {
+    return packaged
+      ? t(
+          '禁用只拦新的：目录里不再列出它，工作区不能再启用它的实例。已经启用它的工作区照常可以调用——要立即切断，勾选下面的「同时禁用全部 Operation」。',
+          'Disabling only stops new use: the catalog stops listing it and workspaces can no longer enable its instances. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below.',
+        )
+      : t(
+          '禁用只拦新的：目录里不再列出它，工作区不能再启用它的实例，也不能再自己连这一类系统。已经启用它的工作区照常可以调用——要立即切断，勾选下面的「同时禁用全部 Operation」。工作区此前自己连的同类系统不受接入包状态影响。',
+          'Disabling only stops new use: the catalog stops listing it, and workspaces can no longer enable its instances or connect this kind of system themselves. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below. Systems of this kind a workspace already connected itself are not affected by the connector state.',
+        );
+  }
+  if (pendingMode === 'platform_preset' && !packaged) {
+    return t(
+      '切到平台预置后，工作区只能从目录启用它的实例，不能再自己连这一类系统；已经建立的连接不受影响。改错了可以随时再切回来。',
+      'As a platform preset, workspaces can only enable its instances from the catalog and can no longer connect this kind of system themselves; existing connections are unaffected. Switch it back at any time if this was a mistake.',
+    );
+  }
+  return t(
+    '新模式对这个接入包往后的启用/展示生效，已经建立的连接不受影响；改错了可以随时再切回来。',
+    "The new mode governs this connector's enable/visibility from here on; existing connections are unaffected. Switch it back at any time if this was a mistake.",
+  );
+}
+
 /** The select's minimum width — S8 W1-A7 batch design review finding: at 768px the longest mode
  *  value, `platform_preset`, truncated inside the (previously unconstrained) `<select>`. */
 const CONNECTOR_MODE_SELECT_STYLE = { minWidth: '11rem' } as const;
@@ -259,7 +293,7 @@ function ConnectorRow({
         <td>{connector.packaged ? t('预置', 'Packaged') : t('通用', 'Generic')}</td>
         <td>
           <Confirm
-            tier={mode.disablingInUse ? 'irreversible' : 'medium'}
+            tier="medium"
             open={mode.modeConfirmOpen}
             onOpenChange={mode.onModeConfirmOpenChange}
             anchor={
@@ -284,18 +318,8 @@ function ConnectorRow({
               </Select>
             }
             title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(mode.pendingMode ?? connector.mode, t)}`}
-            description={
-              mode.disablingInUse
-                ? t(
-                    'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。',
-                    'disabled immediately cuts off every workspace that enabled this connector, platform-wide.',
-                  )
-                : t(
-                    '新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。',
-                    "The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.",
-                  )
-            }
-            target={mode.disablingInUse ? connector.name : undefined}
+            description={connectorModeDescription(mode.pendingMode, connector.packaged, t)}
+            target={connector.name}
             impact={[
               t(`${instanceCount} 个门实例`, `${instanceCount} gate instance(s)`),
               t(`${operationCount} 个 Operation`, `${operationCount} operation(s)`),
@@ -304,7 +328,25 @@ function ConnectorRow({
             danger={mode.pendingMode === 'disabled'}
             onConfirm={() => (mode.pendingMode ? mode.changeMode(mode.pendingMode) : undefined)}
             testId={`connector-mode-confirm-${connector.name}`}
-          />
+          >
+            {mode.disablingInUse ? (
+              <label className="checkbox" data-testid={`connector-mode-deny-all-${connector.name}`}>
+                <input
+                  type="checkbox"
+                  checked={mode.alsoDisableOperations}
+                  onChange={(event) => mode.setAlsoDisableOperations(event.target.checked)}
+                  disabled={mode.savingMode}
+                  data-testid={`connector-mode-deny-all-checkbox-${connector.name}`}
+                />
+                <span>
+                  {t(
+                    `同时禁用全部 ${operationCount} 个 Operation：已从目录启用它的工作区下一次调用即被拒绝，这才是真正的切断。以后新上报的 Operation 不在其中；可以在展开的「允许调用的操作」里逐个恢复。`,
+                    `Also disable all ${operationCount} operation(s): workspaces that enabled it from the catalog are refused on their next call — this is the actual cut-off. Operations announced later are not included; re-allow them one by one under "Operations agents may call".`,
+                  )}
+                </span>
+              </label>
+            ) : null}
+          </Confirm>
           <PlatformError
             error={mode.modeError}
             title={t('无法设置模式', 'Could not set the mode')}

@@ -22,7 +22,9 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionSecretConflictError,
   ConnectionSecretInvalidError,
+  ConnectorNotSelfServeError,
   createConnectionHandler,
+  requestConnectionHandler,
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
@@ -42,8 +44,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * arguments to prove the same redaction contract at the handler-orchestration level.
  *
  * R-01 / R-27 (2026-10-02 review): the first `describe` below needs no database (a stub
- * `PoolClient` that answers every query with no rows) and always runs — the outbound-target
- * predicate refusing owner-supplied URLs before any fetch, and the connection-secret checks. The
+ * `PoolClient` that answers the connector-mode read with the given mode and every other query with
+ * no rows) and always runs — the outbound-target predicate refusing owner-supplied URLs before any
+ * fetch, the connection-secret checks, and R-40's connector three-state refusal. The
  * DB-gated suite proves the same through `dispatchCapability`: what credential the fake gate is
  * addressed with, the salt on the Gatekeeper, rotation, and the audit redaction.
  */
@@ -121,11 +124,24 @@ function createFakeGatekeeperClient() {
   return { client, storeConnectedAccountCalls, targets };
 }
 
-/** A `PoolClient` stand-in for handler-level tests that never reach a write: every query (the
- *  catalog read, the salt-reuse lookup) answers with no rows. */
-const EMPTY_CLIENT = {
-  query: async () => ({ rows: [], rowCount: 0 }),
-} as unknown as PoolClient;
+/** A `PoolClient` stand-in for handler-level tests that never reach a write: the connector-mode
+ *  read (R-40) answers `connectorMode`, every other query (the catalog read, the salt-reuse lookup)
+ *  answers with no rows. Records every query's SQL. */
+function stubClient(connectorMode: string | null): PoolClient & { readonly sql: string[] } {
+  const sql: string[] = [];
+  return {
+    sql,
+    query: async (text: string) => {
+      sql.push(text);
+      if (/from connectors where name/.test(text) && connectorMode !== null) {
+        return { rows: [{ mode: connectorMode }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  } as unknown as PoolClient & { readonly sql: string[] };
+}
+
+const EMPTY_CLIENT = stubClient('self_serve');
 
 describe('create_connection before any fetch (R-27 predicate, R-01 secret) — no database', () => {
   const WORKSPACE = randomUUID();
@@ -209,6 +225,41 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     );
     expect(fake.targets).toEqual([]);
   });
+
+  it.each([['disabled'], ['platform_preset'], [null]])(
+    'R-40: refuses create_connection and request_connection when the connector is %s, before anything else',
+    async (mode) => {
+      const { fake, fetchImpl } = wire();
+      const client = stubClient(mode);
+      const thrown = await createConnectionHandler(
+        client,
+        WORKSPACE,
+        {
+          kind: 'ssh',
+          target: 'x',
+          endpoint: 'https://gate.owner.example',
+          credentialKind: 'shared',
+          connectionSecret: secrets.mint(WORKSPACE).secret,
+        },
+        { channel: 'human', principalId: OWNER },
+      ).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(ConnectorNotSelfServeError);
+      expect(thrown).toMatchObject({ code: 'connector_not_self_serve', connector: 'ssh', mode });
+      // Nothing but the connector read ran: no catalog read, no salt lookup, no fetch, no gate call.
+      expect(client.sql).toHaveLength(1);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(fake.targets).toEqual([]);
+
+      await expect(
+        requestConnectionHandler(
+          stubClient(mode),
+          WORKSPACE,
+          { kind: 'ssh', target: 'x' },
+          { channel: 'handle', principalId: OWNER },
+        ),
+      ).rejects.toMatchObject({ code: 'connector_not_self_serve' });
+    },
+  );
 });
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -273,6 +324,33 @@ describe.runIf(DATABASE_URL !== undefined)(
           policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
         }),
       });
+    });
+
+    it('R-40: a connector the platform set to disabled refuses create_connection with 409 connector_not_self_serve', async () => {
+      const setSshMode = (mode: string) =>
+        withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query('update connectors set mode = $1 where name = $2', [mode, 'ssh']),
+          { skipRoleSwitch: true },
+        );
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      await setSshMode('disabled');
+      try {
+        await expect(
+          dispatchCapability({ pool }, owner, 'create_connection', {
+            kind: 'ssh',
+            target: 'example-ssh-system',
+            endpoint: 'http://127.0.0.1:1/unused',
+            connectionSecret: newSecret(),
+            credentialKind: 'shared',
+          }),
+        ).rejects.toBeInstanceOf(ConnectorNotSelfServeError);
+        expect(fake.targets).toEqual([]);
+      } finally {
+        await setSshMode('self_serve');
+      }
     });
 
     it('falls back to describe_operations when manifestSource is omitted (cli/ssh, or an already-manifest-loaded http/mcp gate)', async () => {

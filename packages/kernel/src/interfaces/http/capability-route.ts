@@ -29,6 +29,7 @@ import {
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
   ConnectionSecretInvalidError,
+  ConnectorNotSelfServeError,
   CsrfHeaderRequiredError,
   DecisionNotFoundError,
   type DispatchDeps,
@@ -392,6 +393,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // platform-catalog gate instance; the caller's route to it is `enable_gate_instance`.
   if (err instanceof ConnectionEndpointIsPlatformGateError) {
     return { status: 400, code: err.code, message: err.message };
+  }
+  // R-40 (D-19): the platform keeps this kind's connector out of `self_serve` — a platform-state
+  // refusal, the same 409 family as `enable_gate_instance`'s `connector_not_preset`.
+  if (err instanceof ConnectorNotSelfServeError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own
   // services or networks — refused before any fetch (adapters/outbound-target).
