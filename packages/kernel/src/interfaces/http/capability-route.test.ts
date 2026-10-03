@@ -28,6 +28,7 @@ import {
   ExplainNodeNotFoundError,
   FactHasNoEvidenceError,
   FactNotFoundError,
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyViolationError,
@@ -320,6 +321,13 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new OntologyDraftNotFoundError('ont-1', 2));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('not_found');
+  });
+
+  it('OntologyBaseMovedError (publish_ontology_version, R-60) → 409 ontology_base_moved', () => {
+    const mapped = mapCapabilityError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
+    expect(mapped.status).toBe(409);
+    expect(mapped.code).toBe('ontology_base_moved');
+    expect(mapped.message).toMatch(/published version 1.*now 2/);
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {

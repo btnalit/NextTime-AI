@@ -153,6 +153,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个门实例没有待确认的公告清单',
     en: 'This gate instance has no announced manifest awaiting confirmation',
   },
+  // R-60: the ontology draft was proposed against a published version that is no longer the
+  // family's latest — publishing it would drop what the newer version added. Nothing was
+  // published; the proposer proposes again from the current version (or discards this draft).
+  ontology_base_moved: {
+    zh: '这份草稿提出之后，该本体又发布了新版本；本次没有发布任何内容。请基于当前版本重新提议，或丢弃这份草稿',
+    en: 'A newer version of this ontology was published after this draft was proposed — nothing was published. Propose the change again from the current version, or discard this draft',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of
