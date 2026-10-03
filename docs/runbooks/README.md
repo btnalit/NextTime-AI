@@ -36,7 +36,7 @@
 | Runbook | 一句话 |
 |---|---|
 | [`operations.md`](./operations.md) | 服务依赖图、重启/恢复顺序、健康检查清单、日志与指标现状 |
-| [`key-rotation.md`](./key-rotation.md) | 五种密钥/令牌各自的轮换机制：Handle 签名密钥（硬切换）、`internal_token`/`gate_token`（同步重启）、provider key、平台用户 API key（`rotate_api_key`） |
+| [`key-rotation.md`](./key-rotation.md) | 五种密钥/令牌各自的轮换机制：Handle 签名密钥（硬切换）、`internal_token`/`gate_token`（同步重启）、provider key、服务凭证 API key（`rotate_api_key`；人不签发 key） |
 | [`backup-restore.md`](./backup-restore.md) | 每日备份内容、`backup` 容器的 root+单一 capability 权限模型、`scripts/restore.sh` 恢复演练（`scripts/drill-restore.sh` 自动化版本） |
 | [`pi-upgrade.md`](./pi-upgrade.md) | pi 版本升级契约：耦合面清单、单一版本源、升级步骤、漂移检测（`pi-drift.yml`）、回滚 |
 | [`web-console.md`](./web-console.md) | web 控制台每个页面依赖哪些 capability、角色可见性、排障表 |

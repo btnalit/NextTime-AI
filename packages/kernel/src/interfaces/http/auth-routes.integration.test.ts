@@ -3,16 +3,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { withAdminClient } from '../../application/gateway/auth.js';
 import {
   CONSOLE_SESSION_COOKIE,
+  LOGIN_MAX_FAILURES,
+  checkPassword,
   createUser,
   findUserByLogin,
   setUserPassword,
 } from '../../application/identity/index.js';
+import { readPlatformSettings, updatePlatformSettings } from '../../application/platform/index.js';
 import { addPrincipal, createWorkspace } from '../../cli/bootstrap.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
@@ -35,6 +39,28 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
 const CSRF_HEADERS = { 'x-requested-with': 'nexttime', 'content-type': 'application/json' };
+
+/** The shared pool, except that every statement starting with `failingSql` rejects — a simulated
+ *  database fault in exactly one step of a route (R-15). */
+function poolFailingOn(pool: Pool, failingSql: string): PoolLike {
+  return {
+    connect: async (): Promise<PoolClient> => {
+      const client = await pool.connect();
+      return new Proxy(client, {
+        get(target, prop, receiver) {
+          if (prop === 'query') {
+            return (text: unknown, ...rest: unknown[]) =>
+              typeof text === 'string' && text.startsWith(failingSql)
+                ? Promise.reject(new Error('simulated database fault'))
+                : (target.query as (...args: unknown[]) => unknown).call(target, text, ...rest);
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+}
 
 describe.runIf(DATABASE_URL !== undefined)(
   'auth-routes — integration (real Postgres, HTTP via app.inject)',
@@ -180,6 +206,75 @@ describe.runIf(DATABASE_URL !== undefined)(
         const noCookie = await app.inject({ method: 'GET', url: '/api/auth/me' });
         expect(noCookie.statusCode).toBe(401);
       });
+
+      it('R-43: parallel wrong passwords get exactly LOGIN_MAX_FAILURES guesses — the rest are refused as locked, and so is the right password', async () => {
+        const parallelLogin = `r43-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login: parallelLogin, displayName: 'R43 Parallel', password });
+        const attempts = 12;
+
+        const results = await Promise.all(
+          Array.from({ length: attempts }, (_, i) =>
+            checkPassword(pool, parallelLogin, `wrong-password-${i}`),
+          ),
+        );
+
+        const reasons = results.map((result) => (result.ok ? 'ok' : result.reason));
+        expect(reasons.filter((reason) => reason === 'bad_credentials')).toHaveLength(
+          LOGIN_MAX_FAILURES,
+        );
+        expect(reasons.filter((reason) => reason === 'locked')).toHaveLength(
+          attempts - LOGIN_MAX_FAILURES,
+        );
+        expect(await checkPassword(pool, parallelLogin, password)).toEqual({
+          ok: false,
+          reason: 'locked',
+        });
+      }, 30_000);
+    });
+
+    // ---- POST /api/auth/bind-api-key (R-28) -----------------------------------------------------
+
+    describe('POST /api/auth/bind-api-key', () => {
+      const password = 'correct horse battery staple';
+
+      it('moves the key’s membership onto the calling user and leaves a principal.user_rebound audit row {from, to}', async () => {
+        const created = await createWorkspace(pool, `auth-routes-bind-ws-${randomUUID()}`, 'Owner');
+        const formerUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!formerUser) throw new Error('createWorkspace linked no user');
+        const login = `bind-test-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Caller', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(
+          response.json().result.memberships.map((m: { principalId: string }) => m.principalId),
+        ).toContain(created.ownerPrincipalId);
+
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{
+            workspace_id: string | null;
+            actor_user_id: string | null;
+            payload: { workspaceId?: string; from?: string; to?: string };
+          }>(
+            `select workspace_id, actor_user_id, payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows).toHaveLength(1);
+        expect(audit.rows[0]).toMatchObject({
+          workspace_id: null,
+          actor_user_id: caller.id,
+          payload: { workspaceId: created.workspaceId, from: formerUser.id, to: caller.id },
+        });
+      }, 30_000);
     });
 
     // ---- POST /api/auth/claim -------------------------------------------------------------------
@@ -231,6 +326,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(body.result.user.platformRole).toBe('user');
         expect(body.result.user.mustChangePassword).toBe(false);
         expect(response.headers['set-cookie']).toBeTruthy();
+
+        // R-28: the claim left a platform audit row, attributed to the claiming user.
+        const claimed = await withAdminClient(pool, (client) =>
+          client.query<{
+            workspace_id: string | null;
+            actor_user_id: string | null;
+            resource_id: string | null;
+            payload: { workspaceId?: string; login?: string };
+          }>(
+            `select workspace_id, actor_user_id, resource_id, payload from audit_records
+              where action = 'user.identity_claimed' and actor_user_id = $1`,
+            [body.result.user.id],
+          ),
+        );
+        expect(claimed.rows).toHaveLength(1);
+        expect(claimed.rows[0]).toMatchObject({
+          workspace_id: null,
+          resource_id: body.result.user.id,
+          payload: { workspaceId, login },
+        });
 
         const loginResponse = await app.inject({
           method: 'POST',
@@ -719,6 +834,189 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(me.statusCode).toBe(401);
       });
+
+      it('R-15: a revocation that fails (500) still clears the cookie', async () => {
+        const cookie = await loginAs(appWithKeys(), login, password);
+        // Same database, but the one statement that revokes the session fails.
+        const failing = createServer({
+          pool: poolFailingOn(pool, 'update user_sessions set revoked_at = now() where id = $1'),
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => privateKey,
+        });
+
+        const response = await failing.inject({
+          method: 'POST',
+          url: '/api/auth/logout',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: {},
+        });
+        expect(response.statusCode).toBe(500);
+        expect(setCookieHeader(response.headers)).toMatch(
+          new RegExp(`^${CONSOLE_SESSION_COOKIE}=; Max-Age=0;`),
+        );
+      });
+
+      it('R-15: no cookie at all → 200, and the browser is still told to drop it', async () => {
+        const response = await appWithKeys().inject({
+          method: 'POST',
+          url: '/api/auth/logout',
+          headers: CSRF_HEADERS,
+          payload: {},
+        });
+        expect(response.statusCode).toBe(200);
+        expect(setCookieHeader(response.headers)).toMatch(/Max-Age=0/);
+      });
+    });
+
+    // ---- POST /api/auth/password: revocation and policy (R-13) ----------------------------------
+
+    describe('POST /api/auth/password revokes the user’s other credentials (R-13)', () => {
+      const password = 'correct horse battery staple';
+      let workspaceId: string;
+      let ownerPrincipalId: string;
+      let ownerApiKey: string;
+      let login: string;
+
+      beforeAll(async () => {
+        const created = await createWorkspace(pool, `auth-routes-r13-ws-${randomUUID()}`, 'Owner');
+        workspaceId = created.workspaceId;
+        ownerPrincipalId = created.ownerPrincipalId;
+        ownerApiKey = created.apiKey;
+        login = created.ownerLogin;
+        await setPasswordForLogin(login, password);
+      });
+
+      function changePassword(
+        app: ReturnType<typeof createServer>,
+        cookie: string,
+        currentPassword: string,
+        newPassword: string,
+      ) {
+        return app.inject({
+          method: 'POST',
+          url: '/api/auth/password',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { currentPassword, newPassword },
+        });
+      }
+
+      function me(app: ReturnType<typeof createServer>, cookie: string) {
+        return app.inject({
+          method: 'GET',
+          url: '/api/auth/me',
+          headers: { cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+        });
+      }
+
+      it('a new password under the platform minimum is refused (400 weak_password), the same rule the reset applies', async () => {
+        const previous = await withAdminClient(pool, (client) => readPlatformSettings(client));
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { passwordMinLength: 40 }, null),
+        );
+        try {
+          const app = appWithKeys();
+          const cookie = await loginAs(app, login, password);
+          const response = await changePassword(
+            app,
+            cookie,
+            password,
+            'only-thirty-characters-long!!!',
+          );
+          expect(response.statusCode).toBe(400);
+          expect(response.json()).toMatchObject({ ok: false, error: { code: 'weak_password' } });
+        } finally {
+          await withAdminClient(pool, (client) =>
+            updatePlatformSettings(
+              client,
+              { passwordMinLength: previous.settings.passwordMinLength },
+              null,
+            ),
+          );
+        }
+      });
+
+      it('keeps the session making the change and the running Workers; revokes the other console session, the mcp_session and entry Handles and the API key', async () => {
+        const app = appWithKeys();
+        const making = await loginAs(app, login, password);
+        const other = await loginAs(app, login, password);
+        /** A Handle under a fresh session of `kind` on the owner's behalf. */
+        const handleUnder = (kind: 'mcp_session' | 'entry' | 'worker_run') =>
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerPrincipalId },
+            async (client) => {
+              const session = await client.query<{ id: string }>(
+                `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+                 values ($1, $2, $3, $2, 'active') returning id`,
+                [workspaceId, ownerPrincipalId, kind],
+              );
+              const sessionId = session.rows[0]?.id;
+              if (!sessionId) throw new Error('no session row');
+              return issueHandle(client, {
+                sessionId,
+                scope: { capabilities: ['search'], resources: {} },
+                ttlSeconds: 3600,
+                privateKey,
+              });
+            },
+            { skipRoleSwitch: true },
+          );
+        const mcp = await handleUnder('mcp_session');
+        const entry = await handleUnder('entry');
+        const worker = await handleUnder('worker_run');
+        const keyBefore = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${ownerApiKey}`, 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(keyBefore.statusCode).toBe(200);
+
+        const response = await changePassword(
+          app,
+          making,
+          password,
+          'correct horse battery staple, changed',
+        );
+        expect(response.statusCode).toBe(200);
+
+        expect((await me(app, making)).statusCode).toBe(200);
+        expect((await me(app, other)).statusCode).toBe(401);
+        const keyAfter = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${ownerApiKey}`, 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(keyAfter.statusCode).toBe(401);
+        const revokedAt = async (jti: string) =>
+          (
+            await withAdminClient(pool, (client) =>
+              client.query<{ revoked_at: Date | null }>(
+                'select revoked_at from capability_handles where jti = $1',
+                [jti],
+              ),
+            )
+          ).rows[0]?.revoked_at ?? null;
+        expect(await revokedAt(mcp.jti)).not.toBeNull();
+        expect(await revokedAt(entry.jti)).not.toBeNull();
+        // A Worker the person started keeps its LLM access through their own password change.
+        expect(await revokedAt(worker.jti)).toBeNull();
+      }, 30_000);
+
+      it('wrong current passwords count toward the login lockout: the 5th locks, then 423 even with the right one', async () => {
+        const user = `r13-lock-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login: user, displayName: 'R13 Lock', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, user, password);
+        for (let i = 0; i < 5; i++) {
+          const wrong = await changePassword(app, cookie, `wrong-${i}-password`, `${password} new`);
+          expect(wrong.statusCode).toBe(401);
+        }
+        const locked = await changePassword(app, cookie, password, `${password} new`);
+        expect(locked.statusCode).toBe(423);
+        expect(locked.json()).toMatchObject({ ok: false, error: { code: 'locked' } });
+      }, 30_000);
     });
 
     // ---- a disabled user --------------------------------------------------------------------------

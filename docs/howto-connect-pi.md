@@ -23,7 +23,11 @@ Claude Code 经 `/mcp`（MCP streamable HTTP）；`interactive` 模式是让你�
 
 ## 第 1 步：拿一个 Handle
 
-跟 `docs/howto-connect-claude-code.md` 第 1 步完全相同：
+跟 `docs/howto-connect-claude-code.md` 第 1 步完全相同。**控制台（推荐）**：登录后打开「我的账户」页
+（`#/me/account`）的「接 Claude Code / MCP」卡片点「签发」，复制只显示一次的 Handle——不需要 API key。
+
+**命令行（等价）**：仅适用于运维 CLI（`create-workspace`）建出、仍持有 owner API key 的人——人不再
+签发 API key（2026-10-02 复审 D-25）：
 
 ```bash
 curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \

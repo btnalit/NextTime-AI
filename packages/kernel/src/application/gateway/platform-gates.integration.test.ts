@@ -82,6 +82,7 @@ import {
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
+import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
 import { setRequestActionDeps } from './request-action-handler.js';
@@ -1276,6 +1277,58 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('issue_service_handle (R-36)', () => {
+      async function insertServicePrincipal(role: string, displayName: string): Promise<string> {
+        const id = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', $3, $4)`,
+            [workspaceId, id, role, displayName],
+          ),
+        );
+        return id;
+      }
+
+      it('refuses the platform’s internal service Principals (leftover 88, kernel side) and opens no session', async () => {
+        const internalId = await insertServicePrincipal('member', '__members_internal_r36__');
+        const thrown = await callAsOwner('issue_service_handle', {
+          principalId: internalId,
+          scope: ['assert_fact'],
+        }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        expect(thrown).toBeInstanceOf(PrincipalOperationRefusedError);
+        expect((thrown as PrincipalOperationRefusedError).reason).toBe('platform_managed');
+        const sessions = await withAdminClient(pool, (client) =>
+          client.query('select 1 from sessions where workspace_id = $1 and principal_id = $2', [
+            workspaceId,
+            internalId,
+          ]),
+        );
+        expect(sessions.rowCount).toBe(0);
+      });
+
+      it('narrows the requested capabilities by the service Principal’s role, like the other issuers', async () => {
+        const memberId = await insertServicePrincipal('member', 'r36 member key');
+        const builderId = await insertServicePrincipal('builder', 'r36 builder key');
+        const requested = ['search', 'propose_operation'];
+
+        const asMember = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          { principalId: memberId, scope: requested },
+        );
+        expect(asMember.scope.capabilities).toEqual(['search']);
+
+        const asBuilder = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          { principalId: builderId, scope: requested },
+        );
+        expect(new Set(asBuilder.scope.capabilities)).toEqual(new Set(requested));
+      });
+    });
+
     describe('external runtimes', () => {
       it('lists a service Principal’s live session across workspaces and revokes it', async () => {
         const servicePrincipalId = randomUUID();
@@ -1332,6 +1385,53 @@ describe.runIf(DATABASE_URL !== undefined)(
             callAsAdmin('revoke_external_runtime', { workspaceId, sessionId: issued.sessionId }),
           'runtime_not_found',
         );
+      });
+
+      it('R-12 (D-25): a member’s issue_handle MCP session is listed while its Handle lives, and revocable', async () => {
+        const issued = await callAsOwner<{ sessionId: string; handle: string; expiresAt: string }>(
+          'issue_handle',
+          { sessionKind: 'interactive', ttlSeconds: 3600 },
+        );
+        const runtimes =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(runtimes.items.find((r) => r.sessionId === issued.sessionId)).toMatchObject({
+          workspaceId,
+          principalId: ownerPrincipalId,
+          sessionKind: 'mcp_session',
+          expiresAt: issued.expiresAt,
+        });
+
+        // A session opened before issue_handle recorded an expiry is listed only for the longest
+        // a Handle can live (30 days) after it was opened.
+        const legacySessionId = await withAdminClient(pool, async (client) => {
+          const inserted = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status, created_at)
+             values ($1, $2, 'mcp_session', $2, 'active', now() - interval '31 days')
+             returning id`,
+            [workspaceId, ownerPrincipalId],
+          );
+          return inserted.rows[0]?.id;
+        });
+        const withLegacy =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(withLegacy.items.find((r) => r.sessionId === legacySessionId)).toBeUndefined();
+
+        const revoked = await callAsAdmin<{ revoked: boolean }>('revoke_external_runtime', {
+          workspaceId,
+          sessionId: issued.sessionId,
+        });
+        expect(revoked.revoked).toBe(true);
+        const handles = await withAdminClient(pool, (client) =>
+          client.query<{ revoked_at: Date | null }>(
+            'select revoked_at from capability_handles where session_id = $1',
+            [issued.sessionId],
+          ),
+        );
+        expect(handles.rows.length).toBeGreaterThan(0);
+        expect(handles.rows.every((row) => row.revoked_at !== null)).toBe(true);
+        const after =
+          await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
+        expect(after.items.find((r) => r.sessionId === issued.sessionId)).toBeUndefined();
       });
     });
 

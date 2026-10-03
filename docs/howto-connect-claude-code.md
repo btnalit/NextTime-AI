@@ -21,8 +21,9 @@
 制台的实际地址替换下面示例里的 `<host>:8443`）。跳到
 [第 2 步](#第-2-步把-handle-配成-claude-code-的-mcp-server)。
 
-**命令行（等价）**：用你的 API key 调用 `issue_handle`（`sessionKind` 目前只接受字面量
-`'interactive'`）：
+**命令行（等价）**：用一把 owner API key 调用 `issue_handle`（`sessionKind` 目前只接受字面量
+`'interactive'`）。人不再签发 API key（2026-10-02 复审 D-25）——这条只适用于运维 CLI
+（`create-workspace`）建出、仍持有 key 的 owner；其他人用上面的控制台卡片：
 
 ```bash
 curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \
@@ -59,11 +60,10 @@ curl -sk -X POST "https://<host>:8443/api/cap/issue_handle" \
   对，不是"发什么就给什么"。`scope.resources.gatekeeper` 只收窄执行授权，不限制只读调用。
 - `ttlSeconds` 默认 24 小时，上限 30 天（`ISSUE_HANDLE_MAX_TTL_SECONDS`）；到期后这个 Handle 上的
   一切调用都是 401，需要重新走本步骤拿新 Handle（没有"续期"接口）。
-- 撤销：目前没有单独的"撤销这一个 Handle"能力（任务范围内未新增）——`disable_principal`
-  （控制台"成员与授权"页，或直接调用能力）禁用你自己账号会级联撤销，这条路径不适合用来撤销单个
-  开发工具的 Handle；到期前唯一的收紧手段是等 ttl 自然过期，或让 owner 撤销你相关的
-  `connect_gatekeeper` Grant（这会在下一次 `issue_handle` 时收窄新 Handle 的范围，但不撤销已经
-  签发的旧 Handle）。
+- 撤销：每个 `issue_handle` 会话都列在平台管理员的「集成 → 外部运行时」里（`list_external_runtimes`），
+  可以单独吊销（`revoke_external_runtime`，连同其下全部 Handle）。管理员重置你的密码、你自己改密码、
+  停用你的账号或把你移出工作区，也会吊销你在该范围内签出的全部 Handle（2026-10-02 复审 R-12/R-13）。
+  改你的角色同样会吊销它（W5.5）。
 
 ## 第 2 步：把 Handle 配成 Claude Code 的 MCP server
 

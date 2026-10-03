@@ -14,9 +14,14 @@ import type { Role } from '@nexttime/shared';
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { withWorkspace } from '../../adapters/db/pool.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
-import { MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from './password.js';
+import {
+  MIN_PASSWORD_LENGTH,
+  hashPassword,
+  passwordPolicyViolation,
+  verifyPassword,
+} from './password.js';
 
 export type PlatformRole = 'admin' | 'user';
 export type UserStatus = 'active' | 'disabled';
@@ -129,13 +134,15 @@ export function normalizeLogin(login: string): string {
   return normalized;
 }
 
-export function assertPasswordStrength(password: string): void {
-  if (password.length < MIN_PASSWORD_LENGTH || password.length > 256) {
-    throw new IdentityError(
-      'weak_password',
-      `password must be ${MIN_PASSWORD_LENGTH}–256 characters`,
-    );
-  }
+/** `minLength` is the platform setting `passwordMinLength` where the caller has read it (R-13:
+ *  the self-service password change, `set-password`); the bootstrap paths keep the
+ *  {@link MIN_PASSWORD_LENGTH} floor. The rule itself is `passwordPolicyViolation` (password.ts). */
+export function assertPasswordStrength(
+  password: string,
+  minLength: number = MIN_PASSWORD_LENGTH,
+): void {
+  const violation = passwordPolicyViolation(password, minLength);
+  if (violation !== null) throw new IdentityError('weak_password', violation);
 }
 
 /** The backfill's login shape (migration 0019): `<slug of display name>-<8 hex of id>`. Used for
@@ -328,6 +335,22 @@ export async function claimIdentityOnClient(
   );
   const row = updated.rows[0];
   if (!row) throw new IdentityError('user_not_found', 'user not found');
+  // Review 2026-10-02 R-28: an API key just became a platform login — recorded in the same
+  // transaction, attributed to the user who claimed it (the key's holder).
+  await writeAudit(client, {
+    workspaceId: null,
+    actorPrincipalId: null,
+    actorUserId: userId,
+    action: 'user.identity_claimed',
+    resourceType: 'user',
+    resourceId: userId,
+    payload: {
+      workspaceId: input.workspaceId,
+      principalId: input.principalId,
+      login,
+      ...(input.platformRole !== undefined ? { platformRole: input.platformRole } : {}),
+    },
+  });
   return mapUser(row);
 }
 
@@ -394,6 +417,7 @@ export async function bindPrincipalToUser(
       input.principalId,
       input.userId,
     ]);
+    let formerUserDeleted = false;
     if (formerUserId) {
       const stillReferenced = await client.query(
         'select 1 from principals where user_id = $1 limit 1',
@@ -402,28 +426,26 @@ export async function bindPrincipalToUser(
       if ((stillReferenced.rowCount ?? 0) === 0) {
         await client.query('delete from user_sessions where user_id = $1', [formerUserId]);
         await client.query('delete from users where id = $1', [formerUserId]);
+        formerUserDeleted = true;
       }
     }
-  });
-}
-
-export async function setUserPassword(
-  pool: PoolLike,
-  userId: string,
-  password: string,
-  options: { readonly mustChangePassword: boolean },
-): Promise<void> {
-  assertPasswordStrength(password);
-  const passwordHash = await hashPassword(password);
-  await withAdminClient(pool, async (client) => {
-    const result = await client.query(
-      `update users
-         set password_hash = $2, must_change_password = $3, failed_login_count = 0,
-             locked_until = null, updated_at = now()
-       where id = $1`,
-      [userId, passwordHash, options.mustChangePassword],
-    );
-    if ((result.rowCount ?? 0) === 0) throw new IdentityError('user_not_found', 'user not found');
+    // Review 2026-10-02 R-28: a membership moved to another account — recorded in the same
+    // transaction, so "when, and to whom, did this membership move" has an answer even after the
+    // key is rotated. Attributed to the calling user (the account that now owns it).
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId: input.userId,
+      action: 'principal.user_rebound',
+      resourceType: 'principal',
+      resourceId: input.principalId,
+      payload: {
+        workspaceId: input.workspaceId,
+        from: formerUserId,
+        to: input.userId,
+        formerUserDeleted,
+      },
+    });
   });
 }
 
@@ -447,27 +469,6 @@ export async function updateUserDisplayName(
   });
 }
 
-/** `POST /api/auth/password`: verifies the current password, then stores the new one and clears
- *  `must_change_password`. `null` = current password wrong (the route answers 401). */
-export async function changeOwnPassword(
-  pool: PoolLike,
-  userId: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<UserRow | null> {
-  assertPasswordStrength(newPassword);
-  const current = await withAdminClient(pool, async (client) => {
-    const result = await client.query<{ password_hash: string | null }>(
-      'select password_hash from users where id = $1',
-      [userId],
-    );
-    return result.rows[0]?.password_hash ?? null;
-  });
-  if (current === null || !(await verifyPassword(currentPassword, current))) return null;
-  await setUserPassword(pool, userId, newPassword, { mustChangePassword: false });
-  return findUserById(pool, userId);
-}
-
 export const LOGIN_MAX_FAILURES = 5;
 export const LOGIN_LOCK_MINUTES = 5;
 
@@ -479,6 +480,14 @@ export type PasswordCheck =
  * Verifies a login + password with the S4.1 throttle: 5 consecutive failures lock the login for
  * 5 minutes; a success resets the counter. Unknown logins take the same code path length as
  * wrong passwords (a dummy hash verification) so timing does not reveal which logins exist.
+ *
+ * Review 2026-10-02 R-43: every attempt first *reserves* its place in the count — one guarded
+ * `UPDATE … RETURNING` that increments `failed_login_count`, locks the login when the increment
+ * reaches the limit, and matches only while the login is not locked — and is verified only after
+ * that statement committed. The row lock serializes concurrent attempts and each re-checks the
+ * lock after the one before it, so N parallel wrong passwords get exactly `LOGIN_MAX_FAILURES`
+ * guesses, never N (reading "not locked" first and incrementing after the slow hash let every
+ * parallel request through). A verified password gives the reservation back.
  */
 export async function checkPassword(
   pool: PoolLike,
@@ -487,41 +496,41 @@ export async function checkPassword(
 ): Promise<PasswordCheck> {
   const normalized = login.trim().toLowerCase();
   const row = await withAdminClient(pool, async (client) => {
-    const result = await client.query<
-      UserDbRow & { password_hash: string | null; locked_until: Date | null }
-    >(`select ${USER_COLUMNS}, password_hash, locked_until from users where login = $1`, [
-      normalized,
-    ]);
+    const result = await client.query<UserDbRow & { password_hash: string }>(
+      `update users
+          set failed_login_count = failed_login_count + 1,
+              locked_until = case when failed_login_count + 1 >= $2
+                                  then now() + make_interval(mins => $3) else null end,
+              updated_at = now()
+        where login = $1 and password_hash is not null
+          and (locked_until is null or locked_until <= now())
+        returning ${USER_COLUMNS}, password_hash`,
+      [normalized, LOGIN_MAX_FAILURES, LOGIN_LOCK_MINUTES],
+    );
     return result.rows[0];
   });
-  if (!row || row.password_hash === null) {
+  if (!row) {
+    // Locked, unknown, or never given a password: only the first is worth saying.
+    const locked = await withAdminClient(pool, async (client) => {
+      const result = await client.query(
+        `select 1 from users
+          where login = $1 and password_hash is not null and locked_until > now()`,
+        [normalized],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+    if (locked) return { ok: false, reason: 'locked' };
     await verifyPassword(password, DUMMY_HASH); // equalize timing
     return { ok: false, reason: 'bad_credentials' };
   }
-  if (row.locked_until && row.locked_until.getTime() > Date.now()) {
-    return { ok: false, reason: 'locked' };
-  }
   const verified = await verifyPassword(password, row.password_hash);
-  if (!verified) {
-    await withAdminClient(pool, (client) =>
-      client.query(
-        `update users
-           set failed_login_count = failed_login_count + 1,
-               locked_until = case when failed_login_count + 1 >= $2
-                                   then now() + make_interval(mins => $3) else locked_until end,
-               updated_at = now()
-         where id = $1`,
-        [row.id, LOGIN_MAX_FAILURES, LOGIN_LOCK_MINUTES],
-      ),
-    );
-    return { ok: false, reason: 'bad_credentials' };
-  }
-  if (row.status !== 'active') return { ok: false, reason: 'disabled' };
+  if (!verified) return { ok: false, reason: 'bad_credentials' };
   await withAdminClient(pool, (client) =>
     client.query('update users set failed_login_count = 0, locked_until = null where id = $1', [
       row.id,
     ]),
   );
+  if (row.status !== 'active') return { ok: false, reason: 'disabled' };
   return { ok: true, user: mapUser(row) };
 }
 
@@ -604,32 +613,4 @@ export async function findActiveMembership(
 ): Promise<MembershipRow | null> {
   const all = await listActiveMemberships(pool, userId);
   return all.find((m) => m.workspaceId === workspaceId) ?? null;
-}
-
-/** Revokes every workspace session of a user's principals (used when a user is disabled or
- *  logs out everywhere). Runs under `app.platform = on` — the one cross-workspace write this
- *  module makes, on the `sessions_platform_admin` policy. */
-export async function revokeWorkspaceSessionsForUser(
-  pool: PoolLike,
-  userId: string,
-): Promise<number> {
-  return withWorkspace(
-    pool,
-    {
-      workspaceId: '00000000-0000-0000-0000-000000000000',
-      principalId: '00000000-0000-0000-0000-000000000000',
-    },
-    async (client) => {
-      await client.query("select set_config('app.platform', 'on', true)");
-      const result = await client.query(
-        `update sessions s
-            set status = 'revoked', expires_at = now()
-           from principals p
-          where p.workspace_id = s.workspace_id and p.id = s.principal_id
-            and p.user_id = $1 and s.status = 'active'`,
-        [userId],
-      );
-      return result.rowCount ?? 0;
-    },
-  );
 }

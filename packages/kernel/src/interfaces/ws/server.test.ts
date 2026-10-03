@@ -1104,6 +1104,59 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('R-12: reset_user_password also closes an API-key socket of the user’s membership — the key is cleared', async () => {
+        const admin = await newConsoleUser('admin');
+        const user = await newConsoleUser();
+        const memberKey = `rev-member-key-${randomUUID()}`;
+        await insertMember({ userId: user.id, apiKey: memberKey });
+        const keyClient = await apiKeySocket(memberKey);
+
+        await dispatchCapability({ pool }, platformAdmin(admin), 'reset_user_password', {
+          userId: user.id,
+        });
+
+        await keyClient.waitForClose();
+        expect(keyClient.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+      });
+
+      it('R-13: a self-service password change closes the user’s other console sockets and API-key sockets, never its own', async () => {
+        const user = await newConsoleUser();
+        const memberKey = `rev-member-key-${randomUUID()}`;
+        await insertMember({ userId: user.id, apiKey: memberKey });
+        const makingToken = await loginForCookie(user.login);
+        const making = await cookieSocket(makingToken);
+        const other = await cookieSocket(await loginForCookie(user.login));
+        const keyClient = await apiKeySocket(memberKey);
+
+        const response = await revApp.inject({
+          method: 'POST',
+          url: '/api/auth/password',
+          headers: {
+            cookie: `${CONSOLE_SESSION_COOKIE}=${makingToken}`,
+            'x-requested-with': 'nexttime',
+            'content-type': 'application/json',
+          },
+          payload: { currentPassword: password, newPassword: `${password}, changed` },
+        });
+        expect(response.statusCode).toBe(200);
+
+        await other.waitForClose();
+        await keyClient.waitForClose();
+        for (const client of [other, keyClient]) {
+          expect(client.unsolicitedErrors).toContainEqual({
+            code: WS_ERROR_CODES.UNAUTHORIZED,
+            message: 'unauthorized',
+          });
+        }
+        const chats = await making.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        expect(making.unsolicitedErrors).toEqual([]);
+        making.close();
+      });
+
       it('set_user_status → disabled closes the user’s sockets on every credential, API key included', async () => {
         const admin = await newConsoleUser('admin');
         const user = await newConsoleUser();

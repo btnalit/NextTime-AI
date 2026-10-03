@@ -359,18 +359,27 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(AlreadyMemberError);
     });
 
-    it('rotate_api_key: self-service invalidates the old key immediately and issues a new one', async () => {
+    it('rotate_api_key never mints a key for a person (D-25): refused self-service and for an owner, the legacy key untouched', async () => {
       const oldKey = `key-${randomUUID()}`;
       const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Carol', 'human', oldKey);
       const memberCaller = humanCaller(workspaceId, memberId, 'member');
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const before = await readPrincipalState(workspaceId, memberId);
 
-      const rotated = (await dispatchCapability({ pool }, memberCaller, 'rotate_api_key', {
-        principalId: memberId,
-      })) as { principalId: string; apiKey: string };
+      await expectRefused(
+        () =>
+          dispatchCapability({ pool }, memberCaller, 'rotate_api_key', { principalId: memberId }),
+        'human_api_key',
+      );
+      // L8a-11: an owner minting a member's key could act as that member.
+      await expectRefused(
+        () => dispatchCapability({ pool }, owner, 'rotate_api_key', { principalId: memberId }),
+        'human_api_key',
+      );
 
-      expect(rotated.principalId).toBe(memberId);
-      expect(await authenticateHuman(pool, oldKey)).toBeNull();
-      expect((await authenticateHuman(pool, rotated.apiKey))?.principal.id).toBe(memberId);
+      expect(await readPrincipalState(workspaceId, memberId)).toEqual(before);
+      // A key the operator CLI provisioned keeps working until a reset or disable clears it.
+      expect((await authenticateHuman(pool, oldKey))?.principal.id).toBe(memberId);
     });
 
     it('rotate_api_key: a non-owner cannot rotate another principal’s key (403)', async () => {
