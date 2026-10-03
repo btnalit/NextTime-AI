@@ -30,6 +30,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { readConnectorMode } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { platformGateIdForEndpoint } from './gate-target.js';
@@ -78,6 +79,15 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * was minted for this workspace, stores only its non-secret salt on the Gatekeeper, and presents the
  * re-derived secret on every call (`gate-target.ts` decides; `gate_token` goes only to catalog
  * instances). `rotate_connection_secret` replaces the salt.
+ *
+ * **Connector three-state (R-40, maintainer decision D-19)**: a workspace may connect a system of
+ * its own only while the platform keeps the generic connector for that `kind` in `self_serve`
+ * (design `platform-admin-design.md` "三态：禁用 / 可自连 / 平台预置"). `disabled` closes it to new
+ * connections; `platform_preset` means the platform runs that kind's instances and a workspace
+ * enables them from the catalog (`enable_gate_instance`). `assertConnectorSelfServe` refuses both
+ * `create_connection` and `request_connection` otherwise, before any other check or I/O — 409
+ * `connector_not_self_serve`. Existing connections are untouched (D-19: the mode gates new
+ * connections; the connector's Operation deny list is the cut-off for existing ones).
  *
  * **Outbound-target predicate (R-27)**: `endpoint` and `manifestSource` are owner-supplied URLs the
  * kernel itself fetches from inside the platform's networks, so both pass `@nexttime/shared`'s
@@ -187,6 +197,38 @@ export class ConnectionSecretConflictError extends Error {
   }
 }
 
+/** R-40 (D-19): the generic connector for the connection's `kind` is not `self_serve` (or has no
+ *  row) — the platform administrator has disabled self-connection for that kind, or runs it as a
+ *  platform preset. Mapped to 409 `connector_not_self_serve` by interfaces/http/capability-route. */
+export class ConnectorNotSelfServeError extends Error {
+  readonly code = 'connector_not_self_serve' as const;
+  readonly connector: string;
+  readonly mode: string | null;
+  constructor(connector: string, mode: string | null) {
+    const why =
+      mode === 'platform_preset'
+        ? 'the platform provides it as a preset — enable one of its instances from the catalog (enable_gate_instance)'
+        : mode === 'disabled'
+          ? 'the platform administrator has disabled it'
+          : 'no such connector is configured';
+    super(
+      `"${connector}" systems cannot be connected by a workspace itself right now: ${why}. Ask the platform administrator if you need it.`,
+    );
+    this.name = 'ConnectorNotSelfServeError';
+    this.connector = connector;
+    this.mode = mode;
+  }
+}
+
+/** R-40 (D-19): see the module doc comment ("Connector three-state"). */
+async function assertConnectorSelfServe(
+  client: PoolClient,
+  kind: ConnectionRequestKind,
+): Promise<void> {
+  const mode = await readConnectorMode(client, kind);
+  if (mode !== 'self_serve') throw new ConnectorNotSelfServeError(kind, mode);
+}
+
 /**
  * Refuses an endpoint whose `host` matches any catalog instance's (`gate_instances.endpoint`, every
  * status — a `disabled` instance is exactly one the administrator does not want reached) — the
@@ -210,6 +252,8 @@ export const requestConnectionHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { kind, target } = params as { kind: ConnectionRequestKind; target: string };
+  // R-40: a request the owner could never complete is refused up front, with the reason.
+  await assertConnectorSelfServe(client, kind);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   const requesterKind: PrincipalKind = ctx?.channel === 'human' ? 'human' : 'agent';
 
@@ -330,6 +374,8 @@ export const createConnectionHandler: CapabilityHandler = async (
   const params = rawParams as CreateConnectionParams;
   const current = requireDeps();
   const { gatekeeperClient, connectionSecrets, fetchImpl } = current;
+  // R-40 (D-19): first — whether this workspace may self-connect this kind at all.
+  await assertConnectorSelfServe(client, params.kind);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const effectiveCredentialKind: 'shared' | 'connected_account' =

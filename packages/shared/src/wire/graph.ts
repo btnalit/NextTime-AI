@@ -141,6 +141,11 @@ const ExplainFactRefSchema = z
   .object({
     id: z.string(),
     linkType: z.string(),
+    /** R-47: the Fact's own two Objects and its value (the `FactWire` fields of the same names) —
+     *  so a reader comparing two Facts, e.g. the two sides of a Conflict, sees what each says. */
+    sourceObjectId: z.string(),
+    targetObjectId: z.string(),
+    properties: z.record(z.string(), z.unknown()),
     epistemicStatus: z.string(),
     assertedByPrincipal: ExplainPrincipalRefSchema,
     verifiedByPrincipal: ExplainPrincipalRefSchema,

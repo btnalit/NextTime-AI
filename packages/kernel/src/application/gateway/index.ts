@@ -202,6 +202,7 @@ export {
   ConnectionManifestFetchError,
   ConnectionSecretConflictError,
   ConnectionSecretInvalidError,
+  ConnectorNotSelfServeError,
   connectGatekeeperHandler,
   createConnectionHandler,
   listConnectionRequestsHandler,

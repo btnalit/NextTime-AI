@@ -297,7 +297,7 @@ describe('PlatformIntegrationsPage', () => {
     expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(false);
   });
 
-  it('switching disabled for a connector already in use is an irreversible confirm requiring the connector name', async () => {
+  it('R-41: disabling a connector in use says existing workspaces keep calling it; without the opt-in only the mode changes', async () => {
     const http = scriptedHttp({
       list_connectors: () => ({ items: [connector({ mode: 'self_serve', instanceCount: 3 })] }),
       set_connector_mode: (params) => {
@@ -314,18 +314,82 @@ describe('PlatformIntegrationsPage', () => {
     });
 
     const confirm = await screen.findByTestId('connector-mode-confirm-docker');
-    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
-    const confirmButton = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
-    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
-      target: { value: 'docker' },
-    });
-    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
-    expect(confirmButton.disabled).toBe(false);
-    fireEvent.click(confirmButton);
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    // The corrected copy: the mode gates new use only; the deny list is the real cut-off.
+    expect(confirm.textContent).toContain('已经启用它的工作区照常可以调用');
+    expect(confirm.textContent).not.toContain('都拿不到');
+    const denyAll = within(confirm).getByTestId(
+      'connector-mode-deny-all-checkbox-docker',
+    ) as HTMLInputElement;
+    expect(denyAll.checked).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
+    );
+    expect(http.calls.some((call) => call.name === 'list_gate_instances')).toBe(false);
+  });
+
+  it('R-41: ticking "also disable all operations" sends every announced and already-refused name with the mode, in one call', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [
+          connector({ mode: 'self_serve', instanceCount: 2, disabledOperations: ['old_op'] }),
+        ],
+      }),
+      list_gate_instances: (params) => {
+        expect(params).toEqual({ connector: 'docker' });
+        return {
+          items: [
+            gateInstance(),
+            gateInstance({
+              gateId: 'gate-2',
+              operations: [
+                {
+                  name: 'container_list',
+                  mode: 'observe',
+                  blastRadius: 'low',
+                  autoApprovable: true,
+                  readOnlyHint: true,
+                  destructiveHint: false,
+                  idempotentHint: true,
+                },
+                {
+                  name: 'container_restart',
+                  mode: 'execute',
+                  blastRadius: 'medium',
+                  autoApprovable: false,
+                  readOnlyHint: false,
+                  destructiveHint: false,
+                  idempotentHint: true,
+                },
+              ],
+            }),
+          ],
+        };
+      },
+      set_connector_mode: (params) => {
+        expect(params).toEqual({
+          name: 'docker',
+          mode: 'disabled',
+          disabledOperations: ['container_list', 'container_restart', 'old_op'],
+        });
+        return connector({ mode: 'disabled', instanceCount: 2 });
+      },
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    const row = within(table).getByTestId('connector-row-docker');
+    fireEvent.change(within(row).getByTestId('connector-mode-docker'), {
+      target: { value: 'disabled' },
+    });
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    fireEvent.click(within(confirm).getByTestId('connector-mode-deny-all-checkbox-docker'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'set_connector_mode')).toHaveLength(1),
     );
   });
 
@@ -344,6 +408,8 @@ describe('PlatformIntegrationsPage', () => {
 
     const confirm = await screen.findByTestId('connector-mode-confirm-docker');
     expect(confirm.getAttribute('data-tier')).toBe('medium');
+    // Nothing to cut off: no instance, so no deny-all opt-in either.
+    expect(within(confirm).queryByTestId('connector-mode-deny-all-docker')).toBeNull();
   });
 
   it('expanding a connector row, unchecking an operation (allow-list UX) and confirming posts disabledOperations only', async () => {
