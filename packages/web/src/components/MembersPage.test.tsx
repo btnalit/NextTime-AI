@@ -340,7 +340,27 @@ describe('MembersPage', () => {
 
     expect(within(drawer).getByLabelText(/角色/)).toBeTruthy();
     expect(within(drawer).getByRole('button', { name: /轮换/ })).toBeTruthy();
+    expect(within(drawer).queryByTestId('principal-no-person-key')).toBeNull();
     expect(within(drawer).getByRole('button', { name: '停用成员' })).toBeTruthy();
+  });
+
+  it('D-25: a person’s drawer offers no "Rotate API key" — one line says why — and keeps role / disable', async () => {
+    const bob = principal({ hasApiKey: true });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [bob] }),
+      rotate_api_key: () => {
+        throw new Error('rotate_api_key must never be offered for a person');
+      },
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+
+    expect(within(drawer).queryByRole('button', { name: /轮换/ })).toBeNull();
+    expect(within(drawer).getByTestId('principal-no-person-key').textContent).toContain('密码');
+    expect(within(drawer).getByLabelText(/角色/)).toBeTruthy();
+    expect(within(drawer).getByRole('button', { name: '停用成员' })).toBeTruthy();
+    expect(http.calls.some((call) => call.name === 'rotate_api_key')).toBe(false);
   });
 
   it('R-06: promoting a service credential to owner opens the irreversible confirm; cancelling calls nothing', async () => {

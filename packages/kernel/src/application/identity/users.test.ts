@@ -56,4 +56,15 @@ describe('assertPasswordStrength', () => {
   it('accepts an 8-character password', () => {
     expect(() => assertPasswordStrength('12345678')).not.toThrow();
   });
+
+  it('R-13: applies the platform minimum when the caller passes one', () => {
+    expect(() => assertPasswordStrength('a'.repeat(11), 12)).toThrow(IdentityError);
+    expect(() => assertPasswordStrength('a'.repeat(12), 12)).not.toThrow();
+  });
+
+  it('R-13: a configured minimum below the floor never lowers it; 256 is the ceiling', () => {
+    expect(() => assertPasswordStrength('1234567', 4)).toThrow(IdentityError);
+    expect(() => assertPasswordStrength('a'.repeat(257))).toThrow(IdentityError);
+    expect(() => assertPasswordStrength('a'.repeat(256))).not.toThrow();
+  });
 });

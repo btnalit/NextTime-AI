@@ -18,16 +18,26 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { addPrincipal } from '../../cli/bootstrap.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
-import { CONSOLE_SESSION_COOKIE, createPlatformAdmin, createUser } from '../identity/index.js';
+import {
+  CONSOLE_SESSION_COOKIE,
+  createPlatformAdmin,
+  createUser,
+  findUserByLogin,
+} from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition } from '../worker/definitions.js';
 import { proposeProcedure } from '../worker/procedures.js';
 import { proposeSkill } from '../worker/skills.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
-import { generateApiKey, hashApiKey, withAdminClient } from './auth.js';
+import {
+  generateApiKey,
+  hashApiKey,
+  lookupPrincipalByApiKeyHash,
+  withAdminClient,
+} from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { PlatformAdminError } from './platform-handlers.js';
@@ -222,6 +232,67 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(thrown).toBeInstanceOf(PlatformAdminError);
       expect((thrown as PlatformAdminError).code).toBe(code);
+    }
+
+    /** R-12: a Handle minted under a fresh session of `kind` on `principalId`'s behalf — the
+     *  `capability_handles` row is what revocation must reach (Handle verification never reads
+     *  `sessions.status`). An entry session is opened `starting`, as agent-host-runtime.ts does. */
+    async function issueSessionHandle(
+      ws: string,
+      principalId: string,
+      kind: 'entry' | 'mcp_session' | 'worker_run',
+    ): Promise<{ readonly sessionId: string; readonly jti: string }> {
+      return withAdminClient(pool, async (client) => {
+        const session = await client.query<{ id: string }>(
+          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, $3, $2, $4) returning id`,
+          [ws, principalId, kind, kind === 'entry' ? 'starting' : 'active'],
+        );
+        const sessionId = session.rows[0]?.id;
+        if (!sessionId) throw new Error('issueSessionHandle: no session row');
+        const issued = await issueHandle(client, {
+          sessionId,
+          scope: { capabilities: ['search'], resources: {} },
+          ttlSeconds: 3600,
+          privateKey,
+        });
+        return { sessionId, jti: issued.jti };
+      });
+    }
+
+    async function handleRevoked(jti: string): Promise<boolean> {
+      const result = await withAdminClient(pool, (client) =>
+        client.query<{ revoked_at: Date | null }>(
+          'select revoked_at from capability_handles where jti = $1',
+          [jti],
+        ),
+      );
+      const row = result.rows[0];
+      return row !== undefined && row.revoked_at !== null;
+    }
+
+    async function sessionStatus(sessionId: string): Promise<string | undefined> {
+      const result = await withAdminClient(pool, (client) =>
+        client.query<{ status: string }>('select status from sessions where id = $1', [sessionId]),
+      );
+      return result.rows[0]?.status;
+    }
+
+    /** Gives a membership Principal an API key the way the operator CLI does (a key a person
+     *  still holds from before D-25) and returns the plaintext. */
+    async function giveLegacyApiKey(ws: string, principalId: string): Promise<string> {
+      const apiKey = generateApiKey();
+      await withAdminClient(pool, (client) =>
+        client.query(
+          'update principals set api_key_hash = $3 where workspace_id = $1 and id = $2',
+          [ws, principalId, hashApiKey(apiKey)],
+        ),
+      );
+      return apiKey;
+    }
+
+    async function apiKeyWorks(apiKey: string): Promise<boolean> {
+      return (await lookupPrincipalByApiKeyHash(pool, hashApiKey(apiKey))) !== null;
     }
 
     beforeAll(async () => {
@@ -508,6 +579,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         // round-trips above — past Vitest's 5s default.
       }, 30_000);
 
+      it('R-12 (D-25): disabling revokes every Handle of the user’s memberships, the entry session’s included, and clears their API keys for good', async () => {
+        const user = await createUser(pool, {
+          login: `disabled-keys-${randomUUID().slice(0, 8)}`,
+          displayName: 'Disabled Key Holder',
+        });
+        const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        const apiKey = await giveLegacyApiKey(workspaceId, membership.principalId);
+        const entry = await issueSessionHandle(workspaceId, membership.principalId, 'entry');
+        const mcp = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+
+        await callAsAdmin<UserWire>('set_user_status', { userId: user.id, status: 'disabled' });
+
+        expect(await handleRevoked(entry.jti)).toBe(true);
+        expect(await handleRevoked(mcp.jti)).toBe(true);
+        // `starting` (an entry session never advances) is revoked like `active`.
+        expect(await sessionStatus(entry.sessionId)).toBe('revoked');
+        expect(await sessionStatus(mcp.sessionId)).toBe('revoked');
+
+        // Re-enabling the user does not bring the key back.
+        await callAsAdmin<UserWire>('set_user_status', { userId: user.id, status: 'active' });
+        expect(await apiKeyWorks(apiKey)).toBe(false);
+      });
+
       it('refuses disabling a workspace’s last human owner (R-06: last_owner); allowed once a second human owner exists', async () => {
         const ws = randomUUID();
         await withAdminClient(pool, (client) =>
@@ -581,6 +679,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(withNew.statusCode).toBe(200);
         expect(withNew.json().result.user.mustChangePassword).toBe(true);
         // Two scrypt hashes and three verifies — past Vitest's 5s default on a CI runner.
+      }, 30_000);
+
+      it('R-12 (D-25): revokes every Handle of the user’s memberships — entry, mcp_session, worker_run — and clears a CLI-issued API key; another member’s are untouched', async () => {
+        // The operator CLI still gives a person an API key (the acceptance suites rely on it).
+        const holder = await addPrincipal(pool, workspaceId, 'CLI Key Holder', 'member');
+        const bystander = await addPrincipal(pool, workspaceId, 'CLI Bystander', 'member');
+        expect(await apiKeyWorks(holder.apiKey)).toBe(true);
+        const user = await findUserByLogin(pool, holder.login);
+        if (!user) throw new Error('addPrincipal linked no user');
+        const held = [
+          await issueSessionHandle(workspaceId, holder.principalId, 'entry'),
+          await issueSessionHandle(workspaceId, holder.principalId, 'mcp_session'),
+          await issueSessionHandle(workspaceId, holder.principalId, 'worker_run'),
+        ];
+        const bystanderHandle = await issueSessionHandle(
+          workspaceId,
+          bystander.principalId,
+          'mcp_session',
+        );
+
+        await callAsAdmin('reset_user_password', { userId: user.id });
+
+        for (const handle of held) {
+          expect(await handleRevoked(handle.jti)).toBe(true);
+          expect(await sessionStatus(handle.sessionId)).toBe('revoked');
+        }
+        expect(await apiKeyWorks(holder.apiKey)).toBe(false);
+        expect(await handleRevoked(bystanderHandle.jti)).toBe(false);
+        expect(await sessionStatus(bystanderHandle.sessionId)).toBe('active');
+        expect(await apiKeyWorks(bystander.apiKey)).toBe(true);
       }, 30_000);
     });
 
@@ -711,6 +839,61 @@ describe.runIf(DATABASE_URL !== undefined)(
           'last_owner',
         );
       });
+
+      it('R-12 (D-25): remove_membership revokes that membership’s Handles and API key only — the user’s other membership and console session stay', async () => {
+        const otherWorkspaceId = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query('insert into workspaces (id, name) values ($1, $2)', [
+            otherWorkspaceId,
+            `remove-scope-${otherWorkspaceId.slice(0, 8)}`,
+          ]),
+        );
+        const login = `remove-scope-${randomUUID().slice(0, 8)}`;
+        const user = await createUser(pool, {
+          login,
+          displayName: 'Two Memberships',
+          password: PASSWORD,
+        });
+        const removed = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId: otherWorkspaceId,
+          role: 'member',
+        });
+        const kept = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        await giveLegacyApiKey(otherWorkspaceId, removed.principalId);
+        const keptKey = await giveLegacyApiKey(workspaceId, kept.principalId);
+        const removedHandle = await issueSessionHandle(
+          otherWorkspaceId,
+          removed.principalId,
+          'mcp_session',
+        );
+        const keptHandle = await issueSessionHandle(workspaceId, kept.principalId, 'mcp_session');
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, PASSWORD);
+
+        await callAsAdmin('remove_membership', { userId: user.id, workspaceId: otherWorkspaceId });
+
+        expect(await handleRevoked(removedHandle.jti)).toBe(true);
+        const removedRow = await withAdminClient(pool, (client) =>
+          client.query<{ api_key_hash: string | null }>(
+            'select api_key_hash from principals where workspace_id = $1 and id = $2',
+            [otherWorkspaceId, removed.principalId],
+          ),
+        );
+        expect(removedRow.rows[0]?.api_key_hash).toBeNull();
+        expect(await handleRevoked(keptHandle.jti)).toBe(false);
+        expect(await apiKeyWorks(keptKey)).toBe(true);
+        const me = await app.inject({
+          method: 'GET',
+          url: '/api/auth/me',
+          headers: { cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+        });
+        expect(me.statusCode).toBe(200);
+      }, 30_000);
 
       it('last_owner counts people only (R-06): a service owner never stands in for the last human owner', async () => {
         // A bare workspace row is enough — memberships are all these two capabilities touch.

@@ -12,8 +12,11 @@ import { HttpClient } from '../lib/http-client.js';
 import { hrefs, navigate } from '../lib/router.js';
 import {
   clearApiKey,
+  clearSignOutPending,
+  isSignOutPending,
   loadApiKey,
   loadSelectedWorkspaceId,
+  markSignOutPending,
   saveApiKey,
   saveSelectedWorkspaceId,
 } from '../lib/session.js';
@@ -67,7 +70,10 @@ export interface SessionMachineOptions {
  *   1. `GET /api/auth/me`. 200 → cookie session (`proceedAfterCookieAuth` below decides
  *      changePassword / noWorkspace / platform-only / open-a-workspace from there). 401 (or any
  *      other failure — fails open rather than showing nothing forever) → `login`. Either way,
- *      also try the stored API key auto-connect — the two channels are independent.
+ *      also try the stored API key auto-connect — the two channels are independent. R-15: when
+ *      this browser's last sign-out never reached the kernel (`lib/session.ts`
+ *      `isSignOutPending`), boot retries `POST /api/auth/logout` instead and goes to `login`
+ *      without asking `/me` — a cookie the user signed out of is never resumed.
  *   2. Workspace selection (`proceedAfterCookieAuth`): auto-select when there is exactly one
  *      active membership; else the last-selected workspace from this tab's sessionStorage if it is
  *      still a membership; else (deviation from a literal "none" — there is no separate workspace-
@@ -255,6 +261,8 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
       memberships: readonly WireMembership[],
       replacing?: WsClient,
     ): Promise<void> => {
+      // R-15: a fresh sign-in (login, claim) replaced the cookie a failed sign-out left behind.
+      clearSignOutPending();
       // Landing on a pre-session state while a session is still published (C1: the claim form
       // runs inside a live API-key session, and the claimed user may have no membership yet, or
       // a temporary password) must tear that session down, or `App`'s render switch — which
@@ -357,6 +365,18 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     if (bootAttempted.current) return;
     bootAttempted.current = true;
     void (async () => {
+      // R-15: this browser signed out but the kernel never confirmed it — retry the revoke, and
+      // never resume the cookie it may still hold, whether or not the retry gets through.
+      if (isSignOutPending()) {
+        try {
+          await apiLogout();
+          clearSignOutPending();
+        } catch {
+          // Still pending: the next load retries again.
+        }
+        await bootUnauthenticated();
+        return;
+      }
       try {
         const me = await getMe();
         await proceedAfterCookieAuth(me.user, me.memberships);
@@ -381,11 +401,16 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     setSession(null);
     setWorkspaceCookie(null);
     setPreSession({ kind: 'login' });
+    // R-15: signed out here at once, whatever the request below does. The session cookie is
+    // HttpOnly — only the kernel's logout response can clear it — so until that response arrives
+    // the browser is marked: if it never does, the next load retries the revoke instead of
+    // resuming the cookie (boot, above).
+    markSignOutPending();
     try {
       await apiLogout();
+      clearSignOutPending();
     } catch {
-      // Best-effort — server-side revoke (§7.11) is not required for the client to consider
-      // itself signed out; the cookie is cleared client-side above either way.
+      // Left pending on purpose — see above.
     }
   }, [session]);
 

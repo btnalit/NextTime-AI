@@ -197,16 +197,22 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
 
     // The session row is a real, freshly-created kind='mcp_session' row (§9.2 "外部运行时").
     const sessionRow = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-      client.query<{ kind: string; on_behalf_of: string; principal_id: string }>(
-        'select kind, on_behalf_of, principal_id from sessions where id = $1',
-        [result.sessionId],
-      ),
+      client.query<{
+        kind: string;
+        on_behalf_of: string;
+        principal_id: string;
+        expires_at: Date | null;
+      }>('select kind, on_behalf_of, principal_id, expires_at from sessions where id = $1', [
+        result.sessionId,
+      ]),
     );
     expect(sessionRow.rows[0]).toMatchObject({
       kind: 'mcp_session',
       on_behalf_of: ownerId,
       principal_id: ownerId,
     });
+    // R-12: the session expires with its Handle, so the external-runtime inventory drops it then.
+    expect(sessionRow.rows[0]?.expires_at?.toISOString()).toBe(result.expiresAt);
 
     // The minted token is a real, verifiable Handle — authenticateHandle round-trips it against
     // the same keypair the composition root configured above.

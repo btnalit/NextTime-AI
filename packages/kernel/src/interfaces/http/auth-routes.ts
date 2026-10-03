@@ -48,10 +48,13 @@ import {
  *                                    and the browser gets a console session (self-service
  *                                    migration for a member who has only a key; once only)
  *   POST /api/auth/login             {login, password} → cookie + {user, memberships}
- *   POST /api/auth/logout            revoke the cookie's user_sessions row, clear the cookie
+ *   POST /api/auth/logout            revoke the cookie's user_sessions row, clear the cookie (on
+ *                                    every outcome, R-15)
  *   GET  /api/auth/me                {user, memberships}
  *   PATCH /api/auth/me               {displayName}
- *   POST /api/auth/password          {currentPassword, newPassword} → clears must_change_password
+ *   POST /api/auth/password          {currentPassword, newPassword} → clears must_change_password;
+ *                                    revokes the user's other console sessions, membership API
+ *                                    keys and Handles except running Workers' (R-13)
  *
  * Envelope: the same `{ok:true,result}` / `{ok:false,error:{code,message}}` shape as
  * `/api/cap/*` (packages/shared/src/http.ts), so the web client parses one shape. Every
@@ -325,7 +328,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         `send X-Requested-With: ${CSRF_HEADER_VALUE}`,
       );
     }
-    // Idempotent: an expired or already-revoked cookie still gets cleared from the browser.
+    // Review 2026-10-02 R-15: the browser drops the cookie on every outcome from here on — an
+    // expired or already-revoked cookie (idempotent 200), and a revocation that failed (500): the
+    // user asked to sign out, and keeping the HttpOnly cookie would hand the session to whoever
+    // next opens this browser. Set before the attempt so no error path can skip it.
+    reply.header('Set-Cookie', clearConsoleSessionCookie());
     try {
       const user = await resolveConsoleUser(request.headers.cookie, deps);
       await revokeUserSession(deps.pool, user.consoleSessionId);
@@ -334,7 +341,6 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     } catch (err) {
       if (!(err instanceof UnauthorizedError)) return mapAuthError(request, reply, err);
     }
-    reply.header('Set-Cookie', clearConsoleSessionCookie());
     return { ok: true, result: { loggedOut: true } };
   });
 
@@ -388,14 +394,27 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
     try {
       const consoleUser = await resolveConsoleUser(request.headers.cookie, deps);
-      const user = await changeOwnPassword(
-        deps.pool,
-        consoleUser.id,
-        body.data.currentPassword,
-        body.data.newPassword,
-      );
-      if (!user) return fail(reply, 401, 'bad_credentials', 'current password is incorrect');
-      return { ok: true, result: { user: toWireUser(user) } };
+      const outcome = await changeOwnPassword(deps.pool, {
+        userId: consoleUser.id,
+        consoleSessionId: consoleUser.consoleSessionId,
+        currentPassword: body.data.currentPassword,
+        newPassword: body.data.newPassword,
+      });
+      if (!outcome.ok) {
+        // R-13: wrong current passwords count toward the login lockout (identity/credentials.ts).
+        if (outcome.reason === 'locked') {
+          return fail(reply, 423, 'locked', 'too many failed attempts; try again in a few minutes');
+        }
+        return fail(reply, 401, 'bad_credentials', 'current password is incorrect');
+      }
+      // R-13: the change revoked the user's other console sessions, the memberships' API keys and
+      // their Handles (running Workers' excepted); close the open /ws sockets too — every socket
+      // but this console session's own.
+      for (const consoleSessionId of outcome.revoked.consoleSessionIds) {
+        publishSessionKick({ consoleSessionId });
+      }
+      publishSessionKick({ apiKeyPrincipalIds: outcome.revoked.principalIds });
+      return { ok: true, result: { user: toWireUser(outcome.user) } };
     } catch (err) {
       return mapAuthError(request, reply, err);
     }

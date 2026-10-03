@@ -1,6 +1,8 @@
 export {
+  MAX_PASSWORD_LENGTH,
   MIN_PASSWORD_LENGTH,
   hashPassword,
+  passwordPolicyViolation,
   verifyPassword,
 } from './password.js';
 export {
@@ -10,7 +12,6 @@ export {
   LOGIN_PATTERN,
   assertPasswordStrength,
   bindPrincipalToUser,
-  changeOwnPassword,
   checkPassword,
   claimIdentity,
   claimIdentityOnClient,
@@ -25,8 +26,6 @@ export {
   listActiveMemberships,
   listMemberships,
   normalizeLogin,
-  revokeWorkspaceSessionsForUser,
-  setUserPassword,
   updateUserDisplayName,
 } from './users.js';
 export type {
@@ -62,6 +61,13 @@ export {
   verifyConsoleSessionToken,
 } from './console-session.js';
 export type { ConsoleSessionClaims, UserSessionRow } from './console-session.js';
+export { changeOwnPassword, revokeUserCredentials, setUserPassword } from './credentials.js';
+export type {
+  ChangeOwnPasswordInput,
+  ChangeOwnPasswordOutcome,
+  RevokeUserCredentialsOptions,
+  UserCredentialRevocation,
+} from './credentials.js';
 export {
   DEFAULT_INITIAL_ADMIN_PASSWORD_FILE,
   INITIAL_ADMIN_DISPLAY_NAME,

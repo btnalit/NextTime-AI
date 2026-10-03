@@ -9,8 +9,9 @@ import type { WsSessionEndReason } from '../lib/ws-client.js';
  * useSessionMachine.test.tsx: R-16 (review 2026-10-02) — where the session machine goes when the
  * kernel ends a published session for good. `-32001` / HTTP `unauthorized` → login, with the
  * socket closed (the client itself no longer reconnects — lib/ws-client.test.ts); `-32002` →
- * re-read `/api/auth/me` and choose a workspace again, not login. `lib/auth-api`, `lib/ws-client`
- * and `lib/http-client` are stubbed at the module boundary, as in App.test.tsx.
+ * re-read `/api/auth/me` and choose a workspace again, not login. R-15: a Sign out the kernel never
+ * confirmed is still a sign-out on every later load. `lib/auth-api`, `lib/ws-client` and
+ * `lib/http-client` are stubbed at the module boundary, as in App.test.tsx.
  */
 
 const BOB: WireUser = {
@@ -104,6 +105,7 @@ async function bootCookieSession(memberships: readonly WireMembership[]) {
 
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
   window.location.hash = '';
   vi.clearAllMocks();
   stubs.sockets.length = 0;
@@ -200,5 +202,85 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
 
     expect(result.current.session?.selectedWorkspaceId).toBe('ws-2');
     expect(lastSocket().closed).toBe(false);
+  });
+});
+
+describe('useSessionMachine: Sign out when the kernel cannot be reached (R-15)', () => {
+  function bootFresh() {
+    return renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+  }
+
+  async function signOutWhileKernelUnreachable() {
+    const hook = await bootCookieSession([membership('ws-1')]);
+    const socket = lastSocket();
+    stubs.logout.mockRejectedValueOnce(new Error('network down'));
+
+    await act(() => hook.result.current.cookieLogout());
+
+    // Signed out here at once, whatever the request did.
+    expect(hook.result.current.session).toBeNull();
+    expect(hook.result.current.preSession).toEqual({ kind: 'login' });
+    expect(socket.closed).toBe(true);
+    hook.unmount();
+    vi.clearAllMocks();
+  }
+
+  it('the next load retries the revoke and never resumes the cookie, until a retry gets through', async () => {
+    await signOutWhileKernelUnreachable();
+
+    // Still unreachable: back to login, /api/auth/me never asked.
+    stubs.logout.mockRejectedValueOnce(new Error('network down'));
+    const second = bootFresh();
+    await waitFor(() => expect(second.result.current.preSession).toEqual({ kind: 'login' }));
+    expect(stubs.logout).toHaveBeenCalledTimes(1);
+    expect(stubs.getMe).not.toHaveBeenCalled();
+    expect(second.result.current.session).toBeNull();
+    second.unmount();
+    vi.clearAllMocks();
+
+    // The kernel is back: the retry gets through, and it is still login, not the old session.
+    const third = bootFresh();
+    await waitFor(() => expect(third.result.current.preSession).toEqual({ kind: 'login' }));
+    expect(stubs.logout).toHaveBeenCalledTimes(1);
+    expect(stubs.getMe).not.toHaveBeenCalled();
+    third.unmount();
+    vi.clearAllMocks();
+
+    // From then on, an ordinary boot.
+    const fourth = await bootCookieSession([membership('ws-1')]);
+    expect(stubs.logout).not.toHaveBeenCalled();
+    expect(stubs.getMe).toHaveBeenCalledTimes(1);
+    fourth.unmount();
+  });
+
+  it('signing in again after a failed sign-out replaces the cookie: the next load is an ordinary boot', async () => {
+    await signOutWhileKernelUnreachable();
+
+    stubs.logout.mockRejectedValueOnce(new Error('network down'));
+    const second = bootFresh();
+    await waitFor(() => expect(second.result.current.preSession).toEqual({ kind: 'login' }));
+    // The login page's password form succeeded (a fresh cookie).
+    await act(() => second.result.current.proceedAfterCookieAuth(BOB, [membership('ws-1')]));
+    expect(second.result.current.session).not.toBeNull();
+    second.unmount();
+    vi.clearAllMocks();
+
+    const third = await bootCookieSession([membership('ws-1')]);
+    expect(stubs.logout).not.toHaveBeenCalled();
+    third.unmount();
+  });
+
+  it('a sign-out the kernel confirms leaves nothing behind', async () => {
+    const hook = await bootCookieSession([membership('ws-1')]);
+    await act(() => hook.result.current.cookieLogout());
+    expect(stubs.logout).toHaveBeenCalledTimes(1);
+    hook.unmount();
+    vi.clearAllMocks();
+
+    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    const next = bootFresh();
+    await waitFor(() => expect(next.result.current.preSession).toEqual({ kind: 'login' }));
+    expect(stubs.getMe).toHaveBeenCalledTimes(1);
+    expect(stubs.logout).not.toHaveBeenCalled();
   });
 });

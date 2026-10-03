@@ -49,6 +49,10 @@ export interface PrincipalDetailProps {
  * owner goes through the same `kit/confirm tier="irreversible"` as creating one
  * (`CreatePrincipalForm`), so "create as member, then promote" cannot skip it; promoting a person,
  * or demoting anyone, saves straight away as before.
+ *
+ * Review 2026-10-02 D-25 (L8a-11): "Rotate API key" is a service credential's control only — the
+ * kernel refuses to mint a key for a person (a key the owner could use to act as the member), so a
+ * human member's drawer says why there is no button instead.
  */
 export function PrincipalDetail({
   http,
@@ -275,7 +279,14 @@ export function PrincipalDetail({
 
             <div className="row-wrap">
               <StatusChip machine="role" status={principal.role} size="s" />
-              {rotated ? null : (
+              {principal.kind === 'human' ? (
+                <span className="text-3 text-small" data-testid="principal-no-person-key">
+                  {t(
+                    '成员用密码登录，不签发 API key；自动化请用服务凭证。',
+                    'People sign in with a password and get no API key — use a service credential for automation.',
+                  )}
+                </span>
+              ) : rotated ? null : (
                 <Button
                   variant="secondary"
                   size="s"

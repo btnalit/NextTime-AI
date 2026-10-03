@@ -14,9 +14,13 @@ import type { Role } from '@nexttime/shared';
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { withWorkspace } from '../../adapters/db/pool.js';
 import { withAdminClient } from '../gateway/auth.js';
-import { MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from './password.js';
+import {
+  MIN_PASSWORD_LENGTH,
+  hashPassword,
+  passwordPolicyViolation,
+  verifyPassword,
+} from './password.js';
 
 export type PlatformRole = 'admin' | 'user';
 export type UserStatus = 'active' | 'disabled';
@@ -129,13 +133,15 @@ export function normalizeLogin(login: string): string {
   return normalized;
 }
 
-export function assertPasswordStrength(password: string): void {
-  if (password.length < MIN_PASSWORD_LENGTH || password.length > 256) {
-    throw new IdentityError(
-      'weak_password',
-      `password must be ${MIN_PASSWORD_LENGTH}–256 characters`,
-    );
-  }
+/** `minLength` is the platform setting `passwordMinLength` where the caller has read it (R-13:
+ *  the self-service password change, `set-password`); the bootstrap paths keep the
+ *  {@link MIN_PASSWORD_LENGTH} floor. The rule itself is `passwordPolicyViolation` (password.ts). */
+export function assertPasswordStrength(
+  password: string,
+  minLength: number = MIN_PASSWORD_LENGTH,
+): void {
+  const violation = passwordPolicyViolation(password, minLength);
+  if (violation !== null) throw new IdentityError('weak_password', violation);
 }
 
 /** The backfill's login shape (migration 0019): `<slug of display name>-<8 hex of id>`. Used for
@@ -407,26 +413,6 @@ export async function bindPrincipalToUser(
   });
 }
 
-export async function setUserPassword(
-  pool: PoolLike,
-  userId: string,
-  password: string,
-  options: { readonly mustChangePassword: boolean },
-): Promise<void> {
-  assertPasswordStrength(password);
-  const passwordHash = await hashPassword(password);
-  await withAdminClient(pool, async (client) => {
-    const result = await client.query(
-      `update users
-         set password_hash = $2, must_change_password = $3, failed_login_count = 0,
-             locked_until = null, updated_at = now()
-       where id = $1`,
-      [userId, passwordHash, options.mustChangePassword],
-    );
-    if ((result.rowCount ?? 0) === 0) throw new IdentityError('user_not_found', 'user not found');
-  });
-}
-
 export async function updateUserDisplayName(
   pool: PoolLike,
   userId: string,
@@ -445,27 +431,6 @@ export async function updateUserDisplayName(
     if (!row) throw new IdentityError('user_not_found', 'user not found');
     return mapUser(row);
   });
-}
-
-/** `POST /api/auth/password`: verifies the current password, then stores the new one and clears
- *  `must_change_password`. `null` = current password wrong (the route answers 401). */
-export async function changeOwnPassword(
-  pool: PoolLike,
-  userId: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<UserRow | null> {
-  assertPasswordStrength(newPassword);
-  const current = await withAdminClient(pool, async (client) => {
-    const result = await client.query<{ password_hash: string | null }>(
-      'select password_hash from users where id = $1',
-      [userId],
-    );
-    return result.rows[0]?.password_hash ?? null;
-  });
-  if (current === null || !(await verifyPassword(currentPassword, current))) return null;
-  await setUserPassword(pool, userId, newPassword, { mustChangePassword: false });
-  return findUserById(pool, userId);
 }
 
 export const LOGIN_MAX_FAILURES = 5;
@@ -604,32 +569,4 @@ export async function findActiveMembership(
 ): Promise<MembershipRow | null> {
   const all = await listActiveMemberships(pool, userId);
   return all.find((m) => m.workspaceId === workspaceId) ?? null;
-}
-
-/** Revokes every workspace session of a user's principals (used when a user is disabled or
- *  logs out everywhere). Runs under `app.platform = on` — the one cross-workspace write this
- *  module makes, on the `sessions_platform_admin` policy. */
-export async function revokeWorkspaceSessionsForUser(
-  pool: PoolLike,
-  userId: string,
-): Promise<number> {
-  return withWorkspace(
-    pool,
-    {
-      workspaceId: '00000000-0000-0000-0000-000000000000',
-      principalId: '00000000-0000-0000-0000-000000000000',
-    },
-    async (client) => {
-      await client.query("select set_config('app.platform', 'on', true)");
-      const result = await client.query(
-        `update sessions s
-            set status = 'revoked', expires_at = now()
-           from principals p
-          where p.workspace_id = s.workspace_id and p.id = s.principal_id
-            and p.user_id = $1 and s.status = 'active'`,
-        [userId],
-      );
-      return result.rowCount ?? 0;
-    },
-  );
 }

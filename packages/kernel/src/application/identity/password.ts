@@ -19,6 +19,23 @@ const PREFIX = 'scrypt';
 /** Minimum accepted password length (S4.1). Enforced at the application boundary, not here. */
 export const MIN_PASSWORD_LENGTH = 8;
 
+/** The longest password any path accepts. */
+export const MAX_PASSWORD_LENGTH = 256;
+
+/** Review 2026-10-02 R-13: the one password rule — at least `minLength` (the platform setting
+ *  `passwordMinLength`, never below {@link MIN_PASSWORD_LENGTH}) and at most
+ *  {@link MAX_PASSWORD_LENGTH} characters. The violation message, or `null` when it passes. Each
+ *  caller wraps the message in its own error class (identity's `IdentityError`, the platform
+ *  plane's `PlatformAdminError`), so the rule lives in one place and the error shapes stay as they
+ *  were. */
+export function passwordPolicyViolation(password: string, minLength: number): string | null {
+  const min = Math.max(minLength, MIN_PASSWORD_LENGTH);
+  if (password.length < min || password.length > MAX_PASSWORD_LENGTH) {
+    return `password must be ${min}–${MAX_PASSWORD_LENGTH} characters`;
+  }
+  return null;
+}
+
 function scryptAsync(
   password: string,
   salt: Buffer,
