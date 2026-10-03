@@ -523,6 +523,98 @@ describe('WsClient', () => {
     });
   });
 
+  describe('R-63: resynced after a reconnect', () => {
+    it('fires once after a reconnect re-authenticates — never on the first connect', async () => {
+      const { client, sockets } = harness;
+      const onResynced = vi.fn();
+      client.onResynced(onResynced);
+      const socket1 = await connectAndAuth(client, sockets);
+      expect(onResynced).not.toHaveBeenCalled();
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      // Not before the new socket is authenticated — a read issued then could still miss a push.
+      expect(onResynced).not.toHaveBeenCalled();
+      respond(socket2, sentFrame(socket2, 0), { authenticated: true });
+      await flush();
+
+      expect(onResynced).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not fire when the reconnect’s authenticate is refused (the session ended)', async () => {
+      const { client, sockets } = harness;
+      const onResynced = vi.fn();
+      client.onResynced(onResynced);
+      const socket1 = await connectAndAuth(client, sockets);
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      respondError(socket2, sentFrame(socket2, 0), { code: -32001, message: 'unauthorized' });
+      await flush();
+      await wait(0);
+      await flush();
+
+      expect(onResynced).not.toHaveBeenCalled();
+      expect(client.getStatus()).toBe('closed');
+    });
+
+    it('a throwing listener neither stops the others nor fails the reconnect', async () => {
+      const { client, sockets } = harness;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const second = vi.fn();
+      client.onResynced(() => {
+        throw new Error('boom');
+      });
+      client.onResynced(second);
+      const socket1 = await connectAndAuth(client, sockets);
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      respond(socket2, sentFrame(socket2, 0), { authenticated: true });
+      await flush();
+
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(client.getStatus()).toBe('connected');
+      expect(sockets).toHaveLength(2);
+      warn.mockRestore();
+    });
+
+    it('stops delivering after unsubscribe', async () => {
+      const { client, sockets } = harness;
+      const onResynced = vi.fn();
+      const unsubscribe = client.onResynced(onResynced);
+      const socket1 = await connectAndAuth(client, sockets);
+      unsubscribe();
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      respond(socket2, sentFrame(socket2, 0), { authenticated: true });
+      await flush();
+
+      expect(onResynced).not.toHaveBeenCalled();
+    });
+  });
+
   describe('connection status', () => {
     it('reports connecting -> connected -> reconnecting -> connected across an unexpected drop', async () => {
       const { client, sockets } = harness;

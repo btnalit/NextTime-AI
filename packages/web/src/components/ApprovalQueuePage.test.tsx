@@ -61,16 +61,27 @@ function historyOf(
   return () => Promise.resolve({ items: rows });
 }
 
-function pushSourceWithUpdated(): PushSource & { emitUpdated: (event: ActionUpdatedPush) => void } {
+function pushSourceWithUpdated(): PushSource & {
+  emitUpdated: (event: ActionUpdatedPush) => void;
+  resync: () => void;
+} {
   const listeners = new Set<(event: ActionUpdatedPush) => void>();
+  const resynced = new Set<() => void>();
   return {
     ...SILENT_PUSH_SOURCE,
     onActionUpdated: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
     },
+    onResynced: (handler) => {
+      resynced.add(handler);
+      return () => resynced.delete(handler);
+    },
     emitUpdated: (event) => {
       for (const fn of listeners) fn(event);
+    },
+    resync: () => {
+      for (const fn of resynced) fn();
     },
   };
 }
@@ -255,6 +266,43 @@ describe('ApprovalQueuePage state machine', () => {
       ).toBe('approved'),
     );
     expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(1);
+  });
+});
+
+describe('ApprovalQueuePage after a WS reconnect (R-63)', () => {
+  it('re-reads the queue (a request raised during the outage appears) and the open request (decided elsewhere meanwhile → no longer decidable)', async () => {
+    const pushes = pushSourceWithUpdated();
+    const raisedDuringOutage = row({ id: 'ar-2', requestedAt: '2026-09-03T01:00:00.000Z' });
+    const http = scriptedHttp(
+      [() => Promise.resolve([row()]), () => Promise.resolve([raisedDuringOutage])],
+      {
+        // Another operator approved ar-1 while this socket was down; its action.updated is lost.
+        get_action: () => Promise.resolve(row({ status: 'approved' })),
+      },
+    );
+    render(<ApprovalQueuePage http={http} pushes={pushes} selectedId="ar-1" onSelect={vi.fn()} />);
+    const detail = await screen.findByTestId('approval-detail');
+    expect(within(detail).getByTestId('approval-approve')).toBeTruthy();
+
+    act(() => pushes.resync());
+
+    await waitFor(() =>
+      expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(2),
+    );
+    // Only the request raised during the outage is pending now — ar-1 (selected) left the queue.
+    await waitFor(() => expect(screen.getAllByTestId('approval-row')).toHaveLength(1));
+    expect(screen.getByTestId('approval-row').getAttribute('aria-current')).not.toBe('true');
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId('approval-detail')
+          .querySelector('[data-testid="approval-status"]')
+          ?.getAttribute('data-status'),
+      ).toBe('approved'),
+    );
+    expect(
+      within(screen.getByTestId('approval-detail')).queryByTestId('approval-approve'),
+    ).toBeNull();
   });
 });
 

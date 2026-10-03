@@ -33,6 +33,10 @@ export interface PlatformWorkspacesPageProps {
   readonly memberships: readonly WireMembership[];
   /** Switch the session to `workspaceId` and land on its 成员与授权 page. */
   readonly onOpenWorkspaceConfig: (workspaceId: string) => void;
+  /** R-64: owners were delegated or a workspace created — either may have added the signed-in
+   *  administrator to a workspace, and `memberships` is otherwise a login-time snapshot, so the
+   *  session re-reads `/api/auth/me` (the "打开工作区配置" entry and the switcher follow at once). */
+  readonly onMembershipsChanged?: () => void;
   /** The location hash at mount (defaults to `window.location.hash`) — the overview banner's
    *  `?residue=1` preselects the residue view (`lib/platform-workspaces.ts`). */
   readonly initialHash?: string;
@@ -121,6 +125,7 @@ export function PlatformWorkspacesPage({
   http,
   memberships,
   onOpenWorkspaceConfig,
+  onMembershipsChanged,
   initialHash,
 }: PlatformWorkspacesPageProps) {
   const t = useT();
@@ -173,6 +178,7 @@ export function PlatformWorkspacesPage({
     workspaces.mutate((data) => ({ ...data, items: [...data.items, created] }));
     setPanel({ kind: 'workspace', workspaceId: created.id });
     void workspaces.reload();
+    onMembershipsChanged?.();
   }
 
   function handlePurged(result: PurgeWorkspaceResultWire): void {
@@ -370,7 +376,10 @@ export function PlatformWorkspacesPage({
             models={catalog}
             modelsReady={models.state.status === 'ready'}
             onChanged={replaceWorkspace}
-            onDelegated={() => void workspaces.reload()}
+            onDelegated={() => {
+              void workspaces.reload();
+              onMembershipsChanged?.();
+            }}
             onOpenWorkspaceConfig={
               memberOf.has(openWorkspace.id)
                 ? () => onOpenWorkspaceConfig(openWorkspace.id)

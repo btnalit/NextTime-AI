@@ -149,6 +149,44 @@ describe('useCapability', () => {
     );
   });
 
+  it('R-63: with reloadOn set, a WS reconnect (resynced) re-fetches too — pushes sent during the outage were lost; without reloadOn it does not', async () => {
+    const resynced = new Set<() => void>();
+    const pushes: PushSource = {
+      ...SILENT_PUSH_SOURCE,
+      onResynced: (handler) => {
+        resynced.add(handler);
+        return () => resynced.delete(handler);
+      },
+    };
+    const following = scriptedCaller([
+      () => Promise.resolve({ items: [] }),
+      () => Promise.resolve({ items: ['raised during the outage'] }),
+    ]);
+    const plain = scriptedCaller([() => Promise.resolve({ id: 'w' })]);
+    const { result } = renderHook(
+      () => ({
+        following: useCapability(following, 'list_pending', undefined, {
+          pushes,
+          reloadOn: ['actionPending'],
+        }),
+        plain: useCapability(plain, 'get_workspace', undefined, { pushes }),
+      }),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() => expect(result.current.following.state.status).toBe('ready'));
+    await waitFor(() => expect(result.current.plain.state.status).toBe('ready'));
+
+    act(() => {
+      for (const fn of resynced) fn();
+    });
+    await waitFor(() =>
+      expect(
+        result.current.following.state.status === 'ready' && result.current.following.state.data,
+      ).toEqual({ items: ['raised during the outage'] }),
+    );
+    expect(plain.calls).toHaveLength(1);
+  });
+
   it('invalidateCapability drops the cache so the next mount reloads instead of showing stale data', async () => {
     const caller = scriptedCaller([
       () => Promise.resolve({ id: 'v1' }),

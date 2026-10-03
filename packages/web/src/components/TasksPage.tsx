@@ -118,6 +118,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   );
 
   useEffect(() => pushes.onTaskUpdated((event) => void refreshOne(event.id)), [pushes, refreshOne]);
+  // R-63: `task.updated` pushes sent while the socket was down are lost — after a reconnect the
+  // whole list is re-read, not just the rows a push would have named.
+  useEffect(() => pushes.onResynced(() => void tasks.reload()), [pushes, tasks.reload]);
 
   const allRows = tasks.state.status === 'ready' ? tasks.state.data : [];
   const rows = useMemo(() => {
