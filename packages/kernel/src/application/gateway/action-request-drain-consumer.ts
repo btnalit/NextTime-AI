@@ -29,6 +29,15 @@ import type { WithTransactionFn } from './action-executor.js';
  * error (a genuine DB/gate fault) is still passed to `onError` (design doc §13 "outbox 派发器崩溃
  * ... 消费者幂等" — a real failure is retried on the next `ActionRequestUpdated`/periodic tick,
  * never silently dropped).
+ *
+ * The drain itself runs in the background (R-52, 2026-10-02 review): the consumer only reads the
+ * row's Gatekeeper and *starts* the drain, then returns. The outbox dispatcher is one serial loop
+ * that delivers each row inside an open transaction, so awaiting the drain here — a gate `apply`
+ * can take up to its 60 s budget per queued row — held that transaction open and stalled delivery
+ * of every other event platform-wide (a `container.restart` blocking `TurnStarted` in every
+ * workspace). A crash mid-drain loses nothing: the row stays `approved`/`auto_approved` (or
+ * `executing`, for the stale-executing reaper) and the periodic drain tick picks it up. The
+ * drain's own failures reach `onError` exactly as before.
  */
 
 type ActionRequestUpdatedEvent = Extract<DomainEvent, { type: 'ActionRequestUpdated' }>;
@@ -57,14 +66,17 @@ export function registerActionRequestDrainConsumer(
         (client) => getActionRequest(client, event.workspaceId, event.actionRequestId),
       );
       if (!actionRequest) return;
-      await drainer.drainGatekeeper(
-        event.workspaceId,
-        SYSTEM_ACTOR_PLACEHOLDER,
-        actionRequest.gatekeeperId,
-      );
+      // Started, not awaited (R-52 — see this file's doc comment); its outcome goes to `onError`.
+      drainer
+        .drainGatekeeper(event.workspaceId, SYSTEM_ACTOR_PLACEHOLDER, actionRequest.gatekeeperId)
+        .catch(reportDrainError);
     } catch (err) {
-      if (err instanceof IllegalTransition) return; // lost a benign race — see this file's doc.
-      onError(err);
+      reportDrainError(err);
     }
   });
+
+  function reportDrainError(err: unknown): void {
+    if (err instanceof IllegalTransition) return; // lost a benign race — see this file's doc.
+    onError(err);
+  }
 }
