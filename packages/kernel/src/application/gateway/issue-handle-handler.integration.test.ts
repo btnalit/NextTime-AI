@@ -14,6 +14,7 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
+import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ENTRY_CEILING_CAPABILITIES,
   HANDLE_SIGNING_ALG,
@@ -221,6 +222,42 @@ describe.runIf(DATABASE_URL !== undefined)('issue_handle (integration, real Post
     expect(claims.obo).toBe(ownerId);
     expect(claims.sid).toBe(result.sessionId);
     expect(claims.scope.resources.gatekeeper).toEqual([gatekeeperId]);
+  });
+
+  it('R-37 / D-20: the ceiling is narrowed like the entry Handle — a gate the owner excluded on My Agent, or the AgentPolicy caps out, is not carried', async () => {
+    const owner = humanCaller(workspaceId, ownerId, 'owner');
+    const issue = async () =>
+      (
+        (await dispatchCapability({ pool }, owner, 'issue_handle', {
+          sessionKind: 'interactive',
+        })) as { scope: { resources: Record<string, string[]> } }
+      ).scope.resources.gatekeeper;
+
+    await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      setAgentProfile(client, workspaceId, ownerId, ownerId, {
+        excludedGatekeepers: [gatekeeperId],
+      }),
+    );
+    try {
+      expect(await issue()).toBeUndefined();
+    } finally {
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        setAgentProfile(client, workspaceId, ownerId, ownerId, { excludedGatekeepers: [] }),
+      );
+    }
+
+    await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [randomUUID()] }),
+    );
+    try {
+      expect(await issue()).toBeUndefined();
+    } finally {
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [] }),
+      );
+    }
+
+    expect(await issue()).toEqual([gatekeeperId]);
   });
 
   it('a requested scope narrower than the ceiling is honoured exactly (intersection, not "ignore and give everything")', async () => {

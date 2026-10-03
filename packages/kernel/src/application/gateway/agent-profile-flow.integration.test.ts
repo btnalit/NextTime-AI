@@ -841,5 +841,51 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(ownerRow.rows[0]?.revoked_at).toBeNull(); // the owner's own Handle is untouched
       });
     });
+
+    describe('set_agent_policy — change propagation (R-37 / D-20)', () => {
+      it('a gate-cap change revokes every member’s entry-session Handle; a change that leaves the cap alone revokes none', async () => {
+        const policyWs = await adminInsertWorkspace('agent-profile-policy-revoke-workspace');
+        const policyOwnerId = await adminInsertPrincipal(policyWs, 'owner', 'PolicyOwnerRevoke');
+        const memberId = await adminInsertPrincipal(policyWs, 'member', 'Wendy');
+        const owner = humanCaller(policyWs, policyOwnerId, 'owner');
+        const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+          crv: 'Ed25519',
+          extractable: true,
+        });
+        const revokedAt = async (jti: string) =>
+          (
+            await pool.query<{ revoked_at: Date | null }>(
+              'select revoked_at from capability_handles where jti = $1',
+              [jti],
+            )
+          ).rows[0]?.revoked_at ?? null;
+
+        const before = {
+          member: await issueEntryHandle(policyWs, memberId, keyPair),
+          owner: await issueEntryHandle(policyWs, policyOwnerId, keyPair),
+        };
+        await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          maxPromptAddendumChars: 1500,
+        });
+        expect(await revokedAt(before.member.jti)).toBeNull();
+        expect(await revokedAt(before.owner.jti)).toBeNull();
+
+        await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          allowedGatekeepers: [randomUUID()],
+        });
+        expect(await revokedAt(before.member.jti)).not.toBeNull();
+        expect(await revokedAt(before.owner.jti)).not.toBeNull();
+
+        // Re-sending the same cap is not a change.
+        const after = await issueEntryHandle(policyWs, memberId, keyPair);
+        const unchanged = (await dispatchCapability({ pool }, owner, 'get_agent_policy', {})) as {
+          allowedGatekeepers: string[];
+        };
+        await dispatchCapability({ pool }, owner, 'set_agent_policy', {
+          allowedGatekeepers: [...unchanged.allowedGatekeepers],
+        });
+        expect(await revokedAt(after.jti)).toBeNull();
+      });
+    });
   },
 );

@@ -14,8 +14,10 @@ import {
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
+  narrowScopeToExecutableGates,
   observeRefusal,
   operationPlatformStatus,
+  readExecuteAccess,
   readGateLinkPoliciesForWorkspace,
   readObserveExclusions,
 } from '../gates/index.js';
@@ -238,9 +240,11 @@ function toWireOperation(
  *     or the member's own AgentProfile excludes, or an Operation on the platform deny list, is not
  *     listed. This is what makes an ungranted system visible to the entry agent, a Worker and an
  *     MCP client alike — without it enforcement would allow a call no tool exists for.
- *   - **execute-class** (unchanged): the published execute Operations of the Gatekeepers in the
- *     Handle's own `resources.gatekeeper` (Grant-derived, attenuated per Worker), minus the platform
- *     deny list (`operationPlatformStatus`).
+ *   - **execute-class**: the published execute Operations of the Gatekeepers in the Handle's own
+ *     `resources.gatekeeper` (Grant-derived, attenuated per Worker) that the member can still act
+ *     on now — narrowed to their current `effective.enabledGatekeepers` exactly as `request_action`
+ *     narrows it (R-37 / D-20, application/gates/execute-access.ts) — minus the platform deny list
+ *     (`operationPlatformStatus`).
  *
  *  Human callers (no Handle, `ctx?.scope` undefined) get an empty list — this describes a Handle.
  *
@@ -257,7 +261,11 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
   const principalId = ctx?.principalId;
   if (!ctx?.scope || !principalId) return { result: { items: [] } };
 
-  const executeGatekeepers = new Set(ctx.scope.resources.gatekeeper ?? []);
+  const executeScope = narrowScopeToExecutableGates(
+    ctx.scope,
+    await readExecuteAccess(client, workspaceId, principalId),
+  );
+  const executeGatekeepers = new Set(executeScope.resources.gatekeeper ?? []);
   const gates = await listGatekeepers(client, workspaceId);
   const records = await listPublishedOperationsForGatekeepers(
     client,

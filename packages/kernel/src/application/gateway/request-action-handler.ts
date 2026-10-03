@@ -44,8 +44,10 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
+  narrowScopeToExecutableGates,
   observeRefusal,
   operationPlatformStatus,
+  readExecuteAccess,
   readGateLinkPolicy,
   readObserveExclusions,
 } from '../gates/index.js';
@@ -1011,8 +1013,9 @@ function assertRoleMayReachGatekeeper(role: Role): void {
 /** The `gatekeeper` resource-scope key `evaluate()` reads (see `governance/policy/engine.ts`'s
  *  own `GATEKEEPER_RESOURCE_SCOPE_KEY` doc comment) — defense-in-depth alongside
  *  `assertHumanGatekeeperAccess` above (the real gate for a human caller), not a replacement for
- *  it: a Handle caller's own scope is returned unchanged (its Handle already carries the correct,
- *  attenuated scope). A human caller's scope is built from their real active `'gatekeeper'` Grants
+ *  it: a Handle caller's own scope is returned unchanged here (its Handle carries the attenuated
+ *  scope it was minted with) and narrowed to the caller's current executable gates before the
+ *  governed path (R-37 / D-20, `governedScope` in `requestActionHandler`). A human caller's scope is built from their real active `'gatekeeper'` Grants
  *  (`listActiveGrantResourceScopes`, item 1's own instruction) rather than synthesized to always
  *  cover whichever Gatekeeper is being asked about (the pre-fix behavior, which made policy's own
  *  `deny` decision unreachable for any human). `owner` is unconstrained — represented here by
@@ -1257,6 +1260,23 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     );
   }
 
+  // R-37 / D-20: a Handle's gates were fixed when it was minted; execution is re-checked against
+  // what `onBehalfOf` may act on *now* — their current `effective.enabledGatekeepers` (Grants
+  // minus My Agent exclusions, capped by the AgentPolicy; for an owner, the Handle's own gates
+  // minus the same exclusions) — the rule `execution_readiness` reports. A gate dropped since the
+  // Handle was minted falls outside the requester scope, so `evaluate()` records a `deny`
+  // ActionRequest and the caller gets 403 (application/gates/execute-access.ts). The human
+  // channel's scope is already built from current Grants (`resolveRequesterScope`) and the
+  // person's own console calls are not their agent's (AgentProfile / AgentPolicy configure the
+  // agent), so it is unchanged.
+  const governedScope =
+    channel === 'handle'
+      ? narrowScopeToExecutableGates(
+          requesterScope,
+          await readExecuteAccess(client, workspaceId, onBehalfOf),
+        )
+      : requesterScope;
+
   // S3.13 / R-21 (decision D-16): `onBehalfOf`'s resolved `effective.autoApproveLow` — the same
   // predicate (`resolveAutoApproveLow`) the "当前生效" read model shows. The workspace AgentPolicy's
   // `allowMemberAutoApproveLow: false` is an enforced narrowing for every requester; the
@@ -1281,7 +1301,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       operationParams: resolvedParams,
       onBehalfOf,
       actorRuntime,
-      requesterScope,
+      requesterScope: governedScope,
       blastRadius: 'medium',
       autoApprovable: false,
       awaitDecision: true,
@@ -1310,7 +1330,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     onBehalfOf,
     actorRuntime,
     principalAutoApproveLowEnabled,
-    requesterScope,
+    requesterScope: governedScope,
     blastRadius: operation.blast_radius,
     autoApprovable: operation.auto_approvable && !mcpTrustBlocked,
     mcpTrustBlocked,
