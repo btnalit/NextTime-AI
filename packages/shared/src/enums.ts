@@ -180,6 +180,15 @@ export const ENTRY_AGENT_SESSION_STATUS_VALUES = [
 export type EntryAgentSessionStatus = (typeof ENTRY_AGENT_SESSION_STATUS_VALUES)[number];
 export const EntryAgentSessionStatusSchema = asEnum(ENTRY_AGENT_SESSION_STATUS_VALUES);
 
+/**
+ * Turn status (design doc §9.2 DDL `activities(kind='agent_turn', status in (...))`, §13 "Turn 非法
+ * 转移被拒"): `running → completed | interrupted | failed`, every end state terminal. The same three
+ * end states a `turnEnded` runtime event and the `TurnCompleted` outbox event carry.
+ */
+export const TURN_STATUS_VALUES = ['running', 'completed', 'interrupted', 'failed'] as const;
+export type TurnStatus = (typeof TURN_STATUS_VALUES)[number];
+export const TurnStatusSchema = asEnum(TURN_STATUS_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

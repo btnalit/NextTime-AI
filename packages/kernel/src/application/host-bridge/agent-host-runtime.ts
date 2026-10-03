@@ -1,4 +1,5 @@
 import type { Role } from '@nexttime/shared';
+import { AGENT_HOST_SPAWN_TIMEOUT_MS, AGENT_HOST_TURN_STARTUP_MS } from '@nexttime/shared';
 import type {
   AgentHostToKernelFrame,
   AgentRuntimeEventWire,
@@ -89,7 +90,14 @@ import type {
  */
 
 const DEFAULT_ENTRY_HANDLE_TTL_SECONDS = 24 * 60 * 60;
-const DEFAULT_TURN_ACCEPTED_TIMEOUT_MS = 30_000;
+/** R-55: agent-host's own spawn budget plus pi's startup (`@nexttime/shared`'s constants) — it used
+ *  to equal the spawn budget alone, so a slow spawn that succeeded had its Turn marked `failed` and
+ *  then answered anyway. */
+export const DEFAULT_TURN_ACCEPTED_TIMEOUT_MS =
+  AGENT_HOST_SPAWN_TIMEOUT_MS + AGENT_HOST_TURN_STARTUP_MS;
+/** R-55: how many not-yet-started turnIds a `stopTurn` is remembered for (see `stopTurn`). Only
+ *  the window between a Turn's `send_chat_message` and its `TurnStarted` delivery matters. */
+const STOPPED_BEFORE_START_LIMIT = 256;
 /** Reissue a cached entry Handle once less than this fraction of its total ttl remains
  *  (architecture point 2: "reissue when < 10% left"). */
 const HANDLE_REISSUE_THRESHOLD = 0.1;
@@ -127,6 +135,12 @@ interface ActiveTurn {
   readonly workspaceId: string;
   readonly chatId: string;
   readonly principalId: string;
+  /** R-55: `stopTurn` was called for this Turn. Before its `startTurn` frame went out, `startTurn`
+   *  then ends it `interrupted` instead of sending it; after, a rejected or timed-out accept ends
+   *  it `interrupted` rather than `failed`. */
+  stopRequested: boolean;
+  /** R-55: the `startTurn` frame has been sent — only then does agent-host have anything to stop. */
+  sent: boolean;
 }
 
 interface CachedHandle {
@@ -227,7 +241,13 @@ interface ResolvedEntryDefinition {
 
 type AcceptOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: string; readonly alreadyEnded?: false }
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly alreadyEnded?: false;
+      /** R-55: no answer within `turnAcceptedTimeoutMs` — agent-host may still be starting it. */
+      readonly timedOut?: true;
+    }
   /** The Turn ended (a `turnEnded` runtime event arrived) before agent-host ever accepted it —
    *  e.g. the entry container exited during startup and agent-host reported `interrupted`. The
    *  sink already has that `turnEnded`; the accept wait must not add a second, later
@@ -252,6 +272,9 @@ export class AgentHostRuntime implements AgentRuntime {
   private link: AgentHostLink | undefined;
   private lastHelloInstanceId: string | undefined;
   private readonly activeTurns = new Map<string, ActiveTurn>();
+  /** R-55: turnIds `stopTurn` was asked to stop before `startTurn` ever saw them — see `stopTurn`.
+   *  Insertion-ordered, capped at `STOPPED_BEFORE_START_LIMIT`. */
+  private readonly stoppedBeforeStart = new Set<string>();
   private readonly pendingAccepts = new Map<string, PendingAccept>();
   private readonly handleCache = new Map<string, CachedHandle>();
 
@@ -322,6 +345,19 @@ export class AgentHostRuntime implements AgentRuntime {
   // -------------------------------------------------------------------------------------------
 
   async startTurn(input: StartTurnInput): Promise<void> {
+    // R-55: `stop_agent` already ended this Turn (`stopTurn` found it untracked) while its
+    // TurnStarted was on the way here — starting it now would run the agent after the Stop.
+    if (this.stoppedBeforeStart.delete(input.turnId)) {
+      this.log(
+        JSON.stringify({
+          level: 'info',
+          msg: 'agent-host-runtime: Turn was stopped before it started — not starting it',
+          turnId: input.turnId,
+        }),
+      );
+      return;
+    }
+
     const link = this.link;
     if (!link) {
       this.log(
@@ -331,9 +367,20 @@ export class AgentHostRuntime implements AgentRuntime {
           turnId: input.turnId,
         }),
       );
-      await this.emitFailed(input);
+      await this.emitEnded(input, 'failed');
       return;
     }
+
+    // R-55: tracked from here — not only once the frame is about to go out — so a `stopTurn`
+    // arriving during the reads below finds it and the frame is never sent.
+    const turn: ActiveTurn = {
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      principalId: input.principalId,
+      stopRequested: false,
+      sent: false,
+    };
+    this.activeTurns.set(input.turnId, turn);
 
     // S3.13: the caller's own AgentProfile/AgentPolicy, resolved fresh on every startTurn (same
     // "cheap, never a stale-cache class of bug" convention `resolveEntryDefinition` below already
@@ -350,6 +397,7 @@ export class AgentHostRuntime implements AgentRuntime {
         agentProfile,
       );
     } catch (err) {
+      this.activeTurns.delete(input.turnId);
       this.log(
         JSON.stringify({
           level: 'error',
@@ -359,7 +407,7 @@ export class AgentHostRuntime implements AgentRuntime {
           error: String(err),
         }),
       );
-      await this.emitFailed(input);
+      await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
       return;
     }
 
@@ -385,12 +433,6 @@ export class AgentHostRuntime implements AgentRuntime {
       input.turnId,
     );
 
-    this.activeTurns.set(input.turnId, {
-      workspaceId: input.workspaceId,
-      chatId: input.chatId,
-      principalId: input.principalId,
-    });
-
     // P-A2: the administrator's platform-wide addendum (docs/platform-admin-design.md §6.6),
     // read fresh per Turn like everything else above; a read failure degrades to "none".
     const instanceInstructions = await this.resolveInstanceInstructions(
@@ -407,6 +449,13 @@ export class AgentHostRuntime implements AgentRuntime {
       input.principalId,
       input.turnId,
     );
+
+    if (turn.stopRequested) {
+      // R-55: stopped while the reads above ran — agent-host never hears of it.
+      this.activeTurns.delete(input.turnId);
+      await this.emitEnded(input, 'interrupted');
+      return;
+    }
 
     const sent = this.sendStartTurnFrame(
       link,
@@ -428,9 +477,10 @@ export class AgentHostRuntime implements AgentRuntime {
           reason: sent.reason,
         }),
       );
-      await this.emitFailed(input);
+      await this.emitEnded(input, 'failed');
       return;
     }
+    turn.sent = true;
 
     // Do not await `sent.wait` — see this class's own doc comment / agent-runtime.ts's
     // `startTurn` doc comment (lane-4 P2 fix): resolving here, right after the frame is sent,
@@ -438,11 +488,15 @@ export class AgentHostRuntime implements AgentRuntime {
     // (application/host-bridge/turn-started-consumer.ts), and awaiting up to
     // `turnAcceptedTimeoutMs` here would stall every other outbox event behind this one Turn.
     // The accept/reject/timeout outcome is instead handled asynchronously: a negative outcome
-    // still produces exactly one `turnEnded {status:'failed'}` event, just later.
+    // still produces exactly one `turnEnded {status:'failed'}` event (`interrupted` when the Turn
+    // was stopped meanwhile), just later.
     void sent.wait.then((outcome) => {
       if (outcome.ok) return;
       this.activeTurns.delete(input.turnId);
       if (outcome.alreadyEnded) return; // the sink already saw this Turn end — nothing to add
+      // R-55: agent-host may still be starting it — tell it to stop, or it answers after the Turn
+      // is already `failed` (any later frame for it is dropped, untracked, either way).
+      if (outcome.timedOut) this.sendStopFrame(input.turnId, input.principalId);
       this.log(
         JSON.stringify({
           level: 'error',
@@ -451,7 +505,7 @@ export class AgentHostRuntime implements AgentRuntime {
           reason: outcome.reason,
         }),
       );
-      void this.emitFailed(input);
+      void this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
     });
   }
 
@@ -463,13 +517,34 @@ export class AgentHostRuntime implements AgentRuntime {
    *  agent-host is not currently connected (`!this.link`), because the Turn is still tracked and
    *  will eventually resolve one way or another (a future `runtimeEvent`, or `abandonAllActive
    *  Turns` on the next `hello` if agent-host restarted) — only a *fully unknown* `turnId` means
-   *  this runtime will never independently report a `turnEnded` for it. */
+   *  this runtime will never independently report a `turnEnded` for it.
+   *
+   *  R-55: an untracked `turnId` is also remembered (bounded) — its `TurnStarted` may still be on the
+   *  way, and the caller is about to end the Turn itself, so a later `startTurn` for it must start
+   *  nothing. A tracked Turn whose `startTurn` frame has not gone out yet is only marked: `startTurn`
+   *  ends it `interrupted` instead of sending it. */
   async stopTurn(turnId: string): Promise<boolean> {
     const turn = this.activeTurns.get(turnId);
-    if (!turn) return false;
-    if (!this.link) return true;
+    if (!turn) {
+      this.rememberStoppedBeforeStart(turnId);
+      return false;
+    }
+    turn.stopRequested = true;
+    if (turn.sent) this.sendStopFrame(turnId, turn.principalId);
+    return true;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // internals
+  // -------------------------------------------------------------------------------------------
+
+  /** Best-effort `stopTurn` frame through whichever link is registered now — none connected, or a
+   *  send that throws, is logged and otherwise ignored (the caller's own bookkeeping decides what
+   *  happens to the Turn). */
+  private sendStopFrame(turnId: string, principalId: string): void {
+    if (!this.link) return;
     try {
-      this.link.send({ type: 'stopTurn', turnId, principalId: turn.principalId });
+      this.link.send({ type: 'stopTurn', turnId, principalId });
     } catch (err) {
       this.log(
         JSON.stringify({
@@ -480,12 +555,15 @@ export class AgentHostRuntime implements AgentRuntime {
         }),
       );
     }
-    return true;
   }
 
-  // -------------------------------------------------------------------------------------------
-  // internals
-  // -------------------------------------------------------------------------------------------
+  private rememberStoppedBeforeStart(turnId: string): void {
+    this.stoppedBeforeStart.add(turnId);
+    if (this.stoppedBeforeStart.size > STOPPED_BEFORE_START_LIMIT) {
+      const oldest = this.stoppedBeforeStart.values().next().value;
+      if (oldest !== undefined) this.stoppedBeforeStart.delete(oldest);
+    }
+  }
 
   /**
    * Sends the `startTurn` command frame and returns immediately (`{ok: true, wait}`) — `wait` is
@@ -524,7 +602,11 @@ export class AgentHostRuntime implements AgentRuntime {
 
     const timeoutHandle = setTimeout(() => {
       this.pendingAccepts.delete(input.turnId);
-      resolveWait({ ok: false, reason: 'agent-host did not accept the turn in time' });
+      resolveWait({
+        ok: false,
+        reason: 'agent-host did not accept the turn in time',
+        timedOut: true,
+      });
     }, this.turnAcceptedTimeoutMs);
     timeoutHandle.unref?.();
 
@@ -578,6 +660,23 @@ export class AgentHostRuntime implements AgentRuntime {
   }
 
   private async handleRuntimeEvent(event: AgentRuntimeEventWire): Promise<void> {
+    // R-55: a frame for a Turn this runtime does not track is dropped — one that already ended
+    // here (stopped before it was sent, an accept timeout, agent-host's own earlier `turnEnded`),
+    // or one an earlier kernel process started (startup recovery marked it `interrupted`).
+    // Persisting it would attach output, or a second terminal status, to a Turn that has ended.
+    if (!this.activeTurns.has(event.turnId)) {
+      if (event.type === 'turnEnded' || event.type === 'message') {
+        this.log(
+          JSON.stringify({
+            level: 'info',
+            msg: 'agent-host-runtime: dropped a runtime event for a Turn that is not active here',
+            turnId: event.turnId,
+            eventType: event.type,
+          }),
+        );
+      }
+      return;
+    }
     // Untracked *before* the (possibly slow) sink call below — a stopTurn racing in for a turn
     // that has, from agent-host's point of view, already ended must see it as gone immediately,
     // not only once the sink has finished persisting it.
@@ -648,10 +747,10 @@ export class AgentHostRuntime implements AgentRuntime {
     }
   }
 
-  private async emitFailed(input: StartTurnInput): Promise<void> {
+  private async emitEnded(input: StartTurnInput, status: 'failed' | 'interrupted'): Promise<void> {
     await this.safeSinkHandle({
       type: 'turnEnded',
-      status: 'failed',
+      status,
       workspaceId: input.workspaceId,
       chatId: input.chatId,
       turnId: input.turnId,
