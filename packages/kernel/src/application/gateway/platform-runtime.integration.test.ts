@@ -24,7 +24,6 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
-import { startActivity } from '../../substrate/epistemic/index.js';
 import { newChat, sendChatMessage } from '../chat/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
@@ -241,11 +240,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    /** `activities.started_by` FKs to `principals (workspace_id, id)` — `startRunningTurn` below
-     *  needs a real principal row, not just any UUID (a fake resident's `principalId` from
-     *  `residentEntry()` is otherwise unconstrained, since worker-supervisor is faked here and the
-     *  kernel never validates a resident's principal against `principals` for
-     *  `runtime_inventory`/`roll_entry_containers` — only `startRunningTurn`'s own INSERT does). */
+    /** A real principal row, for a resident that must own a Chat and start a Turn
+     *  (`newChat`/`sendChatMessage` FK to `principals (workspace_id, id)`) — a fake resident's
+     *  `principalId` from `residentEntry()` is otherwise unconstrained, since worker-supervisor is
+     *  faked here and the kernel never validates a resident's principal against `principals` for
+     *  `runtime_inventory`/`roll_entry_containers`. */
     async function insertHumanPrincipal(
       workspaceIdArg: string,
       displayName: string,
@@ -264,25 +263,6 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
       return id;
-    }
-
-    /** Starts a real `kind='agent_turn'` Activity (`status='running'`, `started_by = principalId`)
-     *  — the exact DB-backed signal `roll_entry_containers`'s `hasInFlightTurn` reads. `principalId`
-     *  must already be a real row (`insertHumanPrincipal`) — `activities.started_by` FKs to
-     *  `principals`. No `chatId` needed (nullable FK). */
-    async function startRunningTurn(principalId: string): Promise<string> {
-      return withWorkspace(
-        pool,
-        { workspaceId, principalId },
-        async (client) => {
-          const activity = await startActivity(client, workspaceId, {
-            kind: 'agent_turn',
-            principalId,
-          });
-          return activity.id;
-        },
-        { skipRoleSwitch: true },
-      );
     }
 
     /** Test-only cleanup, outside any capability — `set_active_runtime_image` can only ever set a
@@ -634,7 +614,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('roll_entry_containers (E2 — acceleration only)', () => {
-      it('stops a container that needs rebuild and has no in-flight Turn, and skips one that does', async () => {
+      it('stops a container that needs rebuild and has no in-flight Turn, and skips one whose resident has a private-chat Turn running', async () => {
         supervisor.images = [IMAGE_V1, IMAGE_V2];
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
 
@@ -647,7 +627,20 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         supervisor.residents = [idleStale, busyStale];
 
-        await startRunningTurn(busyStale.principalId);
+        // R-59 (2026-10-02 review): a real private-chat Turn, started the way a user starts one.
+        // `activities_visibility` hides it from every principal but the Chat's owner — the in-flight
+        // check used to look under the nil principal and miss it.
+        const busyChat = await withWorkspace(
+          pool,
+          { workspaceId, principalId: busyPrincipalId },
+          (client) => newChat(client, workspaceId, busyPrincipalId, {}),
+        );
+        await withWorkspace(pool, { workspaceId, principalId: busyPrincipalId }, (client) =>
+          sendChatMessage(client, workspaceId, busyPrincipalId, {
+            chatId: busyChat.id,
+            text: 'still working on it',
+          }),
+        );
 
         const result = await callAsAdmin<RollEntryContainersResultWire>('roll_entry_containers');
         const idleOutcome = result.outcomes.find((o) => o.principalId === idleStale.principalId);

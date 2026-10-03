@@ -68,8 +68,10 @@ const IMAGE_BUILT_FROM_LABEL = 'ai.nexttime.built-from';
 
 /** Nil UUID — the same placeholder `platform-handlers.ts`'s `countGatekeepers` already uses for
  *  `setWorkspaceContext`'s `principalId` argument when no real acting Principal exists for the
- *  statement about to run (every RLS policy touched below is `workspace_id = app_workspace()`
- *  only, never principal-scoped). */
+ *  statement about to run. Only valid for a table whose RLS policy is `workspace_id =
+ *  app_workspace()` alone (`llm_usage`, `sumLlmUsage30Days`). `activities` is not one: its policy
+ *  (core 0003) also hides a Turn in a private Chat from everyone but the Chat's owner, so
+ *  `hasInFlightTurn` sets the resident's own principal instead (2026-10-02 review R-59). */
 const NIL_PRINCIPAL = '00000000-0000-0000-0000-000000000000';
 
 /** S7-E 决定 E1: resolved once per `startTurn`/`task/spawn` by the callers
@@ -438,13 +440,20 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
  *  `startActivity`), not agent-host's in-memory state — this is exactly the DB-backed signal E2's
  *  "kernel's own turn bookkeeping" asks for: reliable, survives a kernel restart, and (via
  *  `setWorkspaceContext`) reachable across every workspace from inside the one open platform
- *  transaction without a second, RLS-bypassing connection. */
+ *  transaction without a second, RLS-bypassing connection.
+ *
+ *  2026-10-02 review R-59: the context's principal is the resident itself, not `NIL_PRINCIPAL`.
+ *  `activities_visibility` (core 0003) shows a Turn whose `chat_id` is a private Chat only to that
+ *  Chat's owner, and a resident's Turns run in its own Chats — under the nil principal this check
+ *  never saw a real private-chat Turn, so the roll could stop a resident mid-Turn (leftover 64's
+ *  lock held, but the check it guards was blind). As the resident it sees every Turn it started:
+ *  its own private Chats and any workspace-visible one. */
 async function hasInFlightTurn(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
 ): Promise<boolean> {
-  await setWorkspaceContext(client, workspaceId, NIL_PRINCIPAL);
+  await setWorkspaceContext(client, workspaceId, principalId);
   const result = await client.query(
     `select 1 from activities
       where kind = 'agent_turn' and status = 'running' and started_by = $1

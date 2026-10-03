@@ -675,6 +675,7 @@
   - **给 S2.9 的 seam**：`lifecycle.ts` 导出 `completeTaskWithResult(client, workspaceId, actorPrincipalId, taskId, workerRunId, result)`——把 Task 从 `running` 转 `completed`、记录 `result`、终止对应 WorkerRun（撤销 Handle）。S2.9 的 `task/result.ts` 应该在自己的 capability/内部路由 handler 里直接调用它；调用前 Task 必须仍是 `running`（否则 `IllegalTransition`，说明 reaper 已经先一步判定为 `failed: no_result`，S2.9 侧需要自己决定如何处理这种竞态——这次没有替它做选择）。
   - **给 S2.11 的 seam**：`getTaskWithWorkerRuns`（读 Task + 其全部 WorkerRun）、`taskForWorkerRun`；`TaskUpdated`/`WorkerRunUpdated`（新增）/`ActionRequestPending`/`ActionRequestUpdated` 四个 outbox 事件已经在每次状态转移时发出，S2.11 直接订阅即可，不需要改这个模块。`Turn --generated--> Task` 的边（Task 行的 `created_by_activity_id`）S2.7 里始终是 `null`——`invoke_worker` 的入参没有 Turn/Activity 上下文，写这条边是 S2.11 自己的职责范围。
   - **已知偏离清单**（PR body "已知偏离"重复一遍，便于以后查）：①`WorkerRun` 的 `suspended` 状态在 S2.7 未被任何代码路径写入（等待审批时 WorkerRun 保留 `running`，只有 Task 转 `waiting_approval`）；②`ActionRequestUpdated` 恢复 Task 时不检查同一 Task 下是否有其它并发 pending 项；③`find_operations`/`find_procedures` 在 S2.4/S2.14 落地前恒为空结果；④`invoke_worker` 的注册表参数新增了可选 `gates` 字段（`packages/shared/src/capabilities.ts`），不影响任何既有调用方（新字段全程可选）。
+  - **R-58 更正（2026-10-02 复审）——崩溃重试加守卫**：`reactToSupervisorStatus` 的重试分支原来无条件终止 WorkerRun、无条件 `retry_count + 1`、随后 spawn——reaper 的定时扫描与 `wait:true` 轮询同时对同一次崩溃作出反应时两边都去自增并 spawn，只是第二个自增撞上 `tasks_retry_count_check`（`retry_count <= 1`）才没有起第二个 Worker——那次反应整笔回滚并抛错，取消若落在反应的读与写之间，重试会在已取消的 Task 下起一个新 Worker。现在：`terminateWorkerRunRow` 返回本次调用是否真的把 run 置为 `terminated`；只有它返回 `true` 且守卫自增 `update tasks set retry_count = retry_count + 1 where … and retry_count = <读到的值> and status = 'running'` 命中一行时才 spawn；终止了 run 却没赢得自增（Task 已离开 `running`）则同无重试分支一样 `failTaskRow(…, 'worker_failed')`（对已终态的 Task 是空操作）。`spawnWorkerRun` 在建任何东西、调 supervisor 之前重读 Task，已终态则抛 `IllegalTransition`（两个调用方都经 `failTaskAndReapWorkerRuns` 处理，终态 Task 原样保留）。测试：`task/invoke.integration.test.ts`（同一崩溃两个并发反应只 spawn 一次；反应前 Task 已取消则不 spawn；`spawnWorkerRun` 拒绝终态 Task 且不留 WorkerRun）、`task/lifecycle.test.ts`（`terminateWorkerRunRow` 返回值）。
 
 - 实现说明补充（入口工具注册修复 PR，2026-09，S2.12 验收脚本发现）：
   - **缺口**：`packages/platform-extension/src/modes/entry.ts` 一直只注册 S1 的五个观察工具（`get_object/traverse/search/explain/get_task`），`find_*`/`invoke_worker`/`request_connection`/`propose_*` 以及门投影的观察工具从未注册成 pi 工具——`ontology/entry-agent.yaml` 的 `capabilities` 与系统提示描述的行为在容器里并不存在，"对话 → 找手段 → 派 Worker"主链在聊天里走不通（S2.7/S2.9 的主机验收都是从 human 通道直接调 capability，没走入口 agent）。
@@ -3097,6 +3098,10 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
   （`agent_turn` 且 `running`）跳过忙容器；`platform_status` 的三次库读串行（同一 `PoolClient`），两路 HTTP 探测并发。
   `set_platform_default_model` 未知模型回 409 `unknown_model`（与 `create_workspace` / `update_workspace` 同一规则同一
   码）；`update_platform_settings` 不再接受 `defaultEntryModel`。集成测试用独立新建库（`platform_settings` 是全局单行）。
+  **R-59 更正（2026-10-02 复审）**：`hasInFlightTurn` 原来以 nil principal 设上下文——`activities_visibility`（core 0003）
+  只让私有对话的主人看到其中的 Turn，于是真实的私有对话 Turn 永远看不见，遗留 64 的锁成立却守了个空检查，滚动会停掉正在跑
+  Turn 的常驻容器；现以该常驻容器自己的 principal 设上下文（它的 Turn 都在自己的对话或工作区可见对话里），不需要
+  security-definer 函数。集成测试改为经 `newChat` + `sendChatMessage` 开一个真实的私有对话 Turn。
 
 ## 5e. S8 — 产品化与修复（2026-09-23 立项）
 

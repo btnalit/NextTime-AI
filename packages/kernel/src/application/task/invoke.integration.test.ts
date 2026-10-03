@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { IllegalTransition } from '@nexttime/shared';
 import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -442,6 +443,119 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(taskAfterSecondFailure?.status).toBe('failed');
     expect(taskAfterSecondFailure?.failureReason).toBe('worker_failed');
     expect(supervisorClient.spawnCalls).toHaveLength(2); // no third spawn
+  });
+
+  // R-58 (2026-10-02 review): the crash-retry path. The reaper tick and a `wait:true` poll can react
+  // to the same crash at once, and a cancel can land between a reaction's reads and its writes.
+  describe('R-58 — crash-retry guards (docs/code-review-2026-10-02.md)', () => {
+    async function spawnRunningTask(displayName: string) {
+      const principalId = await adminInsertPrincipal('member', displayName);
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const runtimeDeps = deps(supervisorClient);
+      const spawnResult = await invokeWorker(
+        workspaceId,
+        { principalId, channel: 'handle', claims: claimsFromIssued(issued) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      );
+      return { principalId, supervisorClient, runtimeDeps, spawnResult };
+    }
+
+    async function workerRunCount(principalId: string, taskId: string): Promise<number> {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ n: number }>(
+          'select count(*)::int as n from worker_runs where workspace_id = $1 and task_id = $2',
+          [workspaceId, taskId],
+        );
+        return result.rows[0]?.n ?? 0;
+      });
+    }
+
+    it('two concurrent reactions to the same crashed WorkerRun spawn exactly one retry', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+        'r58-concurrent-reactions',
+      );
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+      await Promise.all([
+        reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId),
+        reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId),
+      ]);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(2); // the original + one retry
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+      expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(2);
+    });
+
+    it('a crash reaction under a Task cancelled meanwhile spawns no retry', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-cancelled-meanwhile');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      // The cancel's Task write landing before the reaction's own writes — set directly so the
+      // crashed run is still live when the reaction gets to it (a full `terminateTask` would
+      // terminate the run first, and the reaction would then have nothing to do).
+      await inTx(principalId, (client) =>
+        client.query(
+          `update tasks set status = 'cancelled', cancelled_at = now()
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, spawnResult.taskId],
+        ),
+      );
+
+      await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(1); // no retry
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('cancelled');
+      expect(task?.retryCount).toBe(0);
+      const run = await inTx(principalId, (client) =>
+        readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+      );
+      expect(run?.status).toBe('terminated');
+    });
+
+    it('spawnWorkerRun refuses a terminal Task before creating a WorkerRun or calling the supervisor', async () => {
+      const principalId = await adminInsertPrincipal('member', 'r58-spawn-terminal');
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const taskId = randomUUID();
+      await inTx(principalId, (client) =>
+        client.query(
+          `insert into tasks (
+             workspace_id, id, status, on_behalf_of, worker_definition_id,
+             worker_definition_version, cancelled_at
+           ) values ($1, $2, 'cancelled', $3, $4, 1, now())`,
+          [workspaceId, taskId, principalId, workerDefinitionId],
+        ),
+      );
+      const task = await inTx(principalId, (client) => readTaskRow(client, workspaceId, taskId));
+      if (!task) throw new Error('the seeded Task was not found');
+
+      await expect(
+        spawnWorkerRun(deps(supervisorClient), workspaceId, {
+          task,
+          parentWorkerRunId: null,
+          depth: 1,
+          attempt: 2,
+          onBehalfOf: principalId,
+          parentAuthority: 'unconstrained',
+          parentClaimsForLineage: undefined,
+          declaredCapabilities: [],
+          declaredGates: [],
+          definitionName: 'r58-spawn-terminal',
+        }),
+      ).rejects.toBeInstanceOf(IllegalTransition);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(0);
+      expect(await workerRunCount(principalId, taskId)).toBe(0);
+    });
   });
 
   it('an exited (code 0) container without a posted result marks the Task failed: no_result', async () => {
