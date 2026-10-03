@@ -429,6 +429,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.22.0 → v0.23.0 | governance 0012 | 143 / 143 通过 | `agent_profiles` 的读写（`setAgentProfile` / 请求执行路径）在共享库套件里 |
 | v0.34.0 → v0.35.0 | core 0033 | 149 / 149 通过 | 本体提议 / 发布 / 读在共享库套件里；旧代码从不删除 `ontology_versions` 的行 |
 | v0.35.1 → #400 | core 0034 | 149 / 149 通过（#400 的 PR 自动探针） | 修订发布（v0.35.1 先发布、后弃用的顺序，正是延迟约束要放行的情形）在共享库套件 `manifest.test.ts` 的 S3.12 组里；自建私有库的 platform-* 套件只跑 v0.35.1 自己的迁移，对 0034 无信号 |
+| v0.38.0 → #436 | core 0035、governance 0015 | 161 / 161 通过（#436 的 PR 自动探针） | 吊销、Evidence / Fact 写入、工作区状态读取、平台设置读取都在共享库套件里；`ontology-guard` / `worker-result` 两个 v0.38.0 套件在工作区事务里改自己工作区的 `ontology_enforcement`，正是兼容放行保留的那一种写入（本地实测：去掉 `workspaces_own_ontology_enforcement` 后这两个套件 4 个用例失败）；平台事务对 `workspaces` / `platform_settings` 的写入主要在自建私有库的 platform-* 套件里，那部分跑 v0.38.0 自己的迁移、对两条迁移无信号，由本 PR 的 `write-confinement.integration.test.ts` 在新 schema 上覆盖 |
 
 结论：以上迁移"可逆"由推理升级为实测（空库上的 schema 兼容性；依赖生产数据的部分不在其内）。此前这里写的
 `drill-upgrade.sh --to v0.15.0 --ack-live-restore` 主机 PROBE 不再需要——它的回滚会覆盖活库，维护者 2026-10-02 选择
