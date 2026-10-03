@@ -151,7 +151,7 @@ else
 fi
 
 chmod 640 "$INTERNAL_TOKEN"
-chgrp "$CONTAINER_GID" "$INTERNAL_TOKEN" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $INTERNAL_TOKEN to gid $CONTAINER_GID — the kernel/agent-host/llm-proxy/egress-proxy containers will not be able to read it" >&2
+chgrp "$CONTAINER_GID" "$INTERNAL_TOKEN" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $INTERNAL_TOKEN to gid $CONTAINER_GID — the kernel container (its only holder) will not be able to read it" >&2
 
 # --- secrets/gate.token: generate only if missing/empty (fix/gate-protocol-hardening) ----------
 if [ ! -s "$GATE_TOKEN" ]; then

@@ -54,12 +54,22 @@ git push
 
 ## 3. 主机怎么跟随一个 release tag
 
-**应用一个 release 的唯一入口（S9 D2）**：在检出根目录
+**应用一个 release 的唯一入口（S9 D2）**：在检出根目录，跑**目标 tag 自己的** `apply-release.sh`
 
 ```
-sh scripts/apply-release.sh vX.Y.Z           # 源码构建镜像
-sh scripts/apply-release.sh --pull vX.Y.Z    # 拉取发布镜像（失败自动退回源码构建）
+git fetch -q origin --tags
+git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
+sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z    # 拉取发布镜像（失败自动退回源码构建）
+sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 ```
+
+为什么不直接 `sh scripts/apply-release.sh`：检出目录此时还停在**正在运行的旧版本**上，
+`scripts/apply-release.sh` 是旧 tag 的副本——它切到新 tag 后仍按旧流程往下走，新版本加进流程的步骤
+它一概不会做。R-03 起的第一次应用就是这样：旧副本没有"派生 internal-plane 凭证"这一步
+（`scripts/derive-internal-tokens.sh`），迁移的 `docker compose run` 因新 compose 文件引用的
+`secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响；
+此时检出已在新 tag 上，再跑一次 `sh scripts/apply-release.sh` 也能过）。用 `git show` 取出目标 tag 的
+副本，流程永远属于被应用的那个版本。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。

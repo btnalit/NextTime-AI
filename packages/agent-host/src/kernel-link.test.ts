@@ -300,6 +300,47 @@ describe('createKernelLink', () => {
     await vi.waitFor(() => expect(link?.isConnected()).toBe(true));
   });
 
+  it('backs off while the kernel refuses the link with 1013 (another link is registered), instead of retrying at the base delay', async () => {
+    // The kernel accepts the upgrade and then closes a refused second link with 1013, so `open`
+    // fires on every attempt — the backoff must not be reset by it.
+    const refusing = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    const connectedAt: number[] = [];
+    refusing.on('connection', (ws) => {
+      connectedAt.push(Date.now());
+      ws.close(1013, 'agent-host link already registered');
+    });
+    await new Promise<void>((resolve) => refusing.once('listening', () => resolve()));
+    const address = refusing.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const lines: string[] = [];
+    link = createKernelLink({
+      kernelWsUrl: `ws://127.0.0.1:${port}`,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      reconnectBaseDelayMs: 25,
+      reconnectMaxDelayMs: 10_000,
+      log: (line) => lines.push(line),
+    });
+    try {
+      link.start();
+      // Delays 25, 50, 100, 200 ms: the fifth attempt lands ~375 ms in. Without the backoff it
+      // would land ~100 ms in, every gap ~25 ms.
+      await vi.waitFor(() => expect(connectedAt.length).toBeGreaterThanOrEqual(5), {
+        timeout: 3_000,
+      });
+      const gaps = connectedAt.slice(1).map((t, i) => t - (connectedAt[i] as number));
+      expect(gaps[3]).toBeGreaterThanOrEqual(150);
+      expect(gaps[3]).toBeGreaterThan(gaps[0] as number);
+      expect(lines.some((l) => l.includes('kernel-link: refused'))).toBe(true);
+    } finally {
+      link.stop();
+      for (const client of refusing.clients) client.terminate();
+      await new Promise<void>((resolve) => refusing.close(() => resolve()));
+    }
+  });
+
   it('stop() halts reconnection', async () => {
     server = await startFakeKernelServer();
     link = createKernelLink({

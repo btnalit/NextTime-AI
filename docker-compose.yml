@@ -343,7 +343,7 @@ services:
 
   worker-supervisor:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
-    # fix/runtime-hardening, lane-6 review P1-3：POST /task/spawn 与全部 /resident/* 路由现在都要求
+    # fix/runtime-hardening, lane-6 review P1-3：除 GET /healthz 外的每条路由现在都要求
     # 调用方凭证（packages/worker-supervisor/src/internal-auth.ts）——这个服务只在 control 网络
     # （下面 networks 只有 control，从不在 workers 上），但此前任何其他 control 网络上的服务都能不带
     # 凭证直接调用这两组路由；"trusted caller" 只是约定，监听端本身并不强制。R-03：它只有两个调用方，
@@ -680,9 +680,9 @@ services:
     # internal_gate_to_kernel (P-B1; R-03): lets the gate announce itself to the kernel (`POST
     # /internal/gates/announce`, GATE_ID / GATE_CONNECTOR / KERNEL_URL below) — endpoints and
     # manifest only, never a credential. The packaged gates' own credential, mounted where the gate
-    # reads it (/run/secrets/internal_token): the kernel admits it on announce and nothing else —
-    # never the root, never what agent-host / llm-proxy / egress-proxy hold. A separate trust
-    # boundary from gate_token (kernel → gate).
+    # reads it (/run/secrets/internal_token): the kernel admits it on announce, for packaged (non-
+    # hosted) instances only, and nothing else — never the root, never what agent-host / llm-proxy /
+    # egress-proxy hold. A separate trust boundary from gate_token (kernel → gate).
     secrets:
       - gate_token
       - { source: internal_gate_to_kernel, target: internal_token }
@@ -720,8 +720,10 @@ services:
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
-    # internal_gate_to_kernel / GATE_* (P-B1; R-03): see gatekeeper-docker. The announced `target`
-    # is the gate's RAGFLOW_BASE_URL from the env_file (a URL, not the API key).
+    # internal_gate_to_kernel / GATE_* (P-B1; R-03): see gatekeeper-docker — here too
+    # /run/secrets/internal_token is the packaged gates' own announce credential, not the root.
+    # The announced `target` is the gate's RAGFLOW_BASE_URL from the env_file (a URL, not the API
+    # key).
     secrets:
       - gate_token
       - { source: internal_gate_to_kernel, target: internal_token }
@@ -761,8 +763,10 @@ services:
   # mounts (GATE_HOST_PUBLIC_KEY_FILE). The kernel never sees a credential. At rest they are
   # AES-256-GCM under gate_host_store_key (scripts/gen-handle-keys.sh), one directory per instance
   # under ${NEXTTIME_DATA}/gate-host. Three secrets, three trust boundaries: gate_token (kernel →
-  # gates), internal_gate_host_to_kernel (this host → kernel, mounted where gatekeeper-base reads
-  # it), gate_host_store_key (this container's own data at rest).
+  # gates), internal_gate_host_to_kernel (this host → kernel; mounted at /run/secrets/internal_token,
+  # where gatekeeper-base reads it — so in this container that path is gate-host's own credential,
+  # which the kernel admits on the instance pull and on announce for hosted instances only, never
+  # the root), gate_host_store_key (this container's own data at rest).
   gate-host:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
     secrets:
@@ -1363,7 +1367,10 @@ secrets:
   internal_token: { file: "${NEXTTIME_DATA}/secrets/internal.token" } # scripts/gen-handle-keys.sh；0640 组 10001；internal plane 的根，只挂 kernel
   # R-03: every internal-plane service's own credential, derived from internal.token by
   # scripts/derive-internal-tokens.sh (gen-handle-keys.sh and apply-release.sh run it) — 0640 组
-  # 10001. Each is mounted into the services on its edge only; none is the root.
+  # 10001. Each is mounted into the services on its edge only; none is the root. The container
+  # path /run/secrets/internal_token means a different file per service (each service block says
+  # which): the root in kernel, the kernel's credential *for* worker-supervisor in
+  # worker-supervisor, and in every other service its own credential toward the kernel.
   internal_agent_host_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-agent-host-to-kernel.token" }
   internal_llm_proxy_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-llm-proxy-to-kernel.token" }
   internal_egress_proxy_to_kernel: { file: "${NEXTTIME_DATA}/secrets/internal-egress-proxy-to-kernel.token" }

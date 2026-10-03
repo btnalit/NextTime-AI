@@ -31,7 +31,8 @@ R-03 起按服务分开：`@nexttime/shared` 的 `internal-token.ts`，`packages
 校验，这条路由只认 agent-host 的凭证），并额外拒绝来自 `NEXTTIME_SUBNET_WORKERS` 的连接（即使凭证
 正确）——与 `/internal/llm-usage`、`/internal/handle-revocations` 同一份守卫。已有一条连接在线时，第二条
 连接被拒（close 1013），不再顶替第一条；内核随即 ping 在线那条，不回 pong 就断开它，所以 agent-host
-真正重启后（旧连接半开）下一次重连就能连上。Schema 定义在
+真正重启后（旧连接半开）随后的某次重连就能连上。被 1013 拒绝时 agent-host 按指数退避重试（上限 30 秒，
+日志 `kernel-link: refused`），不会每 500 ms 重试一次。Schema 定义在
 `@nexttime/shared` 的 `agent-host-protocol.ts`（kernel 与 agent-host 共享同一份，不会漂移）。
 
 agent-host → kernel：
