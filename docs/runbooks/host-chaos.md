@@ -35,7 +35,9 @@
   （worker-supervisor 内部状态探测走一次性 kernel 镜像容器，同 `scripts/accept_s1.sh` 的
   `resident_status()` 助手）。
 - 一个 human 通道 API key。`chaos-kill-worker.sh`/`chaos-kill-entry.sh` 角色至少 `member`
-  （`send_chat_message`/`get_task`/`list_tasks` 各自的 `minRole`）即可，不需要单独铸造 Handle；
+  （`send_chat_message`/`get_task`/`list_tasks` 各自的 `minRole`）即可，不需要单独铸造 Handle——
+  但 `chaos-kill-worker.sh` 读的 Task 必须是这把 key 自己发起的，或者用 owner 的 key（D-21：别人的
+  Task 对 `get_task` 是 404）；
   `chaos-kill-kernel-mid-invoke.sh` 需要至少 `builder`（见下）。**key 放在一个只有自己可读的文件里，
   脚本参数给的是文件路径 `<apiKeyFile>`**（R-34，2026-10-02 复审）：命令行参数在 `/proc/<pid>/cmdline`
   里对同机所有用户可见，也会留在 shell 历史里；脚本只从文件读 key，再经 stdin 交给 curl

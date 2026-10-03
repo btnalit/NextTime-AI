@@ -717,8 +717,8 @@ create table worker_definitions (
 | | `<gate>.<op>`（execute 类）经 `request_action` | execute | 只有 Worker 的 Handle 可含 |
 | connection | `request_connection` | propose（Handle 通道） | 产生连接请求卡片 |
 | | `create_connection`（填凭证、注册门、导入清单草稿）/ `publish_manifest` / `connect_gatekeeper` | human（owner） | 凭证直达门；`connect_gatekeeper` = CapabilityGrant |
-| meta | `propose_operation` / `propose_skill` / `propose_procedure` | propose | 私有草稿（I16） |
-| | `publish_skill` / `publish_procedure` / `deprecate_*` | human | D-24：所有 `publish_*` / `deprecate_*` 为 `minRole: builder`，且只有该行的提案人或 owner 能发布 / 弃用（`publish_ontology_version` 仍只认提案人，`publish_manifest` 仍是 owner） |
+| meta | `propose_operation` / `propose_skill` / `propose_procedure` | propose | 私有草稿（I16）；Operation 草稿另对 owner、builder 可见（D-26：成员 Worker 的提案要由 owner 在能力目录审核发布） |
+| | `publish_skill` / `publish_procedure` / `deprecate_*` | human | D-24：所有 `publish_*` / `deprecate_*` 为 `minRole: builder`，且只有该行的提案人或 owner 能发布 / 弃用；发布会替代（或弃用）别人提议的在用版本时，也要那位提案人或 owner（`publish_ontology_version` 仍只认提案人，`publish_manifest` 仍是 owner） |
 | | `assert_fact` / `supersede_fact` / `invalidate_fact` | propose | 状态由调用方类型决定 |
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
 | | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |
@@ -726,7 +726,7 @@ create table worker_definitions (
 | | `approve` / `reject` / `list_pending` / `set_auto_approved_action_kind` | human | I14 |
 | | `get_action` / `list_action_requests` | human（observe） | 同一可见性谓词：owner 看全部；其他人只看匹配自己有效授权的（I14）或自己发起的；`get_action` 读不到的一律 404（R-42 / D-22） |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
-| task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明 |
+| task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明。`get_task` 只对 owner、请求者（`on_behalf_of`）和该 Task 自己的 WorkerRun Handle 可见，其余一律 404（D-21，与 `cancel_task` 同一谓词）；`list_tasks` 只列调用者自己的 |
 | worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` / `list_worker_definitions` | propose / human / observe | 发布 / 弃用同 meta 行（D-24） |
 | ingest | `register_source` / `submit_observations` | propose | service |
 | audit | `audit_query` / `reconstruct` / `export_prov` | observe（auditor） | |
