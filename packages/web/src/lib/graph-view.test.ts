@@ -3,7 +3,6 @@ import type {
   ExplainResultWire,
   FactWire,
   OntologyDefinition,
-  OntologyTypeWire,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -250,32 +249,30 @@ describe('as-of input helpers', () => {
   });
 });
 
-// Closing wave C5b (coverage gap G1 part 2): a proposal's diff against the currently-visible types.
+// Closing wave C5b (coverage gap G1 part 2) / R-61: a proposal's diff against the published
+// version of its own family it was proposed against.
 describe('ontologyProposalDiff', () => {
-  const currentTypes: readonly OntologyTypeWire[] = [
-    { kind: 'object', name: 'Host', description: 'A machine', identityKey: ['hostname'] },
-    {
-      kind: 'link',
-      name: 'runs_on',
-      signatures: [{ domain: 'Container', range: 'Host', description: 'runs on' }],
-    },
-    {
-      kind: 'action',
-      name: 'docker_restart',
-      description: 'Restart a container',
-      mode: 'execute',
-      blastRadius: 'medium',
-      autoApprovable: false,
-    },
-  ];
+  const base: OntologyDefinition = {
+    objectTypes: [{ name: 'Host', description: 'A machine', identityKey: ['hostname'] }],
+    linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'runs on' }],
+    actionTypes: [
+      {
+        name: 'docker_restart',
+        description: 'Restart a container',
+        mode: 'execute',
+        blastRadius: 'medium',
+        autoApprovable: false,
+      },
+    ],
+  };
 
-  it('flags a brand-new object/link/action type as added', () => {
+  it('flags a brand-new object/link/action type as added and a dropped one as removed', () => {
     const draft: OntologyDefinition = {
       objectTypes: [{ name: 'Widget', description: 'A widget.', identityKey: ['widgetId'] }],
       linkTypes: [{ name: 'connects', domain: 'Widget', range: 'Widget', description: 'd' }],
       actionTypes: [{ name: 'spin', description: 'Spin it.', mode: 'execute', blastRadius: 'low' }],
     };
-    const diff = ontologyProposalDiff(draft, currentTypes);
+    const diff = ontologyProposalDiff(draft, base);
     // Sorted by kind then name (module doc comment): action < link < object.
     expect(diff).toEqual([
       { kind: 'action', name: 'docker_restart', change: 'removed' },
@@ -294,24 +291,21 @@ describe('ontologyProposalDiff', () => {
       ],
       linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'runs on' }],
     };
-    const diff = ontologyProposalDiff(draft, currentTypes);
+    const diff = ontologyProposalDiff(draft, base);
     expect(diff).toEqual([
       { kind: 'action', name: 'docker_restart', change: 'removed' },
       { kind: 'object', name: 'Host', change: 'changed' },
     ]);
   });
 
-  it('treats a LinkType name as its whole signature set — order-independent, adding a signature is a change', () => {
-    const twoSignatureCurrent: readonly OntologyTypeWire[] = [
-      {
-        kind: 'link',
-        name: 'runs_on',
-        signatures: [
-          { domain: 'Container', range: 'Host', description: 'a' },
-          { domain: 'WorkerRun', range: 'Host', description: 'b' },
-        ],
-      },
-    ];
+  it('treats a LinkType name as its whole signature set — order-independent, dropping a signature is a change', () => {
+    const twoSignatureBase: OntologyDefinition = {
+      objectTypes: [{ name: 'X', description: 'x' }],
+      linkTypes: [
+        { name: 'runs_on', domain: 'Container', range: 'Host', description: 'a' },
+        { name: 'runs_on', domain: 'WorkerRun', range: 'Host', description: 'b' },
+      ],
+    };
     // Same two signatures, reversed order: no diff.
     const sameSet: OntologyDefinition = {
       objectTypes: [{ name: 'X', description: 'x' }],
@@ -320,36 +314,27 @@ describe('ontologyProposalDiff', () => {
         { name: 'runs_on', domain: 'Container', range: 'Host', description: 'a' },
       ],
     };
-    expect(
-      ontologyProposalDiff(sameSet, twoSignatureCurrent).some((entry) => entry.name === 'runs_on'),
-    ).toBe(false);
+    expect(ontologyProposalDiff(sameSet, twoSignatureBase)).toEqual([]);
 
     // Dropping one signature: a change (not silently missed).
     const droppedSignature: OntologyDefinition = {
       objectTypes: [{ name: 'X', description: 'x' }],
       linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'a' }],
     };
-    expect(ontologyProposalDiff(droppedSignature, twoSignatureCurrent)).toContainEqual({
-      kind: 'link',
-      name: 'runs_on',
-      change: 'changed',
-    });
+    expect(ontologyProposalDiff(droppedSignature, twoSignatureBase)).toEqual([
+      { kind: 'link', name: 'runs_on', change: 'changed' },
+    ]);
   });
 
   it('omits identical types entirely — a pure diff, not a full listing', () => {
-    const draft: OntologyDefinition = {
-      objectTypes: [{ name: 'Host', description: 'A machine', identityKey: ['hostname'] }],
-      linkTypes: [{ name: 'runs_on', domain: 'Container', range: 'Host', description: 'runs on' }],
-      actionTypes: [
-        {
-          name: 'docker_restart',
-          description: 'Restart a container',
-          mode: 'execute',
-          blastRadius: 'medium',
-          autoApprovable: false,
-        },
-      ],
-    };
-    expect(ontologyProposalDiff(draft, currentTypes)).toEqual([]);
+    expect(ontologyProposalDiff(base, base)).toEqual([]);
+  });
+
+  it('a draft of a family with nothing published (base null) is all added — never a removal', () => {
+    expect(ontologyProposalDiff(base, null)).toEqual([
+      { kind: 'action', name: 'docker_restart', change: 'added' },
+      { kind: 'link', name: 'runs_on', change: 'added' },
+      { kind: 'object', name: 'Host', change: 'added' },
+    ]);
   });
 });

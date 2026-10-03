@@ -2,7 +2,12 @@ import type { OperationSummaryWire } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../../lib/governance.js';
+import {
+  type GatekeeperListRow,
+  type GrantRow,
+  type PrincipalRow,
+  gateGrantMakesApprover,
+} from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
 import { Button } from '../kit/button.js';
@@ -40,6 +45,11 @@ export interface GrantGateFormProps {
  * "全部门" (every gate, including ones registered later) is a distinct, explicit choice — ticking
  * it clears any gate selection and opens a `medium` confirm before it takes effect (J6: "「全部门」
  * 必须显式选择并走确认"); nothing here fires `grant_capability` until the caller presses 授予.
+ *
+ * R-39 (D-13): a gate grant also makes an `operator` an approver of every action on that gate (the
+ * kernel counts the grant as I14 approval scope). The covered-Operations hint says so, and picking
+ * a member whose role makes the grant an approval grant (`gateGrantMakesApprover`) shows a notice
+ * naming them before anything is submitted.
  *
  * One `grant_capability` call per selected gate (the capability takes one `resourceId` at a time);
  * `resourceId` omitted entirely for the "全部门" case. There is no `scope`: the kernel never
@@ -220,6 +230,14 @@ export function GrantGateForm({
           testId="ggf-member-chip"
         />
       ) : null}
+      {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
+        <Notice tone="warn" testId="ggf-approver-notice">
+          {t(
+            `${selectedPrincipal.displayName} 的角色是${roleLabel(selectedPrincipal.role, t)}：授予门的同时，他也会成为所授予门上所有动作的审批者——能批准或驳回其他成员经 Worker 提出的写操作。撤销授权会同时收回这份审批权。`,
+            `${selectedPrincipal.displayName} has the ${roleLabel(selectedPrincipal.role, t)} role: a gate grant also makes them an approver of every action on the granted gate(s) — they can approve or reject the writes other members request through a Worker. Revoking the grant removes that approval right too.`,
+          )}
+        </Notice>
+      ) : null}
 
       {lockedGatekeeper ? (
         <Field id="ggf-locked-gate" label={t('门', 'Gatekeeper')}>
@@ -322,8 +340,8 @@ export function GrantGateForm({
           </span>
           <p className="field-hint">
             {t(
-              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。只读 Operation 不需要授权，工作区里每个成员都能调用。',
-              'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Read operations need no grant — every member of the workspace can call them.',
+              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，他同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
+              'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Granted to an operator, it also makes them an approver of every action on this gate. Read operations need no grant — every member of the workspace can call them.',
             )}
           </p>
           {operations.state.status === 'loading' ? (

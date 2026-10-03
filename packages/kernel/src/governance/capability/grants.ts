@@ -490,7 +490,9 @@ export async function listActiveGrantResourceScopes(
 // Workspace owner — "the workspace owner counts as holding every scope" (this task's own I14
 // wording; §5.8 does not otherwise special-case `owner` for approval, but §5.1.1 already frames
 // `owner` as the tenant-root role — see application/gateway/authorize.ts's `roleSatisfiesMinRole`
-// doc comment for the same "owner is a super-role" reading applied to `minRole`).
+// doc comment for the same "owner is a super-role" reading applied to `minRole`). Only an active
+// owner (`disabled_at is null`) counts (R-38): a disabled owner cannot authenticate, so routing
+// approvals to one only leaks the request to someone who can no longer decide it.
 // -------------------------------------------------------------------------------------------
 
 export async function isWorkspaceOwner(
@@ -499,7 +501,8 @@ export async function isWorkspaceOwner(
   principalId: string,
 ): Promise<boolean> {
   const result = await client.query(
-    `select 1 from principals where workspace_id = $1 and id = $2 and role = 'owner' limit 1`,
+    `select 1 from principals
+     where workspace_id = $1 and id = $2 and role = 'owner' and disabled_at is null limit 1`,
     [workspaceId, principalId],
   );
   return (result.rowCount ?? 0) > 0;
@@ -510,7 +513,7 @@ export async function listWorkspaceOwnerPrincipalIds(
   workspaceId: string,
 ): Promise<readonly string[]> {
   const result = await client.query<{ id: string }>(
-    `select id from principals where workspace_id = $1 and role = 'owner'`,
+    `select id from principals where workspace_id = $1 and role = 'owner' and disabled_at is null`,
     [workspaceId],
   );
   return result.rows.map((row) => row.id);

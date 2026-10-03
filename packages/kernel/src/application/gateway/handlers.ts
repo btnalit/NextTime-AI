@@ -65,7 +65,7 @@ import {
   type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
   approveActionRequest,
-  getActionRequest,
+  getActionRequestVisibleTo,
   listActionRequestsForApprover,
   listPendingForApprover,
   readApprovalDecisions,
@@ -1065,11 +1065,21 @@ const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
   return { result: { items: await withApprovalDecision(client, workspaceId, rows) } };
 };
 
-/** `get_action`: workspace-scoped read, not I14-narrowed (§9.3 "get_action returns one
- *  (workspace-scoped)") — any `operator`+ role may read any single ActionRequest by id. */
+/** `get_action` (R-42, maintainer decision D-22): one ActionRequest under the same visibility as
+ *  `list_action_requests` (`governance/approval/reads.ts`'s `getActionRequestVisibleTo`) — the
+ *  owner sees every row; anyone else only a row matching one of their own active grants (I14) or
+ *  one they requested themselves. A row outside that visibility answers 404 exactly like an
+ *  unknown id, so a single-row read never shows more than the list does (its `params` can carry
+ *  an ssh command line or API arguments). */
 const getActionHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { actionRequestId } = params as { actionRequestId: string };
-  const result = await getActionRequest(client, workspaceId, actionRequestId);
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const result = await getActionRequestVisibleTo(
+    client,
+    workspaceId,
+    { principalId: caller.id, role: caller.role },
+    actionRequestId,
+  );
   if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
   return {
     result: await oneWithApprovalDecision(client, workspaceId, result),

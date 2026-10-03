@@ -98,6 +98,16 @@ function typesHttp(overrides: Parameters<typeof scriptedHttp>[0] = {}) {
 // Proposals tab (closing wave C5b, coverage gap G1 part 2) fixtures.
 // -------------------------------------------------------------------------------------------
 
+const RUNS_ON_SIGNATURES = [
+  { name: 'runs_on', domain: 'Container', range: 'Host', description: 'Container runs on a Host' },
+  {
+    name: 'runs_on',
+    domain: 'WorkerRun',
+    range: 'Host',
+    description: 'A Worker run runs on a Host',
+  },
+];
+
 const DRAFT_PROPOSAL: OntologyVersionListItemWire = {
   id: 'ov-1',
   version: 3,
@@ -105,24 +115,27 @@ const DRAFT_PROPOSAL: OntologyVersionListItemWire = {
   proposedBy: { id: 'p-alice', kind: 'human', displayName: 'Alice' },
   createdAt: '2026-09-20T10:00:00.000Z',
   definition: {
-    // Widget is new (added); Host/docker_restart are absent from this draft (removed); runs_on
-    // keeps the exact same signature set as TYPES's own LINK_TYPE (unchanged, omitted from the
+    // Against its base (v2 below): Widget is new (added); Host/docker_restart are absent from this
+    // draft (removed); runs_on keeps the exact same signature set (unchanged, omitted from the
     // diff).
     objectTypes: [{ name: 'Widget', description: 'A widget.', identityKey: ['widgetId'] }],
-    linkTypes: [
-      {
-        name: 'runs_on',
-        domain: 'Container',
-        range: 'Host',
-        description: 'Container runs on a Host',
-      },
-      {
-        name: 'runs_on',
-        domain: 'WorkerRun',
-        range: 'Host',
-        description: 'A Worker run runs on a Host',
-      },
-    ],
+    linkTypes: RUNS_ON_SIGNATURES,
+  },
+  // R-61: the published version of this draft's own family it was proposed against.
+  base: {
+    version: 2,
+    definition: {
+      objectTypes: [{ name: 'Host', description: 'A machine', identityKey: ['hostname'] }],
+      linkTypes: RUNS_ON_SIGNATURES,
+      actionTypes: [
+        {
+          name: 'docker_restart',
+          description: 'Restart a container',
+          mode: 'execute',
+          blastRadius: 'medium',
+        },
+      ],
+    },
   },
 };
 
@@ -131,6 +144,7 @@ const PUBLISHED_ROW: OntologyVersionListItemWire = {
   id: 'ov-0',
   version: 1,
   status: 'published',
+  base: null,
 };
 
 function proposalsHttp(overrides: Parameters<typeof scriptedHttp>[0] = {}) {
@@ -373,7 +387,7 @@ describe('OntologyTypesDrawer — Proposals list view', () => {
 });
 
 describe('OntologyTypesDrawer — Proposal detail view', () => {
-  it('opens a draft and diffs it against the currently-visible types', async () => {
+  it('opens a draft and diffs it against its own family’s published base (R-61)', async () => {
     const http = proposalsHttp();
     render(<Harness http={http} startTab="proposals" />);
     const rows = await screen.findAllByTestId('graph-proposal-row');
@@ -382,13 +396,59 @@ describe('OntologyTypesDrawer — Proposal detail view', () => {
     const body = await screen.findByTestId('graph-proposal-detail-body');
     expect(body.textContent).toContain('Alice');
     expect(body.textContent).toContain('v3');
+    expect(screen.getByTestId('graph-proposal-detail-fields').textContent).toContain('v2');
 
     const diffRows = await screen.findAllByTestId('graph-proposal-diff-row');
     const diffTexts = diffRows.map((row) => row.textContent ?? '');
     expect(diffTexts.some((text) => text.includes('Widget'))).toBe(true);
     expect(diffTexts.some((text) => text.includes('Host'))).toBe(true);
+    expect(diffTexts.some((text) => text.includes('docker_restart'))).toBe(true);
     // runs_on keeps the identical signature set in the draft — no diff row for it.
     expect(diffTexts.some((text) => text.includes('runs_on'))).toBe(false);
+  });
+
+  // R-61 (review L8b-1): the merged `list_types` namespace already holds the proposer's own draft
+  // and every other family, so diffing against it hid the real change and showed other families'
+  // types as removed. The detail view never reads it now.
+  it('never diffs against list_types: other families’ types are not "removed", the proposer’s own draft does not hide the change', async () => {
+    const http = proposalsHttp({
+      list_types: () => ({
+        items: [
+          // The proposer's own draft, as `list_types` shows it to them (I16) ...
+          { kind: 'object', name: 'Widget', description: 'A widget.', identityKey: ['widgetId'] },
+          // ... and a type of another family (platform-meta) the draft has nothing to do with.
+          { kind: 'object', name: 'Gatekeeper', description: 'A gate.' },
+        ],
+      }),
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    fireEvent.click(rows[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+
+    const diffTexts = (await screen.findAllByTestId('graph-proposal-diff-row')).map(
+      (row) => row.textContent ?? '',
+    );
+    expect(diffTexts.some((text) => text.includes('Widget'))).toBe(true);
+    expect(diffTexts.some((text) => text.includes('Gatekeeper'))).toBe(false);
+    expect(http.callsTo('list_types')).toEqual([]);
+  });
+
+  it('a draft of a family with nothing published lists every type as added', async () => {
+    const http = proposalsHttp({
+      list_ontology_versions: () => ({ items: [{ ...DRAFT_PROPOSAL, base: null }] }),
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    fireEvent.click(rows[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+
+    const diffRows = await screen.findAllByTestId('graph-proposal-diff-row');
+    const texts = diffRows.map((row) => row.textContent ?? '');
+    expect(texts).toHaveLength(2);
+    expect(texts.some((text) => text.includes('runs_on'))).toBe(true);
+    expect(texts.some((text) => text.includes('Widget'))).toBe(true);
+    expect(diffRows.every((row) => row.querySelector('.chip-ok') !== null)).toBe(true);
   });
 
   it('shows a missing state when the proposal is not (or no longer) visible', async () => {
@@ -448,9 +508,8 @@ describe('OntologyTypesDrawer — publish a proposal', () => {
     expect(http.callsTo('publish_ontology_version')).toEqual([
       { id: DRAFT_PROPOSAL.id, version: DRAFT_PROPOSAL.version },
     ]);
-    // Both reads were re-fetched, not just invalidated-and-left-stale.
+    // The drafts list was re-fetched, not just invalidated-and-left-stale.
     expect(http.callsTo('list_ontology_versions').length).toBeGreaterThan(1);
-    expect(http.callsTo('list_types').length).toBeGreaterThan(1);
   });
 
   it('shows the kernel’s own refusal inline in the confirm, and hides the button on the next visit', async () => {
