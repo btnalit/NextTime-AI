@@ -14,7 +14,8 @@
 # Reads:  secrets/internal.token — the root (gen-handle-keys.sh generates it). Only the kernel
 #         mounts it.
 # Writes: secrets/internal-<caller>-to-<callee>.token, one per edge of the internal plane, mode
-#         0640, group 10001 (the same convention as internal.token). docker-compose.yml mounts each
+#         0640, group 10001 (the same convention as internal.token; run as root — a file that
+#         cannot be given group 10001 stops the script, exit 1). docker-compose.yml mounts each
 #         into the services on that edge only:
 #           agent-host   -> kernel             agent-host
 #           llm-proxy    -> kernel             llm-proxy
@@ -84,7 +85,18 @@ derive() { # $1 = caller, $2 = callee
 		status="derived"
 	fi
 	chmod 640 "$file"
-	chgrp "$CONTAINER_GID" "$file" 2>/dev/null || echo "derive-internal-tokens: WARNING: could not chgrp $file to gid $CONTAINER_GID — the containers it is mounted into will not be able to read it" >&2
+	# Fatal, unlike gen-handle-keys.sh's best-effort chgrp: apply-release.sh runs this right before
+	# images, migrations and `up`, and a credential the non-root (gid 10001) service cannot read
+	# would take that service down at `up` — stop here instead, with the running stack untouched.
+	if ! chgrp "$CONTAINER_GID" "$file"; then
+		echo "derive-internal-tokens: could not chgrp $file to gid $CONTAINER_GID — the services it is mounted into could not read it. Run this script as root (the host scripts and CI's bootstrap step do)" >&2
+		exit 1
+	fi
+	gid=$(stat -c '%g' "$file" 2>/dev/null || echo '?')
+	if [ "$gid" != "$CONTAINER_GID" ]; then
+		echo "derive-internal-tokens: $file has group $gid after chgrp, expected $CONTAINER_GID — refusing to continue" >&2
+		exit 1
+	fi
 	echo "derive-internal-tokens: secrets/internal-$1-to-$2.token: $status (mode $(stat -c '%a' "$file" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$file" 2>/dev/null || echo '?'))"
 }
 
