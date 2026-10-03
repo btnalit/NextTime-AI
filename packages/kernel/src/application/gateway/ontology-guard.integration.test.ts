@@ -75,13 +75,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
+    // Test setup on the login role: only a platform transaction may change a workspace row
+    // (migration core 0035); the administrator's path is `update_workspace`.
     async function setEnforcement(mode: 'reject' | 'warn'): Promise<void> {
-      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
-        await client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
-          workspaceId,
-          mode,
-        ]);
-      });
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+            workspaceId,
+            mode,
+          ]);
+        },
+        { skipRoleSwitch: true },
+      );
     }
 
     async function thrownBy(call: () => Promise<unknown>): Promise<unknown> {
