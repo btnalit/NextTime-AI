@@ -977,7 +977,9 @@ const connectionCapabilities: readonly Capability[] = [
     minRole: 'member',
     paramsSchema: z.object({ gatekeeperId: id }).strict(),
     resultSchema: wire.GatekeeperDetailWireSchema,
-    description: 'One Gatekeeper instance with its Operations and a live health probe.',
+    description:
+      'One Gatekeeper instance with its Operations and a live health probe. A draft Operation ' +
+      'is listed only to its proposer, a builder or the owner (D-26, I16).',
   },
   {
     name: 'list_operations',
@@ -994,7 +996,9 @@ const connectionCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.OperationSummaryWireSchema),
     description:
       'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to ' +
-      'one gate and/or narrowed by q (case-insensitive substring on name).',
+      'one gate and/or narrowed by q (case-insensitive substring on name). A draft is listed ' +
+      'only to its proposer, a builder or the owner (D-26, I16); published and deprecated ' +
+      'Operations are listed to every member.',
   },
   {
     // S3.12 catalog-usage follow-up (docs/development-tasks.md S3.12, 2026-09-08+): the catalog's
@@ -2060,7 +2064,11 @@ const taskCapabilities: readonly Capability[] = [
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
     resultSchema: wire.TaskWireSchema,
-    description: 'Read one Task and its WorkerRun.',
+    // D-21 (review 2026-10-02, L2-11): kernel `taskVisibleTo` (application/task/service.ts).
+    description:
+      'Read one Task and its WorkerRuns. Visible to the workspace owner, the principal the Task ' +
+      'acts for, and the Task’s own WorkerRun Handle; for anyone else it is not found, exactly ' +
+      'like an unknown id.',
   },
   {
     // S2.9 addition (task brief: "add a small kernel capability/endpoint if none exists — e.g.
