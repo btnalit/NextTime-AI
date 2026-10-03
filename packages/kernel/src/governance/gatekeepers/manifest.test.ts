@@ -622,9 +622,12 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           client,
           workspaceId,
           { gatekeeperId, name: op.name },
+          // The resolved human Principal dispatch.ts always passes on the human channel — D-24's
+          // proposer-or-owner check (here: the owner, allowed) reads the caller's role from it.
           {
             channel: 'human',
             principalId: ownerId,
+            principal: { id: ownerId, kind: 'human', role: 'owner', displayName: null },
           },
         ),
       )) as { result: { supersedes: string | null } };
