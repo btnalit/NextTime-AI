@@ -12,7 +12,9 @@ worker-supervisor 日志，定位到具体是哪一层出的问题——而不�
 ## 2. 前置条件
 
 - 有能调用 capability 的凭证（owner/operator 的 API key，或知道该 Task 属于哪个 workspace 的
-  operator 权限——`list_pending`/`get_action` 要求 `minRole: operator`）。
+  operator 权限——`list_pending`/`get_action` 要求 `minRole: operator`）。operator 用
+  `get_action`/`list_action_requests` 只能看到自己持有匹配授权或自己发起的 ActionRequest，其余
+  一律 404 / 不出现（R-42）；查别人的请求用 owner。
 - 知道以下至少一项：Task id、WorkerRun id、ActionRequest id，或该用户/该 workspace 大概的时间窗口。
 
 ## 3. 诊断流程

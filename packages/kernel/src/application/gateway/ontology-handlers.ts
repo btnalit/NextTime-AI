@@ -154,6 +154,7 @@ function toWireOntologyVersionListItem(row: OntologyVersionListItem) {
     proposedBy: row.proposedBy,
     createdAt: row.createdAt.toISOString(),
     definition: row.definition,
+    base: row.base,
   };
 }
 

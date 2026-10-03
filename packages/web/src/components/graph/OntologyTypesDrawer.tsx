@@ -1,7 +1,6 @@
 import type { OntologyTypeWire, OntologyVersionListItemWire } from '@nexttime/shared';
 import { type FormEvent, useMemo, useState } from 'react';
 import {
-  type CapabilityListResult,
   invalidateCapability,
   useCapability,
   useCapabilityList,
@@ -78,7 +77,8 @@ function rowSummary(row: OntologyTypeWire): string {
  * inside one `kit/sheet`.
  *
  * 「类型 Types」 (closing wave C5, part 1): a read-only browser over the workspace's currently-
- * visible ontology (every published ObjectType/LinkType/ActionType, `list_types`; `get_type`
+ * visible ontology (`list_types`: every family's latest published ObjectType/LinkType/ActionType —
+ * or, for a family the viewer has their own newer draft of, that draft's, I16; `get_type`
  * re-fetches the canonical definition once a row is opened, the same "list row is a summary,
  * detail re-reads" convention `ProvenanceDrawer`/`ApprovalDetail` already follow) — searchable,
  * kind-filterable list plus a selected type's detail, `onSelectType`/`selectedTypeName` switching
@@ -91,7 +91,8 @@ function rowSummary(row: OntologyTypeWire): string {
  * 「提案 Proposals」 (closing wave C5b, part 2): lists the caller-visible `ontology_versions` draft
  * rows (`list_ontology_versions` — part 1's own module doc comment explains why that capability did
  * not exist yet), each opening onto a detail view that diffs the draft's own definition against the
- * currently-visible types (`ontologyProposalDiff`, `lib/graph-view.ts`) and offers `发布 Publish`
+ * published version of its own family it was proposed against (the item's `base`, R-61 —
+ * `ontologyProposalDiff`, `lib/graph-view.ts`) and offers `发布 Publish`
  * (`publish_ontology_version`) behind an `irreversible`-tier confirm — that capability is a one-way
  * `draft -> published` transition (I12: the definition becomes immutable the moment it publishes,
  * and no unpublish/deprecate exists for an OntologyVersion), so this is not a `medium`-tier
@@ -518,7 +519,7 @@ function LinkValidateTool({ http, linkType, t }: LinkValidateToolProps) {
 // -------------------------------------------------------------------------------------------
 // Proposals tab (closing wave C5b, coverage gap G1 part 2): list every draft visible to the
 // caller (`list_ontology_versions` — published + own drafts + I16, this drawer's module doc
-// comment) and let a person review one against the currently-visible types, then publish it.
+// comment) and let a person review one against its family's published base, then publish it.
 // -------------------------------------------------------------------------------------------
 
 interface ProposalsListViewProps {
@@ -607,26 +608,17 @@ function ProposalDetailView({
     'list_ontology_versions',
     {},
   );
-  const types = useCapabilityList<OntologyTypeWire>(http, 'list_types', {});
   const rows = proposals.state.status === 'ready' ? proposals.state.data.items : undefined;
   const row = rows?.find((item) => item.id === proposalId && item.version === proposalVersion);
 
-  // Publish invalidates and re-fetches both reads the console cares about here — the drafts list
-  // (this row moves from draft to published, or disappears if the tab keeps only drafts) and the
-  // currently-visible types (the newly-published definition) — same `invalidateCapability` +
-  // `reload()` idiom `CatalogPage.tsx`'s own `refresh()` uses after `publish_skill`/etc.
-  function handlePublished(): void {
+  // Publish and discard both change what `list_types` shows the proposer — it already shows their
+  // own draft for this family (I16), so publishing makes it everyone's and discarding drops it
+  // back to the published version (R-61). The drafts list is re-fetched here; `list_types` is
+  // only invalidated, so the Types tab reads it fresh the next time it mounts — same
+  // `invalidateCapability` + `reload()` idiom `CatalogPage.tsx`'s own `refresh()` uses.
+  function handleChanged(): void {
     invalidateCapability(http, 'list_ontology_versions');
     invalidateCapability(http, 'list_types');
-    void proposals.reload();
-    void types.reload();
-    onBack();
-  }
-
-  // Discard (leftover 99) deletes the draft row outright — only the drafts list changes; no type
-  // becomes visible or disappears, so `list_types` is left alone.
-  function handleDiscarded(): void {
-    invalidateCapability(http, 'list_ontology_versions');
     void proposals.reload();
     onBack();
   }
@@ -658,9 +650,8 @@ function ProposalDetailView({
         <ProposalDetailBody
           http={http}
           row={row}
-          types={types}
-          onPublished={handlePublished}
-          onDiscarded={handleDiscarded}
+          onPublished={handleChanged}
+          onDiscarded={handleChanged}
           t={t}
         />
       )}
@@ -683,22 +674,21 @@ function diffChangeLabel(change: OntologyProposalDiffEntry['change'], t: Transla
 function ProposalDetailBody({
   http,
   row,
-  types,
   onPublished,
   onDiscarded,
   t,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OntologyVersionListItemWire;
-  readonly types: CapabilityListResult<OntologyTypeWire>;
   readonly onPublished: () => void;
   readonly onDiscarded: () => void;
   readonly t: Translate;
 }) {
-  const currentTypes = types.state.status === 'ready' ? types.state.data.items : undefined;
+  // R-61: within this draft's own family only — against the published version it was proposed
+  // against (`base`), or against nothing for a family with nothing published yet.
   const diff = useMemo(
-    () => (currentTypes ? ontologyProposalDiff(row.definition, currentTypes) : undefined),
-    [row.definition, currentTypes],
+    () => ontologyProposalDiff(row.definition, row.base?.definition ?? null),
+    [row.definition, row.base],
   );
 
   return (
@@ -712,6 +702,13 @@ function ProposalDetailBody({
         items={[
           { key: 'version', label: t('版本', 'Version'), value: `v${row.version}`, mono: true },
           {
+            key: 'base',
+            label: t('基于', 'Based on'),
+            value: row.base
+              ? t(`已发布的 v${row.base.version}`, `Published v${row.base.version}`)
+              : t('无（新的本体族）', 'Nothing (a new ontology family)'),
+          },
+          {
             key: 'createdAt',
             label: t('提出时间', 'Proposed at'),
             value: formatDateTime(row.createdAt),
@@ -720,30 +717,29 @@ function ProposalDetailBody({
       />
       <div className="stack-s" data-testid="graph-proposal-diff">
         <h3 className="text-12 font-semibold uppercase tracking-wider text-text-3">
-          {t('与当前已发布类型的差异', 'Diff against currently visible types')}
+          {row.base
+            ? t(
+                `相对该族已发布 v${row.base.version} 的改动`,
+                `Changes to this family's published v${row.base.version}`,
+              )
+            : t(
+                '该族尚无发布版本，以下全部为新增',
+                'Nothing of this family is published — all new',
+              )}
         </h3>
-        {types.state.status === 'loading' ? (
-          <SkeletonRows count={2} label="Loading types" testId="graph-proposal-diff-loading" />
-        ) : types.state.status === 'error' ? (
-          <ErrorBanner
-            error={types.state.error}
-            title={t('无法加载当前类型', 'Could not load current types')}
-            onRetry={() => void types.reload()}
-            testId="graph-proposal-diff-error"
-          />
-        ) : (diff ?? []).length === 0 ? (
+        {diff.length === 0 ? (
           <EmptyState
-            title={t('没有可见差异', 'No visible difference')}
+            title={t('没有改动', 'No changes')}
             body={t(
-              '该提案声明的类型与当前一致。',
-              'The types this proposal declares already match what is currently visible.',
+              '该提案的定义与它所基于的已发布版本相同。',
+              'This proposal declares exactly what the published version it is based on declares.',
             )}
             variant="inline"
             testId="graph-proposal-diff-empty"
           />
         ) : (
           <div className="stack-s">
-            {(diff ?? []).map((entry) => (
+            {diff.map((entry) => (
               <div
                 key={`${entry.kind}:${entry.name}`}
                 className="row-wrap"

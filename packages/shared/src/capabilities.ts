@@ -417,7 +417,7 @@ const ontologyCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: listEnvelope(wire.OntologyVersionListItemWireSchema),
     description:
-      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish.',
+      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish; a draft also carries base — the published version of its own family it was proposed against, with that version’s definition (null: the family had nothing published) — so what the draft changes is the diff between the two.',
   },
 ];
 
@@ -1613,15 +1613,21 @@ const governanceCapabilities: readonly Capability[] = [
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
-    description: 'Read one ActionRequest.',
+    // R-42 (maintainer decision D-22): the same visibility as `list_action_requests` — one
+    // predicate (`governance/approval/reads.ts`'s `getActionRequestVisibleTo`), so a single-row
+    // read never shows more than the list. A row outside it answers 404, like an unknown id.
+    description:
+      'Read one ActionRequest the caller may see: the owner sees every row, anyone else only a row matching one of their own active grants (I14) or one they requested. Otherwise 404.',
   },
   {
     // S5.5 leftover 21 (docs/STATUS.md row 21, docs/development-tasks.md §5b S5.5 item 8): the
     // console's "审批历史" read — every ActionRequest regardless of status, unlike `list_pending`'s
-    // hardcoded `pending_approval` filter. Same I14 visibility as `list_pending`/`get_action`
-    // (`governance/approval/reads.ts`'s `listActionRequestsForApprover` doc comment): the owner
-    // sees every row, any other role only rows matching one of their own active `capability_grants`
-    // — a row a caller may not see must not appear here even once it is no longer pending.
+    // hardcoded `pending_approval` filter. Same visibility as `get_action` (R-42, D-22 — one
+    // predicate, `governance/approval/reads.ts`'s `listActionRequestsForApprover` doc comment): the
+    // owner sees every row, any other role only rows matching one of their own active
+    // `capability_grants` (I14, the match `list_pending` uses) plus the rows they requested
+    // themselves — a row a caller may not see must not appear here even once it is no longer
+    // pending.
     name: 'list_action_requests',
     group: 'governance',
     mode: 'observe',
@@ -1649,8 +1655,9 @@ const governanceCapabilities: readonly Capability[] = [
     description:
       'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
       'status, gatekeeperId, taskId (every WorkerRun of that Task) or parentWorkerRunId; ' +
-      'keyset-paginated (limit, cursor → nextCursor). Same I14 visibility as list_pending. Decided ' +
-      'rows carry decisionReason / decidedBy / decidedAt.',
+      'keyset-paginated (limit, cursor → nextCursor). Same visibility as get_action: the owner ' +
+      'sees every row, anyone else rows matching one of their own active grants (I14) or that ' +
+      'they requested. Decided rows carry decisionReason / decidedBy / decidedAt.',
   },
   {
     name: 'set_auto_approved_action_kind',
