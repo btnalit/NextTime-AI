@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCardData } from '../lib/action-card.js';
 import { HttpError } from '../lib/http-client.js';
@@ -132,15 +132,25 @@ describe('ActionRequestCard', () => {
     );
   });
 
-  it('"Always allow" approves with alwaysAllow: true', async () => {
+  it('"Always allow" confirms the rule’s real scope first, then approves with alwaysAllow: true (R-20 / D-15)', async () => {
     const { props } = renderCard();
     fireEvent.click(screen.getByRole('button', { name: /总是允许/ }));
+    const confirm = await screen.findByTestId('action-card-always-allow-confirm');
+    expect(props.onApprove).not.toHaveBeenCalled();
+    expect(confirm.textContent).toContain('此门');
+    expect(confirm.textContent).toContain('其他门上的同名动作不受影响');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: undefined,
         alwaysAllow: true,
       }),
     );
+  });
+
+  it('offers no "Always allow" when the card’s gate is unknown — the rule is keyed by gate', () => {
+    renderCard({ card: baseCard({ gatekeeperId: '' }) });
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
   });
 
   it('requires a reason to approve a high blast radius and never offers "Always allow" for it (I8)', async () => {

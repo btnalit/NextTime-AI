@@ -79,8 +79,21 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
   it('reports the decision with the reason and the always-allow choice; Reject opens a confirm carrying the reason (S8 W1-A7: every Reject confirms)', async () => {
     const { onApprove, onReject } = renderDetail();
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: ' why ' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /总是允许/ }));
+    // R-20 / D-15: the option names the gate and says it covers every requester.
+    const option = screen.getByRole('checkbox', { name: /总是允许/ });
+    expect(screen.getByTestId('approval-always-allow-option').textContent).toContain('docker-prod');
+    expect(screen.getByTestId('approval-always-allow-option').textContent).toContain('任何人');
+    fireEvent.click(option);
     fireEvent.click(screen.getByTestId('approval-approve'));
+    // Writing the rule always confirms, even at medium blast radius, and the confirm states the
+    // rule's real scope.
+    const alwaysConfirm = await screen.findByTestId('approval-confirm');
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(
+      within(alwaysConfirm).getByTestId('approval-confirm-always-allow-scope').textContent,
+    ).toContain('docker-prod');
+    expect(alwaysConfirm.textContent).toContain('其他门上的同名动作不受影响');
+    fireEvent.click(within(alwaysConfirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith({
         actionRequestId: 'ar-1',
@@ -88,6 +101,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
         alwaysAllow: true,
       }),
     );
+    await waitFor(() => expect(screen.queryByTestId('approval-confirm')).toBeNull());
     fireEvent.click(screen.getByTestId('approval-reject'));
     const confirm = await screen.findByTestId('approval-confirm');
     expect(within(confirm).getByTestId('approval-confirm-reason').textContent).toBe('why');
@@ -97,8 +111,22 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     );
   });
 
-  it('high blast radius: Approve without a reason is refused in place (the kernel rule, mirrored)', async () => {
+  it('a medium approval without "总是允许" still goes straight through, no confirm', async () => {
+    const { onApprove } = renderDetail();
+    fireEvent.click(screen.getByTestId('approval-approve'));
+    await waitFor(() =>
+      expect(onApprove).toHaveBeenCalledWith({
+        actionRequestId: 'ar-1',
+        reason: undefined,
+        alwaysAllow: false,
+      }),
+    );
+    expect(screen.queryByTestId('approval-confirm')).toBeNull();
+  });
+
+  it('high blast radius: never offers "总是允许" (R-20 / I8), and Approve without a reason is refused in place (the kernel rule, mirrored)', async () => {
     const { onApprove } = renderDetail({ blastRadius: 'high' });
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     // S8 W1-A10: ApprovalCard's reason error is bilingual via t() now; default zh-CN renders the
     // zh half.

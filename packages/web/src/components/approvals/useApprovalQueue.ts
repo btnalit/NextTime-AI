@@ -250,12 +250,16 @@ export function useApprovalQueue({
     }
     if (input.alwaysAllow) {
       try {
-        await http.call('set_auto_approved_action_kind', { actionKindTag: row.actionKindTag });
+        // R-20 / D-15: the rule is keyed by this request's gate and action kind.
+        await http.call('set_auto_approved_action_kind', {
+          gatekeeperId: row.gatekeeperId,
+          actionKindTag: row.actionKindTag,
+        });
         toast.push({
           tone: 'info',
           title: t(
-            `今后自动批准 · ${row.actionKindTag}`,
-            `Auto-approved from now on · ${row.actionKindTag}`,
+            `今后自动批准 · 此门上的 ${row.actionKindTag}（所有发起人）`,
+            `Auto-approved from now on · ${row.actionKindTag} on this gate (every requester)`,
           ),
         });
       } catch (err) {

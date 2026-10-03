@@ -94,6 +94,7 @@ describe('ModelsPage', () => {
         items: [
           {
             id: 'pol-1',
+            gatekeeperId: null,
             actionKindTag: 'docker.restart_container',
             blastRadius: 'high',
             autoApprove: false,
@@ -101,6 +102,17 @@ describe('ModelsPage', () => {
             setBy: 'owner-1',
             createdAt: '2026-09-01T00:00:00.000Z',
             updatedAt: '2026-09-02T00:00:00.000Z',
+          },
+          {
+            id: 'pol-2',
+            gatekeeperId: 'gk-lab-0001',
+            actionKindTag: 'docker.restart_container',
+            blastRadius: 'medium',
+            autoApprove: true,
+            requesterCanApprove: null,
+            setBy: 'owner-1',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z',
           },
         ],
       }),
@@ -127,6 +139,12 @@ describe('ModelsPage', () => {
     );
     expect(within(row).getByTestId('policy-auto-approve').textContent).toContain('需审批');
     expect(row.textContent).toContain('高影响');
+    // R-20 / D-15: a workspace-wide rule says it covers every gate and can only tighten; a gate
+    // rule names its gate.
+    expect(within(row).getByTestId('policy-scope').textContent).toContain('所有门');
+    const gateRow = within(policies).getByTestId('policy-row-pol-2');
+    expect(within(gateRow).getByTestId('policy-scope').textContent).toContain('gk-lab-0');
+    expect(within(gateRow).getByTestId('policy-auto-approve').textContent).toContain('自动批准');
   });
 
   it('each section degrades to its own error banner independently on 404 not_found (B6: no "not live yet" branch)', async () => {

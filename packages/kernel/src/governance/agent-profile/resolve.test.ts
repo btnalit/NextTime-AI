@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { NO_AVAILABLE_AGENT_RESOURCES, resolveEffectiveAgentProfile } from './resolve.js';
+import {
+  NO_AVAILABLE_AGENT_RESOURCES,
+  resolveAutoApproveLow,
+  resolveEffectiveAgentProfile,
+} from './resolve.js';
 import type { AvailableAgentResources } from './resolve.js';
 import { defaultAgentPolicy } from './store.js';
 import type { AgentPolicyRow, AgentProfileRow } from './types.js';
@@ -40,7 +44,7 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
       enabledGatekeepers: [],
       enabledWorkerDefinitions: [],
       promptAddendum: '',
-      autoApproveLow: false,
+      autoApproveLow: true,
     });
   });
 
@@ -214,13 +218,36 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     expect(withNull.promptAddendum).toBe('');
   });
 
-  it('autoApproveLow: profile true overrides a workspace default of false', () => {
+  it('autoApproveLow (D-16): a policy of false is enforced — a stored profile true cannot override it', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ autoApproveLow: true }),
       policy({ allowMemberAutoApproveLow: false }),
       available(),
     );
-    expect(effective.autoApproveLow).toBe(true);
+    expect(effective.autoApproveLow).toBe(false);
+  });
+
+  it('autoApproveLow (D-16): the compiled-in policy default is true, so no rows at all means on', () => {
+    expect(policy().allowMemberAutoApproveLow).toBe(true);
+    expect(resolveEffectiveAgentProfile(undefined, policy(), available()).autoApproveLow).toBe(
+      true,
+    );
+  });
+
+  it('autoApproveLow (D-16): resolveAutoApproveLow is the same predicate the effective value uses', () => {
+    for (const allowMemberAutoApproveLow of [true, false]) {
+      for (const autoApproveLow of [true, false, null]) {
+        const resolved = resolveEffectiveAgentProfile(
+          profile({ autoApproveLow }),
+          policy({ allowMemberAutoApproveLow }),
+          available(),
+        ).autoApproveLow;
+        expect(resolveAutoApproveLow({ autoApproveLow }, { allowMemberAutoApproveLow })).toBe(
+          resolved,
+        );
+        expect(resolved).toBe(allowMemberAutoApproveLow && autoApproveLow !== false);
+      }
+    }
   });
 
   it('autoApproveLow: profile false narrows a workspace default of true (never widens)', () => {

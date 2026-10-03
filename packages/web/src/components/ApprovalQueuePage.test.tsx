@@ -460,7 +460,9 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     expect(approve).not.toHaveBeenCalled();
     view.unmount();
 
-    // Medium blast radius: Approve is one click (no confirmation); the checkbox writes the rule.
+    // Medium blast radius with "总是允许": the rule outlives this request and covers every
+    // requester, so it confirms first (R-20 / D-15); confirmed, it is written keyed by this
+    // request's gate and action kind.
     render(
       <ApprovalQueuePage
         http={http}
@@ -472,11 +474,16 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     await screen.findByTestId('approval-detail');
     fireEvent.click(screen.getByRole('checkbox', { name: /总是允许/ }));
     fireEvent.click(screen.getByRole('button', { name: /批准/ }));
+    await screen.findByTestId('approval-confirm');
+    expect(approve).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('confirm-button'));
     await waitFor(() => expect(approve).toHaveBeenCalledWith({ actionRequestId: 'ar-1' }));
     await waitFor(() =>
-      expect(setAuto).toHaveBeenCalledWith({ actionKindTag: 'docker.container_restart' }),
+      expect(setAuto).toHaveBeenCalledWith({
+        gatekeeperId: row().gatekeeperId,
+        actionKindTag: 'docker.container_restart',
+      }),
     );
-    expect(screen.queryByTestId('approval-confirm')).toBeNull();
   });
 
   it('History shows the decider as a named principal chip, the reason and the decision time (C25 wire fields)', async () => {

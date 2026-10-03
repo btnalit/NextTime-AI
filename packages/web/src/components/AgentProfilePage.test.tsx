@@ -205,26 +205,79 @@ describe('AgentProfilePage', () => {
     await screen.findByTestId('agent-profile-error');
   });
 
-  it('save sends the full six-field state: null for inherited scalars, [] for "exclude nothing"', async () => {
+  it('save sends the full state: null for inherited scalars, [] for "exclude nothing" — and leaves an untouched autoApproveLow out (R-21: inherit never becomes explicit)', async () => {
     const http = scriptedHttp({
       get_agent_profile: () => profile(),
-      set_agent_profile: (params) => {
-        expect(params).toEqual({
-          principalId: 'p-1',
-          model: null,
-          excludedSkills: [],
-          excludedGatekeepers: [],
-          excludedWorkerDefinitions: [],
-          promptAddendum: null,
-          autoApproveLow: false,
-        });
-        return profile();
-      },
+      set_agent_profile: () => profile(),
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
     fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+    expect(http.calls.find((c) => c.name === 'set_agent_profile')?.params).toEqual({
+      principalId: 'p-1',
+      model: null,
+      excludedSkills: [],
+      excludedGatekeepers: [],
+      excludedWorkerDefinitions: [],
+      promptAddendum: null,
+    });
+  });
+
+  it('R-21 / D-16: unticking auto-approve sends false; ticking a stored false sends null (follow the workspace), never true', async () => {
+    const savedParams = () =>
+      http.calls.filter((c) => c.name === 'set_agent_profile').map((c) => c.params);
+    let current = profile({
+      effective: { ...profile().effective, autoApproveLow: true },
+    });
+    const http = scriptedHttp({
+      get_agent_profile: () => current,
+      set_agent_profile: (params) => {
+        const next = (params as { autoApproveLow?: boolean | null }).autoApproveLow;
+        current = profile({
+          autoApproveLow: next ?? null,
+          effective: { ...profile().effective, autoApproveLow: next !== false },
+        });
+        return current;
+      },
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-profile-form');
+    const checkbox = within(screen.getByTestId('agent-profile-auto-approve-low')).getByRole(
+      'checkbox',
+    ) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+
+    fireEvent.click(checkbox);
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(savedParams()).toHaveLength(1));
+    expect(savedParams()[0]).toMatchObject({ autoApproveLow: false });
+
+    fireEvent.click(checkbox);
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(savedParams()).toHaveLength(2));
+    expect(savedParams()[1]).toMatchObject({ autoApproveLow: null });
+  });
+
+  it('R-21 / D-16: a policy that forbids it shows the enforced off value, disabled, and a save never sends it — no lock-out on a stored true', async () => {
+    const http = scriptedHttp({
+      get_agent_policy: () => policy({ allowMemberAutoApproveLow: false }),
+      get_agent_profile: () => profile({ autoApproveLow: true }),
+      set_agent_profile: () => profile({ autoApproveLow: true }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-profile-form');
+    const option = await screen.findByTestId('agent-profile-auto-approve-low');
+    await waitFor(() => expect(option.textContent).toContain('强制'));
+    const checkbox = within(option).getByRole('checkbox') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
+    expect(http.calls.find((c) => c.name === 'set_agent_profile')?.params).not.toHaveProperty(
+      'autoApproveLow',
+    );
   });
 
   it('console redesign D1: granted systems are listed ticked; unticking one saves it as an exclusion', async () => {

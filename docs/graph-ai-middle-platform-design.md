@@ -373,7 +373,7 @@ flowchart TB
 
 - **传输种类（S2 全部交付通用基类）**：`http`（REST / GraphQL，清单可从 OpenAPI 导入，GET 默认 observe、其余默认 execute 并按动词给默认影响半径）、`mcp`（代理外部 MCP server，`tools/list` 即清单，`readOnlyHint` 为 observe，其余 execute；自动批准需 `vetted`）、`cli`（门容器内的命令模板，如 `kubectl`、`gh`、厂商 CLI）、`ssh`（远程命令模板 + 命令策略表，兼容 RouterOS 这类只有 CLI 的设备）。后续：`db`（默认只读 SQL，写入以声明的存储过程为 Operation）、`browser`（无 API 系统的 RPA）。`docker` 是 `cli` 种类的一个预置清单。
 - **协议**：`describe_operations`、`observe`、`simulate`、`apply`（以 `action_request_id` 幂等）、`revert`、`health`。
-- **命令策略表（`ssh` / `cli`）**：正则模式 → `mode / blast_radius / auto_approvable`；未命中默认 `require_approval`（I17）；审批卡片上的「此类总是允许」把模式写入工作区策略。
+- **命令策略表（`ssh` / `cli`）**：正则模式 → `mode / blast_radius / auto_approvable`；未命中默认 `require_approval`（I17）；审批卡片上的「总是允许」写入**该门**上这个动作种类的自动批准规则，对所有发起人生效（以 `(gatekeeper_id, action_kind)` 为键，复审 R-20 / 决定 D-15；同名动作在其他门上不受影响）。
 - **结果映射**：Operation 可声明 JMESPath 映射把响应变成对象身份键与属性，门返回时内核写为 `observed` Fact；没有映射的结果只作为 Observation 挂在 Activity 上，仍可在对话里使用。
 - **凭证**：基类内置共享（env）与 ConnectedAccount（门本地加密存储，按 `on_behalf_of`）；报销、审批这类必须以本人身份操作的系统用后者，库存、基础设施用前者。
 - **连接流程**：`request_connection(kind, target)` 或「连接系统」页 → 卡片 → 人填地址与凭证（凭证直达门，不经内核持久化）→ 门实例注册 → 图里生成 `Gatekeeper` 与系统对象 → 若是 `http` / `mcp` 自动导入清单草稿 → owner 发布清单。
@@ -940,7 +940,7 @@ nexttime explain <turn_activity_id>
 
 - **网络**：只有 caddy 有公网面；内核不发布端口；agent 容器经出网代理上公网、到不了内网（I10）；Gatekeeper 只被内核访问；Postgres 只对内核。
 - **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
-- **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。
+- **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。开启自动批准的规则必须指定门（`gatekeeper_policies`，门规则优先于工作区级规则），工作区级（所有门）规则只能收紧（R-20 / D-15）。AgentPolicy 的 `allowMemberAutoApproveLow` 是强制收窄：关闭后所有发起人的 low 都要人批，个人 AgentProfile 只能再收窄；默认开启（R-21 / D-16）。
 - **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
 - **门上的观察（决定 D4 撤回，2026-09-27 维护者确认"只读调用不需要授权"；人类通道同日一并放开——"也放开吧"）**：observe 类 Operation 对本工作区内任何 Handle（入口 agent、Worker、外部 Claude Code / pi 的凭证）和任何成员本人（人类通道，控制台 / API key）都可调，条件是——门已在本工作区启用、Operation 已发布且不在平台连接器禁用清单上；Handle 通道另加：门没有被工作区 AgentPolicy 上限或调用成员自己的 AgentProfile 排除（这两项是成员**智能体**的配置，不限制成员本人的读取）。`auditor` 角色仍不碰门（§5.1.1）。门 Grant 只管 execute 类：`request_action` 的执行类与未分类路径（含人类通道）照旧要 Grant + 审批，它读 observe 类 Operation 时与 `observe_operation` 同规则。每次观察照旧审计。实现上是一个谓词（`application/gates/observe-access.ts` 的 `observeRefusal`）：`observe_operation`（两个通道；人类通道以"无排除项"调用）/ `request_action` 的 observe 分支（两个通道）、`list_allowed_operations` 工具投射、可达性读模型、`find_procedures` 与「我的智能体」的可选系统清单都调它；Worker 的观察类工具走 `observe_operation`（Worker 基础能力，不随门范围衰减），执行类走 `request_action`；Handle 的 `resources.gatekeeper` 只表示执行授权（Grant 派生、按 Worker 衰减），不再决定能否观察（`productization-plan-v2-2026-09-26.md` §2 实现说明）。
 - **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。 **用户与平台管理员**：用户是平台级目录，`platform_role` 只分 admin / user；人用用户名 + 密码登录（本地账号即此），API key 留给自动化与 agent；平台管理员只有管理权没有业务数据权；初始化靠一次性令牌（§7.11）。

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { grantCapability } from '../capability/index.js';
-import { setPolicy } from '../policy/index.js';
+import { SetPolicyValidationError, setPolicy } from '../policy/index.js';
 import {
   compensateActionRequest,
   expireActionRequest,
@@ -324,9 +324,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(row).toBeUndefined();
       });
 
-      it('a workspace policy row changes request_action resolution for a medium-blast-radius kind', async () => {
+      it('a gate-scoped policy row changes request_action resolution for a medium-blast-radius kind on that gate only (R-20 / D-15)', async () => {
+        const otherGatekeeperId = await insertGatekeeperObject(workspaceId, ownerId);
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           setPolicy(client, workspaceId, {
+            gatekeeperId,
             actionKind: 'test.policy_opt_in',
             blastRadius: 'medium',
             autoApprove: true,
@@ -334,19 +336,34 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
 
-        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          requestAction(client, workspaceId, {
-            gatekeeperId,
-            actionKind: 'test.policy_opt_in',
-            blastRadius: 'medium',
-            operationAutoApprovable: true,
-            awaitDecision: false,
-            onBehalfOf: ownerId,
-            actorRuntime: 'pi',
-            requesterScope: scopeCovering(gatekeeperId),
-          }),
-        );
-        expect(row.status).toBe('auto_approved');
+        const requestOn = (target: string) =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            requestAction(client, workspaceId, {
+              gatekeeperId: target,
+              actionKind: 'test.policy_opt_in',
+              blastRadius: 'medium',
+              operationAutoApprovable: true,
+              awaitDecision: false,
+              onBehalfOf: ownerId,
+              actorRuntime: 'pi',
+              requesterScope: scopeCovering(gatekeeperId, otherGatekeeperId),
+            }),
+          );
+        expect((await requestOn(gatekeeperId)).status).toBe('auto_approved');
+        expect((await requestOn(otherGatekeeperId)).status).toBe('pending_approval');
+      });
+
+      it('refuses a workspace-wide auto-approval rule before touching the DB (R-20 / D-15)', async () => {
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            setPolicy(client, workspaceId, {
+              actionKind: 'test.workspace_wide_opt_in',
+              blastRadius: 'medium',
+              autoApprove: true,
+              setBy: ownerId,
+            }),
+          ),
+        ).rejects.toThrow(SetPolicyValidationError);
       });
     });
   },

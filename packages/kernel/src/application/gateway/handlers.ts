@@ -79,6 +79,13 @@ import {
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import {
+  GatekeeperNotFoundError,
+  OperationNotFoundError,
+  getGatekeeper,
+  getPublishedOperation,
+} from '../../governance/gatekeepers/index.js';
+import {
+  assertPolicyWriteAllowed,
   listPolicies,
   parseSetPolicyPayload,
   setAutoApprovedActionKind,
@@ -1145,20 +1152,24 @@ const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId,
   };
 };
 
-/** "总是批准此类" — writes/upserts a workspace auto-approval rule for one action_kind (§9.3,
- *  design doc S2.10 card action). See `governance/policy/policies.ts`'s own doc comment for why
- *  the I8 high-blast-radius guard can only fire here when a prior `set_policy` call already
- *  recorded this action_kind's `blast_radius` (S2.6's graph-stored Operation metadata, the only
- *  other source of truth, does not exist yet). */
+/** "总是允许" — writes/upserts the auto-approval rule for one Gatekeeper's action kind, for every
+ *  requester (§9.3, design doc S2.10 card action; R-20 / D-15 keyed it by `(gatekeeperId,
+ *  actionKindTag)` — it used to be the bare Operation name on every gate). The Operation must be
+ *  published on that Gatekeeper (404 otherwise: an unclassified action can never be auto-approved,
+ *  I17), and its own `blast_radius` is the rule's snapshot, so a `high` Operation is refused (400,
+ *  I8 — `setAutoApprovedActionKind` → `assertPolicyWriteAllowed`). */
 // Item 5 fix (review job 652a4abc lane2 P1: "operator flips I8 workspace signal for medium
 // action_kind across all gates, no I14 scope check"): `minRole:'operator'` only gates *entry* to
 // this capability (`authorize.ts`) — a non-owner operator must additionally hold an active grant
-// covering `actionKind` (`hasAnyActiveGrant`, any `resourceScope`: this writes one workspace-wide
-// rule, not a per-gate one, so the check cannot narrow to a single gate either — see that
-// function's own doc comment). `owner` bypasses, the same "workspace owner counts as holding
-// every scope" convention I14 already uses elsewhere.
+// covering `actionKind` (`hasAnyActiveGrant`, any `resourceScope` — unchanged by R-20, which
+// narrowed what the rule covers, not who may write it). `owner` bypasses, the same "workspace
+// owner counts as holding every scope" convention I14 already uses elsewhere. Checked before the
+// Operation lookup, so an unauthorized caller learns nothing about which Operations exist.
 const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { actionKindTag } = params as { actionKindTag: string };
+  const { gatekeeperId, actionKindTag } = params as {
+    gatekeeperId: string;
+    actionKindTag: string;
+  };
   const caller = await currentPrincipalRole(client, workspaceId);
   if (caller.role !== 'owner') {
     const covered = await hasAnyActiveGrant(client, workspaceId, {
@@ -1172,20 +1183,49 @@ const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, works
       );
     }
   }
+  const published = await getPublishedOperation(client, workspaceId, gatekeeperId, actionKindTag);
+  if (!published) throw new OperationNotFoundError(gatekeeperId, actionKindTag);
   const result = await setAutoApprovedActionKind(client, workspaceId, {
+    gatekeeperId,
     actionKind: actionKindTag,
+    blastRadius: published.operation.blast_radius,
     setBy: caller.id,
   });
   return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
 };
 
+/** `set_policy` (owner). With `gatekeeperId` the rule is gate-scoped (R-20 / D-15): the Gatekeeper
+ *  must exist, and when the Operation is published there its own `blast_radius` is checked (a
+ *  `high` one is never opted in, I8) and fills the snapshot the payload left out. Without it the
+ *  rule is workspace-wide and `setPolicy` refuses `autoApprove: true`. */
 const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { policy } = params as { policy: unknown };
   const payload = parseSetPolicyPayload(policy);
   const setBy = await currentPrincipalId(client);
+  let blastRadius = payload.blastRadius;
+  if (payload.gatekeeperId !== undefined) {
+    if (!(await getGatekeeper(client, workspaceId, payload.gatekeeperId))) {
+      throw new GatekeeperNotFoundError(payload.gatekeeperId);
+    }
+    const published = await getPublishedOperation(
+      client,
+      workspaceId,
+      payload.gatekeeperId,
+      payload.actionKindTag,
+    );
+    if (published) {
+      assertPolicyWriteAllowed({
+        actionKind: payload.actionKindTag,
+        blastRadius: published.operation.blast_radius,
+        autoApprove: payload.autoApprove,
+      });
+      blastRadius ??= published.operation.blast_radius;
+    }
+  }
   const result = await setPolicy(client, workspaceId, {
+    ...(payload.gatekeeperId !== undefined ? { gatekeeperId: payload.gatekeeperId } : {}),
     actionKind: payload.actionKindTag,
-    blastRadius: payload.blastRadius,
+    blastRadius,
     autoApprove: payload.autoApprove,
     requesterCanApprove: payload.requesterCanApprove,
     setBy,

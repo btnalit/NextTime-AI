@@ -17,15 +17,19 @@ export interface AgentProfile {
   readonly excludedGatekeepers: readonly string[];
   readonly excludedWorkerDefinitions: readonly string[];
   readonly promptAddendum: string | null;
+  /** R-21 / D-16: `false` narrows this principal; `null` (inherit) and `true` follow the
+   *  workspace AgentPolicy, whose `allowMemberAutoApproveLow: false` is enforced for everyone. */
   readonly autoApproveLow: boolean | null;
   readonly updatedAt: string;
   readonly updatedBy: string;
   /** The systems the My Agent checklist offers (leftover 98): granted ones (read + write) plus
    *  every system readable without a Grant — before exclusions, not capped by the policy. */
   readonly availableGatekeepers: readonly AvailableGatekeeper[];
-  /** Resolved — never `null`: the model / addendum / auto-approve fall back to the policy's
-   *  defaults, and each list is everything currently granted / published minus the exclusions,
-   *  capped by the policy. `enabledGatekeepers` is the *granted* (read + write) set only. */
+  /** Resolved — never `null`: the model / addendum fall back to the policy's defaults,
+   *  `autoApproveLow` is the policy's value narrowed by the profile's own `false` (exactly what the
+   *  kernel enforces on `request_action`), and each list is everything currently granted /
+   *  published minus the exclusions, capped by the policy. `enabledGatekeepers` is the *granted*
+   *  (read + write) set only. */
   readonly effective: EffectiveAgentProfile;
 }
 
@@ -48,9 +52,11 @@ export interface EffectiveAgentProfile {
 }
 
 /** `set_agent_profile` params — every field optional, but this console's own editor
- *  (`components/AgentProfilePage.tsx`) always sends the full six-field state on save (`null` for
- *  "reset to inherit", `[]` for "exclude nothing") rather than a partial diff, so a cleared field
- *  is unambiguously cleared rather than silently left at its previous override by omission. */
+ *  (`components/AgentProfileForm.tsx`) always sends the full state of the other five fields on
+ *  save (`null` for "reset to inherit", `[]` for "exclude nothing") rather than a partial diff, so
+ *  a cleared field is unambiguously cleared rather than silently left at its previous override by
+ *  omission. `autoApproveLow` is sent only when the reader changed it (R-21): `null` to follow the
+ *  workspace, `false` to narrow — never `true`. */
 export interface SetAgentProfileParams {
   readonly principalId?: string;
   readonly model?: string | null;
@@ -70,6 +76,8 @@ export interface AgentPolicy {
   /** Empty = unrestricted (§S3.13 AgentPolicy: "空 = 不限制") — never read as "nothing allowed". */
   readonly allowedSkills: readonly string[];
   readonly allowedGatekeepers: readonly string[];
+  /** R-21 / D-16: `false` is enforced — low-blast-radius auto-approval is off for every requester
+   *  in the workspace, whatever their profile says. Default `true`. */
   readonly allowMemberAutoApproveLow: boolean;
   readonly updatedAt: string;
   readonly updatedBy: string;

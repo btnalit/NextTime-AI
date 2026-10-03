@@ -115,6 +115,7 @@ export function toWireGrant(row: CapabilityGrantRow) {
 export function toWirePolicy(row: PolicyRow) {
   return {
     id: row.id,
+    gatekeeperId: row.gatekeeperId,
     actionKindTag: row.actionKind,
     blastRadius: row.blastRadius,
     autoApprove: row.autoApprove,

@@ -12,12 +12,13 @@ import { breadcrumbFor } from '../lib/nav.js';
 import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
-import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
+import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { PolicyEditSheet } from './governance/PolicyEditSheet.js';
 import { QuotaEditSheet } from './governance/QuotaEditSheet.js';
 import { Button } from './kit/button.js';
 import { DataTable, type DataTableColumn } from './kit/data-table.js';
 import { PageHeader } from './kit/page-header.js';
+import { RefChip } from './kit/ref-chip.js';
 import { DashboardCard } from './kit/section.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -120,7 +121,11 @@ function quotaColumns(
  *  reads as the row's "status". */
 function policyColumns(
   t: Translate,
-  options: { readonly canManage: boolean; readonly onEdit: (row: PolicyWire) => void },
+  options: {
+    readonly canManage: boolean;
+    readonly onEdit: (row: PolicyWire) => void;
+    readonly gateNames: ReadonlyMap<string, string>;
+  },
 ): readonly DataTableColumn<PolicyWire>[] {
   return [
     {
@@ -129,6 +134,27 @@ function policyColumns(
       priority: 'primary',
       cellClassName: 'mono',
       cell: (policy) => <span data-testid="policy-action-kind">{policy.actionKindTag}</span>,
+    },
+    {
+      // R-20 / D-15: a rule is either for one gate's action kind ("Always allow" writes only
+      // these) or for the name on every gate — which can only require approval.
+      id: 'gate',
+      header: t('适用范围', 'Applies to'),
+      priority: 'high',
+      cell: (policy) =>
+        policy.gatekeeperId === null ? (
+          <span className="text-3" data-testid="policy-scope">
+            {t('所有门（只能收紧）', 'Every gate (tighten only)')}
+          </span>
+        ) : (
+          <RefChip
+            kind="gatekeeper"
+            id={policy.gatekeeperId}
+            name={nameOf(options.gateNames, policy.gatekeeperId)}
+            size="s"
+            testId="policy-scope"
+          />
+        ),
     },
     {
       id: 'blastRadius',
@@ -440,6 +466,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
             columns={policyColumns(t, {
               canManage: isOwner,
               onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
+              gateNames: gatekeepers.names,
             })}
             data={policies.state.data.items}
             getRowId={(policy) => policy.id}
@@ -461,6 +488,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
           open
           onOpenChange={(open) => !open && setPolicyEditor(null)}
           editing={policyEditor.kind === 'edit' ? policyEditor.row : undefined}
+          gatekeepers={gatekeepers.rows ?? []}
           onSaved={handlePolicySaved}
         />
       ) : null}
