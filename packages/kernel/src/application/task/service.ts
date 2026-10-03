@@ -1,5 +1,6 @@
 import {
   type ProcedureStep,
+  type Role,
   TASK_TRANSITIONS,
   type TaskEvent,
   type TaskStatus,
@@ -54,12 +55,10 @@ export interface TaskWithWorkerRuns {
   readonly workerRuns: readonly WorkerRunRow[];
 }
 
-/** Workspace-scoped, on_behalf_of-visible (docs/development-tasks.md S2.7 "get_task
- *  (workspace-scoped, on_behalf_of-visible)"): `tasks`'/`worker_runs`' own RLS policies are
- *  workspace-only (migrations/task/0001_tasks.sql's own header comment — no owner-narrowing rule
- *  is implied by §5.6 for Task the way it is for Chat/private-Source), so any workspace member may
- *  read any Task; "on_behalf_of-visible" describes *who a Task is for*, not an access restriction
- *  this function enforces on top of that. */
+/** Workspace-scoped and unfiltered: `tasks`'/`worker_runs`' own RLS policies are workspace-only
+ *  (migrations/task/0001_tasks.sql's own header comment). This is the internal read (the
+ *  `list_action_requests{taskId}` filter, `cancel_task`'s pre-read) — a caller that hands the
+ *  Task's content to someone goes through `getTaskVisibleTo` below, which applies D-21. */
 export async function getTaskWithWorkerRuns(
   client: PoolClient,
   workspaceId: string,
@@ -75,6 +74,50 @@ export async function getTaskWithWorkerRuns(
     [workspaceId, taskId],
   );
   return { task, workerRuns: workerRunsResult.rows.map(mapWorkerRunRow) };
+}
+
+/** Who is reading a Task — the acting principal (a Handle's `obo`, I13) with its workspace role,
+ *  plus the calling Handle's own session (`claims.sid`) on the handle channel. */
+export interface TaskViewer {
+  readonly principalId: string;
+  readonly role: Role;
+  readonly sessionId?: string;
+}
+
+/**
+ * D-21 (review 2026-10-02, L2-11): a Task's content — `input`, `result`, `failureReason`, its
+ * WorkerRuns — is visible to the workspace owner, the principal the Task acts for (`on_behalf_of`,
+ * the requester), and the Task's own WorkerRun Handle (a Handle whose session is one of this Task's
+ * WorkerRuns). Nobody else: a Task's input can carry private-chat content (§5.6 / I15). The same
+ * rule `cancel_task` applies (owner or requester; that capability is not in any Handle ceiling, so
+ * the WorkerRun branch never reaches it). Task *names* stay workspace-wide through `resolve_refs`
+ * (resolve-refs-handler.ts: a name is not sensitive); `list_tasks` lists only the caller's own
+ * Tasks, a subset of this predicate.
+ */
+export function taskVisibleTo(
+  viewer: TaskViewer,
+  task: TaskRow,
+  workerRuns: readonly WorkerRunRow[],
+): boolean {
+  if (viewer.role === 'owner') return true;
+  if (task.onBehalfOf === viewer.principalId) return true;
+  const sessionId = viewer.sessionId;
+  return sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
+}
+
+/** `get_task`: `getTaskWithWorkerRuns` narrowed by `taskVisibleTo`. A Task the viewer may not see
+ *  is a `TaskNotFoundError`, exactly like an unknown id — the answer never says it exists. */
+export async function getTaskVisibleTo(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: TaskViewer,
+  taskId: string,
+): Promise<TaskWithWorkerRuns> {
+  const found = await getTaskWithWorkerRuns(client, workspaceId, taskId);
+  if (!taskVisibleTo(viewer, found.task, found.workerRuns)) {
+    throw new TaskNotFoundError(workspaceId, taskId);
+  }
+  return found;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -124,8 +167,8 @@ export interface TasksPage {
 /**
  * `list_tasks` (S2.10 addition — see packages/shared/src/capabilities.ts's own doc comment on
  * that registry entry for why one had to be added; §9.3 never defined a list capability for Task).
- * Unlike `getTaskWithWorkerRuns` above (workspace-scoped, any Task by id), this is narrowed to
- * `on_behalf_of = principalId` — "the caller's own Tasks" (the task brief's own words) — newest
+ * Narrowed to `on_behalf_of = principalId` — "the caller's own Tasks" (the task brief's own
+ * words), for an owner too: a subset of `taskVisibleTo`'s rule (D-21), never wider — newest
  * first, each with its WorkerRuns, keyset-paginated (S8 W1-C). One query for the Task page, one
  * batched query for every WorkerRun across that page's Tasks (`task_id = any($2)`), grouped back
  * together in application code — avoids an N+1 query per Task while staying a single, easily-read

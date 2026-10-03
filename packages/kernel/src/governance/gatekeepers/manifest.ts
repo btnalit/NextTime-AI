@@ -1,4 +1,4 @@
-import type { Operation, PrincipalKind, PublishableStatus } from '@nexttime/shared';
+import type { Operation, PrincipalKind, PublishableStatus, Role } from '@nexttime/shared';
 import { IllegalTransition, PUBLISHABLE_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { OperationOrigin } from '../../substrate/ontology/index.js';
@@ -9,6 +9,7 @@ import {
   setOperationGovernanceFieldsObject,
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
+import { roleSatisfiesMinRole } from '../capability/index.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -593,6 +594,10 @@ export async function listDraftOperationsForGatekeeper(
  * deliberate here (full lifecycle history stays queryable — module doc comment's revision-
  * versioning note), unlike `listPublishedOperationsForGatekeepers`/`getPublishedOperation`, which
  * still resolve to at most one row per identity.
+ *
+ * Unfiltered: the human read handlers narrow drafts per caller with `operationVisibleTo` below
+ * (D-26) — this function also feeds `governanceChangesForDrafts`, which needs both rows of an
+ * identity.
  */
 export async function listOperations(
   client: PoolClient,
@@ -627,24 +632,64 @@ export async function listOperations(
   return records;
 }
 
+/** Who is reading the Operation directory: the human caller and their workspace role. */
+export interface OperationViewer {
+  readonly principalId: string;
+  readonly role: Role;
+}
+
+/** Owner and builder review Operation drafts (`roleSatisfiesMinRole(role, 'builder')`: the owner
+ *  clears every role, `builder` is the role that proposes meta-ontology). */
+function viewerSeesEveryOperationDraft(role: Role): boolean {
+  return roleSatisfiesMinRole(role, 'builder');
+}
+
+/**
+ * D-26 (review 2026-10-02, L2-15): an Operation **draft** is private to its proposer (I16 —
+ * `propose_operation` is "a private draft Operation"), the same read rule Skill / Procedure /
+ * WorkerDefinition drafts follow (`status = 'published' or (status = 'draft' and proposed_by =
+ * caller)`, application/worker/skills.ts). One difference, by decision: the workspace's reviewers —
+ * `owner` and `builder` — see every draft, because an agent's Operation proposal (a member's
+ * Worker result, `proposedBy` = that member) only ever goes live through an owner's
+ * `publish_operation` from the catalog. Published and deprecated rows stay workspace-visible. A
+ * legacy draft with no recorded proposer is nobody's draft: reviewers only.
+ */
+export function operationVisibleTo(viewer: OperationViewer, record: OperationRecord): boolean {
+  if (record.status !== 'draft') return true;
+  if (viewerSeesEveryOperationDraft(viewer.role)) return true;
+  return record.proposedBy?.id === viewer.principalId;
+}
+
 /** `list_gatekeepers`'s own per-gate `operationCount` (S3.11) — one grouped query over every
  *  Gatekeeper's Operations, rather than `listOperations(...).length` once per gate in a loop
  *  (N+1), and rather than fetching every Operation's full `properties` just to count them.
  *  Counts **distinct Operation identities** (`gatekeeperId` + `name`), not rows — S3.12: a single
  *  identity can now project as several rows (a `deprecated` version alongside its `published`
  *  successor, or a pending revision `draft`), and this count is meant to answer "how many
- *  Operations does this gate expose", not "how many row versions exist". */
+ *  Operations does this gate expose", not "how many row versions exist".
+ *
+ *  D-26: with a `viewer`, only rows `operationVisibleTo` would show that viewer are counted (the
+ *  same rule in SQL — a row with no `status` reads as a draft, like `toOperationRecord`), so the
+ *  count never names an identity that exists only as someone else's draft. */
 export async function countOperationsByGatekeeper(
   client: PoolClient,
   workspaceId: string,
+  viewer?: OperationViewer,
 ): Promise<ReadonlyMap<string, number>> {
+  const seesEveryDraft = viewer === undefined || viewerSeesEveryOperationDraft(viewer.role);
   const result = await client.query<{ gatekeeper_id: string | null; count: string }>(
     `select identity_key ->> 'gatekeeperId' as gatekeeper_id,
             count(distinct identity_key ->> 'name')::bigint as count
      from objects
      where workspace_id = $1 and object_type = 'Operation'
+       and (
+         $2::boolean
+         or coalesce(properties ->> 'status', 'draft') <> 'draft'
+         or (properties ->> 'proposedBy' = $3::text
+             and properties ->> 'proposedByKind' is not null)
+       )
      group by identity_key ->> 'gatekeeperId'`,
-    [workspaceId],
+    [workspaceId, seesEveryDraft, viewer?.principalId ?? null],
   );
   const counts = new Map<string, number>();
   for (const row of result.rows) {

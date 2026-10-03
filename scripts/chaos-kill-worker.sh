@@ -17,7 +17,8 @@
 #                comment — "channel:'handle' capabilities are available to *both* channels" — a
 #                `channel:'human'` guard only ever blocks the opposite direction. This is the same
 #                "curl + API key" transport docs/runbooks/troubleshoot-task.md's own `get_task`
-#                example already uses.
+#                example already uses. D-21: the key must belong to the Task's requester or the
+#                workspace owner — anyone else's `get_task` on <taskId> is a 404.
 #   [pollTimeoutSeconds] — how long to wait for the reaper to notice and requeue/fail the Task
 #                after the kill. Default 90 (application/task's own reaper runs on a 30s tick by
 #                default, TASK_REAPER_INTERVAL_MS — 90s gives it up to 3 ticks).

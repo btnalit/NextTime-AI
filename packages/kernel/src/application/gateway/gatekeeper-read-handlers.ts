@@ -11,15 +11,17 @@ import {
   GatekeeperNotFoundError,
   type OperationGovernanceChange,
   type OperationRecord,
+  type OperationViewer,
   countOperationsByGatekeeper,
   getGatekeeper,
   listGatekeepers,
   listOperations,
   operationGovernanceChange,
+  operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
 import type { GateLinkPolicyView } from '../gates/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
 
 /**
@@ -206,11 +208,31 @@ function matchesQuery(name: string, q: string | undefined): boolean {
   return q === undefined || name.toLowerCase().includes(q.toLowerCase());
 }
 
-export const listGatekeepersHandler: CapabilityHandler = async (client, workspaceId, params) => {
+/** D-26: the caller the Operation directory is narrowed for (`operationVisibleTo`). All three
+ *  reads here are `channel: 'human'`, so dispatch.ts always resolved the Principal. */
+function operationViewerOf(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): OperationViewer {
+  if (!ctx?.principal) {
+    throw new Error(
+      `${name}: no resolved human principal in context (this capability is channel:"human"-only)`,
+    );
+  }
+  return { principalId: ctx.principal.id, role: ctx.principal.role };
+}
+
+export const listGatekeepersHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { q } = params as { q?: string };
+  const viewer = operationViewerOf('list_gatekeepers', ctx);
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const entries = await listGatekeepers(client, workspaceId);
-  const operationCounts = await countOperationsByGatekeeper(client, workspaceId);
+  const operationCounts = await countOperationsByGatekeeper(client, workspaceId, viewer);
   return {
     result: {
       items: entries
@@ -222,8 +244,9 @@ export const listGatekeepersHandler: CapabilityHandler = async (client, workspac
   };
 };
 
-export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { gatekeeperId } = params as { gatekeeperId: string };
+  const viewer = operationViewerOf('get_gatekeeper', ctx);
   const record = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
 
@@ -235,7 +258,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;
   const operations = allOperations.filter(
-    (op) => !operationPlatformStatus(gateLink, op.name).disabled,
+    (op) => operationVisibleTo(viewer, op) && !operationPlatformStatus(gateLink, op.name).disabled,
   );
 
   const summary = toWireGatekeeperSummary(
@@ -260,8 +283,14 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   };
 };
 
-export const listOperationsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const listOperationsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { gatekeeperId, q } = params as { gatekeeperId?: string; q?: string };
+  const viewer = operationViewerOf('list_operations', ctx);
   const records = await listOperations(client, workspaceId, { gatekeeperId });
   const governanceChanges = governanceChangesForDrafts(records);
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
@@ -269,6 +298,8 @@ export const listOperationsHandler: CapabilityHandler = async (client, workspace
   const visible = [];
   for (const record of records) {
     if (!matchesQuery(record.name, q)) continue;
+    // D-26: someone else's draft is not listed (owner / builder see every draft).
+    if (!operationVisibleTo(viewer, record)) continue;
     let link = linksByGatekeeper.get(record.gatekeeperId);
     if (link === undefined) {
       link = await gateLinkPolicyFor(client, workspaceId, record.gatekeeperId);
