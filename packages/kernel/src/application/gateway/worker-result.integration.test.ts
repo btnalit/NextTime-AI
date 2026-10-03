@@ -1025,11 +1025,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('warn: both entries are written and the guard’s own ontology_violation row records the second', async () => {
-        await inTx(ownerId, (client) =>
-          client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
-            workspaceId,
-            'warn',
-          ]),
+        // Login role: only a platform transaction may change a workspace row (migration core 0035).
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+              workspaceId,
+              'warn',
+            ]),
+          { skipRoleSwitch: true },
         );
         const { taskId, claims } = await spawnWorkerRun();
         const marker = randomUUID().slice(0, 8);

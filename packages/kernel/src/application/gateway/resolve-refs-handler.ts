@@ -48,12 +48,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  *     app_principal()`) is already enforced by Postgres on the plain `select` below — a private
  *     chat belonging to someone else is simply absent from the result set, never a second
  *     application-level check.
- *   - `workspace` — the one kind with no RLS at all to lean on (`workspaces` deliberately has
- *     none, migrations/core/0001_identity.sql's own comment) and the one where this capability's
- *     own `workspaceId` argument is *always* the caller's current workspace — so "the caller's own
- *     workspace" only ever needs `id === workspaceId`, no query required; a platform administrator
- *     (`ctx.consoleUser?.platformRole === 'admin'` — S4.1 console-session login, threaded by
- *     `dispatch.ts`) additionally sees any other workspace by id, the same authority
+ *   - `workspace` — the one kind with no read-scoping RLS to lean on (every transaction may read
+ *     `workspaces`, migrations/core/0035_db_write_confinement.sql) and the one where this
+ *     capability's own `workspaceId` argument is *always* the caller's current workspace — so
+ *     "the caller's own workspace" only ever needs `id === workspaceId`, no query required; a
+ *     platform administrator (`ctx.consoleUser?.platformRole === 'admin'` — S4.1 console-session
+ *     login, threaded by `dispatch.ts`) additionally sees any other workspace by id, the same authority
  *     `list_workspaces` (`scope:'platform'`) already grants them. The id filter runs before the
  *     query, not after: a non-admin's query never even asks about another workspace's id.
  */
@@ -231,7 +231,7 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   }
 
   // -----------------------------------------------------------------------------------------
-  // workspace — no RLS to lean on (see this module's own doc comment): resolvable ids are
+  // workspace — no read-scoping RLS to lean on (see this module's own doc comment): resolvable ids are
   // filtered *before* the query, not after — the caller's own workspace always, any other
   // workspace only for a platform administrator's console session.
   // -----------------------------------------------------------------------------------------

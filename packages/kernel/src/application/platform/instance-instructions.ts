@@ -14,9 +14,9 @@ import { readPlatformSettings } from './settings.js';
  *      informational, exactly as `agent-host-runtime.ts`'s former `appendPromptAddendum` did.
  *
  * Both consumers read the setting fresh per Turn / per spawn (a one-row select inside the
- * transaction they already hold — `platform_settings` has a plain SELECT grant for `nexttime_app`
- * and no RLS, 0021), so a change in 平台设置 reaches the *next* container start (design §8 "之后启动
- * 的容器"), never a running one — pi reads `--system-prompt` at start.
+ * transaction they already hold — `platform_settings` has a SELECT grant for `nexttime_app`, 0021,
+ * and a read-all RLS policy, 0035), so a change in 平台设置 reaches the *next* container start
+ * (design §8 "之后启动的容器"), never a running one — pi reads `--system-prompt` at start.
  */
 
 export async function readInstanceInstructions(client: PoolClient): Promise<string> {
