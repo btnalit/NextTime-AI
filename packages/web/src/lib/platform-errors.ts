@@ -142,6 +142,17 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个门没有关联的平台实例，没有可对齐的公告清单',
     en: 'This Gatekeeper has no linked platform gate instance — there is no announced manifest to align with',
   },
+  // R-18 (D-18): the manifest shown is no longer the one that would be applied — a workspace
+  // enable / refresh after an administrator confirmed a newer manifest, or a platform confirm
+  // after the gate announced again. Nothing was written; reload and look again.
+  manifest_changed: {
+    zh: '门的清单在你查看之后变了，没有写入任何内容；请重新打开查看',
+    en: "The gate's manifest changed after you looked at it — nothing was written; open it again to review",
+  },
+  no_pending_manifest: {
+    zh: '这个门实例没有待确认的公告清单',
+    en: 'This gate instance has no announced manifest awaiting confirmation',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of

@@ -103,6 +103,11 @@ export async function registerGatesRoutes(
         { gateId: outcome.gateId, connector: parsed.data.connector, status: outcome.status },
         'gates/announce: new gate instance discovered',
       );
+    } else if (outcome.manifestHeld) {
+      request.log?.info?.(
+        { gateId: outcome.gateId, status: outcome.status },
+        'gates/announce: the announced manifest changes what this decided instance can do — held for an administrator to confirm (confirm_gate_manifest); the manifest in effect is unchanged',
+      );
     }
     return reply.status(200).send({
       ok: true,

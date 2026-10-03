@@ -9,11 +9,13 @@ import type { OperationStatsRow } from '../../governance/approval/index.js';
 import {
   type GatekeeperListEntry,
   GatekeeperNotFoundError,
+  type OperationGovernanceChange,
   type OperationRecord,
   countOperationsByGatekeeper,
   getGatekeeper,
   listGatekeepers,
   listOperations,
+  operationGovernanceChange,
 } from '../../governance/gatekeepers/index.js';
 import type { GateLinkPolicyView } from '../gates/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
@@ -139,8 +141,14 @@ function toWireGatekeeperSummary(entry: GatekeeperListEntry, operationCount: num
  * explicitly the "按门分组" (grouped by gate) human directory *across* gates (task brief), which is
  * not actually groupable without knowing which gate each item belongs to; omitting it would make
  * that directory unusable the moment more than one Gatekeeper is registered.
+ *
+ * R-19 (D-17): `governanceChange` (from `governanceChangesForDrafts`) rides on a draft whose
+ * identity has a published version — what publishing it would change, with the kernel's direction.
  */
-function toWireOperationSummary(record: OperationRecord) {
+function toWireOperationSummary(
+  record: OperationRecord,
+  governanceChange?: OperationGovernanceChange,
+) {
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -159,7 +167,30 @@ function toWireOperationSummary(record: OperationRecord) {
     ...(record.operation.description !== undefined
       ? { description: record.operation.description }
       : {}),
+    ...(governanceChange !== undefined ? { governanceChange } : {}),
   };
+}
+
+/** R-19 (D-17): for every `draft` in `records` whose identity also has a `published` row there,
+ *  the change publishing it would make to that row (`publishOperation` retires the published row of
+ *  the identity, so that row is the "before"). Keyed by the draft's own Object id. `records` must
+ *  be the unfiltered per-gate read, so both rows of an identity are present. */
+function governanceChangesForDrafts(
+  records: readonly OperationRecord[],
+): ReadonlyMap<string, OperationGovernanceChange> {
+  const published = new Map<string, OperationRecord>();
+  for (const record of records) {
+    if (record.status === 'published') {
+      published.set(`${record.gatekeeperId}:${record.name}`, record);
+    }
+  }
+  const changes = new Map<string, OperationGovernanceChange>();
+  for (const record of records) {
+    if (record.status !== 'draft') continue;
+    const live = published.get(`${record.gatekeeperId}:${record.name}`);
+    if (live) changes.set(record.id, operationGovernanceChange(live.operation, record.operation));
+  }
+  return changes;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -200,6 +231,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   // client and run one after the other (S5.5 leftover 34).
   const healthProbe = probeGatekeeperHealth(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
+  const governanceChanges = governanceChangesForDrafts(allOperations);
   const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;
   const operations = allOperations.filter(
@@ -220,7 +252,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   return {
     result: {
       ...summary,
-      operations: operations.map(toWireOperationSummary),
+      operations: operations.map((op) => toWireOperationSummary(op, governanceChanges.get(op.id))),
       health,
     },
     resourceType: 'gatekeeper',
@@ -231,6 +263,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
 export const listOperationsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { gatekeeperId, q } = params as { gatekeeperId?: string; q?: string };
   const records = await listOperations(client, workspaceId, { gatekeeperId });
+  const governanceChanges = governanceChangesForDrafts(records);
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
   const linksByGatekeeper = new Map<string, GateLinkPolicyView | null>();
   const visible = [];
@@ -243,7 +276,13 @@ export const listOperationsHandler: CapabilityHandler = async (client, workspace
     }
     if (!operationPlatformStatus(link, record.name).disabled) visible.push(record);
   }
-  return { result: { items: visible.map(toWireOperationSummary) } };
+  return {
+    result: {
+      items: visible.map((record) =>
+        toWireOperationSummary(record, governanceChanges.get(record.id)),
+      ),
+    },
+  };
 };
 
 /** `get_operation_stats` (S3.12 catalog-usage follow-up) — no existence check on `gatekeeperId`,

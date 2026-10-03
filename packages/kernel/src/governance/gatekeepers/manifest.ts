@@ -993,6 +993,42 @@ export function classifyOperationGovernanceChange(
   return directions.size > 1 ? 'mixed' : ([...directions][0] as OperationGovernanceDirection);
 }
 
+/** R-19 (decision D-17): the one direction every console confirm shows for a governance change —
+ *  the refresh preview, a catalog publish, the wizard's reclassification and a gate's pending
+ *  manifest — so no client keeps a ranking of its own. `classifyOperationGovernanceChange` for a
+ *  real change, `neutral` when none of the three fields differs. */
+export type OperationGovernanceChangeDirection = OperationGovernanceDirection | 'neutral';
+
+export function operationGovernanceChangeDirection(
+  before: OperationGovernanceFields,
+  after: OperationGovernanceFields,
+): OperationGovernanceChangeDirection {
+  const diff = diffOperationGovernanceFields(before, after);
+  return diff.differs
+    ? classifyOperationGovernanceChange(before, after, diff.changedFields)
+    : 'neutral';
+}
+
+export interface OperationGovernanceChange {
+  readonly before: OperationGovernanceFields;
+  readonly after: OperationGovernanceFields;
+  readonly direction: OperationGovernanceChangeDirection;
+}
+
+/** `before` → `after` as the wire's `OperationGovernanceChangeWire`. */
+export function operationGovernanceChange(
+  before: Operation,
+  after: Operation,
+): OperationGovernanceChange {
+  const beforeFields = operationGovernanceFieldsOf(before);
+  const afterFields = operationGovernanceFieldsOf(after);
+  return {
+    before: beforeFields,
+    after: afterFields,
+    direction: operationGovernanceChangeDirection(beforeFields, afterFields),
+  };
+}
+
 export interface RefreshOperationGovernanceInput {
   readonly gatekeeperId: string;
   /** The gate instance's announced manifest right now (`operationsOf(rawOperations(...))` —

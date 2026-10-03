@@ -1648,6 +1648,482 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "confirm_gate_manifest",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "credentialMode": {
+                  "enum": [
+                    "shared",
+                    "connected_account"
+                  ],
+                  "type": "string"
+                },
+                "manifestSource": {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "target": {
+                  "format": "uri",
+                  "type": "string"
+                },
+                "transportKind": {
+                  "enum": [
+                    "http",
+                    "mcp"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "transportKind",
+                "target",
+                "credentialMode",
+                "manifestSource"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "enabledWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enablingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "health": {
+          "enum": [
+            "ok",
+            "unreachable",
+            "unauthorized",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "hosted": {
+          "type": "boolean"
+        },
+        "lastCheckedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "type": "string"
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable",
+              "readOnlyHint",
+              "destructiveHint",
+              "idempotentHint"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "pendingManifest": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "added": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "announcedAt": {
+                  "type": "string"
+                },
+                "changed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "direction": {
+                        "enum": [
+                          "loosened",
+                          "tightened",
+                          "mixed",
+                          "neutral"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "otherChangedFields": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after",
+                      "direction",
+                      "name",
+                      "otherChangedFields"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "operationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "removed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "digest",
+                "announcedAt",
+                "operationCount",
+                "added",
+                "removed",
+                "changed"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "discovered",
+            "enabled",
+            "disabled",
+            "lost"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "transportKind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "trust": {
+          "enum": [
+            "byo",
+            "vetted"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "connector",
+        "displayName",
+        "transportKind",
+        "target",
+        "endpoint",
+        "status",
+        "trust",
+        "health",
+        "lastSeenAt",
+        "lastCheckedAt",
+        "operationCount",
+        "enabledWorkspaceCount",
+        "operations",
+        "hosted",
+        "definition",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "execute",
@@ -2055,6 +2531,233 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "pendingManifest": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "added": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "announcedAt": {
+                  "type": "string"
+                },
+                "changed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "direction": {
+                        "enum": [
+                          "loosened",
+                          "tightened",
+                          "mixed",
+                          "neutral"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "otherChangedFields": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after",
+                      "direction",
+                      "name",
+                      "otherChangedFields"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "operationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "removed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "digest",
+                "announcedAt",
+                "operationCount",
+                "added",
+                "removed",
+                "changed"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -3203,6 +3906,10 @@
       "additionalProperties": false,
       "properties": {
         "gateId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "manifestDigest": {
           "minLength": 1,
           "type": "string"
         }
@@ -5566,6 +6273,233 @@
           },
           "type": "array"
         },
+        "pendingManifest": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "added": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "announcedAt": {
+                  "type": "string"
+                },
+                "changed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "direction": {
+                        "enum": [
+                          "loosened",
+                          "tightened",
+                          "mixed",
+                          "neutral"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "otherChangedFields": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after",
+                      "direction",
+                      "name",
+                      "otherChangedFields"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "operationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "removed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "digest",
+                "announcedAt",
+                "operationCount",
+                "added",
+                "removed",
+                "changed"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "status": {
           "enum": [
             "discovered",
@@ -5689,6 +6623,84 @@
               },
               "gatekeeperId": {
                 "type": "string"
+              },
+              "governanceChange": {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable"
+                    ],
+                    "type": "object"
+                  },
+                  "direction": {
+                    "enum": [
+                      "loosened",
+                      "tightened",
+                      "mixed",
+                      "neutral"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "before",
+                  "after",
+                  "direction"
+                ],
+                "type": "object"
               },
               "mode": {
                 "enum": [
@@ -8539,6 +9551,233 @@
                 },
                 "type": "array"
               },
+              "pendingManifest": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "added": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "autoApprovable": {
+                              "type": "boolean"
+                            },
+                            "blastRadius": {
+                              "type": "string"
+                            },
+                            "destructiveHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            "idempotentHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            "mode": {
+                              "enum": [
+                                "observe",
+                                "execute"
+                              ],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "readOnlyHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "mode",
+                            "blastRadius",
+                            "autoApprovable",
+                            "readOnlyHint",
+                            "destructiveHint",
+                            "idempotentHint"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "announcedAt": {
+                        "type": "string"
+                      },
+                      "changed": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "after": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "autoApprovable": {
+                                  "type": "boolean"
+                                },
+                                "blastRadius": {
+                                  "enum": [
+                                    "low",
+                                    "medium",
+                                    "high"
+                                  ],
+                                  "type": "string"
+                                },
+                                "mode": {
+                                  "enum": [
+                                    "observe",
+                                    "execute"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "mode",
+                                "blastRadius",
+                                "autoApprovable"
+                              ],
+                              "type": "object"
+                            },
+                            "before": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "autoApprovable": {
+                                  "type": "boolean"
+                                },
+                                "blastRadius": {
+                                  "enum": [
+                                    "low",
+                                    "medium",
+                                    "high"
+                                  ],
+                                  "type": "string"
+                                },
+                                "mode": {
+                                  "enum": [
+                                    "observe",
+                                    "execute"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "mode",
+                                "blastRadius",
+                                "autoApprovable"
+                              ],
+                              "type": "object"
+                            },
+                            "direction": {
+                              "enum": [
+                                "loosened",
+                                "tightened",
+                                "mixed",
+                                "neutral"
+                              ],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "otherChangedFields": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "before",
+                            "after",
+                            "direction",
+                            "name",
+                            "otherChangedFields"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "digest": {
+                        "type": "string"
+                      },
+                      "operationCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "removed": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "autoApprovable": {
+                              "type": "boolean"
+                            },
+                            "blastRadius": {
+                              "type": "string"
+                            },
+                            "destructiveHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            "idempotentHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            "mode": {
+                              "enum": [
+                                "observe",
+                                "execute"
+                              ],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "readOnlyHint": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "mode",
+                            "blastRadius",
+                            "autoApprovable",
+                            "readOnlyHint",
+                            "destructiveHint",
+                            "idempotentHint"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "digest",
+                      "announcedAt",
+                      "operationCount",
+                      "added",
+                      "removed",
+                      "changed"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "enum": [
                   "discovered",
@@ -9193,6 +10432,84 @@
               },
               "gatekeeperId": {
                 "type": "string"
+              },
+              "governanceChange": {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable"
+                    ],
+                    "type": "object"
+                  },
+                  "direction": {
+                    "enum": [
+                      "loosened",
+                      "tightened",
+                      "mixed",
+                      "neutral"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "before",
+                  "after",
+                  "direction"
+                ],
+                "type": "object"
               },
               "mode": {
                 "enum": [
@@ -12053,6 +13370,9 @@
         "gateId": {
           "type": "string"
         },
+        "manifestDigest": {
+          "type": "string"
+        },
         "operationsAlreadyPresent": {
           "items": {
             "additionalProperties": false,
@@ -12088,6 +13408,15 @@
               },
               "differs": {
                 "type": "boolean"
+              },
+              "direction": {
+                "enum": [
+                  "loosened",
+                  "tightened",
+                  "mixed",
+                  "neutral"
+                ],
+                "type": "string"
               },
               "existing": {
                 "additionalProperties": false,
@@ -12135,7 +13464,8 @@
               "name",
               "existing",
               "announced",
-              "differs"
+              "differs",
+              "direction"
             ],
             "type": "object"
           },
@@ -12260,7 +13590,8 @@
         "wouldLink",
         "ambiguousCandidates",
         "operationsToImport",
-        "operationsAlreadyPresent"
+        "operationsAlreadyPresent",
+        "manifestDigest"
       ],
       "type": "object"
     }
@@ -12481,6 +13812,91 @@
         "gatekeeperId": {
           "type": "string"
         },
+        "governanceChange": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "after": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "autoApprovable": {
+                      "type": "boolean"
+                    },
+                    "blastRadius": {
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ],
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "blastRadius",
+                    "autoApprovable"
+                  ],
+                  "type": "object"
+                },
+                "before": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "autoApprovable": {
+                      "type": "boolean"
+                    },
+                    "blastRadius": {
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ],
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "blastRadius",
+                    "autoApprovable"
+                  ],
+                  "type": "object"
+                },
+                "direction": {
+                  "enum": [
+                    "loosened",
+                    "tightened",
+                    "mixed",
+                    "neutral"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "before",
+                "after",
+                "direction"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "type": "string"
         },
@@ -12502,7 +13918,8 @@
         "name",
         "version",
         "status",
-        "draftOf"
+        "draftOf",
+        "governanceChange"
       ],
       "type": "object"
     }
@@ -13971,6 +15388,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "manifestDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
         "operationNames": {
           "items": {
             "minLength": 1,
@@ -13980,7 +15401,8 @@
         }
       },
       "required": [
-        "gatekeeperId"
+        "gatekeeperId",
+        "manifestDigest"
       ],
       "type": "object"
     },
@@ -19205,6 +20627,233 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "pendingManifest": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "added": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "announcedAt": {
+                  "type": "string"
+                },
+                "changed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable"
+                        ],
+                        "type": "object"
+                      },
+                      "direction": {
+                        "enum": [
+                          "loosened",
+                          "tightened",
+                          "mixed",
+                          "neutral"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "otherChangedFields": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after",
+                      "direction",
+                      "name",
+                      "otherChangedFields"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "operationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "removed": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "digest",
+                "announcedAt",
+                "operationCount",
+                "added",
+                "removed",
+                "changed"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
