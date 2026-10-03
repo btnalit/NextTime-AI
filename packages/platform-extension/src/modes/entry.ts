@@ -234,6 +234,14 @@ function renderEntryContext(context: EntryContextResult): string {
   return ['## NextTime entry context', ...sections].join('\n\n');
 }
 
+function isInvalidParams(error: unknown): boolean {
+  return (
+    error instanceof KernelError &&
+    error.kind === 'capability_error' &&
+    error.code === 'invalid_params'
+  );
+}
+
 function logKernelError(error: unknown, capabilityName: string): void {
   const message = error instanceof KernelError ? `${error.kind}: ${error.message}` : String(error);
   // Never interpolates the capability Handle — KernelError's message never carries it (kernel-client.ts).
@@ -322,10 +330,29 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     return undefined;
   });
 
+  // 2026-10-02 review R-57 (decision D-23): every call names the Turn it serves. The kernel returns
+  // that Turn's chat's items on every LLM call of the Turn — a second call, a provider-error retry
+  // — and drops them only once `report_turn` (agent_settled below) acknowledges the Turn. Without
+  // a known Turn the call sends `{}` (the kernel then attributes it to the running Turn itself).
+  // A kernel from before `turnId` existed (a rolled-back kernel with this runtime image still
+  // active) rejects the param as `invalid_params`; this process then falls back to `{}`, the only
+  // form that kernel accepts, for the rest of its life.
+  let sendTurnIdToEntryContext = true;
   pi.on('context', async (event) => {
     let entryContext: EntryContextResult;
     try {
-      entryContext = await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
+      const turnParams =
+        sendTurnIdToEntryContext && currentTurnId ? { turnId: currentTurnId } : undefined;
+      try {
+        entryContext = await options.kernelClient.call<EntryContextResult>(
+          'get_entry_context',
+          turnParams ?? {},
+        );
+      } catch (error) {
+        if (!turnParams || !isInvalidParams(error)) throw error;
+        sendTurnIdToEntryContext = false;
+        entryContext = await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
+      }
     } catch (error) {
       // context fires before every LLM call; a kernel outage must degrade to "no injected
       // context", never break the turn.
@@ -337,7 +364,8 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     if (!text) return undefined;
 
     // Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from
-    // `context` is used for this LLM call only, never written back to the session file.
+    // `context` is used for this LLM call only, never written back to the session file — which is
+    // why the kernel keeps returning the same items for the Turn until it is reported (above).
     const contextMessage: (typeof event.messages)[number] = {
       role: 'custom',
       customType: 'nexttime-entry-context',

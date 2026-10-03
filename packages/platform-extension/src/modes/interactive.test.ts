@@ -279,6 +279,28 @@ describe('registerInteractiveMode', () => {
     expect(outcome).toBeUndefined();
   });
 
+  // 2026-10-02 review R-57 (decision D-23): an interactive session has no Turn, so it reads
+  // without a turnId — the kernel's read-only peek (application/linkage/store.ts, covered by the
+  // kernel's integration tests) — and repeated reads never take the item away.
+  it('R-57: context reads get_entry_context without a turnId (a peek) on every call', async () => {
+    kernel.setHandler('get_entry_context', () => ({
+      ok: true,
+      result: { tasks: [{ taskId: 't-peek', status: 'completed' }] },
+    }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    const first = await contextHandler({ messages: [] }, fakeCtx());
+    const second = await contextHandler({ messages: [] }, fakeCtx());
+    expect(first?.messages[0]?.content).toContain('t-peek');
+    expect(second?.messages[0]?.content).toContain('t-peek');
+    expect(
+      kernel.requests
+        .filter((request) => request.capability === 'get_entry_context')
+        .map((request) => request.params),
+    ).toEqual([{}, {}]);
+  });
+
   it('never calls pi.appendEntry — no Turn/session-entry correlation for an interactive session', async () => {
     kernel.setHandler('get_entry_context', () => ({ ok: true, result: {} }));
     const contextHandler = fake.handlers.get('context');

@@ -2,18 +2,19 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CapabilityScope } from '@nexttime/shared';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { approveActionRequest, requestAction } from '../../governance/approval/index.js';
 import { grantCapability } from '../../governance/capability/index.js';
+import { startActivity } from '../../substrate/epistemic/index.js';
 import { newChat } from '../chat/index.js';
 import {
   type ActionRequestEventSource,
   registerActionRequestConsumers,
 } from './action-request-consumer.js';
-import { drainPendingContextItems } from './store.js';
+import { leaseContextItemsToTurn, peekContextItems } from './store.js';
 
 /**
  * application/linkage/action-request-consumer.integration: DB-gated end-to-end test for docs/
@@ -212,20 +213,20 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Only the requester gets a pending_context_items row (§8.5: holders act through the web
       // queue, not next-turn context — see action-request-consumer.ts's own doc comment).
-      const requesterDrain = await withWorkspace(
+      const requesterContext = await withWorkspace(
         pool,
         { workspaceId, principalId: requesterId },
-        (client) => drainPendingContextItems(client, workspaceId, requesterId),
+        (client) => peekContextItems(client, workspaceId, requesterId),
       );
-      expect(requesterDrain.pendingApprovals).toHaveLength(1);
-      expect(requesterDrain.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
+      expect(requesterContext.pendingApprovals).toHaveLength(1);
+      expect(requesterContext.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
 
-      const holderDrain = await withWorkspace(
+      const holderContext = await withWorkspace(
         pool,
         { workspaceId, principalId: holderId },
-        (client) => drainPendingContextItems(client, workspaceId, holderId),
+        (client) => peekContextItems(client, workspaceId, holderId),
       );
-      expect(holderDrain.pendingApprovals).toHaveLength(0);
+      expect(holderContext.pendingApprovals).toHaveLength(0);
 
       // ActionRequestUpdated (approve, by a holder) fans out an update message too.
       const approved = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -333,13 +334,13 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // The fix under test: despite isHolder:true, a pending_context_items row is still written,
       // because ownerId is also the requester.
-      const ownerDrain = await withWorkspace(
+      const ownerContext = await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
-        (client) => drainPendingContextItems(client, workspaceId, ownerId),
+        (client) => peekContextItems(client, workspaceId, ownerId),
       );
-      expect(ownerDrain.pendingApprovals).toHaveLength(1);
-      expect(ownerDrain.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
+      expect(ownerContext.pendingApprovals).toHaveLength(1);
+      expect(ownerContext.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
     });
 
     // Leftover 78 (docs/STATUS.md §4): `resolveDefaultChat`'s "most recently created Chat" rule is
@@ -478,6 +479,142 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
       );
       expect(newerChatMessages.rows).toHaveLength(0);
+    });
+
+    // 2026-10-02 review R-57 (decision D-23: items belong to the Chat that started them): an
+    // ActionRequest raised by a Worker belongs, for its requester, to the Chat whose Turn invoked
+    // that Worker — its pending card, its update and its context items — not to whichever Chat the
+    // requester created last, and a Turn of another Chat never sees its context items.
+    it('a Worker-raised ActionRequest lands in the Chat whose Turn invoked the Worker, message and context items alike', async () => {
+      const requester = await adminInsertPrincipal('member', 'worker-raised-requester');
+      const asRequester = <T>(fn: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId, principalId: requester }, fn);
+
+      const originChat = await asRequester((client) => newChat(client, workspaceId, requester, {}));
+      const originTurn = await asRequester((client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: originChat.id,
+          principalId: requester,
+        }),
+      );
+      // The Task that Turn invoked, and its WorkerRun — inserted directly: only the
+      // `parent_worker_run_id → worker_runs.task_id → tasks.created_by_activity_id` chain matters.
+      const workerRunId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: requester },
+        async (client) => {
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, created_by_activity_id,
+                                worker_definition_id, worker_definition_version)
+             values ($1, 'running', $2, $3, $4, 1) returning id`,
+            [workspaceId, requester, originTurn.id, randomUUID()],
+          );
+          const run = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id)
+             values ($1, 'running', $2) returning id`,
+            [workspaceId, task.rows[0]?.id],
+          );
+          const id = run.rows[0]?.id;
+          if (!id) throw new Error('failed to insert worker run');
+          return id;
+        },
+        { skipRoleSwitch: true },
+      );
+      // Created after the origin Chat: `resolveDefaultChat` would pick this one.
+      const newerChat = await asRequester((client) => newChat(client, workspaceId, requester, {}));
+      const newerTurn = await asRequester((client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: newerChat.id,
+          principalId: requester,
+        }),
+      );
+
+      const row = await asRequester((client) =>
+        requestAction(client, workspaceId, {
+          gatekeeperId,
+          actionKind: 'linkage.test.action',
+          blastRadius: 'medium',
+          operationAutoApprovable: true,
+          awaitDecision: false,
+          onBehalfOf: requester,
+          actorRuntime: 'pi',
+          requesterScope: scopeCovering(gatekeeperId),
+          parentWorkerRunId: workerRunId,
+        }),
+      );
+      expect(row.status).toBe('pending_approval');
+
+      async function outboxRowFor(eventType: string, status?: string) {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ id: string; payload: Record<string, unknown> }>(
+            `select id, payload from outbox
+             where workspace_id = $1 and event_type = $2 and payload->>'actionRequestId' = $3
+               and ($4::text is null or payload->>'status' = $4)
+             order by id desc limit 1`,
+            [workspaceId, eventType, row.id, status ?? null],
+          );
+          const found = result.rows[0];
+          if (!found) throw new Error(`expected an ${eventType} outbox row`);
+          return found;
+        });
+      }
+      async function messageKindsIn(chatId: string): Promise<unknown[]> {
+        const result = await asRequester((client) =>
+          client.query<{ content: Record<string, unknown> }>(
+            'select content from chat_messages where workspace_id = $1 and chat_id = $2 order by sequence asc',
+            [workspaceId, chatId],
+          ),
+        );
+        return result.rows.map((message) => message.content.kind);
+      }
+
+      const dispatcher = createFakeDispatcher();
+      registerActionRequestConsumers(dispatcher, { pool });
+      const pending = await outboxRowFor('ActionRequestPending');
+      await dispatcher.emit('ActionRequestPending', pending.id, pending.payload as never);
+
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId: row.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      const updated = await outboxRowFor('ActionRequestUpdated', 'approved');
+      await dispatcher.emit('ActionRequestUpdated', updated.id, updated.payload as never);
+
+      expect(await messageKindsIn(originChat.id)).toEqual([
+        'system.action_pending',
+        'system.action_update',
+      ]);
+      expect(await messageKindsIn(newerChat.id)).toEqual([]);
+
+      const newerChatContext = await asRequester((client) =>
+        leaseContextItemsToTurn(client, workspaceId, requester, {
+          turnId: newerTurn.id,
+          chatId: newerChat.id,
+        }),
+      );
+      expect(newerChatContext.pendingApprovals).toHaveLength(0);
+
+      const originChatContext = await asRequester((client) =>
+        leaseContextItemsToTurn(client, workspaceId, requester, {
+          turnId: originTurn.id,
+          chatId: originChat.id,
+        }),
+      );
+      expect(originChatContext.pendingApprovals).toHaveLength(2);
+      expect(originChatContext.pendingApprovals[0]).toMatchObject({
+        kind: 'system.action_pending',
+        actionRequestId: row.id,
+      });
+      expect(originChatContext.pendingApprovals[1]).toMatchObject({
+        kind: 'system.action_update',
+        actionRequestId: row.id,
+        status: 'approved',
+      });
     });
   },
 );

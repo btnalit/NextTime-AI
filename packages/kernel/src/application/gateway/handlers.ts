@@ -23,7 +23,12 @@ import {
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
-import { drainPendingContextItems } from '../../application/linkage/index.js';
+import {
+  type EntryContextTurn,
+  acknowledgeTurnContextItems,
+  leaseContextItemsToTurn,
+  peekContextItems,
+} from '../../application/linkage/index.js';
 import {
   DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
@@ -621,33 +626,93 @@ const renameChatHandler: CapabilityHandler = async (client, workspaceId, params,
  * S1 scope was: pending approvals and running tasks always empty, `facts` the one real piece of
  * context (`GraphStore.listRecentFacts`). S2.11 addition (design doc §7.4 `context` injection row,
  * §8.2 "用户下一次发言时，context 事件把 Task 结果注入"; docs/development-tasks.md S2.11 deliverable 3):
- * `tasks`/`pendingApprovals` are now populated from `application/linkage`'s
- * `drainPendingContextItems` — every undelivered Task outcome, budget warning (≥80%), or
- * `waiting_approval` notice for this principal (`tasks` bucket), and every undelivered ActionRequest
- * status change this principal is the requester of (`pendingApprovals` bucket) — marked delivered
- * in the same call so nothing repeats on the next Turn (`application/linkage/store.ts`'s own doc
- * comment has the full "why a table, not a column" rationale). `precedents` remains S3 scope (no
- * Procedure/Skill graph content exists yet to precedent-match against).
+ * `tasks`/`pendingApprovals` are populated from `application/linkage`'s `pending_context_items` —
+ * Task outcomes, budget warnings (≥80%) and `waiting_approval` notices (`tasks` bucket), and
+ * ActionRequest status changes this principal is the requester of (`pendingApprovals` bucket).
+ * `precedents` remains S3 scope (no Procedure/Skill graph content exists yet to precedent-match
+ * against).
+ *
+ * Delivery (2026-10-02 review R-57, maintainer decision D-23): pi's `context` event fires before
+ * every LLM call and its injection is not persisted, so a read must not consume.
+ *   - With `turnId` (the entry runtime, every call of a Turn): the items of that Turn's Chat are
+ *     leased to the Turn and returned — the same items for every call of the Turn (a second LLM
+ *     call, a provider-error retry) until `report_turn` for it acknowledges them. A Chat only sees
+ *     its own items.
+ *   - Without `turnId`: a read-only peek over the principal's unacknowledged items (interactive /
+ *     MCP sessions, which have no Turn), so such a session never takes an item away from its Chat.
+ *     One exception, for an entry image built before `turnId` existed (it calls with `{}` during a
+ *     rolling upgrade, and possibly longer — the runtime image is an operator setting): an `entry`
+ *     session is attributed to the principal's running Turn (agent-host runs one Turn per user at a
+ *     time), and its existing `report_turn` acknowledges it, so an old image gets the same
+ *     semantics. With no running Turn it peeks.
  *
  * Field names deliberately unchanged from the S1 stub (`tasks`/`pendingApprovals`, not new keys) —
  * `packages/platform-extension/src/modes/entry.ts`'s `EntryContextResult`/`renderSection` already
- * render any JSON-shaped array under these two keys generically; inventing new top-level keys would
- * need a platform-extension change, which is out of this task's ownership (S2.9's area).
+ * render any JSON-shaped array under these two keys generically.
  */
-const getEntryContextHandler: CapabilityHandler = async (client, workspaceId) => {
+const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { turnId } = params as { turnId?: string };
   const principalId = await currentPrincipalId(client);
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const facts = await graphStore.listRecentFacts(client, workspaceId);
-  const drained = await drainPendingContextItems(client, workspaceId, principalId);
+  const turn = await resolveEntryContextTurn(client, workspaceId, principalId, {
+    turnId,
+    sessionId: ctx?.claims?.sid,
+  });
+  const items = turn
+    ? await leaseContextItemsToTurn(client, workspaceId, principalId, turn)
+    : await peekContextItems(client, workspaceId, principalId);
   return {
     result: {
-      pendingApprovals: drained.pendingApprovals,
-      tasks: drained.tasks,
+      pendingApprovals: items.pendingApprovals,
+      tasks: items.tasks,
       facts: facts.map(toWireFact),
       precedents: [],
     },
   };
 };
+
+/** The caller's own `agent_turn` Activity `turnId` and its Chat, or `undefined` — RLS
+ *  (`activities_visibility`) plus `started_by` keep it to the caller's own Turns. */
+async function readOwnAgentTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  turnId: string,
+): Promise<EntryContextTurn | undefined> {
+  const result = await client.query<{ id: string; chat_id: string | null }>(
+    `select id, chat_id from activities
+     where workspace_id = $1 and id = $2 and kind = 'agent_turn' and started_by = $3`,
+    [workspaceId, turnId, principalId],
+  );
+  const row = result.rows[0];
+  return row ? { turnId: row.id, chatId: row.chat_id } : undefined;
+}
+
+/** Which Turn a `get_entry_context` call serves, or `undefined` for a peek — see
+ *  `getEntryContextHandler`'s doc comment. An unknown `turnId` is `TurnNotFoundError` (404), the
+ *  same masking `report_turn` uses. */
+async function resolveEntryContextTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  input: { readonly turnId?: string; readonly sessionId?: string },
+): Promise<EntryContextTurn | undefined> {
+  if (input.turnId !== undefined) {
+    const turn = await readOwnAgentTurn(client, workspaceId, principalId, input.turnId);
+    if (!turn) throw new TurnNotFoundError(workspaceId, input.turnId);
+    return turn;
+  }
+  if (!input.sessionId) return undefined;
+  const session = await client.query<{ kind: string }>(
+    'select kind from sessions where workspace_id = $1 and id = $2',
+    [workspaceId, input.sessionId],
+  );
+  if (session.rows[0]?.kind !== 'entry') return undefined;
+  const running = await findAttributableTurn(client, { workspaceId, principalId, at: new Date() });
+  if (!running?.wasRunning) return undefined;
+  return readOwnAgentTurn(client, workspaceId, principalId, running.id);
+}
 
 export class TurnNotFoundError extends Error {
   constructor(workspaceId: string, turnId: string) {
@@ -689,6 +754,10 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   );
   const row = result.rows[0];
   if (!row) throw new TurnNotFoundError(workspaceId, turnId);
+
+  // R-57 (D-23): reporting the Turn acknowledges the context items it was shown
+  // (`get_entry_context` leased them to it), so the next Turn does not see them again.
+  await acknowledgeTurnContextItems(client, workspaceId, await currentPrincipalId(client), turnId);
 
   return {
     result: { turnId: row.id, status: row.status },
