@@ -138,6 +138,22 @@ export interface PublishOntologyVersionInput {
   readonly principalId: string;
 }
 
+/** R-60: serializes every publish into one ontology family (`registry.ts`'s `publishOntologyDraft`
+ *  and this file's `publishOntologyVersion`) until the transaction ends, so the "has the family's
+ *  published head moved since this draft was proposed" check and the publish itself are one step —
+ *  two drafts made from the same base can no longer both pass the check concurrently. Same
+ *  `pg_advisory_xact_lock(hashtext(...))` convention `application/platform/modules.ts` uses, keyed
+ *  on a namespaced string. */
+export async function lockOntologyFamily(
+  client: PoolClient,
+  workspaceId: string,
+  id: string,
+): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `ontology_family:${workspaceId}:${id}`,
+  ]);
+}
+
 /** Publishes `input.definition` as a `published` `ontology_versions` row for `workspaceId`
  *  (bootstrap-time seeding — see this module's doc comment). */
 export async function publishOntologyVersion(
@@ -145,6 +161,7 @@ export async function publishOntologyVersion(
   workspaceId: string,
   input: PublishOntologyVersionInput,
 ): Promise<OntologyVersionRow> {
+  if (input.id) await lockOntologyFamily(client, workspaceId, input.id);
   const nextVersion = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
     `insert into ontology_versions

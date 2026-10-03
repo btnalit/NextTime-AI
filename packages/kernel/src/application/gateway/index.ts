@@ -91,8 +91,10 @@ export {
 export { OntologyViolationError } from '../../substrate/graph/index.js';
 // S3.1 (docs/development-tasks.md S3.1) — `propose_ontology_change`/`publish_ontology_version`
 // (`ontology-handlers.ts`) pass caller input straight into `substrate/ontology/registry.ts`'s
-// `proposeOntologyChange`/`publishOntologyDraft`.
+// `proposeOntologyChange`/`publishOntologyDraft` (R-60: `OntologyBaseMovedError`, the draft's base
+// is no longer the family's published head).
 export {
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
 } from '../../substrate/ontology/index.js';

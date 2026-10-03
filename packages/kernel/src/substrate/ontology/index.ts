@@ -67,6 +67,7 @@ export type {
 } from './meta-objects.js';
 
 export {
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   evaluateLink,

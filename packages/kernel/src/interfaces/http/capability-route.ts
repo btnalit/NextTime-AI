@@ -43,6 +43,7 @@ import {
   MetaOntologyWriteForbiddenError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
+  OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyViolationError,
@@ -322,6 +323,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof IllegalTransition) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // R-60 `publish_ontology_version`: the draft's base is no longer its family's published head
+  // (someone published another version since) — its own code so the console can tell the
+  // proposer to propose again from the current version, not just "conflict".
+  if (err instanceof OntologyBaseMovedError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // Review 2026-09 (docs/development-tasks.md S2.4 "实现说明补充"): `propose_operation` over an
   // identity that already exists and is not the caller's own draft — a published/deprecated
