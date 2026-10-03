@@ -107,7 +107,7 @@ Worker 跑的 pi + platform-extension 会悄悄停在旧构建上），并从检
 签名；历史版本可在 Actions 手动跑 `publish-images` 补发）。检出切到同一个 tag 后：
 
 ```
-sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（身份钉到本仓库 main 上的 publish-images.yml）→ 重打成 compose 的本地名
+sh scripts/pull-images.sh vX.Y.Z       # 拉取 → 验签（精确匹配：本仓库 main 上的 publish-images.yml，且由本仓库 main 上的运行签出）→ 重打成 compose 的本地名
 docker compose up -d --no-build
 ```
 

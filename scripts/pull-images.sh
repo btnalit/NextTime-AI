@@ -11,10 +11,13 @@
 #
 # What it does, in three passes so a failure never leaves the host half-retagged:
 #   1. pull   <registry>/nexttime-ai-<service>:<tag> for each service;
-#   2. verify each pulled digest's cosign keyless signature: issuer = GitHub Actions OIDC,
-#      identity = this repository's .github/workflows/publish-images.yml on refs/heads/main
-#      (a signature from a workflow run on any other branch is rejected). cosign runs as a
-#      digest-pinned container — nothing is installed on the host;
+#   2. verify each pulled digest's cosign keyless signature, every part matched exactly (R-33):
+#      issuer = GitHub Actions OIDC; identity = this repository's
+#      .github/workflows/publish-images.yml on refs/heads/main; and the run that signed was this
+#      repository's, on refs/heads/main — so neither a run of that workflow on another branch nor
+#      a workflow elsewhere (another branch, another repository) calling it as a reusable
+#      workflow passes. cosign runs as a digest-pinned container — nothing is installed on the
+#      host;
 #   3. retag each image to the local name docker compose already uses for that service
 #      (`docker compose config --images <service>` — e.g. nexttime-ai-kernel, nexttime-ai-caddy,
 #      nexttime-ai-worker-runtime), plus nexttime-ai-worker-runtime:pi-<version> like
@@ -58,7 +61,7 @@ else
 fi
 if [ "$verify" -eq 1 ]; then
   [ -n "$slug" ] || die "cannot derive owner/repo from origin '$origin' for the signature identity; use --no-verify only with a recorded reason"
-  IDENTITY="^https://github\.com/${slug}/\.github/workflows/publish-images\.yml@refs/heads/main\$"
+  IDENTITY="https://github.com/${slug}/.github/workflows/publish-images.yml@refs/heads/main"
 fi
 
 case "$SERVICES" in
@@ -80,6 +83,21 @@ local_name_of() {
   names=$(docker compose --profile build-only config --images "$1" | grep -E "^[a-z0-9][a-z0-9_.-]*-${1}\$" || true)
   [ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ] || die "cannot resolve one local image name for '$1' (got: $(printf '%s' "$names" | tr '\n' ' '))"
   printf '%s\n' "$names"
+}
+
+# One cosign verification of an image@digest; extra `docker run` options (a mounted docker config)
+# follow the reference. The certificate identity is the reusable workflow that signed
+# (publish-images.yml@refs/heads/main); the workflow repository / ref extensions belong to the run
+# that called it — release-please on main, or a dispatch from main.
+cosign_verify() {
+  image_ref=$1
+  shift
+  docker run --rm "$@" "$COSIGN_IMAGE" verify \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity "$IDENTITY" \
+    --certificate-github-workflow-repository "$slug" \
+    --certificate-github-workflow-ref refs/heads/main \
+    "$image_ref"
 }
 
 # 0. resolve every local name before touching the network
@@ -106,16 +124,10 @@ for s in $SERVICES; do
     # because the cosign image runs as a non-root user that cannot read root's 0600 config.json
     # (2026-10-02 host: "loading config file: permission denied" failed every verification).
     cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
-    if ! out=$(docker run --rm "$COSIGN_IMAGE" verify \
-        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-        --certificate-identity-regexp "$IDENTITY" \
-        "${REGISTRY}/nexttime-ai-${s}@${digest}" 2>&1); then
+    if ! out=$(cosign_verify "${REGISTRY}/nexttime-ai-${s}@${digest}" 2>&1); then
       if [ -f "$cfg" ]; then
-        out=$(docker run --rm --user 0:0 -v "$cfg:/docker-config/config.json:ro" -e DOCKER_CONFIG=/docker-config \
-          "$COSIGN_IMAGE" verify \
-          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-          --certificate-identity-regexp "$IDENTITY" \
-          "${REGISTRY}/nexttime-ai-${s}@${digest}" 2>&1) \
+        out=$(cosign_verify "${REGISTRY}/nexttime-ai-${s}@${digest}" \
+          --user 0:0 -v "$cfg:/docker-config/config.json:ro" -e DOCKER_CONFIG=/docker-config 2>&1) \
           || die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
       else
         die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
