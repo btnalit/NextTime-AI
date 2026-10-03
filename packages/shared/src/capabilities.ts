@@ -1566,7 +1566,7 @@ const governanceCapabilities: readonly Capability[] = [
         .strict(),
     ]),
     description:
-      'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest.',
+      'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest. A Handle caller’s gates are re-checked at call time against what its member may act on now (Grants minus My Agent exclusions, capped by the AgentPolicy; an owner keeps the Handle’s gates minus the same exclusions) — a gate dropped since the Handle was minted is denied (R-37).',
   },
   {
     // S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §6, §12 item 6): `reason` is
@@ -1779,8 +1779,10 @@ const governanceCapabilities: readonly Capability[] = [
     description:
       'Issue a CapabilityHandle for a new interactive-mode session (a pi/Claude-Code-like ' +
       'client running outside the platform, §7.4 "interactive"), scoped to the intersection of ' +
-      'the request, the entry-agent ceiling, and the caller’s own Grants — never wider than an ' +
-      'entry Handle. The token is returned once and never stored in plaintext.',
+      'the request, the entry-agent ceiling, and the caller’s own Grants narrowed by their My Agent ' +
+      'exclusions and the AgentPolicy gate cap (the entry Handle’s gate set) — never wider than an ' +
+      'entry Handle; execution through it is re-checked against that set at call time. The token ' +
+      'is returned once and never stored in plaintext.',
   },
   // -----------------------------------------------------------------------------------------
   // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision):

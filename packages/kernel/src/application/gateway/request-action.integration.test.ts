@@ -30,7 +30,11 @@ import {
   getActionRequest,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
-import { entryScope, grantCapability } from '../../governance/capability/index.js';
+import {
+  entryScope,
+  grantCapability,
+  revokeCapabilityGrant,
+} from '../../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
@@ -45,7 +49,7 @@ import {
   reapStaleExecutingActionRequests,
 } from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
-import { setRequestActionDeps } from './request-action-handler.js';
+import { ActionRequestDeniedError, setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -894,6 +898,107 @@ describe.runIf(DATABASE_URL !== undefined)(
             params: {},
           }),
         ).rejects.toThrow(/not in|scope|forbidden/i);
+      });
+
+      // R-37 / D-20: a Worker's Handle keeps the gates it was minted with; execution re-checks them
+      // against what its member may act on now — refused at call time (a recorded `denied`
+      // ActionRequest, the gate never called) and dropped from the Worker's execute tool list.
+      it('R-37: a Worker Handle minted with the gate loses execute on it once My Agent excludes it, the AgentPolicy caps it out, or the Grant is revoked', async () => {
+        const memberId = await adminInsertPrincipal('member-r37-worker', 'member');
+        const grant = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          grantCapability(client, workspaceId, {
+            principalId: memberId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: ownerId,
+          }),
+        );
+        function workerFor(obo: string): ResolvedCaller {
+          const now = Math.floor(Date.now() / 1000);
+          return {
+            channel: 'handle',
+            claims: {
+              ws: workspaceId,
+              sid: randomUUID(),
+              obo,
+              scope: {
+                capabilities: ['request_action', 'list_allowed_operations'],
+                resources: { gatekeeper: [gatekeeperId] },
+              },
+              jti: randomUUID(),
+              iat: now,
+              exp: now + 600,
+            },
+          };
+        }
+        let qty = 100;
+        const execute = (obo: string) => {
+          qty += 1;
+          return dispatchCapability({ pool }, workerFor(obo), 'request_action', {
+            gatekeeperId,
+            operation: AUTO_OP.name,
+            params: { qty },
+          }) as Promise<{ status: string }>;
+        };
+        const deniedCount = () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            const result = await client.query<{ n: string }>(
+              `select count(*) as n from action_requests
+               where workspace_id = $1 and on_behalf_of = $2 and action_kind = $3 and status = 'denied'`,
+              [workspaceId, memberId, AUTO_OP.name],
+            );
+            return Number(result.rows[0]?.n ?? 0);
+          });
+        const expectRefused = async (obo: string) => {
+          const calls = transport.calls[AUTO_OP.name] ?? 0;
+          await expect(execute(obo)).rejects.toBeInstanceOf(ActionRequestDeniedError);
+          expect(transport.calls[AUTO_OP.name] ?? 0).toBe(calls);
+        };
+
+        // Baseline: granted, nothing excluded — executes, and the tools are offered.
+        await expect(execute(memberId)).resolves.toMatchObject({ status: 'executed' });
+        expect(await listedOperationNames(workerFor(memberId))).toEqual(
+          [AUTO_OP.name, OBSERVE_OP.name, PENDING_OP.name].sort(),
+        );
+
+        // 1. The member unticks the gate on My Agent.
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentProfile(client, workspaceId, memberId, ownerId, {
+            excludedGatekeepers: [gatekeeperId],
+          }),
+        );
+        const deniedBefore = await deniedCount();
+        await expectRefused(memberId);
+        expect(await deniedCount()).toBe(deniedBefore + 1); // the denial leaves its trace
+        expect(await listedOperationNames(workerFor(memberId))).toEqual([]);
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentProfile(client, workspaceId, memberId, ownerId, { excludedGatekeepers: [] }),
+        );
+
+        // 2. The owner caps the gate out — for every member's Worker, the owner's own included.
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [randomUUID()] }),
+        );
+        try {
+          await expectRefused(memberId);
+          await expect(execute(ownerId)).rejects.toBeInstanceOf(ActionRequestDeniedError);
+          expect(await listedOperationNames(workerFor(memberId))).toEqual([]);
+        } finally {
+          await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [] }),
+          );
+        }
+        await expect(execute(memberId)).resolves.toMatchObject({ status: 'executed' });
+
+        // 3. The member's Grant is revoked: observation stays (no Grant needed), execution goes.
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          revokeCapabilityGrant(client, workspaceId, grant.id),
+        );
+        await expectRefused(memberId);
+        expect(await listedOperationNames(workerFor(memberId))).toEqual([OBSERVE_OP.name]);
+
+        // The owner holds every scope: a Worker the owner started directly keeps the gate.
+        await expect(execute(ownerId)).resolves.toMatchObject({ status: 'executed' });
       });
     });
 
