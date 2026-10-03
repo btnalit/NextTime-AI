@@ -2,6 +2,8 @@ import {
   BindingKindMismatchError,
   HttpTransport,
   TransportInvokeError,
+  encodePathSegment,
+  resolveBindingUrl,
 } from '@nexttime/gatekeeper-base';
 import type {
   HttpTransportOptions,
@@ -125,9 +127,11 @@ export class RagflowTransport implements Transport {
     }
 
     const { datasetId, name, bytes } = buildUploadRequest(operation, params);
-    const url = new URL(
-      `/api/v1/datasets/${encodeURIComponent(datasetId)}/documents`,
+    // R-22: the same one-segment rule and base-path join `HttpTransport` applies to every other
+    // Operation — `dataset_id: '..'` must not turn this into a POST to `/api/v1/documents`.
+    const url = resolveBindingUrl(
       this.options.baseUrl,
+      `/api/v1/datasets/${encodePathSegment('dataset_id', datasetId)}/documents`,
     );
     url.searchParams.set('type', 'local');
 

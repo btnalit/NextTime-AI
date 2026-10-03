@@ -1,6 +1,7 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { HttpTransport, importOpenApi } from './http.js';
+import { TransportInvokeError } from '../errors.js';
+import { HttpTransport, encodePathSegment, importOpenApi, resolveBindingUrl } from './http.js';
 
 describe('importOpenApi', () => {
   const document = {
@@ -117,6 +118,115 @@ describe('HttpTransport', () => {
     expect(call).toBeDefined();
     const [, init] = call as NonNullable<typeof call>;
     expect(init?.redirect).toBe('error');
+  });
+
+  // R-22 (review 2026-10-02): a path parameter can never climb out of its template.
+  describe('path parameters stay one segment (R-22)', () => {
+    const documentsOperation: Operation = {
+      ...observeOperation,
+      name: 'kb.documents',
+      binding: { kind: 'http', method: 'GET', path: '/api/v1/datasets/{dataset_id}/documents' },
+    };
+    const parseOperation: Operation = {
+      ...observeOperation,
+      name: 'document.parse',
+      mode: 'execute',
+      binding: { kind: 'http', method: 'POST', path: '/api/v1/datasets/{dataset_id}/chunks' },
+    };
+
+    it.each([
+      ['..'],
+      ['.'],
+      [''],
+      ['%2e%2e'],
+      ['%2E%2E'],
+      ['.%2e'],
+      ['%252e%252e'],
+      ['a/../b'],
+      ['a%2F..%2Fb'],
+      ['a%252Fb'],
+      ['..\\windows'],
+      ['%5c'],
+    ])('refuses %j before any request is made', async (value) => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://ragflow.test', fetchImpl });
+      await expect(
+        transport.invoke(documentsOperation, { dataset_id: value }, {}),
+      ).rejects.toBeInstanceOf(TransportInvokeError);
+      await expect(
+        transport.invoke(parseOperation, { dataset_id: value, document_ids: ['d1'] }, {}),
+      ).rejects.toThrow(/single path segment|is required/);
+      await expect(
+        transport.simulate?.(documentsOperation, { dataset_id: value }, {}),
+      ).rejects.toThrow(/path parameter "dataset_id"/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('refuses a missing path parameter instead of rendering an empty segment', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://ragflow.test', fetchImpl });
+      await expect(transport.invoke(documentsOperation, {}, {})).rejects.toThrow(/is required/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('still encodes an ordinary value as one segment (dots inside a name are fine)', async () => {
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+      const transport = new HttpTransport({ baseUrl: 'https://ragflow.test', fetchImpl });
+      await transport.invoke(documentsOperation, { dataset_id: 'kb v1.2...final' }, {});
+      const [url] = fetchImpl.mock.calls[0] as unknown as [URL];
+      expect(url.toString()).toBe(
+        'https://ragflow.test/api/v1/datasets/kb%20v1.2...final/documents',
+      );
+    });
+
+    it('keeps the base URL path prefix for an absolute binding path', async () => {
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+      const transport = new HttpTransport({ baseUrl: 'https://host.test/ragflow/', fetchImpl });
+      await transport.invoke(documentsOperation, { dataset_id: 'ds1' }, {});
+      const [url] = fetchImpl.mock.calls[0] as unknown as [URL];
+      expect(url.toString()).toBe('https://host.test/ragflow/api/v1/datasets/ds1/documents');
+    });
+
+    it('a leading empty segment can never change the host', async () => {
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+      const transport = new HttpTransport({ baseUrl: 'https://host.test', fetchImpl });
+      const tenantOperation: Operation = {
+        ...observeOperation,
+        binding: { kind: 'http', method: 'GET', path: '/{tenant}/items' },
+      };
+      await expect(transport.invoke(tenantOperation, { tenant: '' }, {})).rejects.toThrow(
+        TransportInvokeError,
+      );
+      // A template that itself starts with "//" stays on the configured host.
+      const odd: Operation = {
+        ...observeOperation,
+        binding: { kind: 'http', method: 'GET', path: '//elsewhere.test/items' },
+      };
+      await transport.invoke(odd, {}, {});
+      const [url] = fetchImpl.mock.calls[0] as unknown as [URL];
+      expect(url.host).toBe('host.test');
+    });
+  });
+
+  describe('encodePathSegment / resolveBindingUrl', () => {
+    it('encodePathSegment encodes a plain value and refuses dot segments in any encoding', () => {
+      expect(encodePathSegment('id', 'a b')).toBe('a%20b');
+      expect(encodePathSegment('id', 42)).toBe('42');
+      expect(() => encodePathSegment('id', '..')).toThrow(TransportInvokeError);
+      expect(() => encodePathSegment('id', '%2e%2e')).toThrow(TransportInvokeError);
+      expect(() => encodePathSegment('id', 'a/../b')).toThrow(TransportInvokeError);
+      expect(() => encodePathSegment('id', undefined)).toThrow(/is required/);
+    });
+
+    it('resolveBindingUrl joins base path and binding path and keeps a query in the binding', () => {
+      expect(resolveBindingUrl('https://h.test', '/a/b').toString()).toBe('https://h.test/a/b');
+      expect(resolveBindingUrl('https://h.test/base', '/a').toString()).toBe(
+        'https://h.test/base/a',
+      );
+      expect(resolveBindingUrl('https://h.test/base/', 'a?type=local').toString()).toBe(
+        'https://h.test/base/a?type=local',
+      );
+    });
   });
 
   describe('param "in" routing (review lane 5, P2-4)', () => {
