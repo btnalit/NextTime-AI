@@ -313,6 +313,7 @@
   `POST /v1/responses`、`anthropic-messages`→`POST /v1/messages`），`GET /v1/models` 继续走既有的
   白名单合成路径；其余一律 404/405，请求体连读都不读，更不会转发到上游。同时把"非 JSON 请求体静默
   透传、不做 model 校验"的口子堵上——请求体现在必须是合法 JSON 对象且带非空字符串 `model`，否则 400。
+- **R-14 更正（2026-10-02 复审）——吊销同步分页**：`GET /internal/handle-revocations` 原来一次最多回 5000 行就静默截断，llm-proxy 随即把 `since` 移到内核的 `now`；冷启动时若吊销但未过期的 Handle 超过 5000 条，最新的吊销永远同步不到，那些 Handle 在 llm-proxy 一直可用到过期。现在按 `(revoked_at, jti)` 稳定排序分页：满页时回 `hasMore: true` 与 `nextCursor`，调用方带同一个 `since` 加 `cursor` 取下一页；不满页 `hasMore: false`。游标里的 `revoked_at` 精确到微秒（不是线上 `revokedAt` 的毫秒）——一次 `revokeSession` 给它吊销的所有 Handle 同一个 `revoked_at`，毫秒游标会让这样的整页无限重放。llm-proxy 的 `revocation.ts` 一次同步把所有页取完（上限 1000 页，游标不前进即停）；走完最后一页才前移 `lastSyncAt`，且前移到**第一页**的 `now`（后面的页是更晚的快照，期间提交、`revoked_at` 更早的吊销排在游标之前，重叠窗口要从第一页的时钟算起）；中途失败则保留已收到的 `jti`，只前移到实际收到的最后一行的 `revokedAt`，绝不前移到 `now`。#411 给这条路由加的 llm-proxy 专用凭证不变。线上只多了可选字段与参数：旧 llm-proxy 忽略 `hasMore`，新 llm-proxy 遇到不带 `hasMore` 的旧内核按一页处理。测试：`handle-revocations.test.ts`（游标往返保留微秒、非法游标 400）、`handle-revocations.integration.test.ts`（真库：同一瞬间吊销的 7 个 Handle 在页大小 3 下各出现一次、三页后 `hasMore: false`）、llm-proxy `revocation.test.ts`（翻完所有页、下次从第一页的 `now` 起、中途失败只前移到最后收到的行、游标不前进即停、旧内核一页）。
 
 ### S1.8 web：登录与对话
 - 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
