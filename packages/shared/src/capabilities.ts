@@ -417,7 +417,7 @@ const ontologyCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: listEnvelope(wire.OntologyVersionListItemWireSchema),
     description:
-      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish.',
+      'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish; a draft also carries base — the published version of its own family it was proposed against, with that version’s definition (null: the family had nothing published) — so what the draft changes is the diff between the two.',
   },
 ];
 

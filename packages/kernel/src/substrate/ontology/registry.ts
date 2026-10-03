@@ -528,6 +528,15 @@ export interface OntologyVersionListItem {
     readonly displayName: string | null;
   };
   readonly createdAt: Date;
+  /** R-61: for a draft, the published version of its own family it was proposed against (R-60's
+   *  `base_version`) with that version's definition — what the draft changes is exactly the diff
+   *  between the two, within this one family. Null for a draft of a new family (or one with
+   *  nothing published when it was proposed), and always null for a published row: a base only
+   *  means something while there is still a decision to make. */
+  readonly base: {
+    readonly version: number;
+    readonly definition: OntologyDefinition;
+  } | null;
 }
 
 interface OntologyVersionListDbRow {
@@ -539,6 +548,8 @@ interface OntologyVersionListDbRow {
   proposer_id: string;
   proposer_kind: PrincipalKind;
   proposer_display_name: string | null;
+  base_version: number | null;
+  base_definition: OntologyDefinition | null;
 }
 
 function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
@@ -553,6 +564,10 @@ function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
       displayName: row.proposer_display_name,
     },
     createdAt: row.created_at,
+    base:
+      row.base_version !== null && row.base_definition !== null
+        ? { version: row.base_version, definition: row.base_definition }
+        : null,
   };
 }
 
@@ -611,6 +626,11 @@ export interface OntologyVersionsPage {
  * resolved `{id, kind, displayName}` — the FK (`ontology_versions.proposed_by references
  * principals`) guarantees the join always finds a row, so this is a plain `join`, not a `left
  * join`.
+ *
+ * R-61: a draft row also carries its `base` — a `left join` to the same family's row at the
+ * draft's `base_version` (R-60). That row is published by construction (a base is only ever taken
+ * from `published` rows, and a published row never goes back to draft), and the join still
+ * excludes drafts outright, so it can never surface another principal's draft (I16).
  */
 export async function listOntologyVersions(
   client: PoolClient,
@@ -624,9 +644,16 @@ export async function listOntologyVersions(
 
   const result = await client.query<OntologyVersionListDbRow>(
     `select t.id, t.version, t.status, t.definition, t.created_at,
-            p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name
+            p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name,
+            b.version as base_version, b.definition as base_definition
      from ontology_versions t
      join principals p on p.workspace_id = t.workspace_id and p.id = t.proposed_by
+     left join ontology_versions b
+       on t.status = 'draft'
+      and b.workspace_id = t.workspace_id
+      and b.id = t.id
+      and b.version = t.base_version
+      and b.status <> 'draft'
      where t.workspace_id = $1
        and (
          t.status = 'published'

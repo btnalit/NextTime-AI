@@ -477,6 +477,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(published.status).toBe('published');
       });
 
+      // R-61 (review L8b-1): the console diffs a draft against its own family's published base,
+      // never against the merged `list_types` namespace — so the kernel hands that base over.
+      it('R-61: list_ontology_versions carries each draft’s own-family base; published rows and new families carry none', async () => {
+        type Item = {
+          id: string;
+          version: number;
+          status: string;
+          base: { version: number; definition: unknown } | null;
+        };
+        const familyId = await publishedFamily();
+        const revision = await propose(aliceId, familyId, withLinkType('valve_listed_rel'));
+        const freshFamily = (await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES),
+          'propose_ontology_change',
+          { change: BASE_CHANGE },
+        )) as { id: string; version: number };
+
+        async function aliceItems(): Promise<Item[]> {
+          const page = (await dispatchCapability(
+            { pool },
+            handleCaller(workspaceId, aliceId, ONTOLOGY_HANDLE_CAPABILITIES),
+            'list_ontology_versions',
+            {},
+          )) as { items: Item[] };
+          return page.items;
+        }
+        const find = (items: Item[], ref: { id: string; version: number }) =>
+          items.find((i) => i.id === ref.id && i.version === ref.version);
+
+        const before = await aliceItems();
+        expect(find(before, revision)?.base).toEqual({ version: 1, definition: BASE_CHANGE });
+        expect(find(before, { id: familyId, version: 1 })?.base).toBeNull();
+        expect(find(before, freshFamily)?.base).toBeNull();
+
+        // Once published it is no longer a decision to make — the row carries no base.
+        await publish(aliceId, revision);
+        expect(find(await aliceItems(), revision)?.base).toBeNull();
+      });
+
       it('another principal’s draft still reads not-found, never base-moved (nothing about the family leaks)', async () => {
         const familyId = await publishedFamily();
         const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_private_rel'));
