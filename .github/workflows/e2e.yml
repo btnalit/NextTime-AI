@@ -320,8 +320,8 @@ jobs:
           echo "WEB_E2E_TEMP_LOGIN=$E2E_PRINCIPAL_LOGIN_B" >>"$GITHUB_ENV"
           echo "WEB_E2E_TEMP_PASSWORD=$temp_password" >>"$GITHUB_ENV"
 
-      # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per
-      # `resource_scope` marker that file hardcodes) — the exact psql block packages/web/README.md
+      # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per scenario; see
+      # the R-26 note below for the isolation row's scope) — the exact psql block packages/web/README.md
       # "Seeding a pending ActionRequest" documents for a local run, executed here inside the
       # already-running postgres container. The `outbox` row is what makes the kernel's linkage
       # consumer (already up, previous steps) write the `system.action_pending` chat card and push
@@ -340,18 +340,30 @@ jobs:
       # baseline-generation run caught this the hard way (a real CI failure, not a hypothetical).
       # All four kept separate from approvals.spec.ts's own two scopes so the suites can never race
       # for the same row.
+      #
+      # R-26 / D-14: `grant_capability` creates only a per-gate grant now, and I14 matches a gate
+      # grant against an ActionRequest's `resource_scope`. So approvals.spec.ts's holder-isolation
+      # row is scoped to its own gate, the way a real `request_action` writes it (`resource_scope`
+      # = gatekeeper id), and that id is exported as WEB_E2E_ISOLATION_GATEKEEPER_ID: the spec
+      # grants B that gate and finds the row by it. Gate ids are generated here, not by the insert,
+      # so that one can be exported; every other row keeps its marker scope.
       - name: Seed pending ActionRequests (approvals.spec.ts, 00-gates/, journeys/03-*)
         run: |
           set -euo pipefail
           for scope in e2e-approve-flow e2e-isolation-flow e2e-gate-pending \
             e2e-journey3-approve-a e2e-journey3-approve-b; do
+            gatekeeper_id=$(cat /proc/sys/kernel/random/uuid)
+            resource_scope="$scope"
+            if [ "$scope" = e2e-isolation-flow ]; then
+              resource_scope="$gatekeeper_id"
+              echo "WEB_E2E_ISOLATION_GATEKEEPER_ID=$gatekeeper_id" >>"$GITHUB_ENV"
+            fi
             sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
               exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 \
               -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
-              -v resource_scope="$scope" <<'SQL'
-          insert into objects (workspace_id, object_type, properties)
-          values (:'workspace_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb)
-          returning id as gatekeeper_id \gset
+              -v gatekeeper_id="$gatekeeper_id" -v resource_scope="$resource_scope" <<'SQL'
+          insert into objects (workspace_id, id, object_type, properties)
+          values (:'workspace_id'::uuid, :'gatekeeper_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb);
 
           insert into action_requests
             (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,

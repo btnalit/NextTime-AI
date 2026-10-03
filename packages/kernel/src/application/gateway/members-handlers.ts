@@ -6,7 +6,7 @@ import {
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import { generateApiKey, hashApiKey } from './auth.js';
+import { generateApiKey, hashApiKey, isLastActiveHumanOwner } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { publishSessionKick } from './session-revocation.js';
@@ -20,18 +20,26 @@ import { publishSessionKick } from './session-revocation.js';
  * owner"), so a Principal's own membership/credentials are gateway's concern, the same way the
  * human channel's API-key lookup already is.
  *
- * Invariants enforced here (docs/development-tasks.md S3.11's own dispatch):
- *   - `create_principal` always writes `kind='human'` — agent/service principals are created by
- *     the platform itself (`application/task/agent-principal.ts`, `governance/gatekeepers/
- *     service-principal.ts`), never through this capability.
- *   - `set_principal_role`/`rotate_api_key`/`disable_principal` refuse a non-`human` target
- *     (`PrincipalOperationRefusedError`) — rotating/disabling a key that was never issued, or
- *     reassigning a role that was never meaningful (migrations/core/0014's own "role is inert for
- *     an agent principal" note), is nonsensical, not merely unauthorized.
- *   - `set_principal_role`/`disable_principal` refuse ever leaving the workspace with zero active
- *     (`disabled_at is null`) owners — `lockActiveOwnerIds` takes `for update` on every currently-
- *     active owner row first, so two concurrent demote/disable calls against the same last two
- *     owners cannot both read "2 owners remain" and both proceed.
+ * Invariants enforced here (docs/development-tasks.md S3.11's own dispatch; review 2026-10-02
+ * R-06, maintainer decision D-05):
+ *   - `create_principal` always writes `kind='service'` (P-A1) — an automation credential with an
+ *     API key; people join through `add_member` (`kind='human'`, no key). Agent Principals and the
+ *     platform's own internal service Principals are created by the platform itself
+ *     (`application/task/agent-principal.ts`, `governance/gatekeepers/service-principal.ts`,
+ *     `application/worker/draft-lifecycle.ts`), never through a capability — so
+ *     `create_principal` refuses the reserved `__…__` display name those internal ones carry.
+ *   - `set_principal_role`/`rotate_api_key`/`disable_principal` manage `human` and `service`
+ *     Principals alike — a leaked service key can always be disabled, re-keyed or re-roled from
+ *     the workspace. They refuse an `agent` Principal or an internal service Principal
+ *     (`PrincipalOperationRefusedError` `platform_managed`): an agent's role is inert
+ *     (migrations/core/0014) and it holds no key; an internal one is platform plumbing.
+ *   - A workspace always keeps at least one active (`disabled_at is null`) **human** owner; a
+ *     service Principal never counts toward it, whatever its role. `isLastActiveHumanOwner`
+ *     (auth.ts, identity's owner) is the one predicate for it — `set_principal_role`/
+ *     `disable_principal` here and the platform plane's `set_membership_role`/`remove_membership`
+ *     (platform-handlers.ts) all call it — and it takes `for update` on every active human owner
+ *     row first, so two concurrent demote/disable calls against the same last two owners cannot
+ *     both read "2 owners remain" and both proceed.
  *   - `disable_principal` additionally refuses disabling the caller's own principal.
  *   - `rotate_api_key`'s registry `minRole` is `'member'` (anyone may rotate their own key); this
  *     handler is what actually enforces "owner, or the caller's own id" — the same "minRole gates
@@ -46,10 +54,11 @@ export class PrincipalNotFoundError extends Error {
   }
 }
 
-/** One class, several reasons (`reason` field) — last-owner protection, self-disable, and
- *  non-human-target all share the same "the request is well-formed but this Principal's current
- *  state forbids it" 409 shape (interfaces/http/capability-route.ts, interfaces/ws/rpc.ts), the
- *  same family `OperationIdentityConflictError`/`IllegalTransition` are already mapped to. */
+/** One class, several reasons (`reason` field) — last-owner protection, self-disable, a
+ *  platform-managed target and a reserved display name all share the same "the request is
+ *  well-formed but this Principal's current state forbids it" 409 shape (interfaces/http/
+ *  capability-route.ts, interfaces/ws/rpc.ts), the same family `OperationIdentityConflictError`/
+ *  `IllegalTransition` are already mapped to. */
 export class PrincipalOperationRefusedError extends Error {
   readonly reason: string;
   constructor(reason: string, message: string) {
@@ -222,48 +231,32 @@ async function getPrincipalDetailed(
   return row ? mapPrincipalDetailRow(row) : null;
 }
 
-/** Every currently-active (`disabled_at is null`) owner's id, `for update` — locks those rows for
- *  the remainder of the caller's transaction so two concurrent demote/disable calls against the
- *  same last two owners cannot both observe "2 remain" and both proceed (see this file's own
- *  module doc comment). `nexttime_app` already holds `update` on `principals`
- *  (migrations/core/0001_identity.sql), which `select ... for update` also requires. */
-async function lockActiveOwnerIds(
-  client: PoolClient,
-  workspaceId: string,
-): Promise<readonly string[]> {
-  const result = await client.query<{ id: string }>(
-    `select id from principals
-     where workspace_id = $1 and role = 'owner' and disabled_at is null
-     for update`,
-    [workspaceId],
-  );
-  return result.rows.map((row) => row.id);
-}
-
-/** Refuses (`PrincipalOperationRefusedError`) an operation that would leave `target` — currently
- *  an active owner — as the workspace's last one. A no-op (never queries) for any target that is
- *  not *currently* an active owner: demoting/disabling a non-owner, or re-disabling an
- *  already-disabled owner, can never reduce the active-owner count. */
-async function assertNotLastActiveOwner(
+/** Refuses (`PrincipalOperationRefusedError` `last_owner`) demoting or disabling `target` when
+ *  it is the workspace's last active human owner ({@link isLastActiveHumanOwner}). Never queries
+ *  for a target that is not currently an active human owner (the common case) — a service or
+ *  non-owner target, or an already-disabled owner, can never reduce the count. */
+async function assertNotLastActiveHumanOwner(
   client: PoolClient,
   workspaceId: string,
   target: PrincipalDetailRow,
 ): Promise<void> {
-  if (target.role !== 'owner' || target.disabledAt !== null) return;
-  const lockedOwnerIds = await lockActiveOwnerIds(client, workspaceId);
-  if (lockedOwnerIds.length <= 1) {
+  if (target.kind !== 'human' || target.role !== 'owner' || target.disabledAt !== null) return;
+  if (await isLastActiveHumanOwner(client, workspaceId, target.id)) {
     throw new PrincipalOperationRefusedError(
       'last_owner',
-      `cannot leave workspace ${workspaceId} with no active owner — principal ${target.id} is the last one`,
+      `cannot leave workspace ${workspaceId} with no active human owner — principal ${target.id} is the last one`,
     );
   }
 }
 
-function assertHumanTarget(target: PrincipalDetailRow, capability: string): void {
-  if (target.kind !== 'human') {
+/** R-06 (D-05): `set_principal_role`/`rotate_api_key`/`disable_principal` take a `human` or a
+ *  `service` target and refuse the platform's own identities — a Worker's `agent` Principal, or
+ *  an internal service Principal ({@link isInternalPrincipal}). */
+function assertManageableTarget(target: PrincipalDetailRow, capability: string): void {
+  if (target.kind === 'agent' || isInternalPrincipal(target)) {
     throw new PrincipalOperationRefusedError(
-      'not_human',
-      `${capability}: principal ${target.id} is kind="${target.kind}", not a human Principal`,
+      'platform_managed',
+      `${capability}: principal ${target.id} is managed by the platform (kind="${target.kind}"), not from a workspace`,
     );
   }
 }
@@ -277,15 +270,21 @@ function assertHumanTarget(target: PrincipalDetailRow, capability: string): void
 // S8 W4 (leftover 88 "内部服务主体与普通服务主体混在一起"): every internal service Principal this
 // platform creates for itself uses a `display_name` wrapped in double underscores
 // (`__gatekeeper_service__`, `governance/gatekeepers/service-principal.ts`; `__draft_reaper__`,
-// `application/worker/draft-lifecycle.ts`) — never a name `create_principal` (always human-
-// authored) or `add_member` would produce. Derived once, here, in the wire projection every reader
-// shares (`list_principals`/`create_principal`/`set_principal_role`/`rotate_api_key`/
-// `disable_principal`) rather than each web consumer re-deriving its own guess from a hardcoded
-// name list — the kernel is the single source of truth for "is this principal internal".
+// `application/worker/draft-lifecycle.ts`) — a name `create_principal` refuses (R-06). Derived
+// once, here, in the wire projection every reader shares (`list_principals`/`create_principal`/
+// `set_principal_role`/`rotate_api_key`/`disable_principal`) rather than each web consumer
+// re-deriving its own guess from a hardcoded name list — the kernel is the single source of truth
+// for "is this principal internal". R-06: `kind='service'` only — a person's display name is
+// their own (`PATCH /api/auth/me`), and a person renamed `__…__` must neither drop off the Members
+// page nor become unmanageable through `assertManageableTarget`.
 const INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN = /^__.+__$/;
 
 export function isInternalPrincipalDisplayName(displayName: string | null): boolean {
   return displayName !== null && INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN.test(displayName);
+}
+
+function isInternalPrincipal(row: Pick<PrincipalDetailRow, 'kind' | 'displayName'>): boolean {
+  return row.kind === 'service' && isInternalPrincipalDisplayName(row.displayName);
 }
 
 function toWirePrincipal(row: PrincipalDetailRow) {
@@ -298,7 +297,7 @@ function toWirePrincipal(row: PrincipalDetailRow) {
     ...(row.workerDefinitionId !== null ? { workerDefinitionId: row.workerDefinitionId } : {}),
     hasApiKey: row.hasApiKey,
     disabledAt: row.disabledAt ? row.disabledAt.toISOString() : null,
-    internal: isInternalPrincipalDisplayName(row.displayName),
+    internal: isInternalPrincipal(row),
   };
 }
 
@@ -320,11 +319,20 @@ export const listPrincipalsHandler: CapabilityHandler = async (client, workspace
 
 const CreatePrincipalParams = (params: unknown) => params as { role: Role; displayName: string };
 
-/** `create_principal`: always `kind='human'` (see this file's module doc). The plaintext
+/** `create_principal`: always `kind='service'` (see this file's module doc). The plaintext
  *  `apiKey` is returned in the *result* only — `application/gateway/dispatch.ts` audits `params`
  *  (role/displayName), never `result`, so the key never reaches `audit_records` either. */
 export const createPrincipalHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { role, displayName } = CreatePrincipalParams(params);
+  // R-06: an `__…__` name would make this key read as internal — hidden from the Members page
+  // and refused by `assertManageableTarget`, i.e. a credential nobody could disable from the
+  // workspace.
+  if (isInternalPrincipalDisplayName(displayName)) {
+    throw new PrincipalOperationRefusedError(
+      'reserved_name',
+      `create_principal: display name "${displayName}" is reserved for the platform's internal Principals`,
+    );
+  }
   const apiKey = generateApiKey();
   const apiKeyHash = hashApiKey(apiKey);
 
@@ -423,10 +431,10 @@ export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspa
   const { principalId, role } = SetPrincipalRoleParams(params);
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
-  assertHumanTarget(target, 'set_principal_role');
+  assertManageableTarget(target, 'set_principal_role');
 
   if (target.role === 'owner' && role !== 'owner') {
-    await assertNotLastActiveOwner(client, workspaceId, target);
+    await assertNotLastActiveHumanOwner(client, workspaceId, target);
   }
 
   const updated = await client.query<{ id: string }>(
@@ -468,7 +476,7 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
 
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
-  assertHumanTarget(target, 'rotate_api_key');
+  assertManageableTarget(target, 'rotate_api_key');
 
   const apiKey = generateApiKey();
   await client.query(
@@ -476,10 +484,25 @@ export const rotateApiKeyHandler: CapabilityHandler = async (client, workspaceId
     [hashApiKey(apiKey), workspaceId, principalId],
   );
 
+  const result = { principalId, apiKey };
   return {
-    result: { principalId, apiKey },
+    result,
     resourceType: 'principal',
     resourceId: principalId,
+    // R-06: the old key stops resolving at once (`lookupPrincipalByApiKeyHash`), but a `/ws`
+    // socket authenticates only at connect — so when someone else re-keys a service credential,
+    // its open sockets (every one of them rode the old key) close too
+    // (application/gateway/session-revocation.ts). Not for a person: their console sockets ride
+    // the cookie, not the key, and a principal kick would close those as well. Not on
+    // self-rotation either: the socket asking may be the one waiting for the new key.
+    ...(target.kind === 'service' && callerId !== principalId
+      ? {
+          afterCommit: async () => {
+            publishSessionKick({ principalIds: [principalId] });
+            return result;
+          },
+        }
+      : {}),
   };
 };
 
@@ -503,8 +526,8 @@ export const disablePrincipalHandler: CapabilityHandler = async (
 
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
-  assertHumanTarget(target, 'disable_principal');
-  await assertNotLastActiveOwner(client, workspaceId, target);
+  assertManageableTarget(target, 'disable_principal');
+  await assertNotLastActiveHumanOwner(client, workspaceId, target);
 
   const disabled = await client.query<{ disabled_at: Date }>(
     `update principals set disabled_at = coalesce(disabled_at, now())
@@ -517,7 +540,8 @@ export const disablePrincipalHandler: CapabilityHandler = async (
 
   // R-05: revokes every Handle issued under any session on this principal's behalf — entry,
   // mcp_session and worker_run (governance/capability/handles.ts), so a running Worker loses its
-  // LLM access too — and (belt/suspenders) application/gateway/handle-auth.ts additionally
+  // LLM access too; for a service Principal (R-06) also `issue_service_handle`'s `service`
+  // sessions — and (belt/suspenders) application/gateway/handle-auth.ts additionally
   // rejects any Handle whose on_behalf_of principal is disabled — see that module's own doc
   // comment.
   await revokeOnBehalfOfSessionHandles(client, workspaceId, principalId);

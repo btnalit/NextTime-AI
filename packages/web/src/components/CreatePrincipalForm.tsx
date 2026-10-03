@@ -1,10 +1,11 @@
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
-import type { CreatePrincipalResult } from '../lib/governance.js';
+import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
+import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
@@ -29,6 +30,11 @@ export interface CreatePrincipalFormProps {
  * `lib/session.ts`/`sessionStorage` and is dropped from this component's own state the moment the
  * drawer closes (mirrors `CompleteConnectionForm`'s credential-clearing discipline for the
  * shared-credential field).
+ *
+ * R-06 (review 2026-10-02, D-05): an owner-role credential is allowed, but submitting one goes
+ * through `kit/confirm tier="irreversible"` first (retype the display name + acknowledge), which
+ * spells out what an owner-level key can do; the call only runs from that confirm, so cancelling
+ * creates nothing. Every other role submits straight away, as before.
  */
 export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalFormProps) {
   const t = useT();
@@ -38,19 +44,30 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const [error, setError] = useState<unknown | null>(null);
   const [created, setCreated] = useState<CreatePrincipalResult | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [confirmingOwner, setConfirmingOwner] = useState(false);
+  const ownerCopy = ownerCredentialConfirmCopy(t);
+
+  async function createPrincipal(trimmed: string): Promise<void> {
+    const result = await http.call<CreatePrincipalResult>('create_principal', {
+      role,
+      displayName: trimmed,
+    });
+    setCreated(result);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = displayName.trim();
     if (!trimmed || submitting) return;
+    if (role === 'owner') {
+      setError(null);
+      setConfirmingOwner(true);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      const result = await http.call<CreatePrincipalResult>('create_principal', {
-        role,
-        displayName: trimmed,
-      });
-      setCreated(result);
+      await createPrincipal(trimmed);
     } catch (err) {
       setError(err);
     } finally {
@@ -152,14 +169,28 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        <Button
-          type="submit"
-          variant="primary"
-          aria-busy={submitting}
-          disabled={!displayName.trim()}
-        >
-          {t('创建', 'Create')}
-        </Button>
+        <Confirm
+          tier="irreversible"
+          open={confirmingOwner}
+          onOpenChange={setConfirmingOwner}
+          anchor={
+            <Button
+              type="submit"
+              variant="primary"
+              aria-busy={submitting}
+              disabled={!displayName.trim()}
+            >
+              {t('创建', 'Create')}
+            </Button>
+          }
+          title={t('创建 owner 级服务凭证', 'Create an owner-level service credential')}
+          description={ownerCopy.description}
+          target={displayName.trim()}
+          impact={ownerCopy.impact}
+          confirmLabel={t('创建', 'Create')}
+          onConfirm={() => createPrincipal(displayName.trim())}
+          testId="create-principal-owner-confirm"
+        />
       </div>
     </form>
   );

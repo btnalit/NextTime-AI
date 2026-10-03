@@ -59,6 +59,29 @@ export function principalDisplayRole(
   return principal.kind === 'human' ? role : `${role} · ${principalKindLabel(principal.kind, t)}`;
 }
 
+/** R-06 (review 2026-10-02, D-05): what the `kit/confirm` `irreversible` tier says before a
+ *  service credential holds the owner role — on create (`CreatePrincipalForm`) and on promotion
+ *  (`PrincipalDetail`) alike, so "create as member, then promote" reads the same warning. */
+export function ownerCredentialConfirmCopy(t: Translate): {
+  readonly description: string;
+  readonly impact: readonly string[];
+} {
+  return {
+    description: t(
+      '这把 API key 能做 owner 在本工作区能做的一切，包括管理成员和审批。',
+      'This API key can do everything an owner can do in this workspace, including managing members and approving requests.',
+    ),
+    impact: [
+      t(
+        '管理成员与凭证（添加、停用、改角色，签发 API key 与 Handle）',
+        'Manage members and credentials: add, disable, change roles, issue API keys and Handles',
+      ),
+      t('批准或驳回动作请求', 'Approve or reject action requests'),
+      t('修改授权、策略、配额与系统接入', 'Change grants, policies, quotas and system connections'),
+    ],
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // Access (list_grants / grant_capability / revoke_capability — grant_capability and
 // revoke_capability already exist, docs/wire-contract-conventions.md §1 resourceType/resourceId

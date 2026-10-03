@@ -10,7 +10,7 @@
 | `actionRequestId` | 一个 ActionRequest 的 id。门协议 `/gate/apply` 的执行预占键就是它——字段名就叫 `actionRequestId`，不叫 `idempotencyKey`。 | — |
 | `actionKind` | **仅** ActionDescription 里的展示对象 `{ tag, label }`（cloudflare-os 类型原样）。 | 不得把裸字符串叫 `actionKind` |
 | `actionKindTag` | 动作种类的裸标识字符串（= `actionKind.tag`）。策略（`set_auto_approved_action_kind`）、事件、聊天卡片、审计里承载的都是它。 | — |
-| `resourceType` / `resourceId` | Grant 指向的资源种类与 id（当前 `'gatekeeper'`；将来 `'worker_definition'`、`'skill'`）。`capability_grants.capability` 改名为 `resource_type`；`grant_capability` / `revoke_capability` 参数改为 `resourceType` + `resourceId`（原 `scope` 里的 id 提为一等字段，`scope` 只留真正的范围限定）。 | Grant 不再借用「capability」这个词——capability 只指注册表里的能力名 |
+| `resourceType` / `resourceId` | Grant 指向的资源种类与 id（当前 `'gatekeeper'`；将来 `'worker_definition'`、`'skill'`）。`capability_grants.capability` 改名为 `resource_type`；`grant_capability` / `revoke_capability` 参数改为 `resourceType` + `resourceId`（原 `scope` 里的 id 提为一等字段，`scope` 只留真正的范围限定）。R-26 / D-14 起 `grant_capability` 只接受 `resourceType: 'gatekeeper'` 加必填 `resourceId`（控制台能展示与撤销的唯一一种）；通配（`resource_id` 为空）与其他种类只剩历史行，仍照旧参与匹配。 | Grant 不再借用「capability」这个词——capability 只指注册表里的能力名 |
 | `mode`（capability 注册表） | 治理类别，四值：`observe`（只读）、`write`（平台内即时状态变更，审计、无审批）、`propose`（产生**待人类发布/批准**的草稿或请求：`propose_*`、`request_connection`、`propose_ontology_change`）、`execute`（经门作用于外部系统，按策略审批）。 | `assert_fact` / `record_decision` / `invoke_worker` / `report_*` / `cancel_task` / `register_source` / `submit_observations` 等即时写操作不得标 `propose`，改 `write` |
 | `mode`（Operation，门侧） | 不变：`observe` / `execute`（设计 §7.4）。两处 `mode` 的取值集合不同，靠类型名区分：`CapabilityMode` vs `OperationMode`。 | — |
 | `kind` | 只用于**类型判别**字段（`principals.kind`、`chat.message.kind`、`ChatMessageContent.kind`）。 | 不得用作"种类描述"的自由文本 |

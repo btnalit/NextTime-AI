@@ -166,6 +166,36 @@ export async function lookupPrincipalByApiKeyHash(
 }
 
 /**
+ * Review 2026-10-02 R-06 (maintainer decision D-05): whether `principalId` is the workspace's only
+ * active (`disabled_at is null`) **human** owner — the one "last owner" rule of both planes: the
+ * workspace's `set_principal_role`/`disable_principal` (members-handlers.ts) and the platform's
+ * `set_membership_role`/`remove_membership` (platform-handlers.ts). A service Principal never
+ * counts, whatever its role, so a service owner cannot stand in for the last person. Here, with
+ * identity's other rules (this file's module doc), rather than in either handler module, so the
+ * platform plane does not import the workspace plane's handlers. Call it from the transaction
+ * that is about to demote, disable or remove `principalId`: it takes `for update` on every active
+ * human owner row, so two concurrent calls against the same last two owners cannot both observe
+ * "2 remain" and both proceed (the second re-reads after the first commits). `false` for a
+ * Principal that is not currently an active human owner — demoting or disabling one can never
+ * reduce the count. `nexttime_app` holds `update` on `principals` (migrations/core/
+ * 0001_identity.sql), which `select ... for update` also requires; the platform plane reaches the
+ * rows through 0019's `principals_platform_admin` policy.
+ */
+export async function isLastActiveHumanOwner(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<boolean> {
+  const result = await client.query<{ id: string }>(
+    `select id from principals
+     where workspace_id = $1 and kind = 'human' and role = 'owner' and disabled_at is null
+     for update`,
+    [workspaceId],
+  );
+  return result.rows.length === 1 && result.rows[0]?.id === principalId;
+}
+
+/**
  * Finds an unexpired `kind='web'` session for `principal` (`on_behalf_of` = the principal itself
  * — a human always acts on its own behalf, I13) and reuses it, or creates a new one. `client` must
  * already be inside a `withWorkspace()` transaction scoped to `principal.workspaceId`.

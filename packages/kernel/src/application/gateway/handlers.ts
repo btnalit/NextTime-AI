@@ -1113,11 +1113,14 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
   return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
 };
 
+/** R-26 / D-14: the registry's `paramsSchema` admits only the per-gate grant the console shows and
+ *  revokes — `resourceType: 'gatekeeper'` with a required `resourceId` (packages/shared
+ *  capabilities.ts); a wildcard or `action_kind` grant is a 400 before this handler runs. */
 const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { principalId, resourceType, resourceId } = params as {
     principalId: string;
-    resourceType: string;
-    resourceId?: string;
+    resourceType: 'gatekeeper';
+    resourceId: string;
   };
   const grantedBy = await currentPrincipalId(client);
   const result = await grantCapability(client, workspaceId, {
