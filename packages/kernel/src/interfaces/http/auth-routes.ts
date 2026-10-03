@@ -53,8 +53,8 @@ import {
  *   GET  /api/auth/me                {user, memberships}
  *   PATCH /api/auth/me               {displayName}
  *   POST /api/auth/password          {currentPassword, newPassword} → clears must_change_password;
- *                                    revokes the user's other console sessions and every Handle
- *                                    and membership API key of theirs (R-13)
+ *                                    revokes the user's other console sessions, membership API
+ *                                    keys and Handles except running Workers' (R-13)
  *
  * Envelope: the same `{ok:true,result}` / `{ok:false,error:{code,message}}` shape as
  * `/api/cap/*` (packages/shared/src/http.ts), so the web client parses one shape. Every
@@ -407,9 +407,9 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         }
         return fail(reply, 401, 'bad_credentials', 'current password is incorrect');
       }
-      // R-13: the change revoked the user's other console sessions and the memberships' Handles
-      // and API keys; close their open /ws sockets too — every socket but this console
-      // session's own.
+      // R-13: the change revoked the user's other console sessions, the memberships' API keys and
+      // their Handles (running Workers' excepted); close the open /ws sockets too — every socket
+      // but this console session's own.
       for (const consoleSessionId of outcome.revoked.consoleSessionIds) {
         publishSessionKick({ consoleSessionId });
       }

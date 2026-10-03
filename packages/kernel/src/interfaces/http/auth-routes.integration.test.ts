@@ -844,30 +844,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
-      it('keeps the session making the change; revokes the other console session, the membership’s Handles and its API key', async () => {
+      it('keeps the session making the change and the running Workers; revokes the other console session, the mcp_session and entry Handles and the API key', async () => {
         const app = appWithKeys();
         const making = await loginAs(app, login, password);
         const other = await loginAs(app, login, password);
-        const handle = await withWorkspace(
-          pool,
-          { workspaceId, principalId: ownerPrincipalId },
-          async (client) => {
-            const session = await client.query<{ id: string }>(
-              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-               values ($1, $2, 'mcp_session', $2, 'active') returning id`,
-              [workspaceId, ownerPrincipalId],
-            );
-            const sessionId = session.rows[0]?.id;
-            if (!sessionId) throw new Error('no session row');
-            return issueHandle(client, {
-              sessionId,
-              scope: { capabilities: ['search'], resources: {} },
-              ttlSeconds: 3600,
-              privateKey,
-            });
-          },
-          { skipRoleSwitch: true },
-        );
+        /** A Handle under a fresh session of `kind` on the owner's behalf. */
+        const handleUnder = (kind: 'mcp_session' | 'entry' | 'worker_run') =>
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerPrincipalId },
+            async (client) => {
+              const session = await client.query<{ id: string }>(
+                `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+                 values ($1, $2, $3, $2, 'active') returning id`,
+                [workspaceId, ownerPrincipalId, kind],
+              );
+              const sessionId = session.rows[0]?.id;
+              if (!sessionId) throw new Error('no session row');
+              return issueHandle(client, {
+                sessionId,
+                scope: { capabilities: ['search'], resources: {} },
+                ttlSeconds: 3600,
+                privateKey,
+              });
+            },
+            { skipRoleSwitch: true },
+          );
+        const mcp = await handleUnder('mcp_session');
+        const entry = await handleUnder('entry');
+        const worker = await handleUnder('worker_run');
         const keyBefore = await app.inject({
           method: 'POST',
           url: '/api/cap/get_workspace',
@@ -893,13 +898,19 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: {},
         });
         expect(keyAfter.statusCode).toBe(401);
-        const revoked = await withAdminClient(pool, (client) =>
-          client.query<{ revoked_at: Date | null }>(
-            'select revoked_at from capability_handles where jti = $1',
-            [handle.jti],
-          ),
-        );
-        expect(revoked.rows[0]?.revoked_at).not.toBeNull();
+        const revokedAt = async (jti: string) =>
+          (
+            await withAdminClient(pool, (client) =>
+              client.query<{ revoked_at: Date | null }>(
+                'select revoked_at from capability_handles where jti = $1',
+                [jti],
+              ),
+            )
+          ).rows[0]?.revoked_at ?? null;
+        expect(await revokedAt(mcp.jti)).not.toBeNull();
+        expect(await revokedAt(entry.jti)).not.toBeNull();
+        // A Worker the person started keeps its LLM access through their own password change.
+        expect(await revokedAt(worker.jti)).toBeNull();
       }, 30_000);
 
       it('wrong current passwords count toward the login lockout: the 5th locks, then 423 even with the right one', async () => {
