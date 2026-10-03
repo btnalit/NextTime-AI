@@ -205,25 +205,70 @@ describe('UserDetailPanel', () => {
     expect(screen.getByRole('button', { name: '停用' }).hasAttribute('disabled')).toBe(true);
   });
 
-  it('a pending (password-less) user can be merged into another account after a confirm', async () => {
+  it('R-45: merging a pending user is an irreversible confirm — retype the target login; the impact lists every membership that moves', async () => {
     const http = scriptedHttp({
       merge_user: (params) => {
         expect(params).toEqual({ sourceUserId: 'u-1', targetUserId: 'u-2' });
         return user({ id: 'u-2' });
       },
     });
-    const { onMerged } = renderPanel(http, user({ hasPassword: false }));
+    const source = user({
+      hasPassword: false,
+      memberships: [
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          workspaceStatus: 'active',
+          principalId: 'p-1',
+          role: 'operator',
+          disabled: false,
+        },
+        {
+          workspaceId: 'ws-2',
+          workspaceName: 'Beta',
+          workspaceStatus: 'active',
+          principalId: 'p-2',
+          role: 'owner',
+          disabled: false,
+        },
+      ],
+    });
+    const { onMerged } = renderPanel(http, source, {
+      users: [
+        source,
+        user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
+        user({ id: 'u-3', login: 'carol', displayName: 'Carol', status: 'disabled' }),
+      ],
+    });
     expect(screen.getByTestId('user-detail-status').textContent).toBe('待激活');
     const merge = screen.getByRole('button', { name: '合并' });
     expect(merge.hasAttribute('disabled')).toBe(true);
     const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
-    // The source itself is never offered as a target.
+    // Neither the source itself nor a disabled account is offered as a target.
     expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-2']);
     fireEvent.change(target, { target: { value: 'u-2' } });
     fireEvent.click(merge);
-    expect(screen.getByTestId('user-merge-confirm')).toBeTruthy();
+
+    const confirm = await screen.findByTestId('user-merge-confirm');
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+    const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+    expect(impact).toContain('Acme');
+    expect(impact).toContain('Beta');
+    expect(impact).toContain('→ bob');
     expect(http.calls).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: '确认合并' }));
+
+    const button = within(confirm).getByTestId('confirm-button');
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    // The source's own login does not unlock it — only the target's does.
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'alice' },
+    });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'bob' },
+    });
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
     await waitFor(() => expect(onMerged).toHaveBeenCalledTimes(1));
   });
 });

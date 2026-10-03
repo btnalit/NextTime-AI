@@ -2,9 +2,12 @@ import type { PlatformRoleWire, ResetUserPasswordResultWire, UserWire } from '@n
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
-import { envAdminTitle } from '../../lib/platform-errors.js';
+import { HttpError } from '../../lib/http-client.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { roleLabel } from '../../lib/labels.js';
+import { envAdminTitle, platformErrorMessage } from '../../lib/platform-errors.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
+import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -41,6 +44,15 @@ function budgetInput(value: number | null): string {
   return value === null ? '' : String(value);
 }
 
+/** The kernel's platform error with the console's bilingual copy as its message, so `kit/confirm`'s
+ *  own inline error banner reads the same as `PlatformError` does (the `PurgeWorkspaceDrawer`
+ *  convention). Anything unmapped is rethrown as it came. */
+function friendly(err: unknown, t: Translate): unknown {
+  const mapped = platformErrorMessage(err, t);
+  if (mapped === null || !(err instanceof HttpError)) return err;
+  return new HttpError(err.kind, mapped, err.code);
+}
+
 /**
  * components/platform/UserDetailPanel: one row's drawer body on the users page (P-A1, design
  * §6.1's row actions) — `update_user` (display name + platform role), `set_user_budget`,
@@ -48,6 +60,11 @@ function budgetInput(value: number | null): string {
  * drawer. Disabling gets a same-drawer confirm step, the shape `PrincipalDetail` established for
  * `disable_principal` (it revokes every console and workspace session the user holds); re-enabling
  * is not destructive and acts directly.
+ *
+ * R-45 (review 2026-10-02): `merge_user` hard-deletes this row and hands its memberships and roles
+ * to the target, so it sits behind `kit/confirm tier="irreversible"` — retype the *target's* login
+ * (the real risk is folding into the wrong, live account) — with one impact line per membership
+ * that moves. Only active accounts are offered as targets.
  *
  * A login listed in `NEXTTIME_PLATFORM_ADMINS` can be neither disabled nor demoted — the kernel
  * refuses it with `protected_admin`, and this panel says so up front (disabled control plus the
@@ -88,8 +105,6 @@ export function UserDetailPanel({
 
   const [mergeTargetId, setMergeTargetId] = useState('');
   const [confirmingMerge, setConfirmingMerge] = useState(false);
-  const [merging, setMerging] = useState(false);
-  const [mergeError, setMergeError] = useState<unknown | null>(null);
 
   const profileDirty =
     displayName.trim() !== user.displayName || platformRole !== user.platformRole;
@@ -99,7 +114,10 @@ export function UserDetailPanel({
   const budgetDirty =
     dailyCallLimit !== budgetInput(user.dailyCallLimit) ||
     monthlyTokenBudget !== budgetInput(user.monthlyTokenBudget);
-  const mergeTargets = users.filter((candidate) => candidate.id !== user.id);
+  const mergeTargets = users.filter(
+    (candidate) => candidate.id !== user.id && candidate.status === 'active',
+  );
+  const mergeTarget = mergeTargets.find((candidate) => candidate.id === mergeTargetId);
 
   async function saveProfile(): Promise<void> {
     if (!profileDirty || savingProfile) return;
@@ -167,22 +185,19 @@ export function UserDetailPanel({
     }
   }
 
+  /** `kit/confirm`'s `onConfirm`: throws on failure so the tier keeps itself open with the error
+   *  inline; closes itself on success. */
   async function merge(): Promise<void> {
-    if (mergeTargetId === '' || merging) return;
-    setMerging(true);
-    setMergeError(null);
+    if (!mergeTarget) return;
     try {
       await http.call<UserWire>('merge_user', {
         sourceUserId: user.id,
-        targetUserId: mergeTargetId,
+        targetUserId: mergeTarget.id,
       });
-      setConfirmingMerge(false);
-      onMerged();
     } catch (err) {
-      setMergeError(err);
-    } finally {
-      setMerging(false);
+      throw friendly(err, t);
     }
+    onMerged();
   }
 
   return (
@@ -418,11 +433,7 @@ export function UserDetailPanel({
             <Select
               id="ud-merge-target"
               value={mergeTargetId}
-              onChange={(event) => {
-                setMergeTargetId(event.target.value);
-                setConfirmingMerge(false);
-              }}
-              disabled={merging}
+              onChange={(event) => setMergeTargetId(event.target.value)}
             >
               <option value="">{t('选择目标账户', 'Pick a target account')}</option>
               {mergeTargets.map((candidate) => (
@@ -432,35 +443,44 @@ export function UserDetailPanel({
               ))}
             </Select>
           </Field>
-          <PlatformError error={mergeError} title={t('无法合并', 'Could not merge this user')} />
-          {confirmingMerge ? (
-            <div className="stack-s" data-testid="user-merge-confirm">
-              <Notice tone="warn">
-                {t(
-                  '合并后这一行会消失，且不可撤销。',
-                  'This row disappears afterwards and the merge cannot be undone.',
-                )}
-              </Notice>
+          <Confirm
+            tier="irreversible"
+            open={confirmingMerge && mergeTarget !== undefined}
+            onOpenChange={setConfirmingMerge}
+            anchor={
               <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <Button variant="ghost" onClick={() => setConfirmingMerge(false)}>
-                  {t('取消', 'Cancel')}
-                </Button>
-                <Button variant="danger" onClick={() => void merge()} loading={merging}>
-                  {t('确认合并', 'Confirm merge')}
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmingMerge(true)}
+                  disabled={mergeTarget === undefined}
+                >
+                  {t('合并', 'Merge')}
                 </Button>
               </div>
-            </div>
-          ) : (
-            <div className="row" style={{ justifyContent: 'flex-end' }}>
-              <Button
-                variant="secondary"
-                onClick={() => setConfirmingMerge(true)}
-                disabled={mergeTargetId === ''}
-              >
-                {t('合并', 'Merge')}
-              </Button>
-            </div>
-          )}
+            }
+            title={t(
+              `把 ${user.login} 合并到 ${mergeTarget?.login ?? ''}`,
+              `Merge ${user.login} into ${mergeTarget?.login ?? ''}`,
+            )}
+            description={t(
+              `${user.login} 这一行会被删除，不可撤销；下面的成员资格连同角色全部转给 ${mergeTarget?.login ?? ''}，此后由那个账户登录使用。请键入目标账户的登录名确认没有选错人。`,
+              `The ${user.login} row is deleted and cannot be restored; every membership below moves, with its role, to ${mergeTarget?.login ?? ''}, who signs in to use them from then on. Type the target account's login to confirm it is the right person.`,
+            )}
+            target={mergeTarget?.login}
+            impact={
+              user.memberships.length === 0
+                ? [t('没有要转移的成员资格', 'No memberships to move')]
+                : user.memberships.map((membership) =>
+                    t(
+                      `工作区 ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? '（已停用）' : ''} → ${mergeTarget?.login ?? ''}`,
+                      `Workspace ${membership.workspaceName} · ${roleLabel(membership.role, t)}${membership.disabled ? ' (disabled)' : ''} → ${mergeTarget?.login ?? ''}`,
+                    ),
+                  )
+            }
+            confirmLabel={t('确认合并', 'Confirm merge')}
+            onConfirm={merge}
+            testId="user-merge-confirm"
+          />
         </>
       )}
     </div>

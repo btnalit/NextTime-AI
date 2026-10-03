@@ -38,8 +38,9 @@ const SEED_ACTION_REQUESTS = process.env.WEB_E2E_SEED_ACTION_REQUESTS === '1';
 
 /** Must match the `resource_scope` the README's seed commands are given for the approve flow. */
 const E2E_APPROVE_SCOPE = 'e2e-approve-flow';
-/** The isolation row's gate — also its `resource_scope`, so it is the text its queue row and chat
- *  card show (README "Seeding a pending ActionRequest"; `.github/workflows/e2e.yml` exports it). */
+/** The isolation row's gate — also its `resource_scope`, so it is the text its chat card shows and
+ *  its queue row's `data-gatekeeper-id` (the queue no longer prints a gate-scoped scope as text,
+ *  L8a-10) (README "Seeding a pending ActionRequest"; `.github/workflows/e2e.yml` exports it). */
 const E2E_ISOLATION_GATEKEEPER_ID = process.env.WEB_E2E_ISOLATION_GATEKEEPER_ID;
 
 async function login(page: import('@playwright/test').Page, apiKey: string): Promise<void> {
@@ -77,6 +78,15 @@ function queueRowByMarker(page: import('@playwright/test').Page, marker: string)
   return page.getByTestId('approval-row').filter({ hasText: marker }).first();
 }
 
+/** L8a-10: a gate-scoped request's queue row shows the gate by name, not its id — found by the
+ *  row's `data-gatekeeper-id` attribute instead of visible text. */
+function queueRowByGate(page: import('@playwright/test').Page, gatekeeperId: string) {
+  return page
+    .getByTestId('approval-row')
+    .filter({ has: page.locator(`[data-gatekeeper-id="${gatekeeperId}"]`) })
+    .first();
+}
+
 async function openQueueRow(page: import('@playwright/test').Page, marker: string) {
   // A plain centre click: console redesign P3-4 (V6) made the whole row a `kit/list-row` button
   // with no nested interactive element (the old `DataRow`'s meta-line `RefChip` copy button — the
@@ -84,7 +94,14 @@ async function openQueueRow(page: import('@playwright/test').Page, marker: strin
   // shows plain text, not chips). `data-testid="approval-drawer"` is the detail pane on a wide
   // viewport (≥1180px, this suite's default) or the sheet's content on a narrower one — either
   // way it opens on selection.
-  await queueRowByMarker(page, marker).click();
+  return openRow(page, queueRowByMarker(page, marker));
+}
+
+async function openRow(
+  page: import('@playwright/test').Page,
+  row: ReturnType<typeof queueRowByMarker>,
+) {
+  await row.click();
   const drawer = page.getByTestId('approval-drawer');
   await expect(drawer).toBeVisible();
   return drawer;
@@ -165,7 +182,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     // --- A sees the row (isHolder: true — A is on_behalf_of and the sole initial holder) ---
     await login(page, apiKeyA);
     await page.goto('/#/work/approvals');
-    await expect(queueRowByMarker(page, isolationGate)).toBeVisible({ timeout: 15_000 });
+    await expect(queueRowByGate(page, isolationGate)).toBeVisible({ timeout: 15_000 });
 
     // --- B does not: neither the queue nor B's chat mentions this ActionRequest at all (§8.5 —
     //     an unrelated principal is not even in the requester/holder target set). Wait for the
@@ -175,7 +192,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     await expect(
       page.getByTestId('approvals-empty').or(page.getByTestId('approvals-list')),
     ).toBeVisible({ timeout: 15_000 });
-    await expect(queueRowByMarker(page, isolationGate)).toHaveCount(0);
+    await expect(queueRowByGate(page, isolationGate)).toHaveCount(0);
 
     // --- A grants B the request's gate (grant_capability, minRole:'owner' — done via a direct
     //     capability call, the same HTTP contract the console's own per-gate grant form uses).
@@ -207,10 +224,10 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     //     `list_pending` page would stay on screen — a grant made out of band reaches an open
     //     queue only through the user's own Refresh/reload, exactly what a real operator does. ---
     await page.reload();
-    await expect(queueRowByMarker(page, isolationGate)).toBeVisible({ timeout: 15_000 });
-    const drawerForB = await openQueueRow(page, isolationGate);
+    await expect(queueRowByGate(page, isolationGate)).toBeVisible({ timeout: 15_000 });
+    const drawerForB = await openRow(page, queueRowByGate(page, isolationGate));
     await drawerForB.getByRole('button', { name: '批准' }).click();
-    await expect(queueRowByMarker(page, isolationGate)).toHaveCount(0, { timeout: 15_000 });
+    await expect(queueRowByGate(page, isolationGate)).toHaveCount(0, { timeout: 15_000 });
     await page.keyboard.press('Escape');
 
     // --- A's chat shows only the status update, never Approve/Reject buttons for a decision B
