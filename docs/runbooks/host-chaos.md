@@ -36,7 +36,16 @@
   `resident_status()` 助手）。
 - 一个 human 通道 API key。`chaos-kill-worker.sh`/`chaos-kill-entry.sh` 角色至少 `member`
   （`send_chat_message`/`get_task`/`list_tasks` 各自的 `minRole`）即可，不需要单独铸造 Handle；
-  `chaos-kill-kernel-mid-invoke.sh` 需要至少 `builder`（见下）。
+  `chaos-kill-kernel-mid-invoke.sh` 需要至少 `builder`（见下）。**key 放在一个只有自己可读的文件里，
+  脚本参数给的是文件路径 `<apiKeyFile>`**（R-34，2026-10-02 复审）：命令行参数在 `/proc/<pid>/cmdline`
+  里对同机所有用户可见，也会留在 shell 历史里；脚本只从文件读 key，再经 stdin 交给 curl
+  （`-H @-`）。不要用 `echo <key> > 文件` 建它（那一行同样进历史），例如：
+
+  ```
+  umask 077; key_file=$(mktemp)
+  stty -echo; IFS= read -r key; stty echo; printf '%s\n' "$key" >"$key_file"; unset key
+  # 用完：rm -f "$key_file"
+  ```
 - `chaos-kill-worker.sh` 需要一个已知的、当前正在跑的 `taskId`（例如从 web 控制台的 Task 视图，或
   `scripts/accept_s2.sh` 跑出来的一个 `invoke_worker` 调用）。
 - `chaos-kill-entry.sh` 需要一个已知的 `principalId`（其入口容器必须已经在跑——先跟这个 principal
@@ -52,45 +61,45 @@
 
 ```
 cd <CODE_DIR>
-sh scripts/chaos-kill-worker.sh <taskId> <apiKey>
+sh scripts/chaos-kill-worker.sh <taskId> <apiKeyFile>
 ```
 
 带自定义超时（默认 90 秒——任务 reaper 默认每 30 秒跑一次，`TASK_REAPER_INTERVAL_MS`，给它最多
 3 轮）：
 
 ```
-sh scripts/chaos-kill-worker.sh <taskId> <apiKey> 120
+sh scripts/chaos-kill-worker.sh <taskId> <apiKeyFile> 120
 ```
 
 杀入口容器（省略 `chatId` 时脚本自己 `new_chat`）：
 
 ```
-sh scripts/chaos-kill-entry.sh <principalId> <apiKey>
+sh scripts/chaos-kill-entry.sh <principalId> <apiKeyFile>
 ```
 
 带已有的 `chatId` 与自定义超时（默认 60 秒）：
 
 ```
-sh scripts/chaos-kill-entry.sh <principalId> <apiKey> <chatId> 90
+sh scripts/chaos-kill-entry.sh <principalId> <apiKeyFile> <chatId> 90
 ```
 
 杀内核（`queued` 崩溃缺口）：
 
 ```
-sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey>
+sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKeyFile>
 ```
 
 带自定义超时（默认 150 秒——崩溃缺口清扫自己的 60 秒陈旧阈值 + 最多一轮任务 reaper 周期 30 秒 +
 余量）：
 
 ```
-sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey> 200
+sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKeyFile> 200
 ```
 
 经 SSH 跑（同 `scripts/accept_s1.sh` 的既有约定，管道场景必须带 `</dev/null`）：
 
 ```
-ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/chaos-kill-worker.sh <taskId> <apiKey>' </dev/null
+ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/chaos-kill-worker.sh <taskId> <apiKeyFile>' </dev/null
 ```
 
 ## 4. 期望输出（验证）
