@@ -27,6 +27,17 @@ describe('provider key files (R-24)', () => {
     expect(files.size).toBe(0);
   });
 
+  it('a path that is not a readable directory is reported, not silently treated as absent', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'llm-provider-keys-'));
+    const notADir = join(dir, 'file-not-dir');
+    writeFileSync(notADir, 'x');
+    const lines: string[] = [];
+    const files = await loadProviderKeyFiles(notADir, (line) => lines.push(line));
+    expect(files.size).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('could not be read');
+  });
+
   it('the file wins over the env var, with no warning', () => {
     const lines: string[] = [];
     const resolve = createProviderKeyResolver({

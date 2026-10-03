@@ -35,7 +35,19 @@ export async function loadProviderKeyFiles(
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
+  } catch (err) {
+    // Absent: not migrated yet, every name falls back to env. Anything else (a 0700 root-owned
+    // directory, say) is a permission mistake the operator must see, not a silent fallback.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: the provider keys directory could not be read — check its mode / group (0750, group 10001); falling back to env for every key',
+          dir,
+          error: (err as NodeJS.ErrnoException).code ?? String(err),
+        }),
+      );
+    }
     return new Map();
   }
   const keys = new Map<string, string>();
