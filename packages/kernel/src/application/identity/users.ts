@@ -14,6 +14,7 @@ import type { Role } from '@nexttime/shared';
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import {
   MIN_PASSWORD_LENGTH,
@@ -334,6 +335,22 @@ export async function claimIdentityOnClient(
   );
   const row = updated.rows[0];
   if (!row) throw new IdentityError('user_not_found', 'user not found');
+  // Review 2026-10-02 R-28: an API key just became a platform login — recorded in the same
+  // transaction, attributed to the user who claimed it (the key's holder).
+  await writeAudit(client, {
+    workspaceId: null,
+    actorPrincipalId: null,
+    actorUserId: userId,
+    action: 'user.identity_claimed',
+    resourceType: 'user',
+    resourceId: userId,
+    payload: {
+      workspaceId: input.workspaceId,
+      principalId: input.principalId,
+      login,
+      ...(input.platformRole !== undefined ? { platformRole: input.platformRole } : {}),
+    },
+  });
   return mapUser(row);
 }
 
@@ -400,6 +417,7 @@ export async function bindPrincipalToUser(
       input.principalId,
       input.userId,
     ]);
+    let formerUserDeleted = false;
     if (formerUserId) {
       const stillReferenced = await client.query(
         'select 1 from principals where user_id = $1 limit 1',
@@ -408,8 +426,26 @@ export async function bindPrincipalToUser(
       if ((stillReferenced.rowCount ?? 0) === 0) {
         await client.query('delete from user_sessions where user_id = $1', [formerUserId]);
         await client.query('delete from users where id = $1', [formerUserId]);
+        formerUserDeleted = true;
       }
     }
+    // Review 2026-10-02 R-28: a membership moved to another account — recorded in the same
+    // transaction, so "when, and to whom, did this membership move" has an answer even after the
+    // key is rotated. Attributed to the calling user (the account that now owns it).
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId: input.userId,
+      action: 'principal.user_rebound',
+      resourceType: 'principal',
+      resourceId: input.principalId,
+      payload: {
+        workspaceId: input.workspaceId,
+        from: formerUserId,
+        to: input.userId,
+        formerUserDeleted,
+      },
+    });
   });
 }
 
@@ -444,6 +480,14 @@ export type PasswordCheck =
  * Verifies a login + password with the S4.1 throttle: 5 consecutive failures lock the login for
  * 5 minutes; a success resets the counter. Unknown logins take the same code path length as
  * wrong passwords (a dummy hash verification) so timing does not reveal which logins exist.
+ *
+ * Review 2026-10-02 R-43: every attempt first *reserves* its place in the count — one guarded
+ * `UPDATE … RETURNING` that increments `failed_login_count`, locks the login when the increment
+ * reaches the limit, and matches only while the login is not locked — and is verified only after
+ * that statement committed. The row lock serializes concurrent attempts and each re-checks the
+ * lock after the one before it, so N parallel wrong passwords get exactly `LOGIN_MAX_FAILURES`
+ * guesses, never N (reading "not locked" first and incrementing after the slow hash let every
+ * parallel request through). A verified password gives the reservation back.
  */
 export async function checkPassword(
   pool: PoolLike,
@@ -452,41 +496,41 @@ export async function checkPassword(
 ): Promise<PasswordCheck> {
   const normalized = login.trim().toLowerCase();
   const row = await withAdminClient(pool, async (client) => {
-    const result = await client.query<
-      UserDbRow & { password_hash: string | null; locked_until: Date | null }
-    >(`select ${USER_COLUMNS}, password_hash, locked_until from users where login = $1`, [
-      normalized,
-    ]);
+    const result = await client.query<UserDbRow & { password_hash: string }>(
+      `update users
+          set failed_login_count = failed_login_count + 1,
+              locked_until = case when failed_login_count + 1 >= $2
+                                  then now() + make_interval(mins => $3) else null end,
+              updated_at = now()
+        where login = $1 and password_hash is not null
+          and (locked_until is null or locked_until <= now())
+        returning ${USER_COLUMNS}, password_hash`,
+      [normalized, LOGIN_MAX_FAILURES, LOGIN_LOCK_MINUTES],
+    );
     return result.rows[0];
   });
-  if (!row || row.password_hash === null) {
+  if (!row) {
+    // Locked, unknown, or never given a password: only the first is worth saying.
+    const locked = await withAdminClient(pool, async (client) => {
+      const result = await client.query(
+        `select 1 from users
+          where login = $1 and password_hash is not null and locked_until > now()`,
+        [normalized],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+    if (locked) return { ok: false, reason: 'locked' };
     await verifyPassword(password, DUMMY_HASH); // equalize timing
     return { ok: false, reason: 'bad_credentials' };
   }
-  if (row.locked_until && row.locked_until.getTime() > Date.now()) {
-    return { ok: false, reason: 'locked' };
-  }
   const verified = await verifyPassword(password, row.password_hash);
-  if (!verified) {
-    await withAdminClient(pool, (client) =>
-      client.query(
-        `update users
-           set failed_login_count = failed_login_count + 1,
-               locked_until = case when failed_login_count + 1 >= $2
-                                   then now() + make_interval(mins => $3) else locked_until end,
-               updated_at = now()
-         where id = $1`,
-        [row.id, LOGIN_MAX_FAILURES, LOGIN_LOCK_MINUTES],
-      ),
-    );
-    return { ok: false, reason: 'bad_credentials' };
-  }
-  if (row.status !== 'active') return { ok: false, reason: 'disabled' };
+  if (!verified) return { ok: false, reason: 'bad_credentials' };
   await withAdminClient(pool, (client) =>
     client.query('update users set failed_login_count = 0, locked_until = null where id = $1', [
       row.id,
     ]),
   );
+  if (row.status !== 'active') return { ok: false, reason: 'disabled' };
   return { ok: true, user: mapUser(row) };
 }
 

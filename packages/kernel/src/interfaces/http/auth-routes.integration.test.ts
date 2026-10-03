@@ -10,6 +10,8 @@ import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool
 import { withAdminClient } from '../../application/gateway/auth.js';
 import {
   CONSOLE_SESSION_COOKIE,
+  LOGIN_MAX_FAILURES,
+  checkPassword,
   createUser,
   findUserByLogin,
   setUserPassword,
@@ -204,6 +206,75 @@ describe.runIf(DATABASE_URL !== undefined)(
         const noCookie = await app.inject({ method: 'GET', url: '/api/auth/me' });
         expect(noCookie.statusCode).toBe(401);
       });
+
+      it('R-43: parallel wrong passwords get exactly LOGIN_MAX_FAILURES guesses — the rest are refused as locked, and so is the right password', async () => {
+        const parallelLogin = `r43-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, { login: parallelLogin, displayName: 'R43 Parallel', password });
+        const attempts = 12;
+
+        const results = await Promise.all(
+          Array.from({ length: attempts }, (_, i) =>
+            checkPassword(pool, parallelLogin, `wrong-password-${i}`),
+          ),
+        );
+
+        const reasons = results.map((result) => (result.ok ? 'ok' : result.reason));
+        expect(reasons.filter((reason) => reason === 'bad_credentials')).toHaveLength(
+          LOGIN_MAX_FAILURES,
+        );
+        expect(reasons.filter((reason) => reason === 'locked')).toHaveLength(
+          attempts - LOGIN_MAX_FAILURES,
+        );
+        expect(await checkPassword(pool, parallelLogin, password)).toEqual({
+          ok: false,
+          reason: 'locked',
+        });
+      }, 30_000);
+    });
+
+    // ---- POST /api/auth/bind-api-key (R-28) -----------------------------------------------------
+
+    describe('POST /api/auth/bind-api-key', () => {
+      const password = 'correct horse battery staple';
+
+      it('moves the key’s membership onto the calling user and leaves a principal.user_rebound audit row {from, to}', async () => {
+        const created = await createWorkspace(pool, `auth-routes-bind-ws-${randomUUID()}`, 'Owner');
+        const formerUser = await findUserByLogin(pool, created.ownerLogin);
+        if (!formerUser) throw new Error('createWorkspace linked no user');
+        const login = `bind-test-${randomUUID().slice(0, 8)}`;
+        const caller = await createUser(pool, { login, displayName: 'Bind Caller', password });
+        const app = appWithKeys();
+        const cookie = await loginAs(app, login, password);
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/bind-api-key',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: { apiKey: created.apiKey },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(
+          response.json().result.memberships.map((m: { principalId: string }) => m.principalId),
+        ).toContain(created.ownerPrincipalId);
+
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{
+            workspace_id: string | null;
+            actor_user_id: string | null;
+            payload: { workspaceId?: string; from?: string; to?: string };
+          }>(
+            `select workspace_id, actor_user_id, payload from audit_records
+              where action = 'principal.user_rebound' and resource_id = $1`,
+            [created.ownerPrincipalId],
+          ),
+        );
+        expect(audit.rows).toHaveLength(1);
+        expect(audit.rows[0]).toMatchObject({
+          workspace_id: null,
+          actor_user_id: caller.id,
+          payload: { workspaceId: created.workspaceId, from: formerUser.id, to: caller.id },
+        });
+      }, 30_000);
     });
 
     // ---- POST /api/auth/claim -------------------------------------------------------------------
@@ -255,6 +326,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(body.result.user.platformRole).toBe('user');
         expect(body.result.user.mustChangePassword).toBe(false);
         expect(response.headers['set-cookie']).toBeTruthy();
+
+        // R-28: the claim left a platform audit row, attributed to the claiming user.
+        const claimed = await withAdminClient(pool, (client) =>
+          client.query<{
+            workspace_id: string | null;
+            actor_user_id: string | null;
+            resource_id: string | null;
+            payload: { workspaceId?: string; login?: string };
+          }>(
+            `select workspace_id, actor_user_id, resource_id, payload from audit_records
+              where action = 'user.identity_claimed' and actor_user_id = $1`,
+            [body.result.user.id],
+          ),
+        );
+        expect(claimed.rows).toHaveLength(1);
+        expect(claimed.rows[0]).toMatchObject({
+          workspace_id: null,
+          resource_id: body.result.user.id,
+          payload: { workspaceId, login },
+        });
 
         const loginResponse = await app.inject({
           method: 'POST',

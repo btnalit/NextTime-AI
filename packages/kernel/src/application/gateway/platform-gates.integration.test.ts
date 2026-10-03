@@ -82,6 +82,7 @@ import {
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
+import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
 import { setRequestActionDeps } from './request-action-handler.js';
@@ -1273,6 +1274,58 @@ describe.runIf(DATABASE_URL !== undefined)(
           reason: 'mcp_gate_not_vetted',
         });
         expect(evaluate({ ...base, mcpTrustBlocked: false }).decision).toBe('allow');
+      });
+    });
+
+    describe('issue_service_handle (R-36)', () => {
+      async function insertServicePrincipal(role: string, displayName: string): Promise<string> {
+        const id = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', $3, $4)`,
+            [workspaceId, id, role, displayName],
+          ),
+        );
+        return id;
+      }
+
+      it('refuses the platform’s internal service Principals (leftover 88, kernel side) and opens no session', async () => {
+        const internalId = await insertServicePrincipal('member', '__members_internal_r36__');
+        const thrown = await callAsOwner('issue_service_handle', {
+          principalId: internalId,
+          scope: ['assert_fact'],
+        }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        expect(thrown).toBeInstanceOf(PrincipalOperationRefusedError);
+        expect((thrown as PrincipalOperationRefusedError).reason).toBe('platform_managed');
+        const sessions = await withAdminClient(pool, (client) =>
+          client.query('select 1 from sessions where workspace_id = $1 and principal_id = $2', [
+            workspaceId,
+            internalId,
+          ]),
+        );
+        expect(sessions.rowCount).toBe(0);
+      });
+
+      it('narrows the requested capabilities by the service Principal’s role, like the other issuers', async () => {
+        const memberId = await insertServicePrincipal('member', 'r36 member key');
+        const builderId = await insertServicePrincipal('builder', 'r36 builder key');
+        const requested = ['search', 'propose_operation'];
+
+        const asMember = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          { principalId: memberId, scope: requested },
+        );
+        expect(asMember.scope.capabilities).toEqual(['search']);
+
+        const asBuilder = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          { principalId: builderId, scope: requested },
+        );
+        expect(new Set(asBuilder.scope.capabilities)).toEqual(new Set(requested));
       });
     });
 
