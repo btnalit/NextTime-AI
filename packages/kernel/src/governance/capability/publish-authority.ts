@@ -10,7 +10,10 @@ import type { Role } from '@nexttime/shared';
  *
  * `publish_operation` on a revision draft also deprecates the identity's live row (S3.12), so the
  * caller needs the same authority over that row — a builder revises their own Operation; replacing
- * one someone else proposed (a gate's imported Operation, say) is the owner's.
+ * one someone else proposed (a gate's imported Operation, say) is the owner's. The versioned
+ * registries apply the same rule to their families (`application/worker/publish-family.ts`):
+ * propose may add a version to anyone's family, but publishing it over a live version someone
+ * else proposed needs that proposer or the owner.
  *
  * The services (`application/worker` skills / procedures / definitions,
  * `governance/gatekeepers/manifest.ts`) apply it to the row they have just locked, so a version

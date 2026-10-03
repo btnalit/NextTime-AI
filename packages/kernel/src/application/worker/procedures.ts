@@ -12,6 +12,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
+import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
  * application/worker/procedures: the Procedure registry (design doc §5.1.4 Procedure, §5.4
@@ -286,8 +287,9 @@ async function resolveStepTargets(
  *  resolved step) so `find_procedures` has something to traverse.
  *
  *  `actor` (D-24): the `publish_procedure` caller — `actor.principalId` is
- *  `publisherPrincipalId` — checked against the locked row (`requireProcedureAuthority`); omitted
- *  by internal callers. */
+ *  `publisherPrincipalId` — checked against the locked row (`requireProcedureAuthority`) and the
+ *  family's live version it would supersede (`assertFamilyPublishAuthority`); omitted by internal
+ *  callers. */
 export async function publishProcedure(
   client: PoolClient,
   workspaceId: string,
@@ -298,6 +300,13 @@ export async function publishProcedure(
   const row = await getLatestForUpdate(client, workspaceId, procedureId);
   requireProcedureAuthority('publish_procedure', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'procedures',
+    action: 'publish_procedure',
+    familyId: row.id,
+    subject: `Procedure ${row.id}@${row.version}`,
+    actor,
+  });
 
   if (row.steps.length === 0) {
     throw new ProcedureStepReferenceError(-1, 'a Procedure must have at least one step to publish');

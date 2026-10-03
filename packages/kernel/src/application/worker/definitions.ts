@@ -13,6 +13,7 @@ import {
   assertPublishAuthority,
 } from '../../governance/capability/index.js';
 import { projectWorkerDefinitionObject } from '../../substrate/ontology/index.js';
+import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
  * application/worker/definitions: the WorkerDefinition registry (design doc §5.1.4
@@ -296,8 +297,9 @@ function requireWorkerDefinitionAuthority(
  *  `find_workers` (S2.7) has something to traverse.
  *
  *  `actor` (D-24): the `publish_worker_definition` caller — `actor.principalId` is
- *  `publisherPrincipalId` — checked against the locked row; omitted by internal callers
- *  (workspace creation's default entry definition). */
+ *  `publisherPrincipalId` — checked against the locked row and the family's live version it would
+ *  supersede (`assertFamilyPublishAuthority`); omitted by internal callers (workspace creation's
+ *  default entry definition). */
 export async function publishWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -308,6 +310,13 @@ export async function publishWorkerDefinition(
   const row = await getForUpdate(client, workspaceId, ref);
   requireWorkerDefinitionAuthority('publish_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish'); // throws IllegalTransition if illegal
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'worker_definitions',
+    action: 'publish_worker_definition',
+    familyId: row.id,
+    subject: `WorkerDefinition ${row.id}@${row.version}`,
+    actor,
+  });
 
   validateWorkerDefinitionContent(row.kind, row.definition);
 

@@ -13,6 +13,7 @@ import { type PublishActor, assertPublishAuthority } from '../../governance/capa
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
+import { assertFamilyPublishAuthority } from './publish-family.js';
 
 const graphStore = new SqlGraphStore();
 
@@ -254,7 +255,8 @@ function requireSkillAuthority(
  *  to find.
  *
  *  `actor` (D-24): the `publish_skill` caller — `actor.principalId` is `publisherPrincipalId` —
- *  checked against the locked row (`requireSkillAuthority`); omitted by internal callers. */
+ *  checked against the locked row (`requireSkillAuthority`) and against the family's live
+ *  version it would supersede (`assertFamilyPublishAuthority`); omitted by internal callers. */
 export async function publishSkill(
   client: PoolClient,
   workspaceId: string,
@@ -265,6 +267,13 @@ export async function publishSkill(
   const row = await getLatestForUpdate(client, workspaceId, skillId);
   requireSkillAuthority('publish_skill', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'skills',
+    action: 'publish_skill',
+    familyId: row.id,
+    subject: `Skill ${row.id}@${row.version}`,
+    actor,
+  });
   validateSkillContent(row);
 
   const result = await client.query<SkillDbRow>(

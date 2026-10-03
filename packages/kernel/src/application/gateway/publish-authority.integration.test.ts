@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { proposeSkill as proposeSkillVersion } from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
@@ -20,6 +21,12 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * owner may act on it. One publish path (`publish_skill`, a draft private to its proposer: someone
  * else's reads as not found) and one deprecate path (`deprecate_operation`, a published row
  * everyone sees: 403 `not_proposer`), each at member / another builder / the proposer / the owner.
+ *
+ * Plus the version half: propose stays permissive (a new version may be added to anyone's family),
+ * but publishing a version that would supersede a live version someone else proposed needs that
+ * proposer or the owner — a Skill family (the version is added through the service, since
+ * `propose_skill`'s params carry no family id) and a WorkerDefinition family (end to end:
+ * `propose_worker_definition{definitionId}` does accept one).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -284,6 +291,76 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(published.status).toBe('published');
         expect(published.version).toBe(2);
+      });
+    });
+
+    describe('a new version in someone else’s family', () => {
+      it('Skill: another builder may propose a version, may not publish it; the owner may', async () => {
+        const skillId = await proposeSkill();
+        await call(builderId, 'builder', 'publish_skill', { skillId });
+
+        const v2 = await withWorkspace(
+          pool,
+          { workspaceId, principalId: otherBuilderId },
+          (client) =>
+            proposeSkillVersion(client, workspaceId, otherBuilderId, {
+              skillId,
+              name: `d24-skill-${randomUUID().slice(0, 8)}`,
+              description: 'Another builder’s version of the family.',
+              markdown: '# Steps\n\nDo it differently.',
+            }),
+        );
+        expect(v2.version).toBe(2);
+        await expect(
+          call(otherBuilderId, 'builder', 'publish_skill', { skillId }),
+        ).rejects.toBeInstanceOf(NotProposerError);
+
+        const published = await call<{ status: string; version: number }>(
+          ownerId,
+          'owner',
+          'publish_skill',
+          { skillId },
+        );
+        expect(published).toMatchObject({ status: 'published', version: 2 });
+      });
+
+      it('WorkerDefinition: propose_worker_definition{definitionId} is allowed, publishing it is not; the owner may', async () => {
+        const v1 = await call<{ id: string; version: number }>(
+          builderId,
+          'builder',
+          'propose_worker_definition',
+          { kind: 'worker', definition: { systemPrompt: 'v1 by the family’s proposer' } },
+        );
+        await call(builderId, 'builder', 'publish_worker_definition', {
+          definitionId: v1.id,
+          version: v1.version,
+        });
+
+        const v2 = await call<{ id: string; version: number }>(
+          otherBuilderId,
+          'builder',
+          'propose_worker_definition',
+          {
+            definitionId: v1.id,
+            kind: 'worker',
+            definition: { systemPrompt: 'v2 by another builder' },
+          },
+        );
+        expect(v2.version).toBe(2);
+        await expect(
+          call(otherBuilderId, 'builder', 'publish_worker_definition', {
+            definitionId: v2.id,
+            version: v2.version,
+          }),
+        ).rejects.toBeInstanceOf(NotProposerError);
+
+        const published = await call<{ status: string }>(
+          ownerId,
+          'owner',
+          'publish_worker_definition',
+          { definitionId: v2.id, version: v2.version },
+        );
+        expect(published.status).toBe('published');
       });
     });
   },
