@@ -5,7 +5,7 @@ import type { Operation } from '@nexttime/shared';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConnectedAccountStore } from './credentials/index.js';
-import { OperationRefusedError } from './errors.js';
+import { OperationRefusedError, TransportInvokeError, TransportTimeoutError } from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
@@ -240,6 +240,50 @@ describe('gatekeeper protocol server', () => {
         message: 'not served by this gate',
       });
     }
+  });
+
+  it('POST /gate/apply answers a stored transport failure again on retry, not 409 (R-51)', async () => {
+    app = buildApp({
+      kind: 'http',
+      async invoke() {
+        throw new TransportInvokeError('target responded 500');
+      },
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers: AUTH_HEADERS,
+        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-failed' },
+      });
+      expect(response.statusCode).toBe(502);
+      expect(response.json().error).toEqual({
+        code: 'transport_error',
+        message: 'target responded 500',
+      });
+    }
+  });
+
+  it('POST /gate/apply maps a transport timeout to 409 apply_outcome_unknown, on retry too (R-51)', async () => {
+    let invocations = 0;
+    app = buildApp({
+      kind: 'http',
+      async invoke() {
+        invocations += 1;
+        throw new TransportTimeoutError('command timed out after 50000 ms and was killed');
+      },
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers: AUTH_HEADERS,
+        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-unknown' },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe('apply_outcome_unknown');
+    }
+    expect(invocations).toBe(1);
   });
 
   it('POST /gate/simulate returns a description without executing', async () => {

@@ -562,6 +562,35 @@
     未动）；② `GATE_STORE_KEY_FILE` 进 compose `secrets:` 只落了文档，没有新增一个真正跑
     `connected_account` 模式的常驻门服务去验证；③ 四个 Dockerfile 镜像构建本机无 Docker，未验证
     `.dockerignore` 生效后镜像仍能正常构建（同 S2.4/S2.5 已有的"本机无 Docker"已知限制）。
+  - **后续修复（R-48 / R-50 / R-51，2026-10-02 复审，遗留 104 的后续）**：遗留 104 把 `apply` 超时改成"结果未知、
+    行留 `executing`、由 stale-executing reaper 以同一 `actionRequestId` 重放"，复审发现门侧与内核侧都不完整。
+    - **门（R-51，维护者决定 D-11）**：`IdempotencyStore` 新增 `fail`。`JsonFileIdempotencyStore` 在 `reserve` 返回前就把
+      预留写盘；门进程调用中途退出后，这个 key 重启时载入为孤儿，此后同一 tuple 一律 409 `apply_outcome_unknown`，不再
+      释放给重放去重跑。传输失败记在 key 上（重试得到同一个 502，不再永远 409，也不二次调用）；凭证解析失败释放 key（什么
+      都没跑）。`ssh` / `cli` 加执行超时（`kinds/exec-timeout.ts`，默认 50 s，低于内核 60 s 的 apply 预算；超时 SIGKILL 子
+      进程，记为结果未知），子进程 stdin 立即 EOF，ssh 加 `-n`、`ConnectTimeout=10`、`ServerAliveInterval=15`。
+      `SshCommandRejectedError` 改为 `OperationRefusedError` 子类：403 `operation_refused` 并释放 key，此前是不透明的 500
+      且钉住 key。整文件重写串行化，旧快照不会晚于新快照落盘。Operation schema 里没有平台治理的幂等声明——只有 MCP
+      自报、不可信的 `idempotent_hint`，自动批准时还要叠加门看不到的实例 `vetted`——因此不做"声明幂等即自动重放"：只有
+      已完成的 key 回放结果，孤儿预留一律"结果未知"，不新增清单字段。
+    - **内核重放（R-48）**：新增 `ActionReplayer.replay`，reaper 只走它。它不跑拒绝名单与注册前置检查（首次调用可能已经
+      生效，只有门说了算），总是用同一 key 调幂等 `apply`：成功 → `executed`；门回答该 key 的已存失败（502）或"什么都
+      没跑"的拒绝（403 / 424）→ `failed`；409 `apply_outcome_unknown` → `failed: outcome_unknown`；其余（409
+      `idempotency_conflict` 即仍在执行、超时、不可达、其他错误）→ 行留 `executing`。每次重放前在行上计数（governance
+      0013 `replay_attempts`，重放抛异常也计，跨重启有效），到 `DEFAULT_MAX_REPLAY_ATTEMPTS`（3 次，按 5 分钟一轮约 15
+      分钟）仍无答复 → `failed: outcome_unknown`，交人对账。首次执行同样把 409 `apply_outcome_unknown` 记为
+      `failed: outcome_unknown`，把 409 `idempotency_conflict` 当结果未知（`indeterminate`）。
+    - **每门串行（R-50，D-10：这是保证）**：`listExecutableQueue` 纳入 `executing`；drainer 遇 `executing` 停（另一触发路径
+      的 apply 在途，或结果未知、等 reaper），`indeterminate` 之后也停（`DrainResult.stoppedAtExecuting`）。每处理完一行
+      重读队列，执行期间新批准的行由持有屏障的那次 drain 接着跑，不必等下一个 tick。`start_execution` 仍是条件更新，不加
+      锁（咨询锁跨不过 apply 本身）。`index.ts` 里"进程内单飞是优化"的注释改为：单飞集合只省一次多余 drain，顺序由数据库
+      屏障保证。
+    - **测试**：gatekeeper-base 单测覆盖已存失败 / 结果未知 / 重启后孤儿、凭证失败释放、真实子进程的 stdin EOF 与超时击杀、
+      ssh 拒绝走 403、server 的 409 映射；kernel 集成测试：drainer（`indeterminate` 后停、跨实例屏障并由第一个 drain 接走
+      r2）、request-action（重放超时到上限 `failed: outcome_unknown`、重放遇 409 留 `executing` 后取回已存结果、门回答
+      结果未知时首次与重放都 `failed: outcome_unknown` 且效果只跑一次）、platform-gates（Operation 被禁用后重放仍问门）。
+    - **已知边界**：首次请求根本没到门（key 从未预留）时，重放会第一次执行该效果——门协议只有 `apply` 一个查询入口，
+      Operation 已被禁用也一样；`http` / `mcp` 传输自己的超时仍按普通传输失败（502 → `failed`）记，没有改成结果未知。
 
 ### S2.5 `docker` 预置清单与 `ragflow` 门实例
 - 交付物：`gatekeepers/docker`（`cli` 种类的预置清单 + dockerode 绑定；observe：`containers.list / container.inspect / compose.ls / container.logs_tail`；execute：`container.restart`（medium，`await_decision=false`，simulate 返回将影响的容器）、`compose.up / compose.down`（high）；全部 `auto_approvable=false`）；`gatekeepers/ragflow`（`http` 种类的清单：observe `kb.list / kb.documents / retrieve`，execute `document.upload`（medium）、`document.parse`（low））。

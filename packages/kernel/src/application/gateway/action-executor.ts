@@ -5,14 +5,17 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import {
   type GatekeeperClient,
+  GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import type { ActionExecutor, ActionExecutorResult } from '../../governance/approval/index.js';
 import type { ActionRequestRow } from '../../governance/approval/index.js';
 import {
+  DEFAULT_MAX_REPLAY_ATTEMPTS,
   listStaleExecutingActionRequests,
   markActionRequestExecuted,
   markActionRequestFailed,
+  recordActionRequestReplayAttempt,
 } from '../../governance/approval/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
@@ -27,13 +30,14 @@ import { writeObservedFacts } from './observed-facts.js';
  * §7.10) because it composes `adapters/gatekeeper-client` with `governance/gatekeepers` and
  * `substrate`.
  *
- * `apply`'s `actionRequestId` is the ActionRequest's own id — a `drainGatekeeper` retry (e.g. after
- * a crash between `apply` succeeding and `markActionRequestExecuted` committing) replays the same
- * key, so the gate's own idempotency store (design doc §5.1.4 "apply 幂等") returns the stored
- * result instead of re-running the effect. Observed facts from a successful `apply` are written in
- * their own short Activity, opened and closed around the write — separate from whatever Activity
- * (if any) the original `request_action` call ran under, since execution can happen well after and
- * in a different transaction (a human approving asynchronously, or the periodic drain tick).
+ * `apply`'s `actionRequestId` is the ActionRequest's own id — the stale-executing reaper's replay
+ * (`replay` below; e.g. after a crash between `apply` succeeding and `markActionRequestExecuted`
+ * committing) asks again under the same key, so the gate's own idempotency store (design doc
+ * §5.1.4 "apply 幂等") returns the stored result instead of re-running the effect. Observed facts
+ * from a successful `apply` are written in their own short Activity, opened and closed around the
+ * write — separate from whatever Activity (if any) the original `request_action` call ran under,
+ * since execution can happen well after and in a different transaction (a human approving
+ * asynchronously, or the periodic drain tick).
  */
 
 export type WithTransactionFn = <T>(
@@ -133,7 +137,100 @@ export interface GatekeeperActionExecutorDeps {
   readonly withTransaction: WithTransactionFn;
 }
 
-export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDeps): ActionExecutor {
+/** R-48: the stale-executing reaper's port (`reapStaleExecutingActionRequests` below). `replay`
+ *  asks the gate again about an `executing` row whose first `apply` gave no answer — never a fresh
+ *  execution decision. `ok: false` with `indeterminate: true` means the gate still gave no verdict
+ *  on the call's key (the row stays `executing`); any other `ok: false` is terminal. */
+export interface ActionReplayer {
+  replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult>;
+}
+
+export type GatekeeperActionExecutor = ActionExecutor & ActionReplayer;
+
+/** Gate error codes (`@nexttime/gatekeeper-base` `server.ts`) that settle an `apply` for its key on
+ *  a replay (R-48): the call's own stored failure (502 `transport_error`, R-51), or a refusal that
+ *  ran nothing and freed the key (403 `operation_refused`, 424 `credential_unavailable`). */
+const SETTLED_FAILURE_CODES = new Set([
+  'transport_error',
+  'operation_refused',
+  'credential_unavailable',
+]);
+
+type ApplyErrorVerdict =
+  /** The gate gave no verdict on this key: the call timed out, or the gate answered 409
+   *  `idempotency_conflict` — an apply for this key is still running there. */
+  | { readonly kind: 'in_doubt'; readonly message: string }
+  /** The gate says it cannot know (409 `apply_outcome_unknown`, R-51 / D-11): its exec timeout
+   *  killed the call, or a gate process stopped mid-call. Never re-run — a person reconciles. */
+  | { readonly kind: 'outcome_unknown'; readonly message: string }
+  /** `settled`: the gate answered from the key's own record (`SETTLED_FAILURE_CODES`). */
+  | { readonly kind: 'failed'; readonly message: string; readonly settled: boolean };
+
+/** How one failed `gate/apply` call reads — shared by the first execution and the reaper's replay,
+ *  so both draw the same line between "failed", "outcome unknown" and "no answer yet". */
+function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof GatekeeperTimeoutError) return { kind: 'in_doubt', message };
+  if (err instanceof GatekeeperClientError) {
+    if (err.code === 'apply_outcome_unknown') return { kind: 'outcome_unknown', message };
+    if (err.code === 'idempotency_conflict') return { kind: 'in_doubt', message };
+    return { kind: 'failed', message, settled: SETTLED_FAILURE_CODES.has(err.code) };
+  }
+  return { kind: 'failed', message, settled: false };
+}
+
+/** The `failed` reason for an apply whose effect nobody can confirm (R-48): `outcome_unknown`, the
+ *  same reason-prefix convention as `operation_disabled` below. */
+function outcomeUnknownReason(detail: string): string {
+  return `outcome_unknown: ${detail}`;
+}
+
+export function createGatekeeperActionExecutor(
+  deps: GatekeeperActionExecutorDeps,
+): GatekeeperActionExecutor {
+  /** Writes a successful `apply`'s observed facts in their own short Activity (module doc). */
+  async function recordApplied(
+    actionRequest: ActionRequestRow,
+    applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>,
+  ): Promise<ActionExecutorResult> {
+    await deps.withTransaction(
+      actionRequest.workspaceId,
+      actionRequest.onBehalfOf,
+      async (client) => {
+        const activity = await startActivity(client, actionRequest.workspaceId, {
+          kind: 'gatekeeper_apply',
+          principalId: actionRequest.onBehalfOf,
+          metadata: {
+            actionRequestId: actionRequest.id,
+            gatekeeperId: actionRequest.gatekeeperId,
+          },
+        });
+        await writeObservedFacts(
+          client,
+          actionRequest.workspaceId,
+          actionRequest.gatekeeperId,
+          applyResult.observedFacts ?? [],
+          activity.id,
+        );
+        await endActivity(client, actionRequest.workspaceId, activity.id, 'completed');
+      },
+    );
+
+    return {
+      ok: true,
+      resultMetadata: { data: applyResult.data, replayed: applyResult.replayed },
+    };
+  }
+
+  function applyInput(actionRequest: ActionRequestRow) {
+    return {
+      operation: actionRequest.actionKind,
+      params: actionRequest.params,
+      onBehalfOf: actionRequest.onBehalfOf,
+      actionRequestId: actionRequest.id,
+    };
+  }
+
   return {
     async execute(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
       const { gatekeeper, disabled } = await deps.withTransaction(
@@ -172,53 +269,76 @@ export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDep
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(gatekeeper.endpoint, {
-          operation: actionRequest.actionKind,
-          params: actionRequest.params,
-          onBehalfOf: actionRequest.onBehalfOf,
-          actionRequestId: actionRequest.id,
-        });
+        applyResult = await deps.gatekeeperClient.apply(
+          gatekeeper.endpoint,
+          applyInput(actionRequest),
+        );
       } catch (err) {
-        if (err instanceof GatekeeperTimeoutError) {
+        const verdict = applyErrorVerdict(err);
+        if (verdict.kind === 'in_doubt') {
           // The gate may still be performing the effect — the outcome is unknown, not failed.
-          // The drainer leaves the row `executing`; `reapStaleExecutingActionRequests` (below)
-          // replays this same `actionRequestId` later and the gate's idempotency store answers.
+          // The drainer leaves the row `executing` (a barrier for this Gatekeeper's queue, R-50);
+          // `reapStaleExecutingActionRequests` (below) asks the gate again later under this same
+          // `actionRequestId` and the gate's idempotency store answers.
           return {
             ok: false,
             indeterminate: true,
-            reason: `outcome unknown: ${err.message} — the gate may still complete it`,
+            reason: `outcome unknown: ${verdict.message} — the gate may still complete it`,
           };
         }
-        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+        if (verdict.kind === 'outcome_unknown') {
+          return { ok: false, reason: outcomeUnknownReason(verdict.message) };
+        }
+        return { ok: false, reason: verdict.message };
       }
 
-      await deps.withTransaction(
+      return recordApplied(actionRequest, applyResult);
+    },
+
+    /**
+     * R-48: the reaper's replay. Unlike `execute`, no deny-list or registration pre-check may end
+     * the row here: the first call may already have taken effect, so only the gate can say what
+     * happened. It always asks the gate — an idempotent `apply` under the same `actionRequestId`,
+     * which the gate's idempotency store answers with the first call's stored result, its stored
+     * failure (R-51), or "outcome unknown" (a key a gate process left pending, D-11). A gate with
+     * no verdict yet (409 still applying, a timeout, unreachable, any other error) leaves the row
+     * `executing` for the next tick — the reaper's attempt cap bounds that.
+     *
+     * Known edge: a key the first call never reserved (its request never reached the gate) is
+     * free, so this replay runs the effect fresh — `apply` is the only lookup the gate protocol has.
+     */
+    async replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
+      const gatekeeper = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
-        async (client) => {
-          const activity = await startActivity(client, actionRequest.workspaceId, {
-            kind: 'gatekeeper_apply',
-            principalId: actionRequest.onBehalfOf,
-            metadata: {
-              actionRequestId: actionRequest.id,
-              gatekeeperId: actionRequest.gatekeeperId,
-            },
-          });
-          await writeObservedFacts(
-            client,
-            actionRequest.workspaceId,
-            actionRequest.gatekeeperId,
-            applyResult.observedFacts ?? [],
-            activity.id,
-          );
-          await endActivity(client, actionRequest.workspaceId, activity.id, 'completed');
-        },
+        (client) => getGatekeeper(client, actionRequest.workspaceId, actionRequest.gatekeeperId),
       );
+      if (!gatekeeper) {
+        return {
+          ok: false,
+          indeterminate: true,
+          reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered — no gate to ask`,
+        };
+      }
 
-      return {
-        ok: true,
-        resultMetadata: { data: applyResult.data, replayed: applyResult.replayed },
-      };
+      let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
+      try {
+        applyResult = await deps.gatekeeperClient.apply(
+          gatekeeper.endpoint,
+          applyInput(actionRequest),
+        );
+      } catch (err) {
+        const verdict = applyErrorVerdict(err);
+        if (verdict.kind === 'outcome_unknown') {
+          return { ok: false, reason: outcomeUnknownReason(verdict.message) };
+        }
+        if (verdict.kind === 'failed' && verdict.settled) {
+          return { ok: false, reason: verdict.message };
+        }
+        return { ok: false, indeterminate: true, reason: verdict.message };
+      }
+
+      return recordApplied(actionRequest, applyResult);
     },
   };
 }
@@ -235,6 +355,9 @@ export interface ReapStaleExecutingActionRequestsOptions {
   /** Forwarded to `listStaleExecutingActionRequests` — default `DEFAULT_STALE_EXECUTING_
    *  TIMEOUT_MS`. */
   readonly staleAfterMs?: number;
+  /** R-48: replays of one row that may end without an answer before the row is marked `failed`
+   *  with an `outcome_unknown` reason — default `DEFAULT_MAX_REPLAY_ATTEMPTS`. */
+  readonly maxReplayAttempts?: number;
   /** Called for a row whose replay genuinely failed (a real DB/network error, not a benign race
    *  with the original executor finally finishing) — never for a benign race, which the reaper
    *  itself resolves by moving on to the next row. Defaults to a no-op; `packages/kernel/src/
@@ -249,13 +372,19 @@ export interface ReapStaleExecutingActionRequestsResult {
 
 /**
  * Scans every workspace for `executing` ActionRequests stuck past `options.staleAfterMs`
- * (`listStaleExecutingActionRequests`) and, for each, replays `apply` through the *same*
- * `ActionExecutor.execute` every other execution path in this codebase uses — the gate's own
- * idempotency store (keyed by `actionRequestId`, `apply`'s own field of that name) is what makes this
- * safe to call again: a genuinely-completed `apply` returns its stored result instead of
- * re-running the effect (same guarantee `action-executor.ts`'s own module doc comment and
- * `request-action-handler.ts`'s `tryExecuteInline` already document and rely on) — this function
- * does not re-implement that guarantee, it only decides *when* to retry.
+ * (`listStaleExecutingActionRequests`) and, for each, asks the gate again through
+ * `ActionReplayer.replay` (R-48 — not `execute`: no pre-check may end a row whose first call may
+ * already have taken effect). The gate's own idempotency store (keyed by `actionRequestId`,
+ * `apply`'s own field of that name) is what makes this safe: a completed `apply` returns its
+ * stored result instead of re-running the effect, a failed one its stored failure, and a key a
+ * gate process left pending answers "outcome unknown" (R-51 / D-11) — this function does not
+ * re-implement that guarantee, it only decides *when* to ask and when to stop asking.
+ *
+ * Bounded (R-48): each replay is counted on the row before it runs
+ * (`recordActionRequestReplayAttempt`, so a replay that throws counts too, across restarts). A
+ * replay with no verdict (`indeterminate`) leaves the row `executing` for the next tick until the
+ * count reaches `options.maxReplayAttempts`; then the row is marked `failed` with an
+ * `outcome_unknown` reason for a person to reconcile against the target system.
  *
  * Marking the outcome tolerates `IllegalTransition`: the row may have been genuinely still
  * executing (just slow) and finished — by the original caller's own phase-2, the drainer, or the
@@ -268,7 +397,7 @@ export interface ReapStaleExecutingActionRequestsResult {
  */
 export async function reapStaleExecutingActionRequests(
   pool: PoolLike,
-  actionExecutor: ActionExecutor,
+  actionReplayer: ActionReplayer,
   options: ReapStaleExecutingActionRequestsOptions = {},
 ): Promise<ReapStaleExecutingActionRequestsResult> {
   const staleRows = await listStaleExecutingActionRequests(pool, {
@@ -276,20 +405,37 @@ export async function reapStaleExecutingActionRequests(
   });
   const withTransaction = createAdminWithTransaction(pool);
   const onRowError = options.onRowError ?? (() => {});
+  const maxReplayAttempts = options.maxReplayAttempts ?? DEFAULT_MAX_REPLAY_ATTEMPTS;
 
   let reaped = 0;
   for (const row of staleRows) {
     try {
-      // An `indeterminate` result here (the replay timed out too) is resolved as `failed` with
-      // its "outcome unknown" reason, not left `executing` again — bounded: the reaper replays a
-      // row at most once more after the first attempt, it never parks a row forever.
-      const result = await actionExecutor.execute(row);
+      const attempt = await withTransaction(row.workspaceId, row.onBehalfOf, (client) =>
+        recordActionRequestReplayAttempt(client, row.workspaceId, row.id),
+      );
+      if (attempt === null) continue; // benign — already resolved elsewhere since the scan.
+
+      // Past the cap only when earlier replays threw before resolving anything: stop asking.
+      const replayed: ActionExecutorResult =
+        attempt > maxReplayAttempts
+          ? { ok: false, indeterminate: true, reason: 'earlier replays ended in errors' }
+          : await actionReplayer.replay(row);
+      const noAnswer = !replayed.ok && replayed.indeterminate === true;
+      if (noAnswer && attempt < maxReplayAttempts) continue; // still `executing`: next tick.
+      const outcome: ActionExecutorResult = noAnswer
+        ? {
+            ok: false,
+            reason: outcomeUnknownReason(
+              `no answer from the gate after ${attempt} replays (last: ${replayed.reason}) — check the target system and reconcile by hand`,
+            ),
+          }
+        : replayed;
       await withTransaction(row.workspaceId, row.onBehalfOf, (client) =>
-        result.ok
+        outcome.ok
           ? markActionRequestExecuted(client, row.workspaceId, row.id, {
-              resultMetadata: result.resultMetadata,
+              resultMetadata: outcome.resultMetadata,
             })
-          : markActionRequestFailed(client, row.workspaceId, row.id, { reason: result.reason }),
+          : markActionRequestFailed(client, row.workspaceId, row.id, { reason: outcome.reason }),
       );
       reaped += 1;
     } catch (err) {

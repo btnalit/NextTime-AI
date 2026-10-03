@@ -6,6 +6,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import type { ConnectedAccountStore } from './credentials/index.js';
 import {
+  ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
   ConnectedAccountStoreNotConfiguredError,
   CredentialResolutionError,
@@ -78,6 +79,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
   }
   if (err instanceof IdempotencyConflictError) {
     return { status: 409, code: 'idempotency_conflict', message: err.message };
+  }
+  if (err instanceof ApplyOutcomeUnknownError) {
+    return { status: 409, code: 'apply_outcome_unknown', message: err.message };
   }
   if (err instanceof OperationRefusedError) {
     return { status: 403, code: 'operation_refused', message: err.message };

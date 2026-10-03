@@ -78,9 +78,17 @@ The kernel never receives credential material — every `request_action` call ca
 
 ## Idempotent apply store
 
-`JsonFileIdempotencyStore` (default in `main()`/`startGatekeeperServer`) keeps every stored
-`apply` result in a single JSON file under `GATE_DATA_DIR`, loaded fully into memory and rewritten
-atomically (write-to-temp-then-`rename`) on every write. **Durability limits**: safe for one gate
+`JsonFileIdempotencyStore` (default in `main()`/`startGatekeeperServer`) keeps every `apply` key
+in a single JSON file under `GATE_DATA_DIR`, loaded fully into memory and rewritten atomically
+(write-to-temp-then-`rename`, writes serialized) on every change. A key is reserved on disk
+*before* the transport runs, then ends as a stored result (a repeat `apply` replays it), a stored
+failure (a repeat gets the same 502, never a second run), or is released when nothing ran (a
+refusal, 403 `operation_refused`; an unresolvable credential, 424). A key still reserved when the
+gate process stopped is loaded back as outcome-unknown: every later `apply` for it answers 409
+`apply_outcome_unknown` and the call is never re-run automatically — the kernel marks the
+ActionRequest `failed: outcome_unknown` for a person to reconcile. The same answer follows an
+`ssh`/`cli` command killed by the exec timeout (50 s, below the kernel's 60 s `apply` budget).
+**Durability limits**: safe for one gate
 process; not safe for multiple gate processes sharing the same data directory (no cross-process
 locking); no compaction — an operator wanting bounded growth should prune old entries
 out-of-band. `InMemoryIdempotencyStore` is available for tests or a gate that deliberately opts

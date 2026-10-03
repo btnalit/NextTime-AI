@@ -1,7 +1,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Operation } from '@nexttime/shared';
-import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
+import {
+  BindingKindMismatchError,
+  TransportInvokeError,
+  TransportTimeoutError,
+} from '../errors.js';
+import { DEFAULT_EXEC_TIMEOUT_MS, runWithExecTimeout } from './exec-timeout.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
 /**
@@ -13,17 +18,24 @@ import type { Transport, TransportInvokeContext, TransportInvokeResult } from '.
  * (S2.5) is the first prebuilt `cli`-kind manifest.
  */
 
+/** `options.signal` aborts when the transport's exec timeout passes — an impl kills the child. */
 export type ExecFileFn = (
   file: string,
   args: readonly string[],
+  options: { readonly signal: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const execFileAsync = promisify(execFile);
 
-const defaultExecFile: ExecFileFn = async (file, args) => {
-  const { stdout, stderr } = await execFileAsync(file, args as string[], {
+const defaultExecFile: ExecFileFn = async (file, args, { signal }) => {
+  const pending = execFileAsync(file, args as string[], {
     maxBuffer: 10 * 1024 * 1024,
+    signal,
+    killSignal: 'SIGKILL',
   });
+  // R-51: the command gets an empty stdin — one that reads stdin sees EOF instead of hanging.
+  pending.child.stdin?.end();
+  const { stdout, stderr } = await pending;
   return { stdout, stderr };
 };
 
@@ -69,6 +81,9 @@ export function renderCommandTemplate(template: string, params: Record<string, u
 
 export interface CliTransportOptions {
   readonly execFileImpl?: ExecFileFn;
+  /** R-51: a command still running after this long is killed and the call fails with
+   *  `TransportTimeoutError` (default `DEFAULT_EXEC_TIMEOUT_MS`, below the kernel's apply budget). */
+  readonly execTimeoutMs?: number;
 }
 
 export class CliTransport implements Transport {
@@ -103,9 +118,14 @@ export class CliTransport implements Transport {
       throw new TransportInvokeError(`cli transport: empty command for "${operation.name}"`);
     try {
       const run = this.options.execFileImpl ?? defaultExecFile;
-      const { stdout, stderr } = await run(file, args);
+      const { stdout, stderr } = await runWithExecTimeout(
+        this.options.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS,
+        `cli transport: command for "${operation.name}"`,
+        (signal) => run(file, args, { signal }),
+      );
       return { data: { stdout, stderr } };
     } catch (err) {
+      if (err instanceof TransportTimeoutError) throw err;
       throw new TransportInvokeError(`cli transport: command failed for "${operation.name}"`, {
         cause: err,
       });

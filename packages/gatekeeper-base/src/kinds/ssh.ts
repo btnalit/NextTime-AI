@@ -1,7 +1,13 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { BlastRadius, Operation, OperationMode } from '@nexttime/shared';
-import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
+import {
+  BindingKindMismatchError,
+  OperationRefusedError,
+  TransportInvokeError,
+  TransportTimeoutError,
+} from '../errors.js';
+import { DEFAULT_EXEC_TIMEOUT_MS, runWithExecTimeout } from './exec-timeout.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 import { boundUntrustedText } from './untrusted-text.js';
 
@@ -82,32 +88,51 @@ export function classifyCommand(
   return UNCLASSIFIED_DEFAULT;
 }
 
+/** `options.signal` aborts when the transport's exec timeout passes — an impl kills the child. */
 export type SshExecFn = (
   target: SshTarget,
   command: string,
+  options: { readonly signal: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const execFileAsync = promisify(execFile);
 
-/** Exported for tests — the exact argv handed to `ssh` (never a shell). */
+/** Exported for tests — the exact argv handed to `ssh` (never a shell). R-51: `-n` gives the
+ *  remote command an empty stdin (a command that reads stdin gets EOF instead of hanging), and
+ *  `ConnectTimeout` / `ServerAliveInterval` bound an unreachable or silently dead peer well inside
+ *  the transport's exec timeout. */
 export function sshConnectionArgs(target: SshTarget): string[] {
-  const args: string[] = [];
+  const args: string[] = ['-n'];
   if (target.identityFile) args.push('-i', target.identityFile);
   if (target.port) args.push('-p', String(target.port));
   if (target.strictHostKeyChecking) {
     args.push('-o', `StrictHostKeyChecking=${target.strictHostKeyChecking}`);
   }
   if (target.knownHostsFile) args.push('-o', `UserKnownHostsFile=${target.knownHostsFile}`);
-  args.push('-o', 'BatchMode=yes', `${target.user}@${target.host}`);
+  args.push(
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'ServerAliveInterval=15',
+    `${target.user}@${target.host}`,
+  );
   return args;
 }
 
-const defaultSshExec: SshExecFn = async (target, command) => {
+const defaultSshExec: SshExecFn = async (target, command, { signal }) => {
   // `--` ends option parsing: OpenSSH keeps parsing options after the destination, so a command
   // beginning with `-o` (e.g. `-oProxyCommand=…`) would otherwise be consumed as a *client* option
   // and run locally inside the gate with its identity file (review lane 5, P0-1).
   const args = [...sshConnectionArgs(target), '--', command];
-  const { stdout, stderr } = await execFileAsync('ssh', args, { maxBuffer: 10 * 1024 * 1024 });
+  const pending = execFileAsync('ssh', args, {
+    maxBuffer: 10 * 1024 * 1024,
+    signal,
+    killSignal: 'SIGKILL',
+  });
+  pending.child.stdin?.end();
+  const { stdout, stderr } = await pending;
   return { stdout, stderr };
 };
 
@@ -131,6 +156,9 @@ export interface SshTransportOptions {
   readonly policyTable: readonly SshPolicyRule[];
   /** Injectable for tests — defaults to a real `execFile('ssh', ...)` call. */
   readonly execImpl?: SshExecFn;
+  /** R-51: a command still running after this long is killed and the call fails with
+   *  `TransportTimeoutError` (default `DEFAULT_EXEC_TIMEOUT_MS`, below the kernel's apply budget). */
+  readonly execTimeoutMs?: number;
 }
 
 /** Resolves the literal command to run: a `command_template` is rendered like the `cli` transport
@@ -148,7 +176,10 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export class SshCommandRejectedError extends Error {
+/** A refusal (R-51): thrown before anything runs on the target, so it takes the
+ *  `OperationRefusedError` path — 403 `operation_refused`, and `apply` frees its idempotency key —
+ *  instead of an opaque 500 that pinned the key. */
+export class SshCommandRejectedError extends OperationRefusedError {
   constructor(reason: string) {
     super(`ssh transport: command rejected — ${reason}`);
     this.name = 'SshCommandRejectedError';
@@ -223,8 +254,8 @@ function resolveCommand(operation: Operation, params: unknown): string {
   }
   const pattern = operation.binding.command_pattern;
   if (pattern && !new RegExp(pattern).test(command)) {
-    throw new Error(
-      `ssh transport: command does not match operation "${operation.name}"'s own command_pattern`,
+    throw new SshCommandRejectedError(
+      `command does not match operation "${operation.name}"'s own command_pattern`,
     );
   }
   return command;
@@ -252,9 +283,14 @@ export class SshTransport implements Transport {
     assertClassificationAllowed(operation, classification);
     try {
       const run = this.options.execImpl ?? defaultSshExec;
-      const { stdout, stderr } = await run(this.options.target, command);
+      const { stdout, stderr } = await runWithExecTimeout(
+        this.options.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS,
+        `ssh transport: command for "${operation.name}"`,
+        (signal) => run(this.options.target, command, { signal }),
+      );
       return { data: { stdout, stderr }, detail: { command, classification } };
     } catch (err) {
+      if (err instanceof TransportTimeoutError) throw err;
       throw new TransportInvokeError(
         `ssh transport: command failed for "${operation.name}": ${describeExecFailure(err)}`,
         { cause: err },
