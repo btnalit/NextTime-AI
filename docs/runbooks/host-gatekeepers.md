@@ -566,7 +566,8 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
 
 宿主要的三份 secret 与一个只读挂载：`gate_token`（内核 → 门，与打包门同一份）、`internal_gate_host_to_kernel`
 （宿主 → 内核：拉定义 + announce；R-03 起是宿主自己的派生凭证，挂在 `/run/secrets/internal_token`，
-`scripts/derive-internal-tokens.sh` 生成）、`gate_host_store_key`（宿主自己的静态加密密钥，`secrets/gate-host-store.key`）、
+`scripts/derive-internal-tokens.sh` 生成；内核只让它 announce 管理员建的门宿主实例，打包门实例一律 403，
+反之打包门的凭证也 announce 不了门宿主实例）、`gate_host_store_key`（宿主自己的静态加密密钥，`secrets/gate-host-store.key`）、
 `config/handle.pub`（验浏览器带来的 5 分钟平台 JWT——与 llm-proxy 挂的是同一个文件）。全部在
 `docker-compose.yml` `gate-host` 服务块里，不需要 `.env` 新变量。
 

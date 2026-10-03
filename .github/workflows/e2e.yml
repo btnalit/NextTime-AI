@@ -189,17 +189,21 @@ jobs:
       # start once an administrator already exists, so reading it here (kernel started, nothing
       # below restarts it) is safe regardless of what the bootstrap steps below do.
       # P-B1 (docs/development-tasks.md P-B 决定 ③): the console e2e needs one "discovered" gate
-      # instance without running a gate container. Seed it exactly the way a gate does — a POST to
-      # the internal plane with a gate's own credential — from inside the gate-host container, which
-      # holds one (R-03: the kernel admits only gate credentials on announce; the root the kernel
-      # container holds is refused there). Health will read "unreachable", which is the truth about
-      # an endpoint nothing listens on; the fake-MCP end-to-end path is P-B2.
+      # instance without running a gate container. Seed it exactly the way a packaged gate does — a
+      # POST to the internal plane with the packaged gates' own credential
+      # (secrets/internal-gate-to-kernel.token, read on the runner and piped in on stdin, never
+      # argv). It runs inside the gate-host container only for its network position (it reaches
+      # kernel:8080): R-03 — the kernel admits only gate credentials on announce (the root the
+      # kernel container holds is refused there), and gate-host's own credential announces only
+      # hosted instances, never a packaged one. Health will read "unreachable", which is the truth
+      # about an endpoint nothing listens on; the fake-MCP end-to-end path is P-B2.
       - name: Seed a discovered gate instance (announce)
         run: |
           set -euo pipefail
-          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml exec -T gate-host node -e '
+          sudo cat "$NEXTTIME_DATA/secrets/internal-gate-to-kernel.token" | \
+            sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml exec -T gate-host node -e '
             const fs = require("node:fs");
-            const token = fs.readFileSync("/run/secrets/internal_token", "utf8").trim();
+            const token = fs.readFileSync(0, "utf8").trim();
             const op = (name, mode, extra) => ({ name, binding: { kind: "mcp", tool_name: name },
               params_schema: { type: "object", properties: {} }, mode, blast_radius: mode === "observe" ? "low" : "medium",
               reversibility: false, auto_approvable: mode === "observe", await_decision: mode === "execute", reads: [], writes: [], ...extra });

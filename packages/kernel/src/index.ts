@@ -1098,13 +1098,15 @@ export function main(): void {
   // (the same value the compose file gives `egress-proxy`) enables the peer rule: a request from
   // inside the Worker subnet is rejected even with the right credential (a Worker must never hold
   // one). The kernel's own credential for worker-supervisor is a separate file
-  // (`loadSupervisorToken`, R-03), loaded in the same slot.
+  // (`loadSupervisorToken`, R-03), loaded in the same slot: required with the real runtime
+  // (`AGENT_RUNTIME=agent-host`); with `AGENT_RUNTIME=fake` a missing file is tolerated (no
+  // credential is sent, so worker-supervisor refuses every call — fail-closed, never open).
   const workersSubnet = process.env.NEXTTIME_SUBNET_WORKERS?.trim();
   const internalAuth: InternalPlaneAuthConfig = {
     token: loadInternalToken(),
     workersSubnet: workersSubnet ? workersSubnet : undefined,
   };
-  const supervisorToken = loadSupervisorToken();
+  const supervisorToken = loadSupervisorToken(process.env, { optional: kind === 'fake' });
 
   // adapters/db/pool: `pg` raises idle-client failures (a Postgres restart / failover, a network
   // partition) on the Pool's 'error' event; `createPool` installs the listener so they can never
@@ -1137,6 +1139,11 @@ export function main(): void {
     },
   );
   onPoolIdleClientError = (err) => app.log.error({ err }, 'adapters/db/pool: idle client error');
+  if (supervisorToken === undefined) {
+    app.log.warn(
+      'AGENT_RUNTIME=fake and no worker-supervisor credential file — every call to worker-supervisor will be refused (scripts/derive-internal-tokens.sh)',
+    );
+  }
 
   const port = Number(process.env.KERNEL_PORT ?? 8080);
   const host = process.env.KERNEL_BIND_ADDR ?? '0.0.0.0';
@@ -1309,7 +1316,8 @@ export function main(): void {
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
       // The kernel's own credential for worker-supervisor (R-03), loaded above — never the root.
-      supervisorAuthorizationHeader: internalAuthorizationHeader(supervisorToken),
+      supervisorAuthorizationHeader:
+        supervisorToken !== undefined ? internalAuthorizationHeader(supervisorToken) : undefined,
       taskSupervisorClient: fakeTaskSupervisorClient,
       fakeAgentRuntimeOnDelegate,
       taskReaperIntervalMs,

@@ -27,8 +27,8 @@ import type { SubnetMatcher } from './subnet.js';
  * `/internal/agent-host` and receive every user's `startTurn` (prompt + entry Handle), forge
  * `/internal/llm-usage`, audit and egress rows, or announce gate manifests. Now only the kernel
  * holds the root secret (`secrets/internal.token`); each calling service holds only its own
- * credential, derived from the root by `scripts/gen-handle-keys.sh` and mounted into that service
- * alone:
+ * credential, derived from the root by `scripts/derive-internal-tokens.sh` and mounted into that
+ * service alone:
  *
  *     credential(caller) = HMAC-SHA256(key = "nexttime-internal:<caller>->kernel", msg = root)
  *
@@ -66,6 +66,10 @@ import type { SubnetMatcher } from './subnet.js';
  *   4. the identified caller must be on the route's allow-list — a valid credential on another
  *      service's route is refused (`route_not_allowed`).
  *
+ * An admitted request carries its caller as `request.internalCaller`, so a route that more than
+ * one caller may use can still tell them apart (`/internal/gates/announce`: a packaged gate may
+ * not announce a gate-host instance, nor the gate host a packaged one — R-03 review, D-02).
+ *
  * `/api/cap/*`, `/api/health` and `/ws` are outside the prefix and untouched by this hook.
  */
 
@@ -73,7 +77,7 @@ import type { SubnetMatcher } from './subnet.js';
 export const INTERNAL_PLANE_ROUTE_PREFIX = '/internal/' as const;
 
 /** Prefix of every derived internal-plane credential's label (`deriveInternalCredential`) —
- *  `scripts/gen-handle-keys.sh` derives the same labels, so the two must change together. */
+ *  `scripts/derive-internal-tokens.sh` derives the same labels, so the two must change together. */
 export const INTERNAL_CREDENTIAL_LABEL_PREFIX = 'nexttime-internal:' as const;
 
 /**
@@ -93,6 +97,14 @@ export type InternalCaller =
   | 'egress-proxy'
   | 'gate'
   | 'gate-host';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** The caller `registerInternalPlaneGuard` admitted this request as — set on every admitted
+     *  `/internal/` request, `null` everywhere else (and before the guard has run). */
+    internalCaller: InternalCaller | null;
+  }
+}
 
 /** Every caller whose credential is derived from the root (all but `kernel`). */
 const DERIVED_CALLERS = ['agent-host', 'llm-proxy', 'egress-proxy', 'gate', 'gate-host'] as const;
@@ -194,18 +206,31 @@ export function loadInternalToken(
  * `internal_kernel_to_worker_supervisor`). A file rather than a derivation from the root, so the
  * acceptance / ops scripts that call worker-supervisor from a kernel container read the same file
  * the kernel does. Same fail-fast contract as `loadInternalToken`.
+ *
+ * `optional` (R-03 review; `main()` passes it for `AGENT_RUNTIME=fake` — dev, CI, the fake
+ * acceptance stack): a *missing* file yields `undefined` instead of a startup failure. The kernel
+ * then sends no credential and worker-supervisor refuses every call, so nothing opens. A file that
+ * exists but cannot be read or is malformed is still fatal, and with the real runtime
+ * (`AGENT_RUNTIME=agent-host`) so is a missing one.
  */
+export function loadSupervisorToken(env?: Readonly<Record<string, string | undefined>>): string;
+export function loadSupervisorToken(
+  env: Readonly<Record<string, string | undefined>>,
+  options: { readonly optional: boolean },
+): string | undefined;
 export function loadSupervisorToken(
   env: Readonly<Record<string, string | undefined>> = process.env,
-): string {
+  options: { readonly optional: boolean } = { optional: false },
+): string | undefined {
   const file = resolveSupervisorTokenFile(env);
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'error';
+    if (options.optional && code === 'ENOENT') return undefined;
     throw new InternalTokenError(
-      `cannot read the worker-supervisor credential file "${file}" (${SUPERVISOR_TOKEN_FILE_ENV}; ${code}) — the kernel refuses to start without it: derive it with scripts/gen-handle-keys.sh and mount it as the compose secret internal_kernel_to_worker_supervisor`,
+      `cannot read the worker-supervisor credential file "${file}" (${SUPERVISOR_TOKEN_FILE_ENV}; ${code}) — the kernel refuses to start without it: derive it with scripts/derive-internal-tokens.sh and mount it as the compose secret internal_kernel_to_worker_supervisor`,
     );
   }
   return normalizeInternalToken(raw, file);
@@ -295,7 +320,8 @@ export function createInternalPlaneGuard(
 }
 
 /**
- * Installs the guard as a root-level `onRequest` hook on `app`. Call once per Fastify instance,
+ * Installs the guard as a root-level `onRequest` hook on `app` (and the `request.internalCaller`
+ * decorator it fills in). Call once per Fastify instance,
  * from the composition root (`packages/kernel/src/index.ts` `createServer`), *before* the
  * internal routes are registered: the guard also installs an `onRoute` hook that throws for any
  * `/internal/` route `routeCallers` has no entry for, so a new internal route cannot ship
@@ -317,6 +343,8 @@ export function registerInternalPlaneGuard(
     );
   }
 
+  app.decorateRequest('internalCaller', null);
+
   app.addHook('onRoute', (routeOptions) => {
     const url = routeOptions.url;
     if (url.startsWith(INTERNAL_PLANE_ROUTE_PREFIX) && routeCallers[url] === undefined) {
@@ -331,7 +359,10 @@ export function registerInternalPlaneGuard(
     if (typeof route !== 'string' || !route.startsWith(INTERNAL_PLANE_ROUTE_PREFIX)) return;
 
     const decision = guard.evaluate(request);
-    if (decision.ok) return;
+    if (decision.ok) {
+      request.internalCaller = decision.caller;
+      return;
+    }
 
     const upgrade = isUpgradeRequest(request);
     request.log.warn(

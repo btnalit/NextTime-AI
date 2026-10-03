@@ -242,8 +242,13 @@ async function buildProductionTableApp(logStream?: {
   const instance = Fastify(logStream ? { logger: { level: 'warn', stream: logStream } } : {});
   registerInternalPlaneGuard(instance, { token: TOKEN });
   for (const route of Object.keys(INTERNAL_ROUTE_CALLERS)) {
-    instance.post(route, async () => ({ ok: true, result: route }));
+    instance.post(route, async (request) => ({
+      ok: true,
+      result: route,
+      caller: request.internalCaller,
+    }));
   }
+  instance.get('/api/health', async (request) => ({ caller: request.internalCaller }));
   await instance.ready();
   return instance;
 }
@@ -277,6 +282,25 @@ describe('per-caller credentials and the per-route allow-list (R-03)', () => {
         expect(res.statusCode, `${caller} on ${route}`).toBe(allowed.includes(caller) ? 200 : 401);
       }
     }
+  });
+
+  it('hands the admitted caller to the route as request.internalCaller (null outside the plane)', async () => {
+    app = await buildProductionTableApp();
+    for (const caller of ['gate', 'gate-host'] as const) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/gates/announce',
+        headers: { authorization: `Bearer ${credentialOf(caller)}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().caller).toBe(caller);
+    }
+    const outside = await app.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { authorization: `Bearer ${credentialOf('gate')}` },
+    });
+    expect(outside.json().caller).toBeNull();
   });
 
   it('pins the allow-list itself: who may call what', () => {
@@ -434,5 +458,21 @@ describe('loadInternalToken', () => {
     expect(caught).toBeInstanceOf(InternalTokenError);
     expect((caught as Error).message).toContain(SUPERVISOR_TOKEN_FILE_ENV);
     expect((caught as Error).message).toContain('internal_kernel_to_worker_supervisor');
+  });
+
+  it('loadSupervisorToken { optional } (AGENT_RUNTIME=fake): a missing file is undefined, a present one is read, a malformed one still throws', () => {
+    const missing = { [SUPERVISOR_TOKEN_FILE_ENV]: join(tmpdir(), 'nexttime-no-such', 'f') };
+    expect(loadSupervisorToken(missing, { optional: true })).toBeUndefined();
+    expect(() => loadSupervisorToken(missing, { optional: false })).toThrow(InternalTokenError);
+
+    const supervisorToken = randomBytes(32).toString('hex');
+    const presentFile = tokenFile(`${supervisorToken}\n`);
+    const present = { [SUPERVISOR_TOKEN_FILE_ENV]: presentFile };
+    expect(loadSupervisorToken(present, { optional: true })).toBe(supervisorToken);
+
+    const emptyFile = join(presentFile, '..', 'empty.token');
+    writeFileSync(emptyFile, '\n', 'utf8');
+    const empty = { [SUPERVISOR_TOKEN_FILE_ENV]: emptyFile };
+    expect(() => loadSupervisorToken(empty, { optional: true })).toThrow(InternalTokenError);
   });
 });

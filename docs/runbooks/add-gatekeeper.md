@@ -144,7 +144,7 @@ ConnectSystemLauncher.tsx`）。按第一步选的种类分两条路：
     secrets:
       - gate_token
       # 打包门共用的 announce 凭证（R-03，derive-internal-tokens.sh 派生），挂在门读取的路径；
-      # 内核只在 announce 上放行它。绝不挂根 internal_token（只给 kernel）。
+      # 内核只在 announce 上放行它，且只认打包门（非门宿主）实例。绝不挂根 internal_token（只给 kernel）。
       - { source: internal_gate_to_kernel, target: internal_token }
     environment:
       GATE_TRANSPORT_KIND: ssh                     # 或 cli

@@ -204,7 +204,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((thrown as GateInstanceNotAvailableError).code).toBe(code);
     }
 
-    async function announce(body: Record<string, unknown>) {
+    /** Announces as the gate host by default; `'gate'` for a packaged gate (R-03 review: each
+     *  class may announce only its own kind of instance). */
+    async function announce(
+      body: Record<string, unknown>,
+      caller: 'gate' | 'gate-host' = 'gate-host',
+    ) {
       const server = app();
       return server.inject({
         method: 'POST',
@@ -212,7 +217,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         headers: {
           'content-type': 'application/json',
           authorization: internalAuthorizationHeader(
-            deriveInternalCredential(INTERNAL_TOKEN, 'gate-host'),
+            deriveInternalCredential(INTERNAL_TOKEN, caller),
           ),
         },
         payload: body,
@@ -322,7 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('b. GET /internal/gate-host/instances requires the internal token and lists only hosted definitions', async () => {
       // A packaged (announced) instance must not appear in the host's pull list.
-      const packagedResp = await announce(packagedAnnounceBody);
+      const packagedResp = await announce(packagedAnnounceBody, 'gate');
       expect(packagedResp.statusCode).toBe(200);
 
       const server = app();
@@ -504,6 +509,90 @@ describe.runIf(DATABASE_URL !== undefined)(
         () => callAsAdmin('get_gate_instance', { gateId: 'hosted-mcp-unlinked' }),
         'gate_not_found',
       );
+    });
+
+    it('i. R-03 review (D-02): a packaged gate cannot announce a gate-host instance — unseen, seen-undecided or enabled — and nothing is written', async () => {
+      await callAsAdmin('create_gate_instance', {
+        gateId: 'hosted-mcp-r03',
+        transportKind: 'mcp',
+        target: 'http://mcp.internal.test/',
+        credentialMode: 'shared',
+      });
+
+      // Unseen: the first announcement fills the identity in, endpoint included.
+      const unseen = await announce(
+        hostedAnnounceBody('hosted-mcp-r03', 'http://impostor:9999/i/hosted-mcp-r03'),
+        'gate',
+      );
+      expect(unseen.statusCode).toBe(403);
+      expect(unseen.json().error.code).toBe('forbidden');
+      const untouched = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'hosted-mcp-r03',
+      });
+      expect(untouched.lastSeenAt).toBeNull();
+      expect(untouched.endpoint).toBe('');
+
+      // The host's own announcement still lands.
+      const first = await announce(
+        hostedAnnounceBody('hosted-mcp-r03', 'http://gate-host:8083/i/hosted-mcp-r03'),
+      );
+      expect(first.statusCode).toBe(200);
+      const seen = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'hosted-mcp-r03',
+      });
+      expect(seen.status).toBe('discovered');
+      expect(seen.endpoint).toBe('http://gate-host:8083/i/hosted-mcp-r03');
+
+      // Seen but undecided (not frozen) and enabled (frozen): a packaged gate could otherwise
+      // redefine the first outright and rewrite the second's manifest.
+      for (const gateId of ['hosted-mcp-r03', 'hosted-mcp']) {
+        const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId });
+        const crossed = await announce(
+          {
+            ...hostedAnnounceBody(gateId, `http://impostor:9999/i/${gateId}`),
+            target: 'http://impostor.test/',
+            operations: [HOSTED_OBSERVE_OP],
+          },
+          'gate',
+        );
+        expect(crossed.statusCode, gateId).toBe(403);
+        const after = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId });
+        expect(after.endpoint, gateId).toBe(before.endpoint);
+        expect(after.target, gateId).toBe(before.target);
+        expect(after.operations, gateId).toEqual(before.operations);
+        expect(after.lastSeenAt, gateId).toBe(before.lastSeenAt);
+        expect(after.health, gateId).toBe(before.health);
+      }
+    });
+
+    it('j. R-03 review (D-02): the gate host cannot announce a packaged instance, nor create one', async () => {
+      const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: PACKAGED_GATE_ID,
+      });
+      const crossed = await announce({
+        ...packagedAnnounceBody,
+        endpoint: 'http://impostor:9999',
+        operations: [HOSTED_OBSERVE_OP],
+      });
+      expect(crossed.statusCode).toBe(403);
+      expect(crossed.json().error.code).toBe('forbidden');
+      const after = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: PACKAGED_GATE_ID,
+      });
+      expect(after.endpoint).toBe(before.endpoint);
+      expect(after.operations).toEqual(before.operations);
+      expect(after.lastSeenAt).toBe(before.lastSeenAt);
+
+      const fresh = await announce({ ...packagedAnnounceBody, gateId: 'fixture-b2a-unknown' });
+      expect(fresh.statusCode).toBe(403);
+      await expectPlatformError(
+        () => callAsAdmin('get_gate_instance', { gateId: 'fixture-b2a-unknown' }),
+        'gate_not_found',
+      );
+
+      // The packaged gate's own heartbeat still lands.
+      const own = await announce(packagedAnnounceBody, 'gate');
+      expect(own.statusCode).toBe(200);
     });
   },
 );
