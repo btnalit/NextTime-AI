@@ -3393,6 +3393,27 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `apply-release.sh` 以管道 `| sed` 判断拉取成败，取到的是 sed 的退出码，失败被当成成功、没有退回源码构建
   （三遍式设计让验签失败发生在重打 tag 之前，本地镜像未被改动，栈不受影响）。修为匿名优先、失败且有配置时以
   uid 0 挂配置重试并打印 cosign 报错；拉取退出码直接取自脚本。
+- **R-33 更正（2026-10-02 复审）——签名 job 里不再跑第三方扫描**：原来一个 job 同时持有 `packages: write` 与
+  `id-token: write`，并依次跑 docker login（`GITHUB_TOKEN` 留在 `~/.docker/config.json` 直到 post 步骤）、cosign、
+  `aquasecurity/trivy-action`（`TRIVY_PASSWORD` 就是 `GITHUB_TOKEN`）、`codeql-action/upload-sarif`；其中任何一步
+  被换成恶意提交，都能重推某个发布 tag 并以本工作流身份 keyless 签名，主机 `pull-images.sh` 照样验过。现在拆成两个
+  job：`build-sign`（`contents: read` + `packages: write` + `id-token: write`）只跑检出、Docker 自家的 buildx /
+  login / build-push、sigstore 的 cosign-installer 与 `cosign sign`，签名之后把 `<image>@<digest>` 作为 artifact
+  `digest-<service>` 交出（`actions/upload-artifact`，保留 1 天）；`scan`（`contents: read` +
+  `security-events: write`，无 `packages`、无 `id-token`、不给 Trivy 任何 registry 凭证——包是公开的，匿名拉取）
+  `needs: build-sign`、`if: !cancelled()`，按服务下载 digest（`actions/download-artifact` v8，摘要不符即失败），
+  校验形如 `ghcr.io/*/nexttime-ai-<service>@sha256:*` 后跑 Trivy 并上传 SARIF（分类 `publish-<service>` 不变，仍只
+  报告）；某个服务构建失败时它的扫描跳过，不影响其它。所有 action 仍钉完整提交 SHA（带版本注释）。`build-sign`
+  另拒绝在 `refs/heads/main` 以外运行：从别的分支 dispatch 会用主机验不过的签名覆盖发布 tag。`pull-images.sh`
+  验签从身份正则改为全部精确匹配：issuer、`--certificate-identity`
+  `https://github.com/<owner>/<repo>/.github/workflows/publish-images.yml@refs/heads/main`，外加
+  `--certificate-github-workflow-repository <owner>/<repo>` 与 `--certificate-github-workflow-ref refs/heads/main`
+  ——证书身份是被调用的可复用工作流，这两项是发起运行的那次调用（release-please 在 main 上、或从 main dispatch），
+  于是别的分支或别的仓库以 `…/publish-images.yml@main` 调用它签出的东西也不再通过。已发布的 v0.35–v0.38 都由
+  main 上的 release-please 调用签名，满足新条件。没有在 Docker 自家 action 与 cosign-installer 之外再换成手写 CLI：
+  gha 缓存只对 JS action 暴露运行时令牌，attestation 需要 docker-container builder，这些在 PR 上都无法实跑验证。
+  验证：本地 actionlint 1.7.12（带 shellcheck 0.11.0）对 `publish-images.yml` / `release-please.yml` 无告警，
+  `pull-images.sh` 过 `sh -n` 与 shellcheck；真实发布只在下一次发版发生。
 
 ### D2 实现说明
 
