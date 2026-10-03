@@ -26,8 +26,13 @@
 #   4. images: pull (--pull) or build                                             FAIL → stop
 #   5. migrations: dry-run listing, then the real apply (the kernel never migrates at startup)
 #                                                                                 FAIL → stop
-#      Steps 2–5 stopping leaves the running stack untouched by the new release.
+#      Steps 2–5 stopping leaves the running stack untouched by the new release. A stop in 3–5
+#      also switches the checkout back to the ref it was on before step 3 (recorded as
+#      "STEP checkout-from"), so the checkout keeps matching the running stack; a stop in 5 first
+#      lists the migrations that did commit (each file is its own transaction) — R-71.
 #   6. docker compose up -d                                                       FAIL → stop
+#      (the checkout stays on $TAG here: some containers may already run the new release; decide
+#      the rollback by hand — release.md §5 — the log names the previous ref)
 #   7. acceptance S3 → S1 → S2 → S4 (failures are counted and reported, not fatal: the stack is
 #      already on the new release; read the per-suite logs and decide whether to roll back —
 #      release.md §5)
@@ -66,6 +71,28 @@ echo "STEP start $TAG $TS pull=$pull"
 
 fail() { echo "FAIL $1"; echo "RESULT failed-at=$1"; exit 1; }
 
+# R-71: a stop between checkout and `up` puts the checkout back where it was, so the next
+# `docker compose …` on this host does not run the new release's compose file against the old
+# stack. The running containers were never touched; only the working tree moves back.
+PREV_REF=
+PREV_SHA=
+restore_checkout() {
+  [ -n "$PREV_SHA" ] || return 0
+  if git checkout -q "$PREV_REF" 2>/dev/null; then
+    echo "STEP checkout restored to $(git describe --tags --always HEAD 2>/dev/null) ($PREV_REF) — the running stack was not touched by $TAG"
+  else
+    echo "STEP checkout NOT restored — run: git checkout $PREV_REF   (was $PREV_SHA)"
+  fi
+}
+fail_before_up() { restore_checkout; fail "$1"; }
+
+# Applied migrations as module/version lines (the runner's own table; empty when unreadable).
+applied_migrations() {
+  docker compose exec -T postgres sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select module || chr(47) || version from schema_migrations order by 1"' \
+    </dev/null 2>/dev/null | sort
+}
+
 # 1. backup freshness — report only
 if [ -f scripts/check-backup-freshness.sh ]; then
   sh scripts/check-backup-freshness.sh 2>&1 | sed 's/^/STEP backup-freshness /'
@@ -89,7 +116,10 @@ echo "STEP dump $(stat -c %s "$DUMP") bytes $(docker compose exec -T postgres pg
 
 # 3. checkout — later steps deliberately run the *new* tag's helper scripts (build-images,
 #    pull-images, accept_s*): the release being applied owns its own build and acceptance
-git fetch -q origin --tags && git checkout -q "$TAG" || fail checkout
+PREV_SHA=$(git rev-parse HEAD)
+PREV_REF=$(git symbolic-ref -q --short HEAD || echo "$PREV_SHA")
+echo "STEP checkout-from $PREV_REF ($(git describe --tags --always HEAD 2>/dev/null || echo "$PREV_SHA"))"
+git fetch -q origin --tags && git checkout -q "$TAG" || fail_before_up checkout
 KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
 export KERNEL_VERSION
 echo "STEP checkout $(git rev-parse --short HEAD) KV=$KERNEL_VERSION"
@@ -99,7 +129,7 @@ echo "STEP checkout $(git rev-parse --short HEAD) KV=$KERNEL_VERSION"
 #     Idempotent; touches only secrets/internal-*-to-*.token, never the root or any other file.
 #     A tag that predates per-service credentials has no such script and needs none.
 if [ -f scripts/derive-internal-tokens.sh ]; then
-  sh scripts/derive-internal-tokens.sh </dev/null || fail secrets
+  sh scripts/derive-internal-tokens.sh </dev/null || fail_before_up secrets
   echo "STEP secrets ok"
 fi
 
@@ -121,7 +151,7 @@ if [ "$pull" -eq 1 ]; then
   fi
 fi
 if [ "$images_from" = build ]; then
-  sh scripts/build-images.sh || fail build
+  sh scripts/build-images.sh || fail_before_up build
 fi
 echo "STEP images from=$images_from kernel=$(docker image inspect nexttime-ai-kernel --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^KERNEL_VERSION=//p')"
 echo "STEP runtime-image $(docker image inspect nexttime-ai-worker-runtime --format '{{.Id}} pi={{index .Config.Labels "ai.nexttime.pi-version"}} ext={{index .Config.Labels "ai.nexttime.platform-extension-version"}} from={{index .Config.Labels "ai.nexttime.built-from"}}')"
@@ -130,7 +160,16 @@ echo "STEP runtime-pi $(docker run --rm --entrypoint pi nexttime-ai-worker-runti
 # 5. migrations
 echo "STEP migrate-dry-run"
 docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js --dry-run </dev/null
-docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js </dev/null || fail migrate
+migs_before="$LOG_DIR/apply-$TAG-$TS-migrations-before.txt"
+applied_migrations >"$migs_before"
+if ! docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js </dev/null; then
+  # Each migration file is one transaction: everything listed here is committed, the failing file
+  # is not. The pre-upgrade dump from step 2 is the rollback point for these rows (release.md §5 /
+  # §6); the previous release keeps running on them only where §6 says the migration is reversible.
+  applied_migrations | comm -13 "$migs_before" - | sed 's/^/STEP migrate committed /'
+  echo "STEP migrate rollback point: $DUMP"
+  fail_before_up migrate
+fi
 echo "STEP migrate ok"
 
 # 6. up
