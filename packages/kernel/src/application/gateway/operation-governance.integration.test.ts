@@ -6,10 +6,12 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { NotProposerError } from '../../governance/capability/index.js';
 import {
   getOperation,
   getPublishedOperation,
   importManifest,
+  proposeOperation,
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
@@ -71,6 +73,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let workspaceId: string;
     let ownerId: string;
     let memberId: string;
+    let builderId: string;
+    let otherBuilderId: string;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -236,6 +240,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       workspaceId = await adminInsertWorkspace('operation-governance-test-workspace');
       ownerId = await adminInsertPrincipal('owner', 'owner');
       memberId = await adminInsertPrincipal('member', 'member');
+      builderId = await adminInsertPrincipal('builder', 'builder');
+      otherBuilderId = await adminInsertPrincipal('other-builder', 'builder');
     });
 
     afterAll(async () => {
@@ -408,7 +414,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('update_operation_description', () => {
-      it('a member (no minRole restriction, same as publish_operation) can edit the description; writes an AuditRecord with before/after', async () => {
+      /** A Gatekeeper with one gate-imported (owner-proposed) Operation, published. */
+      async function seedImportedOperation(): Promise<{ gatekeeperId: string; op: Operation }> {
         const op = testOperation({
           name: `desc.dispatch.${randomUUID()}`,
           description: 'original',
@@ -433,34 +440,87 @@ describe.runIf(DATABASE_URL !== undefined)(
             activityId: act,
           }),
         );
+        await inTx((client) =>
+          publishOperation(client, workspaceId, { gatekeeperId, name: op.name }),
+        );
+        return { gatekeeperId, op };
+      }
+
+      it('STATUS leftover 123 (D-24): a gate-imported Operation — member 403, builder 403 not_proposer, owner edits with an AuditRecord', async () => {
+        const { gatekeeperId, op } = await seedImportedOperation();
+        const edit = (description: string) => ({ gatekeeperId, name: op.name, description });
+
+        // The description reaches every agent's tool list — below the builder floor, no call at all.
+        await expect(
+          callAs(memberId, 'member', 'update_operation_description', edit('by a member')),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+        // A builder clears the floor, but the Operation is the owner's (the gate's import).
+        await expect(
+          callAs(builderId, 'builder', 'update_operation_description', edit('by a builder')),
+        ).rejects.toBeInstanceOf(NotProposerError);
+        const untouched = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(untouched?.operation.description).toBe('original');
 
         const result = await callAs<{ description: string }>(
-          memberId,
-          'member',
+          ownerId,
+          'owner',
           'update_operation_description',
-          { gatekeeperId, name: op.name, description: 'updated by a member' },
+          edit('updated by the owner'),
         );
-        expect(result.description).toBe('updated by a member');
+        expect(result.description).toBe('updated by the owner');
 
         const persisted = await inTx((client) =>
           getOperation(client, workspaceId, gatekeeperId, op.name),
         );
-        expect(persisted?.operation.description).toBe('updated by a member');
+        expect(persisted?.operation.description).toBe('updated by the owner');
 
         const audit = await inTx((client) =>
           queryAudit(client, workspaceId, { action: 'operation.description_updated' }),
         );
         // `resource_id` is the Operation Object's own uuid (`audit_records.resource_id` is
         // `uuid`) — the `{gatekeeperId, name}` identity pair lives in the payload instead.
-        const row = audit.find((r) => r.resourceId === persisted?.id);
-        expect(row).toBeDefined();
-        expect(row?.actorPrincipalId).toBe(memberId);
-        expect(row?.payload).toMatchObject({
+        const rows = audit.filter((r) => r.resourceId === persisted?.id);
+        // Refused calls audited nothing of their own: one row, the owner's.
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.actorPrincipalId).toBe(ownerId);
+        expect(rows[0]?.payload).toMatchObject({
           before: 'original',
-          after: 'updated by a member',
+          after: 'updated by the owner',
           gatekeeperId,
           name: op.name,
         });
+      });
+
+      it('STATUS leftover 123 (D-24): a builder edits the Operation they proposed; another builder gets 403 not_proposer', async () => {
+        const { gatekeeperId } = await seedImportedOperation();
+        const name = `desc.builder.${randomUUID()}`;
+        const act = await newActivity();
+        await withWorkspace(pool, { workspaceId, principalId: builderId }, (client) =>
+          proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: testOperation({ name, description: 'proposed' }),
+            proposedBy: { id: builderId, kind: 'human' },
+            activityId: act,
+          }),
+        );
+        const edit = (description: string) => ({ gatekeeperId, name, description });
+
+        await expect(
+          callAs(otherBuilderId, 'builder', 'update_operation_description', edit('not mine')),
+        ).rejects.toBeInstanceOf(NotProposerError);
+        const result = await callAs<{ description: string }>(
+          builderId,
+          'builder',
+          'update_operation_description',
+          edit('revised by its proposer'),
+        );
+        expect(result.description).toBe('revised by its proposer');
+        const persisted = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, name),
+        );
+        expect(persisted?.operation.description).toBe('revised by its proposer');
       });
 
       it('a blank description is rejected through dispatch too, writing nothing', async () => {

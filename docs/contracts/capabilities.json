@@ -6783,6 +6783,9 @@
               "name": {
                 "type": "string"
               },
+              "proposedBy": {
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "draft",
@@ -10767,6 +10770,9 @@
                 "type": "string"
               },
               "name": {
+                "type": "string"
+              },
+              "proposedBy": {
                 "type": "string"
               },
               "status": {
@@ -21311,6 +21317,7 @@
   {
     "channel": "human",
     "group": "meta",
+    "minRole": "builder",
     "mode": "write",
     "name": "update_operation_description",
     "params": {

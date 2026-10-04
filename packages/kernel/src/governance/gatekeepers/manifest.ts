@@ -928,6 +928,10 @@ export interface UpdateOperationDescriptionInput {
   readonly gatekeeperId: string;
   readonly name: string;
   readonly description: string;
+  /** STATUS leftover 123: the `update_operation_description` caller, held to D-24's rule on the
+   *  row being edited — its proposer or the owner (`governance/capability/publish-authority.ts`).
+   *  Omitted by internal callers only. */
+  readonly actor?: PublishActor;
 }
 
 /**
@@ -944,6 +948,14 @@ export interface UpdateOperationDescriptionInput {
  * `description` must be non-blank after trimming and at most `OPERATION_DESCRIPTION_MAX_LENGTH`
  * characters (`OperationDescriptionInvalidError`) — checked before any write, so a rejected call
  * touches nothing.
+ *
+ * Authority (STATUS leftover 123): documentation, but not harmless — a published Operation's
+ * description is what every agent reads in its tool list, so whoever edits it can steer agents.
+ * D-24's rule applies to the row being edited: the registry's builder floor, then only that row's
+ * proposer or the workspace owner (`NotProposerError`, 403 `not_proposer`) — a builder edits the
+ * Operations they proposed; a gate's imported Operation (owner-proposed) is the owner's. A draft the
+ * caller may not see (D-26, `operationVisibleTo`) answers not-found, never 403; under the builder
+ * floor every caller is a draft reviewer, so that branch only matters if the floor ever changes.
  */
 export async function updateOperationDescription(
   client: PoolClient,
@@ -959,6 +971,15 @@ export async function updateOperationDescription(
   }
 
   const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
+  if (input.actor !== undefined && !operationVisibleTo(input.actor, existing)) {
+    throw new OperationNotFoundError(input.gatekeeperId, input.name);
+  }
+  assertPublishAuthority(
+    'update_operation_description',
+    input.actor,
+    { status: existing.status, proposedBy: existing.proposedBy?.id },
+    `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
+  );
   await setOperationDescriptionObject(
     client,
     workspaceId,

@@ -451,6 +451,73 @@ describe('CatalogPage', () => {
     expect(saveButton.disabled).toBe(false);
   });
 
+  // STATUS leftover 123 (D-24): update_operation_description is builder-floor, proposer-or-owner —
+  // the description reaches every agent's tool list. The edit control is offered only where the
+  // call can succeed.
+  it.each([
+    ['the owner, on a gate-imported Operation', 'owner', 'p-me', 'p-owner', true],
+    ['a builder, on an Operation they proposed', 'builder', 'p-me', 'p-me', true],
+    ['a builder, on the owner’s imported Operation', 'builder', 'p-me', 'p-owner', false],
+    ['a member', 'member', 'p-me', 'p-me', false],
+    ['an operator', 'operator', 'p-me', 'p-owner', false],
+  ] as const)(
+    'Operations: Edit description for %s → offered: %s',
+    async (_label, role, callerId, proposedBy, offered) => {
+      const http = scriptedHttp({
+        get_workspace: () => ({
+          id: 'ws-1',
+          name: 'Acme',
+          createdAt: '2026-01-01T00:00:00Z',
+          principalCount: 3,
+          gatekeeperCount: 1,
+          caller: { id: callerId, role, displayName: 'Me', kind: 'human' },
+        }),
+        list_operations: () => ({
+          items: [
+            { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', proposedBy },
+          ],
+        }),
+        get_operation_stats: () => ({ items: [] }),
+      });
+      renderPage(http);
+      const row = await screen.findByTestId('catalog-row');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+      const detail = await selectRow(row);
+      await waitFor(() =>
+        expect(
+          within(detail).queryByTestId('operation-edit-description-gk-1::docker.restart') !== null,
+        ).toBe(offered),
+      );
+    },
+  );
+
+  it('Operations: a not_proposer refusal stays on that row — the dialog shows it and the control stays elsewhere', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      update_operation_description: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'not the proposer of this Operation', 'not_proposer'),
+        ),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    fireEvent.change(within(dialog).getByTestId('operation-description-textarea'), {
+      target: { value: 'new description' },
+    });
+    fireEvent.click(within(dialog).getByTestId('operation-description-save'));
+    await within(dialog).findByText('not the proposer of this Operation');
+    // Not a `forbidden`: the capability is not marked denied for the session.
+    expect(
+      within(detail).queryByTestId('operation-edit-description-gk-1::docker.restart'),
+    ).not.toBeNull();
+  });
+
   it('Workers tab: Deprecate opens a medium confirm listing the definition name; deprecate_worker_definition fires only on confirm', async () => {
     const http = scriptedHttp({
       list_worker_definitions: () => ({
