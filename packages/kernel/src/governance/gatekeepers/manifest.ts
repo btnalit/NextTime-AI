@@ -1,6 +1,11 @@
 import type { Operation, PrincipalKind, PublishableStatus, Role } from '@nexttime/shared';
 import { IllegalTransition, PUBLISHABLE_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import {
+  type GraphReadViewer,
+  operationDraftHiddenSql,
+  operationDraftVisibleTo,
+} from '../../substrate/graph/index.js';
 import type { OperationOrigin } from '../../substrate/ontology/index.js';
 import {
   deprecatePublishedOperationObjects,
@@ -638,10 +643,11 @@ export interface OperationViewer {
   readonly role: Role;
 }
 
-/** Owner and builder review Operation drafts — the one reviewer rule every meta-ontology draft
- *  registry shares (`seesEveryDraft`, governance/capability/publish-authority.ts). */
-function viewerSeesEveryOperationDraft(role: Role): boolean {
-  return seesEveryDraft(role);
+/** The graph layer's form of an Operation viewer: owner and builder review Operation drafts — the
+ *  one reviewer rule every meta-ontology draft registry shares (`seesEveryDraft`,
+ *  governance/capability/publish-authority.ts). */
+function graphReadViewerOf(viewer: OperationViewer): GraphReadViewer {
+  return { principalId: viewer.principalId, seesEveryDraft: seesEveryDraft(viewer.role) };
 }
 
 /**
@@ -652,11 +658,16 @@ function viewerSeesEveryOperationDraft(role: Role): boolean {
  * `publish_operation` from the catalog. Skill and Procedure drafts follow the same rule
  * (`draftVisibleTo`, application/worker/draft-visibility.ts). Published and deprecated rows stay
  * workspace-visible. A legacy draft with no recorded proposer is nobody's draft: reviewers only.
+ *
+ * The rule itself lives in substrate/graph/operation-draft-visibility.ts (STATUS leftover 123), so
+ * the generic graph reads (`get_object`, `search`, `traverse`, `state_at`, `explain`) hide exactly
+ * the drafts this directory hides.
  */
 export function operationVisibleTo(viewer: OperationViewer, record: OperationRecord): boolean {
-  if (record.status !== 'draft') return true;
-  if (viewerSeesEveryOperationDraft(viewer.role)) return true;
-  return record.proposedBy?.id === viewer.principalId;
+  return operationDraftVisibleTo(graphReadViewerOf(viewer), {
+    status: record.status,
+    proposedBy: record.proposedBy?.id,
+  });
 }
 
 /** `list_gatekeepers`'s own per-gate `operationCount` (S3.11) — one grouped query over every
@@ -668,27 +679,23 @@ export function operationVisibleTo(viewer: OperationViewer, record: OperationRec
  *  Operations does this gate expose", not "how many row versions exist".
  *
  *  D-26: with a `viewer`, only rows `operationVisibleTo` would show that viewer are counted (the
- *  same rule in SQL — a row with no `status` reads as a draft, like `toOperationRecord`), so the
- *  count never names an identity that exists only as someone else's draft. */
+ *  same rule in SQL, `operationDraftHiddenSql` — a row with no `status` reads as a draft, like
+ *  `toOperationRecord`), so the count never names an identity that exists only as someone else's
+ *  draft. */
 export async function countOperationsByGatekeeper(
   client: PoolClient,
   workspaceId: string,
   viewer?: OperationViewer,
 ): Promise<ReadonlyMap<string, number>> {
-  const seesEveryDraft = viewer === undefined || viewerSeesEveryOperationDraft(viewer.role);
+  const graphViewer = viewer === undefined ? undefined : graphReadViewerOf(viewer);
   const result = await client.query<{ gatekeeper_id: string | null; count: string }>(
     `select identity_key ->> 'gatekeeperId' as gatekeeper_id,
             count(distinct identity_key ->> 'name')::bigint as count
      from objects
      where workspace_id = $1 and object_type = 'Operation'
-       and (
-         $2::boolean
-         or coalesce(properties ->> 'status', 'draft') <> 'draft'
-         or (properties ->> 'proposedBy' = $3::text
-             and properties ->> 'proposedByKind' is not null)
-       )
+       and not ${operationDraftHiddenSql('objects', '$2', '$3')}
      group by identity_key ->> 'gatekeeperId'`,
-    [workspaceId, seesEveryDraft, viewer?.principalId ?? null],
+    [workspaceId, graphViewer?.seesEveryDraft ?? true, graphViewer?.principalId ?? null],
   );
   const counts = new Map<string, number>();
   for (const row of result.rows) {

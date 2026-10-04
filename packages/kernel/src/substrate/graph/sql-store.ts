@@ -8,6 +8,7 @@ import type { PoolClient } from 'pg';
 import { openConflict, resolveFactOrigin, sameFactOrigin } from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
 import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
+import type { GraphReadViewer } from './operation-draft-visibility.js';
 import {
   buildFindActiveFactByIdentityQuery,
   buildGetFactForUpdateQuery,
@@ -235,8 +236,9 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     objectId: string,
+    viewer?: GraphReadViewer,
   ): Promise<GraphObject | null> {
-    const query = buildGetObjectQuery(workspaceId, objectId);
+    const query = buildGetObjectQuery(workspaceId, objectId, viewer);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const row = result.rows[0];
     return row === undefined ? null : mapObjectRow(row);
@@ -246,9 +248,10 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     objectIds: readonly string[],
+    viewer?: GraphReadViewer,
   ): Promise<ReadonlyMap<string, GraphObject>> {
     if (objectIds.length === 0) return new Map();
-    const query = buildGetObjectsByIdsQuery(workspaceId, objectIds);
+    const query = buildGetObjectsByIdsQuery(workspaceId, objectIds, viewer);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const map = new Map<string, GraphObject>();
     for (const row of result.rows) map.set(row.id, mapObjectRow(row));
@@ -712,9 +715,10 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     input: TraverseInput,
+    viewer?: GraphReadViewer,
   ): Promise<TraverseResult> {
     // buildTraverseQuery validates/clamps depth (throws TraverseDepthError) before any query runs.
-    const query = buildTraverseQuery(workspaceId, input);
+    const query = buildTraverseQuery(workspaceId, input, viewer);
     const result = await client.query<TraverseRow>(query.text, query.values as unknown[]);
 
     const edges: TraverseEdge[] = result.rows.map((row) => ({
@@ -743,15 +747,18 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     input: StateAtInput,
+    viewer?: GraphReadViewer,
   ): Promise<StateAtResult> {
-    const objectQuery = buildGetObjectQuery(workspaceId, input.objectId);
+    const objectQuery = buildGetObjectQuery(workspaceId, input.objectId, viewer);
     const objectResult = await client.query<ObjectRow>(
       objectQuery.text,
       objectQuery.values as unknown[],
     );
     const objectRow = objectResult.rows[0];
 
-    const factsQuery = buildStateAtFactsQuery(workspaceId, input);
+    // Leftover 123: with a viewer, a hidden Object also has no Facts (each one touches it), so the
+    // answer is the same `{object: null, facts: []}` an unknown id gets.
+    const factsQuery = buildStateAtFactsQuery(workspaceId, input, viewer);
     const factsResult = await client.query<FactRow>(
       factsQuery.text,
       factsQuery.values as unknown[],
@@ -767,8 +774,9 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     input: SearchInput,
+    viewer?: GraphReadViewer,
   ): Promise<readonly GraphObject[]> {
-    const query = buildSearchQuery(workspaceId, input);
+    const query = buildSearchQuery(workspaceId, input, viewer);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapObjectRow);
   }
@@ -777,11 +785,12 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     input: SearchInput,
+    viewer?: GraphReadViewer,
   ): Promise<SearchPage> {
     const limit = Math.min(Math.max(input.limit ?? DEFAULT_SEARCH_LIMIT, 1), MAX_SEARCH_LIMIT);
     // Over-fetch by one: a (limit + 1)th row proves there is a next page without a second query,
     // and is never returned itself — it will be the first row of that next page.
-    const query = buildSearchQuery(workspaceId, { ...input, limit: limit + 1 });
+    const query = buildSearchQuery(workspaceId, { ...input, limit: limit + 1 }, viewer);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const rows = result.rows.slice(0, limit);
     const items = rows.map(mapObjectRow);
@@ -800,8 +809,9 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     limit?: number,
+    viewer?: GraphReadViewer,
   ): Promise<readonly Fact[]> {
-    const query = buildRecentFactsQuery(workspaceId, limit);
+    const query = buildRecentFactsQuery(workspaceId, limit, viewer);
     const result = await client.query<FactRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapFactRow);
   }
