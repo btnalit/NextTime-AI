@@ -403,154 +403,247 @@ V1 把遗留 104 拆成四个可以分开修的子问题（R-48…R-51）。V3 �
 | R-70 | 采集器的 RAGFlow 阶段把"读不到"当成"不存在"，一个完整窗口就让全部 KB / Document Fact 退役（L6-10） | 解包失败直接抛错，中止该阶段且不提交窗口；只有每一页、每个 KB 都读成功才提交窗口 | S | — |
 | R-71 | `apply-release.sh` 失败后检出停在新 tag 上，可能留下一批提交了一半的迁移，且没有记录之前的 ref（L9-6、L10-11） | checkout 前记下 `HEAD` 与分支，`up` 之前失败就切回并打印；迁移失败后打印哪些文件已提交 | S | — |
 
-## 6. P3：98 条（按区域，未复核）
+## 6. P3：98 条（按区域；2026-10-04 已逐条复核，结论见 §6.5）
 
-P3 都没有复核，复核者改判或合并过的标 (V)。已被某个 P1 / P2 修法覆盖的不再重复列出，例如：
+2026-10-02 的 P3 都没有复核，复核者改判或合并过的标 (V)。已被某个 P1 / P2 修法覆盖的不再重复列出，例如：
 
 - L2-14 → R-50、L2-17 → R-37、L6-15 / L6-17 → R-51、L9-12 → R-07、L10-11 → R-71；
 - 各簇修法会顺带订正的注释漂移。
 
 建议随所在模块的修复波次顺手修，剩下的集中到 §8 的文档漂移波次。
 
+**2026-10-04 复核**：六个修复波次（v0.36.0–v0.41.0）合入后，在 `origin/main` 上逐条打开工作底稿给的 `file:line`，再用 `git log` 找改过它的 PR，每条末尾标结论：
+
+- `——已修（#PR）`；
+- `——已过时：原因`；
+- `——仍为 P3`（括号里是现状证据）；
+- `——升 P2：失败场景`；
+- 一行合并了多项、只修了一部分的标"部分已修"，并写明余项。
+
+行号以复核时的 `origin/main` 为准。§6.1 原来漏列的 L1 注释漂移一行本次补上。
+
 ### 6.1 内核（35）
 
 - **契约与错误映射**：
-  - L1-13：MCP `add_relationship` 别名映射到 `assert_fact` 已退役的参数，永远 `invalid_params`；
-  - L2-13：`propose_*` 嵌套 `ZodError` 变成 500；
-  - L5-13：拒绝时模型看不到 `code` / `details`；
-  - L1-16 / L5-12(b) / L5-17：`/ws` 与 `/internal/agent-host` 没设 `maxPayload`（默认 100 MiB），`/ws` 没有认证截止时间，注册表文本字段没有 `.max()`。
+  - L1-13：MCP `add_relationship` 别名映射到 `assert_fact` 已退役的参数，永远 `invalid_params`——仍为 P3（`reference-tool-aliases.ts:160` 仍译成 `objectId` / `value`；原生 `assert_fact` 工具一直都在，影响只是别名白调一次）；
+  - L2-13：`propose_*` 嵌套 `ZodError` 变成 500——仍为 P3（`operation-manifest-handlers.ts:71`、`skill-procedure-handlers.ts:75,166` 仍是裸 `.parse()`，`mapCapabilityError` 仍没有 `ZodError` 分支）；
+  - L5-13：拒绝时模型看不到 `code` / `details`——仍为 P3（`kernel-client.ts` 的 `asErrorEnvelope` 仍只留 code 与 message，`capability-route.ts` 的 `invalid_params` 仍不带 issues）；
+  - L1-16 / L5-12(b) / L5-17：`/ws` 与 `/internal/agent-host` 没设 `maxPayload`（默认 100 MiB），`/ws` 没有认证截止时间，注册表文本字段没有 `.max()`——升 P2（认证前的一半）：`registerWsRoute` 仍以默认选项注册 `@fastify/websocket`（单帧上限 100 MiB），仍没有认证截止时间——不带凭证的连接可以无限期挂着不发帧（带 `Authorization` 头时，解析完成前到的帧还会无上限地排进 `pendingFrames`）。不用登录、只要连得到控制台的任何客户端都能并发打开 `/ws`，每条连接发一帧接近 100 MiB 的消息，或者慢慢滴一帧、永不认证；内核逐条整帧缓存，堆耗尽后被 OOM 杀掉，所有工作区的聊天、审批、Task 编排与门执行一起中断，重启后攻击可以立刻重放。注册表文本字段的 `.max()`（L5-17，已认证成员的滥用）仍为 P3，同一个 PR 顺带。见 §6.5 簇 P2-A。
 - **可见性与权限语义**：
-  - L2-11 (V，待 D-21)：`get_task` 对任意成员返回任意 Task 的 input / result；
-  - L2-15 (D-26)：Operation 草稿对所有成员可见；
-  - L2-16：`list_allowed_operations` 向没有 `request_action` 的 Handle 宣称可执行；
-  - L5-9：`report_turn` 不绑定调用者正在运行的 Turn；
-  - L3 §4 / L5-5 / V2 #6 (D-24)：各 registry 的发布权限不统一；
-  - L1 §4：两种"持有该 action kind"的定义，operator 点"总是允许"实际上总是 403；
-  - L5-7：入口模式静态注册了 5 个对非 builder 必然 403 的 `propose_*` 工具。
+  - L2-11 (V，待 D-21)：`get_task` 对任意成员返回任意 Task 的 input / result——已修（#455，D-21：只对 owner、请求者与该 Task 自己的 WorkerRun 可见）；
+  - L2-15 (D-26)：Operation 草稿对所有成员可见——已修（#455，`list_operations` / `get_gatekeeper` / `list_gatekeepers` 按 D-26 过滤）；通用图读取仍返回草稿 Operation 对象，已作为后续项记在遗留 123，不另计；
+  - L2-16：`list_allowed_operations` 向没有 `request_action` 的 Handle 宣称可执行——仍为 P3（`worker-result-handler.ts` 的执行半边仍不看 `request_action`；三个客户端都自己过滤，执行时内核照样拒绝）；
+  - L5-9：`report_turn` 不绑定调用者正在运行的 Turn——仍为 P3（`reportTurnHandler` 仍不核对 `started_by` 与运行状态；但 `chats.visibility` 默认 `private`，没有任何能力能改成 `workspace`，RLS 下调用者只看得到自己聊天里的 Turn，所以只能改自己的 Turn，跨成员的场景今天不可达）；
+  - L3 §4 / L5-5 / V2 #6 (D-24)：各 registry 的发布权限不统一——已修（#460）；
+  - L1 §4：两种"持有该 action kind"的定义，operator 点"总是允许"实际上总是 403——仍为 P3（非 owner 仍走 `hasAnyActiveGrant(resource_type = actionKindTag)`；#407 之后 `grant_capability` 只收 gatekeeper 授权，这种授权再也建不出来，operator 永远 403，控制台第一次 403 后隐藏按钮；应改成"持有该门的 gatekeeper 授权"，与 D-13 的"持有者 = 审批人"一致）；
+  - L5-7：入口模式静态注册了 5 个对非 builder 必然 403 的 `propose_*` 工具——仍为 P3（`entry.ts` 的静态工具表仍含这 5 个，遗留 123 已记）。
 - **认知层与本体**：
-  - L3-8：`verify_fact` 会提升已 superseded / invalidated 的 Fact；
-  - L3-9：Procedure 两步指向同一目标时会 supersede 自己的 `steps` link；
-  - L3-10：I-S5-1 把已退役的 Link 也计入，warn→reject 的切换条件永远达不到；
-  - L3-13：discard 后下一个提案复用 `(id, version)`，是遗留 99 的副作用；
-  - L3-14：同源并发断言在既有异源行时产生重复行；
-  - L3-15：`find_workers` / `find_procedures` 先 `limit` 后过滤；
-  - L3-12：I16 监控漏了 `publish_manifest`；
-  - L3-7 (V)：Task 停车前不复查请求是否仍 pending。
+  - L3-8：`verify_fact` 会提升已 superseded / invalidated 的 Fact——仍为 P3（`sql-store.ts` 的 `verifyFact` 仍只查认知状态转移，不查生命周期）；
+  - L3-9：Procedure 两步指向同一目标时会 supersede 自己的 `steps` link——仍为 P3（`procedures.ts` 每一步仍以同一来源断言同一身份的 `steps`）；
+  - L3-10：I-S5-1 把已退役的 Link 也计入，warn→reject 的切换条件永远达不到——仍为 P3（`checkIS51` 仍不过滤已退役行）；
+  - L3-13：discard 后下一个提案复用 `(id, version)`，是遗留 99 的副作用——仍为 P3（四处 `nextVersion` 仍是 `max(version)+1`，丢弃仍是物理删除）；
+  - L3-14：同源并发断言在既有异源行时产生重复行——仍为 P3（有既有行的路径仍不取身份 advisory lock）；
+  - L3-15：`find_workers` / `find_procedures` 先 `limit` 后过滤——仍为 P3（`task/service.ts` 仍在 `limit` 之后才过滤状态、衰减与排除）；
+  - L3-12：I16 监控漏了 `publish_manifest`——仍为 P3（I16 列表仍是五个 `publish_*`）；
+  - L3-7 (V)：Task 停车前不复查请求是否仍 pending——仍为 P3（`reaper.ts` 的 Pending 消费者仍不复查 `status`；复核时已判明 Task 最终仍能完成）。
 - **数据库**：
-  - L4-11：security-definer 函数信任调用方给的 `p_workspace_id`，`search_path` 缺 `pg_temp`；
-  - L4-12 / L5-16：没有在库里强制"Fact 不能同时 superseded 与 invalidated"、"deprecated 本体定义不可改"、"人类主体必有 user"；
-  - L4-13：同一 Gatekeeper 能有两条 `workspace_gate_links`，应加唯一索引；
-  - L4-17：0021 自带 `begin/commit`，部分迁移没有取头注释所说的 advisory lock；
-  - L4-16：`platform_settings_history.updated_by` 错位一版。
+  - L4-11：security-definer 函数信任调用方给的 `p_workspace_id`，`search_path` 缺 `pg_temp`——部分已修（#436：四个函数撤 PUBLIC 执行权，`lookup_user_by_login` 补 `pg_temp`）；余项"信任调用方给的 `p_workspace_id`"仍为 P3（纵深防御，遗留 123 已记）；
+  - L4-12 / L5-16：没有在库里强制"Fact 不能同时 superseded 与 invalidated"、"deprecated 本体定义不可改"、"人类主体必有 user"——部分已修（#436 收了前两条）；余项"人类主体必有 user"的 CHECK 仍为 P3（会破坏既有集成测试，遗留 123 已记）；
+  - L4-13：同一 Gatekeeper 能有两条 `workspace_gate_links`，应加唯一索引——仍为 P3（仍无唯一索引；`enable_gate_instance` 的 link 分支仍不查该 Gatekeeper 是否已被别的 gate_id 关联，`readGateLinkPolicy` 仍取 `rows[0]`。触发要以新 `GATE_ID` 重新部署同一端点，后果是 `trust` 取哪一行不确定，而两行指的是同一个系统）；
+  - L4-17：0021 自带 `begin/commit`，部分迁移没有取头注释所说的 advisory lock——仍为 P3（迁移已发布，改文件会触发校验和守卫，只能在 runner 或 lint 里防新文件）；
+  - L4-16：`platform_settings_history.updated_by` 错位一版——仍为 P3（`settings.ts` 的历史行仍写本次修改人）。
 - **运行时与并发**：
-  - L1-15：`expireOverduePendingApprovals` 第一行失败就中止整批；
-  - L4-14：`roll_entry_containers` 的 session 级 advisory lock 在 DB 错误时泄漏；
-  - L4-15：聊天自动标题、改名、归档、`stop_agent` 在事务提交前推送；
-  - L4-18：几个"有界"去重 Set 实际无界；
-  - L3-11：`ops.outbox_stuck` 分不清死信与派发器卡住，也没有死信 runbook。
+  - L1-15：`expireOverduePendingApprovals` 第一行失败就中止整批——仍为 P3（`execution.ts` 仍 `ROLLBACK; throw`，扫描也没有 ORDER BY；目前找不到会让某一行持续失败的触发条件）；
+  - L4-14：`roll_entry_containers` 的 session 级 advisory lock 在 DB 错误时泄漏——仍为 P3（`runtime.ts` 仍在平台事务里取 session 锁、在 `finally` 里解锁；事务内 DB 出错时解锁报 25P02，连接带着锁回池）；
+  - L4-15：聊天自动标题、改名、归档、`stop_agent` 在事务提交前推送——仍为 P3（`chat/service.ts` 三处与 `turn-recovery.ts` 仍在提交前 `publishChatPushEvent`）；
+  - L4-18：几个"有界"去重 Set 实际无界——仍为 P3（`turn-started-consumer.ts` 与三个 linkage 消费者的 Set 仍不淘汰；每次发版重启即清空）；
+  - L3-11：`ops.outbox_stuck` 分不清死信与派发器卡住，也没有死信 runbook——仍为 P3（`checkOutboxStuck` 仍不看 `attempts`，仍无死信 runbook）。
 - **审计**：
-  - L1-14：CLI 变更不写 AuditRecord（`add-principal`、一年期 `issue-service-handle`、`set-password` 等），随 R-28 一起修；
-  - L6 内核侧：`sourceId:'unknown'` 的出网拒绝只进 egress-proxy 的 stdout，不进平台审计。
+  - L1-14：CLI 变更不写 AuditRecord（`add-principal`、一年期 `issue-service-handle`、`set-password` 等），随 R-28 一起修——部分已修（#432：`create-workspace` / `add-principal` / `issue-service-handle` / `create-platform-admin` / `set-password` 写 `cli.*` 平台审计行）；余项 `register-gatekeeper --publish` 仍只记 Activity，仍为 P3（遗留 123 已记）；
+  - L6 内核侧：`sourceId:'unknown'` 的出网拒绝只进 egress-proxy 的 stdout，不进平台审计——仍为 P3（`egress-observations.ts` 仍只认 `entry:` 与 WorkerRun 两种来源；未知来源本来就默认拒绝，缺的只是平台侧的可见性）。
 - **注释与文档漂移**：
-  - L10-7 等：`export_prov` "501 / 未实现"（09-10 §4 #3 一直没修）；
-  - L2-18：explorer-read-service 的说法与 `authorize.ts` 相反；
-  - `meta-objects.ts:239-243`、`invariant-checks.ts:44`；
-  - `tasks.updated_at` 从不更新；
-  - `users.ts:220-226`；core 0033 头注释把 I16 写成 RLS 属性；
-  - I14 谓词在 SQL 里重复写了四遍，目前一致，但没有任何机制保证。
+  - L10-7 等：`export_prov` "501 / 未实现"（09-10 §4 #3 一直没修）——仍为 P3（`substrate/audit/index.ts:9-10`、`reference-tool-aliases.ts:32`、`handlers.ts` 模块注释"其余能力一律 501"、`operations.md` §7 表格"`list_conflicts` 无 handler"四处都还在）；
+  - L2-18：explorer-read-service 的说法与 `authorize.ts` 相反——仍为 P3；
+  - `meta-objects.ts:239-243`、`invariant-checks.ts:44`——仍为 P3（现在在 `meta-objects.ts:268-272`，I2 行仍写"不能在库里检查"）；
+  - `tasks.updated_at` 从不更新——仍为 P3（`spawn_lost` 扫描正依赖它恒等于建行时间，改名或改注释即可）；
+  - `users.ts:220-226`；core 0033 头注释把 I16 写成 RLS 属性——仍为 P3（现在在 `users.ts:227-233`；0033 已发布，只能在别处订正）；
+  - I14 谓词在 SQL 里重复写了四遍，目前一致，但没有任何机制保证——仍为 P3（遗留 123 已记"范围匹配 SQL 有四份副本"）；
+  - L1 注释漂移（补列）：`explorer-contract/index.ts:52-57` 说 caddy 注入 `X-API-Key`；`execution.ts:84-92` 说逐行隔离；`action-executor.ts:282-284`；`grants.ts:484-511` 把已停用的 owner 也算作持有一切范围；`llm-admin-audit.ts:25-27` 说只有 proxy 能到达——部分已修（`action-executor.ts` 随 #414、`grants.ts` 随 #441（R-38）、`llm-admin-audit.ts` 随 #411（R-03）改写）；前两处仍为 P3。
 
 ### 6.2 运行时服务（16）
 
 - **agent 侧**：
-  - L5-6：遗留 105 的超时状态到达 Worker 时没有"不要重复请求"的提示，`gate-tools.ts` 与 ops-runner prompt 仍写"超时报 `pending_approval`"；
-  - L5-8：`report_turn` 复用上一个 Turn 的摘要；
-  - L5-11：stop 不取消在途内核调用，中断最长约 100 s；
-  - L5-12(a)：门的原始输出经 `toolCallEnded.result` 不截断地到达内核与浏览器；
-  - L5-14：交互模式落后（不截断、只在 `session_start` 投影）。
+  - L5-6：遗留 105 的超时状态到达 Worker 时没有"不要重复请求"的提示，`gate-tools.ts` 与 ops-runner prompt 仍写"超时报 `pending_approval`"——仍为 P3（`worker.ts` 仍只在 `pending_approval` 时附提示；`gate-tools.ts:70` 仍写"人批准之前什么都不会发生"，`ontology/ops-runner.yaml` 仍写超时报 `pending_approval`。同参数的重复请求会被 R-53 的在途去重合并，换了参数重提才会多一条）；
+  - L5-8：`report_turn` 复用上一个 Turn 的摘要——仍为 P3（`entry.ts` 的 `latestTurnSummary` 仍从不重置，遗留 123 已记）；
+  - L5-11：stop 不取消在途内核调用，中断最长约 100 s——仍为 P3（`entry.ts` / `interactive.ts` 仍不把 pi 的 `signal` 传给 `kernelClient.call`）；
+  - L5-12(a)：门的原始输出经 `toolCallEnded.result` 不截断地到达内核与浏览器——仍为 P3（`agent-host/src/bridge.ts` 仍原样转发 `event.result`，`worker.ts` 的 `details` 仍是完整结果）；
+  - L5-14：交互模式落后（不截断、只在 `session_start` 投影）——仍为 P3。
 - **词表**：
-  - L5-10 (D-08)：部分 `mode:'observe'` 能力有副作用，审计默认视图把它们藏了；
-  - L5-15 / L10-15 (D-08)：约 22 个平台内管理写入标成 `mode:'execute'`；契约文档写"96 covered"，实际 165 条；设计 §9.3 把三个 fact 写入标成 `propose`。
+  - L5-10 (D-08)：部分 `mode:'observe'` 能力有副作用，审计默认视图把它们藏了——已修（#449：注册表加 `sideEffects`，`isReadAuditAction` 改用 `capabilityHasSideEffects`）；
+  - L5-15 / L10-15 (D-08)：约 22 个平台内管理写入标成 `mode:'execute'`；契约文档写"96 covered"，实际 165 条；设计 §9.3 把三个 fact 写入标成 `propose`——部分已修（#449：放宽 `execute` 的定义、加 `sideEffects`，删掉契约文档的"96 个全覆盖"）；余项仍为 P3：`agent-host-protocol.ts:12` 仍说该通道不带凭证（R-03 之后每个服务都有自己的内部凭证），`capabilities.ts` 的"P-A1 platform plane"列表注释仍混着工作区能力，契约文档 `grant_capability` 一行仍说"`scope` 只留真正的范围限定"，设计 §9.3 仍把三个 fact 写入标成 `propose`。
 - **门与代理**：
-  - L6-16：gate-host `/healthz` 经 caddy 公开（列出实例与 `buildError`），凭证限速是全局一个桶；
-  - L6-18：supervisor 扫描不按 entry 隔离、注册表只增不减、llm-proxy 吊销 jti 集合只增不减。
-- **遗留旧账**：L10-16，docker-events 流在 stop 竞态时不销毁（09-10 §4 #7）。
+  - L6-16：gate-host `/healthz` 经 caddy 公开（列出实例与 `buildError`），凭证限速是全局一个桶——部分已修（#397：caddy 只放行 `/gate-host/i/*/gate/connected-accounts`，`/healthz` 不再对外）；余项凭证限速仍是一个全局桶（gate-host 没开 `trustProxy`，`request.ip` 恒为 caddy），仍为 P3；
+  - L6-18：supervisor 扫描不按 entry 隔离、注册表只增不减、llm-proxy 吊销 jti 集合只增不减——仍为 P3（`task-service.ts` 的 `reap` 与 resident 的 `sweepIdle` 仍无逐项 try/catch，注册表仍不删项，吊销集合仍只增；创建成功、启动失败的容器 env 里那把 Handle 已随 #399（R-09）吊销）。
+- **遗留旧账**：L10-16，docker-events 流在 stop 竞态时不销毁（09-10 §4 #7）——仍为 P3（`docker-events.ts` 仍 `if (stopped) return;` 而不 `destroy()`；唯一调用方是 SIGTERM 退出路径）。
 - **漂移**：
-  - 决定 ⑩ 已过时；
-  - `SpawnRequestSchema.egressDeny` 注释与替换语义矛盾；
-  - 标签键 `nexttime.workspace` / `nexttime.workspace-id` 不一致；
-  - 采集器 Dockerfile 还在描述已删除的 `/data/state`；
-  - per-source `egressDeny` 只匹配主机名，未写入文档。
+  - 决定 ⑩ 已过时——仍为 P3（`development-tasks.md` 决定 ⑩ 仍写"接受既有 `gate_token` 或平台 JWT"）；
+  - `SpawnRequestSchema.egressDeny` 注释与替换语义矛盾——仍为 P3；
+  - 标签键 `nexttime.workspace` / `nexttime.workspace-id` 不一致——仍为 P3；
+  - 采集器 Dockerfile 还在描述已删除的 `/data/state`——仍为 P3；
+  - per-source `egressDeny` 只匹配主机名，未写入文档——仍为 P3。
 
 ### 6.3 web 控制台（39）
 
 - **确认与人控**：
-  - L7a-3 (V)：重置密码一键执行、没有确认；
-  - L7a-13："标为 vetted"一键放宽 MCP 审批；
-  - L8a-6：聊天里的 high 批准与所有拒绝跳过确认层级；
-  - L8a-11 (D-25)："轮换 API key"没有确认，对人类成员会铸出一把 owner 能代用的 key；
-  - L8a-4 (V，D-17)：接入向导把 propose + publish 合成一次点击；
-  - L8b-11：Fact 失效写着"不可恢复"，却只用 `medium` 层级。
+  - L7a-3 (V)：重置密码一键执行、没有确认——仍为 P3（`UserDetailPanel.tsx` 的重置按钮仍直接调用，`protectedAdmin` 行仍可点；R-12（#428）之后重置还会吊销该用户的 Handle 与遗留 key，波及面比复核时大，建议并进 §6.5 的控制台确认车道）；
+  - L7a-13："标为 vetted"一键放宽 MCP 审批——仍为 P3（`GateInstanceDetailPanel.tsx` 仍一键切换；vetted 只是自动批准的条件之一，Operation 的 `auto_approvable` 与工作区策略仍要满足）；
+  - L8a-6：聊天里的 high 批准与所有拒绝跳过确认层级——仍为 P3（聊天卡片现在只有"总是允许"走确认（#444），high 批准与拒绝仍一键；内核仍强制 high 必须填理由）；
+  - L8a-11 (D-25)："轮换 API key"没有确认，对人类成员会铸出一把 owner 能代用的 key——部分已修（#428：人类成员不再签发 API key，控制台对人不显示轮换按钮）；余项 service 凭证轮换仍无确认、旧 key 立即失效，仍为 P3；
+  - L8a-4 (V，D-17)：接入向导把 propose + publish 合成一次点击——已修（#429：`propose_operation` 返回 `governanceChange`，分级有变化时先确认再发布）；
+  - L8b-11：Fact 失效写着"不可恢复"，却只用 `medium` 层级——仍为 P3（`FactRow.tsx` 仍是 `tier="medium"`）。
 - **文案与事实不符**：
-  - L7a-7：公告设置承诺"显示在顶栏"，但没有渲染；
-  - L8a-7：输入框提示"每个执行都等**你**批准"；
-  - L8a-10：审批的"目标资源"显示的是 gatekeeper id；
-  - L8a-14："写入 N 条 Fact"按 `factsToAssert` 计；
-  - L8b-6 (D-14)：通配授权的语义漂移；
-  - L8b-7："N 个可调用的读操作"把平台禁用的也算进去；
-  - L8b-9："可委派"承诺写委派，内核的 `ready` 却不要求有能 `request_action` 的 Worker；
-  - L8b-13：启动器"至少授予一名成员 ✓"沿用到另一个门；
-  - L8a-13：登录页永久披露管理员登录名与初始密钥位置。
+  - L7a-7：公告设置承诺"显示在顶栏"，但没有渲染——仍为 P3；
+  - L8a-7：输入框提示"每个执行都等**你**批准"——仍为 P3（`ChatPage.tsx:245`）；
+  - L8a-10：审批的"目标资源"显示的是 gatekeeper id——部分已修（#446：审批队列、详情、高影响确认、`LinkedApprovals`、`audit/ApprovalContext` 不再把门 uuid 当目标）；余项聊天卡片 `ActionRequestCard` 仍把 `resourceScope` 当"目标"打印，仍为 P3；
+  - L8a-14："写入 N 条 Fact"按 `factsToAssert` 计——仍为 P3（`TaskDetail.tsx` 仍按 `factsToAssert` 计数，不显示 `factsRejected`）；
+  - L8b-6 (D-14)：通配授权的语义漂移——已过时：#407 起 `grant_capability` 只收带 `resourceId` 的 gatekeeper 授权，通配授权建不出来，生产为 0；"全部门"分支与启动器对通配行的接受只剩死代码，顺手删掉即可；
+  - L8b-7："N 个可调用的读操作"把平台禁用的也算进去——仍为 P3；
+  - L8b-9："可委派"承诺写委派，内核的 `ready` 却不要求有能 `request_action` 的 Worker——仍为 P3（`execution-readiness-handler.ts:190` 不变）；
+  - L8b-13：启动器"至少授予一名成员 ✓"沿用到另一个门——仍为 P3（`grantedThisSession` 仍不随换门重置）；
+  - L8a-13：登录页永久披露管理员登录名与初始密钥位置——仍为 P3。
 - **状态与刷新**：
-  - L7a-16 / L8a-15：待办计数丢失刷新期间到达的推送，审批历史页从不刷新（R-63 同族）；
-  - L8b-8：授权或撤销后，系统页的可达性过期；
-  - L8b-10：三个"Turn 是否在跑"的来源互相矛盾；
-  - L7a-11：`loadMore` 可能把旧页追加到别的过滤器的列表；
-  - L7a-10：默认模块 toast 的撤销会连带撤销后面的切换；
-  - L7b-1 (V)：客户端聊天水位线套用了服务端已删除的规则，目前是潜在问题。
+  - L7a-16 / L8a-15：待办计数丢失刷新期间到达的推送，审批历史页从不刷新（R-63 同族）——部分已修（#448：`usePendingCount` 在途时记下 `again`，结束后再跑一轮）；余项审批"历史"页仍不订阅推送，仍为 P3（遗留 123 已记）；
+  - L8b-8：授权或撤销后，系统页的可达性过期——仍为 P3；
+  - L8b-10：三个"Turn 是否在跑"的来源互相矛盾——仍为 P3（`useComposer.ts` 注释仍说内核不拒绝归档聊天，`hasRunningTurn` 仍没喂给 `turnStatus`）；
+  - L7a-11：`loadMore` 可能把旧页追加到别的过滤器的列表——仍为 P3；
+  - L7a-10：默认模块 toast 的撤销会连带撤销后面的切换——仍为 P3；
+  - L7b-1 (V)：客户端聊天水位线套用了服务端已删除的规则，目前是潜在问题——仍为 P3（`ws-client.ts` 追上后仍是严格水位线）。
 - **表单与选择器**：
-  - L7a-8：已不在目录里的模型显示成别的值；
-  - L7a-9：`UserPicker` 保留隐藏的选择；
-  - L7a-14：供应商 key 表单不看 `storeWritable`；
-  - L7a-15：审计按操作者过滤只列前 50 个用户；
-  - L8a-5：过期的显式模型让 My Agent 保存失败；
-  - L8a-9：推理链工具按所按的按钮静默忽略已填字段；
-  - L8b-12：Procedure 编辑器选不了旧版本 Worker；
-  - L8b-14：本体提案列表只读第一页。
+  - L7a-8：已不在目录里的模型显示成别的值——仍为 P3；
+  - L7a-9：`UserPicker` 保留隐藏的选择——仍为 P3（换搜索词后仍不清选择；触发要管理员在下拉框显示"选择用户"时仍点创建 / 委托）；
+  - L7a-14：供应商 key 表单不看 `storeWritable`——仍为 P3；
+  - L7a-15：审计按操作者过滤只列前 50 个用户——仍为 P3（`PlatformAuditPage.tsx` 的 `list_users` 仍没有 `autoLoadAll`）；
+  - L8a-5：过期的显式模型让 My Agent 保存失败——仍为 P3（`AgentProfileForm.tsx` 仍按原值播种，没套 C11 的保护）；
+  - L8a-9：推理链工具按所按的按钮静默忽略已填字段——仍为 P3；
+  - L8b-12：Procedure 编辑器选不了旧版本 Worker——仍为 P3；
+  - L8b-14：本体提案列表只读第一页——仍为 P3。
 - **健壮性**：
-  - L7b-7：URL hash 里畸形的 `%` 转义会让整个控制台白屏（没有根错误边界）；
-  - L7b-5：每个 403 都被当成角色证据，auditor / builder 可能丢失治理导航；
-  - L7b-6：`kit/sheet` 丢掉了 `size`；
-  - L7b-9：`kit/toast` 是未挂载的重复 context；
-  - L7a-12：两个平台链接被重定向回概览；
-  - L8a-8：导出静默丢掉隐藏的读取行。
+  - L7b-7：URL hash 里畸形的 `%` 转义会让整个控制台白屏（没有根错误边界）——仍为 P3（`router.ts` 七处裸 `decodeURIComponent`，`main.tsx` 仍无根错误边界）；
+  - L7b-5：每个 403 都被当成角色证据，auditor / builder 可能丢失治理导航——仍为 P3（`role.ts:38` 不变；R-35 之后 auditor 碰到的 403 更多，但内核照常判权，影响只在导航显示）；
+  - L7b-6：`kit/sheet` 丢掉了 `size`——仍为 P3（四处 `size="wide"` 仍按窄宽度渲染）；
+  - L7b-9：`kit/toast` 是未挂载的重复 context——仍为 P3；
+  - L7a-12：两个平台链接被重定向回概览——仍为 P3；
+  - L8a-8：导出静默丢掉隐藏的读取行——仍为 P3（导出仍只写 `visibleRows`、不记 `showReads`；R-35 之后默认隐藏的只剩真正无副作用的读）。
 - **其他与漂移**：
-  - L7b-8：双语拼接残留（遗留 85）；
-  - L7b-10：错误码 / 审计词表镜像漂移；
-  - L8a-12：`ActionRequestDetail.tsx` 是死代码，还对 `high` 提供"总是允许"；
-  - 八处 web 注释或文案漂移（MembersPage、ModelsPage、AvailableGateInstancesSection、PlatformModulesPage、概览、CreateWorkspaceForm、ui/Skeleton、`lib/audit.ts`）。
+  - L7b-8：双语拼接残留（遗留 85）——仍为 P3（`confirm.tsx:417,428`、`ApprovalCard.tsx:191`、`FollowPill.tsx:21` 都还在；守卫不在 CI 跑，见 L9-9）；
+  - L7b-10：错误码 / 审计词表镜像漂移——仍为 P3；
+  - L8a-12：`ActionRequestDetail.tsx` 是死代码，还对 `high` 提供"总是允许"——仍为 P3；
+  - 八处 web 注释或文案漂移（MembersPage、ModelsPage、AvailableGateInstancesSection、PlatformModulesPage、概览、CreateWorkspaceForm、ui/Skeleton、`lib/audit.ts`）——仍为 P3（逐处核对，八处都还在）。
 
 ### 6.4 脚本、CI、文档（8 行，有的合并了多条）
 
-- L9-3 (V)：`gate-host/`（凭证与幂等存储）不在备份里，见遗留 58；注意密文不配套 `secrets/` 就没用。
-- L9-7 / L9-8：升级前 dump 用目标 tag 命名；`restore.sh` 的 EXIT trap 不响应信号。两条都随 R-11 修。
-- L9-9 / L9-15：i18n-pairs 守卫从不在 CI 跑（遗留 85 的回归网失效）；`check-kernel-purity.sh` 在 grep 出错时静默通过。
-- L9-10 / L9-11：`gen-handle-keys.sh` 可能在新 key 旁留下旧 `handle.pub`；`delete-workspace.sh` 在 `rm -rf` 失败时仍报告清理完成。
+- L9-3 (V)：`gate-host/`（凭证与幂等存储）不在备份里，见遗留 58；注意密文不配套 `secrets/` 就没用——仍为 P3（`deploy/backup/backup.sh` 的目录清单仍不含 `gate-host/`）。
+- L9-7 / L9-8：升级前 dump 用目标 tag 命名；`restore.sh` 的 EXIT trap 不响应信号。两条都随 R-11 修——已修（#398：dump 按实际所在版本命名、重跑另起名；INT / TERM / HUP / PIPE 都转成 `exit`，从而触发 EXIT trap）。
+- L9-9 / L9-15：i18n-pairs 守卫从不在 CI 跑（遗留 85 的回归网失效）；`check-kernel-purity.sh` 在 grep 出错时静默通过——仍为 P3（`ci.yml` 仍不跑 `i18n-pairs`，遗留 123 已记；`check-kernel-purity.sh` 仍把 grep 出错当成没有命中）。
+- L9-10 / L9-11：`gen-handle-keys.sh` 可能在新 key 旁留下旧 `handle.pub`；`delete-workspace.sh` 在 `rm -rf` 失败时仍报告清理完成——仍为 P3（`gen-handle-keys.sh` 仍只在 `handle.pub` 缺失时派生；`delete-workspace.sh` 仍不看 `rm -rf` 的退出码）。
 - 供应链与配置：
-  - L9-13 / L9-14 / L9-16：构建输入没有按 digest 固定；签名证明的是 workflow 而不是源码（`pull-images.sh` 不校验 revision 标签，tag 也不受保护）；`.dockerignore` 的密钥模式只锚在根目录；
-  - `image-scan.yml` 声称没有 build arg，而且从不扫描 gate-host；
-  - compose secrets 注释里的属组与实际不符。
-- L10-2 (V，D-28)：`platform_status.backup` 在四处硬编码为"未配置"，控制台因此没有备份新鲜度信号。
-- L10-8：`operations.md` 漂移：
-  - §3 的依赖图；
-  - §7 / §11 "没有 metrics 端点"；
-  - §10 "无 actor 的 purge 不写审计"，连同 `bootstrap.ts:755-760`；
-  - §13 "镜像从不推送"。
-- L10-9 / L10-10 / L10-12 / L10-13 / L10-14：
-  - 验收 runbook 描述的是过时的缺口；
-  - `release.md` 的 `--pull` 在 `EXPLORER_BUILD=1` 主机上会静默丢掉 Explorer 包，还引用了不存在的 `docker-preflight.md`；
-  - `pi-upgrade.md` §7 的回滚早于 `activeRuntimeImage`；
-  - STATUS 有四个"当前波次"标题，缺 host-accept-s4；README 停在 v0.3.0；
-  - platform-extension README 说 worker / 交互模式未实现。
+  - L9-13 / L9-14 / L9-16：构建输入没有按 digest 固定；签名证明的是 workflow 而不是源码（`pull-images.sh` 不校验 revision 标签，tag 也不受保护）；`.dockerignore` 的密钥模式只锚在根目录——部分已修（#427，R-33：`pull-images.sh` 精确匹配签名身份与 workflow ref）；余项仍为 P3：Dockerfile 仍用可变 tag，`pull-images.sh` 仍不比对 `org.opencontainers.image.revision` 与检出的 commit，`.dockerignore` 的密钥模式仍只锚根目录；
+  - `image-scan.yml` 声称没有 build arg，而且从不扫描 gate-host——仍为 P3（矩阵里仍没有 `packages/gatekeeper-base/Dockerfile`；kernel 与 caddy 的 Dockerfile 都声明了 `ARG`）；
+  - compose secrets 注释里的属组与实际不符——仍为 P3（仍写"与这里每个密钥文件同样 0640 组 10001"，`pg_password` 的属组是 999；`gen-handle-keys.sh` 的消费方说明仍漏了 gate-host，`check-membership…sh` 仍手抄人类专属名单）。
+- L10-2 (V，D-28)：`platform_status.backup` 在四处硬编码为"未配置"，控制台因此没有备份新鲜度信号——已修（#461）。
+- L10-8：`operations.md` 漂移（部分已修，余项仍为 P3）：
+  - §3 的依赖图——仍为 P3（healthcheck 清单仍只列四个服务，漏了 `docker-socket-proxy-images`、`gate-host`、`docker-socket-proxy-collector` 及其依赖边）；
+  - §7 / §11 "没有 metrics 端点"——已修（#457）；
+  - §10 "无 actor 的 purge 不写审计"，连同 `bootstrap.ts:755-760`——§10 已修（#432）；`bootstrap.ts` 里 `resolveCliActor` 的注释（现在在 766-769 行）仍说"解析不到就不写审计行"，仍为 P3；
+  - §13 "镜像从不推送"——已修（#457；§13 的备份说法随 #461 订正）。
+- L10-9 / L10-10 / L10-12 / L10-13 / L10-14（部分已修，余项仍为 P3）：
+  - 验收 runbook 描述的是过时的缺口——部分已修（#457 订正了 `host-accept-s2.md` 的过时缺口）；余项仍为 P3：`accept-s1.md` §6 仍说 `/internal/egress` "无额外鉴权"（R-03 之后每条内部路由都有调用方白名单），`host-accept-s2.md` 仍没写 `connect-docker-guard…` / `ontology-propose…` 这些步骤，`host-accept-s3.md` 仍没写 `ontology-guard-*` / `freshness-fixture-*` 这些步骤；
+  - `release.md` 的 `--pull` 在 `EXPLORER_BUILD=1` 主机上会静默丢掉 Explorer 包，还引用了不存在的 `docker-preflight.md`——已修（#457）；
+  - `pi-upgrade.md` §7 的回滚早于 `activeRuntimeImage`——部分已修（#457 补了 `activeRuntimeImage` 与 allowlist）；§7 仍引用已删除的 `.github/dependabot.yml`，仍为 P3；
+  - STATUS 有四个"当前波次"标题，缺 host-accept-s4；README 停在 v0.3.0——已修（#457）；
+  - platform-extension README 说 worker / 交互模式未实现——已修（#457）。
+
+### 6.5 2026-10-04 复核结论
+
+**口径**：
+
+- 按工作底稿的 98 行计数：内核 35、运行时服务 16、web 控制台 39、脚本 / CI / 文档 8。§6.1 列出的 L5-7、L5-13 在工作底稿里归运行时服务，这里照工作底稿计。
+- 一行合并了多项、只修了一部分的，按余项的状态计入（下表括号里的数字）。
+- 每条都打开了工作底稿给的 `file:line` 核对，没有一条只凭 PR 标题判定。
+
+| 区域 | 行数 | 已修 | 已过时 | 仍为 P3（其中部分已修） | 升 P2 |
+|---|---|---|---|---|---|
+| 内核 | 35 | 3 | 0 | 31（4） | 1 |
+| 运行时服务 | 16 | 1 | 0 | 15（2） | 0 |
+| web 控制台 | 39 | 1 | 1 | 37（3） | 0 |
+| 脚本、CI、文档 | 8 | 2 | 0 | 6（3） | 0 |
+| **合计** | **98** | **7** | **1** | **89（12）** | **1** |
+
+- **已修（7）**：
+  - L2-11、L2-15（#455）；
+  - L3 §4 / L5-5（#460）；
+  - L5-10（#449）；
+  - L8a-4（#429）；
+  - L9-7 / L9-8（#398）；
+  - L10-2（#461）。
+- **已过时（1）**：L8b-6，#407 之后通配授权建不出来。
+- **部分已修、余项仍为 P3（12）**：
+  - 内核：L1-14、L4-11、L4-12 / L5-16、L1 注释漂移；
+  - 运行时服务：L5-15 / L10-15、L6-16；
+  - web 控制台：L7a-16 / L8a-15、L8a-10、L8a-11；
+  - 脚本、CI、文档：L9-13 / L9-14 / L9-16、L10-8、L10-9…L10-14。
+
+**升 P2（1 项）**：
+
+| 编号 | 问题 | 失败场景 | 修法 |
+|---|---|---|---|
+| L1-16 / L5-12(b)（认证前的一半） | `/ws` 以默认选项注册 `@fastify/websocket`（单帧上限 100 MiB）；没有认证截止时间，不带凭证的连接可以无限期挂着；带 `Authorization` 头时，解析完成前到的帧无上限地排进 `pendingFrames` | 不用登录、只要连得到控制台的客户端就能并发打开很多 `/ws`，每条发一帧接近 100 MiB 的消息，或者慢慢滴一帧、永不认证。内核逐条整帧缓存，堆耗尽后被 OOM 杀掉，所有工作区的聊天、审批、Task 编排、门执行一起中断；重启策略能拉起，但攻击可以立刻重放 | 显式设 `maxPayload`（与 `/api/cap` 的 1 MiB `bodyLimit` 同量级）；未认证连接约 10 s 内不完成 `authenticate` 就关闭；`pendingFrames` 设上限。L5-17 的 `.max()` 顺带 |
+
+**考虑过、仍判 P3 的边界项**（供排期参考）：
+
+- L5-9：今天没有工作区可见的聊天，跨成员场景不可达。
+  - 若以后开放 `chats.visibility = 'workspace'`，它立刻升 P2：工作区成员可以结束别人正在跑的 Turn、改写别人 Turn 的来源摘要。
+  - 届时要与可见性开关同一个 PR 修。
+- L4-13：要以新 `GATE_ID` 重新部署同一端点才会触发；两行指向的是同一系统，`trust` 的不确定落在同一个 MCP 服务上。
+- L7a-3：R-12 之后波及面变大，但可以恢复（管理员给出临时密码），也不越权。
+- L8a-6：high 批准仍要先填理由，内核也强制。
+- L7a-9：要管理员在下拉框显示"选择用户"时仍然点创建。
+- L1-15：找不到会让某一行持续失败的触发条件。
+- L6-16 余项：只会挡住凭证录入，不暴露任何东西。
+- L9-10：只出现在"恢复了 `config/` 但没恢复 `secrets/`"的灾备路径上。
+
+**修复簇**：
+
+- **P2-A（一个 PR）**：`/ws` 认证前的资源上限。
+  - 文件：`packages/kernel/src/interfaces/ws/server.ts` 及其测试。
+  - 可选：`packages/kernel/src/interfaces/ws/agent-host.ts`。
+    - 这条是内部通道，已有每服务凭证（R-03），不要先于 L5-12(a) 的截断设小上限，否则一次大的门输出会断开 agent-host 链路。
+  - 顺带：`packages/shared/src/capabilities.ts` 的 `.max()`，连同 `docs/contracts/capabilities.json`。
+    - 这个文件同时被别的车道改，冲突时拆成第二个 PR。
+  - 验收：
+    - 未认证连接到期被关闭；
+    - 超限帧在认证前以 1009 关闭；
+    - 控制台登录、聊天、审批照常；
+    - 主机 S1–S4 通过。
+  - 无迁移，回滚就是回退这个 PR。
+
+**其余 89 条 P3 的建议车道**（按文件归属切分，车道之间可以并行；注释漂移随拥有该文件的车道修）：
+
+| 车道 | 条目 | 主要文件 |
+|---|---|---|
+| K1 网关与读模型 | L1-13、L2-13、L2-16、L1 §4、L5-9、L5-13（内核半边）、L2-18、L1 注释漂移（`explorer-contract`），L2 漂移（I14 谓词四份副本） | `application/gateway/*`、`interfaces/http/capability-route.ts`、`interfaces/mcp/reference-tool-aliases.ts`、`interfaces/explorer-contract/index.ts`；I14 副本在 `governance/approval/reads.ts`、`governance/capability/grants.ts`、`application/gateway/resolve-refs-handler.ts` 与 `substrate/audit/invariant-checks.ts`，最后一个属 K3，这一项与 K3 串行 |
+| K2 认知层与 Worker | L3-8、L3-9、L3-13、L3-14、L3-15，L3 注释漂移 | `substrate/graph/sql-store.ts`、`application/worker/*`、`application/task/service.ts`、`substrate/ontology/*` |
+| K3 监控与运行时 | L3-7、L3-10、L3-11（含死信 runbook）、L3-12、L1-15（连同 `execution.ts` 的注释）、L4-14、L4-15、L4-16、L4-17（runner 或 lint 拒绝迁移文件里的事务控制语句）、L4-18、L6 内核侧 | `substrate/audit/invariant-checks.ts`、`governance/approval/execution.ts`、`application/platform/*`、`application/chat/*`、`application/linkage/*`、`application/host-bridge/*`、`application/task/reaper.ts`、`adapters/db/migrate.ts` |
+| K4 数据库与身份纵深（带迁移，编号由主会话分配） | L4-11 余项、L5-16、L4-13、L1-14 余项，L4 注释漂移 | 新迁移、`application/gates/store.ts`、`application/gateway/gate-instance-handlers.ts`、`cli/bootstrap.ts`、`application/identity/users.ts` |
+| R1 agent 侧 | L5-6、L5-7、L5-8、L5-11、L5-12(a)、L5-13（客户端半边）、L5-14 | `packages/platform-extension/*`、`packages/agent-host/src/bridge.ts`、`ontology/ops-runner.yaml` |
+| R2 运行时服务 | L6-16 余项、L6-18、L10-16；L6 漂移里的 `egressDeny` 注释、标签键、采集器 Dockerfile | `packages/gatekeeper-base/src/host.ts`、`packages/worker-supervisor/*`、`packages/llm-proxy/src/revocation.ts`、`collectors/host-inventory/Dockerfile` |
+| W1 控制台确认与人控 | L7a-3、L7a-13、L8a-6、L8a-11 余项、L8b-11 | `UserDetailPanel`、`GateInstanceDetailPanel`、`ActionRequestCard` / `ui/ApprovalCard`、`PrincipalDetail`、`graph/FactRow` |
+| W2 控制台状态与表单 | L7a-8、L7a-9、L7a-10、L7a-11、L7a-14、L7a-15、L8a-5、L8a-9、L8a-15、L8b-8、L8b-10、L8b-12、L8b-13、L8b-14、L7b-1、L7b-5 | `components/platform/*`、`hooks/useCapability.ts`、`AgentProfileForm`、`audit/ProvenanceToolsSection`、`systems/*`、`connect/ConnectSystemLauncher`、`catalog/ProcedureEditor`、`lib/ws-client.ts`、`lib/role.ts` |
+| W3 控制台文案与健壮性 | L7a-7、L7a-12、L8a-7、L8a-8、L8a-10 余项、L8a-12、L8a-13、L8a-14、L8b-6 死代码、L8b-7、L8b-9、L7b-6、L7b-7、L7b-8、L7b-9、L7b-10，web 漂移八处 | `ChatPage`、`TaskDetail`、`LoginPage`、`readiness/*`、`kit/*`、`lib/router.ts`、`lib/errors.ts`、`lib/labels.ts`、`lib/audit.ts` |
+| S1 脚本与 CI | L9-3（是否备份 `gate-host/` 先定）、L9-9、L9-10、L9-11、L9-15、L9-13 / L9-14 / L9-16 余项，image-scan、compose 注释 | `.github/workflows/*`、`scripts/*`、`deploy/backup/backup.sh`、`.dockerignore`、各 Dockerfile |
+| D1 文档 | L10-7、L10-8 余项、L10-9…L10-14 余项、L5-15 余项；L6 漂移里的决定 ⑩、`egressDeny` 只匹配主机名 | `docs/*`、`docs/runbooks/*`；L5-15 的两处代码注释在 `packages/shared/src/agent-host-protocol.ts` 与 `capabilities.ts` |
+
+W2 与 W3、K1 与 K3 如果改到同一个文件，就串行。
 
 ## 7. 待维护者决策（D-01…D-30）
 
