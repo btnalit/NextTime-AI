@@ -63,7 +63,8 @@ export interface Fact {
   readonly assertedBy: string;
   readonly verifiedBy: string | null;
   /** W5 (migrations/core/0018): the single Observation that fed this Fact, when the writer knew
-   *  it — `submit_observations` threads one per submitted item; `null` for ad-hoc `assert_fact`
+   *  it — `submit_observations` threads the one it records per call (STATUS leftover 103: once
+   *  per submitted item before); `null` for ad-hoc `assert_fact`
    *  and every pre-0018 row. `explain(factId)` narrows to it when set (§5.1.3 provenance one
    *  level below the Activity), and falls back to the Activity's whole Observation list otherwise. */
   readonly observationId: string | null;

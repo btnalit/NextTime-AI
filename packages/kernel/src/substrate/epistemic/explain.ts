@@ -111,10 +111,11 @@ export interface ExplainFactRef {
   readonly humanAttestations: readonly ExplainHumanAttestationRef[];
   /**
    * W5 (migrations/core/0018, docs/retrospective-2026-09-09.md §5.1): the single Observation that
-   * fed this Fact when its writer named one (`submit_observations` does, one per submitted item).
+   * fed this Fact when its writer named one (`submit_observations` does — one per call since STATUS
+   * leftover 103, one per submitted item before).
    * When set, `activity.observations` below is narrowed to exactly that Observation instead of
-   * every Observation the Activity recorded (a collector ingest records hundreds under one
-   * Activity — the whole batch answered "this ingest", never "this observation"). `null` for
+   * every Observation the Activity recorded (a collector ingest recorded hundreds under one
+   * Activity before leftover 103, and its phases still record one each). `null` for
    * ad-hoc `assert_fact` writes, worker results, and every pre-0018 Fact — those keep the
    * Activity-level list exactly as before.
    */
