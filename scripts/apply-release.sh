@@ -38,7 +38,8 @@
 #      release.md §5)
 #   8. BACKUP_NOW on the new release; keep the newest 3 pre-upgrade dumps (maintainer
 #      2026-10-01) — reached only after 2–6 succeeded, so a failed apply never prunes a rollback
-#      point; purge expired ephemeral workspaces (acceptance / probe / demo leftovers)
+#      point; keep this project's images of the newest 2 releases (scripts/prune-images.sh);
+#      purge expired ephemeral workspaces (acceptance / probe / demo leftovers)
 set -u
 
 # Step 3 checks out another tag, which can rewrite this very file while sh is still reading it.
@@ -214,6 +215,11 @@ echo "STEP backup-now exit=$? last=$(sed -n 's/^db_dump=//p' "$D/backups/last-su
 ls -t "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | tail -n +4 | xargs -r rm -f --
 ls -t "$D/backups/pre-upgrade"/nexttime-rerun-*.dump 2>/dev/null | tail -n +2 | xargs -r rm -f --
 echo "STEP pre-upgrade-retention kept $(ls "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | wc -l)"
+# Image retention: this project's images of the newest two releases, anything a container uses and
+# the runtime-image rollback target stay; older release tags go (scripts/prune-images.sh).
+if [ -f scripts/prune-images.sh ]; then
+  sh scripts/prune-images.sh --keep 2 --yes </dev/null 2>&1 | grep -E '^prune-images:' | sed 's/^/STEP images-retention /'
+fi
 if [ -f scripts/delete-workspaces-matching.sh ]; then
   sh scripts/delete-workspaces-matching.sh --expired --yes </dev/null 2>&1 | tail -n 3 | sed 's/^/STEP expired-workspaces /'
 fi
