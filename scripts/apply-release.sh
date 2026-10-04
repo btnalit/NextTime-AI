@@ -218,7 +218,7 @@ echo "STEP pre-upgrade-retention kept $(ls "$D/backups/pre-upgrade"/nexttime-pre
 # Image retention: this project's images of the newest two releases, anything a container uses and
 # the runtime-image rollback target stay; older release tags go (scripts/prune-images.sh).
 if [ -f scripts/prune-images.sh ]; then
-  sh scripts/prune-images.sh --keep 2 --yes </dev/null 2>&1 | grep -E '^prune-images:' | sed 's/^/STEP images-retention /'
+  sh scripts/prune-images.sh --keep 2 --yes </dev/null 2>&1 | grep -E '^prune-images:|could not' | sed 's/^/STEP images-retention /'
 fi
 if [ -f scripts/delete-workspaces-matching.sh ]; then
   sh scripts/delete-workspaces-matching.sh --expired --yes </dev/null 2>&1 | tail -n 3 | sed 's/^/STEP expired-workspaces /'
