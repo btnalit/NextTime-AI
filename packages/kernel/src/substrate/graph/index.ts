@@ -87,3 +87,12 @@ export type { FindMeansInput } from './find-means.js';
 
 // S8 W1-C: `traverse`'s `nodeDetails` and `resolve_refs`'s object/gatekeeper name resolution.
 export { objectDisplayName } from './display-name.js';
+
+// STATUS leftover 123 (D-26): the Operation-draft read rule, shared by the generic graph reads and
+// governance/gatekeepers' Operation directory.
+export {
+  linkTouchesHiddenOperationDraftSql,
+  operationDraftHiddenSql,
+  operationDraftVisibleTo,
+} from './operation-draft-visibility.js';
+export type { GraphReadViewer } from './operation-draft-visibility.js';

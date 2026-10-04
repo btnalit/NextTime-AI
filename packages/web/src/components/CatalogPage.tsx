@@ -19,6 +19,7 @@ import {
 import { type Translate, useT } from '../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
@@ -642,6 +643,25 @@ function OperationDetailView({
   );
 }
 
+/**
+ * STATUS leftover 123 (D-24): `update_operation_description` is `minRole: 'builder'`, and only the
+ * Operation's proposer or the owner may edit it — its description reaches every agent's tool list.
+ * Offered only where it can succeed: the owner; a builder on a row they proposed. A caller proven
+ * below the builder floor (a known member / operator / auditor, or an inferred member) is never
+ * offered it. Unknown either side (role or proposer not loaded, an older kernel) keeps the action,
+ * as `isOwnDraftOrUnknown` does — the kernel refuses it anyway.
+ */
+function mayEditOperationDescription(
+  row: Pick<OperationCatalogRow, 'proposedBy'>,
+  role: WorkspaceRole,
+  callerPrincipalId: string | null,
+): boolean {
+  if (role.kind === 'inferred') return !isProvenMember(role);
+  if (role.role === 'owner') return true;
+  if (role.role !== 'builder') return false;
+  return isOwnDraftOrUnknown(row, callerPrincipalId);
+}
+
 /** S8 W3-K1 (leftover 81): the bound `update_operation_description`'s own `paramsSchema` enforces
  *  (`packages/shared/src/capabilities.ts`) — mirrored here only so the textarea can stop the owner
  *  before a doomed round trip, not as the source of truth. */
@@ -664,6 +684,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // for its usage columns when no matching stats entry comes back (see `statsFor` below).
   const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
   const gatekeeperNames = useGatekeeperNames(http);
+  const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   // S8 W3-K1 (leftover 81): the "编辑描述" dialog — one instance shared across rows, controlled by
   // which row (if any) is being edited, same "single shared surface, not one-per-row" convention
@@ -806,7 +827,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       gatekeeperNames={gatekeeperNames}
       canPublish={!permissions.isDenied('publish_operation')}
       canDeprecate={!permissions.isDenied('deprecate_operation')}
-      canEditDescription={!permissions.isDenied('update_operation_description')}
+      canEditDescription={
+        !permissions.isDenied('update_operation_description') &&
+        mayEditOperationDescription(selected, role, principalId)
+      }
       busy={busy === catalogOperationKey(selected)}
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}

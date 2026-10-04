@@ -1,10 +1,5 @@
-import {
-  ProposeProcedureContentSchema,
-  ProposeSkillContentSchema,
-  type Role,
-} from '@nexttime/shared';
-import type { PoolClient } from 'pg';
-import type { DraftViewer, SkillRow } from '../../application/worker/index.js';
+import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
+import type { SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
   deprecateSkill,
@@ -17,11 +12,8 @@ import {
   publishSkill,
 } from '../../application/worker/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import {
-  type CapabilityHandler,
-  type CapabilityHandlerContext,
-  publishActorOf,
-} from './capability-handler.js';
+import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
+import { draftViewerOf } from './draft-viewer.js';
 
 /**
  * application/gateway/skill-procedure-handlers: `propose_skill` / `publish_skill` /
@@ -39,36 +31,9 @@ import {
  * actually parsed against `ProposeSkillContentSchema`/`ProposeProcedureContentSchema`.
  *
  * The three reads (`list_skills` / `get_skill` / `list_procedures`) narrow drafts for one
- * `DraftViewer` (`draftViewerOf` below; the rule is application/worker/draft-visibility.ts's
+ * `DraftViewer` (`draftViewerOf`, draft-viewer.ts; the rule is application/worker/draft-visibility.ts's
  * `draftVisibleTo`): a caller's own drafts, or every draft for the owner and builders.
  */
-
-/**
- * Who a Skill / Procedure read is narrowed for. Human channel: the Principal dispatch.ts resolved.
- * These reads are `channel: 'handle'` too, and there the viewer is the Handle's `obo` (I13,
- * `ctx.principalId`) with that principal's own workspace role — an agent sees exactly the drafts
- * its human may see, never more. No `ctx` (a test driving the handler directly): the RLS session
- * principal, the same fallback `currentPrincipalId` gives every other handler here.
- */
-async function draftViewerOf(
-  client: PoolClient,
-  workspaceId: string,
-  ctx: CapabilityHandlerContext | undefined,
-): Promise<DraftViewer> {
-  if (ctx?.principal) return { principalId: ctx.principal.id, role: ctx.principal.role };
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const result = await client.query<{ role: Role }>(
-    'select role from principals where workspace_id = $1 and id = $2',
-    [workspaceId, principalId],
-  );
-  const role = result.rows[0]?.role;
-  if (!role) {
-    throw new Error(
-      `draftViewerOf: principal ${principalId} not found in workspace ${workspaceId}`,
-    );
-  }
-  return { principalId, role };
-}
 
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { skill: rawSkill } = params as { skill: unknown };

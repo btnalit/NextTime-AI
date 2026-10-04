@@ -1,4 +1,9 @@
 import {
+  type GraphReadViewer,
+  linkTouchesHiddenOperationDraftSql,
+  operationDraftHiddenSql,
+} from './operation-draft-visibility.js';
+import {
   DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   DEFAULT_TRAVERSE_DIRECTION,
@@ -51,6 +56,36 @@ function hasOwnKeys(value: Record<string, unknown> | undefined): value is Record
  */
 const LINK_VISIBLE_PREDICATE = 'link_visible_to_caller(l.workspace_id, l.activity_id)';
 
+/**
+ * Leftover 123 (D-26): the Operation-draft filter a generic graph read applies for `viewer`
+ * (operation-draft-visibility.ts), as an extra `and ...` clause plus its two binds, numbered from
+ * `firstParam`. No viewer — an internal caller (a write-path guard, a governance registry, the
+ * auditor's `reconstruct`) — adds nothing, so those queries are unchanged. `objectViewerFilter`
+ * narrows rows of `objects` (referenced by table name); `linkViewerFilter` drops every Fact with
+ * an endpoint the viewer may not see, which is what keeps a hidden draft out of `traverse` /
+ * `state_at` / recent Facts as well.
+ */
+interface ViewerFilter {
+  readonly sql: string;
+  readonly values: readonly unknown[];
+}
+
+function objectViewerFilter(viewer: GraphReadViewer | undefined, firstParam: number): ViewerFilter {
+  if (!viewer) return { sql: '', values: [] };
+  return {
+    sql: `and not ${operationDraftHiddenSql('objects', `$${firstParam}`, `$${firstParam + 1}`)}`,
+    values: [viewer.seesEveryDraft, viewer.principalId],
+  };
+}
+
+function linkViewerFilter(viewer: GraphReadViewer | undefined, firstParam: number): ViewerFilter {
+  if (!viewer) return { sql: '', values: [] };
+  return {
+    sql: `and not ${linkTouchesHiddenOperationDraftSql('l', `$${firstParam}`, `$${firstParam + 1}`)}`,
+    values: [viewer.seesEveryDraft, viewer.principalId],
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // objects
 // -------------------------------------------------------------------------------------------
@@ -98,10 +133,15 @@ export function buildUpsertObjectQuery(workspaceId: string, input: UpsertObjectI
   };
 }
 
-export function buildGetObjectQuery(workspaceId: string, objectId: string): SqlQuery {
+export function buildGetObjectQuery(
+  workspaceId: string,
+  objectId: string,
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const filter = objectViewerFilter(viewer, 3);
   return {
-    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and id = $2`,
-    values: [workspaceId, objectId],
+    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and id = $2 ${filter.sql}`,
+    values: [workspaceId, objectId, ...filter.values],
   };
 }
 
@@ -112,10 +152,12 @@ export function buildGetObjectQuery(workspaceId: string, objectId: string): SqlQ
 export function buildGetObjectsByIdsQuery(
   workspaceId: string,
   objectIds: readonly string[],
+  viewer?: GraphReadViewer,
 ): SqlQuery {
+  const filter = objectViewerFilter(viewer, 3);
   return {
-    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and id = any($2::uuid[])`,
-    values: [workspaceId, objectIds],
+    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and id = any($2::uuid[]) ${filter.sql}`,
+    values: [workspaceId, objectIds, ...filter.values],
   };
 }
 /** `getObjectByIdentity` (store.ts): looks up an Object by its `(object_type, identity_key)`
@@ -183,10 +225,16 @@ export function decodeSearchCursor(
  *  a millisecond-truncated cursor would drop every row sharing the boundary millisecond (all rows
  *  written in one transaction share the same `now()`), so both sides are truncated to the same
  *  precision and `id` breaks the ties. */
-export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQuery {
+export function buildSearchQuery(
+  workspaceId: string,
+  input: SearchInput,
+  viewer?: GraphReadViewer,
+): SqlQuery {
   const pattern = `%${input.query}%`;
   const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
   const cursor = decodeSearchCursor(input.cursor);
+  // Leftover 123: in the WHERE, so `limit` and the keyset cursor count only rows the viewer sees.
+  const filter = objectViewerFilter(viewer, 7);
   return {
     text: `
       select ${OBJECT_COLUMNS}
@@ -198,6 +246,7 @@ export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQu
           $5::timestamptz is null
           or (date_trunc('milliseconds', updated_at), id) < ($5::timestamptz, $6::uuid)
         )
+        ${filter.sql}
       order by date_trunc('milliseconds', updated_at) desc, id desc
       limit $4
     `,
@@ -208,6 +257,7 @@ export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQu
       limit,
       cursor?.updatedAt ?? null,
       cursor?.id ?? null,
+      ...filter.values,
     ],
   };
 }
@@ -475,9 +525,17 @@ export function buildNeighborsQuery(workspaceId: string, input: NeighborsInput):
  * — depth-bounded recursion over a possibly-cyclic graph can otherwise revisit the same edge from
  * more than one path).
  */
-export function buildTraverseQuery(workspaceId: string, input: TraverseInput): SqlQuery {
+export function buildTraverseQuery(
+  workspaceId: string,
+  input: TraverseInput,
+  viewer?: GraphReadViewer,
+): SqlQuery {
   const direction: TraverseDirection = input.direction ?? DEFAULT_TRAVERSE_DIRECTION;
   const depth = normalizeTraverseDepth(input.depth);
+  // Leftover 123: both terms skip a Fact touching a draft the viewer may not see, so the walk never
+  // reaches such a node — nor anything only reachable through it — and a hidden anchor yields
+  // nothing, exactly like an unknown id.
+  const filter = linkViewerFilter(viewer, 6);
 
   return {
     text: `
@@ -496,6 +554,7 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
           )
           and ($4::text is null or l.link_type = $4)
           and ${LINK_VISIBLE_PREDICATE}
+          ${filter.sql}
 
         union all
 
@@ -514,13 +573,14 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
           and ($4::text is null or l.link_type = $4)
           and w.depth < $5
           and ${LINK_VISIBLE_PREDICATE}
+          ${filter.sql}
       )
       select link_id, link_type, source_object_id, target_object_id, next_object_id, min(depth) as depth
       from walk
       group by link_id, link_type, source_object_id, target_object_id, next_object_id
       order by depth, link_id
     `,
-    values: [workspaceId, input.fromId, direction, input.linkType ?? null, depth],
+    values: [workspaceId, input.fromId, direction, input.linkType ?? null, depth, ...filter.values],
   };
 }
 
@@ -530,7 +590,12 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
  * `buildNeighborsQuery`/`buildTraverseQuery` already use (`superseded_at is null and
  * invalidated_at is null`), with no anchor Object (workspace-wide, not `traverse`-from-a-node).
  */
-export function buildRecentFactsQuery(workspaceId: string, limit: number | undefined): SqlQuery {
+export function buildRecentFactsQuery(
+  workspaceId: string,
+  limit: number | undefined,
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const filter = linkViewerFilter(viewer, 3);
   return {
     text: `
       select ${FACT_COLUMNS}
@@ -539,10 +604,11 @@ export function buildRecentFactsQuery(workspaceId: string, limit: number | undef
         and superseded_at is null
         and invalidated_at is null
         and ${LINK_VISIBLE_PREDICATE}
+        ${filter.sql}
       order by recorded_at desc
       limit $2
     `,
-    values: [workspaceId, limit ?? DEFAULT_RECENT_FACTS_LIMIT],
+    values: [workspaceId, limit ?? DEFAULT_RECENT_FACTS_LIMIT, ...filter.values],
   };
 }
 
@@ -558,7 +624,12 @@ export function buildRecentFactsQuery(workspaceId: string, limit: number | undef
  * the old fact after supersede" hold: supersede sets the old row's `superseded_at` to a time
  * after `t0`, so at `t0` it was still current on the system-time axis.
  */
-export function buildStateAtFactsQuery(workspaceId: string, input: StateAtInput): SqlQuery {
+export function buildStateAtFactsQuery(
+  workspaceId: string,
+  input: StateAtInput,
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const filter = linkViewerFilter(viewer, 4);
   return {
     text: `
       select ${FACT_COLUMNS}
@@ -571,8 +642,9 @@ export function buildStateAtFactsQuery(workspaceId: string, input: StateAtInput)
         and valid_from <= $3
         and (valid_until is null or valid_until > $3)
         and ${LINK_VISIBLE_PREDICATE}
+        ${filter.sql}
       order by recorded_at desc
     `,
-    values: [workspaceId, input.objectId, input.at],
+    values: [workspaceId, input.objectId, input.at, ...filter.values],
   };
 }

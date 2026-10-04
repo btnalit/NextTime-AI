@@ -169,6 +169,9 @@ function toWireOperationSummary(
     ...(record.operation.description !== undefined
       ? { description: record.operation.description }
       : {}),
+    // STATUS leftover 123: whose row it is under D-24 — the console offers the description edit
+    // only to that proposer and the owner (the kernel enforces it either way).
+    ...(record.proposedBy !== undefined ? { proposedBy: record.proposedBy.id } : {}),
     ...(governanceChange !== undefined ? { governanceChange } : {}),
   };
 }

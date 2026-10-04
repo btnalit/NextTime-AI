@@ -132,6 +132,7 @@ import {
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
 import { discardDraftHandler } from './discard-draft-handler.js';
+import { graphReadViewerOf } from './draft-viewer.js';
 import {
   attestFactHandler,
   causalChainHandler,
@@ -308,9 +309,15 @@ export type {
 
 const graphStore = new SqlGraphStore();
 
-const getObjectHandler: CapabilityHandler = async (client, workspaceId, params) => {
+// STATUS leftover 123 (D-26): the five generic graph reads below (`get_object`, `traverse`,
+// `search`, `state_at`, `explain`) and `get_entry_context`'s recent Facts are narrowed for the
+// caller (`graphReadViewerOf`: the human, or a Handle's `obo` with that principal's role) — an
+// Operation draft they may not see reads exactly like an unknown id, and no Fact touching it is
+// returned.
+const getObjectHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { objectId } = params as { objectId: string };
-  const object = await graphStore.getObject(client, workspaceId, objectId);
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const object = await graphStore.getObject(client, workspaceId, objectId, viewer);
   return {
     result: object ? toWireObject(object) : null,
     resourceType: 'object',
@@ -321,10 +328,11 @@ const getObjectHandler: CapabilityHandler = async (client, workspaceId, params) 
 // S8 W1-C (leftover 48 "邻居名称 N × get_object"): `nodeDetails` is additive alongside the
 // pre-existing `nodes`/`edges` (a caller reading only those two sees identical behavior) — one
 // batched `getObjectsByIds` for every reached node, not one `get_object` per node.
-const traverseHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const traverseHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const input = params as TraverseInput;
-  const result = await graphStore.traverse(client, workspaceId, input);
-  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, result.nodes);
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const result = await graphStore.traverse(client, workspaceId, input, viewer);
+  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, result.nodes, viewer);
   const nodeDetails = result.nodes.map((nodeId) => {
     const object = objectsById.get(nodeId);
     // Defensive fallback only — every traversed node id names a real Object in this same
@@ -345,9 +353,10 @@ const traverseHandler: CapabilityHandler = async (client, workspaceId, params) =
 // W5 (docs/STATUS.md 遗留 2): keyset-paginated via `SqlGraphStore.searchPage`. A requested `limit`
 // above `MAX_SEARCH_LIMIT` is clamped by the store and reported here as `truncated: true`
 // (docs/wire-contract-conventions.md §3: "超出按上限截断并在结果 `truncated: true` 标记，而非静默").
-const searchHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const searchHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const input = params as SearchInput;
-  const page = await graphStore.searchPage(client, workspaceId, input);
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const page = await graphStore.searchPage(client, workspaceId, input, viewer);
   const truncated = input.limit !== undefined && input.limit > MAX_SEARCH_LIMIT;
   return {
     result: {
@@ -358,9 +367,15 @@ const searchHandler: CapabilityHandler = async (client, workspaceId, params) => 
   };
 };
 
-const stateAtHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const stateAtHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { objectId, at } = params as { objectId: string; at: string };
-  const state = await graphStore.stateAt(client, workspaceId, { objectId, at: new Date(at) });
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const state = await graphStore.stateAt(
+    client,
+    workspaceId,
+    { objectId, at: new Date(at) },
+    viewer,
+  );
   return {
     result: {
       object: state.object ? toWireObject(state.object) : null,
@@ -371,9 +386,10 @@ const stateAtHandler: CapabilityHandler = async (client, workspaceId, params) =>
   };
 };
 
-const explainHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const explainHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { nodeId } = params as { nodeId: string };
-  const result = await explainByNodeId(client, workspaceId, nodeId);
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const result = await explainByNodeId(client, workspaceId, nodeId, viewer);
   return { result, resourceType: result.nodeType, resourceId: nodeId };
 };
 
@@ -672,7 +688,9 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, pa
   const { turnId } = params as { turnId?: string };
   const principalId = await currentPrincipalId(client);
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
-  const facts = await graphStore.listRecentFacts(client, workspaceId);
+  // Leftover 123: no recent Fact names an Operation draft this caller may not see.
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const facts = await graphStore.listRecentFacts(client, workspaceId, undefined, viewer);
   const turn = await resolveEntryContextTurn(client, workspaceId, principalId, {
     turnId,
     sessionId: ctx?.claims?.sid,
