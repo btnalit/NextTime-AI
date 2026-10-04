@@ -323,6 +323,33 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
   标签 + 工作区名 `^accept-s[1-4]-` 识别，只删容器不动数据库行）——见
   `docs/runbooks/accept-s1.md` §7。
 
+### 10.1 观察记录压缩（遗留 103）
+
+`observations` 是库里唯一会随采集一直增长的表：采集器每轮在每个阶段各写一条（遗留 103 之前是每个条目一条），
+没有别的删除路径，工作区清除只删整个工作区的。保留规则（维护者 2026-10-04 决定）：年龄闸 30 天，带 payload
+的观察（门观察、任务结果）永不压缩。一行只有同时满足下面五条才删——没有任何 Fact 的 `observation_id` /
+`last_observation_id` 指向它（不论 Fact 状态）；不是它所属 Source 最新的一行；不是它所在
+`(workspace, activity, source)` 剩下的最后一行；`content = '{}'`；早于 30 天——所以 Fact 的起源、
+私有 Source 带来的 Fact 可见性、Source 新鲜度 / 静默检测、观察窗口、`explain` 与 PROV 导出读到的都不变
+（机制与依据：`packages/kernel/src/application/platform/compact-observations.ts`）。
+
+每次发版应用都会在 `BACKUP_NOW` 成功之后自动跑一次（`release.md` §3"观察记录压缩"）。要手动跑：
+
+```bash
+# 演练（缺省）：按类别打印各工作区的计数——payload / referenced / source-newest /
+# last-of-activity-source / would-delete——什么都不删、不写审计
+docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js
+# 真删：先确认有一份新的 dump（docker compose run --rm -e BACKUP_NOW=1 backup），再
+docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js --yes [--actor <login>]
+# 可选：--older-than-days <n>（缺省 30）、--workspace <id>、--batch-size <n>（缺省 10000）
+```
+
+按每个 Source、每 1 万行一个短事务分批删（用 core 0039 的索引，不长时间持锁，采集与 Fact 写入照常）；
+两个同时跑的 `--yes` 由一把事务级 advisory lock 逐批串行。每次 `--yes` 写一条平台审计
+`cli.observations_compacted`（参数、各工作区按类别的计数；中途失败也写，`completed: false` 加错误信息）；
+`--actor` 规则同 §10，解析不到时记为未署名的主机运维动作（迁移 core 0040）。第二次紧接着跑应当删 0 行。
+被删的行要找回，只能从压缩前那份 dump 恢复到临时库里查（`backup-restore.md`）。
+
 ## 11. 常见问题
 
 | 现象 | 原因 | 处理 |

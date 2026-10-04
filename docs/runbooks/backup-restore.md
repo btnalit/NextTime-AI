@@ -87,6 +87,12 @@ API key）与 `providers.json` 一并进了 `files-<ts>.tgz`；`tar` 默认保�
 `nexttime-*.dump`，手工放进去的 `nexttime-pre-<tag>.dump` 按名字排在所有时间戳之后、被当成"最新"，
 每天新生成的 dump 反而立刻被删；现在轮换与 `drill-*.sh` 找"最新 dump"都只认 `nexttime-<时间戳>.dump`。
 
+库内的保留只有一处会删行：`observations` 的压缩（遗留 103，`compact-observations`）。它在每次发版应用的
+`BACKUP_NOW` 成功之后跑（`release.md` §3"观察记录压缩"），删的是早于 30 天、不被任何 Fact 引用、
+不是 Source 最新、不是所在 (activity, source) 最后一行、也不带 payload 的采集标记行；要找回某一行，就从压缩前
+那份 `BACKUP_NOW` dump（`backups/db/` 里 `apply-<tag>` 当天的那份）恢复到临时库里查。每天的 dump 因此不再随
+采集无限增长。
+
 ## 手动跑一次
 ```
 docker compose run --rm -e BACKUP_NOW=1 backup
