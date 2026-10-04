@@ -664,9 +664,12 @@ function graphReadViewerOf(viewer: OperationViewer): GraphReadViewer {
  * the drafts this directory hides.
  */
 export function operationVisibleTo(viewer: OperationViewer, record: OperationRecord): boolean {
+  // `record.proposedBy` exists only when the row carried both `proposedBy` and `proposedByKind`
+  // (`toOperationRecord`) — the same "recorded proposer" the SQL form requires.
   return operationDraftVisibleTo(graphReadViewerOf(viewer), {
     status: record.status,
     proposedBy: record.proposedBy?.id,
+    proposedByKind: record.proposedBy?.kind,
   });
 }
 

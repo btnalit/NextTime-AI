@@ -7,7 +7,8 @@ import {
 
 /**
  * Unit tests (no database) for the Operation-draft read rule (STATUS leftover 123, D-26). The SQL
- * form runs against real Postgres in application/gateway/graph-draft-visibility.integration.test.ts.
+ * form is checked against this TS form on the full row × viewer matrix in
+ * operation-draft-visibility.integration.test.ts (real Postgres).
  */
 
 const PROPOSER = 'proposer-id';
@@ -16,30 +17,39 @@ const OTHER = 'other-id';
 describe('operationDraftVisibleTo', () => {
   const member = (principalId: string) => ({ principalId, seesEveryDraft: false });
   const reviewer = (principalId: string) => ({ principalId, seesEveryDraft: true });
+  const recorded = { proposedBy: PROPOSER, proposedByKind: 'agent' };
 
   it('published and deprecated rows are visible to everyone', () => {
     for (const status of ['published', 'deprecated']) {
-      expect(operationDraftVisibleTo(member(OTHER), { status, proposedBy: PROPOSER })).toBe(true);
+      expect(operationDraftVisibleTo(member(OTHER), { status, ...recorded })).toBe(true);
     }
   });
 
-  it('a draft is visible to its proposer and to reviewers, hidden from anyone else', () => {
-    const draft = { status: 'draft', proposedBy: PROPOSER };
+  it('a draft is visible to its recorded proposer and to reviewers, hidden from anyone else', () => {
+    const draft = { status: 'draft', ...recorded };
     expect(operationDraftVisibleTo(member(PROPOSER), draft)).toBe(true);
     expect(operationDraftVisibleTo(reviewer(OTHER), draft)).toBe(true);
     expect(operationDraftVisibleTo(member(OTHER), draft)).toBe(false);
   });
 
-  it('a row with no status reads as a draft; a draft with no proposer is reviewers only', () => {
-    expect(
-      operationDraftVisibleTo(member(PROPOSER), { status: undefined, proposedBy: OTHER }),
-    ).toBe(false);
-    expect(operationDraftVisibleTo(member(OTHER), { status: 'draft', proposedBy: undefined })).toBe(
-      false,
+  it('a row with no status reads as a draft', () => {
+    expect(operationDraftVisibleTo(member(OTHER), { status: undefined, ...recorded })).toBe(false);
+    expect(operationDraftVisibleTo(member(OTHER), { status: null, ...recorded })).toBe(false);
+    expect(operationDraftVisibleTo(member(PROPOSER), { status: undefined, ...recorded })).toBe(
+      true,
     );
-    expect(
-      operationDraftVisibleTo(reviewer(OTHER), { status: 'draft', proposedBy: undefined }),
-    ).toBe(true);
+  });
+
+  it('a proposer counts only when recorded with its kind — otherwise the draft is reviewers only', () => {
+    // A legacy row: proposedBy without proposedByKind is nobody's draft (#455), even for that id.
+    for (const proposedByKind of [undefined, null]) {
+      const legacy = { status: 'draft', proposedBy: PROPOSER, proposedByKind };
+      expect(operationDraftVisibleTo(member(PROPOSER), legacy)).toBe(false);
+      expect(operationDraftVisibleTo(reviewer(OTHER), legacy)).toBe(true);
+    }
+    const noProposer = { status: 'draft', proposedBy: undefined, proposedByKind: undefined };
+    expect(operationDraftVisibleTo(member(OTHER), noProposer)).toBe(false);
+    expect(operationDraftVisibleTo(reviewer(OTHER), noProposer)).toBe(true);
   });
 });
 

@@ -12,7 +12,15 @@
  * The rule: a draft is visible to its proposer and to the workspace's draft reviewers; published
  * and deprecated rows are visible to everyone; a row with no `status` reads as a draft (as
  * `toOperationRecord` reads it), and a draft with no recorded proposer is nobody's — reviewers
- * only. Who counts as a reviewer is governance's `seesEveryDraft(role)` (owner and builder,
+ * only. A proposer is **recorded** only when the row carries both `proposedBy` and
+ * `proposedByKind`: `registerOperationDraftObject` always writes the two together, and
+ * `toOperationRecord` (governance/gatekeepers/manifest.ts) has always read a row missing either as
+ * having no proposer. A `proposedBy` without `proposedByKind` is no writer's output, so it is a
+ * legacy row and stays reviewers-only (#455). Both forms below apply exactly this, and
+ * operation-draft-visibility.integration.test.ts checks them against each other on the full
+ * matrix of rows and viewers.
+ *
+ * Who counts as a reviewer is governance's `seesEveryDraft(role)` (owner and builder,
  * governance/capability/publish-authority.ts); substrate may not import governance, so the caller
  * computes that bit and hands it in as `GraphReadViewer.seesEveryDraft` — the same bind value
  * application/worker/draft-visibility.ts's `draftVisibilityBinds` produces.
@@ -35,14 +43,27 @@ export interface GraphReadViewer {
   readonly seesEveryDraft: boolean;
 }
 
-/** Whether `viewer` may see an Operation row with this `status` / proposer. */
+/** An Operation row's visibility inputs, as stored in its `properties` (absent key → `undefined`,
+ *  JSON `null` → `null`, which `->>` also reads as SQL NULL). */
+export interface OperationVisibilityRow {
+  readonly status: string | null | undefined;
+  readonly proposedBy: string | null | undefined;
+  readonly proposedByKind: string | null | undefined;
+}
+
+/** Whether `viewer` may see an Operation row — the TS form of `operationDraftHiddenSql`. */
 export function operationDraftVisibleTo(
   viewer: GraphReadViewer,
-  row: { readonly status: string | undefined; readonly proposedBy: string | undefined },
+  row: OperationVisibilityRow,
 ): boolean {
   if ((row.status ?? 'draft') !== 'draft') return true;
   if (viewer.seesEveryDraft) return true;
-  return row.proposedBy !== undefined && row.proposedBy === viewer.principalId;
+  const proposerRecorded =
+    row.proposedBy !== undefined &&
+    row.proposedBy !== null &&
+    row.proposedByKind !== undefined &&
+    row.proposedByKind !== null;
+  return proposerRecorded && row.proposedBy === viewer.principalId;
 }
 
 /**
