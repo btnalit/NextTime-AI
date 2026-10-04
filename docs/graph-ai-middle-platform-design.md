@@ -127,7 +127,7 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 | **Activity** | PROV-O Activity：摄取运行、抽取、**Turn**（一轮对话）、Workflow Step |
 | **Chat** | 一个用户与其入口 agent 的对话线程；属于该用户，私有 |
 | **Turn** | Chat 中的一轮：用户消息 + agent 的一次运行；是 `kind=agent_turn` 的 Activity，`used` 上下文 Fact，`generated` Decision / Task |
-| **Observation / Fact / Evidence / Conflict / Decision / Dataset / Lineage** | 同 v0.1；Fact 与 Decision 继承其 Source 的可见性 |
+| **Observation / Fact / Evidence / Conflict / Decision / Dataset / Lineage** | 同 v0.1；Fact 与 Decision 继承其 Source 的可见性。Observation 的粒度是"一个 Source 在一个 Activity 里的一次提交"：一次 `submit_observations` 记一条，本次断言或再确认的每条 Fact 都指向它（`observation_id` / `last_observation_id`）；提交里的条目由 Fact 自己承载，不逐条记行（遗留 103）。门观察与任务结果的 Observation 带内容（payload） |
 
 #### 5.1.4 Governance Model
 
@@ -719,6 +719,7 @@ create table worker_definitions (
 | | `create_connection`（填凭证、注册门、导入清单草稿）/ `publish_manifest` / `connect_gatekeeper` | human（owner） | 凭证直达门；`connect_gatekeeper` = CapabilityGrant |
 | meta | `propose_operation` / `propose_skill` / `propose_procedure` | propose | 私有草稿（I16）；Operation 草稿另对 owner、builder 可见（D-26：成员 Worker 的提案要由 owner 在能力目录审核发布） |
 | | `publish_skill` / `publish_procedure` / `deprecate_*` | human | D-24：所有 `publish_*` / `deprecate_*` 为 `minRole: builder`，且只有该行的提案人或 owner 能发布 / 弃用；发布会替代（或弃用）别人提议的在用版本时，也要那位提案人或 owner（`publish_ontology_version` 仍只认提案人，`publish_manifest` 仍是 owner） |
+| | `update_operation_description` | human（write） | 原地改描述、不走草稿；描述会进每个 agent 的工具列表，所以同 D-24：`minRole: builder`，且只有该 Operation 的提案人或 owner 能改（门导入的 Operation 提案人是 owner）（遗留 123） |
 | | `assert_fact` / `supersede_fact` / `invalidate_fact` | propose | 状态由调用方类型决定 |
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
 | | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |

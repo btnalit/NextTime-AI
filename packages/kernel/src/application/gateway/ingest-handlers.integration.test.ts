@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { listSourceFreshness, resolveFactOrigin } from '../../substrate/epistemic/index.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
@@ -363,8 +364,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       const run1FactId = await activeFactId();
       expect(run1FactId).toBeTruthy();
 
-      // W5: submit_observations threads the per-item Observation id into assertFact's
-      // observationId, and that Observation is recorded under run1's own Activity.
+      // W5: submit_observations threads the call's Observation id (one per call since leftover
+      // 103) into assertFact's observationId, and that Observation is recorded under run1's own
+      // Activity.
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const factRows = await client.query<{ observation_id: string | null }>(
           'select observation_id from links where workspace_id = $1 and id = $2',
@@ -488,6 +490,173 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(visible.rows.length).toBeGreaterThan(0);
       });
+    });
+
+    // STATUS leftover 103: one `submit_observations` call writes ONE Observation per (activity,
+    // source) — a call has exactly one of each — and every Fact it asserts or re-confirms points at
+    // it, instead of one row per item. Every reader that depends on Observations answers what it
+    // did with one row per item: origin (`resolveFactOrigin`), freshness (`listSourceFreshness`),
+    // `explain` (Fact and Activity) and the observation window.
+    it('leftover 103: one call with N items writes one Observation per (activity, source); origin, freshness, explain and the window read it as before', async () => {
+      const caller = handleCaller(workspaceId, servicePrincipalId, [
+        ...INGEST_CAPABILITIES,
+        'explain',
+      ]);
+      const source = (await dispatchCapability({ pool }, caller, 'register_source', {
+        kind: 'host-inventory-collector',
+        name: 'one-observation-per-call-source',
+        visibility: 'workspace',
+      })) as { id: string };
+      const hostname = `opc-host-${randomUUID()}`;
+      const composeProjectId = `opc-project-${hostname}`;
+      const container = (serviceName: string) => ({
+        objectType: 'Container',
+        identity: { composeProjectId, serviceName },
+        links: [{ linkType: 'runs_on', target: { objectType: 'Host', identity: { hostname } } }],
+      });
+      const host = { objectType: 'Host', identity: { hostname } };
+      const submit = async (params: Record<string, unknown>) =>
+        (await dispatchCapability({ pool }, caller, 'submit_observations', {
+          sourceId: source.id,
+          ...params,
+        })) as SubmitObservationsResult & { factsInvalidated: number };
+
+      const observationsOn = async (activityId: string) =>
+        (
+          await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              client.query<{ id: string; source_id: string; created_at: Date }>(
+                `select id, source_id, created_at from observations
+                  where workspace_id = $1 and activity_id = $2 order by created_at, id`,
+                [workspaceId, activityId],
+              ),
+            { skipRoleSwitch: true },
+          )
+        ).rows;
+      const runsOnFacts = async (hostObjectId: string) => {
+        const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query<{
+            id: string;
+            service_name: string;
+            observation_id: string | null;
+            last_observation_id: string | null;
+            invalidation_reason: string | null;
+          }>(
+            `select l.id, s.identity_key ->> 'serviceName' as service_name, l.observation_id,
+                    l.last_observation_id, l.invalidation_reason
+               from links l
+               join objects s on s.workspace_id = l.workspace_id and s.id = l.source_object_id
+              where l.workspace_id = $1 and l.link_type = 'runs_on' and l.target_object_id = $2
+                and l.superseded_at is null
+              order by s.identity_key ->> 'serviceName'`,
+            [workspaceId, hostObjectId],
+          ),
+        );
+        return rows.rows;
+      };
+
+      // Run 1: four items, three Links — one Observation, every Fact's origin and last
+      // confirmation.
+      const run1 = await submit({
+        observations: [host, container('a'), container('b'), container('c')],
+      });
+      expect(run1.factsAsserted).toBe(3);
+      const hostObjectId = run1.objects.find((o) => o.objectType === 'Host')?.id as string;
+      const obs1 = await observationsOn(run1.activityId);
+      expect(obs1).toHaveLength(1);
+      expect(obs1[0]?.source_id).toBe(source.id);
+      const facts1 = await runsOnFacts(hostObjectId);
+      expect(facts1).toHaveLength(3);
+      for (const fact of facts1) {
+        expect(fact.observation_id).toBe(obs1[0]?.id);
+        expect(fact.last_observation_id).toBe(obs1[0]?.id);
+      }
+      // Origin: the one distinct Source feeding the Activity.
+      const origin = await withWorkspace(
+        pool,
+        { workspaceId, principalId: servicePrincipalId },
+        (client) =>
+          resolveFactOrigin(client, workspaceId, {
+            activityId: run1.activityId,
+            assertedBy: servicePrincipalId,
+          }),
+      );
+      expect(origin).toEqual({ kind: 'source', id: source.id });
+
+      // Run 2: the same items unchanged — one new Observation; every Fact keeps its origin and
+      // moves its last confirmation to it.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const run2 = await submit({
+        observations: [host, container('a'), container('b'), container('c')],
+      });
+      expect(run2.factsUnchanged).toBe(3);
+      expect(run2.factsAsserted).toBe(0);
+      const obs2 = await observationsOn(run2.activityId);
+      expect(obs2).toHaveLength(1);
+      for (const fact of await runsOnFacts(hostObjectId)) {
+        expect(fact.observation_id).toBe(obs1[0]?.id);
+        expect(fact.last_observation_id).toBe(obs2[0]?.id);
+      }
+
+      // Freshness: the Source's newest Observation is run 2's.
+      const freshness = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        listSourceFreshness(client, workspaceId, 60 * 60 * 1000),
+      );
+      const row = freshness.find((r) => r.sourceId === source.id);
+      expect(row?.lastObservedAt?.getTime()).toBe(obs2[0]?.created_at.getTime());
+      expect(row?.silent).toBe(false);
+
+      // explain(fact): narrowed to its origin Observation; lastObservation is run 2's — both
+      // resolve to this Source.
+      const factA = facts1.find((f) => f.service_name === 'a')?.id;
+      const explainedFact = (await dispatchCapability({ pool }, caller, 'explain', {
+        nodeId: factA,
+      })) as {
+        activity: { observations: { id: string; source: { id: string } | null }[] } | null;
+        fact?: { lastObservation: { id: string; source: { id: string } | null } | null };
+      };
+      expect(explainedFact.activity?.observations.map((o) => o.id)).toEqual([obs1[0]?.id]);
+      expect(explainedFact.activity?.observations[0]?.source?.id).toBe(source.id);
+      expect(explainedFact.fact?.lastObservation?.id).toBe(obs2[0]?.id);
+      expect(explainedFact.fact?.lastObservation?.source?.id).toBe(source.id);
+
+      // A second phase of run 2 (same Activity) is a second call — a second Observation on that
+      // Activity, still one distinct Source, so origin is unchanged; explain(activity) lists one
+      // Observation per call, each resolving to the Source.
+      await submit({ activityId: run2.activityId, observations: [host] });
+      const obs2Phases = await observationsOn(run2.activityId);
+      expect(obs2Phases).toHaveLength(2);
+      expect(new Set(obs2Phases.map((o) => o.source_id))).toEqual(new Set([source.id]));
+      const explainedActivity = (await dispatchCapability({ pool }, caller, 'explain', {
+        nodeId: run2.activityId,
+      })) as { activity: { observations: { source: { id: string } | null }[] } | null };
+      expect(explainedActivity.activity?.observations).toHaveLength(2);
+      for (const observation of explainedActivity.activity?.observations ?? []) {
+        expect(observation.source?.id).toBe(source.id);
+      }
+
+      // Run 3: a complete window without container c — c's Fact is retired not_reobserved
+      // through its last Observation (run 2's single row), a and b are re-confirmed by run 3's.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const run3 = await submit({
+        observations: [host, container('a'), container('b')],
+        window: { complete: true, objectTypes: ['Container'] },
+      });
+      expect(run3.factsUnchanged).toBe(2);
+      expect(run3.factsInvalidated).toBe(1);
+      const obs3 = await observationsOn(run3.activityId);
+      expect(obs3).toHaveLength(1);
+      const facts3 = await runsOnFacts(hostObjectId);
+      expect(facts3.find((f) => f.service_name === 'c')?.invalidation_reason).toBe(
+        'not_reobserved',
+      );
+      for (const name of ['a', 'b']) {
+        const fact = facts3.find((f) => f.service_name === name);
+        expect(fact?.invalidation_reason).toBeNull();
+        expect(fact?.last_observation_id).toBe(obs3[0]?.id);
+      }
     });
 
     // Review 2026-10-02 R-02 / D-03 (`provenance-anchor-guard.ts`): a caller observes only through

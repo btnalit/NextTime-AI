@@ -71,6 +71,10 @@ export const OperationSummaryWireSchema = z
     /** S8 W3-K1 (leftover 81): absent (never an empty string) for an Operation with no description
      *  — mirrors `OperationSchema.description`'s own optionality (action-description.ts). */
     description: z.string().optional(),
+    /** STATUS leftover 123: the principal that proposed this row (a gate's imported manifest: the
+     *  owner who imported it) — whose it is under D-24, so the console offers "edit description"
+     *  only where the caller may edit. Absent on a legacy row with no recorded proposer. */
+    proposedBy: z.string().optional(),
     /** R-19 (D-17): present only on a `draft` whose identity has a `published` version — what
      *  publishing this draft would change on the version in effect (`before` = that version,
      *  `after` = this draft), with the kernel's direction. The catalog confirms a non-`neutral`

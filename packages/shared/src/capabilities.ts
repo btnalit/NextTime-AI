@@ -1105,15 +1105,17 @@ const metaCapabilities: readonly Capability[] = [
       'Deprecate a published Operation. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
-    // S8 W3-K1 (leftover 81): no minRole — §9.3 names no role for this family, and D-24 (which
-    // raised publish_operation/deprecate_operation to `builder`) covered lifecycle transitions
-    // only, not this documentation edit. `mode:'write'` (not
-    // `execute`, unlike publish/deprecate): an immediate, audited in-platform change with no
-    // approval gate — editing documentation is not a lifecycle transition.
+    // S8 W3-K1 (leftover 81). `mode:'write'` (not `execute`, unlike publish/deprecate): an
+    // immediate, audited in-platform change with no approval gate — editing documentation is not a
+    // lifecycle transition. STATUS leftover 123: it still gets D-24's authority rule — an
+    // Operation's description is injected into every agent's tool list, so editing it is a prompt
+    // lever, not mere documentation. Builder floor; only the Operation's proposer or the workspace
+    // owner may edit it (kernel `governance/capability/publish-authority.ts`).
     name: 'update_operation_description',
     group: 'meta',
     mode: 'write',
     channel: 'human',
+    minRole: 'builder',
     paramsSchema: z
       .object({
         gatekeeperId: id,
@@ -1123,7 +1125,7 @@ const metaCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.UpdateOperationDescriptionResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). description must be non-blank after trimming, at most 2000 characters. AuditRecord with before/after.',
+      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters. AuditRecord with before/after.',
   },
   {
     name: 'propose_skill',
