@@ -3564,6 +3564,10 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | | P1 | Pack Contract v1（数据层）：`packs/<name>/pack.yaml`、PackVersion / PackInstallation、安装计划 → owner 确认 → 经现有发布能力落地并写 `installed_from` → `checks`；模块迁移为包（`install_module` 过渡期作别名）；ops-base 包 | W2 |
 | | P2 | knowledge 包（RAGFlow，证明通用性） | W3 |
 | | P3 | openmetadata 包：`mcp` 门预设 + Operation 分类 + data-catalog 本体 + Skill + data-steward 模板，v1 只联邦查询（决定 5） | W4 |
+| L 遗留收敛 | L-W1 | 复审车道 K2（认知层与 Worker）、K4（数据库与身份纵深）、S1（脚本与 CI，含 `gate-host/` 备份，决定 11）、D1（文档）；遗留 123 中 S10 的前置项（`anthropic-beta` 白名单随 U0、嵌套 Worker Task 的 Turn 归属与 `sources` 增长随 E1、`list_ontology_versions` keyset 与 R-29 例外随 P0）；遗留 118 残余"自连门无平台切断"随 P0 | W1 |
+| | L-W2 | 车道 K1（网关与读模型，含溯源工具 viewer 过滤）、K3（监控与运行时）、R1（agent 侧）、W1（控制台确认与人控）；遗留 48 ②（Skill / Procedure 族 id，决定 10，E2 前置）；遗留 118 残余"推送持有者未纳入 R-17" | W2 |
+| | L-W3 / L-W4 | W3：车道 R2（运行时服务）、控制台 W2（状态与表单）；W4：控制台 W3（文案与健壮性）；遗留 49 余项随控制台车道顺手迁 kit | W3 / W4 |
+| | 保持推迟 | 遗留 10（P5，重启条件：决定 5 选 b 或门驱动采集）、48 ①、102（异地备份）、53（本机）、S9 D3（建议第一个外部企业部署前做） | — |
 
 不变量与"明确不做"见方案 §3.3、§5.6：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
