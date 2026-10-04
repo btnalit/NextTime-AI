@@ -102,10 +102,12 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
   "人读手册、手动敲命令"的状态。见这两份 runbook 各自的"验证"一节。
 - `packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`）：独立 opt-in，需要
   `WEB_E2E_BASE_URL`/`WEB_E2E_API_KEY` 指向一个已跑起来的、`AGENT_RUNTIME=fake` 的内核（见
-  `packages/web/README.md`"已知偏离"一节、`docs/runbooks/accept-s1.md` §5）。development-tasks.md
-  的 S3 实施波次表 W1-D 项计划把它接进 CI 的独立 `e2e` job（用 compose 精简 profile 起
-  `postgres+kernel+caddy+fake-llm`）——写本文档时**尚未落地**，`.github/workflows/ci.yml` 目前
-  只有 `quality`/`test`/`guards` 三个 job，没有 `e2e`。
+  `packages/web/README.md`"已知偏离"一节、`docs/runbooks/accept-s1.md` §5）。CI 里由
+  `.github/workflows/e2e.yml` 的 `web-e2e` job 跑全部用例（起 postgres / kernel / caddy / gate-host 与
+  fixture-mcp，播种工作区、两个人类主体与待审批请求），之后跑 `accept_s1.sh --lite`。
+- AI 探索式测试（agent 自己点页面找问题）：评估过 tester-army/e2e，**暂不接入**——它还不支持
+  `ignoreHTTPSErrors`，连不上只走 caddy 自签 HTTPS 的控制台；结论、费用与重新评估的条件见
+  `reference-projects-and-oss-landscape.md` 第四部分。
 
 ## 5. 常见问题
 

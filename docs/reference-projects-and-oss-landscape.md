@@ -333,3 +333,19 @@ TypeScript（Node ≥ 22.19，erasable-syntax-only）；Bun 编译独立二进�
 - **MCP 17 工具**：`add_entity(id)`、`add_relationship(source, target)`、`search_graph(query)`、`get_graph_summary`、`get_graph_analytics`、`record_decision(category, scenario, reasoning, outcome, confidence)`、`query_decisions`、`find_precedents(scenario)`、`get_causal_chain(decision_id)`、`analyze_decision_impact(decision_id)`、`extract_entities(text)`、`extract_relations(text)`、`extract_all(text)`、`run_reasoning(facts, rules)`、`abductive_reasoning(observations)`、`export_graph`、`get_provenance(entity_id)`。
 - **skills**：`plugins/skills/decision` 与 `query` 是直接 `import semantica.context / semantica.query` 的 Python 脚本，不调 MCP、REST 或 CLI；插件清单没有 MCP 绑定。**换端点不能复用**，只能借子命令与输出格式。
 - **字段**：`Decision`：`decision_id, category, scenario, reasoning, outcome, confidence, timestamp, decision_maker, reasoning_embedding, node2vec_embedding, valid_from, valid_until, metadata`。`ProvenanceEntry`（PROV-O）：`entity_id, entity_type, activity_id, agent_id, agent_type, is_automated, role, source_document, source_location, source_quote, timestamp, first_seen, last_updated, confidence, checksum, sequence_id, previous_checksum, parent_entity_id, used_entities, previous_version_id, derived_from_id, activity_started_at_time, activity_ended_at_time, acted_on_behalf_of, informed_by_activities, valid_from, valid_until, revision_type, supersedes, bundle_id, invalidated, invalidated_at_time, invalidated_by, invalidation_reason, start_index, end_index, credibility, metadata, version`。本平台 schema 采用这两组字段名的超集。
+
+## 第四部分：工具评估
+
+### 1. tester-army/e2e 与 TesterArmy（2026-10-04 评估，结论：暂不接入）
+
+维护者问：这个 AI 端到端测试工具对控制台前端测试有没有帮助、收不收费，有用就集成。
+
+- **是什么（已核实）**：两样东西。开源框架 `e2e`（[tester-army/e2e](https://github.com/tester-army/e2e)，Apache-2.0，2026-07 创建，约 2.4k 星，`e2e@0.17.0` / `@e2e-dev/web@0.12.0`，几乎每天一个次版本）——TypeScript，基于 Playwright 驱动真实浏览器；用例把确定性定位 / 断言与 `agent.act` / `agent.assert` / `agent.extract` 混写；`e2e explore "<目标>"` 让 agent 自己规划步骤探索页面、按"缺陷 / 外观问题"出带复现步骤与截图的报告。另一样是托管服务 TesterArmy（YC P26），可免费起步，规模化收费；"企业版每 1000 次运行 300 美元"是第三方页面的说法，未在官方定价页核实。
+- **收费**：开源框架免费，只花自带模型的 token（任意 OpenAI 兼容端点、OpenRouter、Vercel AI Gateway 等）；我们不需要托管服务。
+- **能补什么**：现有门槛（Playwright 用例、axe、截图基线、文案 / i18n 守卫）都是确定性的，验证"写下来的行为没坏"；维护者的页面验收（"好不好用、有没有不对劲"）仍靠人。`explore` 正好对应这一块。
+- **为什么现在不接（已核实）**：
+  1. **连不上我们的控制台**：CI 栈与主机的控制台只经 caddy `https://:8443`（`tls internal` 自签 CA，无明文监听，`deploy/caddy/Caddyfile`），现有 Playwright 靠 `ignoreHTTPSErrors: true`（`packages/web/playwright.config.ts`）。`e2e` 自己的 Playwright 迁移文档把 `ignoreHTTPSErrors`、`launchOptions`、`proxy` 列为 "not yet"。绕法（往 runner 的 NSS 库塞 caddy CA、手动起 Chromium 走 CDP 挂接、给 CI 加明文监听——会话 cookie 在明文下很可能存不住）都要先改 CI 栈才知道行不行。
+  2. **不能当合并门槛**：步骤缓存可以只读回放（`--strict-cache`），但 `agent.assert` 每次都调模型，结论不确定。
+  3. **太新**：pre-1.0、每天一个次版本、配置与 API 还在变。
+  4. **登录与截图冲突**：密码以 Secret 填入后，本次尝试与恢复该会话的用例都不再截图（防止截到密钥），探索页面时模型就看不到画面；CI 的 owner 密码是每次随机生成、栈用完即毁，可以当普通值填入来保留截图，但要写明这个取舍。
+- **重新评估的条件**：上游支持 `ignoreHTTPSErrors` 或 `launchOptions`（看它迁移文档的功能表）。届时做法：在 `e2e.yml` 加 `workflow_dispatch` 开关，跑在已起好的 CI 假栈上、不进合并门槛；独立目录与锁文件、钉同一发布的 `e2e` / `@e2e-dev/web`、`E2E_TELEMETRY_DISABLED=1`（默认向 PostHog 发匿名计数）、模型走 OpenAI 兼容端点的仓库 secret；**只对 CI 假栈跑，永不对主机**（页面内容会发给模型供应商，在平台治理之外）。试跑 3 次没有可行动的发现就删掉。
