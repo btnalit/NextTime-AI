@@ -3552,20 +3552,21 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | 线 | 项 | 内容 | 波次 |
 |---|---|---|---|
 | U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2，按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
-| | U1 | 版本感知：CI 签名发布 `channel.json`（平台各发版 + pi 上游与漂移结论）；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed` 服务（无凭证、无 docker socket，只取 GitHub 并验签）；内核读模型 `platform_updates`；控制台四个版本（在跑 / 本版内置 / 最新发布版内置 / 上游最新）与提醒——侧栏提醒点、概览提醒条、「pi 运行时」卡片，区分"上游新版初查通过待发版 / 上游新版不兼容 / 有新平台发版"三种情况，只给命令与检查单（维护者 2026-10-04 定为必须项，不做一键升级）。保持设计决定 E3：内核不出网 | W1 |
+| | U1 | 版本感知（维护者定为必须项，不做一键升级）：CI 把 `channel.json`（平台各发版 + pi 上游与漂移结论）发到固定的滚动 release，W1 不签名——只驱动提醒，真正升级仍由 `pull-images.sh` 验镜像签名；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed`（钉 digest 的 curl 类镜像，只取文件、不解析，无凭证、无 docker socket，直连 GitHub 不经 egress-proxy，写入 uid 专属子目录）；内核 `platform_updates` 读时校验 schema 与大小；W1 交付概览提醒条 +「pi 运行时」卡片的上游一行（区分"上游新版初查通过待发版 / 上游新版不兼容 / 有新平台发版"），侧栏提醒点与四版本并排在 W2。保持设计决定 E3：内核不出网 | W1 / W2 |
 | | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行），结论进 channel 记录；不做候选镜像轨道与控制台内拉镜像（决定 1 / 2 已定） | W2 |
 | | U3 | 控制台内一键升级整个平台——不做（决定 3，维护者 2026-10-04） | — |
-| E 受治理的自进化 | E1 | 结果归因：`worker_runs` 记实际装载的 Skill `id@version`；`invoke_worker` 可选 `procedureRef`（agent 自报，标 `claimed`）；Task 的目标结果 `unknown / achieved / not_achieved` 与执行状态分开；草稿丢弃原因；任务详情页显示所用版本、可标目标结果 | W1 |
+| E 受治理的自进化 | E1 | 结果归因：建 Task / 重入队时（内核 `resolveSkillsInline` 已解析出版本）同事务写 `worker_run_skills`；`report_turn` 可选 `procedureRef`（Turn 级，agent 自报，标 `claimed`）；目标结果 `unknown / achieved / not_achieved` 与执行状态分开——请求者标在 Turn、验证步骤标在 Task；草稿丢弃原因；同批遗留 123 的"嵌套 Worker Task 无 Turn 归属""`sources` 无上限增长"；对话里可标、任务详情页显示 | W1 |
 | | E2 | `skill_version_stats` / `procedure_version_stats` 读模型、控制台统计、`find_procedures` 带达成率；真实模型回归结果入库；Skill / Procedure 详情页显示版本时间线与统计 | W2 |
-| | E3 | 评测框架：EvalSuite（冻结用例 + 假门夹具 + 对 agent 不可见、对人全可见的判定）、EvalRun（`kind=evaluation` 的 Activity，平台执行、只碰评测夹具门），判定 `better / within_noise / worse / unmeasured`（噪声带、成本规则、环境不一致即 `unmeasured`），结果作为草稿 Evidence，发布绑定草稿摘要；第一批用例复用 S2 / S3 真实模型场景；**界面同波次交付**（维护者："不能是黑盒"）：评测总览（设置、熔断）、用例集详情（用例与判定规则）、评测运行详情（环境指纹、得分矩阵、成本、逐步判定推导、转录、真实门零调用证明）、发布审阅证据卡；评测对人全透明、对 agent 封闭（I-E4） | W3 |
+| | E3 | 评测框架 MVP：只评 Skill；EvalSuite（冻结用例 + 夹具门 + 判定规则，钉一个 WorkerDefinition 模板版本）；评测 Task `purpose=evaluation`，观察与执行都只能碰夹具门（观察类不看 Handle 门范围，靠 `ObserveExclusions` 固定允许门集合）；`on_behalf_of` 为平台评测主体；用例 / 得分 / 转录存专用 `eval_*` 表、只由 human 通道读，图谱只落摘要 Observation；判定 `better / within_noise / worse / unmeasured`，δ 与 k 按 E1 / E2 数据校准；环境指纹含平台版本、模型、运行时镜像、WorkerDefinition 版本、`instanceInstructions` 摘要、用例集版本；**界面同波次交付**：评测总览、用例集详情、评测运行详情（逐步判定推导）、发布审阅证据卡；对人全透明、对 agent 只给判定与通过计数（I-E4） | W3 |
 | | E4 | 入口 agent 个人记忆：pi-memory-evolution 扩展试点（决定 6） | W4 |
 | | E5 / E6 | 治理调优提议（来自 `get_operation_stats`）、本体缺口提议 | 触发后 |
-| P 能力包 | P0 | 不变量 I-P1：工作区内 ObjectType / ActionType 名唯一，发布与安装拒绝同名覆盖（遗留 124；先在主机只读预检）；连接器接入路径统一为一条（遗留 73 的根治） | W1 |
-| | P1 | Pack Contract v1（数据层）：`packs/<name>/pack.yaml`、PackVersion / PackInstallation、安装计划 → owner 确认 → 经现有发布能力落地并写 `installed_from` → `checks`；模块迁移为包（`install_module` 过渡期作别名）；ops-base 包 | W2 |
+| P 能力包 | P0 | 不变量 I-P1：工作区内已发布各族 ObjectType / ActionType 名唯一，`assertOntologyNamespace` 在 `publishOntologyVersion` 与 `publishOntologyDraft` 两条路径都调用，拒绝而不是覆盖（遗留 124；先主机只读预检）；同批 `list_ontology_versions` keyset 与删 R-29 例外 | W1 |
+| | P0b | 连接器接入路径统一为一条（遗留 73 的根治，含 CLI `register-gatekeeper` 补审计）+ 评测用夹具门重设计（gate-host 托管的 http / mcp 夹具实例）+ 遗留 118 残余 ①（自连门无平台切断） | W2 |
+| | P1 | Pack Contract v1（数据层）：`packs/<name>/pack.yaml`、PackVersion / PackInstallation、安装计划 → owner 确认 → 单事务发布全部数据层组件并写 `installed_from`（失败整体回滚）→ 连接器预设落成"待配置"门实例 → `verify_pack`（可重复）；PackInstallation 每个工作区 × 包族一行；模块成为单组件包（能力名不变、无别名期）；ops-base 包 | W2 |
 | | P2 | knowledge 包（RAGFlow，证明通用性） | W3 |
 | | P3 | openmetadata 包：`mcp` 门预设 + Operation 分类 + data-catalog 本体 + Skill + data-steward 模板，v1 只联邦查询（决定 5） | W4 |
-| L 遗留收敛 | L-W1 | 复审车道 K2（认知层与 Worker）、K4（数据库与身份纵深）、S1（脚本与 CI，含 `gate-host/` 备份，决定 11）、D1（文档）；遗留 123 中 S10 的前置项（`anthropic-beta` 白名单随 U0、嵌套 Worker Task 的 Turn 归属与 `sources` 增长随 E1、`list_ontology_versions` keyset 与 R-29 例外随 P0）；遗留 118 残余"自连门无平台切断"随 P0 | W1 |
-| | L-W2 | 车道 K1（网关与读模型，含溯源工具 viewer 过滤）、K3（监控与运行时）、R1（agent 侧）、W1（控制台确认与人控）；遗留 48 ②（Skill / Procedure 族 id，决定 10，E2 前置）；遗留 118 残余"推送持有者未纳入 R-17" | W2 |
+| L 遗留收敛 | L-W1 | 车道 K4（数据库与身份纵深，单独 PR）、D1（文档）；遗留 123 中 S10 的前置项（`anthropic-beta` 白名单随 U0、嵌套 Worker Task 的 Turn 归属与 `sources` 增长随 E1、`list_ontology_versions` keyset 与 R-29 例外随 P0） | W1 |
+| | L-W2 | 车道 K1（网关与读模型，含溯源工具 viewer 过滤）、K2（认知层与 Worker）、K3（监控与运行时）、R1（agent 侧）、W1（控制台确认与人控）、S1（脚本与 CI，含决定 11：备份加 `gate-host/` 挂载与打包项，runbook 写明恢复依赖 `secrets/` 里的 `gate-host-store.key`）；遗留 48 ②（Skill / Procedure 族 id，决定 10，E2 前置）；遗留 118 残余 ②（推送持有者未纳入 R-17） | W2 |
 | | L-W3 / L-W4 | W3：车道 R2（运行时服务）、控制台 W2（状态与表单）；W4：控制台 W3（文案与健壮性）；遗留 49 余项随控制台车道顺手迁 kit | W3 / W4 |
 | | 保持推迟 | 遗留 10（P5，重启条件：决定 5 选 b 或门驱动采集）、48 ①、102（异地备份）、53（本机）、S9 D3（建议第一个外部企业部署前做） | — |
 
