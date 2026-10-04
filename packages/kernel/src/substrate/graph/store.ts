@@ -1,5 +1,6 @@
 import type { EpistemicStatus, PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import type { GraphReadViewer } from './operation-draft-visibility.js';
 
 /**
  * substrate/graph/store: the `GraphStore` facade (design doc §9.1 "GraphStore facade 先 SQL",
@@ -444,6 +445,15 @@ export function normalizeTraverseDepth(depth: number | undefined): number {
 // The facade
 // -------------------------------------------------------------------------------------------
 
+/**
+ * **Reader narrowing (STATUS leftover 123, D-26)**: the reads a capability exposes — `getObject`,
+ * `getObjectsByIds`, `search` / `searchPage`, `traverse`, `stateAt`, `listRecentFacts` — take an
+ * optional trailing `viewer` (operation-draft-visibility.ts). Given one, an Operation draft that
+ * viewer may not see reads as absent: no row, and no Fact with it at either end. Omitted, the read
+ * is unfiltered — for internal callers only (write-path guards that must see the real ObjectType,
+ * the governance registries, the auditor's `reconstruct`); a handler serving a person or an agent
+ * passes the caller's viewer.
+ */
 export interface GraphStore {
   upsertObject(
     client: PoolClient,
@@ -451,7 +461,12 @@ export interface GraphStore {
     input: UpsertObjectInput,
   ): Promise<GraphObject>;
 
-  getObject(client: PoolClient, workspaceId: string, objectId: string): Promise<GraphObject | null>;
+  getObject(
+    client: PoolClient,
+    workspaceId: string,
+    objectId: string,
+    viewer?: GraphReadViewer,
+  ): Promise<GraphObject | null>;
 
   /** S8 W1-C (leftover 48 "无批量 Object 读"): the batched counterpart to `getObject` — one query
    *  for up to 200 ids, keyed by id in the returned Map; an id with no matching row (unknown, or
@@ -462,6 +477,7 @@ export interface GraphStore {
     client: PoolClient,
     workspaceId: string,
     objectIds: readonly string[],
+    viewer?: GraphReadViewer,
   ): Promise<ReadonlyMap<string, GraphObject>>;
 
   /** Reads one Object by its `(object_type, identity)` upsert key (§16 identity keys) — the
@@ -530,20 +546,36 @@ export interface GraphStore {
     input: NeighborsInput,
   ): Promise<readonly Fact[]>;
 
-  traverse(client: PoolClient, workspaceId: string, input: TraverseInput): Promise<TraverseResult>;
+  traverse(
+    client: PoolClient,
+    workspaceId: string,
+    input: TraverseInput,
+    viewer?: GraphReadViewer,
+  ): Promise<TraverseResult>;
 
-  stateAt(client: PoolClient, workspaceId: string, input: StateAtInput): Promise<StateAtResult>;
+  stateAt(
+    client: PoolClient,
+    workspaceId: string,
+    input: StateAtInput,
+    viewer?: GraphReadViewer,
+  ): Promise<StateAtResult>;
 
   search(
     client: PoolClient,
     workspaceId: string,
     input: SearchInput,
+    viewer?: GraphReadViewer,
   ): Promise<readonly GraphObject[]>;
 
   /** W5: the paginated form of `search` — same predicate and ordering, keyset cursor in/out.
    *  `search` itself keeps returning a bare page-less array for its existing callers
    *  (explorer-read-service's batch fetch, find-means); new callers wanting a cursor use this. */
-  searchPage(client: PoolClient, workspaceId: string, input: SearchInput): Promise<SearchPage>;
+  searchPage(
+    client: PoolClient,
+    workspaceId: string,
+    input: SearchInput,
+    viewer?: GraphReadViewer,
+  ): Promise<SearchPage>;
 
   /** Up to `limit` (default `DEFAULT_RECENT_FACTS_LIMIT`) currently-active (non-superseded,
    *  non-invalidated) Facts for the workspace, newest `recorded_at` first. */
@@ -551,5 +583,6 @@ export interface GraphStore {
     client: PoolClient,
     workspaceId: string,
     limit?: number,
+    viewer?: GraphReadViewer,
   ): Promise<readonly Fact[]>;
 }
