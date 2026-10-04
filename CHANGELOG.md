@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.42.0](https://github.com/btnalit/NextTime-AI/compare/v0.41.0...v0.42.0) (2026-10-04)
+
+
+### Features
+
+* **kernel:** compact-observations retention CLI + apply-release hook (leftover 103) ([#470](https://github.com/btnalit/NextTime-AI/issues/470)) ([3f86c81](https://github.com/btnalit/NextTime-AI/commit/3f86c817926f2e7192bfa95533b67e60fa5d6d29))
+* **scripts:** image retention — keep this project's images of the newest two releases; apply-release runs it after acceptance ([#465](https://github.com/btnalit/NextTime-AI/issues/465)) ([72c2b13](https://github.com/btnalit/NextTime-AI/commit/72c2b13af6442e4aaa6f9255f7586f32bf753efb))
+
+
+### Bug Fixes
+
+* **kernel:** bound /ws before auth: 1 MiB frames, 10 s deadline, capped pre-auth queue (L1-16) ([#472](https://github.com/btnalit/NextTime-AI/issues/472)) ([de41416](https://github.com/btnalit/NextTime-AI/commit/de41416a4ff57edd79c148207e6f3f0733eddcc6))
+* **kernel:** generic graph reads hide Operation drafts the caller may not see (leftover 123) ([#467](https://github.com/btnalit/NextTime-AI/issues/467)) ([06f8d2e](https://github.com/btnalit/NextTime-AI/commit/06f8d2e48312da01ff5219b76d2caead8c46a28e))
+* **kernel:** one Observation per submit_observations call (leftover 103) ([#468](https://github.com/btnalit/NextTime-AI/issues/468)) ([bbdff85](https://github.com/btnalit/NextTime-AI/commit/bbdff85435e4745f4124d770daf9268b32a3bc0b))
+* **kernel:** update_operation_description takes D-24's proposer-or-owner rule (leftover 123) ([#469](https://github.com/btnalit/NextTime-AI/issues/469)) ([cc82a0f](https://github.com/btnalit/NextTime-AI/commit/cc82a0f0e3b3c4c4631a30b9b2d719bc9a3adb10))
+
+
+### Documentation
+
+* **status:** convergence wave merged — leftover 103 closed; P3 triage; /ws pre-auth limits ([#473](https://github.com/btnalit/NextTime-AI/issues/473)) ([3e08b02](https://github.com/btnalit/NextTime-AI/commit/3e08b0272de5e0f8c2004e8cc51a78aa3722d418))
+
 ## [0.41.0](https://github.com/btnalit/NextTime-AI/compare/v0.40.0...v0.41.0) (2026-10-03)
 
 
