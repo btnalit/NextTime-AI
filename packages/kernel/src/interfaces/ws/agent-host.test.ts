@@ -21,6 +21,7 @@ import {
   registerAgentHostWsRoute,
   setAgentHostRuntimeForWsRoute,
 } from './agent-host.js';
+import { WS_MAX_PAYLOAD_BYTES } from './payload-limits.js';
 
 /**
  * interfaces/ws/agent-host.test: end-to-end against a real ephemeral listener + a real `ws`
@@ -331,6 +332,41 @@ describe('GET /internal/agent-host', () => {
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0]).toMatchObject({ type: 'textDelta', delta: 'hi' });
+
+    ws.close();
+  });
+
+  it('L5-12(b): accepts a frame far over /ws’s 1 MiB limit — raw gate outputs still ride this link', async () => {
+    listening = await listen();
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    const ws = await connect(listening.url);
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await nextMessage(ws);
+    ws.send(JSON.stringify({ type: 'turnAccepted', turnId: input.turnId }));
+    await startPromise;
+
+    const delta = 'x'.repeat(4 * WS_MAX_PAYLOAD_BYTES);
+    ws.send(
+      JSON.stringify({
+        type: 'runtimeEvent',
+        event: {
+          type: 'textDelta',
+          delta,
+          workspaceId: input.workspaceId,
+          chatId: input.chatId,
+          turnId: input.turnId,
+          principalId: input.principalId,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ type: 'textDelta' });
+    expect((events[0] as { delta: string }).delta).toHaveLength(delta.length);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
 
     ws.close();
   });

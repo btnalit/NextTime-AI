@@ -3,6 +3,11 @@ import { AgentHostToKernelFrameSchema } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { AgentHostLink, AgentHostRuntime } from '../../application/host-bridge/index.js';
+import {
+  AGENT_HOST_MAX_PAYLOAD_BYTES,
+  WS_PLUGIN_OPTIONS,
+  setSocketMaxPayload,
+} from './payload-limits.js';
 
 /**
  * interfaces/ws/agent-host: `GET /internal/agent-host`, the one raw WebSocket connection
@@ -154,9 +159,16 @@ export function registerAgentHostWsRoute(
     // installs an `onRoute` hook that the `{websocket: true}` route option below depends on, which
     // must be active *before* that `.get()` call when this is the one doing the registering.
     if (!instance.hasRequestDecorator('ws')) {
-      await instance.register(fastifyWebsocket);
+      await instance.register(fastifyWebsocket, WS_PLUGIN_OPTIONS);
     }
-    instance.get('/internal/agent-host', { websocket: true }, (socket) => {
+    instance.get('/internal/agent-host', { websocket: true }, (socket, request) => {
+      // L5-12(b): the shared registration caps every route at 1 MiB; this link still carries raw
+      // gate outputs, so its own sockets get the large limit back (payload-limits.ts).
+      if (!setSocketMaxPayload(socket, AGENT_HOST_MAX_PAYLOAD_BYTES)) {
+        request.log.error(
+          'agent-host link: could not raise the receive limit; a frame over 1 MiB will close it',
+        );
+      }
       handleConnection(socket, probeTimeoutMs);
     });
   });

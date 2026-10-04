@@ -28,6 +28,7 @@ import {
   subscribeToSessionKicks,
 } from '../../application/gateway/index.js';
 import { WORKSPACE_COOKIE, parseCookieHeader } from '../../application/identity/index.js';
+import { WS_MAX_PAYLOAD_BYTES, WS_PLUGIN_OPTIONS } from './payload-limits.js';
 import type {
   JsonRpcErrorResponse,
   JsonRpcId,
@@ -73,6 +74,34 @@ const CHAT_METHOD_NAMES: ReadonlySet<string> = new Set(
  *  first still guarantees no live event is missed while it does (§9.4's whole point). */
 const SUBSCRIBE_REPLAY_LIMIT = 500;
 
+/** L1-16: how long a socket may stay without a caller, from the upgrade until its credential (the
+ *  `Authorization` header or the first-frame `authenticate`) has resolved. The console sends
+ *  `authenticate` as soon as the socket opens and it resolves in milliseconds; a socket that still
+ *  has no caller after this long is closed with {@link WS_POLICY_CLOSE_CODE}. */
+export const WS_AUTH_TIMEOUT_MS = 10_000;
+
+/** L1-16: limits on the frames held while a credential is being resolved, by count and by bytes.
+ *  A client that sends with its `Authorization` header gets no "authenticated" answer to wait
+ *  for, so the byte limit admits one frame of the largest size {@link WS_MAX_PAYLOAD_BYTES}
+ *  allows; the console waits for `authenticate`'s answer and queues nothing. Going over either
+ *  limit closes the socket with {@link WS_POLICY_CLOSE_CODE}. */
+export const WS_PENDING_FRAMES_MAX = 32;
+export const WS_PENDING_BYTES_MAX = WS_MAX_PAYLOAD_BYTES;
+
+/** 1008 "Policy Violation" (RFC 6455 §7.4.1): the close code for a socket that missed the auth
+ *  deadline or overflowed the pre-auth queue. Unlike the auth failures below, it is a bare close
+ *  with no JSON-RPC error frame before it. The console (web `lib/ws-client.ts`, R-16) reads an
+ *  `id: null` -32001 as "the session ended for good" and signs out, which would be wrong when the
+ *  kernel was only slow to answer a reconnect's `authenticate`. A bare close reads as a dropped
+ *  connection, which the client retries with its exponential backoff. */
+export const WS_POLICY_CLOSE_CODE = 1008;
+
+/** Options for {@link registerWsRoute}. */
+export interface WsRouteOptions {
+  /** Overrides {@link WS_AUTH_TIMEOUT_MS} (tests). */
+  readonly authTimeoutMs?: number;
+}
+
 /** The shape `get_chat_history`'s handler (application/gateway/handlers.ts) returns as `result` —
  *  duplicated here as a narrow read-side type rather than imported, since `dispatchCapability`'s
  *  return type is deliberately `unknown` (application/gateway/dispatch.ts: every capability's
@@ -105,8 +134,12 @@ function isChatHistoryResult(value: unknown): value is ChatHistoryResult {
 interface ConnectionState {
   caller: HumanCaller | undefined;
   authFailed: boolean;
+  /** `false` while a credential is being resolved (the `Authorization` header at upgrade, or a
+   *  first-frame `authenticate`): frames arriving meanwhile wait in `pendingFrames`, bounded by
+   *  {@link WS_PENDING_FRAMES_MAX} / {@link WS_PENDING_BYTES_MAX} (`pendingBytes`). */
   authReady: boolean;
   readonly pendingFrames: RawData[];
+  pendingBytes: number;
   subscription: { chatId: string; unsubscribe: () => void } | undefined;
   /** S2.11 (docs/development-tasks.md S2.11 deliverable 2, §9.4): every authenticated connection's
    *  own `action.pending`/`action.updated`/`task.updated` push subscription — set once, right after
@@ -184,6 +217,11 @@ function callLogger(
     correlationId,
     log: request.server.log.child({ correlationId, wsCorrelationId: request.id }),
   };
+}
+
+function rawDataBytes(raw: RawData): number {
+  if (Array.isArray(raw)) return raw.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  return raw.byteLength;
 }
 
 function parseFrame(raw: RawData): unknown {
@@ -469,7 +507,12 @@ export function originMatchesHost(headers: {
   return originHost.toLowerCase() === host.trim().toLowerCase();
 }
 
-function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRouteDeps): void {
+function handleConnection(
+  socket: WebSocket,
+  request: FastifyRequest,
+  deps: WsRouteDeps,
+  authTimeoutMs: number,
+): void {
   if (!originMatchesHost(request.headers)) {
     send(socket, errorResponse(null, WS_ERROR_CODES.FORBIDDEN, 'cross-origin WebSocket rejected'));
     socket.close();
@@ -481,22 +524,76 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     authFailed: false,
     authReady: false,
     pendingFrames: [],
+    pendingBytes: 0,
     subscription: undefined,
     principalUnsubscribe: undefined,
     kickUnsubscribe: undefined,
   };
 
+  // L1-16: the auth deadline. Cleared once a caller is adopted (`adoptCaller`) or the socket closes.
+  const authTimer = setTimeout(() => {
+    if (state.caller === undefined) closeForPolicy('authentication timeout');
+  }, authTimeoutMs);
+  authTimer.unref?.();
+
   socket.once('close', () => {
+    clearTimeout(authTimer);
     dropSubscriptions(state);
   });
 
   socket.on('message', (raw: RawData) => {
+    // A closing socket (revoked, refused, or over a pre-auth limit) processes nothing more.
+    if (socket.readyState !== 1) return;
     if (!state.authReady) {
-      state.pendingFrames.push(raw);
+      queuePending(raw);
       return;
     }
     void handleFrame(raw);
   });
+
+  /** L1-16: closes a socket that broke a pre-auth limit, dropping what it had queued. See
+   *  {@link WS_POLICY_CLOSE_CODE} for why no JSON-RPC error frame goes first. */
+  function closeForPolicy(reason: string): void {
+    state.pendingFrames.splice(0);
+    state.pendingBytes = 0;
+    socket.close(WS_POLICY_CLOSE_CODE, reason);
+  }
+
+  function queuePending(raw: RawData): void {
+    const bytes = rawDataBytes(raw);
+    if (
+      state.pendingFrames.length >= WS_PENDING_FRAMES_MAX ||
+      state.pendingBytes + bytes > WS_PENDING_BYTES_MAX
+    ) {
+      closeForPolicy('too many frames before authentication');
+      return;
+    }
+    state.pendingFrames.push(raw);
+    state.pendingBytes += bytes;
+  }
+
+  /** Makes `caller` the connection's caller and subscribes it to its pushes, unless the socket
+   *  closed while the credential was resolving (the auth deadline, or the client left). Its `close`
+   *  handler has run by then, so push listeners registered now would never be removed. */
+  function adoptCaller(caller: HumanCaller): boolean {
+    if (socket.readyState !== 1) return false;
+    clearTimeout(authTimer);
+    state.caller = caller;
+    subscribeCallerToPrincipalPush(socket, caller, state);
+    subscribeCallerToSessionKicks(socket, caller, state);
+    return true;
+  }
+
+  /** Ends a credential resolution: processes, in arrival order, the frames queued during it. */
+  async function drainPending(): Promise<void> {
+    state.authReady = true;
+    const queued = state.pendingFrames.splice(0);
+    state.pendingBytes = 0;
+    for (const raw of queued) {
+      if (socket.readyState !== 1) return;
+      await handleFrame(raw);
+    }
+  }
 
   type AuthAttempt =
     | { readonly caller: ResolvedCaller }
@@ -560,6 +657,9 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         socket.close();
         return;
       }
+      // L1-16: one credential resolution at a time. Frames arriving meanwhile wait in the bounded
+      // queue instead of each starting a lookup of its own.
+      state.authReady = false;
       const attempt = await authenticateFromParams(req.params);
       if ('error' in attempt) {
         send(socket, errorResponse(req.id, attempt.error.code, attempt.error.message));
@@ -572,10 +672,9 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         socket.close();
         return;
       }
-      state.caller = caller;
-      subscribeCallerToPrincipalPush(socket, caller, state);
-      subscribeCallerToSessionKicks(socket, caller, state);
+      if (!adoptCaller(caller)) return;
       send(socket, successResponse(req.id, { authenticated: true }));
+      await drainPending();
       return;
     }
 
@@ -650,10 +749,8 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
           send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
           socket.close();
           state.authFailed = true;
-        } else {
-          state.caller = caller;
-          subscribeCallerToPrincipalPush(socket, caller, state);
-          subscribeCallerToSessionKicks(socket, caller, state);
+        } else if (!adoptCaller(caller)) {
+          state.authFailed = true;
         }
       } catch {
         send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
@@ -661,12 +758,8 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         state.authFailed = true;
       }
     }
-    state.authReady = true;
     if (state.authFailed) return;
-    const queued = state.pendingFrames.splice(0);
-    for (const raw of queued) {
-      await handleFrame(raw);
-    }
+    await drainPending();
   }
 
   void initAuth();
@@ -674,12 +767,18 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
 
 /** Registers `GET /ws` (design doc §9.4) on `app`, including the `@fastify/websocket` plugin
  *  registration itself — a caller (index.ts's `createServer`) never needs to know about that
- *  dependency directly. Safe to call once per Fastify instance. */
-export function registerWsRoute(app: FastifyInstance, deps: WsRouteDeps): void {
-  app.register(fastifyWebsocket);
+ *  dependency directly. Safe to call once per Fastify instance. The registration carries the
+ *  1 MiB message limit (L1-16, payload-limits.ts) that every WebSocket route on `app` inherits. */
+export function registerWsRoute(
+  app: FastifyInstance,
+  deps: WsRouteDeps,
+  options: WsRouteOptions = {},
+): void {
+  const authTimeoutMs = options.authTimeoutMs ?? WS_AUTH_TIMEOUT_MS;
+  app.register(fastifyWebsocket, WS_PLUGIN_OPTIONS);
   app.register((instance, _opts, done) => {
     instance.get('/ws', { websocket: true }, (socket, request) => {
-      handleConnection(socket, request, deps);
+      handleConnection(socket, request, deps, authTimeoutMs);
     });
     done();
   });
