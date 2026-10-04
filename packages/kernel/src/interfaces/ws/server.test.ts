@@ -1,21 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { generateKeyPair } from 'jose';
-import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Pool, PoolClient } from 'pg';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { PoolLike } from '../../adapters/db/pool.js';
 import { publishPrincipalPushEvent } from '../../application/chat/index.js';
 import { dispatchCapability, hashApiKey } from '../../application/gateway/index.js';
 import { CONSOLE_SESSION_COOKIE, createUser } from '../../application/identity/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createBackgroundServices, createServer } from '../../index.js';
 import type { BackgroundServices } from '../../index.js';
+import { WS_MAX_PAYLOAD_BYTES } from './payload-limits.js';
 import { WS_ERROR_CODES } from './rpc.js';
-import { originMatchesHost } from './server.js';
+import {
+  WS_PENDING_BYTES_MAX,
+  WS_PENDING_FRAMES_MAX,
+  originMatchesHost,
+  registerWsRoute,
+} from './server.js';
 
 /**
  * interfaces/ws/server.test: end-to-end WS tests against a real ephemeral listener on
@@ -183,6 +191,257 @@ describe('originMatchesHost (unit)', () => {
 
   it('a malformed Origin → false', () => {
     expect(originMatchesHost({ origin: 'not a url', host: 'example.com' })).toBe(false);
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// L1-16 / L5-12(b): pre-auth limits. A fake pool answers the two reads an API-key credential
+// makes, so this block needs no DATABASE_URL and always runs.
+// -------------------------------------------------------------------------------------------
+
+const PREAUTH_API_KEY = 'preauth-limits-test-key';
+const PREAUTH_WORKSPACE_ID = randomUUID();
+const PREAUTH_PRINCIPAL_ID = randomUUID();
+
+/** A `PoolLike` that answers exactly what an API-key credential reads (application/gateway/
+ *  auth.ts `lookupPrincipalByApiKeyHash` + `createOrReuseWebSession`). Created `held`, its
+ *  `connect()` waits until `release()`, which keeps a credential resolving as long as a test
+ *  needs. */
+function createPreAuthPool(held = false) {
+  let release: () => void = () => {};
+  const gate = held
+    ? new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    : Promise.resolve();
+  const query = vi.fn(async (text: string, params: unknown[] = []) => {
+    const sql = text.trim();
+    if (
+      sql.startsWith('BEGIN') ||
+      sql.startsWith('COMMIT') ||
+      sql.startsWith('ROLLBACK') ||
+      sql.startsWith('select set_config') ||
+      sql.startsWith('set local role')
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.startsWith('select p.workspace_id, p.id, p.kind, p.role, p.display_name')) {
+      if (params[0] !== hashApiKey(PREAUTH_API_KEY)) return { rows: [], rowCount: 0 };
+      const row = {
+        workspace_id: PREAUTH_WORKSPACE_ID,
+        id: PREAUTH_PRINCIPAL_ID,
+        kind: 'human',
+        role: 'owner',
+        display_name: 'Owner',
+      };
+      return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith('select workspace_id, id, principal_id, kind, on_behalf_of, status')) {
+      const row = {
+        workspace_id: PREAUTH_WORKSPACE_ID,
+        id: randomUUID(),
+        principal_id: PREAUTH_PRINCIPAL_ID,
+        kind: 'web',
+        on_behalf_of: PREAUTH_PRINCIPAL_ID,
+        status: 'active',
+        created_at: new Date(),
+        expires_at: null,
+      };
+      return { rows: [row], rowCount: 1 };
+    }
+    throw new Error(`pre-auth fake pool: unhandled query: ${sql}`);
+  });
+  const client = { query, release: vi.fn() } as unknown as PoolClient;
+  const connect = vi.fn(async () => {
+    await gate;
+    return client;
+  });
+  const pool: PoolLike = { connect };
+  return { pool, connect, release: () => release() };
+}
+
+describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () => {
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  /** A listener with only `/ws`, so the auth deadline can be shortened. */
+  async function listenWs(pool: PoolLike, authTimeoutMs = 60_000): Promise<string> {
+    app = Fastify();
+    registerWsRoute(app, { pool }, { authTimeoutMs });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    return `${address.replace('http://', 'ws://')}/ws`;
+  }
+
+  function open(url: string, headers?: Record<string, string>): Promise<WebSocket> {
+    const ws = new WebSocket(url, headers ? { headers } : undefined);
+    return new Promise((resolve, reject) => {
+      ws.once('open', () => resolve(ws));
+      ws.once('error', reject);
+    });
+  }
+
+  /** Resolves with the code and reason the socket closes with. Call it right after `open`. */
+  function closeOf(ws: WebSocket, timeoutMs = 5000): Promise<{ code: number; reason: string }> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('socket did not close in time')), timeoutMs);
+      ws.once('close', (code, reason) => {
+        clearTimeout(timer);
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+  }
+
+  /** Every JSON frame the socket receives, in order. */
+  function framesOf(ws: WebSocket): JsonRpcMessage[] {
+    const frames: JsonRpcMessage[] = [];
+    ws.on('message', (raw) => frames.push(JSON.parse(raw.toString()) as JsonRpcMessage));
+    return frames;
+  }
+
+  function rpc(id: number, method: string, params: unknown = {}): string {
+    return JSON.stringify({ jsonrpc: '2.0', id, method, params });
+  }
+
+  it('closes a socket that never authenticates once the deadline passes (1008)', async () => {
+    const { pool } = createPreAuthPool();
+    const url = await listenWs(pool, 100);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    await expect(closeOf(ws)).resolves.toEqual({ code: 1008, reason: 'authentication timeout' });
+    // A bare close: no `id: null` -32001 the console would read as "signed out" (R-16).
+    expect(frames).toEqual([]);
+  });
+
+  it('the deadline also ends a credential that is still resolving', async () => {
+    const { pool, connect, release } = createPreAuthPool(true);
+    const url = await listenWs(pool, 100);
+    const ws = await open(url, { authorization: `Bearer ${PREAUTH_API_KEY}` });
+    const closed = closeOf(ws);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    await expect(closed).resolves.toEqual({ code: 1008, reason: 'authentication timeout' });
+    release();
+  });
+
+  it('an authenticated socket outlives the deadline, and a frame just under 1 MiB is still served', async () => {
+    const { pool } = createPreAuthPool();
+    const url = await listenWs(pool, 100);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]).toMatchObject({ id: 1, result: { authenticated: true } });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    // Answered by the dispatcher (an unknown method), so the frame got past the transport.
+    const large = rpc(2, 'no_such_method', { pad: 'x'.repeat(1_000_000) });
+    expect(Buffer.byteLength(large)).toBeLessThan(WS_MAX_PAYLOAD_BYTES);
+    ws.send(large);
+    await vi.waitFor(() => expect(frames).toHaveLength(2));
+    expect(frames[1]).toMatchObject({
+      id: 2,
+      error: { code: WS_ERROR_CODES.METHOD_NOT_FOUND },
+    });
+    ws.close();
+  });
+
+  it('frames sent while the Authorization header resolves are served in order once it does', async () => {
+    const { pool, release } = createPreAuthPool(true);
+    const url = await listenWs(pool);
+    const ws = await open(url, { authorization: `Bearer ${PREAUTH_API_KEY}` });
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    ws.send(rpc(2, 'no_such_method'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(frames).toEqual([]);
+
+    release();
+    await vi.waitFor(() => expect(frames).toHaveLength(2));
+    expect(frames[0]).toMatchObject({ id: 1, error: { code: WS_ERROR_CODES.INVALID_REQUEST } });
+    expect(frames[1]).toMatchObject({ id: 2, error: { code: WS_ERROR_CODES.METHOD_NOT_FOUND } });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it('a first-frame authenticate is resolved alone: frames behind it wait, then are served', async () => {
+    const { pool, connect, release } = createPreAuthPool(true);
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    ws.send(rpc(2, 'authenticate', { token: 'another-guess' }));
+    ws.send(rpc(3, 'no_such_method'));
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // One credential lookup in flight, not one per frame.
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    release();
+    await vi.waitFor(() => expect(frames).toHaveLength(3));
+    expect(frames[0]).toMatchObject({ id: 1, result: { authenticated: true } });
+    expect(frames[1]).toMatchObject({ id: 2, error: { code: WS_ERROR_CODES.INVALID_REQUEST } });
+    expect(frames[2]).toMatchObject({ id: 3, error: { code: WS_ERROR_CODES.METHOD_NOT_FOUND } });
+    ws.close();
+  });
+
+  it(`closes a socket that queues more than ${WS_PENDING_FRAMES_MAX} frames before its credential resolves (1008)`, async () => {
+    const { pool, release } = createPreAuthPool(true);
+    const url = await listenWs(pool);
+    const ws = await open(url, { authorization: `Bearer ${PREAUTH_API_KEY}` });
+    const closed = closeOf(ws);
+    for (let i = 0; i <= WS_PENDING_FRAMES_MAX; i += 1) ws.send(rpc(i + 1, 'no_such_method'));
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: 'too many frames before authentication',
+    });
+    release();
+  });
+
+  it(`closes a socket whose queued frames pass ${WS_PENDING_BYTES_MAX} bytes before its credential resolves (1008)`, async () => {
+    const { pool, release } = createPreAuthPool(true);
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const closed = closeOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    const half = rpc(2, 'no_such_method', { pad: 'x'.repeat(WS_PENDING_BYTES_MAX / 2) });
+    ws.send(half);
+    ws.send(half);
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: 'too many frames before authentication',
+    });
+    release();
+  });
+
+  it('createServer: a /ws frame over 1 MiB closes the socket (1009); one of exactly 1 MiB does not, and the kernel keeps serving', async () => {
+    const { pool } = createPreAuthPool();
+    app = createServer({ pool });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const url = `${address.replace('http://', 'ws://')}/ws`;
+
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    const closed = closeOf(ws);
+    // Exactly at the limit: accepted, and answered (it is not JSON-RPC).
+    ws.send('x'.repeat(WS_MAX_PAYLOAD_BYTES));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]).toMatchObject({ id: null, error: { code: WS_ERROR_CODES.PARSE_ERROR } });
+    // One byte over: `ws` refuses it from the frame header.
+    ws.send('x'.repeat(WS_MAX_PAYLOAD_BYTES + 1));
+    await expect(closed).resolves.toMatchObject({ code: 1009 });
+
+    const health = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(health.statusCode).toBe(200);
+    const next = await open(url);
+    const nextFrames = framesOf(next);
+    next.send(rpc(1, 'list_chats'));
+    await vi.waitFor(() => expect(nextFrames).toHaveLength(1));
+    expect(nextFrames[0]).toMatchObject({ id: 1, error: { code: WS_ERROR_CODES.UNAUTHORIZED } });
   });
 });
 

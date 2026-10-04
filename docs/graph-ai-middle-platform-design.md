@@ -740,6 +740,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 - 推送事件（借 cloudflare-os `AiChatSubscriber`）：`chat.message`（持久消息）、`chat.stream`（`textDelta` / `toolCallStarted` / `toolCallEnded` / `workerSpawned` / `taskUpdated`）、`chat.metadata`、`action.pending` / `action.updated`（审批卡片）、`task.updated`。
 - **客户端规则：先 `subscribe_chat(chatId, startAfter)` 再 `get_chat_history` 翻页**，否则会丢事件。
 - 一个 Chat 同时只允许一个进行中的 Turn；进行中时 `send_chat_message` 被拒，只能 `stop_agent`。
+- **认证前的资源上限**（2026-10-02 复审 L1-16 / L5-12(b)）。威胁：`/ws` 不登录就能连上，ws 默认单帧 100 MiB、不认证也不超时，一个人开很多 socket、每个灌大帧或一直不认证，就能把 kernel 堆打满、OOM 重启，所有工作区的聊天、审批、Task、门执行一起停，重启后还能重来。现行上限：单帧 ≤ 1 MiB（与 `/api/cap` 请求体上限相同；超出由 ws 以 1009 关闭）；升级后 10 s 内没认证成功即以 1008 关闭；凭证解析期间同时只解析一个，期间到达的帧最多排 32 帧 / 1 MiB，超出以 1008 关闭。1008 关闭前不发 `-32001`，控制台把它当普通断线按退避重连，不会被登出。`/internal/agent-host` 与 `/ws` 共用同一个 `@fastify/websocket` 注册，但在自己的 socket 上把上限放回 100 MiB（门的原始输出还走这条链路，等 L5-12(a) 在 bridge 截断后再收紧）；它在升级前就经过内部平面守卫。实现见 `packages/kernel/src/interfaces/ws/payload-limits.ts` 与 `server.ts`。
 
 **`action.pending` / `action.updated` / `task.updated`（S2.11）**：这三个不属于任何一个 Chat——一个 ActionRequest 的持有者可能横跨多个 Chat，Task 的所有者也可能当前没有打开任何 Chat——而是按**principal**推送：每个通过 `authenticate`（首帧或 Authorization 头）完成鉴权的连接，自动订阅该 principal 自己的这三类事件，不需要单独的 `subscribe_principal` 请求（复用 `authenticate` 已建立的会话）。字段形状（`packages/shared/src/events.ts`）：
 
