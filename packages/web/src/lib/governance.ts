@@ -215,6 +215,10 @@ export interface OperationCatalogRow {
   /** S8 W3-K1 (leftover 81) — absent or blank means "未填写描述", never coerced to `''` here so the
    *  page can tell "no description" from "kernel omitted the field" the same way either way. */
   readonly description?: string;
+  /** STATUS leftover 123 (`OperationSummaryWire.proposedBy`): whose row it is under D-24 — only
+   *  that principal and the owner may edit its description. Absent on an older kernel or a legacy
+   *  row with no recorded proposer. */
+  readonly proposedBy?: string;
   /** R-19 (D-17): on a draft that revises a published version — what publishing it would change,
    *  with the kernel's direction (`OperationSummaryWire.governanceChange`). */
   readonly governanceChange?: OperationGovernanceChangeWire;

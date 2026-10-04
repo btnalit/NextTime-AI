@@ -47,10 +47,11 @@ import { type CapabilityHandler, publishActorOf } from './capability-handler.js'
  * only the row's proposer or the workspace owner may act (`governance/capability/
  * publish-authority.ts`, checked by `publishOperation`/`deprecateOperation` on the row itself).
  *
- * S8 W3-K1 addition (leftover 81): `update_operation_description` — human channel, no `minRole`
- * (D-24 covered publish/deprecate only, not this documentation edit), edits one Operation's
- * documentation-only `description` in place (no draft/publish step — `governance/gatekeepers/
- * manifest.ts`'s `updateOperationDescription` doc comment). `refresh_operation_governance`
+ * S8 W3-K1 addition (leftover 81): `update_operation_description` — human channel, edits one
+ * Operation's documentation-only `description` in place (no draft/publish step — `governance/
+ * gatekeepers/manifest.ts`'s `updateOperationDescription` doc comment). STATUS leftover 123: it
+ * takes D-24's rule too (`minRole: 'builder'`, then the row's proposer or the owner) — the
+ * description is injected into every agent's tool list. `refresh_operation_governance`
  * (leftover 79, the sibling *governance*-field write) lives in `gate-instance-handlers.ts` instead,
  * next to `preview_gate_instance_enable`'s `differs` judgment it reuses — not here, since it has
  * nothing to do with the propose/publish manifest flow this file otherwise owns.
@@ -192,21 +193,24 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
     name: string;
     description: string;
   };
+  // Leftover 123 (D-24): the Operation's proposer or the owner, checked on the row being edited.
+  const actor = publishActorOf('update_operation_description', ctx);
   // Best-effort before-snapshot for the audit row — `updateOperationDescription` re-reads the
   // same "current row" (`getOperation`'s draft-first priority) internally; a `null` here (unknown
   // identity) just means the call below throws `OperationNotFoundError` and nothing is audited.
+  // Never returned: a refused call (403 / not found) audits and returns nothing of it.
   const existing = await getOperation(client, workspaceId, gatekeeperId, name);
   const before = existing?.operation.description ?? '';
   const record = await updateOperationDescription(client, workspaceId, {
     gatekeeperId,
     name,
     description,
+    actor,
   });
 
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   await writeAudit(client, {
     workspaceId,
-    actorPrincipalId: principalId,
+    actorPrincipalId: actor.principalId,
     action: 'operation.description_updated',
     resourceType: 'operation',
     // `audit_records.resource_id` is `uuid` — `record.id` (`OperationRecord.id`) is the Operation

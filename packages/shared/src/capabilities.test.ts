@@ -447,4 +447,10 @@ describe('D-24 publish / deprecate authority (review 2026-10-02)', () => {
       expect(['builder', 'owner'], capability.name).toContain(capability.minRole);
     }
   });
+
+  it('update_operation_description (STATUS leftover 123) has the same builder floor', () => {
+    const capability = getCapability('update_operation_description');
+    expect(capability?.channel).toBe('human');
+    expect(capability?.minRole).toBe('builder');
+  });
 });
