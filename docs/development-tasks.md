@@ -3542,6 +3542,37 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
 - 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
 
+## 5h. S10 — 底座演进：可升级运行时 · 受治理的自进化 · 能力包（2026-10-04 立项，11 项决定全部落定）
+
+方案全文、证据、领域模型增量与决定记录在 `s10-evolution-plan-2026-10-04.md`，本节只记任务拆分；实现说明随合入追加。
+它取代 §5f 的"扩展线（草案）"，并回答 §5f 待讨论问题 2（包间依赖、定制组件升级）与问题 3（连接器预设）。
+维护者 2026-10-04 提出三件事：pi 模块化可升级（上游 1.0.2 平台无提醒）、自进化的增强方案（参考 8 个项目）、可插拔能力包
+（"Enterprise Agent & Operational Graph OS"，OpenMetadata 作为可选上下文层）。
+
+| 线 | 项 | 内容 | 波次 |
+|---|---|---|---|
+| U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2，按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
+| | U1 | 版本感知（维护者定为必须项，不做一键升级）：CI 把 `channel.json`（平台各发版 + pi 上游与漂移结论）发到固定的滚动 release，W1 不签名——只驱动提醒，真正升级仍由 `pull-images.sh` 验镜像签名；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed`（钉 digest 的 curl 类镜像，只取文件、不解析，无凭证、无 docker socket，直连 GitHub 不经 egress-proxy，写入 uid 专属子目录）；内核 `platform_updates` 读时校验 schema 与大小；W1 交付概览提醒条 +「pi 运行时」卡片的上游一行（区分"上游新版初查通过待发版 / 上游新版不兼容 / 有新平台发版"），侧栏提醒点与四版本并排在 W2。保持设计决定 E3：内核不出网 | W1 / W2 |
+| | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行），结论进 channel 记录；不做候选镜像轨道与控制台内拉镜像（决定 1 / 2 已定） | W2 |
+| | U3 | 控制台内一键升级整个平台——不做（决定 3，维护者 2026-10-04） | — |
+| E 受治理的自进化 | E1 | 结果归因：建 Task / 重入队时（内核 `resolveSkillsInline` 已解析出版本）同事务写 `worker_run_skills`；`report_turn` 可选 `procedureRef`（Turn 级，agent 自报，标 `claimed`）；目标结果 `unknown / achieved / not_achieved` 与执行状态分开——请求者标在 Turn、验证步骤标在 Task；草稿丢弃原因；同批遗留 123 的"嵌套 Worker Task 无 Turn 归属""`sources` 无上限增长"；对话里可标、任务详情页显示 | W1 |
+| | E2 | `skill_version_stats` / `procedure_version_stats` 读模型、控制台统计、`find_procedures` 带达成率；真实模型回归结果入库；Skill / Procedure 详情页显示版本时间线与统计 | W2 |
+| | E3 | 评测框架 MVP：只评 Skill；EvalSuite（冻结用例 + 夹具门 + 判定规则，钉一个 WorkerDefinition 模板版本）；评测 Task `purpose=evaluation`，观察与执行都只能碰夹具门（观察类不看 Handle 门范围，靠 `ObserveExclusions` 固定允许门集合）；`on_behalf_of` 为平台评测主体；用例 / 得分 / 转录存专用 `eval_*` 表、只由 human 通道读，图谱只落摘要 Observation；判定 `better / within_noise / worse / unmeasured`，δ 与 k 按 E1 / E2 数据校准；环境指纹含平台版本、模型、运行时镜像、WorkerDefinition 版本、`instanceInstructions` 摘要、用例集版本；**界面同波次交付**：评测总览、用例集详情、评测运行详情（逐步判定推导）、发布审阅证据卡；对人全透明、对 agent 只给判定与通过计数（I-E4） | W3 |
+| | E4 | 入口 agent 个人记忆：pi-memory-evolution 扩展试点（决定 6） | W4 |
+| | E5 / E6 | 治理调优提议（来自 `get_operation_stats`）、本体缺口提议 | 触发后 |
+| P 能力包 | P0 | 不变量 I-P1：工作区内已发布各族 ObjectType / ActionType 名唯一，`assertOntologyNamespace` 在 `publishOntologyVersion` 与 `publishOntologyDraft` 两条路径都调用，拒绝而不是覆盖（遗留 124；先主机只读预检）；同批 `list_ontology_versions` keyset 与删 R-29 例外 | W1 |
+| | P0b | 连接器接入路径统一为一条（遗留 73 的根治，含 CLI `register-gatekeeper` 补审计）+ 评测用夹具门重设计（gate-host 托管的 http / mcp 夹具实例）+ 遗留 118 残余 ①（自连门无平台切断） | W2 |
+| | P1 | Pack Contract v1（数据层）：`packs/<name>/pack.yaml`、PackVersion / PackInstallation、安装计划 → owner 确认 → 单事务发布全部数据层组件并写 `installed_from`（失败整体回滚）→ 连接器预设落成"待配置"门实例 → `verify_pack`（可重复）；PackInstallation 每个工作区 × 包族一行；模块成为单组件包（能力名不变、无别名期）；ops-base 包 | W2 |
+| | P2 | knowledge 包（RAGFlow，证明通用性） | W3 |
+| | P3 | openmetadata 包：`mcp` 门预设 + Operation 分类 + data-catalog 本体 + Skill + data-steward 模板，v1 只联邦查询（决定 5） | W4 |
+| L 遗留收敛 | L-W1 | 车道 K4（数据库与身份纵深，单独 PR）、D1（文档）；遗留 123 中 S10 的前置项（`anthropic-beta` 白名单随 U0、嵌套 Worker Task 的 Turn 归属与 `sources` 增长随 E1、`list_ontology_versions` keyset 与 R-29 例外随 P0） | W1 |
+| | L-W2 | 车道 K1（网关与读模型，含溯源工具 viewer 过滤）、K2（认知层与 Worker）、K3（监控与运行时）、R1（agent 侧）、W1（控制台确认与人控）、S1（脚本与 CI，含决定 11：备份加 `gate-host/` 挂载与打包项，runbook 写明恢复依赖 `secrets/` 里的 `gate-host-store.key`）；遗留 48 ②（Skill / Procedure 族 id，决定 10，E2 前置）；遗留 118 残余 ②（推送持有者未纳入 R-17） | W2 |
+| | L-W3 / L-W4 | W3：车道 R2（运行时服务）、控制台 W2（状态与表单）；W4：控制台 W3（文案与健壮性）；遗留 49 余项随控制台车道顺手迁 kit | W3 / W4 |
+| | 保持推迟 | 遗留 10（P5，重启条件：决定 5 选 b 或门驱动采集）、48 ①、102（异地备份）、53（本机）、S9 D3（建议第一个外部企业部署前做） | — |
+
+不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
+平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
