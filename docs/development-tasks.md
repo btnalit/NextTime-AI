@@ -3542,6 +3542,32 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
 - 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
 
+## 5h. S10 — 底座演进：可升级运行时 · 受治理的自进化 · 能力包（2026-10-04 方案，待维护者决定）
+
+方案全文、证据、领域模型增量与待决清单在 `s10-evolution-plan-2026-10-04.md`，本节只记任务拆分；实现说明随合入追加。
+它取代 §5f 的"扩展线（草案）"，并回答 §5f 待讨论问题 2（包间依赖、定制组件升级）与问题 3（连接器预设）。
+维护者 2026-10-04 提出三件事：pi 模块化可升级（上游 1.0.2 平台无提醒）、自进化的增强方案（参考 8 个项目）、可插拔能力包
+（"Enterprise Agent & Operational Graph OS"，OpenMetadata 作为可选上下文层）。
+
+| 线 | 项 | 内容 | 波次 |
+|---|---|---|---|
+| U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2，按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
+| | U1 | 版本感知：CI 签名发布 `channel.json`（平台各发版 + pi 上游与漂移结论）；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed` 服务（无凭证、无 docker socket，只取 GitHub 并验签）；内核读模型 `platform_updates`；控制台四个版本（在跑 / 本版内置 / 最新发布版内置 / 上游最新）与提醒。保持设计决定 E3：内核不出网 | W1 |
+| | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行）；按决定 1 再加候选镜像轨道（本版平台扩展 × 新 pi，签名推 GHCR，主机命令拉取 + 现有 `set_active_runtime_image` / `rollback_runtime_image`） | W2 |
+| | U3 | 控制台内一键升级整个平台——建议不做（决定 3） | — |
+| E 受治理的自进化 | E1 | 结果归因：`worker_runs` 记实际装载的 Skill `id@version`；`invoke_worker` 可选 `procedureRef`（agent 自报，标 `claimed`）；Task 的目标结果 `unknown / achieved / not_achieved` 与执行状态分开；草稿丢弃原因 | W1 |
+| | E2 | `skill_version_stats` / `procedure_version_stats` 读模型、控制台统计、`find_procedures` 带达成率；真实模型回归结果入库 | W2 |
+| | E3 | 评测框架：EvalSuite（冻结用例 + 假门夹具 + 对提议者隐藏的判定）、EvalRun（`kind=evaluation` 的 Activity，平台执行、只碰评测夹具门），判定 `better / within_noise / worse / unmeasured`（噪声带、成本规则、环境不一致即 `unmeasured`），结果作为草稿 Evidence，发布绑定草稿摘要；第一批用例复用 S2 / S3 真实模型场景 | W3 |
+| | E4 | 入口 agent 个人记忆：pi-memory-evolution 扩展试点（决定 6） | W4 |
+| | E5 / E6 | 治理调优提议（来自 `get_operation_stats`）、本体缺口提议 | 触发后 |
+| P 能力包 | P0 | 不变量 I-P1：工作区内 ObjectType / ActionType 名唯一，发布与安装拒绝同名覆盖（遗留 124；先在主机只读预检）；连接器接入路径统一为一条（遗留 73 的根治） | W1 |
+| | P1 | Pack Contract v1（数据层）：`packs/<name>/pack.yaml`、PackVersion / PackInstallation、安装计划 → owner 确认 → 经现有发布能力落地并写 `installed_from` → `checks`；模块迁移为包（`install_module` 过渡期作别名）；ops-base 包 | W2 |
+| | P2 | knowledge 包（RAGFlow，证明通用性） | W3 |
+| | P3 | openmetadata 包：`mcp` 门预设 + Operation 分类 + data-catalog 本体 + Skill + data-steward 模板，v1 只联邦查询（决定 5） | W4 |
+
+不变量与"明确不做"见方案 §3.3、§5.6：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
+平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
