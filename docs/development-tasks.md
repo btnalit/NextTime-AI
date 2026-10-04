@@ -3552,12 +3552,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | 线 | 项 | 内容 | 波次 |
 |---|---|---|---|
 | U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2，按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
-| | U1 | 版本感知：CI 签名发布 `channel.json`（平台各发版 + pi 上游与漂移结论）；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed` 服务（无凭证、无 docker socket，只取 GitHub 并验签）；内核读模型 `platform_updates`；控制台四个版本（在跑 / 本版内置 / 最新发布版内置 / 上游最新）与提醒。保持设计决定 E3：内核不出网 | W1 |
-| | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行）；按决定 1 再加候选镜像轨道（本版平台扩展 × 新 pi，签名推 GHCR，主机命令拉取 + 现有 `set_active_runtime_image` / `rollback_runtime_image`） | W2 |
-| | U3 | 控制台内一键升级整个平台——建议不做（决定 3） | — |
-| E 受治理的自进化 | E1 | 结果归因：`worker_runs` 记实际装载的 Skill `id@version`；`invoke_worker` 可选 `procedureRef`（agent 自报，标 `claimed`）；Task 的目标结果 `unknown / achieved / not_achieved` 与执行状态分开；草稿丢弃原因 | W1 |
-| | E2 | `skill_version_stats` / `procedure_version_stats` 读模型、控制台统计、`find_procedures` 带达成率；真实模型回归结果入库 | W2 |
-| | E3 | 评测框架：EvalSuite（冻结用例 + 假门夹具 + 对提议者隐藏的判定）、EvalRun（`kind=evaluation` 的 Activity，平台执行、只碰评测夹具门），判定 `better / within_noise / worse / unmeasured`（噪声带、成本规则、环境不一致即 `unmeasured`），结果作为草稿 Evidence，发布绑定草稿摘要；第一批用例复用 S2 / S3 真实模型场景 | W3 |
+| | U1 | 版本感知：CI 签名发布 `channel.json`（平台各发版 + pi 上游与漂移结论）；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed` 服务（无凭证、无 docker socket，只取 GitHub 并验签）；内核读模型 `platform_updates`；控制台四个版本（在跑 / 本版内置 / 最新发布版内置 / 上游最新）与提醒——侧栏提醒点、概览提醒条、「pi 运行时」卡片，区分"上游新版初查通过待发版 / 上游新版不兼容 / 有新平台发版"三种情况，只给命令与检查单（维护者 2026-10-04 定为必须项，不做一键升级）。保持设计决定 E3：内核不出网 | W1 |
+| | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行），结论进 channel 记录；不做候选镜像轨道与控制台内拉镜像（决定 1 / 2 已定） | W2 |
+| | U3 | 控制台内一键升级整个平台——不做（决定 3，维护者 2026-10-04） | — |
+| E 受治理的自进化 | E1 | 结果归因：`worker_runs` 记实际装载的 Skill `id@version`；`invoke_worker` 可选 `procedureRef`（agent 自报，标 `claimed`）；Task 的目标结果 `unknown / achieved / not_achieved` 与执行状态分开；草稿丢弃原因；任务详情页显示所用版本、可标目标结果 | W1 |
+| | E2 | `skill_version_stats` / `procedure_version_stats` 读模型、控制台统计、`find_procedures` 带达成率；真实模型回归结果入库；Skill / Procedure 详情页显示版本时间线与统计 | W2 |
+| | E3 | 评测框架：EvalSuite（冻结用例 + 假门夹具 + 对 agent 不可见、对人全可见的判定）、EvalRun（`kind=evaluation` 的 Activity，平台执行、只碰评测夹具门），判定 `better / within_noise / worse / unmeasured`（噪声带、成本规则、环境不一致即 `unmeasured`），结果作为草稿 Evidence，发布绑定草稿摘要；第一批用例复用 S2 / S3 真实模型场景；**界面同波次交付**（维护者："不能是黑盒"）：评测总览（设置、熔断）、用例集详情（用例与判定规则）、评测运行详情（环境指纹、得分矩阵、成本、逐步判定推导、转录、真实门零调用证明）、发布审阅证据卡；评测对人全透明、对 agent 封闭（I-E4） | W3 |
 | | E4 | 入口 agent 个人记忆：pi-memory-evolution 扩展试点（决定 6） | W4 |
 | | E5 / E6 | 治理调优提议（来自 `get_operation_stats`）、本体缺口提议 | 触发后 |
 | P 能力包 | P0 | 不变量 I-P1：工作区内 ObjectType / ActionType 名唯一，发布与安装拒绝同名覆盖（遗留 124；先在主机只读预检）；连接器接入路径统一为一条（遗留 73 的根治） | W1 |
@@ -3569,7 +3569,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 | | L-W3 / L-W4 | W3：车道 R2（运行时服务）、控制台 W2（状态与表单）；W4：控制台 W3（文案与健壮性）；遗留 49 余项随控制台车道顺手迁 kit | W3 / W4 |
 | | 保持推迟 | 遗留 10（P5，重启条件：决定 5 选 b 或门驱动采集）、48 ①、102（异地备份）、53（本机）、S9 D3（建议第一个外部企业部署前做） | — |
 
-不变量与"明确不做"见方案 §3.3、§5.6：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
+不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
 
 ## 6. 验收矩阵
