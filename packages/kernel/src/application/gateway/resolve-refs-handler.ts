@@ -1,6 +1,7 @@
 import { GATEKEEPER_GRANT_CAPABILITY } from '../../governance/capability/index.js';
 import { SqlGraphStore, objectDisplayName } from '../../substrate/graph/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { graphReadViewerOf } from './draft-viewer.js';
 
 /**
  * application/gateway/resolve-refs-handler: `resolve_refs` (S8 W1-C, leftover 48 "无批量 Object
@@ -13,7 +14,10 @@ import type { CapabilityHandler } from './capability-handler.js';
  *     as `get_object`/`list_gatekeepers`/`list_operations` (all `minRole:'member'`, no per-row
  *     narrowing beyond the workspace itself). `operation` and `gatekeeper` are both typed graph
  *     Objects (`governance/gatekeepers/registry.ts`/`manifest.ts`'s own module doc comments) —
- *     one query already covers all three, split back out by `objectType` after the fact.
+ *     one query already covers all three, split back out by `objectType` after the fact. STATUS
+ *     leftover 123 (D-26): that query is narrowed for the caller like `get_object`, so an
+ *     Operation draft they may not see (someone else's, unless they are owner or builder) does
+ *     not resolve.
  *   - `principal` — `displayName` only (never `role`/`hasApiKey`/`disabledAt` — the fields
  *     `list_principals`, `minRole:'operator'`, actually gates), available at this capability's own
  *     `minRole:'member'` floor: the same tier `explain` (member) already surfaces a Fact/Decision's
@@ -93,7 +97,8 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   // Gatekeeper and Operation are typed Objects, `governance/gatekeepers/registry.ts`/
   // `manifest.ts`'s own module doc comments).
   // -----------------------------------------------------------------------------------------
-  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, uniqueIds);
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, uniqueIds, viewer);
   for (const object of objectsById.values()) {
     const kind: ResolvedRefKind =
       object.objectType === 'Gatekeeper'

@@ -127,7 +127,7 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 | **Activity** | PROV-O Activity：摄取运行、抽取、**Turn**（一轮对话）、Workflow Step |
 | **Chat** | 一个用户与其入口 agent 的对话线程；属于该用户，私有 |
 | **Turn** | Chat 中的一轮：用户消息 + agent 的一次运行；是 `kind=agent_turn` 的 Activity，`used` 上下文 Fact，`generated` Decision / Task |
-| **Observation / Fact / Evidence / Conflict / Decision / Dataset / Lineage** | 同 v0.1；Fact 与 Decision 继承其 Source 的可见性 |
+| **Observation / Fact / Evidence / Conflict / Decision / Dataset / Lineage** | 同 v0.1；Fact 与 Decision 继承其 Source 的可见性。Observation 的粒度是"一个 Source 在一个 Activity 里的一次提交"：一次 `submit_observations` 记一条，本次断言或再确认的每条 Fact 都指向它（`observation_id` / `last_observation_id`）；提交里的条目由 Fact 自己承载，不逐条记行（遗留 103）。门观察与任务结果的 Observation 带内容（payload） |
 
 #### 5.1.4 Governance Model
 

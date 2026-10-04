@@ -51,11 +51,12 @@ import { toWireSource } from './resource-wire.js';
  * supersede) is what `factsAsserted`/`factsSuperseded` below count.
  *
  * This is also what makes the collector's own acceptance criterion true: `recordSourceObservation`
- * below writes exactly one Observation, from *this* submission's `sourceId`, per top-level
- * observation item, on the *one* Activity this whole submission's Facts share — so
- * `resolveFactOrigin`'s "single distinct source_id feeding this Activity" always resolves to this
- * collector's own registered Source, every run, as long as the caller keeps reusing the same
- * `sourceId` (see this file's own `register_source` paragraph above). Two submissions of identical
+ * below writes exactly one Observation per call — from *this* submission's `sourceId`, on the *one*
+ * Activity this whole submission's Facts share (STATUS leftover 103: it used to write one per
+ * top-level item, which grew `observations` by items × runs) — so `resolveFactOrigin`'s "single
+ * distinct source_id feeding this Activity" always resolves to this collector's own registered
+ * Source, every run, as long as the caller keeps reusing the same `sourceId` (see this file's own
+ * `register_source` paragraph above). Two submissions of identical
  * observations therefore always resolve as *same origin* (→ supersede, never a Conflict); a changed
  * property value on a later submission still resolves as *same origin* (→ supersede, with the new
  * value) — exactly "两遍无重复无 Conflict…改端口第三遍 supersede", produced entirely by the seam this
@@ -399,8 +400,8 @@ async function writeLink(
       targetObjectId: targetObject.id,
       activityId,
       properties,
-      // W5 (migrations/core/0018): the Observation this item recorded is the one that fed this
-      // Link — `explain(factId)` narrows to it instead of the Activity's whole batch.
+      // W5 (migrations/core/0018): the Observation this call recorded is the one that fed this
+      // Link — `explain(factId)` narrows to it instead of the Activity's whole list.
       observationId,
     },
   );
@@ -477,6 +478,13 @@ export const submitObservationsHandler: CapabilityHandler = async (
     touchedObjects: new Map(),
   };
 
+  // STATUS leftover 103: one Observation per call — per `(activityId, sourceId)`, of which a call
+  // has exactly one — not one per item. Every Fact this call asserts or re-confirms points its
+  // `observation_id` / `last_observation_id` at it. The per-item rows carried no content
+  // (`content = '{}'`), so the item → Fact mapping lives in the Facts themselves and nothing is
+  // lost; `observations` now grows runs × sources instead of items × runs. Recorded lazily with
+  // the first item, so a call with no items (only legal with a `window`) still records none.
+  let observationId: string | undefined;
   try {
     for (const observation of params.observations) {
       const sourceObject = await upsertCounted(
@@ -488,15 +496,17 @@ export const submitObservationsHandler: CapabilityHandler = async (
         observation.properties,
       );
 
-      // One Observation row per submitted observation item (design doc §5.1.3: "Observation：a
-      // single observed input") — ties this Activity to the Source that produced this item, so
-      // `explain(factId)` can trace every Fact this item's links produce back to it, and (see this
-      // file's module doc comment) so `resolveFactOrigin` (S3.2) always finds exactly one distinct
-      // `source_id` feeding this Activity.
-      const recorded = await recordSourceObservation(client, workspaceId, {
-        sourceId: params.sourceId,
-        activityId,
-      });
+      // Design doc §5.1.3: the Observation ties this Activity to the Source that produced this
+      // submission, so `explain(factId)` traces every Fact of the call back to it, and (see this
+      // file's module doc comment) `resolveFactOrigin` (S3.2) always finds exactly one distinct
+      // `source_id` feeding this Activity. Recorded before the first Link is written —
+      // `assertFact` resolves the new assertion's origin from it.
+      observationId ??= (
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: params.sourceId,
+          activityId,
+        })
+      ).id;
 
       for (const link of observation.links ?? []) {
         const targetObject = await upsertCounted(
@@ -517,7 +527,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
           link.linkType,
           link.properties ?? {},
           state,
-          recorded.id,
+          observationId,
         );
       }
     }

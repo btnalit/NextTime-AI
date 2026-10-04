@@ -1,5 +1,10 @@
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+// The leaf file, not `../graph/index.js`: substrate/graph already imports substrate/epistemic.
+import {
+  type GraphReadViewer,
+  linkTouchesHiddenOperationDraftSql,
+} from '../graph/operation-draft-visibility.js';
 import { listHumanAttestations } from './evidence.js';
 
 /**
@@ -106,10 +111,11 @@ export interface ExplainFactRef {
   readonly humanAttestations: readonly ExplainHumanAttestationRef[];
   /**
    * W5 (migrations/core/0018, docs/retrospective-2026-09-09.md §5.1): the single Observation that
-   * fed this Fact when its writer named one (`submit_observations` does, one per submitted item).
+   * fed this Fact when its writer named one (`submit_observations` does — one per call since STATUS
+   * leftover 103, one per submitted item before).
    * When set, `activity.observations` below is narrowed to exactly that Observation instead of
-   * every Observation the Activity recorded (a collector ingest records hundreds under one
-   * Activity — the whole batch answered "this ingest", never "this observation"). `null` for
+   * every Observation the Activity recorded (a collector ingest recorded hundreds under one
+   * Activity before leftover 103, and its phases still record one each). `null` for
    * ad-hoc `assert_fact` writes, worker results, and every pre-0018 Fact — those keep the
    * Activity-level list exactly as before.
    */
@@ -334,17 +340,24 @@ async function fetchObservationRef(
   return { id: row.id, createdAt: row.created_at.toISOString(), source };
 }
 
+/** STATUS leftover 123 (D-26): with a `viewer`, a Fact with an Operation draft that viewer may not
+ *  see at either end is not found — its endpoints name the draft and its Activity's metadata names
+ *  the proposed Operation (`operation_proposal`), so it is hidden exactly like the draft itself. */
 async function explainFact(
   client: PoolClient,
   workspaceId: string,
   factId: string,
+  viewer?: GraphReadViewer,
 ): Promise<ExplainResult> {
   const result = await client.query<FactDbRow>(
     `select id, link_type, source_object_id, target_object_id, properties, epistemic_status,
             activity_id, asserted_by, verified_by, observation_id,
             invalidated_at, invalidation_reason, last_observation_id
-       from links where workspace_id = $1 and id = $2`,
-    [workspaceId, factId],
+       from links l where workspace_id = $1 and id = $2
+       ${viewer ? `and not ${linkTouchesHiddenOperationDraftSql('l', '$3', '$4')}` : ''}`,
+    viewer
+      ? [workspaceId, factId, viewer.seesEveryDraft, viewer.principalId]
+      : [workspaceId, factId],
   );
   const row = result.rows[0];
   if (!row) throw new ExplainNodeNotFoundError('fact', workspaceId, factId);
@@ -451,14 +464,19 @@ export async function explain(
  * most common `explain` target), then delegates to {@link explain}. Throws
  * `ExplainNodeNotFoundError` (tagged `'fact'`, matching the first table tried) if `nodeId` names
  * none of the three.
+ *
+ * `viewer` (the `explain` capability passes its caller's): see `explainFact` — a Fact touching an
+ * Operation draft the viewer may not see reads as not found. Omitted for the auditor-scoped
+ * callers (`export_prov`), which see the full provenance.
  */
 export async function explainByNodeId(
   client: PoolClient,
   workspaceId: string,
   nodeId: string,
+  viewer?: GraphReadViewer,
 ): Promise<ExplainResult> {
   try {
-    return await explainFact(client, workspaceId, nodeId);
+    return await explainFact(client, workspaceId, nodeId, viewer);
   } catch (err) {
     if (!(err instanceof ExplainNodeNotFoundError)) throw err;
   }

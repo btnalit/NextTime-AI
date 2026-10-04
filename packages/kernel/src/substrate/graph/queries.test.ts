@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGetFactForUpdateQuery,
   buildGetObjectQuery,
+  buildGetObjectsByIdsQuery,
   buildInsertFactQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
@@ -320,5 +321,70 @@ describe('buildRecentFactsQuery', () => {
     expect(q.text).toContain('invalidated_at is null');
     expect(q.text).toContain('order by recorded_at desc');
     expect(q.text).not.toContain('source_object_id = $2');
+  });
+});
+
+// STATUS leftover 123 (D-26): a viewer adds the Operation-draft filter and its two binds after the
+// query's own; no viewer leaves the query and its binds as they were (internal callers).
+describe('Operation-draft viewer filter', () => {
+  const viewer = { principalId: 'p1', seesEveryDraft: false };
+
+  it('get_object / getObjectsByIds: a row-level predicate on objects, binds $3 / $4', () => {
+    const q = buildGetObjectQuery('ws1', 'obj1', viewer);
+    expect(q.values).toEqual(['ws1', 'obj1', false, 'p1']);
+    expect(q.text).toContain("and not (objects.object_type = 'Operation'");
+    expect(q.text).toContain("coalesce(objects.properties ->> 'status', 'draft') = 'draft'");
+    expect(q.text).toContain('not $3::boolean');
+    expect(q.text).toContain("objects.properties ->> 'proposedBy' is distinct from $4::text");
+    expect(q.text).not.toContain('hidden_op');
+
+    const byIds = buildGetObjectsByIdsQuery('ws1', ['a', 'b'], viewer);
+    expect(byIds.values).toEqual(['ws1', ['a', 'b'], false, 'p1']);
+    expect(byIds.text).toContain('not $3::boolean');
+  });
+
+  it('without a viewer the object queries carry no filter', () => {
+    expect(buildGetObjectQuery('ws1', 'obj1').text).not.toContain('Operation');
+    expect(buildGetObjectsByIdsQuery('ws1', ['a']).values).toEqual(['ws1', ['a']]);
+    expect(buildSearchQuery('ws1', { query: 'x' }).text).not.toContain('Operation');
+    expect(buildTraverseQuery('ws1', { fromId: 'obj1' }).text).not.toContain('hidden_op');
+  });
+
+  it('search filters in the WHERE (before limit and cursor), binds $7 / $8', () => {
+    const q = buildSearchQuery('ws1', { query: 'widget' }, viewer);
+    expect(q.values).toEqual([
+      'ws1',
+      null,
+      '%widget%',
+      DEFAULT_SEARCH_LIMIT,
+      null,
+      null,
+      false,
+      'p1',
+    ]);
+    expect(q.text).toContain('not $7::boolean');
+    expect(q.text.indexOf("objects.object_type = 'Operation'")).toBeLessThan(
+      q.text.indexOf('order by'),
+    );
+  });
+
+  it('traverse drops Facts touching a hidden draft in both the base and the recursive term', () => {
+    const q = buildTraverseQuery('ws1', { fromId: 'obj1', depth: 2 }, viewer);
+    expect(q.values).toEqual(['ws1', 'obj1', 'both', null, 2, false, 'p1']);
+    expect(q.text.split('and not exists (').length - 1).toBe(2);
+    expect(q.text).toContain('hidden_op.id in (l.source_object_id, l.target_object_id)');
+    expect(q.text).toContain('not $6::boolean');
+  });
+
+  it('state_at and recent Facts drop Facts touching a hidden draft', () => {
+    const at = new Date('2026-01-01T00:00:00Z');
+    const stateAt = buildStateAtFactsQuery('ws1', { objectId: 'obj1', at }, viewer);
+    expect(stateAt.values).toEqual(['ws1', 'obj1', at, false, 'p1']);
+    expect(stateAt.text).toContain('hidden_op.id in (l.source_object_id, l.target_object_id)');
+    expect(stateAt.text).toContain('not $4::boolean');
+
+    const recent = buildRecentFactsQuery('ws1', 5, viewer);
+    expect(recent.values).toEqual(['ws1', 5, false, 'p1']);
+    expect(recent.text).toContain('not $3::boolean');
   });
 });
