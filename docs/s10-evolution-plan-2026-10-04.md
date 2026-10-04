@@ -148,7 +148,7 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 | I-E1 | 评测由平台执行，不由提议者执行；评测运行只能碰假门 / 回放夹具 | 评测 Handle 的门范围只含评测夹具门；供应 Handle 的是内核评测作业 |
 | I-E2 | 评测环境（模型、运行时镜像、用例集版本）与基线不一致时，判定只能是 `unmeasured`，不能是"更好" | 判定函数按环境指纹比较（Meristem `fitness.pair` 的做法） |
 | I-E3 | 发布审阅绑定草稿内容摘要：审阅后草稿再改，原审阅失效 | 发布请求带摘要，不一致即拒 |
-| I-N1 | **非进化不变量**：平台代码、内核、门与采集器镜像、迁移、Policy / Grant / 自动批准规则**永不**因经验自动改变；经验只能产出草稿与提议，由人发布 | 无任何写这些对象的 agent 能力；见 §5.6 |
+| I-N1 | **非进化不变量**：平台代码、内核、门与采集器镜像、迁移**永不**因经验改变；Policy / Grant / 自动批准规则**永不**因经验**自动**改变——经验可以产出调整提议（E5），发布仍只经人 | 无任何写这些对象的 agent 能力；提议走现有 human 通道；见 §5.6 |
 
 ### 3.4 状态机
 
@@ -290,7 +290,8 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
   工作目录（I15，只挂给本人的入口容器）；记忆断言只是该用户的私有上下文，**不进图谱、不成为 Fact**。第二步再考虑把断言作为
   私有 Source 的 Observation（`epistemic_status=inferred`）导出到图谱。
 - **E5 治理调优建议**：从 `get_operation_stats` 发现"某 Operation 近 30 天人工批准 50 / 50"之类模式，**提议**调整
-  `auto_approvable` 或沉淀 Procedure——只产提议，由 owner 决定（呼应"只在关键点设门"）。
+  `auto_approvable` 或沉淀 Procedure——只产提议，由 owner 决定（呼应"只在关键点设门"）。这与 I-N1 不冲突：I-N1 禁止的是
+  治理规则**自动**改变，E5 产出的是待人审阅的提议。
 - **E6 本体缺口提议**：持续出现、无法映射到现有类型的观察聚类，产出 `propose_ontology_change` 草稿（hermes 的"未匹配信号"）。
 - **明确不做**（I-N1）：代码 / prompt 的自修改与自动合入；agent 改 Policy / Grant；评测结果自动发布；未经人工的记忆晋升为
   工作区事实。
@@ -320,7 +321,7 @@ name: openmetadata              # 族名，也是命名空间前缀的来源
 version: 1.0.0                  # PackVersion；发布后内容摘要固定
 summary: 企业数据目录与血缘（联邦查询）
 requires:
-  platform: ">=0.45.0"
+  platform: ">=0.X.0"            # 占位：首个支持 Pack Contract v1 的平台版本，P1 合入时确定
   packs: []                     # 决定 4：只做版本检查，不自动安装依赖
   connectors:
     - kind: mcp                 # 需要一个 mcp 门；凭证由人在门里录入
