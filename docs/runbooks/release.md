@@ -75,7 +75,10 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 它按顺序做完本节下面分散描述的全部手续：备份新鲜度 → 发版前 dump（`backups/pre-upgrade/`）→ 切 tag →
 派生 internal-plane 凭证（新 tag 自己的 `scripts/derive-internal-tokens.sh`，只写
 `secrets/internal-*-to-*.token`，R-03）→ 拉取或构建镜像 → 迁移 dry-run 与应用 → `up -d` → S3 → S1 → S2 →
-S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 清理过期的 ephemeral 工作区。dump / 切 tag / 派生 / 镜像 /
+S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 镜像保留（`scripts/prune-images.sh --keep 2 --yes`：本项目镜像只留
+最近两个发布版本，任何容器在用的、带 `latest` 的、`activeRuntimeImage` 及其回滚目标一律保留；别的项目的镜像、
+没有本项目标签的悬空镜像和构建缓存不碰；`STEP images-retention` 行给出删了多少；单独跑默认只演练）→
+清理过期的 ephemeral 工作区。dump / 切 tag / 派生 / 镜像 /
 迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；切 tag 之前记下原来的 ref（`STEP checkout-from`），
 切 tag 之后、`up` 之前的失败会把检出切回去（`STEP checkout restored to …`，切不回时打印要手动执行的
 `git checkout`），让检出始终与在跑的栈一致；迁移失败时先列出已提交的迁移（每个文件一个事务，
