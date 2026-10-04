@@ -78,7 +78,7 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 镜像保留（`scripts/prune-images.sh --keep 2 --yes`：本项目镜像只留
 最近两个发布版本，任何容器在用的、带 `latest` 的、`activeRuntimeImage` 及其回滚目标一律保留；别的项目的镜像、
 没有本项目标签的悬空镜像和构建缓存不碰；`STEP images-retention` 行给出删了多少；单独跑默认只演练）→
-清理过期的 ephemeral 工作区。dump / 切 tag / 派生 / 镜像 /
+清理过期的 ephemeral 工作区 → 观察记录压缩（遗留 103，见本节"观察记录压缩"段）。dump / 切 tag / 派生 / 镜像 /
 迁移任一步失败都在 `up` 之前停下，在跑的栈不受影响；切 tag 之前记下原来的 ref（`STEP checkout-from`），
 切 tag 之后、`up` 之前的失败会把检出切回去（`STEP checkout restored to …`，切不回时打印要手动执行的
 `git checkout`），让检出始终与在跑的栈一致；迁移失败时先列出已提交的迁移（每个文件一个事务，
@@ -140,6 +140,21 @@ docker compose up -d --no-build
    `nexttime-rerun-<tag>-<ts>.dump`，单独只留 1 份，不会把真正的发版前 dump 挤出 3 份窗口
    （2026-10-02 复审 L9-7）。回退时要选 `from-` 写着回退目标版本的那一份。
 3. 验收通过后 `docker compose run --rm -e BACKUP_NOW=1 backup`，确认新 dump 留在 `backups/db/` 里没被轮换删掉。
+
+**观察记录压缩（遗留 103，维护者 2026-10-04 决定：年龄闸 30 天，带 payload 的观察永不压缩）**：
+`BACKUP_NOW` 成功之后（那份 dump 就是恢复点；`BACKUP_NOW` 失败时这一步跳过，打印
+`STEP observations-compaction skipped …`），并且放在清理过期工作区之后，`apply-release.sh` 跑
+`docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js --yes`，完整输出写进
+`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>-compaction.log`，日志里一行
+`STEP observations-compaction exit=<rc> compact-observations: ok deleted=<n> of older=<m> rows=<r> workspaces=<w> batches=<b> log=…`。
+失败只记录、不中止发版。一行观察只有同时满足下面全部条件才会被删：没有任何 Fact 的 `observation_id` /
+`last_observation_id` 指向它（不论 Fact 状态）；不是它所属 Source 最新的一行；不是它所在
+`(workspace, activity, source)` 剩下的最后一行；`content = '{}'`（采集标记——门观察、任务结果带 payload，
+永不删）；早于 30 天。所以 Fact 的起源、私有 Source 带来的 Fact 可见性、Source 新鲜度 / 静默检测、观察窗口、
+`explain` 与 PROV 导出读到的结果都不变。按每 Source、每 1 万行一个短事务分批删，用 core 0039 的索引；
+每次 `--yes` 写一条平台审计 `cli.observations_compacted`（参数 + 各工作区计数；无操作者时按 core 0040
+记为未署名的主机运维动作）。手动跑：不带 `--yes` 就是演练（dry run），按类别打印各工作区的计数，什么都不删；
+可加 `--older-than-days <n>`、`--workspace <id>`、`--batch-size <n>`、`--actor <login>`。
 
 ### 3.1 版本号随镜像走：构建 kernel 前先导出 `KERNEL_VERSION`
 
@@ -473,6 +488,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.39.0 之后的下一版 | governance `0017_auditor_handles_revoked`（R-35 / 决定 D-07）：吊销所有代表 `auditor` 的未过期、未吊销 Handle（`capability_handles.revoked_at = now()`），每个受影响的 auditor 写一条审计 `principal.auditor_handles_revoked`（payload 带吊销数）。原因：auditor 改为严格只读（显式白名单），但旧版本签发的入口 Handle 仍列着所有 `minRole: 'member'` 能力，最长 24 小时有效；吊销后入口 agent 下一个 Turn 按新上限重签。不改 schema | 可逆 | 无 schema 变更，只置 `revoked_at`（0015 的单调吊销触发器允许）。旧代码的入口 Handle 发放路径（`ensureEntryHandle`）在发现缓存的 Handle 已吊销时照常重签，被吊销的只是会话里的旧凭证，不丢数据 | 只需回退代码；被吊销的 Handle 不随回退恢复（也不需要：下一个 Turn 会重签） |
 | v0.40.0 之后的下一版 | core `0039_provenance_lookup_indexes`（R-66 / L4-9）：只加四个索引——`observations (workspace_id, activity_id)`（`link_visible_to_caller` 的 Fact 可见性判定、`resolveFactOrigin`、指向 `activities` 的外键）、`observations (workspace_id, source_id, created_at)`（静默 Source 检查的 `max(created_at)`、观察窗口、指向 `sources` 的外键）、`links (workspace_id, last_observation_id) where last_observation_id is not null`（0026 的外键）、`activities (workspace_id, started_by, kind, created_at)`（`findAttributableTurn`、指向 `principals` 的外键）。不改数据、约束、授权，不加保留或删除策略（遗留 103 另行决定）。运行器每个文件一个事务，不能用 `concurrently`：普通 `create index` 对这三张表加 SHARE 锁直到文件提交，`apply-release.sh` 迁移时旧版本 kernel 仍在服务，采集写入、Fact 写入、Turn 记账在建索引期间排队（不报错）；主机上 `observations` 约 60 万行，预计合计不到一分钟 | 可逆 | 只加索引：任何语句的结果都不变，规划器只是多了更便宜的路径。读了 v0.40.0 对这三张表的读写：没有引用索引名、也没有依赖"没有索引"的路径；v0.40.0 的清除级联（`alter table … disable trigger`，R-65 之前的做法）在新 schema 上照常运行，外键检查反而更快 | 只需回退代码；若要连 schema 一起撤：`drop index observations_activity_idx, observations_source_idx, links_last_observation_id_idx, activities_started_by_idx`（不撤也无害，只多一点写入时的索引维护） |
 | v0.40.0 之后的下一版 | llm-usage `0002_usage_request_id`（R-67 / L6-13）：`llm_usage` 新增可空 `request_id`（uuid）——llm-proxy 为每个上游请求铸的用量标识，重放时不变；加部分唯一索引 `llm_usage_request_id_uidx (workspace_id, request_id) where request_id is not null`。0001 的唯一键 `(workspace_id, jti, started_at)` **保留**：同一 Handle 在同一毫秒开始的两个请求，后一个存在该毫秒内往后几微秒（不出这一毫秒，低于 llm-proxy 的测量精度）。没有 `request_id` 的记录（R-67 之前的 llm-proxy，只在滚动升级窗口里）照旧按 0001 的键去重。不回填、不改既有行 | 可逆 | 只加一列（可空、无默认值）和一个只覆盖非空行的部分唯一索引。读了 v0.40.0 的 `governance/llm-usage/service.ts`：插入是显式列清单，不写新列（恒为空，新索引不收录），`on conflict (workspace_id, jti, started_at)` 只能推断出一个**非部分**、恰好这三列的唯一索引——正因如此 0001 的键原样保留（删掉或改成部分索引，回退后旧代码的每次用量写入都会 42P10 失败）；新代码写入的行在这三列上也互不相同（微秒错位），所以旧代码的去重语义不变；读路径（日成本 / token 汇总、平台 30 天用量）都是显式列，不读新列。回退后旧代码回到"同一毫秒的并发请求被合并"（即 R-67 本身），新代码期间写入的行原样保留、照常计入汇总 | 只需回退代码；若要连 schema 一起撤：`drop index llm_usage_request_id_uidx; alter table llm_usage drop column request_id`（不撤也无害） |
+| v0.41.0 之后的下一版 | core `0040_audit_unattributed_observation_compaction`（遗留 103）：把 `audit_records_actor_shape` 里 0032 / 0036 的无操作者例外（`actor_user_id` 为空且 `payload -> 'attributedActor'` 是 JSON 布尔 `false`）再扩一个动作 `cli.observations_compacted`——`compact-observations --yes` 的平台审计行，`apply-release.sh` 无人值守地跑它时可能解析不出操作者；其余无操作者的平台行照旧拒绝。不改数据 | 可逆 | 只放宽（widening）：凡满足 0036 约束的行必然满足新约束，重新加约束校验既有行不会失败，无需回填。读了 v0.41.0：没有 `compact-observations`，也没有任何路径写 `cli.observations_compacted`，旧代码从不触发新加的合法分支；旧测试 `writer.test.ts` 断言的拒绝情形（其他动作、缺标记）在新约束下仍被拒。回退后压缩命令不存在（回退目标的 `apply-release.sh` 也不跑它），已写入的 `cli.observations_compacted` 行留在表里、旧代码的 `platform_audit_query` 照常列出；已删掉的观察行不随回退恢复——它们按规则本来就不被任何读者用到，要找回只能用压缩前那份 `BACKUP_NOW` dump | 只需回退代码；若要连 schema 一起撤：按 0036 的定义重建 `audit_records_actor_shape`（前提是先删掉无操作者的 `cli.observations_compacted` 行，否则重建失败；不撤也无害） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

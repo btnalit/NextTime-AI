@@ -20,7 +20,8 @@ export interface AuditRecordInput {
    *  'platform.workspace_purged'` with `payload.attributedActor: false`, the operator CLI's
    *  unattributed purge (`application/platform/purge-workspace.ts`'s own doc comment has the
    *  detail); migration core 0036 extends the same allowance to the operator CLI's five `cli.*`
-   *  identity actions (R-28 / L1-14, `cli/bootstrap.ts` `writeCliIdentityAudit`). Any other
+   *  identity actions (R-28 / L1-14, `cli/bootstrap.ts` `writeCliIdentityAudit`), and core 0040
+   *  to `cli.observations_compacted` (leftover 103, `cli/compact-observations.ts`). Any other
    *  actor-less platform row is still rejected by the DB constraint — this
    *  interface does not enforce that narrower shape itself, so get it exactly right at the call
    *  site or the INSERT fails. */

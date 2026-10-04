@@ -35,6 +35,20 @@ export {
   purgeWorkspace,
   wireTableKey,
 } from './purge-workspace.js';
+export type {
+  CompactObservationsInput,
+  CompactObservationsResult,
+  ObservationCompactionCounts,
+  WorkspaceObservationCompaction,
+} from './compact-observations.js';
+export {
+  OBSERVATION_COMPACTION_AGE_DAYS,
+  OBSERVATION_COMPACTION_AUDIT_ACTION,
+  OBSERVATION_COMPACTION_BATCH_SIZE,
+  ObservationCompactionFailedError,
+  ObservationCompactionRefusedError,
+  compactObservations,
+} from './compact-observations.js';
 export type { SystemPromptParts } from './instance-instructions.js';
 export {
   INSTANCE_INSTRUCTIONS_MARKER,

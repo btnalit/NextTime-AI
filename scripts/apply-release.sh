@@ -39,7 +39,9 @@
 #   8. BACKUP_NOW on the new release; keep the newest 3 pre-upgrade dumps (maintainer
 #      2026-10-01) — reached only after 2–6 succeeded, so a failed apply never prunes a rollback
 #      point; keep this project's images of the newest 2 releases (scripts/prune-images.sh);
-#      purge expired ephemeral workspaces (acceptance / probe / demo leftovers)
+#      purge expired ephemeral workspaces (acceptance / probe / demo leftovers); compact
+#      Observations older than 30 days (leftover 103) — only when BACKUP_NOW succeeded, since its
+#      dump is the recovery point; logged, never fatal
 set -u
 
 # Step 3 checks out another tag, which can rewrite this very file while sh is still reading it.
@@ -209,9 +211,10 @@ for s in 3 1 2 4; do
 done
 docker compose --profile test stop fake-llm >/dev/null 2>&1
 
-# 8. backup on the new release, pre-upgrade retention, expired workspaces
+# 8. backup on the new release, pre-upgrade retention, expired workspaces, observation compaction
 docker compose run --rm -e BACKUP_NOW=1 backup </dev/null >/dev/null 2>&1
-echo "STEP backup-now exit=$? last=$(sed -n 's/^db_dump=//p' "$D/backups/last-success" 2>/dev/null)"
+backup_rc=$?
+echo "STEP backup-now exit=$backup_rc last=$(sed -n 's/^db_dump=//p' "$D/backups/last-success" 2>/dev/null)"
 ls -t "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | tail -n +4 | xargs -r rm -f --
 ls -t "$D/backups/pre-upgrade"/nexttime-rerun-*.dump 2>/dev/null | tail -n +2 | xargs -r rm -f --
 echo "STEP pre-upgrade-retention kept $(ls "$D/backups/pre-upgrade"/nexttime-pre-*.dump 2>/dev/null | wc -l)"
@@ -222,6 +225,20 @@ if [ -f scripts/prune-images.sh ]; then
 fi
 if [ -f scripts/delete-workspaces-matching.sh ]; then
   sh scripts/delete-workspaces-matching.sh --expired --yes </dev/null 2>&1 | tail -n 3 | sed 's/^/STEP expired-workspaces /'
+fi
+# Observation retention (STATUS leftover 103): delete redundant ingest Observations older than 30
+# days — never one a Fact references, a Source's newest, the last of its (activity, source) pair,
+# or one carrying a payload (packages/kernel/src/application/platform/compact-observations.ts).
+# Only on top of the BACKUP_NOW above: that dump is the recovery point. After the expired-workspace
+# purge, so it does not compact rows about to be purged. Failures are logged, never fatal.
+if [ -f packages/kernel/src/cli/compact-observations.ts ]; then
+  if [ "$backup_rc" -ne 0 ]; then
+    echo "STEP observations-compaction skipped — backup-now failed (exit=$backup_rc), no fresh recovery point"
+  else
+    clog="$LOG_DIR/apply-$TAG-$TS-compaction.log"
+    docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js --yes >"$clog" 2>&1 </dev/null
+    echo "STEP observations-compaction exit=$? $(tail -n 1 "$clog") log=$clog"
+  fi
 fi
 
 echo "STEP done"
