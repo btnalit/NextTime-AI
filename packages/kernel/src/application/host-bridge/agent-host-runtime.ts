@@ -280,6 +280,9 @@ export class AgentHostRuntime implements AgentRuntime {
   private readonly stoppedBeforeStart = new Set<string>();
   private readonly pendingAccepts = new Map<string, PendingAccept>();
   private readonly handleCache = new Map<string, CachedHandle>();
+  /** Turn-end ordering: the tail of each Turn's sink chain — see `sinkInOrder`. An entry exists
+   *  only while that Turn has sink work queued or running. */
+  private readonly turnSinkChains = new Map<string, Promise<void>>();
 
   constructor(deps: AgentHostRuntimeDeps) {
     this.pool = deps.pool;
@@ -628,7 +631,7 @@ export class AgentHostRuntime implements AgentRuntime {
         turnId,
       }),
     );
-    void this.safeSinkHandle({
+    void this.sinkInOrder({
       type: 'turnEnded',
       status: 'interrupted',
       workspaceId: turn.workspaceId,
@@ -767,7 +770,7 @@ export class AgentHostRuntime implements AgentRuntime {
     // AgentRuntimeEventWire (agent-host-protocol.ts, @nexttime/shared) is a hand-kept structural
     // mirror of AgentRuntimeEvent (agent-runtime.ts) — see the former's own doc comment for why
     // this package cannot import the latter directly.
-    await this.safeSinkHandle(event as AgentRuntimeEvent);
+    await this.sinkInOrder(event as AgentRuntimeEvent);
   }
 
   private handleHello(instanceId: string): void {
@@ -819,7 +822,7 @@ export class AgentHostRuntime implements AgentRuntime {
     );
     for (const [turnId] of abandoned) this.activeTurns.delete(turnId);
     for (const [turnId, turn] of abandoned) {
-      void this.safeSinkHandle({
+      void this.sinkInOrder({
         type: 'turnEnded',
         status: 'interrupted',
         workspaceId: turn.workspaceId,
@@ -831,7 +834,7 @@ export class AgentHostRuntime implements AgentRuntime {
   }
 
   private async emitEnded(input: StartTurnInput, status: 'failed' | 'interrupted'): Promise<void> {
-    await this.safeSinkHandle({
+    await this.sinkInOrder({
       type: 'turnEnded',
       status,
       workspaceId: input.workspaceId,
@@ -839,6 +842,34 @@ export class AgentHostRuntime implements AgentRuntime {
       turnId: input.turnId,
       principalId: input.principalId,
     });
+  }
+
+  /** `AgentRuntime.ownsTurnEnd`: this runtime still carries `turnId`, or still has events for it
+   *  queued for the sink — its terminal status will come through the sink, after its messages. */
+  ownsTurnEnd(turnId: string): boolean {
+    return this.activeTurns.has(turnId) || this.turnSinkChains.has(turnId);
+  }
+
+  /**
+   * Turn-end ordering: hands `event` to the sink after every event already handed over for the
+   * same Turn has finished — the sink's own contract ("one event at a time, in emission order",
+   * agent-runtime.ts). `handleFrame` does not wait for one frame's sink call before taking the
+   * next, and a `message` (its own transaction, insert under the chat's sequence lock) is slower
+   * than a `turnEnded` (one UPDATE), so without this the Turn could commit `completed` — and a
+   * client read the history — before its answer was stored. Different Turns still run
+   * concurrently. Tracking (`activeTurns`, accept waits) stays synchronous at frame arrival in the
+   * callers; only the sink work is ordered here.
+   */
+  private sinkInOrder(event: AgentRuntimeEvent): Promise<void> {
+    const { turnId } = event;
+    const previous = this.turnSinkChains.get(turnId) ?? Promise.resolve();
+    // `safeSinkHandle` never rejects, so the chain never breaks on one failed event.
+    const next = previous.then(() => this.safeSinkHandle(event));
+    this.turnSinkChains.set(turnId, next);
+    void next.then(() => {
+      if (this.turnSinkChains.get(turnId) === next) this.turnSinkChains.delete(turnId);
+    });
+    return next;
   }
 
   /** `AgentRuntimeEventSink.handle` is caller-supplied (application/chat's event sink in

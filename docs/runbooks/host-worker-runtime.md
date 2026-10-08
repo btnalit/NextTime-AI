@@ -10,9 +10,10 @@
 的 `DOCKER_GID` 因此不再是这个服务的前置条件（下面 §10 那条 EACCES crash-loop 记录已成历史，见该
 条自己的更新说明）——`DOCKER_GID` 本身仍要设置，只是现在只服务于 `gatekeeper-docker`（见
 `docs/runbooks/host-gatekeepers.md`），不在本 runbook 的验收路径上。
-`${NEXTTIME_DATA}/config/egress-sources.json` 建议 `chown 10001:10001`（同一原因——写入会
-`EACCES`，但 S1.5a 已把这个失败改成 best-effort，不会挡住 spawn，只是那次 egress 登记不生效，
-见 §10）。
+`${NEXTTIME_DATA}/config/egress-sources.json` 必须是 `10001:10001 0644`（worker-supervisor 每次
+spawn / stop 原地改写它；root 属主时写入 `EACCES`，S1.5a 起不挡 spawn，但登记不生效，egress-proxy
+把该容器的出网判为 unknown-source 拒绝，见 §10）。v0.43.0 起 `scripts/host-env-init.sh` 与
+`scripts/apply-release.sh` 每次运行都把它设成这个属主与权限，不再需要手工 `chown`。
 
 ## 1. 目的
 
@@ -68,9 +69,10 @@ cat "${NEXTTIME_DATA}/models/models.json"   # S1.7 未接入真实 provider 时�
 ```bash
 cd <CODE_DIR>
 set -a; . ./.env; set +a
-# 让 worker-supervisor（非 root uid 10001）能写 egress 登记文件 —— 不做这步 spawn 仍会成功
-# （S1.5a 把这个失败改成了 best-effort），只是那次的 egress 来源登记不会真的写进去。
-chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json" || true
+# 让 worker-supervisor（非 root uid 10001）能写 egress 登记文件。v0.43.0 起 host-env-init.sh /
+# apply-release.sh 每次都会设好；更早的检出手工补这一行（不做时 spawn 仍成功，但登记写不进去，
+# egress-proxy 按 unknown-source 拒绝该容器出网）。
+chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json" && chmod 644 "${NEXTTIME_DATA}/config/egress-sources.json"
 docker compose up -d egress-proxy worker-supervisor
 docker compose ps egress-proxy worker-supervisor
 ```
@@ -911,3 +913,21 @@ docker compose logs worker-supervisor --since 30s | grep "docker events subscrip
   v0.5.0 tag)"这句话是首次接入这个代理时对全部 flag 的一次性审计，`EVENTS` 当时就在审计范围内（只
   是被显式设成 `0`）；本次改动只把值从 `0` 改成 `1`，flag 本身的语义没有变过，因此没有为这次改动
   重新单独跑一次 `gh api`/读源码核对——如果 v0.5.0 之后升级过镜像版本，应该重新走一次那条审计。
+
+## 16. 已接受风险：`runsc --network=host`
+
+- **现状**：目标主机上 `runsc` 运行时的参数含 `--network=host`（主机 `/etc/docker/daemon.json` 的
+  `runtimes.runsc.runtimeArgs`，不在仓库里）。原因是 Docker 用户自定义网络的内嵌 DNS
+  （`127.0.0.11`）：在 gVisor 默认的用户态网络栈（netstack）下，入口容器与 Worker 解析不到
+  `egress-proxy` 等服务名。
+- **代价**：`--network=host` 让 gVisor 的网络层直接走宿主内核网络栈，不再经 netstack，所以网络相关
+  系统调用会暴露宿主内核攻击面，隔离弱于 gVisor 默认配置。容器仍在 Docker 给它的网络命名空间和
+  `workers` 网络里，这个选项不等于 `docker run --network host`。
+- **补偿控制**：出网白名单仍然有效。`workers` 网络不直连外网，所有出站都必须经 `egress-proxy`；
+  `egress-proxy` 只放行在 `config/egress-sources.json` 里登记过的来源，未登记一律按
+  unknown-source 拒绝（§4、§15）。这一条依赖 `EGRESS_DENY_UNKNOWN_SOURCE=1`（compose 默认值；
+  `.env` 里设成 `0` 会放行未登记来源，补偿控制随之失效，不要这样设）。该文件的属主由 `host-env-init.sh` / `apply-release.sh` 保证
+  （v0.43.0 起）。
+- **决定**：维护者 victor，2026-10-08，保持现状，作为已接受风险。不改运行时配置。
+- **重新评估的时机**：gVisor netstack 能解析内嵌 DNS（升级 gVisor 后复测），或者改为给容器显式配置
+  DNS 或服务地址、不再依赖内嵌 DNS 时，去掉 `--network=host`，并把本节改为已关闭。

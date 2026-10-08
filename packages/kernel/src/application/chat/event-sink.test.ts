@@ -5,8 +5,9 @@ import { createChatEventSink } from './event-sink.js';
 import { _resetChatPushEventsForTests, subscribeToChatPushEvents } from './push.js';
 import type { ChatPushEvent } from './push.js';
 
-/** Unit test for the ephemeral (textDelta/toolCallStarted/toolCallEnded) branch of
- *  createChatEventSink — pure in-memory, no DB (this branch never opens a pool transaction). */
+/** Unit tests for createChatEventSink — the ephemeral (textDelta/toolCallStarted/toolCallEnded)
+ *  branch is pure in-memory, no DB (it never opens a pool transaction); the turnEnded case uses a
+ *  fake pool that records the order of its UPDATE, COMMIT and the push. */
 
 afterEach(() => {
   _resetChatPushEventsForTests();
@@ -69,5 +70,33 @@ describe('createChatEventSink — toolCallEnded.isError', () => {
         payload: { streamKind: 'toolCallEnded', toolCallId: 'tc1', result: { ok: true } },
       },
     ]);
+  });
+});
+
+describe('createChatEventSink — turnEnded pushes only after its transaction commits', () => {
+  it('commits the Turn end before chat.metadata tells a client it ended', async () => {
+    const log: string[] = [];
+    const client = {
+      async query(text: string) {
+        const sql = text.trim();
+        if (sql.startsWith('update activities')) {
+          log.push('update');
+          return { rows: [{ chat_id: 'chat1', status: 'completed' }], rowCount: 1 };
+        }
+        if (sql.startsWith('COMMIT')) log.push('commit');
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    };
+    const pool = { connect: async () => client } as unknown as PoolLike;
+    subscribeToChatPushEvents('chat1', (e) => log.push(`push:${e.type}`));
+
+    await createChatEventSink({ pool }).handle({
+      ...correlation(),
+      type: 'turnEnded',
+      status: 'completed',
+    });
+
+    expect(log).toEqual(['update', 'commit', 'push:chat.metadata']);
   });
 });

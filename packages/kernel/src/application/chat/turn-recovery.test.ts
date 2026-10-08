@@ -2,7 +2,12 @@ import type { PoolClient } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { _resetChatPushEventsForTests, subscribeToChatPushEvents } from './push.js';
 import type { ChatPushEvent } from './push.js';
-import { endTurn, endUnknownRuntimeTurn, requestTurnStop } from './turn-recovery.js';
+import {
+  endTurn,
+  endUnknownRuntimeTurn,
+  publishTurnEnded,
+  requestTurnStop,
+} from './turn-recovery.js';
 
 /**
  * Unit tests (fake `pg` client, no Postgres) for the Turn-end primitives — `endTurn` (R-55, the
@@ -46,14 +51,14 @@ function outboxPayload(queries: { text: string; values?: unknown[] }[]) {
 }
 
 describe('endTurn', () => {
-  it('moves a running Turn only from the states TURN_TRANSITIONS allows, enqueues TurnCompleted and pushes chat.metadata', async () => {
+  it('moves a running Turn only from the states TURN_TRANSITIONS allows and enqueues TurnCompleted — the push is left to the caller, after its commit', async () => {
     const { client, queries } = createFakeClient({ chat_id: CHAT_ID, status: 'completed' });
     const received: ChatPushEvent[] = [];
     subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
 
     const result = await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed');
 
-    expect(result).toBe('completed');
+    expect(result).toEqual({ turnId: TURN_ID, status: 'completed', chatId: CHAT_ID });
     const updateQuery = queries.find((q) => q.text.startsWith('update activities'));
     expect(updateQuery?.values).toEqual([WORKSPACE_ID, TURN_ID, 'completed', ['running']]);
     expect(updateQuery?.text).toContain("metadata ? 'stopRequestedAt'");
@@ -64,23 +69,18 @@ describe('endTurn', () => {
       turnId: TURN_ID,
       status: 'completed',
     });
-    expect(received).toEqual([
-      {
-        type: 'chat.metadata',
-        chatId: CHAT_ID,
-        metadata: { turnId: TURN_ID, turnStatus: 'completed' },
-      },
-    ]);
+    expect(received).toEqual([]);
   });
 
-  it('reports and publishes the status the row actually landed in (a stop-requested completed lands interrupted)', async () => {
+  it('reports the status the row actually landed in (a stop-requested completed lands interrupted), and publishTurnEnded pushes that status', async () => {
     const { client, queries } = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
     const received: ChatPushEvent[] = [];
     subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
 
     const result = await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed');
+    publishTurnEnded(result);
 
-    expect(result).toBe('interrupted');
+    expect(result?.status).toBe('interrupted');
     expect(outboxPayload(queries)).toMatchObject({ status: 'interrupted' });
     expect(received).toEqual([
       {
@@ -97,9 +97,21 @@ describe('endTurn', () => {
     subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
 
     const result = await endTurn(client, WORKSPACE_ID, TURN_ID, 'completed');
+    publishTurnEnded(result);
 
     expect(result).toBeUndefined();
     expect(queries.some((q) => q.text.startsWith('insert into outbox'))).toBe(false);
+    expect(received).toEqual([]);
+  });
+});
+
+describe('publishTurnEnded', () => {
+  it('pushes nothing for a Turn without a Chat', () => {
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
+
+    publishTurnEnded({ turnId: TURN_ID, status: 'completed', chatId: null });
+
     expect(received).toEqual([]);
   });
 });
@@ -118,14 +130,16 @@ describe('requestTurnStop', () => {
 });
 
 describe('endUnknownRuntimeTurn', () => {
-  it('ends a running Turn interrupted, enqueues TurnCompleted, and pushes chat.metadata — returns true', async () => {
+  it('ends a running Turn interrupted, enqueues TurnCompleted, and returns what publishTurnEnded pushes as chat.metadata', async () => {
     const { client, queries } = createFakeClient({ chat_id: CHAT_ID, status: 'interrupted' });
     const received: ChatPushEvent[] = [];
     subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
 
     const result = await endUnknownRuntimeTurn(client, WORKSPACE_ID, CHAT_ID, TURN_ID);
+    expect(received).toEqual([]);
+    publishTurnEnded(result);
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ turnId: TURN_ID, status: 'interrupted', chatId: CHAT_ID });
     const updateQuery = queries.find((q) => q.text.startsWith('update activities'));
     expect(updateQuery?.values).toEqual([WORKSPACE_ID, TURN_ID, 'interrupted', ['running']]);
     expect(outboxPayload(queries)).toMatchObject({
@@ -144,14 +158,15 @@ describe('endUnknownRuntimeTurn', () => {
     ]);
   });
 
-  it('is a no-op (returns false, no TurnCompleted, no push) when the Turn is not currently running', async () => {
+  it('is a no-op (returns undefined, no TurnCompleted, nothing to push) when the Turn is not currently running', async () => {
     const { client, queries } = createFakeClient(undefined);
     const received: ChatPushEvent[] = [];
     subscribeToChatPushEvents(CHAT_ID, (e) => received.push(e));
 
     const result = await endUnknownRuntimeTurn(client, WORKSPACE_ID, CHAT_ID, TURN_ID);
+    publishTurnEnded(result);
 
-    expect(result).toBe(false);
+    expect(result).toBeUndefined();
     expect(queries.some((q) => q.text.startsWith('insert into outbox'))).toBe(false);
     expect(received).toEqual([]);
   });

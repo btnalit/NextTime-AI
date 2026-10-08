@@ -42,6 +42,7 @@
 | [`web-console.md`](./web-console.md) | web 控制台每个页面依赖哪些 capability、角色可见性、排障表 |
 | [`release.md`](./release.md) | release-please 发布契约：单一根版本、release PR 合并前手动踢一次 CI、主机怎么跟随 tag、hotfix 流程、迁移可逆性表（§6，逐迁移读 SQL 与旧调用方判定，不可逆需标注 CHANGELOG） |
 | [`host-drills.md`](./host-drills.md) | S5.8 两个演练：`scripts/drill-install.sh`（操作机经 SSH 把只有 Docker 的干净主机走到三份验收通过，记耗时与交付缺口、拒绝已部署主机）、`scripts/drill-upgrade.sh`（升级到指定 tag → 三份验收 → 可逆性探针 → 回滚代码 + 活库 → S1，`--ack-live-restore` 必填） |
+| [`staging-rehearsal.md`](./staging-rehearsal.md) | 云端发版预演：一次性 GitHub runner 上按生产方式装上一发布版（签名镜像 + 运营者一次性状态 + 基线 S1–S4），再用它自己的 `apply-release.sh` 升到目标并跑 S3→S1→S2→S4；可选真实模型回归（需审批的 environment）；列出仍只能在生产主机做的事 |
 | [`demo.md`](./demo.md) | `DEMO_MODEL=<provider/model> make demo`：ephemeral 工作区 + 采集器 + 三句预置提问（依赖、溯源、审批重启）+ Markdown 结果页，15 分钟预算；不碰生产采集器密钥；同时是 S5.7 的第六场景 |
 | [`automation.md`](./automation.md) | GitHub 自动化一览：每个 bot/workflow 的用途、触发时机、开出东西之后该做什么 |
 

@@ -33,6 +33,7 @@ export function availablePlatformUpdate(
     newerReleases: [
       {
         version: 'v0.43.0',
+        previousVersion: 'v0.42.0',
         publishedAt: '2026-10-05T00:00:00.000Z',
         pi: '1.0.2',
         migrations: ['core 0041'],
@@ -69,6 +70,8 @@ export function feedFreshness(
 ): PlatformUpdateFeedWire {
   return {
     status: 'fresh',
+    // As the kernel sets it: a stale feed carries its cause (the download one unless overridden).
+    staleCause: overrides.status === 'stale' ? 'download' : null,
     fetchedAt: '2026-10-07T04:00:00.000Z',
     generatedAt: '2026-10-07T03:00:00.000Z',
     maxAgeHours: 48,

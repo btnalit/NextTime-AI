@@ -8,7 +8,12 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { createBackgroundServices } from '../../index.js';
-import { createChatEventSink, interruptStaleRunningTurns } from '../chat/index.js';
+import {
+  type ChatPushEvent,
+  createChatEventSink,
+  interruptStaleRunningTurns,
+  subscribeToChatPushEvents,
+} from '../chat/index.js';
 import type { AgentHostLink, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { AgentHostRuntime } from '../host-bridge/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -22,7 +27,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * `status = any(<TURN_TRANSITIONS sources>)` and its stop-intent rule) and because the TurnStarted
  * check reads the Activity row through `createBackgroundServices`' own wiring. Also R-56's chat-level
  * outcome: after an agent-host link flap, the replayed terminal frames end the Turn and the chat
- * takes the next message.
+ * takes the next message. And the Turn-end ordering invariant: when a Turn reaches its terminal
+ * status, every assistant message the kernel received for it is already committed, and a client is
+ * told the Turn ended only after that commit.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -346,6 +353,126 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(
         dispatchCapability({ pool }, human(), 'send_chat_message', { chatId, text: 'next' }),
       ).resolves.toMatchObject({ turnId: expect.any(String) });
+    });
+
+    /** An accepted Turn on a fresh AgentHostRuntime whose sink is `turnSink` (the real chat sink
+     *  unless a test wraps it), and the frame helpers agent-host's own order needs. */
+    async function acceptedRuntimeTurn(turnSink: AgentRuntimeEventSink) {
+      const { privateKey } = await generateEphemeralHandleKeyPair();
+      const runtime = new AgentHostRuntime({
+        pool,
+        sink: turnSink,
+        privateKey,
+        kernelLlmUrl: 'http://llm-proxy:8082',
+        turnAcceptedTimeoutMs: 60 * 60 * 1000,
+        log: () => {},
+      });
+      runtime.connect({ send: () => {} });
+      const { chatId, turnId } = await startTurn();
+      await runtime.startTurn({ workspaceId, chatId, turnId, principalId: ownerId, prompt: 'hi' });
+      runtime.handleFrame({ type: 'turnAccepted', turnId });
+      const answer = (text: string) =>
+        runtime.handleFrame({
+          type: 'runtimeEvent',
+          event: {
+            type: 'message',
+            role: 'assistant',
+            content: { text },
+            workspaceId,
+            chatId,
+            turnId,
+            principalId: ownerId,
+          },
+        });
+      const end = () =>
+        runtime.handleFrame({
+          type: 'runtimeEvent',
+          event: turnEnded(chatId, turnId, 'completed'),
+        });
+      return { runtime, chatId, turnId, answer, end };
+    }
+
+    /** The real sink, with each `message` held back `ms` first — the insert's own transaction
+     *  (chat sequence lock) is slower than `turnEnded`'s single UPDATE; this makes it reliably so. */
+    function slowMessageSink(ms: number): AgentRuntimeEventSink {
+      return {
+        async handle(event) {
+          if (event.type === 'message') await new Promise((resolve) => setTimeout(resolve, ms));
+          await sink.handle(event);
+        },
+      };
+    }
+
+    async function assistantTexts(chatId: string): Promise<string[]> {
+      const history = (await dispatchCapability({ pool }, human(), 'get_chat_history', {
+        chatId,
+      })) as { items: { role: string; text: string }[] };
+      return history.items.filter((item) => item.role === 'assistant').map((item) => item.text);
+    }
+
+    it('Turn-end ordering: the answer agent-host sent before turnEnded is stored before the Turn reads completed', async () => {
+      const { chatId, turnId, answer, end } = await acceptedRuntimeTurn(slowMessageSink(300));
+      const pushes: ChatPushEvent['type'][] = [];
+      const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event.type));
+      try {
+        answer('the stored answer');
+        end();
+
+        // The first moment the Turn reads completed, its answer must already be there.
+        let historyAtCompletion: string[] | undefined;
+        await vi.waitFor(
+          async () => {
+            const status = (await turnRow(turnId))?.status;
+            if (status === 'completed' && historyAtCompletion === undefined) {
+              historyAtCompletion = await assistantTexts(chatId);
+            }
+            expect(status).toBe('completed');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+        expect(historyAtCompletion).toEqual(['the stored answer']);
+        // A client is told about the answer before it is told the Turn ended.
+        await vi.waitFor(() => expect(pushes).toContain('chat.metadata'));
+        expect(pushes.filter((type) => type !== 'chat.stream')).toEqual([
+          'chat.message',
+          'chat.metadata',
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('Turn-end ordering: report_turn arriving before agent-host’s frames records the summary but leaves the end to the runtime', async () => {
+      const { runtime, chatId, turnId, answer, end } = await acceptedRuntimeTurn(
+        slowMessageSink(300),
+      );
+      setAgentRuntimeForHandlers(runtime);
+
+      // pi's agent_settled reaches the extension and agent-host at once; the extension's HTTP
+      // call wins the race to the kernel.
+      const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: 'answered',
+      })) as { status: string };
+      expect(reported.status).toBe('running');
+      expect((await turnRow(turnId))?.metadata.summary).toBe('answered');
+      expect(await turnCompletedStatuses(turnId)).toEqual([]);
+
+      answer('the answer');
+      end();
+      // Still queued behind the answer: report_turn again (a retry) must not end it either.
+      await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: 'answered',
+      });
+      expect((await turnRow(turnId))?.status).toBe('running');
+
+      await vi.waitFor(async () => expect((await turnRow(turnId))?.status).toBe('completed'), {
+        timeout: 5000,
+      });
+      expect(await assistantTexts(chatId)).toEqual(['the answer']);
+      expect(await turnCompletedStatuses(turnId)).toEqual(['completed']);
+      expect(runtime.ownsTurnEnd(turnId)).toBe(false);
     });
   },
 );

@@ -310,20 +310,25 @@ function UpdateFeedCard({ updates }: { readonly updates: Resource<PlatformUpdate
   const summary =
     feed.status === 'fresh'
       ? t(`版本信息在 ${hours} 小时以内。`, `The version information is within ${hours} hours.`)
-      : feed.status === 'stale'
+      : feed.status === 'stale' && feed.staleCause === 'ci'
         ? t(
-            `超过 ${hours} 小时没有取到新的版本信息——请在主机上查看 update-feed 服务的日志。`,
-            `No fresh version information for more than ${hours} hours — check the update-feed service's logs on the host.`,
+            '主机下载正常，但 CI 已经很久没有更新版本记录——请在 GitHub Actions 查看 pi drift / release channel 工作流。',
+            'Downloads are recent, but CI has not rewritten the version record for too long — check the pi drift / release channel workflows in GitHub Actions.',
           )
-        : feed.status === 'invalid'
+        : feed.status === 'stale'
           ? t(
-              '内核拒绝了下载到的版本记录，暂时不会据此提醒升级——详情见技术细节。',
-              'The kernel rejected the downloaded version record, so no upgrade reminders are shown from it for now — see the technical details.',
+              `超过 ${hours} 小时没有取到新的版本信息——请在主机上查看 update-feed 服务的日志。`,
+              `No fresh version information for more than ${hours} hours — check the update-feed service's logs on the host.`,
             )
-          : t(
-              '还没有取到版本信息：update-feed 服务可能还没成功取过一次。',
-              'No version information yet: the update-feed service may not have fetched it successfully even once.',
-            );
+          : feed.status === 'invalid'
+            ? t(
+                '内核拒绝了下载到的版本记录，暂时不会据此提醒升级——详情见技术细节。',
+                'The kernel rejected the downloaded version record, so no upgrade reminders are shown from it for now — see the technical details.',
+              )
+            : t(
+                '还没有取到版本信息：update-feed 服务可能还没成功取过一次。',
+                'No version information yet: the update-feed service may not have fetched it successfully even once.',
+              );
   return (
     <Card title={title}>
       <div className="row" data-testid="status-update-feed">

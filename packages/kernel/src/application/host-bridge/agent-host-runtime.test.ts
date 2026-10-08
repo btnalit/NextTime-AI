@@ -1605,11 +1605,152 @@ describe('AgentHostRuntime — runtimeEvent forwarding', () => {
       { type: 'runtimeEvent', event: { type: 'turnEnded', status: 'completed', ...base } },
     ];
     for (const frame of frames) runtime.handleFrame(frame);
-    await Promise.resolve();
 
-    expect(events).toHaveLength(5);
+    await vi.waitFor(() => expect(events).toHaveLength(5));
     expect(events[0]).toEqual({ type: 'textDelta', delta: 'hi', ...base });
     expect(events[4]).toEqual({ type: 'turnEnded', status: 'completed', ...base });
+  });
+});
+
+describe('AgentHostRuntime — Turn-end ordering: a Turn ends only after its messages are handled', () => {
+  /** A sink whose `message` handling waits until the test releases it — a stand-in for the real
+   *  sink's insert transaction (advisory lock, sequence) being slower than `turnEnded`'s UPDATE. */
+  function createGatedSink() {
+    const log: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sink: AgentRuntimeEventSink = {
+      async handle(event) {
+        log.push(`${event.type}:start`);
+        if (event.type === 'message') await gate;
+        log.push(`${event.type}:end`);
+      },
+    };
+    return { sink, log, release };
+  }
+
+  async function acceptedTurn(sink: AgentRuntimeEventSink) {
+    const { pool } = createFakePool();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+    const base = {
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      turnId: input.turnId,
+      principalId: input.principalId,
+    };
+    return { runtime, input, base, sent };
+  }
+
+  it('holds turnEnded back until the message received before it has been handled', async () => {
+    const { sink, log, release } = createGatedSink();
+    const { runtime, input, base } = await acceptedTurn(sink);
+
+    // agent-host's own order on the one WS stream: the final message, then turnEnded.
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: { type: 'message', role: 'assistant', content: { text: 'answer' }, ...base },
+    });
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: { type: 'turnEnded', status: 'completed', ...base },
+    });
+
+    await vi.waitFor(() => expect(log).toEqual(['message:start']));
+    // Give a concurrent turnEnded every chance to overtake: before the fix it ran here.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(log).toEqual(['message:start']);
+    // The Turn is no longer active, but its end is still queued behind the message — the
+    // runtime still owns it, so the extension's report_turn must leave it alone.
+    expect(runtime.ownsTurnEnd(input.turnId)).toBe(true);
+
+    release();
+    await vi.waitFor(() =>
+      expect(log).toEqual(['message:start', 'message:end', 'turnEnded:start', 'turnEnded:end']),
+    );
+    await vi.waitFor(() => expect(runtime.ownsTurnEnd(input.turnId)).toBe(false));
+  });
+
+  it('a sink failure on one event does not stall the Turn’s later events', async () => {
+    const handled: string[] = [];
+    const sink: AgentRuntimeEventSink = {
+      async handle(event) {
+        if (event.type === 'message') throw new Error('insert failed');
+        handled.push(event.type);
+      },
+    };
+    const { runtime, input, base } = await acceptedTurn(sink);
+
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: { type: 'message', role: 'assistant', content: { text: 'x' }, ...base },
+    });
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: { type: 'turnEnded', status: 'completed', ...base },
+    });
+
+    await vi.waitFor(() => expect(handled).toEqual(['turnEnded']));
+    await vi.waitFor(() => expect(runtime.ownsTurnEnd(input.turnId)).toBe(false));
+  });
+
+  it('does not order one Turn behind another', async () => {
+    const { sink, log, release } = createGatedSink();
+    const first = await acceptedTurn(sink);
+
+    // A second Turn on the same runtime.
+    const secondInput = startTurnInput();
+    const secondStart = first.runtime.startTurn(secondInput);
+    await vi.waitFor(() => expect(first.sent).toHaveLength(2));
+    first.runtime.handleFrame({ type: 'turnAccepted', turnId: secondInput.turnId });
+    await secondStart;
+
+    first.runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: { type: 'message', role: 'assistant', content: { text: 'slow' }, ...first.base },
+    });
+    await vi.waitFor(() => expect(log).toEqual(['message:start']));
+
+    // The second Turn ends while the first one's message is still in flight — it is not held.
+    first.runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: {
+        type: 'turnEnded',
+        status: 'completed',
+        workspaceId: secondInput.workspaceId,
+        chatId: secondInput.chatId,
+        turnId: secondInput.turnId,
+        principalId: secondInput.principalId,
+      },
+    });
+    await vi.waitFor(() =>
+      expect(log).toEqual(['message:start', 'turnEnded:start', 'turnEnded:end']),
+    );
+
+    release();
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+  });
+
+  it('reports ownsTurnEnd for an active Turn and not for one it never knew', async () => {
+    const { sink } = createFakeSink();
+    const { runtime, input } = await acceptedTurn(sink);
+    expect(runtime.ownsTurnEnd(input.turnId)).toBe(true);
+    expect(runtime.ownsTurnEnd(randomUUID())).toBe(false);
   });
 });
 
