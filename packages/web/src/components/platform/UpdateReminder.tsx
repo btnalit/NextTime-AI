@@ -131,14 +131,16 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
     notice.piVersion !== null
       ? t(`内置 pi ${notice.piVersion}`, `bundles pi ${notice.piVersion}`)
       : null,
-    migrations.length === 0
-      ? t('无迁移', 'no migrations')
-      : migrations.length <= 3
-        ? t(`迁移 ${migrations.join('、')}`, `migrations ${migrations.join(', ')}`)
-        : t(
-            `迁移 ${migrations[0]} 等 ${migrations.length} 项`,
-            `${migrations.length} migrations from ${migrations[0]}`,
-          ),
+    notice.migrationsIncomplete
+      ? t('迁移列表不完整', 'migration list incomplete')
+      : migrations.length === 0
+        ? t('无迁移', 'no migrations')
+        : migrations.length <= 3
+          ? t(`迁移 ${migrations.join('、')}`, `migrations ${migrations.join(', ')}`)
+          : t(
+              `迁移 ${migrations[0]} 等 ${migrations.length} 项`,
+              `${migrations.length} migrations from ${migrations[0]}`,
+            ),
     notice.breaking
       ? t('含 breaking 变更', 'includes breaking changes')
       : t('非 breaking', 'not breaking'),
@@ -188,11 +190,21 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
             </li>
             <li data-testid="update-notice-platform-migrations">
               {migrations.length === 0
-                ? t('本次升级不跨迁移。', 'This upgrade crosses no migrations.')
-                : t(
-                    `本次升级会跨越这些迁移：${migrations.join('、')}。`,
-                    `This upgrade crosses these migrations: ${migrations.join(', ')}.`,
-                  )}
+                ? notice.migrationsIncomplete
+                  ? t(
+                      '版本记录里没有列出迁移，但本机落后超过记录覆盖的发版范围，更早的迁移未列出。',
+                      'The version record lists no migrations, but this host is older than the releases it covers, so earlier migrations are not listed.',
+                    )
+                  : t('本次升级不跨迁移。', 'This upgrade crosses no migrations.')
+                : notice.migrationsIncomplete
+                  ? t(
+                      `本次升级至少跨越这些迁移：${migrations.join('、')}。本机落后超过版本记录覆盖的发版范围，更早的迁移未列出（升级脚本会全部执行）。`,
+                      `This upgrade crosses at least these migrations: ${migrations.join(', ')}. This host is older than the releases the version record covers, so earlier migrations are not listed (the upgrade script still runs all of them).`,
+                    )
+                  : t(
+                      `本次升级会跨越这些迁移：${migrations.join('、')}。`,
+                      `This upgrade crosses these migrations: ${migrations.join(', ')}.`,
+                    )}
             </li>
             {notice.breaking ? (
               <li>
@@ -273,27 +285,46 @@ function PiIncompatibleBody({ notice }: { readonly notice: PiIncompatibleNotice 
 
 function FeedStaleBody({ notice }: { readonly notice: FeedStaleNotice }) {
   const t = useT();
-  const { age } = notice;
+  const { age, cause } = notice;
+  const title =
+    cause === 'download'
+      ? age === null
+        ? t('版本信息已陈旧', 'Version information is out of date')
+        : age.unit === 'day'
+          ? t(
+              `版本信息已 ${age.value} 天未更新`,
+              `Version information not updated for ${age.value} day(s)`,
+            )
+          : t(
+              `版本信息已 ${age.value} 小时未更新`,
+              `Version information not updated for ${age.value} hour(s)`,
+            )
+      : age === null
+        ? t('版本记录已停止更新', 'The version record stopped being updated')
+        : age.unit === 'day'
+          ? t(
+              `版本记录已 ${age.value} 天未由 CI 更新`,
+              `The version record has not been rewritten by CI for ${age.value} day(s)`,
+            )
+          : t(
+              `版本记录已 ${age.value} 小时未由 CI 更新`,
+              `The version record has not been rewritten by CI for ${age.value} hour(s)`,
+            );
   return (
     <>
       <strong className="update-notice-title" data-testid="update-notice-feed-stale-title">
-        {age === null
-          ? t('版本信息已陈旧', 'Version information is out of date')
-          : age.unit === 'day'
-            ? t(
-                `版本信息已 ${age.value} 天未更新`,
-                `Version information not updated for ${age.value} day(s)`,
-              )
-            : t(
-                `版本信息已 ${age.value} 小时未更新`,
-                `Version information not updated for ${age.value} hour(s)`,
-              )}
+        {title}
       </strong>
-      <span>
-        {t(
-          '可能是主机取不到 GitHub——请在主机上查看 update-feed 服务的日志。',
-          "The host may be unable to reach GitHub — check the update-feed service's logs on the host.",
-        )}
+      <span data-testid="update-notice-feed-stale-hint">
+        {cause === 'download'
+          ? t(
+              '可能是主机取不到 GitHub——请在主机上查看 update-feed 服务的日志。',
+              "The host may be unable to reach GitHub — check the update-feed service's logs on the host.",
+            )
+          : t(
+              '主机下载正常，但仓库的 pi drift / release channel 工作流没有再写版本记录——请到 GitHub Actions 查看这两个工作流。',
+              "The host downloads fine, but the repository's pi drift / release channel workflows stopped rewriting the record — check those two workflows in GitHub Actions.",
+            )}
       </span>
     </>
   );

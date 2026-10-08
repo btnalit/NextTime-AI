@@ -149,7 +149,7 @@ describe('UpdateReminder', () => {
     expect(within(notice).getByTestId('update-notice-pi-incompatible-link')).toBeTruthy();
   });
 
-  it('feed stale: how many days, and where to look; hours when under a day', async () => {
+  it('feed stale from downloads: how many days, and where to look; hours when under a day', async () => {
     const days = Date.now() - 3 * 86_400_000 - 3_600_000;
     renderReminder(
       scriptedHttp(() =>
@@ -168,7 +168,8 @@ describe('UpdateReminder', () => {
     expect(notice.textContent).toContain('update-feed');
     cleanup();
 
-    const hours = Date.now() - 5 * 3_600_000 - 60_000;
+    // A download 50 h 1 min old, past the 48 h limit by under a day: still shown in days.
+    const hours = Date.now() - 50 * 3_600_000 - 60_000;
     renderReminder(
       scriptedHttp(() =>
         platformUpdates({
@@ -180,7 +181,45 @@ describe('UpdateReminder', () => {
       ),
     );
     expect((await screen.findByTestId('update-notice-feed-stale-title')).textContent).toBe(
-      '版本信息已 5 小时未更新',
+      '版本信息已 2 天未更新',
+    );
+  });
+
+  it('feed stale while downloads are recent: points at the CI workflows, not the host', async () => {
+    renderReminder(
+      scriptedHttp(() =>
+        platformUpdates({
+          feedFreshness: feedFreshness({
+            status: 'stale',
+            fetchedAt: new Date(Date.now() - 5 * 3_600_000).toISOString(),
+            generatedAt: new Date(Date.now() - 4 * 86_400_000 - 60_000).toISOString(),
+          }),
+        }),
+      ),
+    );
+    const notice = await screen.findByTestId('update-notice-feed-stale');
+    expect(within(notice).getByTestId('update-notice-feed-stale-title').textContent).toBe(
+      '版本记录已 4 天未由 CI 更新',
+    );
+    const hint = within(notice).getByTestId('update-notice-feed-stale-hint').textContent ?? '';
+    expect(hint).toContain('GitHub Actions');
+    expect(hint).not.toContain('update-feed');
+  });
+
+  it('a host older than the record window: the migration list says it is partial', async () => {
+    renderReminder(
+      scriptedHttp(() =>
+        platformUpdates({
+          platformUpdate: availablePlatformUpdate({ migrationsIncomplete: true }),
+        }),
+      ),
+    );
+    const notice = await screen.findByTestId('update-notice-platform');
+    expect(within(notice).getByTestId('update-notice-platform-facts').textContent).toContain(
+      '迁移列表不完整',
+    );
+    expect(within(notice).getByTestId('update-notice-platform-migrations').textContent).toContain(
+      '更早的迁移未列出',
     );
   });
 

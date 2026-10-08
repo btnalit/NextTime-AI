@@ -35,6 +35,8 @@ export interface PlatformReleaseNotice {
   /** The pi the newest release bundles; null when that release carries none. */
   readonly piVersion: string | null;
   readonly migrations: readonly string[];
+  /** The running version predates the record's window: `migrations` is partial. */
+  readonly migrationsIncomplete: boolean;
   readonly breaking: boolean;
   readonly notesUrl: string | null;
   readonly applyCommand: string | null;
@@ -65,11 +67,19 @@ export interface FeedInvalidNotice {
   readonly detail: string;
 }
 
+/** Why the record is stale — the kernel checks both halves, the download first:
+ *  - `download`: no successful download for `maxAgeHours` (the host cannot reach GitHub, or the
+ *    update-feed service is down) — the age is the last download's;
+ *  - `ci`: downloads are recent but CI stopped rewriting the record (the nightly pi drift / release
+ *    channel workflows) — the age is the record's own `generatedAt`. */
+export type FeedStaleCause = 'download' | 'ci';
+
 export interface FeedStaleNotice {
   readonly kind: 'feed-stale';
   readonly key: string;
   readonly tone: UpdateNoticeTone;
-  /** null when the feed carries no fetch time (should not happen for `stale`). */
+  readonly cause: FeedStaleCause;
+  /** null when the feed carries no such time (should not happen for `stale`). */
   readonly age: FeedAge | null;
 }
 
@@ -99,8 +109,8 @@ export function feedAge(fetchedAt: string | null, now: number = Date.now()): Fee
   return { value: Math.max(1, Math.floor(elapsed / HOUR_MS)), unit: 'hour' };
 }
 
-/** The wire already restricts these to this repository's GitHub pages (`ReleaseChannelUrlSchema`),
- *  but the console never trusts a href: anything that is not plain https is dropped. */
+/** The kernel already admits only GitHub release / run pages of the repository `UPDATE_FEED_URL`
+ *  names, but the console never trusts a href: anything that is not plain https is dropped. */
 function safeUrl(url: string | null): string | null {
   return url !== null && /^https:\/\//.test(url) ? url : null;
 }
@@ -135,6 +145,7 @@ export function buildUpdateNotices(
       releaseCount: platform.newerReleases.length,
       piVersion: platform.newerReleases[0]?.pi ?? null,
       migrations: platform.migrations,
+      migrationsIncomplete: platform.migrationsIncomplete,
       breaking: platform.breaking,
       notesUrl: safeUrl(platform.notesUrl),
       applyCommand: platform.applyCommand,
@@ -173,12 +184,28 @@ export function buildUpdateNotices(
       detail: feed.detail,
     });
   } else if (feed.status === 'stale') {
-    notices.push({
-      kind: 'feed-stale',
-      key: feedNoticeKey('stale', feed.fetchedAt),
-      tone: 'warn',
-      age: feedAge(feed.fetchedAt, now),
-    });
+    // Same order as the kernel: a download older than its limit is the cause; otherwise the
+    // kernel can only have called it stale for the record's own age.
+    const fetched = feed.fetchedAt === null ? Number.NaN : Date.parse(feed.fetchedAt);
+    const cause: FeedStaleCause =
+      Number.isNaN(fetched) || now - fetched > feed.maxAgeHours * HOUR_MS ? 'download' : 'ci';
+    notices.push(
+      cause === 'download'
+        ? {
+            kind: 'feed-stale',
+            key: feedNoticeKey('stale', feed.fetchedAt),
+            tone: 'warn',
+            cause,
+            age: feedAge(feed.fetchedAt, now),
+          }
+        : {
+            kind: 'feed-stale',
+            key: `feed-stale-ci:${feed.generatedAt ?? 'none'}`,
+            tone: 'warn',
+            cause,
+            age: feedAge(feed.generatedAt, now),
+          },
+    );
   }
 
   return notices;

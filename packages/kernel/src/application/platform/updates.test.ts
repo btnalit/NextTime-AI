@@ -11,6 +11,7 @@ import {
   readReleaseChannel,
   releaseChannelFromFile,
   resolveUpdateFeedFile,
+  resolveUpdateFeedRepo,
 } from './updates.js';
 
 /** S10 U1: `platform_updates` from the downloaded ReleaseChannel record. */
@@ -18,6 +19,7 @@ import {
 const NOW = new Date('2026-10-08T12:00:00Z');
 const HOUR = 3_600_000;
 const REPO = 'https://github.com/example/nexttime-ai';
+const FEED_REPO = 'example/nexttime-ai';
 
 function release(version: string, pi: string, migrations: string[] = [], breaking = false) {
   return {
@@ -63,6 +65,7 @@ function readOf(record: ReleaseChannel, fetchedAgoHours = 1): ReleaseChannelRead
     JSON.stringify(record),
     new Date(NOW.getTime() - fetchedAgoHours * HOUR),
     NOW,
+    FEED_REPO,
   );
 }
 
@@ -103,7 +106,7 @@ describe('releaseChannelFromFile', () => {
   });
 
   it('rejects non-JSON and schema violations as invalid, using nothing from them', () => {
-    const notJson = releaseChannelFromFile('/f', '<html>', NOW, NOW);
+    const notJson = releaseChannelFromFile('/f', '<html>', NOW, NOW, FEED_REPO);
     expect(notJson).toMatchObject({ channel: null, feed: { status: 'invalid' } });
 
     const forged = [
@@ -123,7 +126,7 @@ describe('releaseChannelFromFile', () => {
       }),
     ];
     for (const record of forged) {
-      const read = releaseChannelFromFile('/f', JSON.stringify(record), NOW, NOW);
+      const read = releaseChannelFromFile('/f', JSON.stringify(record), NOW, NOW, FEED_REPO);
       expect(read.channel).toBeNull();
       expect(read.feed.status).toBe('invalid');
       expect(read.feed.detail).toContain('rejected');
@@ -139,6 +142,7 @@ describe('derivePlatformUpdates', () => {
       latestVersion: 'v0.44.0',
       available: true,
       migrations: ['core 0041', 'task 0006', 'core 0042'],
+      migrationsIncomplete: false,
       breaking: true,
       notesUrl: `${REPO}/releases/tag/v0.44.0`,
       applyCommand: 'sh scripts/apply-release.sh --pull v0.44.0',
@@ -155,6 +159,18 @@ describe('derivePlatformUpdates', () => {
       upstreamLatest: '1.0.2',
       bundledIn: 'v0.43.0',
     });
+  });
+
+  it('flags the migration list as partial when this version predates the listed window', () => {
+    // The record lists v0.41.0 and newer; v0.40.0 → the migrations v0.41.0 added over v0.40.x and
+    // anything before are not in it (apply-release still runs them).
+    expect(derive(readOf(channel()), 'v0.40.0 (aaa1111)').platformUpdate).toMatchObject({
+      available: true,
+      migrationsIncomplete: true,
+    });
+    expect(
+      derive(readOf(channel()), 'v0.41.0 (bbb2222)').platformUpdate?.migrationsIncomplete,
+    ).toBe(false);
   });
 
   it('has nothing to offer on the latest release', () => {
@@ -217,8 +233,56 @@ describe('derivePlatformUpdates', () => {
     expect(noPin.piUpdate.state).toBe('unknown');
   });
 
+  it('rejects a record linking outside the UPDATE_FEED_URL repository, case-insensitively', () => {
+    const foreign = channel({
+      platform: {
+        latest: 'v0.44.0',
+        releases: [
+          {
+            ...release('v0.44.0', '1.0.2'),
+            notesUrl: 'https://github.com/someone-else/fork/releases/tag/v0.44.0',
+          },
+        ],
+      },
+    });
+    const read = releaseChannelFromFile('/f', JSON.stringify(foreign), NOW, NOW, FEED_REPO);
+    expect(read).toMatchObject({ channel: null, feed: { status: 'invalid' } });
+    expect(read.feed.detail).toContain('links outside example/nexttime-ai');
+
+    const foreignRun = channel({
+      piUpstream: { ...UPSTREAM, runUrl: 'https://github.com/someone-else/fork/actions/runs/1' },
+    });
+    expect(
+      releaseChannelFromFile('/f', JSON.stringify(foreignRun), NOW, NOW, FEED_REPO).channel,
+    ).toBeNull();
+
+    const own = releaseChannelFromFile(
+      '/f',
+      JSON.stringify(channel()),
+      NOW,
+      NOW,
+      'Example/NextTime-AI'.toLowerCase(),
+    );
+    expect(own.channel).not.toBeNull();
+    expect(
+      releaseChannelFromFile('/f', JSON.stringify(channel()), NOW, NOW, null).feed.status,
+    ).toBe('invalid');
+  });
+
+  it('takes the repository from UPDATE_FEED_URL, lower-cased; null for anything else', () => {
+    expect(
+      resolveUpdateFeedRepo({
+        UPDATE_FEED_URL: 'https://github.com/Owner/Repo.X/releases/download/channel/channel.json',
+      }),
+    ).toBe('owner/repo.x');
+    expect(resolveUpdateFeedRepo({})).toBe('btnalit/nexttime-ai');
+    expect(
+      resolveUpdateFeedRepo({ UPDATE_FEED_URL: 'https://mirror.example/channel.json' }),
+    ).toBeNull();
+  });
+
   it('uses nothing from an invalid or missing record', () => {
-    const invalid = derive(releaseChannelFromFile('/f', '{}', NOW, NOW));
+    const invalid = derive(releaseChannelFromFile('/f', '{}', NOW, NOW, FEED_REPO));
     expect(invalid.platformUpdate).toBeNull();
     expect(invalid.piUpdate).toMatchObject({ state: 'unknown', upstreamLatest: null });
     expect(invalid.feedFreshness.status).toBe('invalid');
@@ -237,7 +301,7 @@ describe('readReleaseChannel', () => {
   });
 
   it('a missing file is an explicit missing, never a throw', async () => {
-    const read = await readReleaseChannel(path.join(dir, 'channel.json'), NOW);
+    const read = await readReleaseChannel(path.join(dir, 'channel.json'), NOW, FEED_REPO);
     expect(read).toMatchObject({ channel: null, feed: { status: 'missing', fetchedAt: null } });
     expect(read.feed.detail).toContain('update-feed');
   });
@@ -245,7 +309,7 @@ describe('readReleaseChannel', () => {
   it('a directory at the path is missing too', async () => {
     const file = path.join(dir, 'channel.json');
     await mkdir(file);
-    expect((await readReleaseChannel(file, NOW)).feed.status).toBe('missing');
+    expect((await readReleaseChannel(file, NOW, FEED_REPO)).feed.status).toBe('missing');
   });
 
   it('reads the file and takes the download time from its modification time', async () => {
@@ -253,7 +317,7 @@ describe('readReleaseChannel', () => {
     await writeFile(file, JSON.stringify(channel()));
     const fetched = new Date(NOW.getTime() - 50 * HOUR);
     await utimes(file, fetched, fetched);
-    const read = await readReleaseChannel(file, NOW);
+    const read = await readReleaseChannel(file, NOW, FEED_REPO);
     expect(read.feed).toMatchObject({ status: 'stale', fetchedAt: fetched.toISOString() });
     expect(read.channel?.platform.latest).toBe('v0.44.0');
   });
@@ -261,7 +325,7 @@ describe('readReleaseChannel', () => {
   it('rejects a file over the size cap without parsing it', async () => {
     const file = path.join(dir, 'channel.json');
     await writeFile(file, ' '.repeat(RELEASE_CHANNEL_MAX_BYTES + 1));
-    const read = await readReleaseChannel(file, NOW);
+    const read = await readReleaseChannel(file, NOW, FEED_REPO);
     expect(read).toMatchObject({ channel: null, feed: { status: 'invalid' } });
     expect(read.feed.detail).toContain(`> ${RELEASE_CHANNEL_MAX_BYTES}`);
   });

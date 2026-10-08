@@ -830,7 +830,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       afterEach(async () => {
-        for (const name of ['UPDATE_FEED_FILE', 'KERNEL_VERSION', 'PI_VERSION_FILE']) {
+        for (const name of [
+          'UPDATE_FEED_FILE',
+          'UPDATE_FEED_URL',
+          'KERNEL_VERSION',
+          'PI_VERSION_FILE',
+        ]) {
           Reflect.deleteProperty(process.env, name);
         }
         supervisor.defaultImage = 'nexttime-ai-worker-runtime';
@@ -875,6 +880,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
         process.env.UPDATE_FEED_FILE = feedFile;
+        process.env.UPDATE_FEED_URL = `${repo}/releases/download/channel/channel.json`;
 
         const result = await callAsAdmin<PlatformUpdatesWire>('platform_updates');
         expect(result.feedFreshness.status).toBe('fresh');

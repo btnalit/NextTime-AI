@@ -47,6 +47,34 @@ export function resolveUpdateFeedFile(env: NodeJS.ProcessEnv): string {
   return configured && configured.length > 0 ? configured : DEFAULT_UPDATE_FEED_FILE;
 }
 
+/** The update-feed service's default source — the compose file's `UPDATE_FEED_URL` default. */
+export const DEFAULT_UPDATE_FEED_URL =
+  'https://github.com/btnalit/nexttime-ai/releases/download/channel/channel.json';
+
+/**
+ * The repository the record must come from: `owner/repo` (lower-cased — GitHub names are
+ * case-insensitive) of `UPDATE_FEED_URL`, which compose hands both the update-feed service and the
+ * kernel. Every link in the record must point into it; a record linking anywhere else is rejected
+ * whole. null when the URL is not a GitHub release download, which rejects every record.
+ */
+export function resolveUpdateFeedRepo(env: NodeJS.ProcessEnv): string | null {
+  const url =
+    env.UPDATE_FEED_URL && env.UPDATE_FEED_URL.length > 0
+      ? env.UPDATE_FEED_URL
+      : DEFAULT_UPDATE_FEED_URL;
+  const match =
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/releases\/download\//.exec(
+      url,
+    );
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
+function linksOf(channel: ReleaseChannel): string[] {
+  const links = channel.platform.releases.map((release) => release.notesUrl);
+  if (channel.piUpstream?.runUrl) links.push(channel.piUpstream.runUrl);
+  return links;
+}
+
 export interface ReleaseChannelRead {
   readonly feed: PlatformUpdateFeedWire;
   /** null unless the file exists, fits the size cap and matches the schema. */
@@ -74,6 +102,7 @@ export function releaseChannelFromFile(
   text: string,
   modifiedAt: Date,
   now: Date,
+  repo: string | null,
 ): ReleaseChannelRead {
   const fetchedAt = modifiedAt.toISOString();
   let json: unknown;
@@ -103,6 +132,22 @@ export function releaseChannelFromFile(
     };
   }
   const channel = parsed.data;
+  const prefix = repo === null ? null : `https://github.com/${repo}/`;
+  const foreign = linksOf(channel).find(
+    (link) => prefix === null || !link.toLowerCase().startsWith(prefix),
+  );
+  if (foreign !== undefined) {
+    return {
+      feed: feedOf(
+        'invalid',
+        prefix === null
+          ? 'UPDATE_FEED_URL is not a GitHub release-download URL, so no record can be trusted — the record was rejected'
+          : `update feed ${file} links outside ${repo} (${foreign.slice(0, 120)}) — the record was rejected`,
+        fetchedAt,
+      ),
+      channel: null,
+    };
+  }
   const fetchAge = now.getTime() - modifiedAt.getTime();
   const generatedAge = now.getTime() - Date.parse(channel.generatedAt);
   const fetchStale = fetchAge > UPDATE_FEED_MAX_AGE_HOURS * 3_600_000;
@@ -148,7 +193,8 @@ function readErrorDetail(file: string, err: unknown): string {
  *  bounded: at most one byte past the cap is ever buffered. */
 export async function readReleaseChannel(
   file: string,
-  now: Date = new Date(),
+  now: Date,
+  repo: string | null,
 ): Promise<ReleaseChannelRead> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -173,7 +219,7 @@ export async function readReleaseChannel(
       length += bytesRead;
     }
     if (length > RELEASE_CHANNEL_MAX_BYTES) return tooLarge(length);
-    return releaseChannelFromFile(file, buffer.toString('utf8', 0, length), info.mtime, now);
+    return releaseChannelFromFile(file, buffer.toString('utf8', 0, length), info.mtime, now, repo);
   } catch (err) {
     return { feed: feedOf('missing', readErrorDetail(file, err)), channel: null };
   } finally {
@@ -201,6 +247,13 @@ function derivePlatformUpdate(
           .filter((release) => (comparePlatformVersions(release.version, currentVersion) ?? 0) > 0)
           .sort((a, b) => comparePlatformVersions(b.version, a.version) ?? 0);
   const newest = newer[0];
+  const oldestListed = channel.platform.releases.reduce<string | null>(
+    (oldest, release) =>
+      oldest === null || (comparePlatformVersions(release.version, oldest) ?? 0) < 0
+        ? release.version
+        : oldest,
+    null,
+  );
   return {
     currentVersion,
     latestVersion: channel.platform.latest,
@@ -208,6 +261,11 @@ function derivePlatformUpdate(
     newerReleases: newer,
     // Apply order: oldest newer release first.
     migrations: [...newer].reverse().flatMap((release) => release.migrations),
+    migrationsIncomplete:
+      newest !== undefined &&
+      currentVersion !== null &&
+      oldestListed !== null &&
+      (comparePlatformVersions(currentVersion, oldestListed) ?? 0) < 0,
     breaking: newer.some((release) => release.breaking),
     notesUrl: newest?.notesUrl ?? null,
     applyCommand: newest ? `sh scripts/apply-release.sh --pull ${newest.version}` : null,
@@ -261,7 +319,11 @@ export function derivePlatformUpdates(input: PlatformUpdatesInput): PlatformUpda
 
 export const platformUpdatesHandler: CapabilityHandler = async (client) => {
   const now = new Date();
-  const read = await readReleaseChannel(resolveUpdateFeedFile(process.env), now);
+  const read = await readReleaseChannel(
+    resolveUpdateFeedFile(process.env),
+    now,
+    resolveUpdateFeedRepo(process.env),
+  );
   const { pinnedPiVersion, activeImagePiVersion } = await readPiVersions(client);
   const result = derivePlatformUpdates({
     read,

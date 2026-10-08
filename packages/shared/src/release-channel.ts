@@ -18,8 +18,10 @@ import { z } from 'zod';
  * W1 does not sign the record: it only drives a reminder, never an action (the real upgrade,
  * `scripts/apply-release.sh --pull`, still verifies every image's signature). The defence is HTTPS
  * from GitHub plus this strict, bounded schema — every string has a pattern or a length cap, and
- * the only URLs it can carry point at this repository's own GitHub release or Actions run pages,
- * so a forged record can mislead a reminder but cannot inject markup or a link elsewhere.
+ * the only URLs it can carry are GitHub release or Actions run pages (of any repository: the
+ * schema alone cannot know which one). The kernel then keeps only the links into the repository
+ * its `UPDATE_FEED_URL` names (`platform_updates`), so a forged record can mislead a reminder but
+ * cannot inject markup or link anywhere else.
  */
 
 /** Upper bound on the file the kernel will read. The real record is a few KiB. */

@@ -54,11 +54,17 @@ case "$URL" in
     ;;
 esac
 
+# The shell is PID 1: without a trap it ignores SIGTERM and `docker compose stop` waits its full
+# timeout before SIGKILL. Sleep in the background and `wait` so the trap runs at once.
+trap 'log "stopping"; [ -n "${pause:-}" ] && kill "$pause" 2>/dev/null; exit 0' TERM INT
+
 log "fetching $URL every ${INTERVAL}s into $OUT_DIR"
 while :; do
   if fetch_once; then
-    sleep "$INTERVAL"
+    sleep "$INTERVAL" &
   else
-    sleep "$RETRY"
+    sleep "$RETRY" &
   fi
+  pause=$!
+  wait "$pause"
 done

@@ -126,6 +126,10 @@ services:
         # visible through the read-only /data/config mount below. Put the yaml there, run seed;
         # no kernel rebuild. The image's own /app/ontology stays the bundled examples.
         DOMAIN_PACK_DIR: /data/config/ontology,
+        # S10 U1: the same URL the update-feed service downloads from (keep the two defaults equal —
+        # scripts/validate-compose.mjs checks it). The kernel never fetches it (E3); it only takes
+        # the owner/repo from it and drops any link in the downloaded record that points elsewhere.
+        UPDATE_FEED_URL: "${UPDATE_FEED_URL:-https://github.com/btnalit/nexttime-ai/releases/download/channel/channel.json}",
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；

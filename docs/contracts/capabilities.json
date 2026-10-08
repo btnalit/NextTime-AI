@@ -13859,6 +13859,9 @@
                   },
                   "type": "array"
                 },
+                "migrationsIncomplete": {
+                  "type": "boolean"
+                },
                 "newerReleases": {
                   "items": {
                     "additionalProperties": false,
@@ -13941,6 +13944,7 @@
                 "available",
                 "newerReleases",
                 "migrations",
+                "migrationsIncomplete",
                 "breaking",
                 "notesUrl",
                 "applyCommand",

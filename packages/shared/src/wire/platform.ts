@@ -991,6 +991,10 @@ export const PlatformUpdateWireSchema = z
     /** Newest first. */
     newerReleases: z.array(ReleaseChannelReleaseSchema),
     migrations: z.array(MigrationRefSchema),
+    /** This version is older than the oldest release the record lists (it carries the newest 20),
+     *  so `migrations` misses the ones added before that window — `apply-release.sh` still runs
+     *  all of them; the reminder must say the list is partial. */
+    migrationsIncomplete: z.boolean(),
     breaking: z.boolean(),
     notesUrl: ReleaseChannelUrlSchema.nullable(),
     applyCommand: z.string().nullable(),

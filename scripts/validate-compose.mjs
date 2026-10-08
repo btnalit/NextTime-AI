@@ -231,6 +231,10 @@ if (!feed) {
   if (doc.networks?.['update-feed']?.internal === true) {
     problems.push('the update-feed network is internal: it could not reach GitHub');
   }
+  const feedUrl = feed.environment?.UPDATE_FEED_URL;
+  if (!feedUrl || doc.services?.kernel?.environment?.UPDATE_FEED_URL !== feedUrl) {
+    problems.push('kernel UPDATE_FEED_URL differs from the update-feed service (link binding)');
+  }
   for (const problem of problems) {
     console.error(`update-feed (S10 U1): ${problem}`);
     process.exitCode = 1;

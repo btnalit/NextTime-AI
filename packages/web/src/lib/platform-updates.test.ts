@@ -157,7 +157,7 @@ describe('buildUpdateNotices', () => {
     expect(notice).toMatchObject({ kind: 'platform', notesUrl: null });
   });
 
-  it('feed stale: warn notice with the age from fetchedAt, keyed by it', () => {
+  it('feed stale from downloads: warn notice with the age from fetchedAt, keyed by it', () => {
     const fetchedAt = '2026-10-05T12:00:00.000Z';
     const [notice] = buildUpdateNotices(
       platformUpdates({ feedFreshness: feedFreshness({ status: 'stale', fetchedAt }) }),
@@ -167,7 +167,31 @@ describe('buildUpdateNotices', () => {
       kind: 'feed-stale',
       key: `feed-stale:${fetchedAt}`,
       tone: 'warn',
+      cause: 'download',
       age: { value: 2, unit: 'day' },
+    });
+  });
+
+  it('feed stale while downloads are recent: CI stopped writing — age from generatedAt', () => {
+    // Downloaded 5 h ago (well inside 48 h), so the kernel can only have called it stale for the
+    // record's own age: the cause is CI, not the host.
+    const generatedAt = '2026-10-04T00:00:00.000Z';
+    const [notice] = buildUpdateNotices(
+      platformUpdates({
+        feedFreshness: feedFreshness({
+          status: 'stale',
+          fetchedAt: '2026-10-07T19:00:00.000Z',
+          generatedAt,
+        }),
+      }),
+      NOW,
+    );
+    expect(notice).toEqual({
+      kind: 'feed-stale',
+      key: `feed-stale-ci:${generatedAt}`,
+      tone: 'warn',
+      cause: 'ci',
+      age: { value: 4, unit: 'day' },
     });
   });
 
