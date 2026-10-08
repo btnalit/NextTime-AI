@@ -1,0 +1,318 @@
+name: staging
+
+# Release rehearsal on a throwaway GitHub-hosted runner (docs/runbooks/staging-rehearsal.md):
+# scripts/staging-rehearsal.sh installs the previous release from its published images exactly the
+# way the production host runs it, seeds the operator's one-time state, runs that release's own
+# S3/S1/S2/S4 as a baseline, then applies the target through docs/runbooks/release.md §3's only
+# entry — the target's own scripts/apply-release.sh, taken with `git show` (it runs the target's
+# S3 → S1 → S2 → S4). A green run means "this commit applies on top of
+# what production runs today and passes the acceptance suites there"; the production apply and its
+# own acceptance stay on the host (the runbook lists what this cannot reproduce).
+#
+# Triggers: a pull request or a push to main that touches the release path (migrations, compose,
+# the host / apply / acceptance scripts), and workflow_dispatch for any ref — including a published
+# tag, which is then applied with `--pull` (its signed images) instead of a source build. Not a
+# required check; the review gate still waits for it whenever it runs.
+#
+# Real-model regression (docs/runbooks/host-accept-real-model.md) runs only on a dispatch with
+# `real_model: true`, in the `staging-real-model` environment — give that environment a required
+# reviewer, since every run spends real tokens. Its secrets: STAGING_LLM_PROVIDERS_YAML (a whole
+# llm-providers.yaml), STAGING_LLM_PROXY_ENV (KEY=VALUE lines for the api_key_env names it uses),
+# STAGING_REAL_MODEL (<provider/model>). This repository is public and so are its run logs and
+# artifacts: the model id and provider names are masked in the log and scrubbed from the uploaded
+# files, never echoed by this workflow. Missing secrets report the real-model part as SKIPPED (job
+# summary + warning), never as passed; cost is capped by the kernel's own per-workspace
+# LLM_DAILY_TOKEN_BUDGET (`token_budget` input) and `runs` ≤ 10. A real-model run must be dispatched
+# from main and may only rehearse a release tag or a commit already on main; the `plan` job checks
+# that and writes from / to / commit into the run name and its summary, both visible before the
+# environment's reviewer approves.
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('staging {0} -> {1}{2}', inputs.from || 'previous release', inputs.to || github.ref_name, inputs.real_model && ' + real model' || '')
+      || github.event.pull_request.title || github.event.head_commit.message }}
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging.yml
+      - scripts/staging-rehearsal.sh
+      - scripts/apply-release.sh
+      - scripts/pull-images.sh
+      - scripts/build-images.sh
+      - scripts/host-*.sh
+      - scripts/gen-handle-keys.sh
+      - scripts/derive-internal-tokens.sh
+      - scripts/accept_s*.sh
+      - scripts/lib/**
+      - deploy/accept/**
+      - docker-compose.yml
+      - packages/kernel/migrations/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/staging.yml
+      - scripts/staging-rehearsal.sh
+      - scripts/apply-release.sh
+      - scripts/pull-images.sh
+      - scripts/build-images.sh
+      - scripts/host-*.sh
+      - scripts/gen-handle-keys.sh
+      - scripts/derive-internal-tokens.sh
+      - scripts/accept_s*.sh
+      - scripts/lib/**
+      - deploy/accept/**
+      - docker-compose.yml
+      - packages/kernel/migrations/**
+  workflow_dispatch:
+    inputs:
+      to:
+        description: 'What to apply: a vX.Y.Z tag (published images) or any commit-ish (source build). Empty = the dispatched ref'
+        type: string
+        default: ''
+      from:
+        description: 'Release the staging host starts on. Empty = the newest vX.Y.Z tag that is an ancestor of `to`'
+        type: string
+        default: ''
+      worker_runtime:
+        description: 'WORKER_RUNTIME for entry/worker containers (auto = what host-preflight.sh reports)'
+        type: choice
+        options: [auto, runc, runsc]
+        default: auto
+      seed:
+        description: 'Run the `from` release''s S3/S1/S2/S4 before the apply (non-empty tables for the migrations)'
+        type: boolean
+        default: true
+      real_model:
+        description: 'Also run accept_s2/s3 --real (staging-real-model environment; spends real tokens)'
+        type: boolean
+        default: false
+      runs:
+        description: 'Runs per real-model scenario, 1-10 (3 = smoke, 10 = per-release regression)'
+        type: string
+        default: '3'
+      token_budget:
+        description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs'
+        type: string
+        default: '3000000'
+
+permissions:
+  contents: read
+
+# Only pull-request runs supersede each other. A push to main queues behind the previous main run
+# instead of cancelling it, and every dispatch (an approved real-model run included) has a group of
+# its own, so nothing cancels it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runs before (and without) the staging-real-model environment, so what an approval would run is
+  # fixed and on the run page before anyone approves it.
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      from: ${{ steps.refs.outputs.from }}
+      to: ${{ steps.refs.outputs.to }}
+      to_sha: ${{ steps.refs.outputs.to_sha }}
+    steps:
+      - name: Checkout (full history and tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve from / to
+        id: refs
+        env:
+          IN_TO: ${{ inputs.to }}
+          IN_FROM: ${{ inputs.from }}
+          REAL: ${{ inputs.real_model || false }}
+          RUNS: ${{ inputs.runs || '3' }}
+          BUDGET: ${{ inputs.token_budget || '3000000' }}
+        run: |
+          set -euo pipefail
+          to=${IN_TO:-$(git rev-parse HEAD)}
+          to_sha=$(git rev-parse --verify "$to^{commit}")
+          from=$IN_FROM
+          if [ -z "$from" ]; then
+            for t in $(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname); do
+              printf '%s\n' "$t" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || continue
+              [ "$(git rev-parse "$t^{commit}")" = "$to_sha" ] && continue
+              git merge-base --is-ancestor "$t" "$to_sha" && { from=$t; break; }
+            done
+          fi
+          [ -n "$from" ] || { echo "::error::no release tag below $to to start from"; exit 1; }
+          what="source build"
+          if [ "$REAL" = true ]; then
+            case "$RUNS" in [1-9]|10) ;; *) echo "::error::runs must be 1-10, got '$RUNS'"; exit 1 ;; esac
+            case "$BUDGET" in ''|*[!0-9]*) echo "::error::token_budget must be a positive integer, got '$BUDGET'"; exit 1 ;; esac
+            [ "$GITHUB_REF" = refs/heads/main ] ||
+              { echo "::error::a real-model run must be dispatched from main (got $GITHUB_REF)"; exit 1; }
+            if printf '%s\n' "$to" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && git rev-parse -q --verify "refs/tags/$to" >/dev/null; then
+              what="release tag"
+            elif git merge-base --is-ancestor "$to_sha" refs/remotes/origin/main; then
+              what="commit on main"
+            else
+              echo "::error::a real-model run only rehearses a release tag or a commit already on main; '$to' ($to_sha) is neither"
+              exit 1
+            fi
+          fi
+          # Hand the rehearsal a release tag by name (apply-release.sh --pull) and anything else by its
+          # commit, so a branch that moves after the plan cannot change what runs.
+          to_arg=$to_sha
+          if printf '%s\n' "$to" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && git rev-parse -q --verify "refs/tags/$to" >/dev/null; then
+            to_arg=$to
+          fi
+          {
+            echo "from=$from"
+            echo "to=$to_arg"
+            echo "to_sha=$to_sha"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "### Rehearsal plan"
+            echo
+            echo "| from | to | commit | real model |"
+            echo "|---|---|---|---|"
+            if [ "$REAL" = true ]; then
+              echo "| \`$from\` | \`$to\` ($what) | \`$to_sha\` | yes: runs=$RUNS, token budget per workspace=$BUDGET |"
+            else
+              echo "| \`$from\` | \`$to\` | \`$to_sha\` | no |"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "rehearsing $from -> $to ($to_sha)"
+
+  rehearsal:
+    name: rehearsal
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: ${{ inputs.real_model && 'staging-real-model' || '' }}
+    steps:
+      - name: Checkout (full history and tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Free disk space (two releases of images side by side)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune -af >/dev/null
+          df -h / | tail -n 1
+
+      # Registered exactly like the production host's runsc (runtimeArgs --network=host): with
+      # gVisor's default netstack an entry container cannot reach Docker's embedded DNS
+      # (127.0.0.11, a gVisor FAQ limitation) and cannot resolve kernel / llm-proxy.
+      - name: Install gVisor (runsc, --network=host like production) — host-preflight.sh fails without it
+        env:
+          GVISOR_RELEASE: '20260928'
+          GVISOR_SHA512: c8d3a9fd4d4c4f5b8ff213caa4517356be128d18659ec4cde37828fe797f61a9725a602a846c81a8ed19c057a996515d31c081eba343ed4613a89951ba32ed59
+        run: |
+          set -euo pipefail
+          dir=$(mktemp -d)
+          curl -fsSL -o "$dir/gvisor.tar.bz2" "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/x86_64/gvisor.tar.bz2"
+          echo "${GVISOR_SHA512}  $dir/gvisor.tar.bz2" | sha512sum -c -
+          tar -xjf "$dir/gvisor.tar.bz2" -C "$dir"
+          sudo install -m 755 "$dir/runsc" "$dir/containerd-shim-runsc-v1" /usr/local/bin/
+          sudo cp -r "$dir/gvisor-bin" /usr/local/bin/
+          sudo /usr/local/bin/runsc install -- --network=host
+          cat /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sudo docker run --rm --runtime=runsc alpine:3.20 true
+          runsc --version | head -n 1
+
+      - name: Pin the planned commit
+        env:
+          TO: ${{ needs.plan.outputs.to }}
+          TO_SHA: ${{ needs.plan.outputs.to_sha }}
+        run: |
+          set -euo pipefail
+          now=$(git rev-parse --verify "$TO^{commit}")
+          [ "$now" = "$TO_SHA" ] || { echo "::error::$TO is $now now, but the plan (what was approved) was $TO_SHA"; exit 1; }
+
+      # Missing secrets are a visible SKIPPED (warning + job summary), never a silent pass: the
+      # rehearsal itself still runs and still gates; only the real-model part is reported as not run.
+      - name: Real-model inputs (staging-real-model environment)
+        id: real
+        if: ${{ inputs.real_model }}
+        env:
+          PROVIDERS_YAML: ${{ secrets.STAGING_LLM_PROVIDERS_YAML }}
+          PROXY_ENV: ${{ secrets.STAGING_LLM_PROXY_ENV }}
+          REAL_MODEL: ${{ secrets.STAGING_REAL_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PROVIDERS_YAML" ] || [ -z "$PROXY_ENV" ] || [ -z "$REAL_MODEL" ]; then
+            echo "::warning::real-model regression SKIPPED: the staging-real-model environment lacks STAGING_LLM_PROVIDERS_YAML / STAGING_LLM_PROXY_ENV / STAGING_REAL_MODEL"
+            echo "### Real-model regression: **SKIPPED** (staging-real-model secrets missing)" >>"$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          dir="$RUNNER_TEMP/real"
+          mkdir -p "$dir"
+          printf '%s\n' "$PROVIDERS_YAML" >"$dir/llm-providers.yaml"
+          printf '%s\n' "$PROXY_ENV" >"$dir/llm-proxy.env"
+          printf '%s\n' "$REAL_MODEL" >"$dir/model"
+          # Everything that would identify the provider: the model id, its parts, the provider names
+          # (keys under `providers:`) and their upstream URLs — masked here, scrubbed from artifacts.
+          # The key values themselves too: GitHub masks the secret in the log, not inside uploaded
+          # files (values shorter than 8 characters are settings, not keys, and are left alone).
+          {
+            printf '%s\n' "$REAL_MODEL" "${REAL_MODEL%%/*}" "${REAL_MODEL#*/}"
+            sed -n 's/^  \([A-Za-z0-9_.-]*\):[[:space:]]*$/\1/p' "$dir/llm-providers.yaml"
+            sed -n 's/^[[:space:]]*upstream_base_url:[[:space:]]*\(.*\)$/\1/p' "$dir/llm-providers.yaml" | tr -d "\"'"
+            sed -n 's/^[A-Za-z_][A-Za-z0-9_]*=//p' "$dir/llm-proxy.env" | tr -d "\"'\r" | grep -E '^.{8,}$' || true
+          } | grep -v '^$' | sort -u >"$dir/scrub"
+          while IFS= read -r s; do echo "::add-mask::$s"; done <"$dir/scrub"
+          echo "enabled=true" >>"$GITHUB_OUTPUT"
+
+      - name: Rehearse ${{ needs.plan.outputs.from }} -> ${{ needs.plan.outputs.to }}
+        env:
+          FROM: ${{ needs.plan.outputs.from }}
+          TO: ${{ needs.plan.outputs.to }}
+          RUNTIME: ${{ inputs.worker_runtime || 'auto' }}
+          SEED: ${{ github.event_name != 'workflow_dispatch' || inputs.seed }}
+          REAL: ${{ steps.real.outputs.enabled || 'false' }}
+          BUDGET: ${{ inputs.token_budget || '3000000' }}
+          RUNS: ${{ inputs.runs || '3' }}
+        run: |
+          set -eu
+          sudo git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          set -- --disposable-host --from "$FROM" --to "$TO" --work "$RUNNER_TEMP/staging"
+          [ "$RUNTIME" = auto ] || set -- "$@" --worker-runtime "$RUNTIME"
+          [ "$SEED" = true ] || set -- "$@" --no-seed
+          if [ "$REAL" = true ]; then
+            set -- "$@" --real "$(cat "$RUNNER_TEMP/real/model")" --runs "$RUNS" --real-token-budget "$BUDGET" \
+              --real-providers "$RUNNER_TEMP/real/llm-providers.yaml" --real-env "$RUNNER_TEMP/real/llm-proxy.env"
+          fi
+          sudo sh scripts/staging-rehearsal.sh "$@"
+
+      - name: Collect logs
+        if: ${{ always() }}
+        run: |
+          set -u
+          out="$RUNNER_TEMP/staging-logs"
+          mkdir -p "$out"
+          sudo sh -c "cp -r '$RUNNER_TEMP/staging/logs/.' '$out/' 2>/dev/null; cd '$RUNNER_TEMP/staging/NextTime-AI' 2>/dev/null && docker compose ps -a > '$out/compose-ps.txt' 2>&1; docker compose logs --no-color --timestamps > '$out/compose-logs.txt' 2>&1" || true
+          sudo chown -R "$(id -u):$(id -g)" "$out"
+          if [ -f "$RUNNER_TEMP/real/scrub" ]; then
+            while IFS= read -r s; do
+              esc=$(printf '%s' "$s" | sed 's/[]\/$*.^[]/\\&/g')
+              find "$out" -type f -exec sed -i "s/$esc/<redacted>/g" {} +
+            done <"$RUNNER_TEMP/real/scrub"
+          fi
+          sudo rm -rf "$RUNNER_TEMP/real"
+          ls -la "$out"
+
+      - name: Upload logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-logs
+          path: ${{ runner.temp }}/staging-logs/
+          retention-days: 7
+          if-no-files-found: ignore
