@@ -109,8 +109,10 @@ export type ReleaseChannelPiUpstream = z.infer<typeof ReleaseChannelPiUpstreamSc
 
 /**
  * The record. `schema` is the format version: a change an older reader must not misread (a field
- * changing meaning or type, a field it needs disappearing) bumps it, and every older kernel then
- * calls the record `invalid` rather than misreading it. An added field does not bump it.
+ * changing meaning or type, a field it needs disappearing, or a new value in an existing enum or
+ * pattern — e.g. `sdkSuite: 'skip'` — which an older reader would reject the whole record for)
+ * bumps it, and every older kernel then calls the record `invalid` rather than misreading it. Only
+ * an added field does not bump it.
  *
  * Two strictnesses over the same fields:
  * - `ReleaseChannelSchema` — strict at every level. The producer (`scripts/release-channel.mjs`)
