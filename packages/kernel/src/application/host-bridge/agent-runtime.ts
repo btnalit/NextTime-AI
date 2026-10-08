@@ -127,4 +127,13 @@ export interface AgentRuntime {
    */
   // biome-ignore lint/suspicious/noConfusingVoidType: intentional — widens the contract to accept a pre-existing Promise<void> test double; see this method's own doc comment.
   stopTurn(turnId: string): Promise<boolean | void>;
+  /**
+   * Whether this runtime will itself end `turnId` — it still carries the Turn, or still has events
+   * for it to hand the sink — so the Turn's terminal status will come through the sink, after
+   * every `message` the runtime received for it. `report_turn` (the entry extension's own report,
+   * over a separate connection) leaves such a Turn's status to the runtime. Optional: a runtime
+   * without it (a test double) is treated as not owning any Turn end, the behavior before this
+   * method existed.
+   */
+  ownsTurnEnd?(turnId: string): boolean;
 }
