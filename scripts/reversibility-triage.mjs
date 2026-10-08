@@ -20,19 +20,24 @@
 // and this script holds every declaration to evidence. Nothing is skipped — BASE's whole suite
 // still runs — and the probe is green only when all of these hold:
 //   1. every BASE failure is a test declared by an *active* delta (one whose migration HEAD adds
-//      or edits over BASE; an entry for a migration BASE already ships is inert, so the manifest
+//      over BASE; an entry for a migration BASE already ships is inert, so the manifest
 //      expires by itself once the next tag carries the updated tests);
 //   2. every declared BASE test exists in BASE's results and actually failed (a declaration that
 //      no longer matches a failure is stale and must be removed, not left as a standing waiver);
 //   3. no test file failed outside its tests (import / hook errors) and BASE reported no
 //      unhandled errors;
-//   4. every `replacedBy` test exists in HEAD and passes when HEAD runs it on the same database —
-//      the new behaviour is asserted, not just the old assertion silenced;
+//   4. every `replacedBy` test is new in HEAD (absent from BASE's results: added or renamed by this
+//      PR), and passes when HEAD runs it on the same database — the new behaviour is asserted, not
+//      just the old assertion silenced; and every declared BASE test's file differs between BASE
+//      and HEAD — the PR actually revisited the old assertion;
+//   4a. the report reconciles: Vitest's own failed-test count equals the failures listed, a name
+//      occurring twice keeps its worst outcome, BASE's exit code agrees with the report, BASE
+//      passed at least one test and skipped at most MAX_SKIPPED_SHARE of them;
 //   5. the manifest is well formed: each migration exists in HEAD, each entry names at least one
 //      BASE test, at least one replacement, and a rationale citing release.md §6.
 //
 // Usage (from the workflow, after BASE's suite wrote its JSON report):
-//   node head/scripts/reversibility-triage.mjs --base-report probe-results.json \
+//   node head/scripts/reversibility-triage.mjs --base-report probe-results.json --base-rc 1 \
 //     --base-log probe.log --base-root base/packages/kernel --head-root head/packages/kernel \
 //     --manifest head/packages/kernel/migrations/reversibility-deltas.json --delta delta.list
 // Pure helpers are exported for scripts/reversibility-triage.test.mjs (node --test).
@@ -94,8 +99,10 @@ export function parseManifest(raw, headMigrationsDir) {
   return { deltas: errors.length === 0 ? doc.deltas : [], errors };
 }
 
-/** Deltas whose migration HEAD adds or edits over BASE (`deltaMigrations`: "<module>/<file>.sql"
- *  paths, as the workflow's delta step lists them, with or without a leading "./"). */
+/** Deltas whose migration HEAD *adds* over BASE (`deltaMigrations`: the workflow's `comm -13`
+ *  list of new "<module>/<file>.sql" paths, with or without a leading "./"). A migration HEAD
+ *  edits after BASE shipped it activates nothing: BASE's runner fails it on its checksum, which is
+ *  a real irreversibility and must stay red. */
 export function activeDeltas(deltas, deltaMigrations) {
   const delta = new Set(deltaMigrations.map((m) => m.replace(/^\.\//, '').trim()).filter(Boolean));
   return {
@@ -106,35 +113,63 @@ export function activeDeltas(deltas, deltaMigrations) {
 
 const testKey = (file, fullName) => `${file}\u0000${fullName}`;
 
-/** Flattens a Vitest JSON report into per-test outcomes keyed by file (relative to `root`, "/"
- *  separators) and full name, plus files that failed outside any test. */
+const STATUS_RANK = { failed: 3, passed: 2, skipped: 1, pending: 1, todo: 1 };
+const worse = (a, b) => ((STATUS_RANK[b] ?? 3) > (STATUS_RANK[a] ?? 3) ? b : a);
+
+/** Flattens a Vitest JSON report: per-test outcomes keyed by file (relative to `root`, "/"
+ *  separators) and full name — a name that occurs twice in one file keeps its *worst* outcome, so
+ *  a passing duplicate never hides a failing one — plus every failed assertion as reported (not
+ *  de-duplicated), the files that failed outside any test, and the report's own totals. */
 export function readReport(report, root) {
   const tests = new Map();
+  const failed = [];
   const fileErrors = [];
   for (const file of report.testResults ?? []) {
     const rel = path.relative(root, file.name).split(path.sep).join('/');
     const assertions = file.assertionResults ?? [];
     for (const a of assertions) {
       const fullName = a.fullName ?? [...(a.ancestorTitles ?? []), a.title].join(' ');
-      tests.set(testKey(rel, fullName), { file: rel, fullName, status: a.status });
+      const key = testKey(rel, fullName);
+      const prior = tests.get(key);
+      tests.set(key, {
+        file: rel,
+        fullName,
+        status: prior ? worse(prior.status, a.status) : a.status,
+      });
+      if (a.status === 'failed') failed.push({ file: rel, fullName });
     }
     if (file.status === 'failed' && !assertions.some((a) => a.status === 'failed')) {
       fileErrors.push({ file: rel, message: (file.message ?? '').split('\n')[0] });
     }
   }
-  return { tests, fileErrors };
+  const totals = {
+    total: report.numTotalTests,
+    passed: report.numPassedTests,
+    failed: report.numFailedTests,
+    skipped: (report.numPendingTests ?? 0) + (report.numTodoTests ?? 0),
+  };
+  return { tests, failed, fileErrors, totals };
 }
 
-/** The probe's verdict over BASE's results. Pure: replacement runs are checked separately. */
-export function classify({ tests, fileErrors }, active, { unhandledErrors = false } = {}) {
+/** At most this share of BASE's tests may be skipped: a suite whose integration tests all skipped
+ *  (no DATABASE_URL — `describe.runIf`) proves nothing and must not read as reversible. */
+export const MAX_SKIPPED_SHARE = 0.05;
+
+/** The probe's verdict over BASE's results. Pure: replacement runs are checked separately.
+ *  `baseExitCode` is BASE's own `vitest run` exit code; `files` answers whether a test file's
+ *  content differs between BASE and HEAD and whether a key exists there (see `checkBindings`). */
+export function classify(
+  { tests, failed, fileErrors, totals },
+  active,
+  { unhandledErrors = false, baseExitCode } = {},
+) {
   const declared = new Map();
   for (const d of active) {
     for (const t of d.baseTests) declared.set(testKey(t.file, t.fullName), d.migration);
   }
   const problems = [];
   const excused = [];
-  for (const t of tests.values()) {
-    if (t.status !== 'failed') continue;
+  for (const t of failed) {
     const migration = declared.get(testKey(t.file, t.fullName));
     if (migration) excused.push({ ...t, migration });
     else problems.push(`undeclared failure: ${t.file} > ${t.fullName}`);
@@ -153,8 +188,60 @@ export function classify({ tests, fileErrors }, active, { unhandledErrors = fals
   for (const f of fileErrors)
     problems.push(`test file failed outside its tests: ${f.file} — ${f.message}`);
   if (unhandledErrors) problems.push("BASE's run reported unhandled errors (see the probe log)");
+
+  // Reconcile with the report's own totals and BASE's exit code: the per-test walk above must
+  // account for every failure Vitest counted, and a non-zero exit needs a reported cause.
+  if (totals.failed !== undefined && totals.failed !== failed.length) {
+    problems.push(
+      `report counts ${totals.failed} failed tests but lists ${failed.length} — cannot account for every failure`,
+    );
+  }
+  if (baseExitCode !== undefined) {
+    const reported = failed.length + fileErrors.length + (unhandledErrors ? 1 : 0);
+    if (baseExitCode !== 0 && reported === 0) {
+      problems.push(`BASE's suite exited ${baseExitCode} with no failure in its report`);
+    }
+    if (baseExitCode === 0 && failed.length > 0) {
+      problems.push("BASE's suite exited 0 although its report lists failures");
+    }
+  }
+  if (!(totals.passed > 0)) problems.push("BASE's suite passed no test — nothing was proven");
+  else if (totals.total > 0 && totals.skipped / totals.total > MAX_SKIPPED_SHARE) {
+    problems.push(
+      `BASE skipped ${totals.skipped} of ${totals.total} tests (over ${MAX_SKIPPED_SHARE * 100}%) — is DATABASE_URL set?`,
+    );
+  }
   return { problems, excused };
 }
+
+/** Binds each active declaration to this PR's own change (no I/O: `baseHas` says whether a test
+ *  key exists in BASE's results, `fileChanged` whether a test file differs between BASE and HEAD):
+ *   - every `replacedBy` test is new in HEAD (added or renamed — absent from BASE's results), so an
+ *     unrelated test that already passed cannot stand in for the new behaviour;
+ *   - every declared BASE test's file is changed by HEAD, so the old assertion was actually
+ *     revisited in this PR, not just waived. */
+export function checkBindings(active, { baseHas, fileChanged }) {
+  const problems = [];
+  for (const d of active) {
+    for (const r of d.replacedBy) {
+      if (baseHas(testKey(r.file, r.fullName))) {
+        problems.push(
+          `replacement for ${d.migration} already exists in BASE — it must be added or renamed in this PR: ${r.file} > ${r.fullName}`,
+        );
+      }
+    }
+    for (const file of new Set(d.baseTests.map((t) => t.file))) {
+      if (!fileChanged(file)) {
+        problems.push(
+          `declared BASE test file for ${d.migration} is unchanged in HEAD — the old assertion was not revisited: ${file}`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+export { testKey };
 
 /** Regex source matching `fullName` literally, for Vitest's `-t` (a selection filter only — the
  *  exact name is then checked against the JSON report). */
@@ -223,8 +310,19 @@ function main() {
       /Vitest caught \d+ unhandled errors?|Unhandled (Errors?|Rejection) ⎯/.test(
         log.replace(ANSI, ''),
       );
-    const verdict = classify(report, active, { unhandledErrors });
+    const baseExitCode = Number.parseInt(arg('base-rc'), 10);
+    const verdict = classify(report, active, { unhandledErrors, baseExitCode });
     problems.push(...verdict.problems);
+    const read = (root, file) => {
+      const full = path.join(root, file);
+      return existsSync(full) ? readFileSync(full, 'utf8') : null;
+    };
+    problems.push(
+      ...checkBindings(active, {
+        baseHas: (key) => report.tests.has(key),
+        fileChanged: (file) => read(baseRoot, file) !== read(headRoot, file),
+      }),
+    );
     if (verdict.excused.length > 0) {
       lines.push('### Declared deltas (BASE tests superseded by a reviewed migration)');
       for (const e of verdict.excused) lines.push(`- ${e.migration}: ${e.file} > ${e.fullName}`);
