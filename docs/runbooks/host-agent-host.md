@@ -80,7 +80,9 @@ kernel → agent-host：
 时已用真实 `pi --mode rpc` 进程复核（`docs/runbooks/pi-upgrade.md` §2.1）：下表每一行不变；0.87.1
 在首轮开头多一对 `role: system` 的 `message_start`/`message_end`（系统提示进 transcript），按
 下表 `message_end` 行"`role` 非 assistant 一律丢弃"处理。升级到 0.99.2 时同样复核（`pi-upgrade.md`
-§2.4）：事件序列与翻译结果逐条不变，只是 `prompt` 的成功响应多了 `data.disposition`，本模块不读。
+§2.4）：事件序列与翻译结果逐条不变，只是 `prompt` 的成功响应多了 `data.disposition`，本模块不读。升级到 1.1.0
+（§2.5，开发机与 worker-runtime 镜像内各跑一遍）同样逐条不变，只多了 `agent_settled.aborted` 与
+`tool_execution_end.durationMs`，本模块都不读。
 
 | pi RPC 事件 | 平台事件 | 备注 |
 |---|---|---|

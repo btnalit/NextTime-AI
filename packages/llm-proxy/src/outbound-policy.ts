@@ -28,9 +28,9 @@ import type { ProviderApiKind, ProviderConfig } from './config.js';
  *     (`web_search*`, `web_fetch*`, `code_execution*` / `code_interpreter`, `mcp` / `mcp_toolset`,
  *     `computer*`, `file_search`, `image_generation`, a vendor's built-in search, …) is removed,
  *     and so are the request parameters that switch provider-side tools on without a tool entry
- *     (`SERVER_TOOL_PARAMS`). Tool lists nested in messages / input items are filtered the same
- *     way. Nothing else in the body changes; a request with nothing to strip is forwarded
- *     byte-for-byte.
+ *     (`SERVER_TOOL_PARAMS`). Tool lists nested in messages / input items, and Anthropic's
+ *     mid-conversation `tool_addition` definitions, are filtered the same way. Nothing else in
+ *     the body changes; a request with nothing to strip is forwarded byte-for-byte.
  *
  * Stripping, not rejecting (D-29): the request still runs, without the provider-side tools.
  * proxy.ts logs every narrowed request with what was removed (the trail for an attempt).
@@ -40,7 +40,7 @@ import type { ProviderApiKind, ProviderConfig } from './config.js';
  * WorkerDefinition field and the kernel copying it into the Handle scope when it mints entry and
  * WorkerRun Handles. Until then every request is stripped.
  *
- * Normal traffic is unaffected: pi (0.99) sends only function / custom tools, the headers above,
+ * Normal traffic is unaffected: pi (1.1) sends only function / custom tools, the headers above,
  * and the `anthropic-beta` values in `FORWARDED_ANTHROPIC_BETAS`.
  */
 
@@ -52,11 +52,16 @@ const FORWARDED_REQUEST_HEADERS: Readonly<Record<ProviderApiKind, readonly strin
 };
 
 /**
- * The `anthropic-beta` values forwarded — exactly the ones pi 0.99's Anthropic provider sends for
- * API-key auth (`@earendil-works/pi-ai` `api/anthropic-messages.js` `getBetaFeatures`). Any other
- * value is dropped and logged, so a pi upgrade that starts sending a new one shows up in the proxy
- * log instead of failing silently. Notably absent: the MCP-connector, web-fetch, code-execution,
- * computer-use, files and skills betas.
+ * The `anthropic-beta` values forwarded — exactly the ones pi's Anthropic provider sends for
+ * API-key auth (`@earendil-works/pi-ai` `api/anthropic-messages.js` `getBetaFeatures`; pi 1.1 and
+ * 0.99, so a rollback to the `:pi-0.99.2` runtime image keeps working). Any other value is dropped
+ * and logged, so a pi upgrade that starts sending a new one shows up in the proxy log instead of
+ * failing silently. Notably absent: the MCP-connector, web-fetch, code-execution, computer-use,
+ * files and skills betas.
+ *
+ * `inline-tools-2026-09-15` (pi 1.0.1+) replaced `mid-conversation-tool-changes-2026-07-01`
+ * (pi 0.99): mid-conversation tool additions now carry the full tool definition inside the
+ * conversation, which `stripProviderServerTools` filters like the top-level `tools` list.
  */
 export const FORWARDED_ANTHROPIC_BETAS: ReadonlySet<string> = new Set([
   'fine-grained-tool-streaming-2025-05-14',
@@ -64,6 +69,8 @@ export const FORWARDED_ANTHROPIC_BETAS: ReadonlySet<string> = new Set([
   'server-side-fallback-2026-07-01',
   'mid-conversation-output-config-2026-07-01',
   'thinking-binding-controls-2026-08-01',
+  'inline-tools-2026-09-15',
+  // pi 0.99 only — kept while the `:pi-0.99.2` runtime image is the documented rollback target.
   'mid-conversation-tool-changes-2026-07-01',
 ]);
 
@@ -198,6 +205,41 @@ function filterToolList(
 }
 
 /**
+ * Filters the `tool_addition` blocks of Anthropic messages in place. pi 1.0.1+ declares a tool
+ * added mid-conversation by value (`{type:'tool_addition', tool:{type:'tool_definition',
+ * definition}}`, `inline-tools-2026-09-15`); pi 0.99 referenced an already-declared tool by name
+ * (`tool:{type:'tool_reference', name}`), which carries no definition and is kept. A definition is
+ * kept only when it is a client-side tool; any other `tool_addition` is removed.
+ */
+function filterAnthropicToolAdditions(
+  messages: unknown,
+  allowed: ReadonlySet<string | undefined>,
+  removed: string[],
+): void {
+  if (!Array.isArray(messages)) return;
+  for (const message of messages) {
+    if (!isRecord(message) || !Array.isArray(message.content)) continue;
+    const content: unknown[] = message.content;
+    const kept = content.filter((block) => {
+      if (!isRecord(block) || block.type !== 'tool_addition') return true;
+      const tool = isRecord(block.tool) ? block.tool : undefined;
+      if (tool?.type === 'tool_reference') return true;
+      if (tool?.type === 'tool_definition' && isRecord(tool.definition)) {
+        const type = tool.definition.type;
+        const typeKey =
+          typeof type === 'string' ? type : type === undefined ? undefined : String(type);
+        if (allowed.has(typeKey)) return true;
+        removed.push(typeKey ?? '(none)');
+        return false;
+      }
+      removed.push(`tool_addition:${typeof tool?.type === 'string' ? tool.type : '(none)'}`);
+      return false;
+    });
+    if (kept.length !== content.length) message.content = kept;
+  }
+}
+
+/**
  * Removes provider-side tools from a parsed request body, in place (see the module comment).
  * The `tools` key stays — possibly as `[]`, which pi itself sends for a conversation with tool
  * history — and `tool_choice` is left alone: one that names a removed tool fails at the provider
@@ -214,7 +256,7 @@ export function stripProviderServerTools(
   filterToolList(body, 'tools', allowed, strippedTools);
   // Tool lists nested in the conversation: pi's mid-conversation tool additions for the OpenAI
   // kinds (a `messages[]` entry with `tools`; Responses `additional_tools` / `tool_search_output`
-  // input items). Anthropic's own additions reference tools by name only.
+  // input items) and Anthropic's `tool_addition` content blocks.
   const nestedHolder =
     api === 'openai-completions'
       ? body.messages
@@ -225,6 +267,9 @@ export function stripProviderServerTools(
     for (const item of nestedHolder) {
       if (isRecord(item)) filterToolList(item, 'tools', allowed, strippedTools);
     }
+  }
+  if (api === 'anthropic-messages') {
+    filterAnthropicToolAdditions(body.messages, allowed, strippedTools);
   }
 
   for (const param of SERVER_TOOL_PARAMS[api]) {

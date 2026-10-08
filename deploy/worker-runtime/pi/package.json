@@ -1,0 +1,8 @@
+{
+  "name": "nexttime-worker-runtime-pi",
+  "private": true,
+  "description": "Pins the pi CLI and its whole dependency tree for the worker-runtime image (see docs/runbooks/pi-upgrade.md §3). The version must equal pi.version (scripts/check-pi-version-consistency.sh).",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0"
+  }
+}

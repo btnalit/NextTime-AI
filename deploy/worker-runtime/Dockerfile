@@ -15,10 +15,12 @@
 # `dist/core/resource-loader.js`, `dist/config.js`, `dist/core/extensions/loader.js`,
 # `dist/core/tools/index.js`, `dist/core/sdk.js`) plus a real `pi --mode rpc -e <extension>` run
 # against deploy/fake-llm (docs/runbooks/pi-upgrade.md §2), and again the same way for the 0.99.2
-# upgrade (§2.4). Every bullet below still holds on 0.99.2. 0.87.1's only CLI change was that
+# upgrade (§2.4), and for 1.1.0 (§2.5, real runs on Linux + node 24 inside this image). Every
+# bullet below still holds on 1.1.0. 0.87.1's only CLI change was that
 # `--mode` rejects a missing/invalid value instead of silently ignoring it (`rpc` is valid); 0.99's
 # are a new `pi mcp` subcommand and `-e builtin:<name>` / `-ne` now also covering pi's new built-in
-# extensions (codemode, tool-search, mcp) — none of which this image relies on:
+# extensions (codemode, tool-search, mcp) — none of which this image relies on; 1.0.x–1.1.0 only
+# added `--no-mcp`, `*` patterns and `+name`/`-name` entries for `--tools`, none of which it uses:
 #   - packages/coding-agent/docs/containerization.md "Plain Docker" recipe is the base for the
 #     runtime stage below: `node:24-bookworm-slim`, apt `bash ca-certificates git ripgrep`,
 #     `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`. This Dockerfile adds
@@ -42,7 +44,7 @@
 #     exactly the path pi itself reads.
 #   - packages/coding-agent/src/core/extensions/loader.ts: `-e <path>` loads via jiti, which
 #     alias-resolves `@earendil-works/pi-*`/`typebox`/etc. imports against pi's OWN install (the
-#     `npm install -g` below), never the extension's own `node_modules` — so
+#     pinned `npm ci` into /opt/pi below), never the extension's own `node_modules` — so
 #     @nexttime/platform-extension's own `@earendil-works/pi-coding-agent` dependency (needed for
 #     its TS types) is redundant at runtime but harmless. `@nexttime/shared` is NOT one of pi's
 #     bundled/aliased modules, so it DOES need to resolve from the extension's own
@@ -108,28 +110,40 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
-# agent@<pi.version>", currently 0.99.2). --ignore-scripts matches pi's own containerization.md
-# recipe (header above; unchanged in 0.87.1 and 0.99.2 — 0.99's new pi-mcp/pi-codemode deps have
-# no install scripts either).
+# agent@<pi.version>", currently 1.1.0). --ignore-scripts matches pi's own containerization.md
+# recipe (header above; unchanged through 1.1.0 — none of pi's dependencies needs an install
+# script).
 #
-# Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file,
-# read here rather than hardcoded — bumping pi means editing exactly that one file for the image.
-# `pnpm`/`npm` still need a literal version string in packages/platform-extension/package.json's
-# own `dependencies`/`devDependencies` (no file-reference syntax exists for that), so those two
-# pins are kept honest against pi.version by scripts/check-pi-version-consistency.sh
-# (`pnpm ci:guards`) instead of reading the same file directly — see the runbook for why a
-# Dockerfile ARG wired through docker-compose.yml's build args was not used instead (this COPY
-# needs no change to the build invocation `docker compose build worker-runtime` already uses).
+# The whole dependency tree is pinned, not just pi: up to 0.99.2 pi published an
+# npm-shrinkwrap.json, so `npm install -g pi@<v>` was reproducible; 1.0.1 dropped it ("Use the
+# pi.dev installer for pinned installations"), after which a global install resolves pi's own
+# `^1.x` ranges (pi-ai, pi-agent-core, pi-mcp, …) to whatever is newest at build time — two builds
+# of the same commit could ship different pi-ai code. deploy/worker-runtime/pi/ holds a package.json
+# naming pi at exactly pi.version plus its package-lock.json, and `npm ci` installs exactly that
+# tree into /opt/pi (docs/runbooks/pi-upgrade.md §3).
+#
+# Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file.
+# npm needs literal versions in package.json / package-lock.json (and pnpm in
+# packages/platform-extension/package.json), so those copies are kept honest against pi.version by
+# scripts/check-pi-version-consistency.sh (`pnpm ci:guards`), and this RUN refuses to build an image
+# whose installed pi is not pi.version — see the runbook for why a Dockerfile ARG wired through
+# docker-compose.yml's build args was not used instead (these COPYs need no change to the build
+# invocation `docker compose build worker-runtime` already uses).
 COPY pi.version /tmp/pi.version
-# This layer's own cache key is already only `pi.version` (the COPY right above it, on top of the
-# stable apt/user layers above that) — bumping pi.version invalidates exactly this RUN and nothing
-# earlier, so a release that doesn't touch pi still skips this download entirely. The cache mount
-# is the STATUS leftover 93 fix's other half: even a *version bump* reuses whatever of the new
+COPY deploy/worker-runtime/pi/package.json deploy/worker-runtime/pi/package-lock.json /opt/pi/
+# This layer's own cache key is only `pi.version` and the two pin files (the COPYs right above it,
+# on top of the stable apt/user layers above that) — bumping pi invalidates exactly this RUN and
+# nothing earlier, so a release that doesn't touch pi still skips this download entirely. The cache
+# mount is the STATUS leftover 93 fix's other half: even a *version bump* reuses whatever of the new
 # version's dependency tree npm already has tarballs for, instead of re-downloading it whole
 # against this host's gateway (see docs/runbooks/release.md §3.4).
 RUN --mount=type=cache,id=npm-cache,target=/npm-cache \
-    PI_VERSION="$(cat /tmp/pi.version)" \
- && npm install -g --ignore-scripts --cache=/npm-cache "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+    cd /opt/pi \
+ && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache=/npm-cache \
+ && PI_VERSION="$(cat /tmp/pi.version)" \
+ && INSTALLED="$(node -p "require('/opt/pi/node_modules/@earendil-works/pi-coding-agent/package.json').version")" \
+ && if [ "$INSTALLED" != "$PI_VERSION" ]; then echo "worker-runtime: deploy/worker-runtime/pi installs pi $INSTALLED, pi.version says $PI_VERSION" >&2; exit 1; fi \
+ && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi \
  && rm /tmp/pi.version
 
 # Same non-root uid:gid every other @nexttime/* image uses (kernel/agent-host/worker-supervisor/
@@ -157,7 +171,7 @@ WORKDIR /workspace
 USER nexttime
 ENV NODE_ENV=production
 ENV HOME=/workspace
-# pi (0.84.4; unchanged in 0.87.1 and 0.99.2, whose `dist/main.js` still skips the RPC-mode catalog
+# pi (0.84.4; unchanged in 0.87.1, 0.99.2 and 1.1.0, whose `dist/main.js` still skips the RPC-mode catalog
 # refresh under it) performs "startup network operations" of its own — a release check
 # (dist/utils/version-check.js → https://pi.dev/api/latest-version) and a remote model-catalog
 # refresh (DEFAULT_CATALOG_BASE_URL = https://pi.dev, written to <agentDir>/models-store.json) —

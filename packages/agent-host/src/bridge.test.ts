@@ -228,6 +228,35 @@ describe('translatePiEvent — agent_settled and everything else', () => {
     expect(translatePiEvent({ type: 'agent_settled' })).toEqual({ kind: 'turnSettled' });
   });
 
+  it('pi 1.1 shapes: agent_settled with `aborted`, tool_execution_end with `durationMs` (both additive, not read)', () => {
+    // Captured from a real `pi --mode rpc` 1.1.0 run (docs/runbooks/pi-upgrade.md §2.5). host.ts
+    // decides interrupted vs completed from its own stopTurn state, not from `aborted`.
+    expect(translatePiEvent({ type: 'agent_settled', aborted: false })).toEqual({
+      kind: 'turnSettled',
+    });
+    expect(translatePiEvent({ type: 'agent_settled', aborted: true })).toEqual({
+      kind: 'turnSettled',
+    });
+    expect(
+      translatePiEvent({
+        type: 'tool_execution_end',
+        toolCallId: 'call_1',
+        toolName: 'accept_s2_api_stock_get',
+        result: { content: [{ type: 'text', text: '{"stock":42}' }] },
+        isError: false,
+        durationMs: 12,
+      }),
+    ).toEqual({
+      kind: 'event',
+      fields: {
+        type: 'toolCallEnded',
+        toolCallId: 'call_1',
+        result: { content: [{ type: 'text', text: '{"stock":42}' }] },
+        isError: false,
+      },
+    });
+  });
+
   it('ignores every event this module has no platform vocabulary slot for', () => {
     for (const event of [
       { type: 'agent_start' },

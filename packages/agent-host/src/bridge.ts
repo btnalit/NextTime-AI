@@ -44,6 +44,12 @@ import type { AgentRuntimeEventWire } from '@nexttime/shared';
  * the stream is that a successful `prompt` response now carries `data: {disposition}`
  * (`"started"`/`"queued"`/`"handled"`), which this module never reads.
  *
+ * Re-verified the same way for the pi 1.1.0 upgrade (docs/runbooks/pi-upgrade.md §2.5), on the dev
+ * box and inside the worker-runtime image: identical event-type sequences and `translatePiEvent`
+ * output against 0.99.2; `dist/modes/rpc/*` is byte-identical. Additive only: `agent_settled`
+ * carries `aborted` and `tool_execution_end` carries `durationMs`, neither of which this module
+ * reads.
+ *
  * Scope decisions (see PR body "假设与偏离"):
  *   - Only `assistantMessageEvent.type === 'text_delta'` from `message_update` becomes a
  *     `textDelta` — every other streaming sub-type (`thinking_*`, `toolcall_*`, `text_start`/

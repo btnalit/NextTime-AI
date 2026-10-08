@@ -82,7 +82,7 @@ describe('buildOutboundHeaders — an allow-list per api kind (R-30)', () => {
         'x-api-key': 'handle-token',
         authorization: 'Bearer smuggled',
         'anthropic-beta':
-          'fine-grained-tool-streaming-2025-05-14, mcp-client-2025-04-04,web-fetch-2025-09-10,interleaved-thinking-2025-05-14,code-execution-2025-08-25',
+          'fine-grained-tool-streaming-2025-05-14, mcp-client-2025-04-04,web-fetch-2025-09-10,interleaved-thinking-2025-05-14,code-execution-2025-08-25,inline-tools-2026-09-15',
       },
       anthropic,
       'sk-ant-real',
@@ -90,7 +90,8 @@ describe('buildOutboundHeaders — an allow-list per api kind (R-30)', () => {
     expect(headerMap(headers)).toEqual({
       accept: 'application/json',
       'accept-encoding': 'identity',
-      'anthropic-beta': 'fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14',
+      'anthropic-beta':
+        'fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,inline-tools-2026-09-15',
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
       'x-api-key': 'sk-ant-real',
@@ -335,6 +336,104 @@ describe('stripProviderServerTools — anthropic-messages', () => {
       strippedTools: [],
       strippedParams: [],
     });
+    expect(body).toEqual(before);
+  });
+
+  /** pi 1.0.1+ (`inline-tools-2026-09-15`): a tool added mid-conversation is defined by value in
+   *  a `tool_addition` block (`pi-ai` `api/anthropic-messages.js` `convertMessages`). */
+  const inlineAddition = (definition: Record<string, unknown>) => ({
+    type: 'tool_addition',
+    tool: { type: 'tool_definition', definition },
+  });
+
+  it('a pi 1.1-shaped mid-conversation tool change (client definitions inline, removals, references) is untouched', () => {
+    const gateTool = {
+      name: 'accept_s2_api_stock_get',
+      description: 'observe',
+      input_schema: { type: 'object', properties: {} },
+    };
+    const body = {
+      model: 'claude-example',
+      max_tokens: 1024,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_removal', tool: { type: 'tool_reference', name: 'old_gate_tool' } },
+            inlineAddition(gateTool),
+            // pi 0.99's by-name form (rollback image).
+            { type: 'tool_addition', tool: { type: 'tool_reference', name: 'other_tool' } },
+            { type: 'text', text: 'and now?' },
+          ],
+        },
+      ],
+      tools: [clientTool, deferred],
+      stream: true,
+    };
+    const before = structuredClone(body);
+    expect(stripProviderServerTools('anthropic-messages', body)).toEqual({
+      strippedTools: [],
+      strippedParams: [],
+    });
+    expect(body).toEqual(before);
+  });
+
+  it('strips server tools smuggled in as inline tool_addition definitions, and unknown tool_addition shapes', () => {
+    const custom = { type: 'custom', name: 'patch', input_schema: { type: 'object' } };
+    const body: Record<string, unknown> = {
+      model: 'claude-example',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            inlineAddition(clientTool),
+            inlineAddition(custom),
+            inlineAddition({ type: 'web_fetch_20250910', name: 'web_fetch' }),
+            inlineAddition({ type: 'mcp_toolset', mcp_server_name: 'exfil' }),
+            { type: 'tool_addition', tool: { type: 'tool_definition' } },
+            { type: 'tool_addition', tool: { type: 'mcp_toolset', mcp_server_name: 'exfil' } },
+            { type: 'tool_addition' },
+            { type: 'text', text: 'go' },
+          ],
+        },
+        { role: 'assistant', content: 'plain string content is left alone' },
+      ],
+      tools: [clientTool],
+    };
+    const result = stripProviderServerTools('anthropic-messages', body);
+    expect(result).toEqual({
+      strippedTools: [
+        'web_fetch_20250910',
+        'mcp_toolset',
+        'tool_addition:tool_definition',
+        'tool_addition:mcp_toolset',
+        'tool_addition:(none)',
+      ],
+      strippedParams: [],
+    });
+    expect(body.messages).toEqual([
+      {
+        role: 'user',
+        content: [inlineAddition(clientTool), inlineAddition(custom), { type: 'text', text: 'go' }],
+      },
+      { role: 'assistant', content: 'plain string content is left alone' },
+    ]);
+  });
+
+  it('tool_addition blocks are an Anthropic shape: an OpenAI-kind body keeps them as opaque content', () => {
+    const body = {
+      model: 'gpt-example',
+      messages: [
+        {
+          role: 'user',
+          content: [inlineAddition({ type: 'web_fetch_20250910', name: 'web_fetch' })],
+        },
+      ],
+    };
+    const before = structuredClone(body);
+    expect(stripProviderServerTools('openai-completions', body).strippedTools).toEqual([]);
     expect(body).toEqual(before);
   });
 

@@ -26,7 +26,7 @@
 - 迁移：`packages/kernel/migrations/NNNN_name.sql` + 幂等 runner（`schema_migrations` 表）。
 - 状态机一律转移表驱动，非法转移抛 `IllegalTransition`。
 - 所有受治理写入与 `audit_records` 同事务（I11）。
-- pi 锁 `@earendil-works/pi-coding-agent@0.99.2`（版本源是根目录 `pi.version`，升级按 `docs/runbooks/pi-upgrade.md`；2026-09-26 由 0.84.4 升到 0.87.1，2026-10-01 升到 0.99.2）；平台扩展只依赖文档化事件。
+- pi 锁 `@earendil-works/pi-coding-agent@1.1.0`（版本源是根目录 `pi.version`，升级按 `docs/runbooks/pi-upgrade.md`；2026-09-26 由 0.84.4 升到 0.87.1，2026-10-01 升到 0.99.2，2026-10-08 升到 1.1.0）；平台扩展只依赖文档化事件。
 - 共享类型在 `packages/shared`：capability 注册表、事件、`ActionDescription`、Zod schema；HTTP 路由、MCP 工具、WS 方法都由注册表生成或校验。
 - HTTP capability 投影约定：`POST /api/cap/<capability_name>`，`Authorization: Bearer <handle>`（S1.6 落地此约定）。
 - 不写任何真实地址、密钥、知识库 ID；测试用 `example` 值。每任务一分支一 PR。
@@ -3551,7 +3551,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 | 线 | 项 | 内容 | 波次 |
 |---|---|---|---|
-| U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2，按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
+| U 可升级运行时 | U0 | pi 0.99.2 → 1.0.2（实际升到 1.1.0，见下方 U0 实现说明），按 `runbooks/pi-upgrade.md` §2 / §3 逐行核对（真实 `pi --mode rpc` + fake-llm），新增 §2.5 核对记录 | W1 |
 | | U1 | 版本感知（维护者定为必须项，不做一键升级）：CI 把 `channel.json`（平台各发版 + pi 上游与漂移结论）发到固定的滚动 release，W1 不签名——只驱动提醒，真正升级仍由 `pull-images.sh` 验镜像签名；漂移检查成功路径开 / 更新 `pi-upgrade-available` issue；主机 `update-feed`（钉 digest 的 curl 类镜像，只取文件、不解析，无凭证、无 docker socket，直连 GitHub 不经 egress-proxy，写入 uid 专属子目录）；内核 `platform_updates` 读时校验 schema 与大小；W1 交付概览提醒条 +「pi 运行时」卡片的上游一行（区分"上游新版初查通过待发版 / 上游新版不兼容 / 有新平台发版"），侧栏提醒点与四版本并排在 W2。保持设计决定 E3：内核不出网 | W1 / W2 |
 | | U2 | 运行时一致性套件（CI 真实启动 `pi --mode rpc`，覆盖 §2 的"人工"行），结论进 channel 记录；不做候选镜像轨道与控制台内拉镜像（决定 1 / 2 已定） | W2 |
 | | U3 | 控制台内一键升级整个平台——不做（决定 3，维护者 2026-10-04） | — |
@@ -3572,6 +3572,28 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
+
+### U0 实现说明（2026-10-08）
+
+- **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
+  `runbooks/pi-upgrade.md` §2.5，本节只记改了什么。
+- **版本**：`pi.version`、`platform-extension/package.json` 两个字段 → 1.1.0，`pnpm-lock.yaml` 更新。`pnpm -r typecheck` 不需要改
+  任何代码（0.99 那次要改测试桩，这次没有）；`platform-extension` 124 / 124。
+- **镜像安装方式**：1.0.1 起 pi 不再发布 `npm-shrinkwrap.json`，`npm install -g` 会把 `pi-ai` 等 `^1.x` 依赖解析成构建当时的
+  最新版。新增 `deploy/worker-runtime/pi/{package.json,package-lock.json}`，Dockerfile 改为 `npm ci` 装进 `/opt/pi` 并软链
+  `/usr/local/bin/pi`，构建时校验已装 pi 等于 `pi.version`；`check-pi-version-consistency.sh` 加两条（依赖与锁文件版本）。
+  升级步骤因此多一步 `npm install --package-lock-only`（`pi-upgrade.md` §4 第 2 步）。
+- **llm-proxy**：1.0.1 起 pi 对 Anthropic 的中途工具变更改用 `inline-tools-2026-09-15` + `tool_addition` 内联定义。
+  `FORWARDED_ANTHROPIC_BETAS` 加这个值（旧值保留给回滚镜像）；`stripProviderServerTools` 对 Anthropic 消息里的 `tool_addition`
+  只保留客户端工具定义，否则内联定义会成为绕过 R-30 / D-29 剥离的新通道。平台 `models.json` 不写 `compat`，今天的平台
+  流量不走这条路，修的是"放行 beta 之后"的口子。`pi-upgrade.md` §2 耦合面表补了这一行。
+- **测试**：`outbound-policy.test.ts` 三个新用例（pi 1.1 真实请求形状原样通过、内联服务端工具与未知形状被剥离、OpenAI
+  kind 不误伤）；`bridge.test.ts` 加 `agent_settled.aborted` / `tool_execution_end.durationMs` 形状。
+- **真实运行**：开发机（node 22）两版各三种模式 + 本 PR 构建的镜像内（node 24、真实 `entrypoint.sh`、`--internal` 网络）
+  三种模式，结果逐条相同（§2.5）。探针脚本没有入库：U2 运行时一致性套件会把它做成 CI 步骤，届时按 U2 的设计落地，
+  而不是先固化一个临时脚本。
+- **未做 / 待主机**：主机 S1–S4 + S5.7 真实模型回归；回滚目标 `nexttime-ai-worker-runtime:pi-0.99.2` 需保留并在
+  `WORKER_IMAGE_ALLOWLIST` 里（`pi-upgrade.md` §7）。
 
 ## 6. 验收矩阵
 
@@ -3640,7 +3662,7 @@ flowchart LR
 | agent 经公网外带数据 | 出网代理记录域名；WorkerDefinition 拒绝清单；有意接受的剩余风险 |
 | S2 范围扩大（四种门 + 连接流程 + Skill） | 这是「能干活」的最小集合，不再拆到 P5；S2 验收脚本七步全过才算完成 |
 | Semantica skills | 不复用实现，只借 UX；工具名别名在 S3.6 |
-| pi ABI 变化 | 锁精确版本（当前 0.99.2，`pi.version`）；S1.6 / S2.9 契约测试 |
+| pi ABI 变化 | 锁精确版本（当前 1.1.0，`pi.version`；镜像内整棵依赖树由 `deploy/worker-runtime/pi/` 锁文件钉死）；S1.6 / S2.9 契约测试 |
 | 每用户一个 pi 进程的内存 | S1.5 空闲超时停进程 |
 | E7 备份暂缓 | S3 后重评 |
 | 各厂商 OpenAI 兼容差异 | pi-ai `compat`；内核不做协议 |
