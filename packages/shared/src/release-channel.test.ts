@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ReleaseChannelReaderSchema,
+  ReleaseChannelSchema,
   ReleaseChannelUrlSchema,
   comparePiVersions,
   comparePlatformVersions,
@@ -50,6 +52,62 @@ describe('ReleaseChannelUrlSchema', () => {
       'javascript:alert(1)',
     ]) {
       expect(ReleaseChannelUrlSchema.safeParse(url).success).toBe(false);
+    }
+  });
+});
+
+describe('ReleaseChannelSchema / ReleaseChannelReaderSchema', () => {
+  const record = {
+    schema: 1,
+    generatedAt: '2026-10-08T03:30:00Z',
+    platform: {
+      latest: 'v0.43.0',
+      releases: [
+        {
+          version: 'v0.43.0',
+          previousVersion: 'v0.42.0',
+          publishedAt: '2026-10-08T03:00:00Z',
+          pi: '1.0.2',
+          migrations: ['core 0041'],
+          breaking: false,
+          notesUrl: 'https://github.com/o/r/releases/tag/v0.43.0',
+        },
+      ],
+    },
+    piUpstream: null,
+  };
+
+  it('the producer rejects an unknown key; the reader strips it', () => {
+    const withExtra = {
+      ...record,
+      platform: {
+        ...record.platform,
+        releases: [{ ...record.platform.releases[0], addedLater: true }],
+      },
+    };
+    expect(ReleaseChannelSchema.safeParse(withExtra).success).toBe(false);
+    const read = ReleaseChannelReaderSchema.safeParse(withExtra);
+    expect(read.success && read.data).toEqual(record);
+  });
+
+  it('both accept a record from before previousVersion, and reject a predecessor not older', () => {
+    const { previousVersion: _, ...legacyRelease } = record.platform.releases[0] as Record<
+      string,
+      unknown
+    >;
+    const legacy = { ...record, platform: { ...record.platform, releases: [legacyRelease] } };
+    expect(ReleaseChannelSchema.safeParse(legacy).success).toBe(true);
+    expect(ReleaseChannelReaderSchema.safeParse(legacy).success).toBe(true);
+    for (const previousVersion of ['v0.43.0', 'v0.44.0']) {
+      const bad = {
+        ...record,
+        platform: {
+          ...record.platform,
+          releases: [{ ...record.platform.releases[0], previousVersion }],
+        },
+      };
+      expect(ReleaseChannelSchema.safeParse(bad).success).toBe(false);
+      expect(ReleaseChannelReaderSchema.safeParse(bad).success).toBe(false);
     }
   });
 });

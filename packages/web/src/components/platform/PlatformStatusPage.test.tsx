@@ -240,12 +240,31 @@ describe('PlatformStatusPage', () => {
     });
 
     const cases = [
-      { status: 'stale', tone: 'warn', label: '已陈旧', text: 'update-feed 服务的日志' },
-      { status: 'invalid', tone: 'danger', label: '异常', text: '内核拒绝了下载到的版本记录' },
-      { status: 'missing', tone: 'neutral', label: '尚未取到', text: '还没有取到版本信息' },
+      {
+        status: 'stale',
+        cause: 'download',
+        tone: 'warn',
+        label: '已陈旧',
+        text: 'update-feed 服务的日志',
+      },
+      { status: 'stale', cause: 'ci', tone: 'warn', label: '已陈旧', text: 'GitHub Actions' },
+      {
+        status: 'invalid',
+        cause: null,
+        tone: 'danger',
+        label: '异常',
+        text: '内核拒绝了下载到的版本记录',
+      },
+      {
+        status: 'missing',
+        cause: null,
+        tone: 'neutral',
+        label: '尚未取到',
+        text: '还没有取到版本信息',
+      },
     ] as const;
     for (const c of cases) {
-      it(`${c.status}: ${c.tone} chip "${c.label}" and what it means`, async () => {
+      it(`${c.status}${c.cause ? ` (${c.cause})` : ''}: ${c.tone} chip "${c.label}" and what it means`, async () => {
         const missing = c.status === 'missing';
         const http = scriptedHttp({
           platform_status: () => status(),
@@ -253,6 +272,7 @@ describe('PlatformStatusPage', () => {
             platformUpdates({
               feedFreshness: feedFreshness({
                 status: c.status,
+                staleCause: c.cause,
                 fetchedAt: missing || c.status === 'invalid' ? null : '2026-10-05T04:00:00.000Z',
                 generatedAt: missing || c.status === 'invalid' ? null : '2026-10-05T03:00:00.000Z',
                 detail: `detail for ${c.status}`,

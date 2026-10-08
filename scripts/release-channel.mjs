@@ -46,7 +46,7 @@ export function isBreaking(changelog, version) {
 
 /**
  * Pure half: the record from already-collected facts.
- * - `releases`: newest first, `{version, publishedAt, pi, migrations, breaking}`.
+ * - `releases`: newest first, `{version, previousVersion, publishedAt, pi, migrations, breaking}`.
  * - `pi`: this run's drift-check result, or null to keep `previous.piUpstream`.
  * `bundledIn` is always recomputed — a release run that ships the new pi must flip it.
  */
@@ -109,7 +109,14 @@ export function collectReleases(maxReleases) {
           .sort()
       : [];
     const publishedAt = new Date(git(['log', '-1', '--format=%cI', tag]).trim()).toISOString();
-    return { version: tag, publishedAt, pi, migrations, breaking: isBreaking(changelog, tag) };
+    return {
+      version: tag,
+      previousVersion: previousTag ?? null,
+      publishedAt,
+      pi,
+      migrations,
+      breaking: isBreaking(changelog, tag),
+    };
   });
 }
 
