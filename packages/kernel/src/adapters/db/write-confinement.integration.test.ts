@@ -171,6 +171,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['evidence', 'update'],
         ['decisions', 'update'],
         ['outbox', 'update'],
+        // core 0042 (L4-13): no kernel path deletes a gate link.
+        ['workspace_gate_links', 'delete'],
       ];
 
       for (const [table, op] of REVOKED) {
@@ -532,6 +534,102 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           ),
         ).rejects.toThrow(/immutable/);
+      });
+    });
+
+    // core 0042 (S10 K4, L4-11 remainder / L4-13): the definer helpers answer only about the
+    // transaction's own workspace, and one Gatekeeper takes at most one gate link.
+    describe('K4 — security-definer helpers are bound to the transaction’s workspace', () => {
+      async function factIdentity(tenant: Tenant) {
+        const { linkId } = await insertFactWithEvidence(tenant);
+        const row = await asLoginRole((client) =>
+          client.query<{
+            link_type: string;
+            source_object_id: string;
+            target_object_id: string;
+            activity_id: string;
+          }>(
+            'select link_type, source_object_id, target_object_id, activity_id from links where id = $1',
+            [linkId],
+          ),
+        );
+        const link = row.rows[0];
+        if (!link) throw new Error('fact missing');
+        return { linkId, ...link };
+      }
+
+      it('find_active_fact_for_identity / latest_fact_invalidated_for_identity refuse another workspace and still answer for their own', async () => {
+        const theirs = await factIdentity(tenantB);
+        for (const fn of [
+          'find_active_fact_for_identity',
+          'latest_fact_invalidated_for_identity',
+        ]) {
+          await expect(
+            asTenant(tenantA, (client) =>
+              client.query(`select * from ${fn}($1, $2, $3, $4)`, [
+                tenantB.workspaceId,
+                theirs.link_type,
+                theirs.source_object_id,
+                theirs.target_object_id,
+              ]),
+            ),
+          ).rejects.toThrow(/is not this transaction's/);
+        }
+
+        const own = await asTenant(tenantB, (client) =>
+          client.query<{ id: string }>(
+            'select id from find_active_fact_for_identity($1, $2, $3, $4)',
+            [
+              tenantB.workspaceId,
+              theirs.link_type,
+              theirs.source_object_id,
+              theirs.target_object_id,
+            ],
+          ),
+        );
+        expect(own.rows.map((r) => r.id)).toEqual([theirs.linkId]);
+        const invalidated = await asTenant(tenantB, (client) =>
+          client.query<{ v: boolean | null }>(
+            'select latest_fact_invalidated_for_identity($1, $2, $3, $4) as v',
+            [
+              tenantB.workspaceId,
+              theirs.link_type,
+              theirs.source_object_id,
+              theirs.target_object_id,
+            ],
+          ),
+        );
+        expect(invalidated.rows[0]?.v).toBe(false);
+      });
+
+      it('link_visible_to_caller / conflict_visible_to_caller answer false (hidden) for another workspace, never raise', async () => {
+        const theirs = await factIdentity(tenantB);
+        const foreign = await asTenant(tenantA, (client) =>
+          client.query<{ link: boolean; conflict: boolean }>(
+            'select link_visible_to_caller($1, $2) as link, conflict_visible_to_caller($1, $3, $3) as conflict',
+            [tenantB.workspaceId, theirs.activity_id, theirs.linkId],
+          ),
+        );
+        expect(foreign.rows[0]).toEqual({ link: false, conflict: false });
+        const own = await asTenant(tenantB, (client) =>
+          client.query<{ link: boolean; conflict: boolean }>(
+            'select link_visible_to_caller($1, $2) as link, conflict_visible_to_caller($1, $3, $3) as conflict',
+            [tenantB.workspaceId, theirs.activity_id, theirs.linkId],
+          ),
+        );
+        expect(own.rows[0]).toEqual({ link: true, conflict: true });
+      });
+
+      it('workspace_gate_links has a unique (workspace, Gatekeeper) index', async () => {
+        const result = await asLoginRole((client) =>
+          client.query<{ indexdef: string }>(
+            `select indexdef from pg_indexes
+              where tablename = 'workspace_gate_links' and indexname = 'workspace_gate_links_gatekeeper_key'`,
+          ),
+        );
+        expect(result.rows[0]?.indexdef).toMatch(
+          /CREATE UNIQUE INDEX .* \(workspace_id, gatekeeper_object_id\)/,
+        );
       });
     });
 

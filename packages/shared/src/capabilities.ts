@@ -919,7 +919,7 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.EnableGateInstanceResultWireSchema,
     description:
-      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess. R-18: an optional manifestDigest (from preview_gate_instance_enable) makes it refuse 409 manifest_changed when the manifest in effect is no longer the previewed one.',
+      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess. L4-13: a single match already linked to a different gate instance refuses 409 gatekeeper_already_linked (one link per Gatekeeper). R-18: an optional manifestDigest (from preview_gate_instance_enable) makes it refuse 409 manifest_changed when the manifest in effect is no longer the previewed one.',
   },
   {
     // S8 W2-K2 (audit J3 "一键写入 ... 没有预览或确认"): the console ConfirmTier's read model for
@@ -933,7 +933,7 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
     resultSchema: wire.PreviewGateInstanceEnableResultWireSchema,
     description:
-      'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
+      'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper, or 409 gatekeeper_already_linked when that Gatekeeper is already linked to another instance), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
   },
   {
     // S8 W3-K1 (leftover 79, audit CO2): the write half of preview_gate_instance_enable's own
