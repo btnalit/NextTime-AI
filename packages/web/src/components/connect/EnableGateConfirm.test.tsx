@@ -202,4 +202,30 @@ describe('EnableGateConfirm', () => {
     const error = await within(confirm).findByTestId('confirm-error');
     expect(error.textContent).toContain('不是平台预置模式');
   });
+
+  it('L4-13: a preview refused as gatekeeper_already_linked explains why and opens no confirm', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => {
+        throw new HttpError(
+          'capability_error',
+          'Gatekeeper gk-a … is already linked to gate instance "gate-0"',
+          'gatekeeper_already_linked',
+        );
+      },
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Docker prod"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const notice = await screen.findByTestId('enable-gate-1-preview-error');
+    expect(notice.textContent).toContain('一个门只能关联一个实例');
+    expect(screen.queryByTestId('enable-gate-1-confirm')).toBeNull();
+  });
 });
