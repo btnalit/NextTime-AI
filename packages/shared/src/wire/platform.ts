@@ -961,9 +961,21 @@ export type PiDriftWire = z.infer<typeof PiDriftWireSchema>;
 export const PlatformUpdateFeedStatusWireSchema = z.enum(['fresh', 'stale', 'missing', 'invalid']);
 export type PlatformUpdateFeedStatusWire = z.infer<typeof PlatformUpdateFeedStatusWireSchema>;
 
+/** Why a `stale` record is stale — the kernel checks the download first:
+ *  - `download`: no successful download for `maxAgeHours` (the host cannot reach GitHub, or the
+ *    update-feed service is down);
+ *  - `ci`: downloads are recent but CI stopped rewriting the record for
+ *    `UPDATE_FEED_GENERATED_MAX_AGE_HOURS` (the nightly pi drift / release channel workflows).
+ *  null for every status but `stale`. */
+export const PlatformUpdateFeedStaleCauseWireSchema = z.enum(['download', 'ci']);
+export type PlatformUpdateFeedStaleCauseWire = z.infer<
+  typeof PlatformUpdateFeedStaleCauseWireSchema
+>;
+
 export const PlatformUpdateFeedWireSchema = z
   .object({
     status: PlatformUpdateFeedStatusWireSchema,
+    staleCause: PlatformUpdateFeedStaleCauseWireSchema.nullable(),
     /** The file's modification time — when `update-feed` last downloaded it. */
     fetchedAt: z.string().nullable(),
     /** The record's own `generatedAt` — when CI last wrote it. */
@@ -991,9 +1003,13 @@ export const PlatformUpdateWireSchema = z
     /** Newest first. */
     newerReleases: z.array(ReleaseChannelReleaseSchema),
     migrations: z.array(MigrationRefSchema),
-    /** This version is older than the oldest release the record lists (it carries the newest 20),
-     *  so `migrations` misses the ones added before that window — `apply-release.sh` still runs
-     *  all of them; the reminder must say the list is partial. */
+    /** This version is older than the release the record's window starts from (the oldest listed
+     *  release's `previousVersion`; the record carries the newest 20), so `migrations` misses the
+     *  ones added before that window — `apply-release.sh` still runs all of them; the reminder
+     *  must say the list is partial. False when this version is that window base itself: the
+     *  oldest listed release's migrations are exactly what it adds over it. A record without
+     *  `previousVersion` (written before the field) bounds the window by the oldest listed
+     *  release instead. */
     migrationsIncomplete: z.boolean(),
     breaking: z.boolean(),
     notesUrl: ReleaseChannelUrlSchema.nullable(),

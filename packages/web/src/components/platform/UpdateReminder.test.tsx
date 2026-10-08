@@ -191,6 +191,7 @@ describe('UpdateReminder', () => {
         platformUpdates({
           feedFreshness: feedFreshness({
             status: 'stale',
+            staleCause: 'ci',
             fetchedAt: new Date(Date.now() - 5 * 3_600_000).toISOString(),
             generatedAt: new Date(Date.now() - 4 * 86_400_000 - 60_000).toISOString(),
           }),

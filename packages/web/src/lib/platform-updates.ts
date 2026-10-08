@@ -1,5 +1,6 @@
 import type {
   PiUpdateWire,
+  PlatformUpdateFeedStaleCauseWire,
   PlatformUpdateFeedStatusWire,
   PlatformUpdatesWire,
 } from '@nexttime/shared';
@@ -67,12 +68,11 @@ export interface FeedInvalidNotice {
   readonly detail: string;
 }
 
-/** Why the record is stale — the kernel checks both halves, the download first:
- *  - `download`: no successful download for `maxAgeHours` (the host cannot reach GitHub, or the
- *    update-feed service is down) — the age is the last download's;
- *  - `ci`: downloads are recent but CI stopped rewriting the record (the nightly pi drift / release
- *    channel workflows) — the age is the record's own `generatedAt`. */
-export type FeedStaleCause = 'download' | 'ci';
+/** Why the record is stale, as the kernel decided it (`feedFreshness.staleCause`):
+ *  - `download`: no successful download for `maxAgeHours` — the age is the last download's;
+ *  - `ci`: downloads are recent but CI stopped rewriting the record — the age is the record's own
+ *    `generatedAt`. */
+export type FeedStaleCause = PlatformUpdateFeedStaleCauseWire;
 
 export interface FeedStaleNotice {
   readonly kind: 'feed-stale';
@@ -184,11 +184,9 @@ export function buildUpdateNotices(
       detail: feed.detail,
     });
   } else if (feed.status === 'stale') {
-    // Same order as the kernel: a download older than its limit is the cause; otherwise the
-    // kernel can only have called it stale for the record's own age.
-    const fetched = feed.fetchedAt === null ? Number.NaN : Date.parse(feed.fetchedAt);
-    const cause: FeedStaleCause =
-      Number.isNaN(fetched) || now - fetched > feed.maxAgeHours * HOUR_MS ? 'download' : 'ci';
+    // The kernel decides the cause; the browser's clock only words the age. A stale feed without
+    // a cause cannot come from the kernel — read it as the download half, the louder hint.
+    const cause: FeedStaleCause = feed.staleCause ?? 'download';
     notices.push(
       cause === 'download'
         ? {
