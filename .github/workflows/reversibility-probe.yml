@@ -154,6 +154,7 @@ jobs:
           # The JSON report is what the verdict reads; the default reporter keeps the log readable.
           pnpm --filter @nexttime/kernel exec vitest run --reporter=default --reporter=json \
             --outputFile.json="$GITHUB_WORKSPACE/probe-results.json" 2>&1 | tee ../probe.log
+          rc=${PIPESTATUS[0]}
           # set -e stays off: a grep with no match must not abort before the result line is written.
           {
             echo "### BASE suite on HEAD schema"
@@ -163,7 +164,7 @@ jobs:
           # Verdict (scripts/reversibility-triage.mjs, HEAD's copy): BASE's exit code alone cannot tell
           # a real incompatibility from a declared, replaced delta; the triage script can.
           node ../head/scripts/reversibility-triage.mjs \
-            --base-report "$GITHUB_WORKSPACE/probe-results.json" --base-log ../probe.log \
+            --base-report "$GITHUB_WORKSPACE/probe-results.json" --base-rc "$rc" --base-log ../probe.log \
             --base-root packages/kernel --head-root ../head/packages/kernel \
             --manifest ../head/packages/kernel/migrations/reversibility-deltas.json \
             --delta ../delta.list | tee -a "$GITHUB_STEP_SUMMARY"
