@@ -283,9 +283,9 @@ gatekeeper-base,llm-proxy,worker-supervisor}/Dockerfile`、`gatekeepers/{docker,
    ——`--offline` 强制不联网,只从上一步已经填好的 store 里链接 `node_modules`（pnpm 自己文档："pair
    with --offline --frozen-lockfile"）。挂载缓存的内容对 BuildKit 是临时挂载,不会进最终镜像层——
    pnpm 在跨设备场景会自动从 hardlink 回退为 copy,把内容真正复制进这层普通文件系统,镜像内容因此不变。
-5. **`deploy/worker-runtime/Dockerfile` 的 pi 全局安装层**（`npm install -g … @earendil-works/pi-
-   coding-agent@${PI_VERSION}`）本来就已经只 keyed 在 `pi.version`（`COPY pi.version` 是这一层唯一
-   的输入,在稳定的 apt/useradd 层之上）,这次只加一个 `RUN --mount=type=cache,id=npm-cache,
+5. **`deploy/worker-runtime/Dockerfile` 的 pi 全局安装层**（当时是 `npm install -g … @earendil-works/pi-
+   coding-agent@${PI_VERSION}`）当时就已经只 keyed 在 `pi.version`（`COPY pi.version` 是这一层唯一
+   的输入,在稳定的 apt/useradd 层之上）,遗留 93 那次只加了一个 `RUN --mount=type=cache,id=npm-cache,
    target=/npm-cache` + `npm install -g --cache=/npm-cache …`：pi 升版本时,新版本依赖树里没变的那部分
    包仍能复用缓存,不必整树重新下载。
    pi 1.1.0 起（#481），这一层改为 `deploy/worker-runtime/pi/` 锁文件 + `npm ci --cache=/npm-cache`：
