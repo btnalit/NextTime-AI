@@ -464,6 +464,10 @@ rollback;" </dev/null
 
 目录 `config/update-feed/`（10002:10002 0755）：v0.43.0 起的 `apply-release.sh` 在切 tag 之前补建（`STEP update-feed-dir`），v0.42.0 及更早的脚本不会建它。第一次应用 v0.43.0 前先手工补建，或跑 `git show v0.43.0:scripts/host-env-init.sh | sudo NEXTTIME_DATA="$NEXTTIME_DATA" sh -s`；漏做只影响「版本信息」缺失，补建后 `docker compose restart update-feed`。第一次应用前确认 CI 已把 `channel.json` 发到滚动的 `channel` 预发布；应用后看 `docker compose logs --tail 20 update-feed` 有一次成功写入。四种状态的核对见 `docs/runbooks/operations.md` §16。
 
+### 3.10 `config/egress-sources.json` 属主每次应用都校正（#491，v0.43.0 起）
+
+v0.43.0 起的 `apply-release.sh` 在切 tag 之前把这个文件设成 `10001:10001 0644`（缺失则建成 `{}`，Docker 先建出的空目录会删掉，非空目录则 `FAIL egress-sources` 停下），应用日志多一行 `STEP egress-sources config/egress-sources.json is 10001:10001 0644`。无 schema 变化。按 §3 的入口用目标 tag 的脚本副本时，第一次应用就生效；直接跑旧检出里的脚本不会做这一步（手工做法见 `docs/runbooks/host-worker-runtime.md` §4）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
