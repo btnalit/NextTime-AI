@@ -6,8 +6,8 @@ import {
   type PlatformUpdatesWire,
   RELEASE_CHANNEL_MAX_BYTES,
   type ReleaseChannel,
+  ReleaseChannelReaderSchema,
   type ReleaseChannelRelease,
-  ReleaseChannelSchema,
   comparePiVersions,
   comparePlatformVersions,
   platformVersionFromKernelVersion,
@@ -24,9 +24,10 @@ import { readPiVersions } from './runtime.js';
  * existing read-only `config/` mount at `/data/config/update-feed/channel.json`.
  *
  * The file crossed the network, so every read re-validates it: at most
- * `RELEASE_CHANNEL_MAX_BYTES`, then `ReleaseChannelSchema` (strict, bounded strings, GitHub-only
- * links). An oversized or malformed file is `invalid` and nothing from it is used — never a
- * partially trusted record, never a failed call.
+ * `RELEASE_CHANNEL_MAX_BYTES`, then `ReleaseChannelReaderSchema` (every known field strictly typed,
+ * bounded strings, GitHub-only links; unknown keys a newer CI added are stripped and never used).
+ * An oversized or malformed file is `invalid` and nothing from it is used — never a partially
+ * trusted record, never a failed call.
  *
  * Freshness has two halves, because either end can silently stop: the file's modification time is
  * the last successful download (`update-feed` writes a temp file and renames it only on success,
@@ -127,7 +128,7 @@ export function releaseChannelFromFile(
       channel: null,
     };
   }
-  const parsed = ReleaseChannelSchema.safeParse(json);
+  const parsed = ReleaseChannelReaderSchema.safeParse(json);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     const where = first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'schema';

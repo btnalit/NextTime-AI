@@ -12,8 +12,9 @@ import { z } from 'zod';
  *   and validates it here before uploading it to the rolling `channel` pre-release;
  * - the host's `update-feed` service only downloads the file (it never parses it);
  * - the kernel's `platform_updates` (application/platform/updates.ts) validates it again on every
- *   read — the file crossed the network, so the kernel trusts nothing about it beyond this schema
- *   and `RELEASE_CHANNEL_MAX_BYTES`.
+ *   read (`ReleaseChannelReaderSchema`: the same field checks, unknown keys stripped) — the file
+ *   crossed the network, so the kernel trusts nothing about it beyond this schema and
+ *   `RELEASE_CHANNEL_MAX_BYTES`.
  *
  * W1 does not sign the record: it only drives a reminder, never an action (the real upgrade,
  * `scripts/apply-release.sh --pull`, still verifies every image's signature). The defence is HTTPS
@@ -49,60 +50,94 @@ export const ReleaseChannelUrlSchema = z
 
 const IsoUtcSchema = z.string().datetime();
 
+const releaseShape = {
+  version: PlatformReleaseVersionSchema,
+  /** The release tag just before this one — what `migrations` is counted from; null for the
+   *  repository's first release. Optional: records written before the field existed lack it,
+   *  and a reader must still accept them (it then cannot place the window's start exactly). */
+  previousVersion: PlatformReleaseVersionSchema.nullable().optional(),
+  publishedAt: IsoUtcSchema,
+  /** The pi this release's images carry (`pi.version` at the tag); null for a tag that has none. */
+  pi: PiReleaseVersionSchema.nullable(),
+  /** Migrations this release adds over `previousVersion`, in apply order. */
+  migrations: z.array(MigrationRefSchema).max(200),
+  /** release-please marked the release `⚠ BREAKING CHANGES`. */
+  breaking: z.boolean(),
+  notesUrl: ReleaseChannelUrlSchema,
+};
+
+/** The predecessor is older by definition; a record saying otherwise is forged or broken. */
+function checkPreviousVersion(
+  release: { readonly version: string; readonly previousVersion?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  const previous = release.previousVersion;
+  if (previous && (comparePlatformVersions(previous, release.version) ?? 0) >= 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['previousVersion'],
+      message: `previousVersion ${previous} is not older than ${release.version}`,
+    });
+  }
+}
+
 export const ReleaseChannelReleaseSchema = z
-  .object({
-    version: PlatformReleaseVersionSchema,
-    /** The release tag just before this one — what `migrations` is counted from; null for the
-     *  repository's first release. Optional: records written before the field existed lack it,
-     *  and a reader must still accept them (it then cannot place the window's start exactly). */
-    previousVersion: PlatformReleaseVersionSchema.nullable().optional(),
-    publishedAt: IsoUtcSchema,
-    /** The pi this release's images carry (`pi.version` at the tag); null for a tag that has none. */
-    pi: PiReleaseVersionSchema.nullable(),
-    /** Migrations this release adds over `previousVersion`, in apply order. */
-    migrations: z.array(MigrationRefSchema).max(200),
-    /** release-please marked the release `⚠ BREAKING CHANGES`. */
-    breaking: z.boolean(),
-    notesUrl: ReleaseChannelUrlSchema,
-  })
-  .strict();
+  .object(releaseShape)
+  .strict()
+  .superRefine(checkPreviousVersion);
 export type ReleaseChannelRelease = z.infer<typeof ReleaseChannelReleaseSchema>;
 
 export const PiSdkSuiteResultSchema = z.enum(['pass', 'fail']);
 export type PiSdkSuiteResult = z.infer<typeof PiSdkSuiteResultSchema>;
 
-export const ReleaseChannelPiUpstreamSchema = z
-  .object({
-    /** npm `latest` of `@earendil-works/pi-coding-agent` when the drift check last ran. */
-    latest: PiReleaseVersionSchema,
-    checkedAt: IsoUtcSchema,
-    /** The drift check's platform-extension typecheck + pi-SDK suite against `latest`. A pass is a
-     *  first compatibility check only: docs/runbooks/pi-upgrade.md §2 still has manual rows. */
-    sdkSuite: PiSdkSuiteResultSchema,
-    /** One line from the drift check when `sdkSuite` is `fail`. */
-    failureSummary: z.string().max(500).nullable(),
-    /** The oldest platform release that bundles `latest`, if any. */
-    bundledIn: PlatformReleaseVersionSchema.nullable(),
-    runUrl: ReleaseChannelUrlSchema.nullable(),
-  })
-  .strict();
+const piUpstreamShape = {
+  /** npm `latest` of `@earendil-works/pi-coding-agent` when the drift check last ran. */
+  latest: PiReleaseVersionSchema,
+  checkedAt: IsoUtcSchema,
+  /** The drift check's platform-extension typecheck + pi-SDK suite against `latest`. A pass is a
+   *  first compatibility check only: docs/runbooks/pi-upgrade.md §2 still has manual rows. */
+  sdkSuite: PiSdkSuiteResultSchema,
+  /** One line from the drift check when `sdkSuite` is `fail`. */
+  failureSummary: z.string().max(500).nullable(),
+  /** The oldest platform release that bundles `latest`, if any. */
+  bundledIn: PlatformReleaseVersionSchema.nullable(),
+  runUrl: ReleaseChannelUrlSchema.nullable(),
+};
+
+export const ReleaseChannelPiUpstreamSchema = z.object(piUpstreamShape).strict();
 export type ReleaseChannelPiUpstream = z.infer<typeof ReleaseChannelPiUpstreamSchema>;
 
-export const ReleaseChannelSchema = z
-  .object({
+/**
+ * The record. `schema` is the format version: a change an older reader must not misread (a field
+ * changing meaning or type, a field it needs disappearing) bumps it, and every older kernel then
+ * calls the record `invalid` rather than misreading it. An added field does not bump it.
+ *
+ * Two strictnesses over the same fields:
+ * - `ReleaseChannelSchema` — strict at every level. The producer (`scripts/release-channel.mjs`)
+ *   validates what it writes with it, so a typo'd or stray key never reaches the channel.
+ * - `ReleaseChannelReaderSchema` — what the kernel reads with: the same types, patterns, caps and
+ *   checks on every field it knows, but unknown keys are stripped (never used, never passed on)
+ *   instead of rejecting the record, so a field a newer CI adds does not silence the reminders of
+ *   every host still running an older kernel.
+ */
+function releaseChannelSchema(unknownKeys: 'strict' | 'strip') {
+  const object = <T extends z.ZodRawShape>(shape: T) =>
+    unknownKeys === 'strict' ? z.object(shape).strict() : z.object(shape).strip();
+  return object({
     schema: z.literal(1),
     generatedAt: IsoUtcSchema,
-    platform: z
-      .object({
-        latest: PlatformReleaseVersionSchema.nullable(),
-        /** Newest first. */
-        releases: z.array(ReleaseChannelReleaseSchema).max(50),
-      })
-      .strict(),
+    platform: object({
+      latest: PlatformReleaseVersionSchema.nullable(),
+      /** Newest first. */
+      releases: z.array(object(releaseShape).superRefine(checkPreviousVersion)).max(50),
+    }),
     /** null until the first drift check has run since the channel existed. */
-    piUpstream: ReleaseChannelPiUpstreamSchema.nullable(),
-  })
-  .strict();
+    piUpstream: object(piUpstreamShape).nullable(),
+  });
+}
+
+export const ReleaseChannelSchema = releaseChannelSchema('strict');
+export const ReleaseChannelReaderSchema = releaseChannelSchema('strip');
 export type ReleaseChannel = z.infer<typeof ReleaseChannelSchema>;
 
 type VersionParts = readonly [number, number, number, string | null];

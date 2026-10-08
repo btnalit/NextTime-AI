@@ -124,7 +124,12 @@ describe('releaseChannelFromFile', () => {
 
     const forged = [
       { ...channel(), schema: 2 },
-      { ...channel(), extra: true },
+      channel({
+        platform: {
+          latest: 'v0.44.0',
+          releases: [{ ...release('v0.44.0', '1.0.2'), previousVersion: 'v0.44.0' }],
+        },
+      }),
       channel({
         platform: {
           latest: 'v0.44.0',
@@ -270,6 +275,28 @@ describe('derivePlatformUpdates', () => {
       now: NOW,
     });
     expect(noPin.piUpdate.state).toBe('unknown');
+  });
+
+  it('reads a record carrying fields a newer CI added, and passes none of them on', () => {
+    const base = channel();
+    const newer = {
+      ...base,
+      addedLater: 'top',
+      platform: {
+        ...base.platform,
+        addedLater: 'platform',
+        releases: base.platform.releases.map((r) => ({ ...r, addedLater: 'release' })),
+      },
+      piUpstream: { ...UPSTREAM, addedLater: 'pi' },
+    };
+    const read = releaseChannelFromFile('/f', JSON.stringify(newer), NOW, NOW, FEED_REPO);
+    expect(read.feed.status).toBe('fresh');
+    expect(read.channel).toEqual(base);
+    // Known fields stay strictly typed: a bad value in one is still a rejected record.
+    const badKnown = { ...newer, generatedAt: 'yesterday' };
+    expect(
+      releaseChannelFromFile('/f', JSON.stringify(badKnown), NOW, NOW, FEED_REPO).channel,
+    ).toBeNull();
   });
 
   it('rejects a record linking outside the UPDATE_FEED_URL repository, case-insensitively', () => {
