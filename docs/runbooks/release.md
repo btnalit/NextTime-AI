@@ -288,6 +288,8 @@ gatekeeper-base,llm-proxy,worker-supervisor}/Dockerfile`、`gatekeepers/{docker,
    的输入,在稳定的 apt/useradd 层之上）,这次只加一个 `RUN --mount=type=cache,id=npm-cache,
    target=/npm-cache` + `npm install -g --cache=/npm-cache …`：pi 升版本时,新版本依赖树里没变的那部分
    包仍能复用缓存,不必整树重新下载。
+   pi 1.1.0 起（#481），这一层改为 `deploy/worker-runtime/pi/` 锁文件 + `npm ci --cache=/npm-cache`：
+   这一层的输入多了这两个文件，缓存挂载照旧，见 `pi-upgrade.md` §3。
 
 **主机怎么核对生效**：
 
