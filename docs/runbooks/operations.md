@@ -734,13 +734,19 @@ cap get_platform_settings | jq '.defaultEntryModel'
 
 **主机侧**：`update-feed` 是常驻服务（curl 镜像钉 digest、uid 10002、只读根、无凭证、独占网络），每 24 小时把
 `channel.json` 取到 `${NEXTTIME_DATA}/config/update-feed/`（失败保留上一份、1 小时后重试）；内核只读该文件，自己不出网。
-**第一次应用含它的发版前**先补目录（`apply-release.sh` 的自拷贝跑的是旧脚本，新版脚本里的补建要到下一次才生效；
-之后每次 apply 都会重设属主，被 Docker 抢先建成 root 属主的目录也会在下一次 apply 时自愈）：
+**第一次应用含它的发版前**先补目录。主机检出里的脚本都还是旧版：`apply-release.sh --pull` 跑的是切版本前那份脚本的
+自拷贝，旧版的 `apply-release.sh` 和 `host-env-init.sh` 都没有这一步；新版 `apply-release.sh` 的补建要到下一次 apply
+才生效（之后每次 apply 都会重设属主，被 Docker 抢先建成 root 属主的目录也会自愈）。在检出根目录执行其一：
 
 ```bash
-sh scripts/host-env-init.sh            # 幂等；或手工：
-# sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+# 手工（就是新版脚本做的三步）：
+sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+# 或跑新版本的 host-env-init.sh（幂等；X.Y.Z 换成要应用的版本）：
+git fetch -q origin --tags && git show vX.Y.Z:scripts/host-env-init.sh | sudo NEXTTIME_DATA="$NEXTTIME_DATA" sh -s
 ```
+
+漏了这一步也不致命：Docker 会把目录建成 root 属主，`update-feed` 写不进去，「版本信息」显示"缺失"；补上面的命令后
+`docker compose restart update-feed` 即可，下一次 apply 也会自愈。
 
 应用后核对：`docker compose logs --tail 20 update-feed` 有 `downloaded channel.json`；控制台运行状态页「版本信息」为"正常"。
 它停了或 GitHub 不通，48 小时后「版本信息」变"陈旧"，提醒指向主机上的 update-feed 日志；下载正常但 CI 超过 72 小时没再写记录（pi drift / release channel 工作流停了）也是"陈旧"，提醒指向 GitHub Actions；记录格式不对或超过 64 KiB 是"异常"。它只影响升级提醒，不影响任何其它功能。
