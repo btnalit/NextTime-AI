@@ -269,7 +269,15 @@ if [ "$seed" -eq 1 ]; then
   base_fail=0
   for s in 3 1 2 4; do
     [ -f "scripts/accept_s$s.sh" ] || continue
-    accept "baseline-$FROM-s$s" "scripts/accept_s$s.sh" || base_fail=$((base_fail + 1))
+    # One retry, reported: a released version's own races cannot be fixed in that version, and the
+    # baseline only has to prove the host is equivalent (e.g. accept_s1 chat-bob reading history
+    # before the agent-host runtime's assistant-message insert commits). The apply phase's suites
+    # (apply-release.sh) are never retried.
+    accept "baseline-$FROM-s$s" "scripts/accept_s$s.sh" ||
+      { step "baseline-$FROM-s$s RETRY once — first attempt kept as baseline-$FROM-s$s-try1.log"
+        mv "$LOGS/baseline-$FROM-s$s.log" "$LOGS/baseline-$FROM-s$s-try1.log"
+        accept "baseline-$FROM-s$s" "scripts/accept_s$s.sh"; } ||
+      base_fail=$((base_fail + 1))
   done
   docker compose --profile test stop fake-llm </dev/null >/dev/null 2>&1
   if [ "$base_fail" -gt 0 ] && [ "$allow_baseline" -eq 0 ]; then

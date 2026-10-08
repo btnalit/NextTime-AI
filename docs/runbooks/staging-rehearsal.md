@@ -122,6 +122,7 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `FAIL preflight … IPv6 disabled` | 主机内核关了 IPv6，docker-socket-proxy 起不来 | 换主机；GitHub runner 没有这个问题 |
+| `STEP baseline-… RETRY once` | `--from` 版本自己的一项验收第一次没过、重跑一次（只对基线；apply 阶段的验收从不重跑）。已知原因：真实 agent-host 运行时下 kernel 并发处理同一 Turn 的 `message` 与 `turnEnded` 帧，`chat.metadata`（Turn 结束）可能先于助手消息入库推给客户端，`accept_s1` 的 `chat-bob` 读到 1 条历史 | 第一次的日志保留为 `baseline-…-try1.log`；同一项连续两次失败才算基线失败 |
 | `FAIL baseline …` | `--from` 版本在这台主机上就过不了验收——环境与生产不等价，预演结论不可信 | 读 `baseline-*.log`；确认是环境差异后可 `--allow-baseline-failures`，并在结论里写明 |
 | S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 而 runsc 用 gVisor 默认网络栈注册：它访问不到 Docker 内嵌 DNS（`127.0.0.11`，gVisor FAQ 列出的限制），入口容器解析不了 `kernel` / `llm-proxy` | 按生产主机的方式注册：`runsc install -- --network=host`（`daemon.json` 里 `runtimes.runsc.runtimeArgs=["--network=host"]`），workflow 已这样装 |
 | S3 `seed-domain-pack` 失败 | `config/ontology/` 里没有 `ops-assets-*.yaml` | 预演脚本已复制；主机上按 `add-domain-pack.md` 放入 |
