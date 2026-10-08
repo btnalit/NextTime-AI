@@ -204,7 +204,7 @@ docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Health}}'
   没有集中式日志收集（无 ELK/Loki 之类的 sidecar）——每个服务的日志只存在于该容器自己的日志驱动
   （Docker 默认 `json-file`）里，容器被 `docker rm` 后日志随之消失，除非在那之前已经 `docs compose
   logs` 导出。
-- **`update-feed`**（S10 U1，见 `release.md` §3.7）：`docker compose logs --tail 20 update-feed`——每次成功写
+- **`update-feed`**（S10 U1，见 §16）：`docker compose logs --tail 20 update-feed`——每次成功写
   `downloaded channel.json (<n> bytes)`，失败写原因并保留上一份文件。它停了或 GitHub 不通，控制台运行状态页「版本信息」
   在 48 小时后变成"陈旧"；记录格式不对则是"异常"。它只影响升级提醒，不影响任何其它功能。
 - **`audit_records` 表**（内核里唯一的持久化、可查询的操作记录，design §12"append-only"）：每次
@@ -721,3 +721,30 @@ cap set_platform_default_model '{"model":"anthropic/claude-sonnet-5"}'   # 目�
 cap set_platform_default_model '{"model":null}'                          # 清回 pi 自己的默认值
 cap get_platform_settings | jq '.defaultEntryModel'
 ```
+
+## 16. 版本感知：`channel.json` 与 `update-feed`（S10 U1，遗留 125）
+
+**CI 侧**：每次发版的镜像发布成功后，`release-please.yml` 调 `.github/workflows/release-channel.yml`
+重算 ReleaseChannel 记录（最近 20 个发版各自内置的 pi、新增迁移、是否 breaking，加上游最新 pi 与漂移检查结论），
+上传到滚动的 `channel` 预发布（`…/releases/download/channel/channel.json`）；`pi-drift.yml` 每晚也调一次（只换 pi 半边）。
+`channel` 不是发版，永远不要从它安装；它的 tag 打在仓库根提交上，主机 `git describe --tags` 不受影响。
+
+**首次**：本节第一次合入后，到 Actions → "release channel" → Run workflow 手动跑一次（或等当晚的 pi-drift），
+`channel` 预发布才会出现；之前主机上的 `update-feed` 取不到文件，控制台显示"版本信息缺失"，不影响其它功能。
+
+**主机侧**：`update-feed` 是常驻服务（curl 镜像钉 digest、uid 10002、只读根、无凭证、独占网络），每 24 小时把
+`channel.json` 取到 `${NEXTTIME_DATA}/config/update-feed/`（失败保留上一份、1 小时后重试）；内核只读该文件，自己不出网。
+**第一次应用含它的发版前**先补目录（`apply-release.sh` 的自拷贝跑的是旧脚本，新版脚本里的补建要到下一次才生效）：
+
+```bash
+sh scripts/host-env-init.sh            # 幂等；或手工：
+# sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+```
+
+应用后核对：`docker compose logs --tail 20 update-feed` 有 `downloaded channel.json`；控制台运行状态页「版本信息」为"正常"。
+它停了或 GitHub 不通，48 小时后「版本信息」变"陈旧"；记录格式不对或超过 64 KiB 是"异常"。它只影响升级提醒，不影响任何其它功能。
+控制台只提醒、给出准确命令（`sh scripts/apply-release.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 可在 `.env`
+覆盖（fork 或镜像源），只接受 https。
+
+**回滚**：`docker compose stop update-feed`（或回退到上一版，compose 里不再有它，`docker compose up -d --remove-orphans`）；
+目录与文件留着无害。无 schema 变化。

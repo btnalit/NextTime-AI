@@ -312,7 +312,7 @@ required checks 里，`ci.yml` 完全不受影响。
 
 **成功路径（S10 U1）**：上游 `@latest` ≠ `pi.version` 且全部通过时，开 / 更新**同一个**带 `pi-upgrade-available`
 label 的 issue（"pi X 可升级、兼容测试通过"——它只是提醒，不开 PR；升级仍走第 4 节）；`pi.version` 追上后自动关闭。
-每次检查（通过或失败）的结论还会写进 ReleaseChannel 记录（`release.md` §3.7），控制台据此在概览提醒"pi 待发版"或
+每次检查（通过或失败）的结论还会写进 ReleaseChannel 记录（`operations.md` §16），控制台据此在概览提醒"pi 待发版"或
 "pi 不兼容"，并在运行层「pi 运行时」卡片显示「上游最新 pi」。
 
 **与控制台运行层页的「pi 运行时」卡片是两回事**。本节上面说的"漂移"是"pinned `pi.version` vs npm 上的

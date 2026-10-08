@@ -130,7 +130,7 @@ function readErrorDetail(file: string, err: unknown): string {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   switch (code) {
     case 'ENOENT':
-      return `no update feed at ${file} yet — the update-feed service has not downloaded the release channel record (compose service update-feed, docs/runbooks/release.md)`;
+      return `no update feed at ${file} yet — the update-feed service has not downloaded the release channel record (compose service update-feed, docs/runbooks/operations.md §16)`;
     case 'EACCES':
     case 'EPERM':
       return `update feed ${file} is not readable by the kernel (uid 10001) — re-run scripts/host-env-init.sh`;
