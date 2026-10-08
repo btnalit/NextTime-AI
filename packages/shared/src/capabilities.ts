@@ -340,6 +340,9 @@ const ontologyCapabilities: readonly Capability[] = [
     // R-60: a draft remembers the published version it was proposed against (its base); once the
     // family's published head has moved past it the publish refuses 409 `ontology_base_moved` —
     // every version is a full replacement, so publishing it would drop the newer version's types.
+    // I-P1 (S10 P0): ObjectType / ActionType names are unique across a workspace's published
+    // families — a same-named type in another family refuses 409 `ontology_namespace_conflict`
+    // instead of one family silently overriding the other.
     name: 'publish_ontology_version',
     group: 'ontology',
     mode: 'execute',
@@ -348,7 +351,7 @@ const ontologyCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ id: id, version: z.number().int().positive() }).strict(),
     resultSchema: wire.OntologyPublishResultWireSchema,
     description:
-      'Publish your own draft OntologyVersion (I16). Human channel only; another principal’s draft reads as not found. A draft proposed against a published version that is no longer the family’s latest (someone published another version since) refuses 409 ontology_base_moved — propose the change again from the current version.',
+      'Publish your own draft OntologyVersion (I16). Human channel only; another principal’s draft reads as not found. A draft proposed against a published version that is no longer the family’s latest (someone published another version since) refuses 409 ontology_base_moved — propose the change again from the current version. An ObjectType or ActionType name another published ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
   {
     // S3.1: handled by `proposeOntologyChangeHandler` (`registry.ts`'s `proposeOntologyChange`).
@@ -3487,7 +3490,7 @@ const modulesCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. Already installed → identical to `upgrade_module` (same underlying call, D3).',
+      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
   {
     name: 'upgrade_module',
@@ -3498,7 +3501,7 @@ const modulesCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ name: z.string().min(1), confirm: z.boolean().optional() }).strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number).',
+      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
 ];
 

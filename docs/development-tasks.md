@@ -3573,6 +3573,33 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
 
+### S10 实现说明
+
+**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**
+
+- `substrate/ontology/namespace.ts`：`assertOntologyNamespace(client, workspaceId, candidateId, definition)` 拿候选定义与
+  工作区内**其他每个族的最新已发布版本**比较（与 `loadPublishedLinkTypes` 判定写入时用的是同一口径），ObjectType 名、
+  ActionType 名各自不得已被别的族声明，候选自身重复声明也算；LinkType 同名照旧累加签名；名字按种类唯一（ObjectType 与
+  ActionType 可同名，`get_type` 的种类顺序已能区分）；草稿不进命名空间（他人草稿不可见，撞名的草稿在发布时拒）。
+  两条落库路径都在写之前调用它：`loader.ts` `publishOntologyVersion`（种子、领域包、`install_module` / `upgrade_module`）
+  与 `registry.ts` `publishOntologyDraft`（`publish_ontology_version`）。撞名抛 `OntologyNamespaceConflictError`
+  （HTTP 409 / WS `illegal_transition`，code `ontology_namespace_conflict`，`conflicts` 列出种类、名字、已拥有它的族），什么都不写。
+- 并发：新增工作区级 advisory 锁 `lockOntologyNamespace`，`lockOntologyFamily` 先取它再取族锁——所有发布者同一顺序取锁，
+  一个事务连发多个族也不会与另一个发布者死锁；两个族并发发布同一个新名字只有先提交的成功。
+- `mergeVisibleOntology` 的"按族 id 靠后者覆盖"保留，但只剩"调用者自己的草稿遮住已发布类型"这一种情形（该草稿发不出去），注释已改。
+- 控制台：`ontology_namespace_conflict` 进 `platform-errors.ts` 双语文案；本体提议发布确认框本就走它，能力目录「模块」页的
+  安装 / 升级失败也改走它（此前只显示内核英文原文）。
+- 遗留 123 跟进 ①：`list_ontology_versions` 的 keyset 从 `(createdAt 毫秒, id)` 改成 `(createdAt 毫秒, id, version)`，游标
+  `base64url(createdAt|id|version)`——同一族在同一毫秒里有多个版本时，翻页边界不再跳过后面的版本；旧的两段游标仍可解，
+  语义同前（"该 (createdAt, id) 的全部版本之后"）。
+- 遗留 123 跟进 ②：core `0041_drop_workspace_ontology_enforcement_allowance` 删掉 0035（R-29）为 v0.38.x 回归套件留的
+  "工作区事务可改自己工作区的 `ontology_enforcement`"放行（策略与触发器里那一支）；可逆性判断与探针预期写在 `runbooks/release.md` §6。
+- 主机只读预检：`runbooks/release.md` §3.7 的查询（只读事务），列出各工作区里已发布族之间重名的类型；空表才应用。
+- 测试：`namespace.test.ts`（纯函数）；`registry.test.ts` 新增 I-P1 三例（草稿发布被拒且仍是草稿、loader 路径被拒且不落行、
+  同族新版本与跨族同名 LinkType 照常）与 keyset 同毫秒三版本翻页；原有夹具改为每次用唯一类型名（同一工作区里反复发布同名
+  新族，正是 I-P1 现在拒绝的写法）；`write-confinement.integration.test.ts` 改断言工作区事务改不了自己工作区的任何列；
+  web `ModulesTab.test.tsx` 断言模块安装撞名显示映射后的文案与原始 code。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |

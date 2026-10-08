@@ -25,8 +25,8 @@ import { createPool, withWorkspace } from './pool.js';
  *   - a revoked Handle cannot be un-revoked, a revoked or expired grant cannot come back — for
  *     every role, while revocation itself keeps working;
  *   - `workspaces` / `platform_settings` / `platform_settings_history` are readable by every
- *     transaction and writable only by a platform transaction (plus the one compatibility
- *     allowance for a workspace's own `ontology_enforcement`);
+ *     transaction and writable only by a platform transaction (core 0041 dropped 0035's one
+ *     compatibility allowance for a workspace's own `ontology_enforcement`);
  *   - L4-11 / L4-12: security-definer ACLs, the Fact "never both" rule, the deprecated
  *     OntologyVersion definition lock;
  *   - the workspace purge (login role) still removes every row.
@@ -360,36 +360,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await readWorkspace(tenantB.workspaceId)).toEqual(before);
       });
 
-      it('a workspace transaction cannot change its own workspace either (status, name, entry model)', async () => {
+      it('a workspace transaction cannot change its own workspace either (status, name, entry model, ontology enforcement)', async () => {
+        const enforcement = async (): Promise<string | undefined> =>
+          (
+            await asLoginRole((client) =>
+              client.query<{ ontology_enforcement: string }>(
+                'select ontology_enforcement from workspaces where id = $1',
+                [tenantA.workspaceId],
+              ),
+            )
+          ).rows[0]?.ontology_enforcement;
+        const before = await readWorkspace(tenantA.workspaceId);
+        const enforcementBefore = await enforcement();
+        // core 0041 dropped 0035's compatibility allowance for `ontology_enforcement`: no policy
+        // admits the workspace plane to its own row any more, so RLS hides it from every UPDATE.
         for (const assignment of [
           `status = 'disabled'`,
           `name = 'renamed'`,
           `entry_model = 'r29/model'`,
+          `ontology_enforcement = case when ontology_enforcement = 'warn' then 'reject' else 'warn' end`,
         ]) {
-          await expect(
-            asTenant(tenantA, (client) =>
-              client.query(`update workspaces set ${assignment} where id = $1`, [
-                tenantA.workspaceId,
-              ]),
-            ),
-          ).rejects.toThrow(/only a platform transaction may change a workspace/);
+          const result = await asTenant(tenantA, (client) =>
+            client.query(`update workspaces set ${assignment} where id = $1`, [
+              tenantA.workspaceId,
+            ]),
+          );
+          expect(result.rowCount).toBe(0);
         }
-        expect((await readWorkspace(tenantA.workspaceId)).status).toBe('active');
-      });
-
-      it("compatibility allowance: a workspace transaction may still set its own ontology_enforcement (the previous release's suite does)", async () => {
-        const result = await asTenant(tenantA, (client) =>
-          client.query(`update workspaces set ontology_enforcement = 'warn' where id = $1`, [
-            tenantA.workspaceId,
-          ]),
-        );
-        expect(result.rowCount).toBe(1);
-        const other = await asTenant(tenantA, (client) =>
-          client.query(`update workspaces set ontology_enforcement = 'warn' where id = $1`, [
-            tenantB.workspaceId,
-          ]),
-        );
-        expect(other.rowCount).toBe(0);
+        expect(await readWorkspace(tenantA.workspaceId)).toEqual(before);
+        expect(await enforcement()).toBe(enforcementBefore);
       });
 
       it('a platform transaction writes any workspace; the login role keeps full power', async () => {

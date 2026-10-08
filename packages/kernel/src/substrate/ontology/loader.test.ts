@@ -31,6 +31,14 @@ linkTypes:
     description: Relates one Thing to anything.
 `;
 
+/** I-P1 (`namespace.ts`): every fresh family published below lands in the same workspace, and
+ *  published families may not share an ObjectType name — so each one names its type uniquely. */
+function uniqueDefinition() {
+  return parseOntologyDefinition(
+    VALID_YAML.replaceAll('Thing', `Thing_${randomUUID().slice(0, 8)}`),
+  );
+}
+
 describe('parseOntologyDefinition', () => {
   it('parses valid YAML into an OntologyDefinition', () => {
     const definition = parseOntologyDefinition(VALID_YAML);
@@ -188,7 +196,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('publishes a fresh definition as a published, version-1 ontology_versions row', async () => {
-      const definition = parseOntologyDefinition(VALID_YAML);
+      const definition = uniqueDefinition();
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
       );
@@ -202,7 +210,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('publishing again under the same id produces version 2', async () => {
-      const definition = parseOntologyDefinition(VALID_YAML);
+      const definition = uniqueDefinition();
       const first = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
       );
@@ -228,7 +236,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('an already-published version cannot have its definition changed (I12, DB trigger)', async () => {
-      const definition = parseOntologyDefinition(VALID_YAML);
+      const definition = uniqueDefinition();
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
       );

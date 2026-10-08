@@ -2,6 +2,7 @@ import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { lockOntologyFamily, mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
+import { assertOntologyNamespace } from './namespace.js';
 import type { ActionTypeDefinition, ObjectTypeDefinition, OntologyDefinition } from './schema.js';
 import { OntologyDefinitionSchema } from './schema.js';
 
@@ -205,15 +206,22 @@ export interface PublishOntologyDraftInput {
  *  published head, else `OntologyBaseMovedError` and nothing changes. The lock makes "check the
  *  head, then publish" one step for every publisher of the family: two drafts made from the same
  *  base can no longer both pass. The not-found check runs first, so a draft that is not the
- *  caller's never reveals anything about its family. */
+ *  caller's never reveals anything about its family.
+ *
+ *  I-P1 (`namespace.ts`): still under that lock (it takes the workspace's namespace lock first),
+ *  the draft's ObjectType / ActionType names must not belong to another family's published head,
+ *  else `OntologyNamespaceConflictError` and nothing changes. */
 export async function publishOntologyDraft(
   client: PoolClient,
   workspaceId: string,
   input: PublishOntologyDraftInput,
 ): Promise<OntologyVersionRow> {
   await lockOntologyFamily(client, workspaceId, input.id);
-  const draft = await client.query<{ base_version: number | null }>(
-    `select base_version from ontology_versions
+  const draft = await client.query<{
+    base_version: number | null;
+    definition: OntologyDefinition;
+  }>(
+    `select base_version, definition from ontology_versions
      where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'
        and proposed_by = $4`,
     [workspaceId, input.id, input.version, input.publishedBy],
@@ -224,6 +232,7 @@ export async function publishOntologyDraft(
   if (head !== draftRow.base_version) {
     throw new OntologyBaseMovedError(input.id, input.version, draftRow.base_version, head);
   }
+  await assertOntologyNamespace(client, workspaceId, input.id, draftRow.definition);
 
   const result = await client.query<OntologyVersionDbRow>(
     `update ontology_versions
@@ -311,10 +320,11 @@ export interface LinkTypeSignature {
 }
 
 /** Merges every visible family's `objectTypes`/`linkTypes`/`actionTypes` into one flat namespace
- *  per kind. On a name collision across *different* families (not exercised by `ops-assets-v1`,
- *  which shares no ObjectType/ActionType name with `platform-meta`), the family later in `families`
- *  wins for ObjectType/ActionType — `families` is ordered by `id` (`loadVisibleOntology`'s own
- *  `order by t.id`), an arbitrary but deterministic tie-break, not a meaningful precedence; a
+ *  per kind. Published families cannot collide on an ObjectType/ActionType name (I-P1, refused at
+ *  publish by `namespace.ts`); only a caller's own draft can still shadow another family's type in
+ *  that caller's own view, and then the family later in `families` wins — `families` is ordered by
+ *  `id` (`loadVisibleOntology`'s own `order by t.id`), an arbitrary but deterministic tie-break,
+ *  not a meaningful precedence (publishing that draft is refused); a
  *  LinkType name instead accumulates signatures from every family that declares it, since two
  *  packs legitimately reusing the same relationship name for their own domain is not a conflict
  *  the way two same-named ObjectTypes would be. */
@@ -577,30 +587,39 @@ export const MAX_LIST_ONTOLOGY_VERSIONS_LIMIT = 500;
 const ONTOLOGY_VERSION_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Same `base64url(createdAt|id)` cursor shape `listWorkerDefinitionsPage`/`listSkills` already
- *  use — one convention for every keyset-paginated `list_*` capability, not a fourth encoding. */
-function encodeListOntologyVersionsCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+/** `base64url(createdAt|id|version)`: the `base64url(createdAt|id)` cursor shape
+ *  `listWorkerDefinitionsPage`/`listSkills` use, plus `version` — unlike those tables, one
+ *  ontology family (`id`) carries many rows, and two versions of one family created in the same
+ *  millisecond (a module install that publishes twice in one transaction, a seed) tie on
+ *  `(createdAt, id)`; a page ending on the first of them used to skip the second. A two-part cursor
+ *  issued before this change still decodes and means what it meant then (`LEGACY_CURSOR_VERSION`). */
+function encodeListOntologyVersionsCursor(createdAt: Date, id: string, version: number): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}|${version}`, 'utf8').toString('base64url');
 }
+
+/** Below every real `version` (a positive int): a legacy two-part cursor compares below all of
+ *  them, so the next page skips every version of that `(createdAt, id)`, as it did before. */
+const LEGACY_CURSOR_VERSION = 0;
 
 function decodeListOntologyVersionsCursor(
   cursor: string | undefined,
-): { readonly createdAt: string; readonly id: string } | null {
+): { readonly createdAt: string; readonly id: string; readonly version: number } | null {
   if (!cursor) return null;
   try {
-    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    const sepIndex = decoded.lastIndexOf('|');
-    if (sepIndex < 0) return null;
-    const createdAt = decoded.slice(0, sepIndex);
-    const id = decoded.slice(sepIndex + 1);
+    const parts = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    if (parts.length !== 2 && parts.length !== 3) return null;
+    const [createdAt = '', id = '', versionText] = parts;
+    const version = versionText === undefined ? LEGACY_CURSOR_VERSION : Number(versionText);
     if (
       !createdAt ||
       Number.isNaN(Date.parse(createdAt)) ||
-      !ONTOLOGY_VERSION_UUID_PATTERN.test(id)
+      !ONTOLOGY_VERSION_UUID_PATTERN.test(id) ||
+      !Number.isSafeInteger(version) ||
+      (versionText !== undefined && version < 1)
     ) {
       return null;
     }
-    return { createdAt, id };
+    return { createdAt, id, version };
   } catch {
     return null;
   }
@@ -622,10 +641,10 @@ export interface OntologyVersionsPage {
  * version — a family may carry more than one row still marked `published`, same as
  * `worker_definitions`, since nothing here deprecates an older published ontology version) plus
  * `callerPrincipalId`'s own `draft` rows (I16 — never another principal's), newest `created_at`
- * first, keyset-paginated. `proposed_by` is joined against `principals` for the wire shape's
- * resolved `{id, kind, displayName}` — the FK (`ontology_versions.proposed_by references
- * principals`) guarantees the join always finds a row, so this is a plain `join`, not a `left
- * join`.
+ * first, keyset-paginated on `(createdAt, id, version)`. `proposed_by` is joined against
+ * `principals` for the wire shape's resolved `{id, kind, displayName}` — the FK
+ * (`ontology_versions.proposed_by references principals`) guarantees the join always finds a row,
+ * so this is a plain `join`, not a `left join`.
  *
  * R-61: a draft row also carries its `base` — a `left join` to the same family's row at the
  * draft's `base_version` (R-60). That row is published by construction (a base is only ever taken
@@ -661,18 +680,26 @@ export async function listOntologyVersions(
        )
        and (
          $3::timestamptz is null
-         or (date_trunc('milliseconds', t.created_at), t.id) < ($3::timestamptz, $4::uuid)
+         or (date_trunc('milliseconds', t.created_at), t.id, t.version)
+            < ($3::timestamptz, $4::uuid, $5::int)
        )
-     order by date_trunc('milliseconds', t.created_at) desc, t.id desc
-     limit $5`,
-    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+     order by date_trunc('milliseconds', t.created_at) desc, t.id desc, t.version desc
+     limit $6`,
+    [
+      workspaceId,
+      callerPrincipalId,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      cursor?.version ?? null,
+      limit + 1,
+    ],
   );
 
   const rows = result.rows.slice(0, limit).map(mapListRow);
   const last = rows[rows.length - 1];
   const nextCursor =
     result.rows.length > limit && last
-      ? encodeListOntologyVersionsCursor(last.createdAt, last.id)
+      ? encodeListOntologyVersionsCursor(last.createdAt, last.id, last.version)
       : undefined;
   const truncated = requestedLimit > MAX_LIST_ONTOLOGY_VERSIONS_LIMIT ? (true as const) : undefined;
   return {
