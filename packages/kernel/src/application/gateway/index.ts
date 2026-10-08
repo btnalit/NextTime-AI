@@ -93,10 +93,13 @@ export { OntologyViolationError } from '../../substrate/graph/index.js';
 // (`ontology-handlers.ts`) pass caller input straight into `substrate/ontology/registry.ts`'s
 // `proposeOntologyChange`/`publishOntologyDraft` (R-60: `OntologyBaseMovedError`, the draft's base
 // is no longer the family's published head).
+// I-P1 (S10 P0): either publish path, plus `install_module` / `upgrade_module` through the loader,
+// refuses an ObjectType / ActionType name another family already owns.
 export {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyNamespaceConflictError,
 } from '../../substrate/ontology/index.js';
 // S3.2 `verify_fact` (I3.6's "harder half" — epistemic-handlers.ts's own doc comment on this
 // class): defined in the handler file itself, not a substrate module, so no six-layer workaround

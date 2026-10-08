@@ -20,13 +20,20 @@ name: reversibility-probe
 #   - pull_request touching packages/kernel/migrations/**: BASE = the latest release tag (what a
 #     host runs), HEAD = the PR. The answer arrives before the migration merges.
 #   - workflow_dispatch with explicit base/head: backfill evidence for past releases.
-# Not a required check: it reports; a failure is triaged (real incompatibility vs. a BASE test that
-# asserted a constraint the new migration deliberately changed) and recorded in release.md §6.
+# Not a required check, but every check must be green to merge (2026-10-08). A BASE test that
+# asserts the very constraint a HEAD migration deliberately changes is *declared* in
+# packages/kernel/migrations/reversibility-deltas.json, reviewed with the migration, and
+# scripts/reversibility-triage.mjs holds each declaration to evidence: BASE's whole suite still runs,
+# every failure must be declared by a migration HEAD adds, each declared test must really fail, and
+# each declared replacement must exist in HEAD and pass on the same database. Any other failure keeps
+# the probe red and is triaged as a real incompatibility (release.md §6).
 
 on:
   pull_request:
     paths:
       - 'packages/kernel/migrations/**'
+      - '.github/workflows/reversibility-probe.yml'
+      - 'scripts/reversibility-triage.mjs'
   workflow_dispatch:
     inputs:
       base:
@@ -144,16 +151,24 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           set +e
-          pnpm --filter @nexttime/kernel test 2>&1 | tee ../probe.log
+          # The JSON report is what the verdict reads; the default reporter keeps the log readable.
+          pnpm --filter @nexttime/kernel exec vitest run --reporter=default --reporter=json \
+            --outputFile.json="$GITHUB_WORKSPACE/probe-results.json" 2>&1 | tee ../probe.log
           rc=${PIPESTATUS[0]}
           # set -e stays off: a grep with no match must not abort before the result line is written.
           {
             echo "### BASE suite on HEAD schema"
             sed 's/\x1b\[[0-9;]*m//g' ../probe.log | grep -E 'Test Files|Tests ' | tail -n 2 | sed 's/^/    /' || true
             sed 's/\x1b\[[0-9;]*m//g' ../probe.log | grep -E '(FAIL|×) ' | sed 's/^/- /' | sort -u | head -n 40 || true
-            if [ "$rc" -eq 0 ]; then echo "**Result: reversible** — BASE code passes on HEAD schema"; else echo "**Result: not proven** — triage the failures above (release.md §6)"; fi
           } >>"$GITHUB_STEP_SUMMARY"
-          exit "$rc"
+          # Verdict (scripts/reversibility-triage.mjs, HEAD's copy): BASE's exit code alone cannot tell
+          # a real incompatibility from a declared, replaced delta; the triage script can.
+          node ../head/scripts/reversibility-triage.mjs \
+            --base-report "$GITHUB_WORKSPACE/probe-results.json" --base-rc "$rc" --base-log ../probe.log \
+            --base-root packages/kernel --head-root ../head/packages/kernel \
+            --manifest ../head/packages/kernel/migrations/reversibility-deltas.json \
+            --delta ../delta.list | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
         shell: bash
 
       - name: No schema delta

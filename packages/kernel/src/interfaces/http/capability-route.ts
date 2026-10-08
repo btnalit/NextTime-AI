@@ -47,6 +47,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyNamespaceConflictError,
   OntologyViolationError,
   PasswordChangeRequiredError,
   PrincipalNotFoundError,
@@ -338,6 +339,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // (someone published another version since) — its own code so the console can tell the
   // proposer to propose again from the current version, not just "conflict".
   if (err instanceof OntologyBaseMovedError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // I-P1 (S10 P0): an ObjectType / ActionType name another published ontology family already
+  // owns — `publish_ontology_version`, `install_module`, `upgrade_module`. Nothing was published.
+  if (err instanceof OntologyNamespaceConflictError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // Review 2026-09 (docs/development-tasks.md S2.4 "实现说明补充"): `propose_operation` over an

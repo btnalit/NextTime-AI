@@ -160,6 +160,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这份草稿提出之后，该本体又发布了新版本；本次没有发布任何内容。请基于当前版本重新提议，或丢弃这份草稿',
     en: 'A newer version of this ontology was published after this draft was proposed — nothing was published. Propose the change again from the current version, or discard this draft',
   },
+  // I-P1 (S10 P0): an ObjectType / ActionType name in this version is already declared by another
+  // published ontology family of the workspace. Nothing was published; rename the type, or change
+  // the family that owns it.
+  ontology_namespace_conflict: {
+    zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
+    en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of

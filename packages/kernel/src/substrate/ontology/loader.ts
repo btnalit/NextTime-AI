@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PoolClient } from 'pg';
+import { assertOntologyNamespace, lockOntologyNamespace } from './namespace.js';
 import { OntologyDefinitionParseError, parseOntologyDefinition } from './schema.js';
 import type { OntologyDefinition } from './schema.js';
 
@@ -143,25 +144,31 @@ export interface PublishOntologyVersionInput {
  *  published head moved since this draft was proposed" check and the publish itself are one step —
  *  two drafts made from the same base can no longer both pass the check concurrently. Same
  *  `pg_advisory_xact_lock(hashtext(...))` convention `application/platform/modules.ts` uses, keyed
- *  on a namespaced string. */
+ *  on a namespaced string. I-P1: takes the workspace's namespace lock first (`namespace.ts`), so
+ *  every publisher acquires the two in the same order. */
 export async function lockOntologyFamily(
   client: PoolClient,
   workspaceId: string,
   id: string,
 ): Promise<void> {
+  await lockOntologyNamespace(client, workspaceId);
   await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
     `ontology_family:${workspaceId}:${id}`,
   ]);
 }
 
 /** Publishes `input.definition` as a `published` `ontology_versions` row for `workspaceId`
- *  (bootstrap-time seeding — see this module's doc comment). */
+ *  (bootstrap-time seeding — see this module's doc comment). I-P1: refuses with
+ *  `OntologyNamespaceConflictError` (nothing written) when an ObjectType / ActionType name is
+ *  already another family's. */
 export async function publishOntologyVersion(
   client: PoolClient,
   workspaceId: string,
   input: PublishOntologyVersionInput,
 ): Promise<OntologyVersionRow> {
   if (input.id) await lockOntologyFamily(client, workspaceId, input.id);
+  else await lockOntologyNamespace(client, workspaceId);
+  await assertOntologyNamespace(client, workspaceId, input.id ?? null, input.definition);
   const nextVersion = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
     `insert into ontology_versions
