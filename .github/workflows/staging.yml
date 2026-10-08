@@ -19,7 +19,9 @@ name: staging
 # llm-providers.yaml), STAGING_LLM_PROXY_ENV (KEY=VALUE lines for the api_key_env names it uses),
 # STAGING_REAL_MODEL (<provider/model>). This repository is public and so are its run logs and
 # artifacts: the model id and provider names are masked in the log and scrubbed from the uploaded
-# files, never echoed by this workflow.
+# files, never echoed by this workflow. Missing secrets report the real-model part as SKIPPED (job
+# summary + warning), never as passed; cost is capped by the kernel's own per-workspace
+# LLM_DAILY_TOKEN_BUDGET (`token_budget` input) and `runs` ≤ 10.
 
 on:
   pull_request:
@@ -78,9 +80,13 @@ on:
         type: boolean
         default: false
       runs:
-        description: 'Runs per real-model scenario (3 = smoke, 10 = per-release regression)'
+        description: 'Runs per real-model scenario, 1-10 (3 = smoke, 10 = per-release regression)'
         type: string
         default: '3'
+      token_budget:
+        description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs'
+        type: string
+        default: '3000000'
 
 permissions:
   contents: read
@@ -151,16 +157,25 @@ jobs:
           echo "to=$to" >>"$GITHUB_OUTPUT"
           echo "rehearsing $from -> $to ($to_sha)"
 
+      # Missing secrets are a visible SKIPPED (warning + job summary), never a silent pass: the
+      # rehearsal itself still runs and still gates; only the real-model part is reported as not run.
       - name: Real-model inputs (staging-real-model environment)
+        id: real
         if: ${{ inputs.real_model }}
         env:
           PROVIDERS_YAML: ${{ secrets.STAGING_LLM_PROVIDERS_YAML }}
           PROXY_ENV: ${{ secrets.STAGING_LLM_PROXY_ENV }}
           REAL_MODEL: ${{ secrets.STAGING_REAL_MODEL }}
+          RUNS: ${{ inputs.runs }}
         run: |
           set -euo pipefail
-          [ -n "$PROVIDERS_YAML" ] && [ -n "$PROXY_ENV" ] && [ -n "$REAL_MODEL" ] || {
-            echo "::error::staging-real-model needs STAGING_LLM_PROVIDERS_YAML, STAGING_LLM_PROXY_ENV and STAGING_REAL_MODEL"; exit 1; }
+          case "$RUNS" in [1-9]|10) ;; *) echo "::error::runs must be 1-10, got '$RUNS'"; exit 1 ;; esac
+          if [ -z "$PROVIDERS_YAML" ] || [ -z "$PROXY_ENV" ] || [ -z "$REAL_MODEL" ]; then
+            echo "::warning::real-model regression SKIPPED: the staging-real-model environment lacks STAGING_LLM_PROVIDERS_YAML / STAGING_LLM_PROXY_ENV / STAGING_REAL_MODEL"
+            echo "### Real-model regression: **SKIPPED** (staging-real-model secrets missing)" >>"$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           umask 077
           dir="$RUNNER_TEMP/real"
           mkdir -p "$dir"
@@ -175,6 +190,7 @@ jobs:
             sed -n 's/^[[:space:]]*upstream_base_url:[[:space:]]*\(.*\)$/\1/p' "$dir/llm-providers.yaml" | tr -d "\"'"
           } | grep -v '^$' | sort -u >"$dir/scrub"
           while IFS= read -r s; do echo "::add-mask::$s"; done <"$dir/scrub"
+          echo "enabled=true" >>"$GITHUB_OUTPUT"
 
       - name: Rehearse ${{ steps.refs.outputs.from }} -> ${{ steps.refs.outputs.to }}
         env:
@@ -182,7 +198,8 @@ jobs:
           TO: ${{ steps.refs.outputs.to }}
           RUNTIME: ${{ inputs.worker_runtime || 'auto' }}
           SEED: ${{ github.event_name != 'workflow_dispatch' || inputs.seed }}
-          REAL: ${{ inputs.real_model }}
+          REAL: ${{ steps.real.outputs.enabled || 'false' }}
+          BUDGET: ${{ inputs.token_budget || '3000000' }}
           RUNS: ${{ inputs.runs || '3' }}
         run: |
           set -eu
@@ -191,7 +208,7 @@ jobs:
           [ "$RUNTIME" = auto ] || set -- "$@" --worker-runtime "$RUNTIME"
           [ "$SEED" = true ] || set -- "$@" --no-seed
           if [ "$REAL" = true ]; then
-            set -- "$@" --real "$(cat "$RUNNER_TEMP/real/model")" --runs "$RUNS" \
+            set -- "$@" --real "$(cat "$RUNNER_TEMP/real/model")" --runs "$RUNS" --real-token-budget "$BUDGET" \
               --real-providers "$RUNNER_TEMP/real/llm-providers.yaml" --real-env "$RUNNER_TEMP/real/llm-proxy.env"
           fi
           sudo sh scripts/staging-rehearsal.sh "$@"

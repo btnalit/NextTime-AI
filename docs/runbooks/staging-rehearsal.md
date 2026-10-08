@@ -78,7 +78,15 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
    - `STAGING_LLM_PROXY_ENV`：`KEY=VALUE` 行，键名即 yaml 里各 provider 的 `api_key_env`；
    - `STAGING_REAL_MODEL`：`<provider/model>`，必须是上面 yaml 生成的 `models.json` 里的 id。
-3. Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归）。
+3. Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
+
+成本上限：真实模型阶段开始前，脚本把内核自己的每工作区每日 token 配额 `LLM_DAILY_TOKEN_BUDGET` 设为
+`token_budget`（默认 3000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，
+见 `operations.md` 遗留 19 一节），而不是靠场景自己收敛。每个验收脚本用自己的一次性工作区，所以单次
+回归的上界约为"验收脚本数 × 配额"。
+
+secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** 并打 warning，不会显示为通过；预演本身
+照常运行、照常判定。
 
 日志与 artifact 是公开的：workflow 对模型 id、它的两段、yaml 里的 provider 名与上游 URL 做
 `::add-mask::`，上传前对日志文件逐一替换成 `<redacted>`。读数规则同 `host-accept-real-model.md`

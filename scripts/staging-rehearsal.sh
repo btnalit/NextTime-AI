@@ -14,7 +14,8 @@
 # Usage:
 #   sh scripts/staging-rehearsal.sh --disposable-host --from vA.B.C --to <tag|commit-ish> --work <dir>
 #        [--worker-runtime runc|runsc] [--no-seed] [--no-verify] [--allow-baseline-failures]
-#        [--real <provider/model> --real-providers <llm-providers.yaml> --real-env <file> [--runs N]]
+#        [--real <provider/model> --real-providers <llm-providers.yaml> --real-env <file> [--runs N]
+#         [--real-token-budget TOKENS]]
 #
 #   --disposable-host   required acknowledgement: this script bootstraps a fresh NEXTTIME_DATA,
 #                       starts the whole `nexttime-ai` compose project and leaves it running. It
@@ -40,7 +41,9 @@
 #   --real ...          after a clean apply, install a real provider (an llm-providers.yaml and an
 #                       env file holding the key variables it names), regenerate models.json, and
 #                       run accept_s2.sh/accept_s3.sh --real <provider/model> --runs N (default 3).
-#                       Costs real tokens. The model id and provider names are never printed by
+#                       Costs real tokens; the kernel's own per-workspace daily cap
+#                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 3000000) first,
+#                       so a runaway scenario is refused by the platform, not by luck. The model id and provider names are never printed by
 #                       this script; the accept scripts do print the model id — callers scrub logs
 #                       before publishing them (staging.yml does).
 #
@@ -57,7 +60,7 @@ set -u
 die() { echo "staging-rehearsal: $*" >&2; exit 2; }
 
 disposable=0 FROM= TO= WORK= RUNTIME= seed=1 verify_flag= allow_baseline=0
-REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3
+REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=3000000
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --disposable-host) disposable=1 ;;
@@ -72,6 +75,7 @@ while [ "$#" -gt 0 ]; do
     --real-providers) REAL_PROVIDERS=${2:-}; shift ;;
     --real-env) REAL_ENV=${2:-}; shift ;;
     --runs) RUNS=${2:-}; shift ;;
+    --real-token-budget) BUDGET=${2:-}; shift ;;
     *) die "unknown argument '$1' (see this script's header comment)" ;;
   esac
   shift
@@ -84,6 +88,7 @@ done
 case "$FROM" in v[0-9]*.[0-9]*.[0-9]*) ;; *) die "--from must be a release tag vX.Y.Z, got '$FROM'" ;; esac
 case "$RUNTIME" in ''|runc|runsc) ;; *) die "--worker-runtime must be runc or runsc" ;; esac
 case "$RUNS" in ''|*[!0-9]*) die "--runs must be a positive integer" ;; esac
+case "$BUDGET" in ''|*[!0-9]*) die "--real-token-budget must be a positive integer" ;; esac
 if [ -n "$REAL_MODEL$REAL_PROVIDERS$REAL_ENV" ]; then
   [ -n "$REAL_MODEL" ] && [ -f "$REAL_PROVIDERS" ] && [ -f "$REAL_ENV" ] ||
     die "--real needs all of --real <provider/model>, --real-providers <file> and --real-env <file>"
@@ -283,12 +288,14 @@ esac
 
 # 11. optional real-model regression on the applied release (docs/runbooks/host-accept-real-model.md).
 if [ -n "$REAL_MODEL" ]; then
+  printf "\nLLM_DAILY_TOKEN_BUDGET=%s\n" "$BUDGET" >>"$D/secrets/kernel.env" || fail real-setup "token budget"
+  docker compose up -d --no-build --force-recreate --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "kernel recreate"
   install -m 644 "$REAL_PROVIDERS" "$D/config/llm-providers.yaml" || fail real-setup "providers file"
   { echo; grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$REAL_ENV"; } >>"$D/secrets/llm-proxy.env" || fail real-setup "env file"
   docker compose up -d --no-build --force-recreate llm-proxy </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "llm-proxy recreate"
   docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null >"$D/models/models.json.tmp" 2>>"$LOGS/stack.log" &&
     mv "$D/models/models.json.tmp" "$D/models/models.json" || { rm -f "$D/models/models.json.tmp"; fail real-setup "gen-models"; }
-  step "real-setup ok"
+  step "real-setup ok token-budget-per-workspace=$BUDGET"
   real_fail=0
   accept "real-s2" scripts/accept_s2.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
   accept "real-s3" scripts/accept_s3.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
