@@ -226,7 +226,12 @@ fi
 
 # --- config/egress-sources.json: empty object; docker-compose.yml bind-mounts this file -------
 # read-only into egress-proxy (SOURCE_MAP_FILE) — if missing, Docker would create a directory
-# at that path instead of a file.
+# at that path instead of a file. worker-supervisor (uid 10001) bind-mounts the same file
+# read-write and rewrites it in place on every spawn / stop (egress-map.ts: open+truncate, never
+# rename), so the FILE must be owned by that uid: root-owned, every write fails with EACCES, the
+# spawn still succeeds (S1.5a made it best-effort) and egress-proxy then refuses that container's
+# traffic as an unknown source. Owner and mode are set on every run, not only on creation, so an
+# older host whose file was created root-owned heals here; 0644 keeps it readable by egress-proxy.
 EGRESS_SOURCES_JSON="$CONFIG_DIR/egress-sources.json"
 if [ ! -f "$EGRESS_SOURCES_JSON" ]; then
 	echo "{}" >"$EGRESS_SOURCES_JSON"
@@ -234,6 +239,8 @@ if [ ! -f "$EGRESS_SOURCES_JSON" ]; then
 else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
+chown "${CONTAINER_UID}:${CONTAINER_GID}" "$EGRESS_SOURCES_JSON"
+chmod 644 "$EGRESS_SOURCES_JSON"
 
 # --- config/ontology/: domain packs the operator drops in (S5.3, docs/runbooks/add-domain-pack.md)
 # `bootstrap.js seed-domain-pack` reads from here by default (kernel env DOMAIN_PACK_DIR, visible
