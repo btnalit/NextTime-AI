@@ -913,3 +913,20 @@ docker compose logs worker-supervisor --since 30s | grep "docker events subscrip
   v0.5.0 tag)"这句话是首次接入这个代理时对全部 flag 的一次性审计，`EVENTS` 当时就在审计范围内（只
   是被显式设成 `0`）；本次改动只把值从 `0` 改成 `1`，flag 本身的语义没有变过，因此没有为这次改动
   重新单独跑一次 `gh api`/读源码核对——如果 v0.5.0 之后升级过镜像版本，应该重新走一次那条审计。
+
+## 16. 已接受风险：`runsc --network=host`
+
+- **现状**：目标主机上 `runsc` 运行时的参数含 `--network=host`（主机 `/etc/docker/daemon.json` 的
+  `runtimes.runsc.runtimeArgs`，不在仓库里）。原因是 Docker 用户自定义网络的内嵌 DNS
+  （`127.0.0.11`）：在 gVisor 默认的用户态网络栈（netstack）下，入口容器与 Worker 解析不到
+  `egress-proxy` 等服务名。
+- **代价**：`--network=host` 让 gVisor 的网络层直接走宿主内核网络栈，不再经 netstack，所以网络相关
+  系统调用会暴露宿主内核攻击面，隔离弱于 gVisor 默认配置。容器仍在 Docker 给它的网络命名空间和
+  `workers` 网络里，这个选项不等于 `docker run --network host`。
+- **补偿控制**：出网白名单仍然有效。`workers` 网络不直连外网，所有出站都必须经 `egress-proxy`；
+  `egress-proxy` 只放行在 `config/egress-sources.json` 里登记过的来源，未登记一律按
+  unknown-source 拒绝（§4、§15）。该文件的属主由 `host-env-init.sh` / `apply-release.sh` 保证
+  （v0.43.0 起）。
+- **决定**：维护者 victor，2026-10-08，保持现状，作为已接受风险。不改运行时配置。
+- **重新评估的时机**：gVisor netstack 能解析内嵌 DNS（升级 gVisor 后复测），或者改为给容器显式配置
+  DNS 或服务地址、不再依赖内嵌 DNS 时，去掉 `--network=host`，并把本节改为已关闭。
