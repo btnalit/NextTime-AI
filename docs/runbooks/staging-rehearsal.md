@@ -23,7 +23,7 @@
 | `.env` | `KERNEL_BIND_ADDR=127.0.0.1`、文档网段 `203.0.113.0/24` / `203.0.114.0/24`、`WORKER_RUNTIME`、`COMPOSE_FILE` 加 staging overlay | 主机自己的 `.env` |
 | 镜像 | `--from` 的 `pull-images.sh`（cosign 验签） | `apply-release.sh --pull` |
 | 迁移 | `migrate.js` | 同 |
-| 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、集成页启用门实例 |
+| 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
 | apply | **`--from` 版本自己的** `apply-release.sh [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | 同一个脚本 |
 | 真实模型（可选） | 写入 providers yaml + key env → 重建 llm-proxy → `gen-models` → `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
@@ -119,3 +119,4 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 | `FAIL baseline …` | `--from` 版本在这台主机上就过不了验收——环境与生产不等价，预演结论不可信 | 读 `baseline-*.log`；确认是环境差异后可 `--allow-baseline-failures`，并在结论里写明 |
 | S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 而 runsc 用 gVisor 默认网络栈注册：它访问不到 Docker 内嵌 DNS（`127.0.0.11`，gVisor FAQ 列出的限制），入口容器解析不了 `kernel` / `llm-proxy` | 按生产主机的方式注册：`runsc install -- --network=host`（`daemon.json` 里 `runtimes.runsc.runtimeArgs=["--network=host"]`），workflow 已这样装 |
 | S3 `seed-domain-pack` 失败 | `config/ontology/` 里没有 `ops-assets-*.yaml` | 预演脚本已复制；主机上按 `add-domain-pack.md` 放入 |
+| S1/S2 egress 探针失败、egress-proxy 日志 `unknown-source` | `config/egress-sources.json` 是 `host-env-init.sh` 建的 root 文件，worker-supervisor（uid 10001）写不进入口容器的来源登记 | 预演脚本已 `chown 10001:10001`；新主机按 `host-worker-runtime.md` §4 做同一步 |

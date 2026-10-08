@@ -223,6 +223,10 @@ docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-ser
   tail -n 1 >"$tok"
 [ -s "$tok" ] || fail seed-collector-handle "see $LOGS/seed.log"
 chgrp 10001 "$tok" && chmod 640 "$tok" || fail seed-collector-handle "permissions on $tok"
+# worker-supervisor (uid 10001) registers each entry container's IP here; host-env-init.sh creates it
+# root-owned, so without this every worker egress is denied as unknown-source
+# (docs/runbooks/host-worker-runtime.md §4).
+chown 10001:10001 "$D/config/egress-sources.json" || fail seed-egress-map "chown config/egress-sources.json"
 step "seed-operator-state ok workspace=$WS"
 
 # 8. up, then the administrator's catalog decision production has made: the docker gate instance
