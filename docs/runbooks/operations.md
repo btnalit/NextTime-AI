@@ -734,20 +734,27 @@ cap get_platform_settings | jq '.defaultEntryModel'
 
 **主机侧**：`update-feed` 是常驻服务（curl 镜像钉 digest、uid 10002、只读根、无凭证、独占网络），每 24 小时把
 `channel.json` 取到 `${NEXTTIME_DATA}/config/update-feed/`（失败保留上一份、1 小时后重试）；内核只读该文件，自己不出网。
-**第一次应用含它的发版前**先补目录（`apply-release.sh` 的自拷贝跑的是旧脚本，新版脚本里的补建要到下一次才生效；
-之后每次 apply 都会重设属主，被 Docker 抢先建成 root 属主的目录也会在下一次 apply 时自愈）：
+**目录**：`update-feed` 写 `${NEXTTIME_DATA}/config/update-feed/`（10002:10002 0755）。按 `docs/runbooks/release.md` §3 的唯一
+入口应用（跑**目标 tag 自己的** `apply-release.sh`）时，v0.43.0 起的脚本在切 tag 之前补建它（`STEP update-feed-dir`），
+之后每次 apply 都重设属主，不需要额外步骤。只有绕开 §3、直接跑检出里旧版的 `scripts/apply-release.sh`（不推荐）时，
+v0.42.0 及更早的脚本不会建它，要先在检出根目录补建：
 
 ```bash
-sh scripts/host-env-init.sh            # 幂等；或手工：
-# sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+# 或跑新版本的 host-env-init.sh（幂等；X.Y.Z 换成要应用的版本）：
+git fetch -q origin --tags && git show vX.Y.Z:scripts/host-env-init.sh | sudo NEXTTIME_DATA="$NEXTTIME_DATA" sh -s
 ```
+
+漏了这一步也不致命：Docker 会把目录建成 root 属主，`update-feed` 写不进去，「版本信息」显示"缺失"；补上面的命令后
+`docker compose restart update-feed` 即可，下一次按 §3 入口 apply 也会自愈。
 
 应用后核对：`docker compose logs --tail 20 update-feed` 有 `downloaded channel.json`；控制台运行状态页「版本信息」为"正常"。
 它停了或 GitHub 不通，48 小时后「版本信息」变"陈旧"，提醒指向主机上的 update-feed 日志；下载正常但 CI 超过 72 小时没再写记录（pi drift / release channel 工作流停了）也是"陈旧"，提醒指向 GitHub Actions；记录格式不对或超过 64 KiB 是"异常"。它只影响升级提醒，不影响任何其它功能。
-控制台只提醒、给出准确命令（`sh scripts/apply-release.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 可在 `.env`
-覆盖（fork 或镜像源），只接受 https；compose 把同一个值也交给内核，内核只认链接指向这个仓库（`owner/repo`，不分大小写）的
-记录，指向别处的整份记录判"异常"。记录只带最近 20 个发版：主机落后更多时，提醒会标"迁移列表不完整"（`apply-release.sh`
-仍会把迁移全部跑完）。
+控制台只提醒、给出准确命令（`sh scripts/apply-release.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 只在用 fork
+时才在 `.env` 覆盖，且必须是该 fork 的 GitHub release 下载地址（`https://github.com/<owner>/<repo>/releases/download/…`）；
+compose 把同一个值也交给内核，内核只认链接指向这个仓库（`owner/repo`，不分大小写）的记录，指向别处的整份记录判"异常"；
+地址不是 GitHub release 下载地址（包括任何镜像源）时，每份记录都判"异常"。记录只带最近 20 个发版：主机版本早于其中最旧
+那一版的前一版时，提醒会标"迁移列表不完整"（`apply-release.sh` 仍会把迁移全部跑完）。
 
 **回滚**：`docker compose stop update-feed`（或回退到上一版，compose 里不再有它，`docker compose up -d --remove-orphans`）；
 目录与文件留着无害。无 schema 变化。
