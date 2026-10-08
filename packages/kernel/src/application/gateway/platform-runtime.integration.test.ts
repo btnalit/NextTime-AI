@@ -861,6 +861,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               releases: [
                 {
                   version: 'v0.43.0',
+                  previousVersion: 'v0.42.0',
                   publishedAt: generatedAt,
                   pi: '1.0.2',
                   migrations: ['core 0041'],
