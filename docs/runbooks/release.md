@@ -452,8 +452,10 @@ select workspace_id, gatekeeper_object_id, array_agg(gate_id order by enabled_at
  group by workspace_id, gatekeeper_object_id
 having count(*) > 1
  order by workspace_id, gatekeeper_object_id;
-rollback;"
+rollback;" </dev/null
 ```
+
+（`</dev/null` 同 §3.7。）
 
 结果记 `docs/private/`；空表 = 可以直接应用。不为空时先别应用：每组留下当前在用的那个门实例的关联，其余的按
 `docs/runbooks/add-gatekeeper.md` §11.1 层 1（登录角色上删 `workspace_gate_links` 一行）删掉，并把删了哪几行记进 `docs/private/`，再重跑预检到空。
