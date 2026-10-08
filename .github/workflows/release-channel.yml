@@ -1,0 +1,122 @@
+name: release channel
+
+# S10 U1 (docs/s10-evolution-plan-2026-10-04.md §4.2): (re)builds the ReleaseChannel record
+# `channel.json` — recent platform releases (bundled pi, migrations, breaking) plus the latest
+# upstream pi with the drift check's verdict — and uploads it to the rolling `channel`
+# pre-release, the one place the host's `update-feed` service downloads it from
+# (`…/releases/download/channel/channel.json`). Version tags' own assets are never touched.
+#
+# Called by release-please.yml after a release's images are published (platform half; the pi
+# half is carried over from the previous record) and by pi-drift.yml after every nightly check
+# (pi half). `workflow_dispatch` rebuilds it by hand — e.g. once after this file first lands, to
+# create the `channel` pre-release before the next nightly run does.
+#
+# Not signed in W1: the record only drives a console reminder, never an action — the real upgrade
+# (`scripts/apply-release.sh --pull`) verifies every image's signature itself. The kernel
+# validates the file against the same schema on every read (scripts/release-channel.mjs checks
+# it here before upload, so CI never publishes a record the kernel would reject).
+
+on:
+  workflow_call:
+    inputs:
+      pi_latest:
+        description: npm latest of @earendil-works/pi-coding-agent (empty = keep the previous record's)
+        type: string
+        default: ''
+      pi_suite:
+        description: pass | fail
+        type: string
+        default: ''
+      pi_failure:
+        description: one-line failure summary when pi_suite is fail
+        type: string
+        default: ''
+      pi_checked_at:
+        type: string
+        default: ''
+      pi_run_url:
+        type: string
+        default: ''
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish-channel:
+    name: publish-channel
+    runs-on: ubuntu-latest
+    # Both callers can run at once (a release merges during the nightly drift check); the two
+    # read-modify-upload cycles must not interleave. Job-level so it holds across workflows.
+    concurrency:
+      group: release-channel-feed
+      cancel-in-progress: false
+    permissions:
+      contents: write # create the `channel` pre-release once, then replace its one asset
+    steps:
+      - name: Checkout (all tags — the record is built from them)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Build the shared schema
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @nexttime/shared build
+
+      - name: Download the previous record (absent on the first run)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p previous
+          gh release download channel --repo "$GITHUB_REPOSITORY" --pattern channel.json \
+            --dir previous --clobber || echo "no previous channel.json"
+
+      - name: Build and validate channel.json
+        env:
+          PI_LATEST: ${{ inputs.pi_latest }}
+          PI_SUITE: ${{ inputs.pi_suite }}
+          PI_FAILURE: ${{ inputs.pi_failure }}
+          PI_CHECKED_AT: ${{ inputs.pi_checked_at }}
+          PI_RUN_URL: ${{ inputs.pi_run_url }}
+        run: |
+          set -eu
+          set -- --repo "$GITHUB_REPOSITORY" --out channel.json --previous previous/channel.json
+          if [ -n "${PI_LATEST:-}" ]; then
+            set -- "$@" --pi-latest "$PI_LATEST" --pi-suite "$PI_SUITE"
+            if [ -n "${PI_FAILURE:-}" ]; then set -- "$@" --pi-failure "$PI_FAILURE"; fi
+            if [ -n "${PI_CHECKED_AT:-}" ]; then set -- "$@" --pi-checked-at "$PI_CHECKED_AT"; fi
+            if [ -n "${PI_RUN_URL:-}" ]; then set -- "$@" --pi-run-url "$PI_RUN_URL"; fi
+          fi
+          node scripts/release-channel.mjs "$@"
+          {
+            echo "### release channel"
+            echo ""
+            echo '```json'
+            cat channel.json
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to the rolling `channel` pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if ! gh release view channel --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # The release needs a git tag, and hosts fetch tags: `channel` goes on the repository's
+            # ROOT commit, so `git describe --tags` (build-images.sh's KERNEL_VERSION,
+            # apply-release.sh, prune-images.sh) always finds a nearer vX.Y.Z tag and never
+            # reports `channel` for a checkout.
+            ROOT=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+            gh release create channel --repo "$GITHUB_REPOSITORY" --target "$ROOT" \
+              --prerelease --latest=false --title "Release channel feed" \
+              --notes "Rolling ReleaseChannel record (channel.json) for the console's update reminder — rewritten by .github/workflows/release-channel.yml. Not a release; never install from it."
+          fi
+          gh release upload channel channel.json --repo "$GITHUB_REPOSITORY" --clobber

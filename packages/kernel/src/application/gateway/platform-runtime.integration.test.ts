@@ -7,6 +7,7 @@ import type {
   PiDriftWire,
   PlatformSettingsWire,
   PlatformStatusWire,
+  PlatformUpdatesWire,
   RollEntryContainersResultWire,
   RuntimeImageWire,
   RuntimeInventoryWire,
@@ -813,6 +814,106 @@ describe.runIf(DATABASE_URL !== undefined)(
         const result = await callAsAdmin<PiDriftWire>('pi_drift');
         expect(result.status).toBe('unknown');
         expect(result.pinnedPiVersion).toBeNull();
+      });
+    });
+
+    // S10 U1: the ReleaseChannel record the host's update-feed service downloads.
+    describe('platform_updates', () => {
+      let feedDir: string;
+      const repo = 'https://github.com/example/nexttime-ai';
+
+      beforeEach(async () => {
+        feedDir = await mkdtemp(path.join(tmpdir(), 'update-feed-'));
+        await pool.query(
+          `update platform_settings set settings = settings - 'activeRuntimeImage' where singleton`,
+        );
+      });
+
+      afterEach(async () => {
+        for (const name of [
+          'UPDATE_FEED_FILE',
+          'UPDATE_FEED_URL',
+          'KERNEL_VERSION',
+          'PI_VERSION_FILE',
+        ]) {
+          Reflect.deleteProperty(process.env, name);
+        }
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime';
+        await rm(feedDir, { recursive: true, force: true });
+      });
+
+      it('reports the newer release, its migrations and command, and the upstream pi it bundles', async () => {
+        const piFile = path.join(feedDir, 'pi.version');
+        await writeFile(piFile, '0.84.4\n');
+        process.env.PI_VERSION_FILE = piFile;
+        process.env.KERNEL_VERSION = 'v0.42.0 (abc1234)';
+        supervisor.images = [IMAGE_V1];
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
+        const generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const feedFile = path.join(feedDir, 'channel.json');
+        await writeFile(
+          feedFile,
+          JSON.stringify({
+            schema: 1,
+            generatedAt,
+            platform: {
+              latest: 'v0.43.0',
+              releases: [
+                {
+                  version: 'v0.43.0',
+                  publishedAt: generatedAt,
+                  pi: '1.0.2',
+                  migrations: ['core 0041'],
+                  breaking: false,
+                  notesUrl: `${repo}/releases/tag/v0.43.0`,
+                },
+              ],
+            },
+            piUpstream: {
+              latest: '1.0.2',
+              checkedAt: generatedAt,
+              sdkSuite: 'pass',
+              failureSummary: null,
+              bundledIn: 'v0.43.0',
+              runUrl: null,
+            },
+          }),
+        );
+        process.env.UPDATE_FEED_FILE = feedFile;
+        process.env.UPDATE_FEED_URL = `${repo}/releases/download/channel/channel.json`;
+
+        const result = await callAsAdmin<PlatformUpdatesWire>('platform_updates');
+        expect(result.feedFreshness.status).toBe('fresh');
+        expect(result.platformUpdate).toMatchObject({
+          currentVersion: 'v0.42.0',
+          available: true,
+          migrations: ['core 0041'],
+          applyCommand: 'sh scripts/apply-release.sh --pull v0.43.0',
+          rollbackVersion: 'v0.42.0',
+        });
+        expect(result.piUpdate).toMatchObject({
+          state: 'released',
+          bundledVersion: '0.84.4',
+          activeImageVersion: '0.84.4',
+          upstreamLatest: '1.0.2',
+        });
+      });
+
+      it('a missing record is an explicit missing, and the call still succeeds', async () => {
+        process.env.UPDATE_FEED_FILE = path.join(feedDir, 'channel.json');
+        const result = await callAsAdmin<PlatformUpdatesWire>('platform_updates');
+        expect(result.feedFreshness.status).toBe('missing');
+        expect(result.platformUpdate).toBeNull();
+        expect(result.piUpdate.state).toBe('unknown');
+      });
+
+      it('a malformed record is rejected as invalid', async () => {
+        const feedFile = path.join(feedDir, 'channel.json');
+        await writeFile(feedFile, JSON.stringify({ schema: 1, platform: 'v9.9.9' }));
+        process.env.UPDATE_FEED_FILE = feedFile;
+        const result = await callAsAdmin<PlatformUpdatesWire>('platform_updates');
+        expect(result.feedFreshness.status).toBe('invalid');
+        expect(result.platformUpdate).toBeNull();
       });
     });
 

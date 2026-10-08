@@ -29,7 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write # open/update/close the single `pi-drift`-labeled tracking issue
+      issues: write # the single `pi-drift` / `pi-upgrade-available` tracking issues
+    # S10 U1: the release-channel job below records this run's verdict for the console reminder.
+    outputs:
+      pinned: ${{ steps.versions.outputs.pinned }}
+      latest_agent: ${{ steps.versions.outputs.latest_agent }}
+      checked_at: ${{ steps.versions.outputs.checked_at }}
+      suite: ${{ steps.test.outcome == 'success' && 'pass' || 'fail' }}
+      failed_count: ${{ steps.summary.outputs.failed_count }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +59,7 @@ jobs:
           LATEST_AGENT=$(npm view @earendil-works/pi-coding-agent version)
           LATEST_AI=$(npm view @earendil-works/pi-ai version)
           echo "pinned=$PINNED" >>"$GITHUB_OUTPUT"
+          echo "checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_OUTPUT"
           echo "latest_agent=$LATEST_AGENT" >>"$GITHUB_OUTPUT"
           echo "latest_ai=$LATEST_AI" >>"$GITHUB_OUTPUT"
 
@@ -67,39 +75,6 @@ jobs:
             echo "| @earendil-works/pi-coding-agent | $PINNED | $LATEST_AGENT |"
             echo "| @earendil-works/pi-ai | $PINNED | $LATEST_AI |"
           } >>"$GITHUB_STEP_SUMMARY"
-
-      # leftover 59 (docs/STATUS.md): the kernel's `pi_drift` capability (application/platform/
-      # runtime.ts) reads a small CI-produced JSON at PI_DRIFT_FILE (default /data/config/
-      # pi-drift.json) — `{"pinnedPiVersion": "...", "checkedAt": "<ISO>"}` — and compares it
-      # against the *deployed runtime image's own* `ai.nexttime.pi-version` label to answer "did
-      # the host forget to rebuild after the last pi.version bump". That is a different axis from
-      # this workflow's own pinned-vs-@latest compatibility check above — this step only ever
-      # records what `pi.version` says on the commit this run checked out (nightly = main's HEAD),
-      # independent of whether the pi@latest test run above passed or failed.
-      #
-      # No host in this deployment pulls GitHub Actions artifacts automatically (see docs/runbooks/
-      # pi-upgrade.md §6 and backup-restore.md's own "no new infra" precedent) — an operator who
-      # wants a live pi_drift reading downloads this artifact by hand
-      # (`gh run download --repo <owner>/<repo> --name pi-drift -D /tmp/pi-drift` after a run, or
-      # `gh run download <run-id> --name pi-drift`) and copies pi-drift.json to
-      # `${NEXTTIME_DATA}/config/pi-drift.json` on the host (docs/runbooks/pi-upgrade.md §6 has the
-      # exact commands). Without that manual step the page honestly says so instead of "unknown"
-      # (application/platform/runtime.ts's own `detail` text, PlatformRuntimePage.tsx).
-      - name: Write pi-drift.json (PI_DRIFT_FILE shape)
-        run: |
-          set -eu
-          printf '{"pinnedPiVersion":"%s","checkedAt":"%s"}\n' \
-            "${{ steps.versions.outputs.pinned }}" \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            >pi-drift.json
-          cat pi-drift.json
-
-      - name: Upload pi-drift.json as a workflow artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pi-drift
-          path: pi-drift.json
-          retention-days: 14
 
       # Throwaway override: this checkout's own packages/platform-extension/package.json is
       # rewritten in place by `pnpm add`, but nothing in this job ever runs `git commit`/`git
@@ -208,3 +183,77 @@ jobs:
             gh issue comment "$EXISTING" --body "pi@latest now passes the pi-SDK-dependent test suite — closing."
             gh issue close "$EXISTING"
           fi
+
+      # S10 U1 (docs/s10-evolution-plan-2026-10-04.md §4.2 ②): the success path speaks too. A
+      # newer pi that passes is not an automatic upgrade — pi-upgrade.md §2 still has manual rows
+      # and routine dependency upgrades are never handed to a bot (2026-09-25) — so this opens or
+      # updates one `pi-upgrade-available` issue and never a PR. Closed once pi.version catches up.
+      - name: Ensure the pi-upgrade-available label exists
+        if: steps.test.outcome == 'success' && steps.versions.outputs.latest_agent != steps.versions.outputs.pinned
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create pi-upgrade-available --color 0E8A16 \
+            --description "a newer pi passes the platform-extension SDK suite; upgrade per docs/runbooks/pi-upgrade.md" \
+            2>/dev/null || true
+
+      - name: Open or update the pi-upgrade-available issue
+        if: steps.test.outcome == 'success' && steps.versions.outputs.latest_agent != steps.versions.outputs.pinned
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST_AGENT: ${{ steps.versions.outputs.latest_agent }}
+          PINNED: ${{ steps.versions.outputs.pinned }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          TITLE="pi ${LATEST_AGENT} available: SDK suite passes, manual checks pending"
+          BODY_FILE=$(mktemp)
+          {
+            echo "\`@earendil-works/pi-coding-agent@${LATEST_AGENT}\` passes @nexttime/platform-extension's"
+            echo "typecheck and pi-SDK test suite (first compatibility check only)."
+            echo ""
+            echo "- Pinned version (\`pi.version\`): ${PINNED}"
+            echo "- Latest version: ${LATEST_AGENT}"
+            echo "- Passing run: ${RUN_URL}"
+            echo ""
+            echo "Upgrading still follows \`docs/runbooks/pi-upgrade.md\`: the coupling-surface rows marked"
+            echo "manual / host acceptance (CLI flags, RPC event stream, models.json parsing, …) are not"
+            echo "covered by this suite. The console shows the same reminder (平台概览 / pi 运行时)."
+            echo ""
+            echo "This issue is opened/updated in place by the nightly \`pi drift\` workflow and closed"
+            echo "automatically once \`pi.version\` on main reaches the latest pi."
+          } >"$BODY_FILE"
+
+          EXISTING=$(gh issue list --state open --label pi-upgrade-available --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY_FILE"
+          else
+            gh issue create --title "$TITLE" --label pi-upgrade-available --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the pi-upgrade-available issue once pi.version caught up
+        if: steps.versions.outputs.latest_agent == steps.versions.outputs.pinned
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          EXISTING=$(gh issue list --state open --label pi-upgrade-available --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "pi.version on main is now the latest pi — closing."
+            gh issue close "$EXISTING"
+          fi
+
+  # S10 U1: write this run's verdict into the ReleaseChannel record the hosts' update-feed service
+  # downloads (the console's 平台概览 reminder and pi 运行时 card read it through the kernel).
+  release-channel:
+    name: release-channel
+    needs: drift-check
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-channel.yml
+    with:
+      pi_latest: ${{ needs.drift-check.outputs.latest_agent }}
+      pi_suite: ${{ needs.drift-check.outputs.suite }}
+      pi_failure: ${{ needs.drift-check.outputs.suite == 'fail' && format('{0} test(s) failed against pi {1}', needs.drift-check.outputs.failed_count, needs.drift-check.outputs.latest_agent) || '' }}
+      pi_checked_at: ${{ needs.drift-check.outputs.checked_at }}
+      pi_run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -1,5 +1,6 @@
 import type {
   PiDriftWire,
+  PlatformUpdatesWire,
   PlatformWorkspaceWire,
   ResidentContainerWire,
   RollEntryContainersResultWire,
@@ -8,10 +9,12 @@ import type {
 } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import type { ResourceState } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { piUpstreamStateText } from '../../lib/platform-updates.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -82,6 +85,8 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   const toast = useToast();
   const inventory = useCapability<RuntimeInventoryWire>(http, 'runtime_inventory');
   const drift = useCapability<PiDriftWire>(http, 'pi_drift');
+  // S10 U1: a second, independent read — only the "上游最新 pi" row depends on it.
+  const updates = useCapability<PlatformUpdatesWire>(http, 'platform_updates');
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [rolling, setRolling] = useState(false);
@@ -104,7 +109,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   }
 
   async function refreshAll(): Promise<void> {
-    await Promise.all([inventory.reload(), drift.reload()]);
+    await Promise.all([inventory.reload(), drift.reload(), updates.reload()]);
   }
 
   async function activate(image: RuntimeImageWire): Promise<void> {
@@ -194,6 +199,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
         ) : (
           <PiRuntimeBody
             drift={drift.state.data}
+            updates={updates.state}
             residents={
               inventory.state.status === 'ready' ? inventory.state.data.residentContainers : null
             }
@@ -668,6 +674,29 @@ function RuntimeBody({
   );
 }
 
+/** The 上游最新 pi row's value: the version (mono) and where it stands relative to this release —
+ *  `platform_updates.piUpdate`, from the CI-produced release channel record. */
+function UpstreamPi({ pi }: { readonly pi: PlatformUpdatesWire['piUpdate'] }) {
+  const t = useT();
+  return (
+    <span className="stack-s">
+      <span>
+        <span className="mono" data-testid="pi-runtime-upstream-version">
+          {pi.upstreamLatest ?? '—'}
+        </span>{' '}
+        <span className="text-2" data-testid="pi-runtime-upstream-state" data-state={pi.state}>
+          {piUpstreamStateText(pi, t)}
+        </span>
+      </span>
+      {pi.checkedAt !== null ? (
+        <span className="text-3 text-small" data-testid="pi-runtime-upstream-checked">
+          {t(`检查于 ${formatDateTime(pi.checkedAt)}`, `Checked ${formatDateTime(pi.checkedAt)}`)}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /**
  * The "pi 运行时" card (2026-09-26, replaces the old "pi 版本漂移" card that only ever said
  * "unknown"): which pi this release expects (the kernel build's own `pi.version`), which pi the
@@ -679,12 +708,15 @@ function RuntimeBody({
  */
 function PiRuntimeBody({
   drift,
+  updates,
   residents,
   runtimeUnreachable,
   upgrading,
   onUpgrade,
 }: {
   readonly drift: PiDriftWire;
+  /** S10 U1 `platform_updates`: loading / failed shows "—" on the 上游最新 pi row only. */
+  readonly updates: ResourceState<PlatformUpdatesWire>;
   readonly residents: readonly ResidentContainerWire[] | null;
   /** worker-supervisor could not report its images at all — then "build the image" would be the
    *  wrong advice; the card says it cannot read the runtime instead. */
@@ -714,6 +746,10 @@ function PiRuntimeBody({
           {activePi === null || activePi === 'dev'
             ? t('没有版本标签', 'no version label')
             : activePi}
+        </dd>
+        <dt>{t('上游最新 pi', 'Latest upstream pi')}</dt>
+        <dd data-testid="pi-runtime-upstream">
+          {updates.status === 'ready' ? <UpstreamPi pi={updates.data.piUpdate} /> : '—'}
         </dd>
         <dt>platform-extension</dt>
         <dd className="mono">{drift.platformExtensionVersion ?? '—'}</dd>

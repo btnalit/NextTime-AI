@@ -6,8 +6,10 @@
  * files, and other modules must not query its table directly; cross-module coordination happens
  * through domain events (see packages/shared).
  *
- * `export_prov` (PROV-O export, design doc §7.1/§9.3 `audit` capability group) is not yet
- * implemented — out of S1.3 scope; the HTTP capability route for it returns 501 until then.
+ * `export_prov` (PROV-O export, design doc §7.1/§9.3 `audit` capability group) is implemented
+ * outside this module: S3.5's `application/gateway/export-prov-handler.ts`, built on the
+ * epistemic `explain()` data (not on this module's `audit_records`), served by the ordinary
+ * `POST /api/cap/export_prov` route.
  *
  * `invariant-checks.ts` (S3.8) is the one deliberate, documented exception to "reads only its own
  * table": periodic cross-workspace scans for design doc §5.4's I1–I16 span several modules' own

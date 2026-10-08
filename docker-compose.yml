@@ -126,6 +126,10 @@ services:
         # visible through the read-only /data/config mount below. Put the yaml there, run seed;
         # no kernel rebuild. The image's own /app/ontology stays the bundled examples.
         DOMAIN_PACK_DIR: /data/config/ontology,
+        # S10 U1: the same URL the update-feed service downloads from (keep the two defaults equal —
+        # scripts/validate-compose.mjs checks it). The kernel never fetches it (E3); it only takes
+        # the owner/repo from it and drops any link in the downloaded record that points elsewhere.
+        UPDATE_FEED_URL: "${UPDATE_FEED_URL:-https://github.com/btnalit/nexttime-ai/releases/download/channel/channel.json}",
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
@@ -1375,6 +1379,36 @@ services:
     cap_add: [DAC_READ_SEARCH]
     security_opt: ["no-new-privileges:true"]
 
+  # update-feed (S10 U1, docs/s10-evolution-plan-2026-10-04.md §4.2): downloads the ReleaseChannel
+  # record `channel.json` from the repository's rolling `channel` pre-release once a day
+  # (deploy/update-feed/update-feed.sh) — the console's update reminder (`platform_updates`) reads
+  # it, so the kernel itself never goes online (design decision E3). A dumb fetch: it never parses
+  # the file (the kernel validates it on every read), holds no credential and no Docker socket,
+  # and its one writable mount is its own directory — config/update-feed/, owned by this service's
+  # own uid 10002 (scripts/host-env-init.sh; config/ itself stays root-owned, S7-A ⑤). The kernel
+  # sees the file through its existing read-only config/ mount. It reaches GitHub directly on its
+  # own network, not through egress-proxy (that proxy only serves registered worker sources and
+  # answers 403 to anything else). scripts/validate-compose.mjs pins all of this.
+  update-feed:
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    entrypoint: ["/bin/sh", "/update-feed.sh"]
+    user: "10002:10002"
+    volumes:
+      [
+        "./deploy/update-feed/update-feed.sh:/update-feed.sh:ro",
+        "${NEXTTIME_DATA:?}/config/update-feed:/data/update-feed",
+      ]
+    environment:
+      {
+        UPDATE_FEED_URL: "${UPDATE_FEED_URL:-https://github.com/btnalit/nexttime-ai/releases/download/channel/channel.json}",
+        UPDATE_FEED_DIR: /data/update-feed,
+      }
+    networks: [update-feed]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
 networks:
   control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL:?}" }] } }
   workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS:?}" }] } }
@@ -1402,6 +1436,9 @@ networks:
   # path for GET /images reads only (docker-socket-proxy-images's own comment below has the full
   # "why not just turn IMAGES=1 on the existing proxy" reasoning).
   dockerapi-images: { internal: true }
+  # update-feed (S10 U1): the update-feed service alone — its own non-internal bridge so it can
+  # reach GitHub, while sharing no network with any other service (it talks to nothing local).
+  update-feed: {}
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001

@@ -29,7 +29,7 @@
  *   | `add_entity`             | —                | —                              | no capability creates an arbitrary Object with a caller-chosen id/type/label — Object identity comes from a domain pack's `ObjectType` + a collector/ontology write path, not a generic "add a node" call. |
  *   | `get_graph_summary`, `get_graph_analytics` | — | — | no aggregate graph-statistics/analytics (PageRank, betweenness, …) capability exists. |
  *   | `run_reasoning`, `abductive_reasoning` | — | — | the design doc explicitly excludes Semantica's reasoning engine from this platform's scope (§14 "不要做": "Semantica 推理引擎与 Explorer Ontology 工作区"). |
- *   | `export_graph`           | —                | —                              | no RDF/turtle/json-ld graph-export capability exists; `export_prov` (audit group) is a different concept (a PROV-O provenance export, not the whole graph) and is itself still unimplemented. |
+ *   | `export_graph`           | —                | —                              | no RDF/turtle/json-ld graph-export capability exists; `export_prov` (audit group) is a different concept (a PROV-O provenance export of one fact/decision/activity, not the whole graph). |
  *
  * Each alias below is registered as an *additional* MCP tool (under Semantica's own name) only
  * when its target capability is in the connecting Handle's scope — never a substitute for the

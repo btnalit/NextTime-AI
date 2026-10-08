@@ -377,6 +377,33 @@
   color: var(--warn);
 }
 
+.notice-danger {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.notice-danger .icon {
+  color: var(--danger);
+}
+
+/* S10 U1 update reminder (components/platform/UpdateReminder): an announcement, not a quiet
+   note — tinted like the other tones, with a thicker leading edge so it reads first on the
+   overview, and a title one step above the body text. */
+.notice-info {
+  border-color: var(--info);
+  background: var(--info-soft);
+}
+
+.update-notice {
+  border-left-width: 4px;
+  padding: var(--space-3);
+}
+
+.update-notice-title {
+  color: var(--text);
+  font-size: var(--fs-14);
+}
+
 /* ---- Skeleton ------------------------------------------------------------------------ */
 .skeleton {
   display: block;
