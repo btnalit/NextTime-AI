@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { useT } from '../lib/i18n.js';
 import type { WsClient } from '../lib/ws-client.js';
@@ -8,11 +9,13 @@ import { ChatHeader } from './chat/ChatHeader.js';
 import { ChatListPane } from './chat/ChatListPane.js';
 import { ChatMessageRow } from './chat/ChatMessageRow.js';
 import { MessageBody } from './chat/MessageBody.js';
+import { TurnOutcomeControl } from './chat/TurnOutcomeControl.js';
 import { useActionCards } from './chat/useActionCards.js';
 import { useAutoFollow } from './chat/useAutoFollow.js';
 import { useChatMessages } from './chat/useChatMessages.js';
 import { useChatSummary } from './chat/useChatSummary.js';
 import { useComposer } from './chat/useComposer.js';
+import { useTurnAttributions } from './chat/useTurnAttributions.js';
 import { Textarea } from './kit/textarea.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -91,6 +94,19 @@ export function ChatPage({
     follow.setFollow,
   );
 
+  // S10 E1: the per-Turn outcome line goes under each Turn's last assistant reply.
+  const { principalId: viewerId } = useWorkspaceIdentity(http);
+  const turnAttributions = useTurnAttributions(http, chatId, turn.status);
+  const lastReplyOfTurn = useMemo(() => {
+    const last = new Map<string, number>();
+    for (const message of messages) {
+      if (message.role === 'assistant' && message.turnId) {
+        last.set(message.turnId, message.sequence);
+      }
+    }
+    return new Set(last.values());
+  }, [messages]);
+
   const canAlwaysAllow = !permissions.isDenied('set_auto_approved_action_kind');
   const { chat, archived } = chatSummary;
 
@@ -131,21 +147,39 @@ export function ChatPage({
                   )}
                 </p>
               ) : null}
-              {messages.map((message) => (
-                <ChatMessageRow
-                  key={message.sequence}
-                  message={message}
-                  http={http}
-                  actionStatusOverrides={actionCards.actionStatusOverrides}
-                  latestActionStatus={actionCards.latestActionStatus}
-                  cardErrors={actionCards.cardErrors}
-                  canAlwaysAllow={canAlwaysAllow}
-                  onApprove={actionCards.handleApprove}
-                  onReject={actionCards.handleReject}
-                  onOpenApproval={onOpenApproval}
-                  onOpenTask={onOpenTask}
-                />
-              ))}
+              {messages.map((message) => {
+                const turnAttribution =
+                  message.turnId && lastReplyOfTurn.has(message.sequence)
+                    ? turnAttributions.byTurn.get(message.turnId)
+                    : undefined;
+                return (
+                  <Fragment key={message.sequence}>
+                    <ChatMessageRow
+                      message={message}
+                      http={http}
+                      actionStatusOverrides={actionCards.actionStatusOverrides}
+                      latestActionStatus={actionCards.latestActionStatus}
+                      cardErrors={actionCards.cardErrors}
+                      canAlwaysAllow={canAlwaysAllow}
+                      onApprove={actionCards.handleApprove}
+                      onReject={actionCards.handleReject}
+                      onOpenApproval={onOpenApproval}
+                      onOpenTask={onOpenTask}
+                    />
+                    {turnAttribution ? (
+                      <TurnOutcomeControl
+                        http={http}
+                        turn={turnAttribution}
+                        viewerId={viewerId}
+                        onChanged={turnAttributions.apply}
+                        onError={(title, description) =>
+                          toast.push({ tone: 'danger', title, description })
+                        }
+                      />
+                    ) : null}
+                  </Fragment>
+                );
+              })}
 
               {turn.status === 'running' ? (
                 <div className="message message-assistant message-streaming" data-role="assistant">

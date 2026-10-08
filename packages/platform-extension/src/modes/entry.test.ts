@@ -112,6 +112,8 @@ describe('registerEntryMode', () => {
       'invoke_worker',
       'request_connection',
       'record_decision',
+      'record_procedure_followed',
+      'report_task_outcome',
       'propose_worker_definition',
       'propose_operation',
       'propose_skill',
@@ -672,6 +674,8 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     'invoke_worker',
     'request_connection',
     'record_decision',
+    'record_procedure_followed',
+    'report_task_outcome',
     'propose_worker_definition',
     'propose_operation',
     'propose_skill',
@@ -862,8 +866,8 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     expect(listReads()).toBe(4);
     expect(kernel.requests.filter((r) => r.capability !== 'list_allowed_operations')).toEqual([]);
     expect(fake.api.setActiveTools).not.toHaveBeenCalled();
-    // 17 static tools + 1 gate tool, each registered once.
-    expect(fake.api.registerTool).toHaveBeenCalledTimes(18);
+    // 19 static tools + 1 gate tool, each registered once.
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(20);
     // Only the first projection is a change worth logging.
     expect(logLines(logSpy).filter((line) => line.includes('check=tool_projection'))).toHaveLength(
       1,

@@ -101,6 +101,8 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
               // assistant/tool row's `content` never has its own `kind` field.
               kind: chatMessageKind(message.content),
               content: message.content,
+              // S10 E1: the reply's Turn, so the console can hang the outcome control under it.
+              turnId: message.turnId,
             },
           });
           return;

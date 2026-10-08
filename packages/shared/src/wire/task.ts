@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import { TaskStatusSchema, WorkerRunStatusSchema } from '../enums.js';
+import {
+  ObjectiveOutcomeWireSchema,
+  SkillLoadWireSchema,
+  TurnAttributionWireSchema,
+} from './attribution.js';
 
 /**
  * wire/task: Task / WorkerRun wire shapes (docs/wire-contract-conventions.md §5, S3.7) — mirrors
@@ -18,6 +23,9 @@ export const WorkerRunWireSchema = z
     attempt: z.number().int().nonnegative(),
     startedAt: z.string(),
     terminatedAt: z.string().nullable(),
+    /** S10 E1: the Skill versions this run loaded (`worker_run_skills`). `null` = not recorded (a
+     *  run from before E1); `[]` = recorded, no Skill loaded. */
+    skills: z.array(SkillLoadWireSchema).nullable(),
   })
   .strict();
 export type WorkerRunWire = z.infer<typeof WorkerRunWireSchema>;
@@ -40,6 +48,17 @@ export const TaskWireSchema = z
     failedAt: z.string().nullable(),
     cancelledAt: z.string().nullable(),
     workerRuns: z.array(WorkerRunWireSchema),
+    /** S10 E1: `Turn --generated--> Task` (`tasks.created_by_activity_id`). A nested Worker's Task
+     *  carries its root Task's Turn. `null` = no Turn (human channel, a call outside any Turn, or
+     *  a nested Task from before E1). */
+    turnId: z.string().nullable(),
+    /** That Turn's attribution — the Procedure its entry agent claimed to follow and the
+     *  requester's objective outcome. `null` when `turnId` is null or the Turn's Chat is not
+     *  visible to the caller (a private Chat of someone else). */
+    turn: TurnAttributionWireSchema.nullable(),
+    /** S10 E1: the Task's own objective outcome, reported from a Procedure's `verify` step by the
+     *  entry agent (`report_task_outcome`). `null` = unknown. */
+    objectiveOutcome: ObjectiveOutcomeWireSchema.nullable(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;

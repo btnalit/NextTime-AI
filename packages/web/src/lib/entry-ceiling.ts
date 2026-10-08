@@ -29,6 +29,8 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly string[] = [
   'invoke_worker',
   'request_connection',
   'record_decision',
+  'record_procedure_followed',
+  'report_task_outcome',
   'explain',
   'list_allowed_operations',
   'report_task_result',
