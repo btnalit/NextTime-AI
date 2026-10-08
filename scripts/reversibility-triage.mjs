@@ -202,8 +202,8 @@ function arg(name) {
 
 function main() {
   const manifestPath = arg('manifest');
-  const headRoot = path.resolve(arg('head-root'));
-  const baseRoot = path.resolve(arg('base-root'));
+  const headRoot = realpathSync(arg('head-root'));
+  const baseRoot = realpathSync(arg('base-root'));
   const lines = [];
   const problems = [];
 
@@ -255,7 +255,8 @@ function main() {
   process.exit(problems.length > 0 ? 1 : 0);
 }
 
-// Real paths on both sides: invoked through a symlinked checkout, a plain path comparison is false
+// Real paths everywhere (here and for --head-root / --base-root, which Vitest reports as real
+// paths): invoked through a symlinked checkout, a plain path comparison is false
 // and the verdict would silently never run (exit 0).
 if (
   process.argv[1] &&
