@@ -111,10 +111,13 @@ PASS connect-http-publish http manifest published
 PASS s213-find-operations-post-publish find_operations('stock') hits after publish_manifest (1 result(s))
 PASS connect-http-grant http gatekeeper granted to alice
 PASS s213-no-token-leak bearer token appears in 0 rows across all NN public tables
-PASS connect-docker-request connectionRequestId=<uuid>
-PASS connect-docker-create gatekeeperId=<uuid>
-PASS connect-docker-publish docker manifest published
+PASS connect-docker-guard self-connect to http://gatekeeper-docker:8083 refused with endpoint_is_platform_gate
+PASS connect-docker-platform-enable gate instance gatekeeper-docker already enabled by the administrator
+PASS connect-docker-ready gatekeeper-docker has announced its Operations
+PASS connect-docker-enable gatekeeperId=<uuid> (Operations published by enable_gate_instance)
 PASS connect-docker-grant docker gatekeeper granted to alice
+PASS ontology-propose accept-s2 ontology drafted: <uuid> v1
+PASS ontology-publish accept-s2 ontology published (AcceptS2Container, AcceptS2Observation, accept_s2_restarted)
 PASS ops-runner-propose definitionId=<uuid> version=1
 PASS ops-runner-publish ops-runner@1 published
 PASS step2-chat-reply entry agent replied: Started a Worker to restart the container — task <task-uuid> is now running, I will follow up once it reports back.
@@ -179,7 +182,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | 脚本步骤 | S2.12 验收条目 | 证明什么 |
 |---|---|---|
 | `connect-ssh-*` / `connect-http-*` / `s213-*` | (1) A 用连接卡片接入测试 SSH 主机与测试 OpenAPI 服务 | `request_connection` → `create_connection`（ssh 走 `credentialKind:'shared'`，http 走 `credentialKind:'connected_account'` + 真实 `manifestSource` OpenAPI 导入）→ `publish_manifest` → `connect_gatekeeper`，与 `docs/runbooks/host-gatekeepers.md` §10 同一条路径；`s213-find-operations-*` 与 `s213-no-token-leak` 是折进本任务的 S2.13 验收句 |
-| `connect-docker-*` | (2) 的前置——把已部署的 `gatekeeper-docker` 接进本次测试 workspace | 同一条 S2.13 流程，`target:"docker"` |
+| `connect-docker-guard` / `connect-docker-platform-enable` / `connect-docker-ready` / `connect-docker-enable` / `connect-docker-grant` | (2) 的前置——把已部署的 `gatekeeper-docker` 经 P-B1 目录路径接进本次测试 workspace（STATUS 遗留 36 / S5.5 之后，不再 `create_connection` 到它的地址） | `guard`：对目录门地址 `create_connection` 必须 400 且 body 含 `endpoint_is_platform_gate`（目录里的门不允许工作区自连一份，否则绕过目录的拒绝清单 / trust / enabled 状态）；`platform-enable`：断言 `gate_instances` 里 `gatekeeper-docker` 已 `enabled`（`discovered` 则脚本代管理员 SQL 置为 `enabled`——这台脚本没有管理员登录；`disabled`、无行、或 `connectors.docker` 不是 `platform_preset` 都直接 FAIL，那是管理员的决定，脚本不覆盖）；`ready`：轮询至多 60s，等该行 `last_seen_at` 非空且 `operations` 非空（`enable_gate_instance` 对尚未宣告 Operation 的实例报 `gate_not_ready`）；`enable`：alice 调 `enable_gate_instance{gateId:'gatekeeper-docker'}`，返回 `gatekeeperId`（同时发布其 Operation，不需要 `publish_manifest`）；`grant`：`connect_gatekeeper` 授权给 alice |
+| `ontology-propose` / `ontology-publish` | S5.1 本体守卫的前置——docker-restart Worker 的结果契约写 `AcceptS2Container --accept_s2_restarted--> AcceptS2Observation`，没有任何领域包声明这些类型，而内核对未在已发布本体里声明的 LinkType 拒绝写入（400 `ontology_violation`） | `propose_ontology_change` 起草两个 ObjectType（`identityKey` 与场景提交的身份一致）与一个 LinkType，`publish_ontology_version` 发布；两步各断言 HTTP 200。守卫本身（故意违规 → 400）由 `accept_s3.sh` 的 `ontology-guard-*` 断言，这里不重复 |
 | `ops-runner-*` | (2)/(4) 的前置——`ops-runner` WorkerDefinition 存在且发布 | 读取真实 `ontology/ops-runner.yaml`（经 kernel 镜像里已有的 `yaml` 包解析，不是脚本自己编的提示词），补上 `capabilities:['request_action']` 与三个门的 `gates` |
 | `step2-chat-reply` / `step2-chat-task-created` / `step2-list-pending` / `step2-approval-card` / `step2-approve` / `step2-executed` / `step2-explain` | (2) A 对话「重启测试容器」→ find_\* → invoke_worker → 卡片 → A 批准 → 执行 → explain 全链 | 真实 chat 驱动链路：`entryRestartChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers`/`invoke_worker`（真实工具结果链式传递，非硬编码 id），`step2-chat-task-created` 核对新 Task 的 `worker_definition_id` 确实是 ops-runner；`step2-chat-entry-tools`（未列在正常路径里，只在链路未解析时触发）FAIL 而非 SKIP——见 §5 "已知偏离" |
 | `step3-chat-reply` / `step3-observe-operation-audited` / `step3-chat-no-task` / `step3-no-action-request` | (3) A 问「测试 API 的 GET 返回什么」→ 入口 agent 直接观察，不拉 Worker（task 数不变） | 真实 chat 驱动链路：`entryObserveChatScenario` 驱动入口 agent 调 `accept_s2_api_stock_get`（观察类 gate 投影工具，内部调 `observe_operation`——一个专门的、observe-only 的 capability，不是 `request_action`），回复文本回显该工具的**真实**返回数据（断言含 `NXT`）；`step3-observe-operation-audited` 核对 `audit_records` 确实记了一条 `observe_operation`；`step3-chat-no-task`/`step3-no-action-request` 核对 `tasks`/`action_requests` 表行数在消息前后都不变 |

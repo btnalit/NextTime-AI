@@ -11,6 +11,7 @@ import type {
   PiDriftStatusWire,
   PlatformBackupStatusWire,
   PlatformRoleWire,
+  PlatformUpdateFeedStatusWire,
   PublishableStatus,
   Role,
   TaskStatus,
@@ -34,6 +35,7 @@ import {
   PiDriftStatusWireSchema,
   PlatformBackupStatusWireSchema,
   PlatformRoleWireSchema,
+  PlatformUpdateFeedStatusWireSchema,
   ROLE_VALUES,
   ServiceHealthWireSchema,
   TASK_STATUS_VALUES,
@@ -112,6 +114,7 @@ export type StatusMachine =
   | 'platformRole'
   | 'piDrift'
   | 'backupFreshness'
+  | 'updateFeed'
   | 'objectiveOutcome';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
@@ -336,6 +339,17 @@ export const BACKUP_FRESHNESS_TONES: Readonly<Record<PlatformBackupStatusWire, C
   unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 
+/** `platform_updates.feedFreshness.status` (S10 U1): whether the `channel.json` the host's
+ *  `update-feed` service downloads is recent and valid. `stale` is only a warning (the old file is
+ *  still used), `invalid` means the kernel rejected the file; `missing` is the quiet "never fetched
+ *  yet" state. */
+export const UPDATE_FEED_TONES: Readonly<Record<PlatformUpdateFeedStatusWire, ChipStyle>> = {
+  fresh: { tone: 'ok', label: { zh: '正常', en: 'Up to date' } },
+  stale: { tone: 'warn', label: { zh: '已陈旧', en: 'Stale' } },
+  invalid: { tone: 'danger', label: { zh: '异常', en: 'Invalid' } },
+  missing: { tone: 'neutral', label: { zh: '尚未取到', en: 'Not fetched yet' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -365,6 +379,10 @@ const MACHINES: Readonly<
   backupFreshness: {
     values: PlatformBackupStatusWireSchema.options,
     tones: BACKUP_FRESHNESS_TONES,
+  },
+  updateFeed: {
+    values: PlatformUpdateFeedStatusWireSchema.options,
+    tones: UPDATE_FEED_TONES,
   },
   objectiveOutcome: { values: OBJECTIVE_OUTCOME_VALUES, tones: OBJECTIVE_OUTCOME_TONES },
 };

@@ -14548,6 +14548,319 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "platform_updates",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "type": "string"
+        },
+        "feedFreshness": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "fetchedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "generatedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maxAgeHours": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "fresh",
+                "stale",
+                "missing",
+                "invalid"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "fetchedAt",
+            "generatedAt",
+            "maxAgeHours",
+            "detail"
+          ],
+          "type": "object"
+        },
+        "piUpdate": {
+          "additionalProperties": false,
+          "properties": {
+            "activeImageVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bundledIn": {
+              "anyOf": [
+                {
+                  "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bundledVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "checkedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "failureSummary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "runUrl": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "pattern": "^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100}\\/(?:releases\\/tag\\/v\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}|actions\\/runs\\/\\d{1,20})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sdkSuite": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pass",
+                    "fail"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "up_to_date",
+                "pending_release",
+                "incompatible",
+                "released",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "upstreamLatest": {
+              "anyOf": [
+                {
+                  "pattern": "^(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})(?:-([0-9A-Za-z.-]{1,32}))?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "bundledVersion",
+            "activeImageVersion",
+            "upstreamLatest",
+            "sdkSuite",
+            "failureSummary",
+            "bundledIn",
+            "checkedAt",
+            "runUrl"
+          ],
+          "type": "object"
+        },
+        "platformUpdate": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "applyCommand": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "breaking": {
+                  "type": "boolean"
+                },
+                "currentVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "latestVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "migrations": {
+                  "items": {
+                    "pattern": "^[a-z][a-z-]{0,31} \\d{4}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "migrationsIncomplete": {
+                  "type": "boolean"
+                },
+                "newerReleases": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "breaking": {
+                        "type": "boolean"
+                      },
+                      "migrations": {
+                        "items": {
+                          "pattern": "^[a-z][a-z-]{0,31} \\d{4}$",
+                          "type": "string"
+                        },
+                        "maxItems": 200,
+                        "type": "array"
+                      },
+                      "notesUrl": {
+                        "maxLength": 300,
+                        "pattern": "^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100}\\/(?:releases\\/tag\\/v\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}|actions\\/runs\\/\\d{1,20})$",
+                        "type": "string"
+                      },
+                      "pi": {
+                        "anyOf": [
+                          {
+                            "pattern": "^(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})(?:-([0-9A-Za-z.-]{1,32}))?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "publishedAt": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "version": {
+                        "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "publishedAt",
+                      "pi",
+                      "migrations",
+                      "breaking",
+                      "notesUrl"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "notesUrl": {
+                  "anyOf": [
+                    {
+                      "maxLength": 300,
+                      "pattern": "^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100}\\/(?:releases\\/tag\\/v\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}|actions\\/runs\\/\\d{1,20})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "rollbackVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "currentVersion",
+                "latestVersion",
+                "available",
+                "newerReleases",
+                "migrations",
+                "migrationsIncomplete",
+                "breaking",
+                "notesUrl",
+                "applyCommand",
+                "rollbackVersion"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "platformUpdate",
+        "piUpdate",
+        "feedFreshness",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "observe",

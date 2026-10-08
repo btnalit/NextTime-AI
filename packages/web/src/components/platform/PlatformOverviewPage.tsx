@@ -23,6 +23,7 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Icon, type IconName } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { UpdateReminder } from './UpdateReminder.js';
 
 export interface PlatformOverviewPageProps {
   readonly http: CapabilityCaller;
@@ -150,6 +151,8 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  * and counts `isResidueWorkspace` — the same predicate the workspaces page's residue preset
  * applies — linking to `#/platform/workspaces?residue=1`. A failed read simply shows no banner;
  * the version card is `platform_overview.version.kernel` (B1's real value lives in the kernel).
+ * S10 U1: `UpdateReminder` sits above the residue banner — a newer platform release / pi, or a
+ * stale version feed (its own `platform_updates` read; a loading or failed read shows nothing).
  *
  * S8 W2 U3a (ui-audit-2026-09-23 O1, §5.9 控制塔 "待处理 / 运行中 / 图谱新鲜度 / 费用四指标、
  * 「需要人处理」列表"): `platform_status`的 30-day cross-workspace `llmUsage30d` backs "费用"；
@@ -203,6 +206,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           'Kernel version, service health, the first-run checklist, and recent platform audit.',
         )}
       />
+      <UpdateReminder http={http} />
       {residue.length > 0 ? (
         <Notice tone="warn" testId="platform-residue-banner">
           {t(

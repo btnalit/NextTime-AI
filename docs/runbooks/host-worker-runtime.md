@@ -163,6 +163,12 @@ docker exec nexttime-entry-demo-alice sh -c 'touch /ok' && echo "UNEXPECTED: roo
 §10 "目标主机 DNS 会把公网域名解析成内网地址" 这条，S1.5a 主机验收时实测遇到过；换一个真正把
 公网域名解析到公网地址的主机/网络再测一次。
 
+**WorkerDefinition 的 `egressDeny`（入口与 Worker 两类都有）只匹配请求的主机名**：条目是精确主机名或 `.` 后缀
+（不分大小写，`example.com` 同时挡 `a.example.com`），经 `worker-supervisor` 写进 `egress-sources.json` 里该来源
+的 `deny`，由 `egress-proxy` 的 `decideEgress` 在其它判定之前检查。IP、CIDR、端口、路径、`host:port` 写进去不会命中
+（一个字面 IP 只会匹配请求里同样写成该字面 IP 的目标，挡不住解析到它的域名）；挡内网段靠代理内置的私网判定，不靠这张
+清单。命中时观测记录的 `reason` 是 `source-deny`。
+
 ## 7. `docker kill` 后重新 spawn
 
 ```bash

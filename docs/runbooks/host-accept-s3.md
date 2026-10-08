@@ -75,12 +75,17 @@ PASS collector-issue-service-handle token minted into a run-private file (never 
 PASS collector-first-run objectsUpserted=<N> factsAsserted=<N>
 PASS collector-container-search containerId=<uuid>
 PASS collector-runs-on-host Container <uuid> runs_on Host — 1 edge(s)
+PASS ontology-guard-reject runs_on Host -> Container refused with ontology_violation; details name the allowed signature Container -> Host
 PASS collector-second-run-idempotent factsAsserted=0 factsSuperseded=0 (every observation resolved unchanged)
 PASS collector-no-open-conflicts 0 open Conflicts
 PASS collector-conflict-positive-source second Source=<uuid>
 PASS collector-conflict-positive-identity container={"composeProjectId":"<uuid>","serviceName":"<name>"} host={"hostname":"<hostname>"}
 PASS collector-conflict-positive-submit second Source's contradicting runs_on assertion: factsAsserted=1
 PASS collector-conflict-positive-open-count 1 open Conflict: {"count":1,"factAId":"<uuid>","factBId":"<uuid>"}
+PASS freshness-fixture-up accept-s3-ephemeral container=<64-hex-id>
+PASS freshness-run-1 fixture Container=<uuid> runs_on Fact=<uuid> <origin Observation = last Observation>
+PASS freshness-run-2 factsAsserted=0, lastObservation advanced (<uuid>), still 1 open Conflict
+PASS freshness-run-3 factsInvalidated=1, no runs_on edge, Fact <invalidated, not_reobserved>, Object retained
 PASS chat-dependency-reply entry agent replied: kernel 依赖（depends_on）服务 postgres。
 PASS chat-dependency-search-kernel kernel containerId=<uuid>
 PASS chat-dependency-traverse depends_on Fact=<uuid> (kernel -> postgres)
@@ -106,6 +111,8 @@ S3 OK
 | `seed_domain_pack_step` | "(a) seed `ops-assets` v1 (`bootstrap.js seed-domain-pack`) into a fresh workspace" |
 | `collector_fixtures_step`/`collector_first_run_step`/`collector_second_run_step` | "(b) run the collector once ... assert `Container runs_on Host` Facts exist and a second run yields ... no open conflicts" |
 | `collector_conflict_positive_step` | 补 §2.2 已知盲区的正向用例：异源、内容矛盾的断言针对同一 `(linkType, sourceObjectId, targetObjectId)` 身份必须恰好开一个 `open` Conflict（不在 S3.9 派单原文里，W5.5 遗留项 16/17 完成标准新增） |
+| `ontology_guard_step`（`ontology-guard-container` / `ontology-guard-host` / `ontology-guard-reject`） | S5.1 本体守卫：内核拒绝已发布本体没有声明的 Link | 先各 `search` 出一个 Container 与一个 Host（采集器第一遍写入的），再把 `runs_on` 的两端写反（Host → Container；`ops-assets` 声明的是 Container → Host）经 `assert_fact` 提交：期望 400 `ontology_violation` 且 `details` 里带允许的签名 `Container -> Host`。若主机在发布期把内核设成 `ONTOLOGY_ENFORCEMENT=warn`，则期望 200，并改验这次写入在 `audit_records` 里留有 `action='ontology_violation'`（`linkType=runs_on`）的行 |
+| `collector_freshness_step`（`freshness-fixture-up` / `freshness-run-1` / `freshness-run-2` / `freshness-fixture-rm` / `freshness-run-3`） | S5.2 新鲜度与缺席（core 0026 / 0027）：采集器重新观察到则确认、不再观察到则作废 Fact，但从不删 Object | 用一次性容器 `accept-s3-ephemeral`（`accept-s3` profile，不属于常规栈）跑三遍采集器。`fixture-up`：拉起并取到容器 id。`run-1`：fixture 的 Container Object 与其 `runs_on` Fact 出现，`explain` 显示最近一次确认就是起源 Observation。`run-2`：`factsAsserted=0`、`lastObservation` 前移到更新的 Observation，且上一步 `collector_conflict_positive_step` 留下的那个 open Conflict 仍恰好是 1 个（这一遍同时是 core 0027 的在线检查：采集器重观察时必须落在自己的行上，而不是落到有 Conflict 的那一行再开第二个）。`fixture-rm`：`docker compose rm -sf` 删掉 fixture（采集器连已停止的容器也会列出，`stop` 不够）。`run-3`：`factsInvalidated>=1`，从 fixture 的 Object `traverse(runs_on)` 为 0 条边，`explain` 显示 `invalidatedAt` 非空且 `invalidationReason=not_reobserved`，`get_object` 仍返回该 Object（缺席绝不删 Object） |
 | `chat_dependency_step`（`--real` 模式下换成 `real_chat_dependency_step`：同一句"哪个服务依赖哪个"改由真实模型作答，重复 N 次，按结果判定；每次打印一行 `RUN scenario=dependency_chat run=… outcome=ok\|fail …`，跑完打印一行 `REAL scenario=dependency_chat ok=k/n …` 汇总，见 `docs/runbooks/host-accept-real-model.md`） | "(c) chat: the entry agent ... answers with a dependency statement and `explain` on one returned Fact resolves to the collector's Source" |
 | `explorer_step` | "(d) Explorer endpoints ... return the graph with `X-API-Key` of the workspace owner ... not via caddy" + a no-credentials call must 401 (W7) |
 | `mcp_step` | "(e) MCP: `issue_handle` for an `interactive` session, then a JSON-RPC `tools/list` + `traverse` call ... no-Handle → 401" |

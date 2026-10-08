@@ -9,10 +9,13 @@ import { z } from 'zod';
  * against it) and `@nexttime/agent-host`'s own `kernel-link.ts` (which constructs every outbound
  * frame against it) can never drift on shape.
  *
- * Trust boundary: this channel carries no bearer credential of its own — it is reachable only on
- * the compose `control` network, which the kernel never exposes past its own network boundary
- * (design doc §11 "内核不发布端口"), the same trust boundary `/internal/llm-usage` and
- * `/internal/handle-revocations` already document. The one secret that *does* cross this channel
+ * Trust boundary: the WebSocket handshake carries agent-host's own internal-plane credential
+ * (`Authorization: Bearer …`; since R-03 each internal caller holds its own credential, derived
+ * from the kernel's root secret, and `/internal/agent-host` admits only `agent-host` — see the
+ * kernel's `interfaces/internal-auth`), the same guard `/internal/llm-usage` and
+ * `/internal/handle-revocations` sit behind. Frames carry no credential of their own, and the
+ * channel is additionally reachable only on the compose `control` network (design doc §11
+ * "内核不发布端口"; defence in depth, no longer the sole boundary). The one secret that *does* cross this channel
  * — a freshly issued entry Capability Handle, carried inside a `startTurn` command — travels only
  * kernel → agent-host → the spawned container's env (`worker-supervisor`'s `/resident/spawn`
  * request body); agent-host must never log it (see agent-host's own kernel-link.ts doc comment).

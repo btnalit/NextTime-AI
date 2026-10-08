@@ -144,7 +144,10 @@ S1 OK
 （S1.10）除验收脚本本身之外唯一改动生产代码的地方：
 
 - 路由：`packages/kernel/src/interfaces/http/internal/egress.ts`（`POST /internal/egress`，同
-  `/internal/llm-usage`/`/internal/handle-revocations` 一样只在 `control` 网络可达、无额外鉴权）。
+  `/internal/llm-usage`/`/internal/handle-revocations` 一样走 `/internal/` 前缀的内部凭证守卫：只有
+  `egress-proxy` 持有的那份内部凭证（R-03，由根密钥派生，每个调用方各一份）能调它，
+  `INTERNAL_ROUTE_CALLERS` 里 `/internal/egress` 的白名单只有 `egress-proxy`；路由文件自己不做鉴权，
+  见 `packages/kernel/src/interfaces/internal-auth/internal-auth.ts`）。
 - 服务逻辑：`packages/kernel/src/application/host-bridge/egress-observations.ts`——解析
   `sourceId`（`entry:<workspaceId>:<principalId>`，格式定义在 `packages/worker-supervisor/src/
   egress-map.ts`）、找该 principal 当前在跑的 Turn（没有则回退到最近 5 分钟内的 Turn，找不到则

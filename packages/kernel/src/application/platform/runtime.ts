@@ -595,7 +595,14 @@ async function readPinnedPiVersion(): Promise<string | null> {
   return null;
 }
 
-export const piDriftHandler: CapabilityHandler = async (client) => {
+/** The pi this release expects, and the pi / platform-extension the active runtime image carries
+ *  (its own labels; null when worker-supervisor cannot list the images or the label is missing).
+ *  Shared by `pi_drift` and `platform_updates` (S10 U1). */
+export async function readPiVersions(client: PoolClient): Promise<{
+  pinnedPiVersion: string | null;
+  activeImagePiVersion: string | null;
+  platformExtensionVersion: string | null;
+}> {
   const { settings } = await readPlatformSettings(client);
   const imagesResult = await tryListImages();
   const { activeImage } = resolveActiveImage(
@@ -603,10 +610,17 @@ export const piDriftHandler: CapabilityHandler = async (client) => {
     imagesResult.defaultImage,
   );
   const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
-  const activeImagePiVersion = activeImageInfo?.labels[IMAGE_PI_VERSION_LABEL] ?? null;
-  const platformExtensionVersion =
-    activeImageInfo?.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null;
-  const pinnedPiVersion = await readPinnedPiVersion();
+  return {
+    pinnedPiVersion: await readPinnedPiVersion(),
+    activeImagePiVersion: activeImageInfo?.labels[IMAGE_PI_VERSION_LABEL] ?? null,
+    platformExtensionVersion:
+      activeImageInfo?.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null,
+  };
+}
+
+export const piDriftHandler: CapabilityHandler = async (client) => {
+  const { pinnedPiVersion, activeImagePiVersion, platformExtensionVersion } =
+    await readPiVersions(client);
 
   let status: PiDriftStatusWire;
   let detail: string;

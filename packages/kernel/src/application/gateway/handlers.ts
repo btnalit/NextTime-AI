@@ -105,6 +105,7 @@ import {
   listRuntimeImagesHandler,
   piDriftHandler,
   platformStatusHandler,
+  platformUpdatesHandler,
   rollEntryContainersHandler,
   rollbackRuntimeImageHandler,
   runtimeInventoryHandler,
@@ -286,14 +287,13 @@ import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-
 export { NoActiveTurnError, TurnNotFoundError };
 
 /**
- * application/gateway/handlers: the real handlers wired for the S1.3 capability set (`get_object`
- * / `traverse` / `search` / `state_at` / `explain` / `audit_query` / `reconstruct` —
- * docs/development-tasks.md S1.3, item 3) plus the S1.4 chat set (`list_chats` / `new_chat` /
- * `send_chat_message` / `stop_agent` / `get_chat_history` / `subscribe_chat`) and the S1.4
- * entry-agent bootstrap/write-back pair (`get_entry_context` / `report_turn`,
- * docs/development-tasks.md S1.4 deliverables 2 and 6). Every other registry capability has no
- * entry in `CAPABILITY_HANDLERS` and falls through to dispatch.ts's `CapabilityNotImplementedError`
- * (HTTP 501).
+ * application/gateway/handlers: `CAPABILITY_HANDLERS`, the one name → handler table for every
+ * capability in the registry. It started as the S1.3 read set (`get_object` / `traverse` /
+ * `search` / `state_at` / `explain` / `audit_query` / `reconstruct`) and the S1.4 chat and
+ * entry-agent sets, and every later capability (`export_prov`, `list_conflicts`, the platform
+ * plane, …) is wired here too — dispatch.test.ts pins that every registry capability has an
+ * entry. dispatch.ts's `CapabilityNotImplementedError` (HTTP 501) remains only as the guard for a
+ * registry row added without a handler.
  *
  * Each handler receives an already-open `PoolClient` inside dispatch.ts's `withWorkspace()`
  * transaction (the same one `writeAudit` appends to — I11) and already-`paramsSchema`-validated
@@ -1930,6 +1930,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['rollback_runtime_image', rollbackRuntimeImageHandler],
   ['roll_entry_containers', rollEntryContainersHandler],
   ['pi_drift', piDriftHandler],
+  ['platform_updates', platformUpdatesHandler],
   ['platform_status', platformStatusHandler],
   // S7-E (P-D 剩余 E5, docs/development-tasks.md §5d) — application/platform/runtime.ts.
   ['set_platform_default_model', setPlatformDefaultModelHandler],
