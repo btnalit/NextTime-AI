@@ -460,6 +460,10 @@ rollback;" </dev/null
 结果记 `docs/private/`；空表 = 可以直接应用。不为空时先别应用：每组留下当前在用的那个门实例的关联，其余的按
 `docs/runbooks/add-gatekeeper.md` §11.1 层 1（登录角色上删 `workspace_gate_links` 一行）删掉，并把删了哪几行记进 `docs/private/`，再重跑预检到空。
 
+### 3.9 新增 `update-feed` 服务（S10 U1，v0.43.0 起）
+
+目录 `config/update-feed/`（10002:10002 0755）由目标 tag 自己的 `apply-release.sh` 在切 tag 之前补建（`STEP update-feed-dir`），主机检出里旧版本的脚本不会建它。第一次应用前确认 CI 已把 `channel.json` 发到滚动的 `channel` 预发布；应用后看 `docker compose logs --tail 20 update-feed` 有一次成功写入。四种状态的核对见 `docs/runbooks/operations.md` §16。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

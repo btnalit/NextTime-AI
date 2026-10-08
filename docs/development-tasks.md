@@ -3677,7 +3677,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **U1 — 版本感知（#479，2026-10-08 合入；遗留 125 / 126 + 车道 D1）**
 
 - **ReleaseChannel 记录**（`packages/shared/src/release-channel.ts`）：生产方与消费方共用一个 zod schema。`schema: 1`、
-  `platform.releases`（最多 50 条，每条：版本、发布时间、内置 pi、相对上一版新增的迁移 `core 0041` 形式、是否 breaking、
+  `platform.releases`（schema 上限 50 条，CI 实际写最近 20 个发版；每条：版本、发布时间、内置 pi、相对上一版新增的迁移 `core 0041` 形式、是否 breaking、
   发版页链接）、`piUpstream`（上游最新、检查时间、SDK 套件 pass / fail、失败摘要、最早内置它的发版、运行链接）。每个字符串
   都有格式或长度上限，链接只能是 GitHub 的发版页或 Actions 运行页；文件上限 64 KiB。与方案 §4.2 示例的差别：发版说明只给
   链接 `notesUrl`、不带正文（伪造的记录最多误导提示，注入不了文字或外链）。
