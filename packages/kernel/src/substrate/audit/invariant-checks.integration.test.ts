@@ -460,6 +460,66 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(results.find((r) => r.invariant === 'I12')?.violations).toBe(0);
     });
 
+    it('I-P1: two published families declaring the same ObjectType name count once; a LinkType or a draft sharing a name does not (S10 P0)', async () => {
+      const typeName = `Collide_${randomUUID().slice(0, 8)}`;
+      const familyA = randomUUID();
+      const familyB = randomUUID();
+      const definition = (extra: object = {}) =>
+        JSON.stringify({ objectTypes: [{ name: typeName }], linkTypes: [], ...extra });
+      const baseline = await runInvariantChecks(pool);
+      const before = baseline.find((result) => result.invariant === 'I-P1');
+      expect(before?.sample.some((entry) => entry.includes(typeName))).toBe(false);
+
+      // Raw inserts on the login role: both publish functions would refuse the second family
+      // (assertOntologyNamespace) — this is the "written before the check existed" shape.
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const insert = `insert into ontology_versions (workspace_id, id, version, status, definition, proposed_by, published_by)
+                          values ($1, $2, 1, $3, $4, $5, $6)`;
+          await client.query(insert, [
+            workspaceId,
+            familyA,
+            'published',
+            definition(),
+            ownerId,
+            ownerId,
+          ]);
+          await client.query(insert, [
+            workspaceId,
+            familyB,
+            'published',
+            definition(),
+            ownerId,
+            ownerId,
+          ]);
+          // A draft of a third family with the same name is not part of the namespace.
+          await client.query(insert, [
+            workspaceId,
+            randomUUID(),
+            'draft',
+            definition(),
+            ownerId,
+            null,
+          ]);
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const after = await runInvariantChecks(pool);
+      const ip1 = after.find((result) => result.invariant === 'I-P1');
+      expect((ip1?.violations ?? 0) - (before?.violations ?? 0)).toBe(1);
+      // `sample` is capped at five rows ordered by workspace; earlier files in this shared database
+      // may already hold collisions sorted ahead of this one.
+      if ((ip1?.violations ?? 0) <= 5) {
+        const entry = ip1?.sample.find((line) => line.includes(typeName));
+        expect(entry).toContain(`${workspaceId}:object:${typeName}`);
+        expect(entry).toContain(familyA);
+        expect(entry).toContain(familyB);
+      }
+    });
+
     it('runInvariantChecks always returns exactly INVARIANT_CHECK_IDS, in that fixed order', async () => {
       const results = await runInvariantChecks(pool);
       expect(results.map((result) => result.invariant)).toEqual(INVARIANT_CHECK_IDS);

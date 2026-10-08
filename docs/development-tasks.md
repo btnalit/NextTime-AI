@@ -3573,6 +3573,61 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
 
+### S10 实现说明
+
+**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**
+
+- `substrate/ontology/namespace.ts`：`assertOntologyNamespace(client, workspaceId, candidateId, definition)` 拿候选定义与
+  工作区内**其他每个族的最新已发布版本**比较（与 `loadPublishedLinkTypes` 判定写入时用的是同一口径），ObjectType 名、
+  ActionType 名各自不得已被别的族声明，候选自身重复声明也算；LinkType 同名照旧累加签名；名字按种类唯一（ObjectType 与
+  ActionType 可同名，`get_type` 的种类顺序已能区分）；草稿不进命名空间（他人草稿不可见，撞名的草稿在发布时拒）。
+  两条落库路径都在写之前调用它：`loader.ts` `publishOntologyVersion`（种子、领域包、`install_module` / `upgrade_module`）
+  与 `registry.ts` `publishOntologyDraft`（`publish_ontology_version`）。撞名抛 `OntologyNamespaceConflictError`
+  （HTTP 409 / WS `illegal_transition`，code `ontology_namespace_conflict`，`conflicts` 列出种类、名字、已拥有它的族），什么都不写。
+- 并发：新增工作区级 advisory 锁 `lockOntologyNamespace`，`lockOntologyFamily` 先取它再取族锁——所有发布者同一顺序取锁，
+  一个事务连发多个族也不会与另一个发布者死锁；两个族并发发布同一个新名字只有先提交的成功。
+- `mergeVisibleOntology` 的"按族 id 靠后者覆盖"保留，但只剩"调用者自己的草稿遮住已发布类型"这一种情形（该草稿发不出去），注释已改。
+- 控制台：`ontology_namespace_conflict` 进 `platform-errors.ts` 双语文案；本体提议发布确认框本就走它，能力目录「模块」页的
+  安装 / 升级失败也改走它（此前只显示内核英文原文）。
+- 遗留 123 跟进 ①：`list_ontology_versions` 的 keyset 从 `(createdAt 毫秒, id)` 改成 `(createdAt 毫秒, id, version)`，游标
+  `base64url(createdAt|id|version)`——同一族在同一毫秒里有多个版本时，翻页边界不再跳过后面的版本；旧的两段游标仍可解，
+  语义同前（"该 (createdAt, id) 的全部版本之后"）。
+- 遗留 123 跟进 ②：core `0041_drop_workspace_ontology_enforcement_allowance` 删掉 0035（R-29）为 v0.38.x 回归套件留的
+  "工作区事务可改自己工作区的 `ontology_enforcement`"放行（策略与触发器里那一支）；可逆性判断与探针预期写在 `runbooks/release.md` §6。
+- 主机只读预检：`runbooks/release.md` §3.7 的查询（只读事务），列出各工作区里已发布族之间重名的类型；空表才应用。
+- 测试：`namespace.test.ts`（纯函数）；`registry.test.ts` 新增 I-P1 三例（草稿发布被拒且仍是草稿、loader 路径被拒且不落行、
+  同族新版本与跨族同名 LinkType 照常）与 keyset 同毫秒三版本翻页；原有夹具改为每次用唯一类型名（同一工作区里反复发布同名
+  新族，正是 I-P1 现在拒绝的写法）；`write-confinement.integration.test.ts` 改断言工作区事务改不了自己工作区的任何列；
+  web `ModulesTab.test.tsx` 断言模块安装撞名显示映射后的文案与原始 code。
+- 评审跟进（#477）：`registry.test.ts` 加并发用例——两个连接同时把同一个新 ObjectType 名发布进两个新族，第二个必须在
+  工作区命名空间锁上等待（断言 `pg_locks` 里有未授予的 advisory 锁），第一个提交后它被 `ontology_namespace_conflict`
+  拒绝，最终只有一个族拥有该名字；不变量巡检（`substrate/audit/invariant-checks.ts`）加 `I-P1`：按"各族最新已发布版本"
+  数工作区内同种类同名、属于不止一个族的类型（与 §3.7 主机预检同一查询），进 `/internal/metrics`，对写入点的锁与检查做纵深防御。
+- 可逆性探针：`packages/kernel/migrations/reversibility-deltas.json` 声明 0041 有意改变、v0.42.0 套件里两个
+  `write-confinement` 断言，由本 PR 的新断言替代（机制见 `runbooks/release.md` §6）。
+
+**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**
+
+- L4-11 余项：四个 `security definer` 函数不再信任调用方给的 `p_workspace_id`。`find_active_fact_for_identity` /
+  `latest_fact_invalidated_for_identity` 由图存储直接调用，参数不是 `app_workspace()` 时报 42501（不返回空——"没有活跃
+  Fact"会把调用方带进插入分支）；`link_visible_to_caller` / `conflict_visible_to_caller` 是 RLS 谓词，扫描时可能先于策略里
+  `workspace_id = app_workspace()` 那一支求值，所以只答 false（隐藏），从不报错。所有调用方都在 `withWorkspace` 里，
+  登录角色也设置 `app.workspace_id`，现有路径答案不变；`create or replace` 保留 0035 的授权。
+- L4-13：`workspace_gate_links (workspace_id, gatekeeper_object_id)` 改唯一索引；`resolveGateLinkTarget` 唯一匹配的
+  Gatekeeper 已关联到别的门实例时，预览与启用都拒绝 `gatekeeper_already_linked`（HTTP 409，什么都不写），索引是第二道墙。
+  0035 留到"L4-13 之前"的 `workspace_gate_links` DELETE 授权一并收回（内核无删关联路径，手工解除关联走登录角色）。
+  控制台：错误码进 `platform-errors.ts`，启用预览失败的提示改走映射文案。
+- 主机只读预检：`runbooks/release.md` §3.8（已有重复关联会让建索引失败、整个迁移回滚）；可逆性见同文件 §6。
+- L5-16 推迟：人类主体的 user 在 principal 行插入**之后**才由 `ensureUserForHumanPrincipal` 补上，CHECK 不能延迟；
+  改成提交时检查的约束触发器会拒绝大量直接插裸人类主体的测试夹具，还会让可逆性探针里旧套件成片失败。
+  理由写在 `users.ts` 该函数注释里，遗留 123 继续记着。
+- L1-14 余项（`register-gatekeeper --publish` 补审计）随 W2 P0b"接入路径统一"做（§5h 表），不在本 PR。
+- L4 注释漂移：`users.ts` `ensureUserForHumanPrincipal` 注释订正（`create_principal` 早已不调用它；`users` 插入在
+  `nexttime_app` 上只有平台事务过得了 RLS）；`gates/store.ts` `findGateLinkByGatekeeper` 注释改为指向唯一索引。
+- 测试：`write-confinement.integration.test.ts` 新增 K4 三例（跨工作区调用两个直调函数报 42501、两个谓词答 false、
+  `workspace_gate_links` 上存在 `(workspace_id, gatekeeper_object_id)` 唯一索引）并把该表 DELETE 列入已收回清单；`platform-gates.integration.test.ts`
+  新增同一端点换 GATE_ID 后预览 / 启用都被拒、不落行、原实例重复启用仍幂等；web `EnableGateConfirm.test.tsx` 新增预览被拒的文案。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |

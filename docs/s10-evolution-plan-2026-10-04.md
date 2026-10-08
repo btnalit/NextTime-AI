@@ -280,6 +280,10 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 - **Procedure**：一个 Procedure 常跨多个 `invoke_worker`，所以挂在 **Turn** 上——`report_turn`（已有 `turnId / summary /
   decisions`）增加可选 `procedureRef`（入口 agent 从 `find_procedures` 拿到的 `id@version`），标 `claimed`（agent 自报，
   非权威——与 Turn id"调用方自报"同一口径）。
+  **实现注记（E1，#480）**：`report_turn` 由扩展在 `agent_settled` 时自己调用，模型传不了参数，改为模型可调用的
+  `record_procedure_followed(procedureId, version)`，归到调用者正在运行的 Turn（与 `record_decision` 同规则），只接受已发布版本、
+  第一次声明为准；语义（Turn 级、`claimed`）不变。目标结果在线上带 `basis`：Turn 上为 `requester`，Task 上为
+  `agent_reported`（verify 步骤由入口 agent 上报，`givenBy` 是它代表的人，不是那个人自己的判断）。
 - **目标结果**（§3.4）：请求者在对话里对一轮回复点"达成 / 未达成"（标在 Turn）；Procedure 的验证步骤标在 Task；默认 `unknown`。
   Skill 的达成率经 Task → Turn 聚合。
 - 草稿被丢弃时记录原因（可选文本）作为信号。

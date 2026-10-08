@@ -134,6 +134,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '工作区里有不止一个门与该实例端点相同，无法确定关联哪一个；先在已注册系统里合并或清理重复的注册',
     en: 'More than one Gatekeeper in this workspace shares that endpoint — merge or clean up the duplicates in Registered systems first',
   },
+  // L4-13 (S10 K4): the existing Gatekeeper at this endpoint is already linked to another gate
+  // instance (the same endpoint redeployed under a new gate id). Nothing was written.
+  gatekeeper_already_linked: {
+    zh: '这个端点上已有的门已经关联到另一个平台门实例；一个门只能关联一个实例，本次没有写入任何内容。请先解除旧实例的关联',
+    en: 'The existing Gatekeeper at this endpoint is already linked to another platform gate instance — one Gatekeeper takes one instance, and nothing was written. Remove the old instance’s link first',
+  },
   // S8 W3-K1 (leftover 79, closing wave C6, G3): `refresh_operation_governance`'s target Gatekeeper
   // has no linked platform gate instance — the console only renders the "对齐" action when
   // `healthInfo.linked`, so this is defense-in-depth for the race (the link is removed between
@@ -159,6 +165,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   ontology_base_moved: {
     zh: '这份草稿提出之后，该本体又发布了新版本；本次没有发布任何内容。请基于当前版本重新提议，或丢弃这份草稿',
     en: 'A newer version of this ontology was published after this draft was proposed — nothing was published. Propose the change again from the current version, or discard this draft',
+  },
+  // I-P1 (S10 P0): an ObjectType / ActionType name in this version is already declared by another
+  // published ontology family of the workspace. Nothing was published; rename the type, or change
+  // the family that owns it.
+  ontology_namespace_conflict: {
+    zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
+    en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
 };
 

@@ -35,6 +35,7 @@ import {
   DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  type TaskAttributions,
   TaskNotFoundError,
   type TaskRow,
   type WorkerRunRow,
@@ -47,6 +48,7 @@ import {
   invokeWorkerCreate,
   listQuotas,
   listTasksForPrincipal,
+  readTaskAttributions,
   resolveParentAuthority,
   resolveWaitTimeoutMs,
   setQuotaValue,
@@ -117,6 +119,15 @@ import {
   setAgentPolicyHandler,
   setAgentProfileHandler,
 } from './agent-profile-handlers.js';
+import {
+  listChatTurnsHandler,
+  markTurnOutcomeHandler,
+  recordProcedureFollowedHandler,
+  reportTaskOutcomeHandler,
+  toWireObjectiveOutcome,
+  toWireSkillLoads,
+  toWireTurnAttribution,
+} from './attribution-handlers.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
@@ -267,7 +278,12 @@ import {
   publishProcedureHandler,
   publishSkillHandler,
 } from './skill-procedure-handlers.js';
+import { NoActiveTurnError, TurnNotFoundError } from './turn-errors.js';
 import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-result-handler.js';
+
+// The two Turn errors moved to `turn-errors.ts` (S10 E1) so the attribution handlers can throw them
+// without importing this file; re-exported so every existing `from './handlers.js'` import holds.
+export { NoActiveTurnError, TurnNotFoundError };
 
 /**
  * application/gateway/handlers: the real handlers wired for the S1.3 capability set (`get_object`
@@ -544,6 +560,8 @@ function toWireChatMessage(message: ChatMessageRow) {
     kind: chatMessageKind(message.content),
     createdAt: message.createdAt.toISOString(),
     sequence: message.sequence,
+    // S10 E1: lets the console hang the Turn's outcome control under its reply.
+    turnId: message.turnId,
   };
 }
 
@@ -750,13 +768,6 @@ async function resolveEntryContextTurn(
   return readOwnAgentTurn(client, workspaceId, principalId, running.id);
 }
 
-export class TurnNotFoundError extends Error {
-  constructor(workspaceId: string, turnId: string) {
-    super(`Turn not found: workspace ${workspaceId}, id ${turnId}`);
-    this.name = 'TurnNotFoundError';
-  }
-}
-
 /**
  * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends a still-running Turn Activity
  * `completed` through `endTurn` (R-55 — a Turn already ended keeps its status) and records
@@ -801,19 +812,6 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
     resourceId: turnId,
   };
 };
-
-/** Thrown by `record_decision` when the caller has no currently-`running` Turn to attribute the
- *  Decision to (`findAttributableTurn`'s recency-window fallback is deliberately *not* accepted
- *  here — see `recordDecisionHandler`'s own doc comment for why). Not mapped in interfaces/ws/
- *  rpc.ts or interfaces/http/capability-route.ts (falls through to a generic 500/INTERNAL_ERROR),
- *  matching this same handler group's existing `TurnNotFoundError` above, which has never had a
- *  dedicated mapping either. */
-export class NoActiveTurnError extends Error {
-  constructor() {
-    super('record_decision: no currently-running Turn to attribute this Decision to');
-    this.name = 'NoActiveTurnError';
-  }
-}
 
 /**
  * `record_decision` (design doc §5.2 `Turn --generated--> Decision`; docs/development-tasks.md
@@ -1479,15 +1477,18 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
   };
 };
 
-function toWireWorkerRun(row: {
-  readonly id: string;
-  readonly status: string;
-  readonly containerId: string | null;
-  readonly depth: number;
-  readonly attempt: number;
-  readonly startedAt: Date;
-  readonly terminatedAt: Date | null;
-}) {
+function toWireWorkerRun(
+  row: {
+    readonly id: string;
+    readonly status: string;
+    readonly containerId: string | null;
+    readonly depth: number;
+    readonly attempt: number;
+    readonly startedAt: Date;
+    readonly terminatedAt: Date | null;
+  },
+  attributions: TaskAttributions,
+) {
   return {
     id: row.id,
     status: row.status,
@@ -1496,12 +1497,23 @@ function toWireWorkerRun(row: {
     attempt: row.attempt,
     startedAt: row.startedAt.toISOString(),
     terminatedAt: row.terminatedAt ? row.terminatedAt.toISOString() : null,
+    // S10 E1: `null` = not recorded (a run from before E1), `[]` = recorded, none loaded.
+    skills: toWireSkillLoads(attributions.skillsByRun.get(row.id)),
   };
 }
 
 /** The wire shape one Task + its WorkerRuns projects to, shared by `get_task` and the S2.10
- *  addition `list_tasks` (one Task per array entry there, same per-Task shape). */
-function toWireTask(task: TaskRow, workerRuns: readonly WorkerRunRow[]) {
+ *  addition `list_tasks` (one Task per array entry there, same per-Task shape). S10 E1 adds the
+ *  attribution (`readTaskAttributions`, batched per page): the generating Turn — `turn` only when
+ *  the caller can see that Turn's Chat — and the Task's own objective outcome. */
+function toWireTask(
+  task: TaskRow,
+  workerRuns: readonly WorkerRunRow[],
+  attributions: TaskAttributions,
+) {
+  const turn = task.createdByActivityId
+    ? attributions.turns.get(task.createdByActivityId)
+    : undefined;
   return {
     id: task.id,
     status: task.status,
@@ -1518,7 +1530,10 @@ function toWireTask(task: TaskRow, workerRuns: readonly WorkerRunRow[]) {
     completedAt: task.completedAt ? task.completedAt.toISOString() : null,
     failedAt: task.failedAt ? task.failedAt.toISOString() : null,
     cancelledAt: task.cancelledAt ? task.cancelledAt.toISOString() : null,
-    workerRuns: workerRuns.map(toWireWorkerRun),
+    workerRuns: workerRuns.map((run) => toWireWorkerRun(run, attributions)),
+    turnId: task.createdByActivityId,
+    turn: turn ? toWireTurnAttribution(turn) : null,
+    objectiveOutcome: toWireObjectiveOutcome(attributions.outcomeByTask.get(task.id) ?? null),
   };
 }
 
@@ -1539,8 +1554,14 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
     },
     taskId,
   );
+  const attributions = await readTaskAttributions(
+    client,
+    workspaceId,
+    [task],
+    workerRuns.map((run) => run.id),
+  );
   return {
-    result: toWireTask(task, workerRuns),
+    result: toWireTask(task, workerRuns, attributions),
     resourceType: 'task',
     resourceId: task.id,
   };
@@ -1557,9 +1578,15 @@ const listTasksHandler: CapabilityHandler = async (client, workspaceId, params) 
   const { limit, cursor } = params as { limit?: number; cursor?: string };
   const principalId = await currentPrincipalId(client);
   const page = await listTasksForPrincipal(client, workspaceId, principalId, { limit, cursor });
+  const attributions = await readTaskAttributions(
+    client,
+    workspaceId,
+    page.items.map(({ task }) => task),
+    page.items.flatMap(({ workerRuns }) => workerRuns.map((run) => run.id)),
+  );
   return {
     result: {
-      items: page.items.map(({ task, workerRuns }) => toWireTask(task, workerRuns)),
+      items: page.items.map(({ task, workerRuns }) => toWireTask(task, workerRuns, attributions)),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
@@ -1775,10 +1802,14 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_chat_history', getChatHistoryHandler],
   ['subscribe_chat', subscribeChatHandler],
   ['archive_chat', archiveChatHandler],
+  ['list_chat_turns', listChatTurnsHandler],
+  ['mark_turn_outcome', markTurnOutcomeHandler],
   ['unarchive_chat', unarchiveChatHandler],
   ['rename_chat', renameChatHandler],
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
+  ['record_procedure_followed', recordProcedureFollowedHandler],
+  ['report_task_outcome', reportTaskOutcomeHandler],
   ['record_decision', recordDecisionHandler],
   ['list_conflicts', listConflictsHandler],
   ['resolve_conflict', resolveConflictHandler],

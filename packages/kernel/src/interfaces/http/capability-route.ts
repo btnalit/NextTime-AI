@@ -47,6 +47,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyNamespaceConflictError,
   OntologyViolationError,
   PasswordChangeRequiredError,
   PrincipalNotFoundError,
@@ -86,6 +87,8 @@ import {
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
+  ObjectiveOutcomeConflictError,
+  ObjectiveOutcomeForbiddenError,
   QuotaExceededError,
   TaskNotFoundError,
   TaskRuntimeNotConfiguredError,
@@ -338,6 +341,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof OntologyBaseMovedError) {
     return { status: 409, code: err.code, message: err.message };
   }
+  // I-P1 (S10 P0): an ObjectType / ActionType name another published ontology family already
+  // owns — `publish_ontology_version`, `install_module`, `upgrade_module`. Nothing was published.
+  if (err instanceof OntologyNamespaceConflictError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
   // Review 2026-09 (docs/development-tasks.md S2.4 "实现说明补充"): `propose_operation` over an
   // identity that already exists and is not the caller's own draft — a published/deprecated
   // Operation, another Principal's draft, an import draft (I16). Same 409 family as
@@ -490,6 +498,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof TaskNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see
+  // the Turn / Task but may not judge it (403), or one its state forbids — not finished yet, or its
+  // one correction already used (409, the same "current state forbids it" family as
+  // IllegalTransition).
+  if (err instanceof ObjectiveOutcomeForbiddenError) {
+    return { status: 403, code: 'forbidden', message: err.message };
+  }
+  if (err instanceof ObjectiveOutcomeConflictError) {
+    return { status: 409, code: 'conflict', message: err.message };
   }
   // `explain` (substrate/epistemic/explain.ts) on an id that does not resolve to a Fact/Activity/
   // Decision — found on the host as a 500 (lane-4 hookup: re-exported through

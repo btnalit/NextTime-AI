@@ -25,8 +25,8 @@ import { createPool, withWorkspace } from './pool.js';
  *   - a revoked Handle cannot be un-revoked, a revoked or expired grant cannot come back — for
  *     every role, while revocation itself keeps working;
  *   - `workspaces` / `platform_settings` / `platform_settings_history` are readable by every
- *     transaction and writable only by a platform transaction (plus the one compatibility
- *     allowance for a workspace's own `ontology_enforcement`);
+ *     transaction and writable only by a platform transaction (core 0041 dropped 0035's one
+ *     compatibility allowance for a workspace's own `ontology_enforcement`);
  *   - L4-11 / L4-12: security-definer ACLs, the Fact "never both" rule, the deprecated
  *     OntologyVersion definition lock;
  *   - the workspace purge (login role) still removes every row.
@@ -171,6 +171,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['evidence', 'update'],
         ['decisions', 'update'],
         ['outbox', 'update'],
+        // core 0042 (L4-13): no kernel path deletes a gate link.
+        ['workspace_gate_links', 'delete'],
       ];
 
       for (const [table, op] of REVOKED) {
@@ -360,36 +362,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await readWorkspace(tenantB.workspaceId)).toEqual(before);
       });
 
-      it('a workspace transaction cannot change its own workspace either (status, name, entry model)', async () => {
+      it('a workspace transaction cannot change its own workspace either (status, name, entry model, ontology enforcement)', async () => {
+        const enforcement = async (): Promise<string | undefined> =>
+          (
+            await asLoginRole((client) =>
+              client.query<{ ontology_enforcement: string }>(
+                'select ontology_enforcement from workspaces where id = $1',
+                [tenantA.workspaceId],
+              ),
+            )
+          ).rows[0]?.ontology_enforcement;
+        const before = await readWorkspace(tenantA.workspaceId);
+        const enforcementBefore = await enforcement();
+        // core 0041 dropped 0035's compatibility allowance for `ontology_enforcement`: no policy
+        // admits the workspace plane to its own row any more, so RLS hides it from every UPDATE.
         for (const assignment of [
           `status = 'disabled'`,
           `name = 'renamed'`,
           `entry_model = 'r29/model'`,
+          `ontology_enforcement = case when ontology_enforcement = 'warn' then 'reject' else 'warn' end`,
         ]) {
-          await expect(
-            asTenant(tenantA, (client) =>
-              client.query(`update workspaces set ${assignment} where id = $1`, [
-                tenantA.workspaceId,
-              ]),
-            ),
-          ).rejects.toThrow(/only a platform transaction may change a workspace/);
+          const result = await asTenant(tenantA, (client) =>
+            client.query(`update workspaces set ${assignment} where id = $1`, [
+              tenantA.workspaceId,
+            ]),
+          );
+          expect(result.rowCount).toBe(0);
         }
-        expect((await readWorkspace(tenantA.workspaceId)).status).toBe('active');
-      });
-
-      it("compatibility allowance: a workspace transaction may still set its own ontology_enforcement (the previous release's suite does)", async () => {
-        const result = await asTenant(tenantA, (client) =>
-          client.query(`update workspaces set ontology_enforcement = 'warn' where id = $1`, [
-            tenantA.workspaceId,
-          ]),
-        );
-        expect(result.rowCount).toBe(1);
-        const other = await asTenant(tenantA, (client) =>
-          client.query(`update workspaces set ontology_enforcement = 'warn' where id = $1`, [
-            tenantB.workspaceId,
-          ]),
-        );
-        expect(other.rowCount).toBe(0);
+        expect(await readWorkspace(tenantA.workspaceId)).toEqual(before);
+        expect(await enforcement()).toBe(enforcementBefore);
       });
 
       it('a platform transaction writes any workspace; the login role keeps full power', async () => {
@@ -533,6 +534,102 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           ),
         ).rejects.toThrow(/immutable/);
+      });
+    });
+
+    // core 0042 (S10 K4, L4-11 remainder / L4-13): the definer helpers answer only about the
+    // transaction's own workspace, and one Gatekeeper takes at most one gate link.
+    describe('K4 — security-definer helpers are bound to the transaction’s workspace', () => {
+      async function factIdentity(tenant: Tenant) {
+        const { linkId } = await insertFactWithEvidence(tenant);
+        const row = await asLoginRole((client) =>
+          client.query<{
+            link_type: string;
+            source_object_id: string;
+            target_object_id: string;
+            activity_id: string;
+          }>(
+            'select link_type, source_object_id, target_object_id, activity_id from links where id = $1',
+            [linkId],
+          ),
+        );
+        const link = row.rows[0];
+        if (!link) throw new Error('fact missing');
+        return { linkId, ...link };
+      }
+
+      it('find_active_fact_for_identity / latest_fact_invalidated_for_identity refuse another workspace and still answer for their own', async () => {
+        const theirs = await factIdentity(tenantB);
+        for (const fn of [
+          'find_active_fact_for_identity',
+          'latest_fact_invalidated_for_identity',
+        ]) {
+          await expect(
+            asTenant(tenantA, (client) =>
+              client.query(`select * from ${fn}($1, $2, $3, $4)`, [
+                tenantB.workspaceId,
+                theirs.link_type,
+                theirs.source_object_id,
+                theirs.target_object_id,
+              ]),
+            ),
+          ).rejects.toThrow(/is not this transaction's/);
+        }
+
+        const own = await asTenant(tenantB, (client) =>
+          client.query<{ id: string }>(
+            'select id from find_active_fact_for_identity($1, $2, $3, $4)',
+            [
+              tenantB.workspaceId,
+              theirs.link_type,
+              theirs.source_object_id,
+              theirs.target_object_id,
+            ],
+          ),
+        );
+        expect(own.rows.map((r) => r.id)).toEqual([theirs.linkId]);
+        const invalidated = await asTenant(tenantB, (client) =>
+          client.query<{ v: boolean | null }>(
+            'select latest_fact_invalidated_for_identity($1, $2, $3, $4) as v',
+            [
+              tenantB.workspaceId,
+              theirs.link_type,
+              theirs.source_object_id,
+              theirs.target_object_id,
+            ],
+          ),
+        );
+        expect(invalidated.rows[0]?.v).toBe(false);
+      });
+
+      it('link_visible_to_caller / conflict_visible_to_caller answer false (hidden) for another workspace, never raise', async () => {
+        const theirs = await factIdentity(tenantB);
+        const foreign = await asTenant(tenantA, (client) =>
+          client.query<{ link: boolean; conflict: boolean }>(
+            'select link_visible_to_caller($1, $2) as link, conflict_visible_to_caller($1, $3, $3) as conflict',
+            [tenantB.workspaceId, theirs.activity_id, theirs.linkId],
+          ),
+        );
+        expect(foreign.rows[0]).toEqual({ link: false, conflict: false });
+        const own = await asTenant(tenantB, (client) =>
+          client.query<{ link: boolean; conflict: boolean }>(
+            'select link_visible_to_caller($1, $2) as link, conflict_visible_to_caller($1, $3, $3) as conflict',
+            [tenantB.workspaceId, theirs.activity_id, theirs.linkId],
+          ),
+        );
+        expect(own.rows[0]).toEqual({ link: true, conflict: true });
+      });
+
+      it('workspace_gate_links has a unique (workspace, Gatekeeper) index', async () => {
+        const result = await asLoginRole((client) =>
+          client.query<{ indexdef: string }>(
+            `select indexdef from pg_indexes
+              where tablename = 'workspace_gate_links' and indexname = 'workspace_gate_links_gatekeeper_key'`,
+          ),
+        );
+        expect(result.rows[0]?.indexdef).toMatch(
+          /CREATE UNIQUE INDEX .* \(workspace_id, gatekeeper_object_id\)/,
+        );
       });
     });
 
