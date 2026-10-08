@@ -90,7 +90,12 @@ export class GateInstanceNotAvailableError extends Error {
     | 'no_announced_manifest'
     // R-18 (D-18): the caller's `manifestDigest` (from `preview_gate_instance_enable`) is not the
     // digest of the manifest in effect any more — an administrator confirmed a newer one since.
-    | 'manifest_changed';
+    | 'manifest_changed'
+    // L4-13 (S10 K4): the one existing Gatekeeper sharing the instance's endpoint is already
+    // linked to a *different* platform gate instance (the same endpoint redeployed under a new
+    // GATE_ID) — a second link would leave trust and the disabled-Operation list undetermined
+    // (core 0042 makes it impossible; this refuses it with a reason first).
+    | 'gatekeeper_already_linked';
   constructor(code: GateInstanceNotAvailableError['code'], message: string) {
     super(message);
     this.name = 'GateInstanceNotAvailableError';
@@ -122,7 +127,9 @@ type GateLinkResolution =
 
 /** The endpoint-association decision (module doc comment) — zero matches: `create` (today's
  *  unchanged path); exactly one: `link` that Object; more than one: `ambiguous`, both callers
- *  refuse/report it rather than pick one. */
+ *  refuse/report it rather than pick one. L4-13: a single match already linked to another gate
+ *  instance refuses `gatekeeper_already_linked` (both callers — the preview never offers a link
+ *  the enable would refuse). */
 async function resolveGateLinkTarget(
   client: PoolClient,
   workspaceId: string,
@@ -133,6 +140,13 @@ async function resolveGateLinkTarget(
   if (matches.length === 1) {
     const [existing] = matches;
     if (!existing) throw new Error('resolveGateLinkTarget: unreachable — length 1 with no [0]');
+    const linked = await findGateLinkByGatekeeper(client, workspaceId, existing.gatekeeperId);
+    if (linked && linked.gateId !== instance.gateId) {
+      throw new GateInstanceNotAvailableError(
+        'gatekeeper_already_linked',
+        `Gatekeeper ${existing.gatekeeperId} (the one existing Gatekeeper at gate instance "${instance.gateId}"'s endpoint) is already linked to gate instance "${linked.gateId}" — one Gatekeeper takes one gate instance link; retire the old instance's link before enabling this one`,
+      );
+    }
     return { kind: 'link', existing };
   }
   return { kind: 'ambiguous', candidateIds: matches.map((m) => m.gatekeeperId) };

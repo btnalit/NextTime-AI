@@ -225,12 +225,18 @@ export async function createUser(pool: PoolLike, input: CreateUserInput): Promis
 }
 
 /** Ensures a human Principal points at a user: if `principals.user_id` is already set, no-op;
- *  otherwise creates a passwordless user with the derived login and links it. For the legacy
- *  creation paths (CLI `create-workspace` / `add-principal`, S3.11 `create_principal`). Runs on
- *  the caller's client, inside its transaction — which for `create_principal` is the
- *  `nexttime_app` role, so the INSERT below names exactly the columns migration 0019 grants that
- *  role (`login`, `display_name`; never `password_hash`) and reads back only `id`. Do not route
- *  this through `insertUser`, whose column list needs the admin path. */
+ *  otherwise creates a passwordless user with the derived login and links it. Callers: CLI
+ *  `add-principal`, `createWorkspace` without an existing owner user, and
+ *  `claimIdentityOnClient` (S3.11 `create_principal` no longer calls it). Runs on the caller's
+ *  client, inside its transaction; the INSERT names only `login` / `display_name` (never
+ *  `password_hash`) and reads back only `id`. On `nexttime_app` it passes RLS only in a platform
+ *  transaction (core 0021 `users_platform_admin` — a workspace transaction cannot create users).
+ *  Do not route this through `insertUser`, which runs on the admin client.
+ *
+ *  L5-16 (deferred): "a human Principal has a user" is established here, *after* the principal
+ *  row is inserted, so the database cannot hold it as a CHECK on `principals` (a CHECK is not
+ *  deferrable); a constraint trigger would have to be deferred to commit and would reject the
+ *  many fixtures that insert bare human principals. */
 export async function ensureUserForHumanPrincipal(
   client: PoolClient,
   principal: {

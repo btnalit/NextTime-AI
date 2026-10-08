@@ -806,12 +806,9 @@ export async function findGateLinkByGate(
  *  platform catalog (the legacy `register-gatekeeper` CLI path, `create_connection`) or one this
  *  workspace never linked. S8 W3-K1 (leftover 79): `refresh_operation_governance`'s own
  *  `no_announced_manifest` refusal is exactly this `null` case — there is no `gate_instances.
- *  operations` manifest to refresh from. `workspace_gate_links` has no unique index on
- *  `gatekeeper_object_id` alone, but `insertGateLink`'s only two callers (`enableGateInstanceHandler`'s
- *  create and link branches) each write at most one row per `(workspaceId, gatekeeperObjectId)` — a
- *  fresh registration mints a new Gatekeeper id, and the link branch's own `resolveGateLinkTarget`
- *  only ever finds one existing Gatekeeper per endpoint before writing this row for it — so `limit 1`
- *  is a defensive bound, not evidence multiple rows are an expected shape. */
+ *  operations` manifest to refresh from. At most one row exists per `(workspaceId,
+ *  gatekeeperObjectId)`: core 0042's unique index (L4-13), with `resolveGateLinkTarget` refusing
+ *  `gatekeeper_already_linked` before the insert would hit it — so `limit 1` is only a bound. */
 export async function findGateLinkByGatekeeper(
   client: PoolClient,
   workspaceId: string,

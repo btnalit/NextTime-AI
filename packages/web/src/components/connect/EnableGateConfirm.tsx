@@ -144,7 +144,8 @@ export function EnableGateConfirm({
       {previewError !== null ? (
         <Notice tone="warn" testId={testId ? `${testId}-preview-error` : undefined}>
           {t('读不到启用预览：', 'Could not load the enable preview: ')}
-          {describeError(previewError).message}
+          {/* L4-13 `gatekeeper_already_linked` (and any other mapped code) reads as its own sentence. */}
+          {platformErrorMessage(previewError, t) ?? describeError(previewError).message}
         </Notice>
       ) : null}
       <Confirm
