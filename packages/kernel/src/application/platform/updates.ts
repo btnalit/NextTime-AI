@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import {
   type PiUpdateWire,
   type PlatformUpdateFeedWire,
@@ -141,40 +141,43 @@ function readErrorDetail(file: string, err: unknown): string {
   }
 }
 
-/** Reads the downloaded record. Never throws. */
+/** Reads the downloaded record. Never throws.
+ *
+ *  One file handle for both the stat and the read, so the size and mtime checked are the
+ *  file's that is read (update-feed replaces it by rename at any time), and the read itself is
+ *  bounded: at most one byte past the cap is ever buffered. */
 export async function readReleaseChannel(
   file: string,
   now: Date = new Date(),
 ): Promise<ReleaseChannelRead> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    const info = await stat(file);
+    handle = await open(file, 'r');
+    const info = await handle.stat();
     if (info.isDirectory())
       return { feed: feedOf('missing', readErrorDetail(file, { code: 'EISDIR' })), channel: null };
-    if (info.size > RELEASE_CHANNEL_MAX_BYTES) {
-      return {
-        feed: feedOf(
-          'invalid',
-          `update feed ${file} is ${info.size} bytes (> ${RELEASE_CHANNEL_MAX_BYTES}) — the record was rejected`,
-          info.mtime.toISOString(),
-        ),
-        channel: null,
-      };
+    const tooLarge = (size: number): ReleaseChannelRead => ({
+      feed: feedOf(
+        'invalid',
+        `update feed ${file} is ${size} bytes (> ${RELEASE_CHANNEL_MAX_BYTES}) — the record was rejected`,
+        info.mtime.toISOString(),
+      ),
+      channel: null,
+    });
+    if (info.size > RELEASE_CHANNEL_MAX_BYTES) return tooLarge(info.size);
+    const buffer = Buffer.alloc(RELEASE_CHANNEL_MAX_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
     }
-    const buffer = await readFile(file);
-    // Re-checked after the read: the file can be replaced between stat and read.
-    if (buffer.length > RELEASE_CHANNEL_MAX_BYTES) {
-      return {
-        feed: feedOf(
-          'invalid',
-          `update feed ${file} is ${buffer.length} bytes (> ${RELEASE_CHANNEL_MAX_BYTES}) — the record was rejected`,
-          info.mtime.toISOString(),
-        ),
-        channel: null,
-      };
-    }
-    return releaseChannelFromFile(file, buffer.toString('utf8'), info.mtime, now);
+    if (length > RELEASE_CHANNEL_MAX_BYTES) return tooLarge(length);
+    return releaseChannelFromFile(file, buffer.toString('utf8', 0, length), info.mtime, now);
   } catch (err) {
     return { feed: feedOf('missing', readErrorDetail(file, err)), channel: null };
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
