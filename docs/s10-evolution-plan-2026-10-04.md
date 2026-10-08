@@ -172,7 +172,7 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 
 ### 4.1 U0 — 按手册把 pi 升到 1.0.2（立即）
 
-> 2026-10-08 落地：开工时上游已到 1.1.0，直接升 1.1.0；核对记录 `pi-upgrade.md` §2.5，实现说明 `development-tasks.md` §5h「U0 实现说明」。
+> 2026-10-08 落地：开工时上游已到 1.1.0，直接升 1.1.0；核对记录 `pi-upgrade.md` §2.5。
 
 - 按 `pi-upgrade.md` §2 / §3 逐行核对 0.99.2 → 1.0.2：两个 npm 包放仓库外临时目录 diff `dist/` 与 `docs/`；按 entrypoint
   的 flag 用 `deploy/fake-llm` 真实启动 `pi --mode rpc`（无扩展 / entry / worker 三种），把捕获的 stdout 喂给
