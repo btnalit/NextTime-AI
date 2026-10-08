@@ -6,6 +6,7 @@ import { revokeSession } from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { ensureWorkerAgentPrincipal } from './agent-principal.js';
+import type { LoadedSkillRef } from './definition-content.js';
 import {
   type MintWorkerRunHandleInput,
   type ParentAuthority,
@@ -67,6 +68,11 @@ export interface SpawnWorkerRunInput {
    *  else about the retry (capabilities/gates/authority) still comes from the failed WorkerRun's
    *  own already-granted Handle scope, never re-derived. */
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
+  /** S10 E1: the Skill versions `skillsInline` was rendered from (`definition-content.ts`'s
+   *  `resolveSkillsInline`, same caller-resolved convention). Written to `worker_run_skills` in the
+   *  transaction that creates the WorkerRun, which is also marked `skills_recorded` — so a run's
+   *  Skill record exists exactly when the run does. Omitted = none loaded (still recorded). */
+  readonly loadedSkills?: readonly LoadedSkillRef[];
   /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`
    *  (`definition-content.ts`'s `WorkerDefinitionContentShape`), resolved by the caller
    *  (`invoke.ts`'s initial spawn, `lifecycle.ts`'s requeue — same convention `model`/
@@ -141,9 +147,10 @@ export async function spawnWorkerRun(
 
       const workerRunResult = await client.query(
         `insert into worker_runs (
-           workspace_id, status, task_id, parent_worker_run_id, depth, attempt, agent_principal_id
+           workspace_id, status, task_id, parent_worker_run_id, depth, attempt, agent_principal_id,
+           skills_recorded
          )
-         values ($1, 'provisioning', $2, $3, $4, $5, $6)
+         values ($1, 'provisioning', $2, $3, $4, $5, $6, true)
          returning ${WORKER_RUN_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -157,6 +164,23 @@ export async function spawnWorkerRun(
       const row = workerRunResult.rows[0];
       if (!row) throw new Error('spawnWorkerRun: worker_runs INSERT ... RETURNING produced no row');
       let workerRun = mapWorkerRunRow(row);
+
+      // S10 E1 (`WorkerRun loaded SkillVersion`, migrations/worker/0004): what this run mounts,
+      // in the same transaction as the run itself.
+      const loadedSkills = input.loadedSkills ?? [];
+      if (loadedSkills.length > 0) {
+        await client.query(
+          `insert into worker_run_skills (workspace_id, worker_run_id, skill_id, skill_version)
+           select $1, $2, s.skill_id, s.skill_version
+           from unnest($3::uuid[], $4::int[]) as s(skill_id, skill_version)`,
+          [
+            workspaceId,
+            workerRun.id,
+            loadedSkills.map((skill) => skill.skillId),
+            loadedSkills.map((skill) => skill.version),
+          ],
+        );
+      }
 
       await recordWorkerRunTransition(client, workspaceId, {
         actorPrincipalId: input.onBehalfOf,

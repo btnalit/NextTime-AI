@@ -118,6 +118,11 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'invoke_worker',
   'request_connection',
   'record_decision',
+  // S10 E1 (docs/s10-evolution-plan-2026-10-04.md §5.3): the Turn's Procedure claim and a
+  // Procedure `verify` step's Task outcome. Entry-only — neither is in the Worker ceiling, so a
+  // Worker can never grade its own Task.
+  'record_procedure_followed',
+  'report_task_outcome',
   'explain',
   // S2.9: `list_allowed_operations`/`report_task_result` are WorkerRun-only in practice (a Worker
   // never has a Task/WorkerRun of its own to report on — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's

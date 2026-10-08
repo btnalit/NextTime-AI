@@ -3897,6 +3897,10 @@
           ],
           "type": "string"
         },
+        "reason": {
+          "maxLength": 500,
+          "type": "string"
+        },
         "version": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -5945,6 +5949,12 @@
               },
               "text": {
                 "type": "string"
+              },
+              "turnId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -5953,7 +5963,8 @@
               "text",
               "content",
               "createdAt",
-              "sequence"
+              "sequence",
+              "turnId"
             ],
             "type": "object"
           },
@@ -7297,6 +7308,66 @@
           "type": "string"
         },
         "input": {},
+        "objectiveOutcome": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "enum": [
+                    "requester",
+                    "agent_reported"
+                  ],
+                  "type": "string"
+                },
+                "givenAt": {
+                  "type": "string"
+                },
+                "givenBy": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "enum": [
+                    "achieved",
+                    "not_achieved"
+                  ],
+                  "type": "string"
+                },
+                "previousOutcome": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "achieved",
+                        "not_achieved"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "maximum": 2,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "basis",
+                "outcome",
+                "givenBy",
+                "givenAt",
+                "revision",
+                "previousOutcome"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "onBehalfOf": {
           "type": "string"
         },
@@ -7321,6 +7392,165 @@
         },
         "tokensUsed": {
           "type": "number"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "chatId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "endedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "basis": {
+                          "enum": [
+                            "requester",
+                            "agent_reported"
+                          ],
+                          "type": "string"
+                        },
+                        "givenAt": {
+                          "type": "string"
+                        },
+                        "givenBy": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "achieved",
+                            "not_achieved"
+                          ],
+                          "type": "string"
+                        },
+                        "previousOutcome": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "achieved",
+                                "not_achieved"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "revision": {
+                          "maximum": 2,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "basis",
+                        "outcome",
+                        "givenBy",
+                        "givenAt",
+                        "revision",
+                        "previousOutcome"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "procedure": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "basis": {
+                          "const": "claimed",
+                          "type": "string"
+                        },
+                        "claimedAt": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "procedureId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "procedureId",
+                        "version",
+                        "name",
+                        "basis",
+                        "claimedAt"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "startedAt": {
+                  "type": "string"
+                },
+                "startedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "running",
+                    "completed",
+                    "interrupted",
+                    "failed"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "chatId",
+                "startedBy",
+                "status",
+                "startedAt",
+                "endedAt",
+                "procedure",
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "workerDefinitionId": {
           "type": "string"
@@ -7350,6 +7580,37 @@
               "id": {
                 "type": "string"
               },
+              "skills": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "skillId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "skillId",
+                        "version",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "startedAt": {
                 "type": "string"
               },
@@ -7376,7 +7637,8 @@
               "depth",
               "attempt",
               "startedAt",
-              "terminatedAt"
+              "terminatedAt",
+              "skills"
             ],
             "type": "object"
           },
@@ -7397,7 +7659,10 @@
         "completedAt",
         "failedAt",
         "cancelledAt",
-        "workerRuns"
+        "workerRuns",
+        "turnId",
+        "turn",
+        "objectiveOutcome"
       ],
       "type": "object"
     },
@@ -8934,6 +9199,201 @@
             "required": [
               "name",
               "mode"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_chat_turns",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chatId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "chatId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "outcome": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "basis": {
+                        "enum": [
+                          "requester",
+                          "agent_reported"
+                        ],
+                        "type": "string"
+                      },
+                      "givenAt": {
+                        "type": "string"
+                      },
+                      "givenBy": {
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "enum": [
+                          "achieved",
+                          "not_achieved"
+                        ],
+                        "type": "string"
+                      },
+                      "previousOutcome": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "achieved",
+                              "not_achieved"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 2,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "basis",
+                      "outcome",
+                      "givenBy",
+                      "givenAt",
+                      "revision",
+                      "previousOutcome"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "procedure": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "basis": {
+                        "const": "claimed",
+                        "type": "string"
+                      },
+                      "claimedAt": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "procedureId": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "procedureId",
+                      "version",
+                      "name",
+                      "basis",
+                      "claimedAt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "startedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "completed",
+                  "interrupted",
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "chatId",
+              "startedBy",
+              "status",
+              "startedAt",
+              "endedAt",
+              "procedure",
+              "outcome"
             ],
             "type": "object"
           },
@@ -11766,6 +12226,66 @@
                 "type": "string"
               },
               "input": {},
+              "objectiveOutcome": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "basis": {
+                        "enum": [
+                          "requester",
+                          "agent_reported"
+                        ],
+                        "type": "string"
+                      },
+                      "givenAt": {
+                        "type": "string"
+                      },
+                      "givenBy": {
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "enum": [
+                          "achieved",
+                          "not_achieved"
+                        ],
+                        "type": "string"
+                      },
+                      "previousOutcome": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "achieved",
+                              "not_achieved"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 2,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "basis",
+                      "outcome",
+                      "givenBy",
+                      "givenAt",
+                      "revision",
+                      "previousOutcome"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "onBehalfOf": {
                 "type": "string"
               },
@@ -11790,6 +12310,165 @@
               },
               "tokensUsed": {
                 "type": "number"
+              },
+              "turn": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "chatId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "endedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "basis": {
+                                "enum": [
+                                  "requester",
+                                  "agent_reported"
+                                ],
+                                "type": "string"
+                              },
+                              "givenAt": {
+                                "type": "string"
+                              },
+                              "givenBy": {
+                                "type": "string"
+                              },
+                              "outcome": {
+                                "enum": [
+                                  "achieved",
+                                  "not_achieved"
+                                ],
+                                "type": "string"
+                              },
+                              "previousOutcome": {
+                                "anyOf": [
+                                  {
+                                    "enum": [
+                                      "achieved",
+                                      "not_achieved"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "revision": {
+                                "maximum": 2,
+                                "minimum": 1,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "basis",
+                              "outcome",
+                              "givenBy",
+                              "givenAt",
+                              "revision",
+                              "previousOutcome"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "procedure": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "basis": {
+                                "const": "claimed",
+                                "type": "string"
+                              },
+                              "claimedAt": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "procedureId": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "exclusiveMinimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "procedureId",
+                              "version",
+                              "name",
+                              "basis",
+                              "claimedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "startedAt": {
+                        "type": "string"
+                      },
+                      "startedBy": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "running",
+                          "completed",
+                          "interrupted",
+                          "failed"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "chatId",
+                      "startedBy",
+                      "status",
+                      "startedAt",
+                      "endedAt",
+                      "procedure",
+                      "outcome"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "turnId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "workerDefinitionId": {
                 "type": "string"
@@ -11819,6 +12498,37 @@
                     "id": {
                       "type": "string"
                     },
+                    "skills": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "skillId": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "exclusiveMinimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "skillId",
+                              "version",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "startedAt": {
                       "type": "string"
                     },
@@ -11845,7 +12555,8 @@
                     "depth",
                     "attempt",
                     "startedAt",
-                    "terminatedAt"
+                    "terminatedAt",
+                    "skills"
                   ],
                   "type": "object"
                 },
@@ -11866,7 +12577,10 @@
               "completedAt",
               "failedAt",
               "cancelledAt",
-              "workerRuns"
+              "workerRuns",
+              "turnId",
+              "turn",
+              "objectiveOutcome"
             ],
             "type": "object"
           },
@@ -12701,6 +13415,183 @@
       "type": "object"
     },
     "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "mark_turn_outcome",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "enum": [
+            "achieved",
+            "not_achieved"
+          ],
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "enum": [
+                    "requester",
+                    "agent_reported"
+                  ],
+                  "type": "string"
+                },
+                "givenAt": {
+                  "type": "string"
+                },
+                "givenBy": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "enum": [
+                    "achieved",
+                    "not_achieved"
+                  ],
+                  "type": "string"
+                },
+                "previousOutcome": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "achieved",
+                        "not_achieved"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "maximum": 2,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "basis",
+                "outcome",
+                "givenBy",
+                "givenAt",
+                "revision",
+                "previousOutcome"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "procedure": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "const": "claimed",
+                  "type": "string"
+                },
+                "claimedAt": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "procedureId": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "procedureId",
+                "version",
+                "name",
+                "basis",
+                "claimedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "startedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "running",
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "chatId",
+        "startedBy",
+        "status",
+        "startedAt",
+        "endedAt",
+        "procedure",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -16027,6 +16918,64 @@
     "sideEffects": true
   },
   {
+    "channel": "handle",
+    "group": "task",
+    "minRole": "member",
+    "mode": "write",
+    "name": "record_procedure_followed",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "procedureId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "procedureId",
+        "version"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "const": "claimed",
+          "type": "string"
+        },
+        "claimedAt": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "procedureId": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "procedureId",
+        "version",
+        "name",
+        "basis",
+        "claimedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "connection",
     "minRole": "owner",
@@ -16558,6 +17507,90 @@
         "archivedAt",
         "lastActivityAt",
         "hasRunningTurn"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "handle",
+    "group": "task",
+    "minRole": "member",
+    "mode": "write",
+    "name": "report_task_outcome",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "enum": [
+            "achieved",
+            "not_achieved"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "requester",
+            "agent_reported"
+          ],
+          "type": "string"
+        },
+        "givenAt": {
+          "type": "string"
+        },
+        "givenBy": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "achieved",
+            "not_achieved"
+          ],
+          "type": "string"
+        },
+        "previousOutcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "achieved",
+                "not_achieved"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "maximum": 2,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "basis",
+        "outcome",
+        "givenBy",
+        "givenAt",
+        "revision",
+        "previousOutcome"
       ],
       "type": "object"
     },

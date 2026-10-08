@@ -63,6 +63,19 @@ export function readDefinitionContent(definition: unknown): WorkerDefinitionCont
   };
 }
 
+/** S10 E1: one Skill version a WorkerRun loads — written to `worker_run_skills` by `spawn.ts` in
+ *  the transaction that creates the run (migrations/worker/0004). */
+export interface LoadedSkillRef {
+  readonly skillId: string;
+  readonly version: number;
+}
+
+/** What `resolveSkillsInline` resolved: the mountable files, and which Skill versions they are. */
+export interface ResolvedRunSkills {
+  readonly skillsInline: readonly TaskSkillInlineMountInput[];
+  readonly loadedSkills: readonly LoadedSkillRef[];
+}
+
 /**
  * Resolves a WorkerDefinition's declared `skills[]` (id-or-name refs) to **published** Skill rows
  * and renders each into pi's on-disk `SKILL.md` format (S2.14 deliverable 4) — the payload
@@ -74,16 +87,23 @@ export function readDefinitionContent(definition: unknown): WorkerDefinitionCont
  * uses for a non-execute-class need the caller doesn't hold: a WorkerDefinition referencing a
  * Skill that was since deprecated (or never published) should not make every future
  * `invoke_worker`/requeue call fail.
+ *
+ * S10 E1: also returns the `id@version` of every Skill it mounted (`loadedSkills`), so the run
+ * records exactly what it loaded — a published Skill version is immutable (I12), so the version
+ * resolved here is the content the container gets.
  */
 export async function resolveSkillsInline(
   client: PoolClient,
   workspaceId: string,
   skillRefs: readonly string[],
-): Promise<readonly TaskSkillInlineMountInput[]> {
-  if (skillRefs.length === 0) return [];
+): Promise<ResolvedRunSkills> {
+  if (skillRefs.length === 0) return { skillsInline: [], loadedSkills: [] };
   const skills = await resolvePublishedSkills(client, workspaceId, skillRefs);
-  return skills.map((skill) => ({
-    name: skill.name,
-    files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
-  }));
+  return {
+    skillsInline: skills.map((skill) => ({
+      name: skill.name,
+      files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
+    })),
+    loadedSkills: skills.map((skill) => ({ skillId: skill.id, version: skill.version })),
+  };
 }

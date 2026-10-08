@@ -26,6 +26,7 @@ import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
+import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
@@ -383,16 +384,23 @@ function DiscardDraftConfirm({
 }: {
   readonly busy: boolean;
   readonly target: string;
-  readonly onConfirm: () => Promise<void>;
+  /** `reason` is the discarder's optional why (S10 E1 结果归因) — kept with the call's own
+   *  AuditRecord, `undefined` when left blank. */
+  readonly onConfirm: (reason: string | undefined) => Promise<void>;
   readonly testId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const reasonId = `${testId}-reason`;
   return (
     <Confirm
       tier="medium"
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setReason('');
+      }}
       anchor={
         <Button
           variant="ghost"
@@ -412,9 +420,11 @@ function DiscardDraftConfirm({
       target={target}
       confirmLabel={t('丢弃', 'Discard')}
       danger
-      onConfirm={onConfirm}
+      onConfirm={() => onConfirm(reason.trim() === '' ? undefined : reason.trim())}
       testId={testId}
-    />
+    >
+      <DiscardReasonField id={reasonId} value={reason} onChange={setReason} />
+    </Confirm>
   );
 }
 
@@ -973,7 +983,7 @@ function SkillDetailView({
   readonly onEditAsDraft: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
-  readonly onDiscard: () => Promise<void>;
+  readonly onDiscard: (reason: string | undefined) => Promise<void>;
 }) {
   const t = useT();
   // Best-effort read of the current version's full body — degrades to "—" on error/while loading
@@ -1132,10 +1142,15 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   // S8 W3 K2 (leftover 82): `discard_draft{kind, id, version}` — a different params shape from
   // `act` above (`{skillId}` alone), so it is its own function rather than a third `action` value.
-  async function discardSkillDraft(row: SkillRow): Promise<void> {
+  async function discardSkillDraft(row: SkillRow, reason?: string): Promise<void> {
     setBusy(row.id);
     try {
-      await http.call('discard_draft', { kind: 'skill', id: row.id, version: row.version });
+      await http.call('discard_draft', {
+        kind: 'skill',
+        id: row.id,
+        version: row.version,
+        ...(reason !== undefined ? { reason } : {}),
+      });
       toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
       selectRow(null);
       refresh();
@@ -1270,7 +1285,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_skill')}
       onDeprecate={() => act(selected, 'deprecate_skill')}
-      onDiscard={() => discardSkillDraft(selected)}
+      onDiscard={(reason) => discardSkillDraft(selected, reason)}
     />
   ) : (
     <SelectionPlaceholder
@@ -1326,7 +1341,7 @@ function ProcedureDetailView({
   readonly onEditAsDraft: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
-  readonly onDiscard: () => Promise<void>;
+  readonly onDiscard: (reason: string | undefined) => Promise<void>;
 }) {
   const t = useT();
   return (
@@ -1460,10 +1475,15 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   // S8 W3 K2 (leftover 82): `discard_draft{kind, id, version}` — a different params shape from
   // `act` above (`{procedureId}` alone), so it is its own function rather than a third `action`.
-  async function discardProcedureDraft(row: ProcedureRow): Promise<void> {
+  async function discardProcedureDraft(row: ProcedureRow, reason?: string): Promise<void> {
     setBusy(row.id);
     try {
-      await http.call('discard_draft', { kind: 'procedure', id: row.id, version: row.version });
+      await http.call('discard_draft', {
+        kind: 'procedure',
+        id: row.id,
+        version: row.version,
+        ...(reason !== undefined ? { reason } : {}),
+      });
       toast.push({ tone: 'ok', title: `${row.name} ${t('已丢弃', 'discarded')}` });
       selectRow(null);
       refresh();
@@ -1605,7 +1625,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}
       onDeprecate={() => act(selected, 'deprecate_procedure')}
-      onDiscard={() => discardProcedureDraft(selected)}
+      onDiscard={(reason) => discardProcedureDraft(selected, reason)}
     />
   ) : (
     <SelectionPlaceholder
@@ -1686,7 +1706,7 @@ function WorkerDetailView({
   readonly onEditAsNewVersion: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
-  readonly onDiscard: () => Promise<void>;
+  readonly onDiscard: (reason: string | undefined) => Promise<void>;
 }) {
   const t = useT();
   const name = workerLabel(row, t);
@@ -1862,13 +1882,14 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // S8 W3 K2 (leftover 82): discards one of the caller's own draft WorkerDefinition versions —
   // same catch-and-toast convention every other write in this tab already uses (never re-throws
   // into `Confirm`'s own inline error state, matching `deprecate`/`publishDraft` above).
-  async function discardWorkerDraft(row: WorkerDefinitionSummary): Promise<void> {
+  async function discardWorkerDraft(row: WorkerDefinitionSummary, reason?: string): Promise<void> {
     setBusy(workerKey(row));
     try {
       await http.call('discard_draft', {
         kind: 'worker_definition',
         id: row.id,
         version: row.version,
+        ...(reason !== undefined ? { reason } : {}),
       });
       toast.push({
         tone: 'ok',
@@ -2137,7 +2158,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => publishDraft(selected)}
       onDeprecate={() => deprecate(selected)}
-      onDiscard={() => discardWorkerDraft(selected)}
+      onDiscard={(reason) => discardWorkerDraft(selected, reason)}
     />
   ) : (
     <SelectionPlaceholder

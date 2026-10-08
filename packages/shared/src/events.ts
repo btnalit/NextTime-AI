@@ -208,6 +208,9 @@ const ChatMessageEvent = z.object({
     // type — a consumer that cares can re-validate with `SystemMessageContentSchema` itself.
     kind: z.string().optional(),
     content: z.record(z.string(), z.unknown()).optional(),
+    // S10 E1: the message's Turn (`ChatMessageWire.turnId`) — set by the producers that know it
+    // (agent replies, history replay); absent or `null` for a system card and the user's own push.
+    turnId: z.string().nullable().optional(),
   }),
 });
 

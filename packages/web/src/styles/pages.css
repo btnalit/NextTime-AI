@@ -472,6 +472,42 @@
   padding: 0 4px;
 }
 
+/* S10 E1 结果归因: the line under a finished Turn's last reply — the Procedure the agent said it
+ * followed (`.turn-outcome-basis` marks it as the agent's own claim) and the requester's outcome. */
+.turn-outcome {
+  align-self: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  max-width: 88%;
+  margin-top: -4px;
+  padding: 0 4px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+.turn-outcome-procedure,
+.turn-outcome-ask,
+.turn-outcome-given {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.turn-outcome-name {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.turn-outcome-basis {
+  padding: 0 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  line-height: 18px;
+}
+
 /* The assistant's own avatar + "入口 agent · time" row leads the body instead of trailing it
  * (console redesign P3-2, V3) — every other role keeps the trailing meta line below. */
 .message-meta-lead {

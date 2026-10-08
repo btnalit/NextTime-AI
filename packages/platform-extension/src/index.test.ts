@@ -103,7 +103,7 @@ describe('platformExtension() activation', () => {
 
     expect(() => platformExtension(pi)).not.toThrow();
 
-    expect(pi.registerTool).toHaveBeenCalledTimes(17);
+    expect(pi.registerTool).toHaveBeenCalledTimes(19);
     const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
     expect(registeredNames.slice(0, 5)).toEqual([
       'get_object',
@@ -219,7 +219,7 @@ describe('platformExtension() activation', () => {
     expect(() => platformExtension(fakePi())).not.toThrow();
   });
 
-  it('registers the same 17 capability tools as entry mode, no turn-id/report_turn wiring, with all env vars set', () => {
+  it('registers the 17 capability tools (entry mode minus the two Turn-attribution tools), no turn-id/report_turn wiring, with all env vars set', () => {
     for (const [key, value] of Object.entries(REQUIRED_INTERACTIVE_ENV)) process.env[key] = value;
     const pi = fakePi();
 

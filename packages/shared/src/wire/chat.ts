@@ -47,6 +47,9 @@ export const ChatMessageWireSchema = z
     kind: z.string().optional(),
     createdAt: z.string(),
     sequence: z.number(),
+    /** S10 E1: the Turn this message belongs to (`chat_messages.turn_id`) — `null` for a system
+     *  card. The console groups a Turn's reply under it to mark the Turn's objective outcome. */
+    turnId: z.string().nullable(),
   })
   .strict();
 export type ChatMessageWire = z.infer<typeof ChatMessageWireSchema>;
