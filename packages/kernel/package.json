@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.0",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@nexttime/gatekeeper-base": "workspace:*",
     "@nexttime/shared": "workspace:*",
     "fastify": "^5.12.5",

@@ -3541,6 +3541,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 触发：改动 `packages/kernel/migrations/**` 的 PR（BASE = 最新发布 tag）；`workflow_dispatch` 补历史。非必过检查。
 - 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
 - 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
+- 声明式有意改变（#482，2026-10-08 合入）：此前探针红只能在 PR 里口头解释。现在 BASE 套件以 JSON reporter 运行，`scripts/reversibility-triage.mjs` 给结论：有意改变旧断言的迁移在 `packages/kernel/migrations/reversibility-deltas.json` 声明（迁移、被改变的 BASE 测试、HEAD 里替代它的新断言、`release.md` §6 依据）；只有 HEAD 新增的迁移激活声明；声明的测试必须真的失败，替代断言必须是本 PR 新增（不在 BASE 结果里）且在 HEAD 通过，被声明的 BASE 测试文件必须在 HEAD 有改动；报告的失败数、BASE 退出码、至少一个通过、跳过不超过 5% 必须对得上；文件级错误与未处理错误都算失败。未声明的失败照旧红，没有整体跳过。单元测试 `scripts/reversibility-triage.test.mjs` 在 CI `quality` 里跑。
 
 ## 5h. S10 — 底座演进：可升级运行时 · 受治理的自进化 · 能力包（2026-10-04 立项，11 项决定全部落定）
 
@@ -3575,7 +3576,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 ### S10 实现说明
 
-**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**
+**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**（#477，2026-10-08 合入）
 
 - `substrate/ontology/namespace.ts`：`assertOntologyNamespace(client, workspaceId, candidateId, definition)` 拿候选定义与
   工作区内**其他每个族的最新已发布版本**比较（与 `loadPublishedLinkTypes` 判定写入时用的是同一口径），ObjectType 名、
@@ -3606,7 +3607,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 可逆性探针：`packages/kernel/migrations/reversibility-deltas.json` 声明 0041 有意改变、v0.42.0 套件里两个
   `write-confinement` 断言，由本 PR 的新断言替代（机制见 `runbooks/release.md` §6）。
 
-**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**
+**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**（#478，2026-10-08 合入）
 
 - L4-11 余项：四个 `security definer` 函数不再信任调用方给的 `p_workspace_id`。`find_active_fact_for_identity` /
   `latest_fact_invalidated_for_identity` 由图存储直接调用，参数不是 `app_workspace()` 时报 42501（不返回空——"没有活跃
@@ -3627,6 +3628,46 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 测试：`write-confinement.integration.test.ts` 新增 K4 三例（跨工作区调用两个直调函数报 42501、两个谓词答 false、
   `workspace_gate_links` 上存在 `(workspace_id, gatekeeper_object_id)` 唯一索引）并把该表 DELETE 列入已收回清单；`platform-gates.integration.test.ts`
   新增同一端点换 GATE_ID 后预览 / 启用都被拒、不落行、原实例重复启用仍幂等；web `EnableGateConfirm.test.tsx` 新增预览被拒的文案。
+
+**E1 — 结果归因（#480，2026-10-08 合入）**
+
+- **迁移只用 task / worker 模块，不碰 core**（开工时 main 最高：core 0040、task 0005、worker 0003）：
+  `task/0006_objective_outcome.sql`——`tasks` 加目标结果五列（`objective_outcome` / `outcome_given_by` /
+  `outcome_given_at` / `outcome_revision` / `outcome_previous`，CHECK 保证"全空，或第 1 版无前值，或第 2 版前值是另一值"），
+  `worker_runs.skills_recorded`（默认 false，旧行读作"未记录"），新表 `turn_outcomes`（Turn 级目标结果，同一 CHECK）；
+  `worker/0004_skill_procedure_attribution.sql`——`worker_run_skills`（FK 到 `skills(ws, id, version)`）与
+  `turn_procedure_claims`（FK 到 `procedures`），两表只授 `select, insert`（只追加）。均为工作区 RLS。
+- **三类记录的认知地位不同，读模型照实标出**：Skill 加载是内核在建 WorkerRun 的同一事务里写的（`spawn.ts`，
+  `resolveSkillsInline` 解析出的版本；重入队的新 run 重新记录），权威；Procedure 是入口 agent 自报，线上
+  `basis: 'claimed'`，界面标"agent 自报"，第一次声明为准（`on conflict do nothing`）；目标结果在 Turn 上由请求者
+  （`started_by`）给，在 Task 上由委派它的 agent 的 verify 步骤给（只限 `on_behalf_of` 是调用者的 Task、且已终态）。
+  目标结果与执行状态分开：`unknown`（无行 / 全空）→ `achieved | not_achieved`，同一给出者可更正一次（第 2 版，保留前值），
+  重复同值是 no-op，第三次 409；他人 403；进行中的 Turn / 未终态的 Task 409。线上 `ObjectiveOutcomeWire.basis` 区分判断来源——
+  Turn 为 `requester`，Task 为 `agent_reported`（入口 Handle 的 principal 就是用户本人，`givenBy` 因此是用户 id，
+  不靠 `basis` 就分不清"人的判断"与"agent 的上报"）；按主体推导，两种主体各只有一条写入路径，不改表。
+- **新能力**：`list_chat_turns`（human，观察，auditor 可读）、`mark_turn_outcome`（human，member）、
+  `record_procedure_followed`、`report_task_outcome`（entry Handle，进入入口天花板，不进 Worker 天花板）；`get_task` /
+  `list_tasks` 的 Task 线上形状加 `turnId` / `turn` / `objectiveOutcome`，WorkerRun 加 `skills`（`null` = 未记录）；
+  `chat.message` 加 `turnId`。`discard_draft` 加可选 `reason`（≤ 500 字），随调用自己的 AuditRecord 落库，不另建表。
+- **与方案的偏离**：方案写"`report_turn` 可选 `procedureRef`"。`report_turn` 是扩展在 `agent_settled` 时自己调用的，
+  模型看不到也传不了参数，所以改成模型可调用的 `record_procedure_followed(procedureId, version)`，归到调用者正在
+  运行的 Turn（与 `record_decision` 同一规则、同一 409）；只接受已发布的版本，草稿与不存在都是 404。
+- **遗留 123 两项**：嵌套 Worker 的 Task 没有 Turn 归属——已修，`invoke_worker` 由 WorkerRun 调用时继承根 Task 的
+  `created_by_activity_id`，不再取调用者此刻在跑的 Turn（`invoke.ts`）。`sources` 每个 WorkerRun 一行无上限增长——
+  **不在本批关**：每个写入的 WorkerRun 一个 Source 是遗留 16 认知语义要求的（Fact 溯源到具体的 run），增长与
+  `worker_runs` / `activities` 同阶；要收住需要 core 侧的保留 / 归档策略，按"只用 task / worker 迁移"的约束转给
+  core 车道（P0 / K4 之后）。
+- **入口 agent 的 prompt**：`ontology/entry-agent.yaml` 加了两件工具的用法（照已发布 Procedure 做时先声明；verify 步骤
+  报告 Task 结果）。只影响新建工作区的种子；已有工作区的入口定义仍是已发布的旧版本，要在控制台发新版本才会用上。
+- **界面**：对话里每个已结束 Turn 的最后一条回复下方一行——自报的 Procedure（标"agent 自报"）与请求者的
+  达成 / 未达成按钮，更正一次走 `medium` 确认；任务详情加"结果归因"一节（Task 目标结果、所属 Turn、流程、Turn 目标结果）
+  与 WorkerRun 的 Skill 列，旧数据一律显示"未记录"（与"无"区分）；目录与本体抽屉的丢弃确认加"丢弃原因（可选）"。
+- **已知缺口**：入口 agent 自己挂载的 Skill（agent-host 运行时加载）不记录，`worker_run_skills` 只覆盖 WorkerRun；
+  对话超过 500 个 Turn 时只有最新 500 个显示结果控件。
+- **验证**：`attribution.integration.test.ts`（真实 Postgres，10 例：加载记录与重入队、旧 run 为 `null`、弃用 Skill 不记、
+  嵌套 Task 继承根 Turn、Turn 结果的首标 / no-op / 更正 / 第三次 409 / 他人 403 / 进行中 409 / 不可见、DB CHECK、
+  Procedure 首声明为准与草稿拒绝、Task 结果的终态与归属）；内核全量（合入 main 后）180 文件 2142 例通过。主机侧：应用迁移、S1–S4、
+  真实模型回归待维护者主机执行。
 
 ## 6. 验收矩阵
 
