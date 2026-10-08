@@ -3631,7 +3631,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **E1 — 结果归因（#480，2026-10-08 合入）**
 
-- **迁移只用 task / worker 模块，不碰 core**（main 当时最高：core 0040、task 0005、worker 0003）：
+- **迁移只用 task / worker 模块，不碰 core**（开工时 main 最高：core 0040、task 0005、worker 0003）：
   `task/0006_objective_outcome.sql`——`tasks` 加目标结果五列（`objective_outcome` / `outcome_given_by` /
   `outcome_given_at` / `outcome_revision` / `outcome_previous`，CHECK 保证"全空，或第 1 版无前值，或第 2 版前值是另一值"），
   `worker_runs.skills_recorded`（默认 false，旧行读作"未记录"），新表 `turn_outcomes`（Turn 级目标结果，同一 CHECK）；
