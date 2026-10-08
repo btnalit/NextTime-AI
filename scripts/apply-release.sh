@@ -129,7 +129,15 @@ mkdir -p "$D/config/update-feed" && chown 10002:10002 "$D/config/update-feed" &&
 # a root-owned file makes every write fail, and egress-proxy then refuses those containers'
 # traffic as unknown sources. Older hosts have it root-owned (host-env-init.sh only set the owner
 # from v0.43.0), so the owner is set on every apply. A missing file is created as an empty map:
-# Docker would otherwise create a directory at the bind source. Same rule as host-env-init.sh.
+# Docker would otherwise create a directory at the bind source — and one an earlier `up` already
+# created is removed first (same as backups/last-success above); a non-empty one stops the apply,
+# since chown on it would "succeed" while every egress registration still failed.
+# Same rule as host-env-init.sh.
+if [ -d "$D/config/egress-sources.json" ]; then
+  rmdir "$D/config/egress-sources.json" 2>/dev/null &&
+    echo "STEP egress-sources removed an empty directory in place of config/egress-sources.json" ||
+    { echo "STEP egress-sources config/egress-sources.json is a non-empty directory — move it aside by hand"; fail egress-sources; }
+fi
 if [ ! -e "$D/config/egress-sources.json" ]; then
   echo "{}" >"$D/config/egress-sources.json"
 fi

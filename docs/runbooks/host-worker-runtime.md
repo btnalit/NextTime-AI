@@ -925,7 +925,8 @@ docker compose logs worker-supervisor --since 30s | grep "docker events subscrip
   `workers` 网络里，这个选项不等于 `docker run --network host`。
 - **补偿控制**：出网白名单仍然有效。`workers` 网络不直连外网，所有出站都必须经 `egress-proxy`；
   `egress-proxy` 只放行在 `config/egress-sources.json` 里登记过的来源，未登记一律按
-  unknown-source 拒绝（§4、§15）。该文件的属主由 `host-env-init.sh` / `apply-release.sh` 保证
+  unknown-source 拒绝（§4、§15）。这一条依赖 `EGRESS_DENY_UNKNOWN_SOURCE=1`（compose 默认值；
+  `.env` 里设成 `0` 会放行未登记来源，补偿控制随之失效，不要这样设）。该文件的属主由 `host-env-init.sh` / `apply-release.sh` 保证
   （v0.43.0 起）。
 - **决定**：维护者 victor，2026-10-08，保持现状，作为已接受风险。不改运行时配置。
 - **重新评估的时机**：gVisor netstack 能解析内嵌 DNS（升级 gVisor 后复测），或者改为给容器显式配置
