@@ -1,9 +1,9 @@
 #!/bin/sh
 # staging-rehearsal.sh — rehearse one release apply end to end on a disposable Docker host: put the
 # previous release on it the way the production host runs it (published images, the host-init
-# scripts, the operator's one-time seeding), then apply the target with that release's own
-# scripts/apply-release.sh — S3 → S1 → S2 → S4 included — and optionally the real-model
-# regression (docs/runbooks/host-accept-real-model.md). It is the cloud stand-in for "apply on the
+# scripts, the operator's one-time seeding), then apply the target through release.md §3's only
+# entry — the target's own scripts/apply-release.sh, taken with `git show`; S3 → S1 → S2 → S4
+# included — and optionally the real-model regression (docs/runbooks/host-accept-real-model.md). It is the cloud stand-in for "apply on the
 # host and accept there" ahead of the host apply; it never replaces the host apply itself
 # (docs/runbooks/staging-rehearsal.md says what stays host-only).
 #
@@ -286,8 +286,13 @@ if [ "$seed" -eq 1 ]; then
   step "baseline done failures=$base_fail"
 fi
 
-# 10. the apply itself — the --from release's apply-release.sh, as the production host runs it.
-APPLY_LOG_DIR="$LOGS" sh scripts/apply-release.sh $pull_flag "$TO_TAG" </dev/null >/dev/null 2>&1
+# 10. the apply itself, through docs/runbooks/release.md §3's only entry: the TARGET's own
+#     apply-release.sh, copied out with `git show` (the checkout still sits on --from, whose copy
+#     would run the old flow and skip every step the target added), run from the checkout root.
+apply_script="$WORK/apply-release-$TO_TAG.sh"
+git show "$TO_TAG:scripts/apply-release.sh" >"$apply_script" || fail apply "git show $TO_TAG:scripts/apply-release.sh"
+step "apply via $TO_TAG:scripts/apply-release.sh (release.md §3)"
+APPLY_LOG_DIR="$LOGS" sh "$apply_script" $pull_flag "$TO_TAG" </dev/null >/dev/null 2>&1
 apply_log=$(ls -t "$LOGS"/apply-"$TO_TAG"-*Z.log 2>/dev/null | head -n 1)
 [ -n "$apply_log" ] || fail apply "apply-release.sh wrote no log"
 grep -E '^(STEP|FAIL|RESULT)' "$apply_log" | grep -vE '^STEP (pull|backup-freshness) ' | sed 's/^/STEP apply | /'

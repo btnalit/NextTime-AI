@@ -3,8 +3,9 @@ name: staging
 # Release rehearsal on a throwaway GitHub-hosted runner (docs/runbooks/staging-rehearsal.md):
 # scripts/staging-rehearsal.sh installs the previous release from its published images exactly the
 # way the production host runs it, seeds the operator's one-time state, runs that release's own
-# S3/S1/S2/S4 as a baseline, then applies the target with that release's scripts/apply-release.sh
-# (which runs the target's S3 → S1 → S2 → S4). A green run means "this commit applies on top of
+# S3/S1/S2/S4 as a baseline, then applies the target through docs/runbooks/release.md §3's only
+# entry — the target's own scripts/apply-release.sh, taken with `git show` (it runs the target's
+# S3 → S1 → S2 → S4). A green run means "this commit applies on top of
 # what production runs today and passes the acceptance suites there"; the production apply and its
 # own acceptance stay on the host (the runbook lists what this cannot reproduce).
 #

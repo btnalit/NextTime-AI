@@ -25,7 +25,7 @@
 | 迁移 | `migrate.js` | 同 |
 | 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
-| apply | **`--from` 版本自己的** `apply-release.sh [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | 同一个脚本 |
+| apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
 | 真实模型（可选） | 写入 providers yaml + key env → 重建 llm-proxy → `gen-models` → `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
 
 staging overlay（写在数据目录 `staging/docker-compose.staging.yml`，不在检出里，所以对 from / to
