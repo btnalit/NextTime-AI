@@ -205,8 +205,11 @@ out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js cre
 WS=$(printf '%s\n' "$out" | sed -n 's/^workspace created: //p')
 OWNER=$(printf '%s\n' "$out" | sed -n 's/^owner principal: *//p')
 [ -n "$WS" ] && [ -n "$OWNER" ] || fail seed-workspace "$(printf '%s' "$out" | tail -n 5)"
+# The operator drops the pack into config/ontology/ first (docs/runbooks/add-domain-pack.md) —
+# seed-domain-pack and accept_s3.sh's own seed step both read it from there, not from the image.
 for f in ops-assets-v1.yaml ops-assets-v2.yaml; do
   [ -f "ontology/$f" ] || continue
+  install -m 644 "ontology/$f" "$D/config/ontology/$f" || fail seed-domain-pack "copy $f into config/ontology"
   docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js seed-domain-pack \
     --workspace "$WS" --principal "$OWNER" --pack-name ops-assets --file-name "$f" </dev/null >>"$LOGS/seed.log" 2>&1 ||
     fail seed-domain-pack "$f — see $LOGS/seed.log"
