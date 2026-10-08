@@ -18,7 +18,7 @@
 -- (revision 1 → 2, to the other value), the correction is audited through the capability call's
 -- own AuditRecord and `previous_outcome` keeps what it was. Who may give it and that a correction
 -- comes from the same giver are enforced in the one write path of each (application/task
--- `objective-outcome.ts`, a guarded UPDATE); the CHECKs below make the shapes that path never
+-- `attribution.ts`, a guarded UPDATE); the CHECKs below make the shapes that path never
 -- writes unrepresentable.
 --
 -- `worker_runs.skills_recorded`: `worker_run_skills` (worker/0004) has no row both for a run that

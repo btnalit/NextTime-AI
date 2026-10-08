@@ -29,7 +29,15 @@ import { readTaskRow } from './lifecycle.js';
 // Records
 // -------------------------------------------------------------------------------------------
 
+/** Who the outcome is the judgement of — derived from the subject, never stored: a Turn's outcome
+ *  has one write path, the requester's own `mark_turn_outcome` (human channel); a Task's has one,
+ *  the delegating entry agent's `report_task_outcome` (Handle channel). `givenBy` is a principal
+ *  either way — for `agent_reported` the human the agent acts on behalf of, not the human's
+ *  own judgement. */
+export type ObjectiveOutcomeBasis = 'requester' | 'agent_reported';
+
 export interface ObjectiveOutcomeRecord {
+  readonly basis: ObjectiveOutcomeBasis;
   readonly outcome: ObjectiveOutcome;
   readonly givenBy: string;
   readonly givenAt: Date;
@@ -122,9 +130,13 @@ interface OutcomeDbRow {
   previous_outcome: ObjectiveOutcome | null;
 }
 
-function mapOutcome(row: OutcomeDbRow): ObjectiveOutcomeRecord | null {
+function mapOutcome(
+  row: OutcomeDbRow,
+  basis: ObjectiveOutcomeBasis,
+): ObjectiveOutcomeRecord | null {
   if (row.outcome === null || row.given_by === null || row.given_at === null) return null;
   return {
+    basis,
     outcome: row.outcome,
     givenBy: row.given_by,
     givenAt: row.given_at,
@@ -177,7 +189,7 @@ function mapTurn(row: TurnDbRow): TurnAttributionRecord {
             claimedAt: row.claimed_at,
           }
         : null,
-    outcome: mapOutcome(row),
+    outcome: mapOutcome(row, 'requester'),
   };
 }
 
@@ -297,7 +309,7 @@ export async function markTurnOutcome(
      from turn_outcomes where workspace_id = $1 and turn_id = $2`,
     [workspaceId, turnId],
   );
-  const current = existing.rows[0] ? mapOutcome(existing.rows[0]) : null;
+  const current = existing.rows[0] ? mapOutcome(existing.rows[0], 'requester') : null;
   const step = decideOutcomeStep(current, principalId, outcome, `Turn ${turnId}`);
   if (step.kind === 'first') {
     await client.query(
@@ -410,7 +422,7 @@ export async function reportTaskOutcome(
       `Task ${taskId}: still ${row.status} — report its outcome once it has finished`,
     );
   }
-  const current = mapOutcome(row);
+  const current = mapOutcome(row, 'agent_reported');
   const step = decideOutcomeStep(current, principalId, outcome, `Task ${taskId}`);
   if (step.kind === 'unchanged' && current) return current;
 
@@ -435,7 +447,7 @@ export async function reportTaskOutcome(
       step.kind === 'correct' ? step.previous : null,
     ],
   );
-  const written = updated.rows[0] ? mapOutcome(updated.rows[0]) : null;
+  const written = updated.rows[0] ? mapOutcome(updated.rows[0], 'agent_reported') : null;
   if (!written) throw new Error('reportTaskOutcome: UPDATE ... RETURNING produced no row');
   return written;
 }
@@ -496,7 +508,7 @@ export async function readTaskAttributions(
        from tasks where workspace_id = $1 and id = any($2::uuid[])`,
       [workspaceId, tasks.map((task) => task.id)],
     );
-    for (const row of outcomes.rows) outcomeByTask.set(row.id, mapOutcome(row));
+    for (const row of outcomes.rows) outcomeByTask.set(row.id, mapOutcome(row, 'agent_reported'));
   }
 
   const turnIds = tasks

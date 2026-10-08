@@ -3586,7 +3586,9 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `basis: 'claimed'`，界面标"agent 自报"，第一次声明为准（`on conflict do nothing`）；目标结果在 Turn 上由请求者
   （`started_by`）给，在 Task 上由委派它的 agent 的 verify 步骤给（只限 `on_behalf_of` 是调用者的 Task、且已终态）。
   目标结果与执行状态分开：`unknown`（无行 / 全空）→ `achieved | not_achieved`，同一给出者可更正一次（第 2 版，保留前值），
-  重复同值是 no-op，第三次 409；他人 403；进行中的 Turn / 未终态的 Task 409。
+  重复同值是 no-op，第三次 409；他人 403；进行中的 Turn / 未终态的 Task 409。线上 `ObjectiveOutcomeWire.basis` 区分判断来源——
+  Turn 为 `requester`，Task 为 `agent_reported`（入口 Handle 的 principal 就是用户本人，`givenBy` 因此是用户 id，
+  不靠 `basis` 就分不清"人的判断"与"agent 的上报"）；按主体推导，两种主体各只有一条写入路径，不改表。
 - **新能力**：`list_chat_turns`（human，观察，auditor 可读）、`mark_turn_outcome`（human，member）、
   `record_procedure_followed`、`report_task_outcome`（entry Handle，进入入口天花板，不进 Worker 天花板）；`get_task` /
   `list_tasks` 的 Task 线上形状加 `turnId` / `turn` / `objectiveOutcome`，WorkerRun 加 `skills`（`null` = 未记录）；

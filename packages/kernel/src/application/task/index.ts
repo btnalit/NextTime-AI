@@ -136,6 +136,7 @@ export {
   DEFAULT_LIST_CHAT_TURNS_LIMIT,
   MAX_LIST_CHAT_TURNS_LIMIT,
   type ChatTurnsPage,
+  type ObjectiveOutcomeBasis,
   type ObjectiveOutcomeRecord,
   ObjectiveOutcomeConflictError,
   ObjectiveOutcomeForbiddenError,

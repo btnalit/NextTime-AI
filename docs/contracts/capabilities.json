@@ -7313,6 +7313,13 @@
             {
               "additionalProperties": false,
               "properties": {
+                "basis": {
+                  "enum": [
+                    "requester",
+                    "agent_reported"
+                  ],
+                  "type": "string"
+                },
                 "givenAt": {
                   "type": "string"
                 },
@@ -7347,6 +7354,7 @@
                 }
               },
               "required": [
+                "basis",
                 "outcome",
                 "givenBy",
                 "givenAt",
@@ -7410,6 +7418,13 @@
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "basis": {
+                          "enum": [
+                            "requester",
+                            "agent_reported"
+                          ],
+                          "type": "string"
+                        },
                         "givenAt": {
                           "type": "string"
                         },
@@ -7444,6 +7459,7 @@
                         }
                       },
                       "required": [
+                        "basis",
                         "outcome",
                         "givenBy",
                         "givenAt",
@@ -9258,6 +9274,13 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "basis": {
+                        "enum": [
+                          "requester",
+                          "agent_reported"
+                        ],
+                        "type": "string"
+                      },
                       "givenAt": {
                         "type": "string"
                       },
@@ -9292,6 +9315,7 @@
                       }
                     },
                     "required": [
+                      "basis",
                       "outcome",
                       "givenBy",
                       "givenAt",
@@ -12207,6 +12231,13 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "basis": {
+                        "enum": [
+                          "requester",
+                          "agent_reported"
+                        ],
+                        "type": "string"
+                      },
                       "givenAt": {
                         "type": "string"
                       },
@@ -12241,6 +12272,7 @@
                       }
                     },
                     "required": [
+                      "basis",
                       "outcome",
                       "givenBy",
                       "givenAt",
@@ -12304,6 +12336,13 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "basis": {
+                                "enum": [
+                                  "requester",
+                                  "agent_reported"
+                                ],
+                                "type": "string"
+                              },
                               "givenAt": {
                                 "type": "string"
                               },
@@ -12338,6 +12377,7 @@
                               }
                             },
                             "required": [
+                              "basis",
                               "outcome",
                               "givenBy",
                               "givenAt",
@@ -13428,6 +13468,13 @@
             {
               "additionalProperties": false,
               "properties": {
+                "basis": {
+                  "enum": [
+                    "requester",
+                    "agent_reported"
+                  ],
+                  "type": "string"
+                },
                 "givenAt": {
                   "type": "string"
                 },
@@ -13462,6 +13509,7 @@
                 }
               },
               "required": [
+                "basis",
                 "outcome",
                 "givenBy",
                 "givenAt",
@@ -17183,6 +17231,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "basis": {
+          "enum": [
+            "requester",
+            "agent_reported"
+          ],
+          "type": "string"
+        },
         "givenAt": {
           "type": "string"
         },
@@ -17217,6 +17272,7 @@
         }
       },
       "required": [
+        "basis",
         "outcome",
         "givenBy",
         "givenAt",

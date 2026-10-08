@@ -33,6 +33,7 @@ import { NoActiveTurnError, TurnNotFoundError } from './turn-errors.js';
 export function toWireObjectiveOutcome(record: ObjectiveOutcomeRecord | null) {
   if (!record) return null;
   return {
+    basis: record.basis,
     outcome: record.outcome,
     givenBy: record.givenBy,
     givenAt: record.givenAt.toISOString(),

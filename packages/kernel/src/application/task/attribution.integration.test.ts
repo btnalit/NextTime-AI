@@ -428,6 +428,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           markTurnOutcome(client, workspaceId, memberId, turnId, 'achieved'),
         );
         expect(first?.outcome).toMatchObject({
+          basis: 'requester',
           outcome: 'achieved',
           givenBy: memberId,
           revision: 1,
@@ -569,7 +570,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         const first = await inTx(ownerId, (client) =>
           reportTaskOutcome(client, workspaceId, ownerId, spawned.taskId, 'not_achieved'),
         );
-        expect(first).toMatchObject({ outcome: 'not_achieved', revision: 1, givenBy: ownerId });
+        // The giver is the principal the agent acts for; `basis` says it is the agent's report.
+        expect(first).toMatchObject({
+          basis: 'agent_reported',
+          outcome: 'not_achieved',
+          revision: 1,
+          givenBy: ownerId,
+        });
         const corrected = await inTx(ownerId, (client) =>
           reportTaskOutcome(client, workspaceId, ownerId, spawned.taskId, 'achieved'),
         );
@@ -602,10 +609,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           if (!task) throw new Error('task missing');
           return readTaskAttributions(client, workspaceId, [task], [spawned.workerRunId]);
         });
-        expect(attributions.outcomeByTask.get(spawned.taskId)?.outcome).toBe('achieved');
+        expect(attributions.outcomeByTask.get(spawned.taskId)).toMatchObject({
+          basis: 'agent_reported',
+          outcome: 'achieved',
+        });
         expect(attributions.turns.get(turnId)).toMatchObject({
           procedure: { procedureId, version: 1 },
-          outcome: { outcome: 'achieved', givenBy: ownerId },
+          outcome: { basis: 'requester', outcome: 'achieved', givenBy: ownerId },
         });
         expect(attributions.skillsByRun.get(spawned.workerRunId)).toEqual([
           expect.objectContaining({ skillId, version: 1 }),

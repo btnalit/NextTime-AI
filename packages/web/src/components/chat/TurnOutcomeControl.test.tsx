@@ -28,6 +28,7 @@ function setup(value: TurnAttributionWire, viewerId: string | null = 'p-me') {
     turn({
       ...previous,
       outcome: {
+        basis: 'requester',
         outcome,
         givenBy: 'p-me',
         givenAt: '2026-10-08T00:02:00.000Z',
@@ -97,6 +98,7 @@ describe('TurnOutcomeControl (S10 E1)', () => {
   it('offers one correction through a confirm, and none after it', async () => {
     const given = turn({
       outcome: {
+        basis: 'requester',
         outcome: 'achieved',
         givenBy: 'p-me',
         givenAt: '2026-10-08T00:02:00.000Z',
@@ -115,6 +117,7 @@ describe('TurnOutcomeControl (S10 E1)', () => {
     setup(
       turn({
         outcome: {
+          basis: 'requester',
           outcome: 'not_achieved',
           givenBy: 'p-me',
           givenAt: '2026-10-08T00:03:00.000Z',

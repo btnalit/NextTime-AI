@@ -400,18 +400,24 @@ function NotRecorded({ t }: { readonly t: Translate }) {
   return <span className="text-3">{t('未记录', 'Not recorded')}</span>;
 }
 
+/** Whose judgement an outcome is reads from the wire's own `basis`, never from where it sits on
+ *  the page: an agent's verify-step report is attributed to the agent acting for a person, not to
+ *  that person. */
 function OutcomeValue({
   outcome,
   principalNames,
-  basis,
   t,
 }: {
   readonly outcome: ObjectiveOutcomeWire | null | undefined;
   readonly principalNames: ReadonlyMap<string, string> | undefined;
-  readonly basis: string;
   readonly t: Translate;
 }) {
   if (!outcome) return <NotRecorded t={t} />;
+  const who = nameOf(principalNames, outcome.givenBy) ?? shortId(outcome.givenBy);
+  const source =
+    outcome.basis === 'agent_reported'
+      ? t(`agent 校验步骤上报（代表 ${who}）`, `reported by the agent's verify step (for ${who})`)
+      : t(`请求人 ${who} 判定`, `judged by the requester, ${who}`);
   const previous =
     outcome.revision === 2 && outcome.previousOutcome !== null
       ? outcome.previousOutcome === 'achieved'
@@ -419,10 +425,10 @@ function OutcomeValue({
         : t('未达成', 'not achieved')
       : null;
   return (
-    <span className="row-wrap">
+    <span className="row-wrap" data-testid="outcome-value" data-basis={outcome.basis}>
       <StatusChip machine="objectiveOutcome" status={outcome.outcome} size="s" />
       <span className="text-3 text-small">
-        {basis} · {nameOf(principalNames, outcome.givenBy) ?? shortId(outcome.givenBy)} ·{' '}
+        {source} ·{' '}
         <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt)}</time>
         {previous ? ` · ${t('已更正，原为', 'corrected from')} ${previous}` : null}
       </span>
@@ -467,14 +473,7 @@ function attributionRows(
     {
       key: 'taskOutcome',
       label: t('任务目标结果', 'Task outcome'),
-      value: (
-        <OutcomeValue
-          outcome={task.objectiveOutcome}
-          principalNames={principalNames}
-          basis={t('agent 校验', 'agent verify step')}
-          t={t}
-        />
-      ),
+      value: <OutcomeValue outcome={task.objectiveOutcome} principalNames={principalNames} t={t} />,
     },
     { key: 'turn', label: t('所属 Turn', 'Turn'), value: turnValue },
     {
@@ -503,14 +502,7 @@ function attributionRows(
     {
       key: 'turnOutcome',
       label: t('Turn 目标结果', 'Turn outcome'),
-      value: (
-        <OutcomeValue
-          outcome={turn?.outcome}
-          principalNames={principalNames}
-          basis={t('请求人', 'requester')}
-          t={t}
-        />
-      ),
+      value: <OutcomeValue outcome={turn?.outcome} principalNames={principalNames} t={t} />,
     },
   ];
 }

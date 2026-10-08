@@ -237,6 +237,7 @@ describe('TaskDetail', () => {
       renderDetail({
         turnId: 'turn-1',
         objectiveOutcome: {
+          basis: 'agent_reported',
           outcome: 'achieved',
           givenBy: 'p-1',
           givenAt: '2026-09-03T00:01:00.000Z',
@@ -275,13 +276,43 @@ describe('TaskDetail', () => {
       const section = screen.getByTestId('task-attribution');
       expect(within(section).getByText('达成')).toBeTruthy();
       expect(within(section).getByText(/已更正，原为 未达成/)).toBeTruthy();
-      expect(within(section).getByText(/Alice/)).toBeTruthy();
+      // An agent's verify-step report reads as the agent's, acting for Alice — not Alice's own call.
+      const taskOutcome = within(section).getByTestId('outcome-value');
+      expect(taskOutcome.getAttribute('data-basis')).toBe('agent_reported');
+      expect(taskOutcome.textContent).toContain('agent 校验步骤上报（代表 Alice）');
       expect(within(section).getByText('diagnose-flow v3')).toBeTruthy();
       expect(within(section).getByText('agent 自报')).toBeTruthy();
       expect(screen.getByTestId('task-turn-link').getAttribute('href')).toBe('#/work/chats/chat-1');
       // The Turn's own outcome: nobody marked it yet.
       expect(within(section).getAllByText('未记录')).toHaveLength(1);
       expect(screen.getByTestId('worker-run-skills').textContent).toBe('diagnose v2');
+    });
+
+    it("the Turn's outcome reads as the requester's own judgement", () => {
+      renderDetail({
+        turnId: 'turn-1',
+        turn: {
+          id: 'turn-1',
+          chatId: 'chat-1',
+          startedBy: 'p-1',
+          status: 'completed',
+          startedAt: '2026-09-03T00:00:00.000Z',
+          endedAt: '2026-09-03T00:02:00.000Z',
+          procedure: null,
+          outcome: {
+            basis: 'requester',
+            outcome: 'not_achieved',
+            givenBy: 'p-1',
+            givenAt: '2026-09-03T00:03:00.000Z',
+            revision: 1,
+            previousOutcome: null,
+          },
+        },
+      });
+      const values = screen.getAllByTestId('outcome-value');
+      expect(values).toHaveLength(1);
+      expect(values[0]?.getAttribute('data-basis')).toBe('requester');
+      expect(values[0]?.textContent).toContain('请求人 Alice 判定');
     });
 
     it('a run that loaded no Skill reads 无, not 未记录; a Turn in an invisible chat says so', () => {

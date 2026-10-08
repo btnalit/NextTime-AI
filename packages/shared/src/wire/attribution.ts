@@ -10,10 +10,20 @@ import { ObjectiveOutcomeSchema, TurnStatusSchema } from '../enums.js';
  * read the same ("未记录" / "unknown"), and a client never has to guess which.
  */
 
-/** An objective outcome on record — who gave it and when. `revision` 2 means the giver corrected
- *  it once (from `previousOutcome`); there is no third revision. */
+/** Whose judgement an outcome is: `requester` — the human who asked, on a Turn
+ *  (`mark_turn_outcome`); `agent_reported` — the delegating entry agent's verify step, on a Task
+ *  (`report_task_outcome`). Derived from the subject, which has exactly one write path each. */
+export const OBJECTIVE_OUTCOME_BASIS_VALUES = ['requester', 'agent_reported'] as const;
+export const ObjectiveOutcomeBasisSchema = z.enum(OBJECTIVE_OUTCOME_BASIS_VALUES);
+export type ObjectiveOutcomeBasis = z.infer<typeof ObjectiveOutcomeBasisSchema>;
+
+/** An objective outcome on record — whose judgement (`basis`), given by whom and when. For
+ *  `agent_reported`, `givenBy` is the principal the agent acted on behalf of — not that human's own
+ *  judgement. `revision` 2 means the giver corrected it once (from `previousOutcome`); there is no
+ *  third revision. */
 export const ObjectiveOutcomeWireSchema = z
   .object({
+    basis: ObjectiveOutcomeBasisSchema,
     outcome: ObjectiveOutcomeSchema,
     givenBy: z.string(),
     givenAt: z.string(),
