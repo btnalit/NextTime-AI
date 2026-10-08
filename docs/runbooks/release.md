@@ -28,6 +28,10 @@
    `CHANGELOG.md` 对应那一节。
 4. 平时不用管这个 PR——它会自己维护到最新状态。什么时候合并，是一个人的决定（"现在要不要切一个
    版本发出去"），不是自动的。
+5. **生产 apply 之前先预演（#488，v0.43.0 起）**：tag 出来后在 Actions → `staging` 手动 dispatch，`to` = 待应用的
+   tag（走 `--pull`，验签发布镜像），在一次性 runner 上从上一个发布版升上去并跑 S3→S1→S2→S4；需要真实模型回归时勾
+   `real_model`（`staging-real-model` environment，需审批、仅 main 触发）。步骤、成本上限与它复现不了的东西见
+   `docs/runbooks/staging-rehearsal.md`。预演绿了再按 §3 上生产主机。
 
 ## 2. 已知限制：release PR 不会自动触发 CI，合并前先手动踢一下
 
@@ -69,6 +73,8 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
 （`scripts/derive-internal-tokens.sh`），迁移的 `docker compose run` 因新 compose 文件引用的
 `secrets/internal-*-to-*.token` 不存在而失败，停在 `FAIL migrate`（`up` 之前，在跑的栈不受影响）。
 用 `git show` 取出目标 tag 的副本，流程永远属于被应用的那个版本。
+
+上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。

@@ -3709,6 +3709,29 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   （`AGENT_RUNTIME=fake`）与 vite 截图核对概览 / 运行层 / 运行状态的亮暗、1280 / 390 两档与五种状态；`update-feed` 脚本在
   钉住的镜像里以 uid 10002、只读根实测成功、404、超限、非 https 四条路径。主机步骤与四种状态的核对见 `runbooks/operations.md` §16。
 
+**云端预发（#488，2026-10-08 合入）**
+
+- `scripts/staging-rehearsal.sh` + `.github/workflows/staging.yml`：一次性 runner 上本地等价于 `drill-install.sh`（不走 SSH、镜像用
+  `pull-images.sh` 验签）+ 运营者一次性状态（工作区、`ops-assets` 域包、采集器 Handle、`config/egress-sources.json` 交给 uid 10001、
+  docker 门实例 enabled）+ 上一个发布版自己的验收作基线（失败重跑一次，显式 `STEP … RETRY`；apply 阶段从不重跑）+ 目标版本自己的
+  `apply-release.sh` 副本。非 tag 目标打本地不推送的 `vA.(B+1).0-staging.<sha>` tag，退出时删除；RagFlow 门经 staging overlay 移出默认 `up`。
+  `--disposable-host` 必填，拒绝在已有容器或非空工作目录的主机上跑。
+- 真实模型回归：`plan` job 在审批前把 from / to / sha / runs / 配额写进 run 名称和摘要，`real_model` 要求从 main 触发、`to` 只能是已发布 tag
+  或 main 上的提交；模型 id、供应商名、上游 URL、key 值全部 `::add-mask::`，上传的 artifact 先逐一 scrub。
+- 预演抓到的两个产品缺陷：`config/egress-sources.json` 属主（#491）、Turn 结束顺序竞态（#493）。预演脚本里的 chown 在 #491 后变成无害的重复。
+
+**Turn 结束顺序（#493，2026-10-08 合入）**
+
+- AgentHostRuntime 按 Turn 把 sink 调用串成一条链（`sinkInOrder`），兑现 `AgentRuntimeEventSink` "one event at a time, in emission order"；
+  不同 Turn 之间仍并发，`activeTurns` 与 accept wait 的簿记仍在帧到达时同步完成。
+- `endTurn` 只写、返回 `EndedTurn`，调用方在提交后调用 `publishTurnEnded`（event sink 在 `withWorkspace` 之后，`stop_agent` / `report_turn`
+  在 `afterCommit` 里）。
+- `report_turn` 在 `AgentRuntime.ownsTurnEnd` 为 true（Turn 仍在 `activeTurns` 或 sink 链上还有它的事件）时不结束 Turn，只记 summary、decisions
+  与 context ack；runtime 不认识的 Turn（FakeAgentRuntime、内核重启后）行为不变。`report_turn` 返回值契约不变（status 可能是 `running`）。
+- 回归测试先写、修复前稳定失败：`agent-host-runtime.test.ts`（gate 卡住 `message` 时 `turnEnded` 不进 sink）、`event-sink.test.ts`
+  （`update → commit → push:chat.metadata`）、`turn-terminal.integration.test.ts`（真实 Postgres：慢 `message`、`report_turn` 抢先两种场景）。
+  审查的非阻塞观察记为 STATUS 遗留 128–131。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
