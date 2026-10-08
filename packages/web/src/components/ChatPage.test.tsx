@@ -72,13 +72,15 @@ function fakeClient(
   };
 }
 
-/** The header's `ModelSwitcher` (profile/policy/catalog) and `useWorkspaceIdentity` (workspace
- *  name, console redesign P3-2) read these on mount; decision assertions look past them. */
+/** The header's `ModelSwitcher` (profile/policy/catalog), `useWorkspaceIdentity` (workspace
+ *  name, console redesign P3-2) and the per-Turn outcome line (`list_chat_turns`, S10 E1) read
+ *  these on mount; decision assertions look past them. */
 const HEADER_READS = new Set([
   'get_agent_profile',
   'get_agent_policy',
   'list_models',
   'get_workspace',
+  'list_chat_turns',
 ]);
 
 interface ScriptedHttp extends CapabilityCaller {
@@ -706,5 +708,52 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
       chatId: 'chat-1',
       title: 'Web-1 incident',
     });
+  });
+});
+
+describe('ChatPage per-Turn outcome (S10 E1)', () => {
+  it('puts the requester’s outcome control under the Turn’s last assistant reply only', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({
+        items: [
+          {
+            id: 'turn-1',
+            chatId: 'chat-1',
+            startedBy: 'p-me',
+            status: 'completed',
+            startedAt: '2026-10-08T00:00:00.000Z',
+            endedAt: '2026-10-08T00:01:00.000Z',
+            procedure: null,
+            outcome: null,
+          },
+        ],
+      }),
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    const message = (sequence: number, role: ChatMessage['role'], text: string): ChatMessage => ({
+      id: `m${sequence}`,
+      role,
+      text,
+      createdAt: '2026-10-08T00:00:00.000Z',
+      sequence,
+      turnId: 'turn-1',
+    });
+    act(() => {
+      fake.deliver(message(1, 'user', 'diagnose web'));
+      fake.deliver(message(2, 'assistant', 'looking'));
+      fake.deliver(message(3, 'assistant', 'root cause: disk full'));
+      fake.caughtUp();
+    });
+
+    const control = await screen.findByTestId('turn-outcome');
+    expect(screen.getAllByTestId('turn-outcome')).toHaveLength(1);
+    // Rendered right after the Turn's last reply, not after its first.
+    const thread = screen.getByTestId('chat-thread');
+    const nodes = Array.from(thread.children);
+    const lastReply = nodes.find((node) => node.textContent?.includes('root cause: disk full'));
+    expect(lastReply?.nextElementSibling).toBe(control);
   });
 });

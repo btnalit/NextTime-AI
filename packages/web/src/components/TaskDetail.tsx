@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import type { ObjectiveOutcomeWire, SkillLoadWire } from '@nexttime/shared';
+import { type ReactNode, useState } from 'react';
 import { auditHref } from '../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import {
@@ -78,6 +79,7 @@ export function TaskDetail({
   const runningRuns = task.workerRuns.filter((run) => run.terminatedAt === null).length;
   const tokensUsedText = task.tokensUsed.toLocaleString();
   const provenance = auditHref({ resourceType: 'task', resourceId: task.id });
+  const attributionItems = attributionRows(task, principalNames, t);
 
   const overviewItems: KeyValueItem[] = [
     {
@@ -216,6 +218,11 @@ export function TaskDetail({
         <KeyValue items={overviewItems} />
       </section>
 
+      <section className="stack-s" data-testid="task-attribution">
+        <span className="section-title">{t('结果归因', 'Attribution')}</span>
+        <KeyValue items={attributionItems} />
+      </section>
+
       {contract ? (
         <div className="stack-s">
           <span className="section-title">{t('结果', 'Result')}</span>
@@ -326,6 +333,7 @@ export function TaskDetail({
                 <TableHead>{t('状态', 'Status')}</TableHead>
                 <TableHead>{t('深度', 'Depth')}</TableHead>
                 <TableHead>{t('尝试', 'Attempt')}</TableHead>
+                <TableHead>Skill</TableHead>
                 <TableHead>{t('开始', 'Started')}</TableHead>
                 <TableHead>{t('用时', 'Duration')}</TableHead>
                 <TableHead>{t('溯源', 'Provenance')}</TableHead>
@@ -344,6 +352,9 @@ export function TaskDetail({
                   </TableCell>
                   <TableCell className="tabular">{run.depth}</TableCell>
                   <TableCell className="tabular">{run.attempt}</TableCell>
+                  <TableCell data-testid="worker-run-skills">
+                    <SkillLoads skills={run.skills} t={t} />
+                  </TableCell>
                   <TableCell>
                     <time title={formatDateTime(run.startedAt)}>
                       {formatRelative(run.startedAt)}
@@ -378,5 +389,141 @@ export function TaskDetail({
         />
       </div>
     </div>
+  );
+}
+
+type Translate = ReturnType<typeof useT>;
+
+/** Shown wherever a field was never written — an old row, or a Task started outside a Turn. Never
+ *  folded into "none": 未记录 says we do not know, "无" says we know it was empty. */
+function NotRecorded({ t }: { readonly t: Translate }) {
+  return <span className="text-3">{t('未记录', 'Not recorded')}</span>;
+}
+
+/** Whose judgement an outcome is reads from the wire's own `basis`, never from where it sits on
+ *  the page: an agent's verify-step report is attributed to the agent acting for a person, not to
+ *  that person. */
+function OutcomeValue({
+  outcome,
+  principalNames,
+  t,
+}: {
+  readonly outcome: ObjectiveOutcomeWire | null | undefined;
+  readonly principalNames: ReadonlyMap<string, string> | undefined;
+  readonly t: Translate;
+}) {
+  if (!outcome) return <NotRecorded t={t} />;
+  const who = nameOf(principalNames, outcome.givenBy) ?? shortId(outcome.givenBy);
+  const source =
+    outcome.basis === 'agent_reported'
+      ? t(`agent 校验步骤上报（代表 ${who}）`, `reported by the agent's verify step (for ${who})`)
+      : t(`请求人 ${who} 判定`, `judged by the requester, ${who}`);
+  const previous =
+    outcome.revision === 2 && outcome.previousOutcome !== null
+      ? outcome.previousOutcome === 'achieved'
+        ? t('达成', 'achieved')
+        : t('未达成', 'not achieved')
+      : null;
+  return (
+    <span className="row-wrap" data-testid="outcome-value" data-basis={outcome.basis}>
+      <StatusChip machine="objectiveOutcome" status={outcome.outcome} size="s" />
+      <span className="text-3 text-small">
+        {source} ·{' '}
+        <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt)}</time>
+        {previous ? ` · ${t('已更正，原为', 'corrected from')} ${previous}` : null}
+      </span>
+    </span>
+  );
+}
+
+/** S10 E1 结果归因 rows: the Task's own outcome (the delegating agent's verify step), its generating
+ *  Turn, the Procedure that Turn claimed, and the requester's outcome for the Turn. */
+function attributionRows(
+  task: TaskSummary,
+  principalNames: ReadonlyMap<string, string> | undefined,
+  t: Translate,
+): KeyValueItem[] {
+  const turn = task.turn ?? null;
+  let turnValue: ReactNode;
+  if (!task.turnId) turnValue = <NotRecorded t={t} />;
+  else if (turn === null)
+    turnValue = (
+      <span className="text-3">
+        <span className="mono">{shortId(task.turnId)}</span> ·{' '}
+        {t('所在对话对你不可见', 'in a chat you cannot see')}
+      </span>
+    );
+  else
+    turnValue = (
+      <span className="row-wrap">
+        {turn.chatId ? (
+          <a href={hrefs.chat(turn.chatId)} className="mono" data-testid="task-turn-link">
+            {shortId(turn.id)}
+          </a>
+        ) : (
+          <span className="mono">{shortId(turn.id)}</span>
+        )}
+        <span className="text-3 text-small">
+          <time title={formatDateTime(turn.startedAt)}>{formatRelative(turn.startedAt)}</time>
+        </span>
+      </span>
+    );
+  const procedure = turn?.procedure ?? null;
+  return [
+    {
+      key: 'taskOutcome',
+      label: t('任务目标结果', 'Task outcome'),
+      value: <OutcomeValue outcome={task.objectiveOutcome} principalNames={principalNames} t={t} />,
+    },
+    { key: 'turn', label: t('所属 Turn', 'Turn'), value: turnValue },
+    {
+      key: 'procedure',
+      label: t('流程', 'Procedure'),
+      value:
+        procedure === null ? (
+          <NotRecorded t={t} />
+        ) : (
+          <span className="row-wrap">
+            <span>
+              {procedure.name} v{procedure.version}
+            </span>
+            <span
+              className="turn-outcome-basis text-3 text-small"
+              title={t(
+                '入口 agent 自己报告的，内核没有核验它是否真的照做',
+                'Reported by the entry agent itself; the kernel did not verify it was followed',
+              )}
+            >
+              {t('agent 自报', 'agent-reported')}
+            </span>
+          </span>
+        ),
+    },
+    {
+      key: 'turnOutcome',
+      label: t('Turn 目标结果', 'Turn outcome'),
+      value: <OutcomeValue outcome={turn?.outcome} principalNames={principalNames} t={t} />,
+    },
+  ];
+}
+
+function SkillLoads({
+  skills,
+  t,
+}: {
+  readonly skills: readonly SkillLoadWire[] | null | undefined;
+  readonly t: Translate;
+}) {
+  if (skills === null || skills === undefined) return <NotRecorded t={t} />;
+  if (skills.length === 0) return <span className="text-3">{t('无', 'None')}</span>;
+  return (
+    <span className="text-small">
+      {skills.map((skill, index) => (
+        <span key={skill.skillId} title={skill.skillId} className="whitespace-nowrap">
+          {index > 0 ? ', ' : null}
+          {skill.name} v{skill.version}
+        </span>
+      ))}
+    </span>
   );
 }

@@ -191,6 +191,16 @@ export const TURN_STATUS_VALUES = ['running', 'completed', 'interrupted', 'faile
 export type TurnStatus = (typeof TURN_STATUS_VALUES)[number];
 export const TurnStatusSchema = asEnum(TURN_STATUS_VALUES);
 
+/**
+ * Objective outcome (S10 E1, docs/s10-evolution-plan-2026-10-04.md §3.4): "做对了吗", kept apart
+ * from the execution status above ("跑完了吗"). Only the two given values are stored; `unknown` is
+ * the absence of a record (`null` on the wire), the default for every Turn and Task. Lifecycle:
+ * `unknown → achieved | not_achieved`, correctable once by the same giver (migrations/task/0006).
+ */
+export const OBJECTIVE_OUTCOME_VALUES = ['achieved', 'not_achieved'] as const;
+export type ObjectiveOutcome = (typeof OBJECTIVE_OUTCOME_VALUES)[number];
+export const ObjectiveOutcomeSchema = asEnum(OBJECTIVE_OUTCOME_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

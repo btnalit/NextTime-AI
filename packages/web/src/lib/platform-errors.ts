@@ -134,6 +134,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '工作区里有不止一个门与该实例端点相同，无法确定关联哪一个；先在已注册系统里合并或清理重复的注册',
     en: 'More than one Gatekeeper in this workspace shares that endpoint — merge or clean up the duplicates in Registered systems first',
   },
+  // L4-13 (S10 K4): the existing Gatekeeper at this endpoint is already linked to another gate
+  // instance (the same endpoint redeployed under a new gate id). Nothing was written.
+  gatekeeper_already_linked: {
+    zh: '这个端点上已有的门已经关联到另一个平台门实例；一个门只能关联一个实例，本次没有写入任何内容。请先解除旧实例的关联',
+    en: 'The existing Gatekeeper at this endpoint is already linked to another platform gate instance — one Gatekeeper takes one instance, and nothing was written. Remove the old instance’s link first',
+  },
   // S8 W3-K1 (leftover 79, closing wave C6, G3): `refresh_operation_governance`'s target Gatekeeper
   // has no linked platform gate instance — the console only renders the "对齐" action when
   // `healthInfo.linked`, so this is defense-in-depth for the race (the link is removed between
