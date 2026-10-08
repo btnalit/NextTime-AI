@@ -28,6 +28,10 @@
    `CHANGELOG.md` 对应那一节。
 4. 平时不用管这个 PR——它会自己维护到最新状态。什么时候合并，是一个人的决定（"现在要不要切一个
    版本发出去"），不是自动的。
+5. **生产 apply 之前先预演（#488，v0.43.0 起）**：tag 出来后在 Actions → `staging` 手动 dispatch，`to` = 待应用的
+   tag（走 `--pull`，验签发布镜像），在一次性 runner 上从上一个发布版升上去并跑 S3→S1→S2→S4；需要真实模型回归时勾
+   `real_model`（`staging-real-model` environment，需审批、仅 main 触发）。步骤、成本上限与它复现不了的东西见
+   `docs/runbooks/staging-rehearsal.md`。预演绿了再按 §3 上生产主机。
 
 ## 2. 已知限制：release PR 不会自动触发 CI，合并前先手动踢一下
 
