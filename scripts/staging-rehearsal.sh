@@ -292,6 +292,14 @@ fi
 apply_script="$WORK/apply-release-$TO_TAG.sh"
 git show "$TO_TAG:scripts/apply-release.sh" >"$apply_script" || fail apply "git show $TO_TAG:scripts/apply-release.sh"
 step "apply via $TO_TAG:scripts/apply-release.sh (release.md §3)"
+# A target whose apply owns config/egress-sources.json's ownership (#491) gets the file back as a
+# fresh host-env-init.sh leaves it (root 0644), so that its own step — not the operator chown above,
+# which the --from baseline needed — is what the target's S1/S2 egress probes then prove.
+if grep -q 'STEP egress-sources' "$apply_script"; then
+  chown 0:0 "$D/config/egress-sources.json" && chmod 644 "$D/config/egress-sources.json" ||
+    fail apply "reset config/egress-sources.json to root before the apply"
+  step "egress-sources reset to root 0644 — the target's apply-release.sh must hand it to uid 10001"
+fi
 APPLY_LOG_DIR="$LOGS" sh "$apply_script" $pull_flag "$TO_TAG" </dev/null >/dev/null 2>&1
 apply_log=$(ls -t "$LOGS"/apply-"$TO_TAG"-*Z.log 2>/dev/null | head -n 1)
 [ -n "$apply_log" ] || fail apply "apply-release.sh wrote no log"

@@ -126,4 +126,4 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 | `FAIL baseline …` | `--from` 版本在这台主机上就过不了验收——环境与生产不等价，预演结论不可信 | 读 `baseline-*.log`；确认是环境差异后可 `--allow-baseline-failures`，并在结论里写明 |
 | S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 而 runsc 用 gVisor 默认网络栈注册：它访问不到 Docker 内嵌 DNS（`127.0.0.11`，gVisor FAQ 列出的限制），入口容器解析不了 `kernel` / `llm-proxy` | 按生产主机的方式注册：`runsc install -- --network=host`（`daemon.json` 里 `runtimes.runsc.runtimeArgs=["--network=host"]`），workflow 已这样装 |
 | S3 `seed-domain-pack` 失败 | `config/ontology/` 里没有 `ops-assets-*.yaml` | 预演脚本已复制；主机上按 `add-domain-pack.md` 放入 |
-| S1/S2 egress 探针失败、egress-proxy 日志 `unknown-source` | `config/egress-sources.json` 是 `host-env-init.sh` 建的 root 文件，worker-supervisor（uid 10001）写不进入口容器的来源登记 | 预演脚本已 `chown 10001:10001`；新主机按 `host-worker-runtime.md` §4 做同一步 |
+| S1/S2 egress 探针失败、egress-proxy 日志 `unknown-source` | `config/egress-sources.json` 是 `host-env-init.sh` 建的 root 文件，worker-supervisor（uid 10001）写不进入口容器的来源登记 | 基线前预演脚本按 `host-worker-runtime.md` §4 `chown 10001:10001`（`--from` 版本需要）；若目标版本的 `apply-release.sh` 自己管这一步（`STEP egress-sources`，#491 起），apply 前把文件还原成 root 0644，由产品步骤负责、apply 后的验收来证明 |
