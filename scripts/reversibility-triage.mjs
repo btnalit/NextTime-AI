@@ -38,7 +38,7 @@
 // Pure helpers are exported for scripts/reversibility-triage.test.mjs (node --test).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -255,4 +255,11 @@ function main() {
   process.exit(problems.length > 0 ? 1 : 0);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+// Real paths on both sides: invoked through a symlinked checkout, a plain path comparison is false
+// and the verdict would silently never run (exit 0).
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
+  main();
+}
