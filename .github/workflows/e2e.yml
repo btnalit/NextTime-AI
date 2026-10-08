@@ -109,6 +109,27 @@ jobs:
           sudo cp config/llm-providers.fake.example.yaml "$NEXTTIME_DATA/config/llm-providers.yaml"
           echo 'FAKE_LLM_API_KEY=fake' | sudo tee -a "$NEXTTIME_DATA/secrets/llm-proxy.env" >/dev/null
 
+      # The bind-mounted files and directories a non-root service writes must be owned by that
+      # service's uid, or its writes fail silently (best-effort) — config/egress-sources.json was
+      # created root-owned for months, so worker-supervisor's egress registrations never landed and
+      # egress-proxy refused every worker as an unknown source. Checked after a first run and again
+      # after simulating an older host's root-owned file, so the re-run must heal it in place.
+      - name: Host data ownership (bind-mounted files written by non-root services)
+        run: |
+          set -euo pipefail
+          check() {
+            got=$(sudo stat -c '%u:%g %a' "$NEXTTIME_DATA/$1")
+            if [ "$got" != "$2" ]; then echo "::error::$1 is $got, expected $2" >&2; exit 1; fi
+            echo "ok $1 $got"
+          }
+          check config/egress-sources.json '10001:10001 644'
+          check config/update-feed '10002:10002 755'
+          sudo chown 0:0 "$NEXTTIME_DATA/config/egress-sources.json"
+          sudo chmod 600 "$NEXTTIME_DATA/config/egress-sources.json"
+          sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/host-env-init.sh >/dev/null
+          check config/egress-sources.json '10001:10001 644'
+          test "$(sudo cat "$NEXTTIME_DATA/config/egress-sources.json")" = '{}'
+
       - name: Build kernel/caddy/llm-proxy images
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
