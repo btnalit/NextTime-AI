@@ -3,7 +3,7 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
 import { chatMessageKind, chatMessageText, insertChatMessage } from './service.js';
-import { endTurn } from './turn-recovery.js';
+import { endTurn, publishTurnEnded } from './turn-recovery.js';
 
 /**
  * application/chat/event-sink: `createChatEventSink` implements `application/host-bridge`'s
@@ -113,12 +113,15 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           // Turn that already ended (a Stop, an accept timeout, the extension's `report_turn`), so
           // a late `completed` never overwrites `interrupted`/`failed`. When it does move the
           // Turn it also enqueues `TurnCompleted` and pushes `chat.metadata` (§13 "未完成 Turn 标
-          // interrupted；下一轮注入'上轮中断'" — how a connected client learns the Turn ended).
-          await withWorkspace(
+          // interrupted；下一轮注入'上轮中断'" — how a connected client learns the Turn ended),
+          // the push only once the transaction has committed, like `chat.message` above: a client
+          // told the Turn ended must find it ended, with its messages, when it reads history.
+          const ended = await withWorkspace(
             deps.pool,
             { workspaceId: event.workspaceId, principalId: event.principalId },
             (client) => endTurn(client, event.workspaceId, event.turnId, event.status),
           );
+          publishTurnEnded(ended);
           return;
         }
       }

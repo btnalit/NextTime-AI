@@ -17,6 +17,7 @@ import {
   getChatHistory,
   listChats,
   newChat,
+  publishTurnEnded,
   renameChat,
   requestTurnStop,
   requireChatAccess,
@@ -530,7 +531,18 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
     await requestTurnStop(client, workspaceId, running.id);
     const runtimeKnowsTurn = await agentRuntime?.stopTurn(running.id);
     if (runtimeKnowsTurn === false) {
-      await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
+      const ended = await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
+      // The `chat.metadata` push waits for this transaction's commit (turn-recovery.ts).
+      const result = { stopped: true };
+      return {
+        result,
+        resourceType: 'chat',
+        resourceId: chatId,
+        afterCommit: async () => {
+          publishTurnEnded(ended);
+          return result;
+        },
+      };
     }
   }
   return { result: { stopped: running !== null }, resourceType: 'chat', resourceId: chatId };
@@ -790,8 +802,20 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a
   // Turn that already ended (Stop, accept timeout, agent-host's own `turnEnded`) keeps its status,
   // one whose stop was requested ends `interrupted`, and the writer that moves it enqueues
-  // `TurnCompleted` and pushes `chat.metadata`.
-  await endTurn(client, workspaceId, turnId, 'completed');
+  // `TurnCompleted` and pushes `chat.metadata` (after the commit — `afterCommit` below).
+  //
+  // Turn-end ordering: a Turn the runtime is still carrying (`ownsTurnEnd` — agent-host has not
+  // reported it ended, or this kernel has not finished persisting what agent-host sent before its
+  // `turnEnded`) is NOT ended here. agent-host reports the Turn's messages and then its `turnEnded`
+  // on one ordered stream, and the runtime persists them in that order, so the Turn reaches its
+  // terminal status only after every assistant message the kernel received for it is committed.
+  // This call comes from the entry extension over a separate connection on the same `agent_settled`,
+  // and ending the Turn from here let a client see it `completed` before its answer was stored.
+  // The summary, decisions and context acknowledgement below are recorded either way.
+  const ended =
+    agentRuntime?.ownsTurnEnd?.(turnId) === true
+      ? undefined
+      : await endTurn(client, workspaceId, turnId, 'completed');
   const result = await client.query<{ id: string; status: string }>(
     `update activities
      set metadata = metadata || $3::jsonb
@@ -806,10 +830,19 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   // (`get_entry_context` leased them to it), so the next Turn does not see them again.
   await acknowledgeTurnContextItems(client, workspaceId, await currentPrincipalId(client), turnId);
 
+  const reported = { turnId: row.id, status: row.status };
   return {
-    result: { turnId: row.id, status: row.status },
+    result: reported,
     resourceType: 'activity',
     resourceId: turnId,
+    ...(ended
+      ? {
+          afterCommit: async () => {
+            publishTurnEnded(ended);
+            return reported;
+          },
+        }
+      : {}),
   };
 };
 
