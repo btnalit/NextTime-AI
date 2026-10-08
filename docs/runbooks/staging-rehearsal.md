@@ -44,6 +44,7 @@ PR 或 main push 改到发布路径（`packages/kernel/migrations/**`、`docker-
 `scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh`、
 `scripts/lib/**`、`deploy/accept/**`、本 workflow）时自动跑：from = 目标之下最新的 `vX.Y.Z`，
 to = PR 合并提交 / main 头，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
+同一 PR 的新推送会取消它上一轮；main push 排队、不互相取消；每次手动触发自成一组，不会被任何推送取消。
 
 ### 3.2 手动（workflow_dispatch）
 
@@ -78,7 +79,11 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
    - `STAGING_LLM_PROXY_ENV`：`KEY=VALUE` 行，键名即 yaml 里各 provider 的 `api_key_env`；
    - `STAGING_REAL_MODEL`：`<provider/model>`，必须是上面 yaml 生成的 `models.json` 里的 id。
-3. Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
+3. 从 **main** Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
+
+被测版本受限：`to` 只能是已发布的 `vX.Y.Z` tag 或已经在 main 上的提交（留空 = main 头），否则 `plan`
+job 直接失败，不进入审批。`plan` 不在 environment 里，先于审批跑完：run 名称与它的 job 摘要里写着
+from / to / 提交 sha / runs / 配额——审批人批的就是这一行；之后 `rehearsal` 开头再核对 sha，不一致就失败。
 
 成本上限：真实模型阶段开始前，脚本把内核自己的每工作区每日 token 配额 `LLM_DAILY_TOKEN_BUDGET` 设为
 `token_budget`（默认 3000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，
@@ -88,8 +93,9 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** 并打 warning，不会显示为通过；预演本身
 照常运行、照常判定。
 
-日志与 artifact 是公开的：workflow 对模型 id、它的两段、yaml 里的 provider 名与上游 URL 做
-`::add-mask::`，上传前对日志文件逐一替换成 `<redacted>`。读数规则同 `host-accept-real-model.md`
+日志与 artifact 是公开的：workflow 对模型 id、它的两段、yaml 里的 provider 名与上游 URL、
+`STAGING_LLM_PROXY_ENV` 里每个 ≥ 8 字符的值（即 API key 本身）做 `::add-mask::`，上传前对日志文件
+逐一替换成 `<redacted>`——GitHub 的 secret 打码只作用于 job 日志，不覆盖 artifact。读数规则同 `host-accept-real-model.md`
 §5（`REAL scenario=… ok=k/n`），计数记录规则同其 §6——供应商与模型名仍只进 `docs/private/`。
 
 ## 5. 仍然只能在生产主机上做的事
