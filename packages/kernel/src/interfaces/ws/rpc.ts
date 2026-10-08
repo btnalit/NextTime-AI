@@ -38,6 +38,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyNamespaceConflictError,
   OntologyViolationError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -319,6 +320,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // R-60 `publish_ontology_version`: mirrors HTTP 409 `ontology_base_moved` (capability-route.ts).
   if (err instanceof OntologyBaseMovedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // I-P1: mirrors HTTP 409 `ontology_namespace_conflict` (capability-route.ts).
+  if (err instanceof OntologyNamespaceConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S5.3 `register_source`: mirrors HTTP 409 `source_identity_conflict` (capability-route.ts).

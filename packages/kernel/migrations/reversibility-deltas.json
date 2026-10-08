@@ -1,0 +1,24 @@
+{
+  "deltas": [
+    {
+      "migration": "core/0041_drop_workspace_ontology_enforcement_allowance.sql",
+      "baseTests": [
+        {
+          "file": "src/adapters/db/write-confinement.integration.test.ts",
+          "fullName": "R-29 — database write confinement (integration, real Postgres) workspaces: read by every transaction, written by a platform transaction a workspace transaction cannot change its own workspace either (status, name, entry model)"
+        },
+        {
+          "file": "src/adapters/db/write-confinement.integration.test.ts",
+          "fullName": "R-29 — database write confinement (integration, real Postgres) workspaces: read by every transaction, written by a platform transaction compatibility allowance: a workspace transaction may still set its own ontology_enforcement (the previous release's suite does)"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/adapters/db/write-confinement.integration.test.ts",
+          "fullName": "R-29 — database write confinement (integration, real Postgres) workspaces: read by every transaction, written by a platform transaction a workspace transaction cannot change its own workspace either (status, name, entry model, ontology enforcement)"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, core 0041 row: 0041 drops 0035's compatibility allowance on purpose, so the workspace plane's UPDATE of its own row is now hidden by RLS (0 rows) instead of raised by the trigger, and setting its own ontology_enforcement no longer succeeds. No v0.42.0 product path used the allowance."
+    }
+  ]
+}

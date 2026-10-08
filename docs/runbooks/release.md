@@ -398,6 +398,42 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
 **不在本次范围**：worker / 入口容器的 `CAPABILITY_HANDLE` 仍以容器 env 传入（短时、按 scope 收窄的 Handle，
 不是 provider key），见 R-24 的后续项。
 
+### 3.7 本体类型名在工作区内唯一（I-P1，S10 P0，core 0041）
+
+**变化**：一个工作区里，ObjectType 名与 ActionType 名各自只能属于一个已发布的本体族（LinkType 仍可同名、签名累加）。
+`publish_ontology_version`、`install_module` / `upgrade_module` 与种子 / 领域包发布在发布前检查，撞名时拒绝
+（409 `ontology_namespace_conflict`，什么都不写），不再让按族 id 排序靠后的族静默覆盖另一个族的同名类型。
+core 0041 同时删掉 0035 给工作区事务留的 `ontology_enforcement` 兼容放行（产品路径从没用过）。
+
+**升级前只读预检**：已有的撞名不会被这次升级改动，但撞名的两个族此后都发不出新版本，所以先确认没有——在主机上：
+
+```bash
+docker compose exec -T postgres psql -U nexttime -d nexttime -c "
+begin transaction read only;
+with heads as (
+  select t.workspace_id, t.id, t.definition
+    from ontology_versions t
+   where t.status = 'published'
+     and t.version = (select max(t2.version) from ontology_versions t2
+                       where t2.workspace_id = t.workspace_id and t2.id = t.id
+                         and t2.status = 'published')),
+names as (
+  select workspace_id, id, 'object' as kind, e->>'name' as name
+    from heads, jsonb_array_elements(definition->'objectTypes') e
+  union all
+  select workspace_id, id, 'action', e->>'name'
+    from heads, jsonb_array_elements(coalesce(definition->'actionTypes', '[]'::jsonb)) e)
+select workspace_id, kind, name, array_agg(id order by id) as families
+  from names group by workspace_id, kind, name having count(*) > 1
+ order by workspace_id, kind, name;
+rollback;" </dev/null
+```
+
+（`</dev/null`：经 ssh 在脚本里跑时，不让 `docker compose exec` 吞掉后续命令的标准输入；本机直接跑无影响。）
+
+结果记 `docs/private/`；空表 = 没有要处理的。不为空时先别应用，把结果带回来单独评审迁移方案（把其中一个族的
+类型改名为新版本，旧版本保留可读——S10 方案 §8）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -459,6 +495,15 @@ schema 上跑它自己的 `accept_s1.sh`"）就是把这条判断从"读代码�
 schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) 已经应用过的迁移文件会以校验和不一致失败，
 这本身就是不可逆的信号。失败要分辨"真不兼容"与"旧测试断言了新迁移有意改变的约束"，结论写进下表。
 
+**有意变更的声明（2026-10-08 起，合并 main 须全部检查为绿）**：旧测试断言了新迁移有意改变的约束时，不再靠 PR
+评论解释红灯，而是在迁移所在的 PR 里给 `packages/kernel/migrations/reversibility-deltas.json` 加一条声明——
+哪个迁移（`<module>/NNNN_name.sql`）、v(n-1) 里哪几个测试（文件 + 完整名）、v(n) 里替代它们断言新行为的测试、
+指向下表那一行的理由——随迁移一起评审。`scripts/reversibility-triage.mjs` 用证据核对每条声明：v(n-1) 的套件仍然
+整套跑（不跳过任何测试）；每个失败都必须被"本 PR 新增的迁移"的声明覆盖（改动已发布的迁移不激活任何声明——那本身就是不可逆）；被声明的测试必须真的失败（不失败 =
+声明过期，要删）；每个替代测试必须是本 PR 新增或改名的（v(n-1) 的结果里不能有同名测试），并在 v(n) 里、同一个库上通过；被声明测试所在的文件必须被本 PR 改动过（证明旧断言确实被重新审视过）；报告必须对得上账——Vitest 自己数的失败数等于逐条列出的失败数，同名测试取最差结果，v(n-1) 的退出码与报告一致，至少通过一个测试、跳过不超过 5%（防止没设 `DATABASE_URL` 时整套集成测试被跳过而误判为绿）；测试文件级错误、未处理异常一律算失败。
+v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新测试之后，该条可以删）。没有被声明覆盖的失败仍然让
+探针保持红色，按"真不兼容"处理。
+
 | 版本 | 迁移 | 可逆？ | 依据 | 回退方式 |
 |---|---|---|---|---|
 | v0.10.1 | （无——本版本只有 kernel 的连接池错误处理修复，无 schema 变更） | 可逆（N/A） | 无迁移可回退 | 按 §3 切回上一个 tag 即可，无需 `restore.sh` |
@@ -489,6 +534,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.40.0 之后的下一版 | core `0039_provenance_lookup_indexes`（R-66 / L4-9）：只加四个索引——`observations (workspace_id, activity_id)`（`link_visible_to_caller` 的 Fact 可见性判定、`resolveFactOrigin`、指向 `activities` 的外键）、`observations (workspace_id, source_id, created_at)`（静默 Source 检查的 `max(created_at)`、观察窗口、指向 `sources` 的外键）、`links (workspace_id, last_observation_id) where last_observation_id is not null`（0026 的外键）、`activities (workspace_id, started_by, kind, created_at)`（`findAttributableTurn`、指向 `principals` 的外键）。不改数据、约束、授权，不加保留或删除策略（遗留 103 另行决定）。运行器每个文件一个事务，不能用 `concurrently`：普通 `create index` 对这三张表加 SHARE 锁直到文件提交，`apply-release.sh` 迁移时旧版本 kernel 仍在服务，采集写入、Fact 写入、Turn 记账在建索引期间排队（不报错）；主机上 `observations` 约 60 万行，预计合计不到一分钟 | 可逆 | 只加索引：任何语句的结果都不变，规划器只是多了更便宜的路径。读了 v0.40.0 对这三张表的读写：没有引用索引名、也没有依赖"没有索引"的路径；v0.40.0 的清除级联（`alter table … disable trigger`，R-65 之前的做法）在新 schema 上照常运行，外键检查反而更快 | 只需回退代码；若要连 schema 一起撤：`drop index observations_activity_idx, observations_source_idx, links_last_observation_id_idx, activities_started_by_idx`（不撤也无害，只多一点写入时的索引维护） |
 | v0.40.0 之后的下一版 | llm-usage `0002_usage_request_id`（R-67 / L6-13）：`llm_usage` 新增可空 `request_id`（uuid）——llm-proxy 为每个上游请求铸的用量标识，重放时不变；加部分唯一索引 `llm_usage_request_id_uidx (workspace_id, request_id) where request_id is not null`。0001 的唯一键 `(workspace_id, jti, started_at)` **保留**：同一 Handle 在同一毫秒开始的两个请求，后一个存在该毫秒内往后几微秒（不出这一毫秒，低于 llm-proxy 的测量精度）。没有 `request_id` 的记录（R-67 之前的 llm-proxy，只在滚动升级窗口里）照旧按 0001 的键去重。不回填、不改既有行 | 可逆 | 只加一列（可空、无默认值）和一个只覆盖非空行的部分唯一索引。读了 v0.40.0 的 `governance/llm-usage/service.ts`：插入是显式列清单，不写新列（恒为空，新索引不收录），`on conflict (workspace_id, jti, started_at)` 只能推断出一个**非部分**、恰好这三列的唯一索引——正因如此 0001 的键原样保留（删掉或改成部分索引，回退后旧代码的每次用量写入都会 42P10 失败）；新代码写入的行在这三列上也互不相同（微秒错位），所以旧代码的去重语义不变；读路径（日成本 / token 汇总、平台 30 天用量）都是显式列，不读新列。回退后旧代码回到"同一毫秒的并发请求被合并"（即 R-67 本身），新代码期间写入的行原样保留、照常计入汇总 | 只需回退代码；若要连 schema 一起撤：`drop index llm_usage_request_id_uidx; alter table llm_usage drop column request_id`（不撤也无害） |
 | v0.41.0 之后的下一版 | core `0040_audit_unattributed_observation_compaction`（遗留 103）：把 `audit_records_actor_shape` 里 0032 / 0036 的无操作者例外（`actor_user_id` 为空且 `payload -> 'attributedActor'` 是 JSON 布尔 `false`）再扩一个动作 `cli.observations_compacted`——`compact-observations --yes` 的平台审计行，`apply-release.sh` 无人值守地跑它时可能解析不出操作者；其余无操作者的平台行照旧拒绝。不改数据 | 可逆 | 只放宽（widening）：凡满足 0036 约束的行必然满足新约束，重新加约束校验既有行不会失败，无需回填。读了 v0.41.0：没有 `compact-observations`，也没有任何路径写 `cli.observations_compacted`，旧代码从不触发新加的合法分支；旧测试 `writer.test.ts` 断言的拒绝情形（其他动作、缺标记）在新约束下仍被拒。回退后压缩命令不存在（回退目标的 `apply-release.sh` 也不跑它），已写入的 `cli.observations_compacted` 行留在表里、旧代码的 `platform_audit_query` 照常列出；已删掉的观察行不随回退恢复——它们按规则本来就不被任何读者用到，要找回只能用压缩前那份 `BACKUP_NOW` dump | 只需回退代码；若要连 schema 一起撤：按 0036 的定义重建 `audit_records_actor_shape`（前提是先删掉无操作者的 `cli.observations_compacted` 行，否则重建失败；不撤也无害） |
+| v0.42.0 之后的下一版 | core `0041_drop_workspace_ontology_enforcement_allowance`（S10 P0，遗留 123 跟进）：删 0035 的 `workspaces_own_ontology_enforcement` 策略，`workspaces_block_workspace_plane_update` 去掉 `ontology_enforcement` 一列的例外——工作区事务改不了任何 `workspaces` 行（RLS 隐藏，0 行）。不改数据、不加列 | 可逆 | v0.42.0 的产品代码只在平台事务（`update_workspace`）或登录角色上写 `workspaces`，没有路径用过这条放行；v0.42.0 套件里依赖它的只有 `write-confinement.integration.test.ts` 的两个用例（"兼容放行"，以及"自己工作区的其他列被触发器报错拒绝"——现在是 RLS 隐藏、0 行而不是报错），它们断言的正是这次有意改变的约束，探针里这两个用例失败属"旧测试断言了新迁移有意改变的约束"；`ontology-guard` / `worker-result` 自 0035 起已改在登录角色上改该列 | 只需回退代码；若要连 schema 一起撤：按 0035 重建该策略与触发器函数 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
