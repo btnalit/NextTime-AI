@@ -3404,7 +3404,18 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: noParams,
     resultSchema: wire.PiDriftWireSchema,
     description:
-      'Whether the repo-pinned `pi.version`, the active runtime image’s own baked-in pi version, and the platform-extension version agree — reads a CI-produced static JSON (never a live npm/GitHub lookup); `status: "unknown"` when that file is not present in this deployment.',
+      'Whether the pi this release expects (`pi.version`, baked into the kernel image) and the pi in the active runtime image (its own version label) agree, plus that image’s platform-extension version — never a live npm/GitHub lookup; `status: "unknown"` when the kernel build carries no pi.version or the active image has no real version label. Whether upstream has a newer pi is `platform_updates`.',
+  },
+  {
+    name: 'platform_updates',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformUpdatesWireSchema,
+    description:
+      'S10 U1: what is newer than this deployment — newer platform releases (migrations crossed, breaking, the exact `apply-release.sh --pull` command, the rollback release) and the latest upstream pi with the nightly drift check’s verdict — read from the ReleaseChannel record the host’s update-feed service downloads (the kernel itself never goes online). Validates the file on every read (schema, 64 KiB cap); reports how fresh it is. Reminder only: nothing here upgrades anything.',
   },
   {
     name: 'platform_status',
@@ -3582,7 +3593,13 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'set_agent_profile',
   'get_agent_policy',
   'set_agent_policy',
-  // P-A1: the platform plane — never a Handle-scope member, never callable by a Principal at all.
+  // P-A1: the platform plane, plus a few workspace-scope members that belong next to it. The
+  // `scope: 'platform'` names here are never callable by a Principal at all (the gateway admits
+  // only a platform-admin console session); the workspace-scope ones — `list_available_gate_instances`,
+  // `enable_gate_instance`, `preview_gate_instance_enable`, `refresh_operation_governance`,
+  // `issue_service_handle`, `issue_gate_credential_token` — are a workspace's own connection and
+  // credential management, human-only for the same reason as the S3.11 names above. None is ever a
+  // Handle-scope member.
   ...[
     'platform_overview',
     'list_users',

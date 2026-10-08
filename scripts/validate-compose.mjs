@@ -191,3 +191,49 @@ if (typeof fixtureHostsRaw !== 'string' || fixtureHostsRaw.includes('$')) {
   }
   console.log(`kernel fixture allow-list (R-27): ${fixtureHostsRaw}`);
 }
+
+// S10 U1: `update-feed` is the one always-on service that reaches the internet on its own. It must
+// stay a dumb, credential-less fetch: digest-pinned image, no secrets, no Docker socket, read-only
+// root, no capabilities, its own uid, exactly its script plus its own output directory mounted,
+// and a network no other service joins.
+const feed = doc.services?.['update-feed'];
+if (!feed) {
+  console.error('MISSING service update-feed (S10 U1)');
+  process.exitCode = 1;
+} else {
+  const problems = [];
+  if (!/@sha256:[0-9a-f]{64}$/.test(String(feed.image ?? '')))
+    problems.push('image is not digest-pinned');
+  if ((feed.secrets ?? []).length > 0) problems.push('mounts secrets');
+  if (feed.read_only !== true) problems.push('root filesystem is not read_only');
+  if (!(feed.cap_drop ?? []).includes('ALL') || (feed.cap_add ?? []).length > 0) {
+    problems.push('capabilities not dropped');
+  }
+  if (feed.user !== '10002:10002') problems.push(`user is ${feed.user}, expected 10002:10002`);
+  const volumes = (feed.volumes ?? []).map(String);
+  const expectedVolumes = [
+    './deploy/update-feed/update-feed.sh:/update-feed.sh:ro',
+    '${NEXTTIME_DATA:?}/config/update-feed:/data/update-feed',
+  ];
+  if (JSON.stringify(volumes) !== JSON.stringify(expectedVolumes)) {
+    problems.push(`volumes are ${JSON.stringify(volumes)}`);
+  }
+  if (volumes.some((volume) => volume.includes('docker.sock')))
+    problems.push('mounts the Docker socket');
+  if (JSON.stringify(feed.networks) !== JSON.stringify(['update-feed'])) {
+    problems.push(`networks are ${JSON.stringify(feed.networks)}, expected only update-feed`);
+  }
+  for (const [name, service] of Object.entries(doc.services ?? {})) {
+    if (name !== 'update-feed' && (service.networks ?? []).includes('update-feed')) {
+      problems.push(`service ${name} joins the update-feed network`);
+    }
+  }
+  if (doc.networks?.['update-feed']?.internal === true) {
+    problems.push('the update-feed network is internal: it could not reach GitHub');
+  }
+  for (const problem of problems) {
+    console.error(`update-feed (S10 U1): ${problem}`);
+    process.exitCode = 1;
+  }
+  if (problems.length === 0) console.log('update-feed (S10 U1): isolated, credential-less fetch');
+}

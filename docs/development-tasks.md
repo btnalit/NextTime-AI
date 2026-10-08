@@ -1372,11 +1372,14 @@
   （每晚 + 手动，对 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 的 `@latest`
   跑 `@nexttime/platform-extension` 的 pi-SDK 相关测试，只在一次性 checkout 里改版本、从不
   提交；失败时开/更新单个 `pi-drift` label 的 issue，打印 pinned/latest 版本 diff；无
-  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；`.github/dependabot.yml`
+  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；~~`.github/dependabot.yml`
   （`packages/platform-extension` 的 npm 依赖按周检查，`@earendil-works/*` 分组为 `pi`，
-  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）。
-- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`/`dependabot.yml`
-  YAML 语法有效；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
+  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）~~——**已移除（#287，
+  2026-09-25 决定，遗留 126）**：该文件不存在也不恢复，npm 的 Dependabot 版本更新在 pnpm workspace 的
+  lockfile 上会失败，常规依赖升级不交给 bot、按收敛方案的波次手动做；pi 升级的"什么时候能升"只剩
+  `pi-drift.yml` 提醒。
+- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`
+  YAML 语法有效（~~`dependabot.yml`~~ 随上条移除）；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
   platform-extension test` 全绿。依赖：S1.5、S1.6。
 
 ---
@@ -1756,8 +1759,10 @@
     EdDSA JWT（`typ` 独立、`aud:'gate-host'`、`gate:<gateId>`、`obo:<存储槽>`、`sub:<用户>`、`exp` 5 分钟）；平台面
     签的 `obo` 固定为共享槽 `__shared__`（非 UUID，不可能撞 Principal），工作区面（connection 组、需本工作区已链接
     该实例）签 `obo:<principalId>`。Caddy 加 `handle_path /gate-host/* → gate-host:8083`；宿主用与 llm-proxy 相同的
-    `config/handle.pub` 验签，`POST /i/<gateId>/gate/connected-accounts` 接受既有 `gate_token`（内核路）或
-    `gate` 声明等于路径 gateId 的平台 JWT，存储键取 JWT 的 `obo` 而非请求体。内核从未见过凭证——这条路第一次
+    `config/handle.pub` 验签，`POST` / `DELETE /i/<gateId>/gate/connected-accounts` **只**认
+    `gate` 声明等于路径 gateId 的平台 JWT（最初写的是"也接受既有 `gate_token`"，审查后收紧：`gate_token` 是内核对每个门
+    都带的同一把共享密钥，接受它等于任何工作区 owner 经内核就能改写宿主实例的槽位，见下文宿主实现说明、独立审查条目 ① 与
+    `runbooks/host-gatekeepers.md` §14.3；其余 `/i/*` 路由仍只认 `gate_token`），存储键取 JWT 的 `obo` 而非请求体。内核从未见过凭证——这条路第一次
     做到"凭证不经内核"。两条反向校验入单测：内核 Handle 校验器拒绝这张 JWT（`typ` / 声明形状不同），宿主拒绝真
     Handle（`aud` 不同）。
   - 决定 ⑪：**宿主实例的共享凭证来自存储不来自环境变量**（`SharedEnvCredentialResolver` 服务不了 N 个实例）：
@@ -3572,6 +3577,40 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
+
+### U1 实现说明（2026-10-08，遗留 125 / 126 + 车道 D1）
+
+- **ReleaseChannel 记录**（`packages/shared/src/release-channel.ts`）：生产方与消费方共用一个 zod schema。`schema: 1`、
+  `platform.releases`（最多 50 条，每条：版本、发布时间、内置 pi、相对上一版新增的迁移 `core 0041` 形式、是否 breaking、
+  发版页链接）、`piUpstream`（上游最新、检查时间、SDK 套件 pass / fail、失败摘要、最早内置它的发版、运行链接）。每个字符串
+  都有格式或长度上限，链接只能是 GitHub 的发版页或 Actions 运行页；文件上限 64 KiB。与方案 §4.2 示例的差别：发版说明只给
+  链接 `notesUrl`、不带正文（伪造的记录最多误导提示，注入不了文字或外链）。
+- **CI**：`scripts/release-channel.mjs` 从 git 标签算出各发版的事实（`git show <tag>:pi.version`、两标签间新增的迁移文件、
+  CHANGELOG 该版本小节有无 `BREAKING`），用共享 schema 校验后才写文件；`.github/workflows/release-channel.yml` 下载上一份、
+  重算、上传到滚动的 `channel` 预发布（不动各版本 tag 的资产；`channel` 标签打在仓库根提交上，主机 `git describe --tags`
+  永远先找到 `vX.Y.Z`）。调用方两个：`release-please.yml` 在镜像发布成功之后（只更新平台半边，pi 半边沿用上一份；
+  `bundledIn` 每次重算），`pi-drift.yml` 每晚（写 pi 半边）。漂移检查成功路径：`latest ≠ pinned` 且通过时开 / 更新一个
+  `pi-upgrade-available` issue（不开 PR），`pi.version` 追上后自动关；无人消费的 `pi-drift.json` 产物删除。job 级
+  `concurrency: release-channel-feed` 保证两个调用方的读改写不交错。W1 不签名（方案 §4.2 ①）。
+- **主机 `update-feed`**（`deploy/update-feed/update-feed.sh`）：`curlimages/curl:8.22.0` 钉 digest，uid 10002、只读根、
+  `cap_drop: ALL`、无 secret、无 docker socket、只挂脚本与 `config/update-feed/`，独占一个非 internal 网络直连 GitHub
+  （不经 egress-proxy）。只用 https（含重定向）、60 s 超时、64 KiB 上限，写临时文件、成功才原子替换；失败保留上一份并
+  1 小时后重试，成功后 24 小时再取。目录由 `host-env-init.sh` 建成 10002 专属 0755（`apply-release.sh` 也补建）；内核经已有的
+  `config/` 只读挂载读 `/data/config/update-feed/channel.json`。`scripts/validate-compose.mjs` 把这些约束全部钉住。
+- **内核 `platform_updates`**（`application/platform/updates.ts`，platform 平面、observe）：每次读先查大小再按 schema 校验，
+  不合规 = `invalid`、不用其中任何字段；`feedFreshness` 取文件 mtime（最后一次成功下载）超 48 h 或记录 `generatedAt` 超 72 h
+  （CI 停写，例如定时工作流被 GitHub 停用）即 `stale`，陈旧记录照用。`platformUpdate` 按 `KERNEL_VERSION` 解析出的
+  `vX.Y.Z` 比较（`dev` 构建不判断"更新"），给出跨越的迁移（按应用顺序）、是否 breaking、准确命令
+  `sh scripts/apply-release.sh --pull vX.Y.Z` 与回滚目标；`piUpdate.state` 五态：`up_to_date` / `pending_release`（①）/
+  `incompatible`（②）/ `released`（③ 已有更新的平台发版内置它，提醒归平台发版）/ `unknown`。`pi_drift` 与它共用
+  `readPiVersions`。无迁移。
+- **控制台**：概览顶部 `UpdateReminder`（新发版：版本、内置 pi、迁移、breaking、发版说明、折叠的升级步骤与回滚目标；pi 待发版；
+  pi 不兼容；版本信息陈旧 / 异常），每条"知道了"按版本键存 localStorage（换版本或换状态再出现）；没有任何升级按钮（决定 2 / 3）。
+  「pi 运行时」卡片加「上游最新 pi」一行；运行状态页加「版本信息」块（`updateFeed` 状态机：fresh / stale / invalid / missing）。
+  W2 余项：侧栏提醒点、四版本并排。
+- **验证**：内核单测 16 条 + 集成 3 条（真库）、共享 schema 单测、脚本 `node --test` 6 条、web 单测；本地起真实内核
+  （`AGENT_RUNTIME=fake`）与 vite 截图核对概览 / 运行层 / 运行状态的亮暗、1280 / 390 两档与五种状态；`update-feed` 脚本在
+  钉住的镜像里以 uid 10002、只读根实测成功、404、超限、非 https 四条路径。主机验收见 PR 的主机步骤。
 
 ## 6. 验收矩阵
 

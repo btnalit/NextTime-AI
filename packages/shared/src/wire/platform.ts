@@ -5,6 +5,14 @@ import {
   PublishableStatusSchema,
   RoleSchema,
 } from '../enums.js';
+import {
+  MigrationRefSchema,
+  PiReleaseVersionSchema,
+  PiSdkSuiteResultSchema,
+  PlatformReleaseVersionSchema,
+  ReleaseChannelReleaseSchema,
+  ReleaseChannelUrlSchema,
+} from '../release-channel.js';
 
 /**
  * wire/platform: the platform-management plane's wire shapes (docs/platform-admin-design.md §5,
@@ -938,6 +946,105 @@ export const PiDriftWireSchema = z
   })
   .strict();
 export type PiDriftWire = z.infer<typeof PiDriftWireSchema>;
+
+/**
+ * `platform_updates` (S10 U1, docs/s10-evolution-plan-2026-10-04.md §4.2): what is newer than this
+ * deployment, read from the ReleaseChannel record (`release-channel.ts`) the host's `update-feed`
+ * service downloads — the kernel itself never goes online (E3).
+ *
+ * `feedFreshness` is about the downloaded file: `fresh` / `stale` by the file's modification time
+ * (the last successful download; `update-feed` never overwrites the file on a failed one) against
+ * `maxAgeHours`; `missing` when there is no file yet; `invalid` when the file is too large or does
+ * not match the schema — then nothing from it is used and `platformUpdate` is null. A `stale` file
+ * is still used: old version information is still information, and the console says how old.
+ */
+export const PlatformUpdateFeedStatusWireSchema = z.enum(['fresh', 'stale', 'missing', 'invalid']);
+export type PlatformUpdateFeedStatusWire = z.infer<typeof PlatformUpdateFeedStatusWireSchema>;
+
+export const PlatformUpdateFeedWireSchema = z
+  .object({
+    status: PlatformUpdateFeedStatusWireSchema,
+    /** The file's modification time — when `update-feed` last downloaded it. */
+    fetchedAt: z.string().nullable(),
+    /** The record's own `generatedAt` — when CI last wrote it. */
+    generatedAt: z.string().nullable(),
+    maxAgeHours: z.number().int().positive(),
+    /** Kernel-authored English for operators: the reason, or the age. */
+    detail: z.string(),
+  })
+  .strict();
+export type PlatformUpdateFeedWire = z.infer<typeof PlatformUpdateFeedWireSchema>;
+
+/**
+ * `platformUpdate`: the releases newer than the one this kernel reports. `currentVersion` is null
+ * for a build whose `KERNEL_VERSION` is not a release tag (`dev`, a hand build) — then `available`
+ * is false and `newerReleases` empty, because "newer" cannot be decided. `migrations` / `breaking`
+ * span every newer release (what applying `latestVersion` crosses), `applyCommand` is the one
+ * command a maintainer runs on the host (decisions 2 and 3: no in-console upgrade), and
+ * `rollbackVersion` is the release to go back to — the one running now.
+ */
+export const PlatformUpdateWireSchema = z
+  .object({
+    currentVersion: PlatformReleaseVersionSchema.nullable(),
+    latestVersion: PlatformReleaseVersionSchema.nullable(),
+    available: z.boolean(),
+    /** Newest first. */
+    newerReleases: z.array(ReleaseChannelReleaseSchema),
+    migrations: z.array(MigrationRefSchema),
+    breaking: z.boolean(),
+    notesUrl: ReleaseChannelUrlSchema.nullable(),
+    applyCommand: z.string().nullable(),
+    rollbackVersion: PlatformReleaseVersionSchema.nullable(),
+  })
+  .strict();
+export type PlatformUpdateWire = z.infer<typeof PlatformUpdateWireSchema>;
+
+/**
+ * `piUpdate.state` — the three reminders of plan §4.2 ⑤ plus the two quiet states:
+ * - `up_to_date`: upstream pi is not newer than the pi this release bundles;
+ * - `pending_release`: upstream is newer, the SDK suite passed, no platform release bundles it yet
+ *   (①, "兼容性初查通过，等待平台发版");
+ * - `incompatible`: upstream is newer and the SDK suite failed (②, "暂不可升");
+ * - `released`: a platform release newer than this one bundles it — the reminder is the platform
+ *   update (③), this state only says where the new pi comes from;
+ * - `unknown`: no usable record, or no pi version in this kernel build.
+ */
+export const PiUpdateStateWireSchema = z.enum([
+  'up_to_date',
+  'pending_release',
+  'incompatible',
+  'released',
+  'unknown',
+]);
+export type PiUpdateStateWire = z.infer<typeof PiUpdateStateWireSchema>;
+
+export const PiUpdateWireSchema = z
+  .object({
+    state: PiUpdateStateWireSchema,
+    /** The pi this release bundles (this kernel build's `pi.version`, as `pi_drift` reads it). */
+    bundledVersion: z.string().nullable(),
+    /** The pi in the active runtime image (its `ai.nexttime.pi-version` label), when readable. */
+    activeImageVersion: z.string().nullable(),
+    upstreamLatest: PiReleaseVersionSchema.nullable(),
+    sdkSuite: PiSdkSuiteResultSchema.nullable(),
+    failureSummary: z.string().nullable(),
+    bundledIn: PlatformReleaseVersionSchema.nullable(),
+    checkedAt: z.string().nullable(),
+    runUrl: ReleaseChannelUrlSchema.nullable(),
+  })
+  .strict();
+export type PiUpdateWire = z.infer<typeof PiUpdateWireSchema>;
+
+export const PlatformUpdatesWireSchema = z
+  .object({
+    /** null when the record is `missing` or `invalid`. */
+    platformUpdate: PlatformUpdateWireSchema.nullable(),
+    piUpdate: PiUpdateWireSchema,
+    feedFreshness: PlatformUpdateFeedWireSchema,
+    checkedAt: z.string(),
+  })
+  .strict();
+export type PlatformUpdatesWire = z.infer<typeof PlatformUpdatesWireSchema>;
 
 /** `platform_status` (E4): service health probes kernel actually performs (never a stand-in for
  *  the workspace-scoped `list_gate_instances` health, which is reused verbatim here), a 30-day

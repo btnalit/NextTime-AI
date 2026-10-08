@@ -398,6 +398,32 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
 **不在本次范围**：worker / 入口容器的 `CAPABILITY_HANDLE` 仍以容器 env 传入（短时、按 scope 收窄的 Handle，
 不是 provider key），见 R-24 的后续项。
 
+### 3.7 版本感知：`channel.json` 与 `update-feed`（S10 U1，遗留 126）
+
+**CI 侧**：每次发版的镜像发布成功后，`release-please.yml` 调 `.github/workflows/release-channel.yml`
+重算 ReleaseChannel 记录（最近 20 个发版各自内置的 pi、新增迁移、是否 breaking，加上游最新 pi 与漂移检查结论），
+上传到滚动的 `channel` 预发布（`…/releases/download/channel/channel.json`）；`pi-drift.yml` 每晚也调一次（只换 pi 半边）。
+`channel` 不是发版，永远不要从它安装；它的 tag 打在仓库根提交上，主机 `git describe --tags` 不受影响。
+
+**首次**：本节随某个发版第一次合入后，到 Actions → "release channel" → Run workflow 手动跑一次（或等当晚的
+pi-drift），`channel` 预发布才会出现；之前主机上的 `update-feed` 取不到文件，控制台显示"版本信息缺失"，不影响其它功能。
+
+**主机侧**：`update-feed` 是常驻服务（curl 镜像钉 digest、uid 10002、只读根、无凭证、独占网络），每 24 小时把
+`channel.json` 取到 `${NEXTTIME_DATA}/config/update-feed/`（失败保留上一份、1 小时后重试）；内核只读该文件，自己不出网。
+**第一次应用含它的发版前**先补目录（`apply-release.sh` 的自拷贝跑的是旧脚本，新版脚本里的补建要到下一次才生效）：
+
+```bash
+sh scripts/host-env-init.sh            # 幂等；或手工：
+# sudo mkdir -p "$NEXTTIME_DATA/config/update-feed" && sudo chown 10002:10002 "$NEXTTIME_DATA/config/update-feed" && sudo chmod 755 "$NEXTTIME_DATA/config/update-feed"
+```
+
+应用后核对：`docker compose logs --tail 20 update-feed` 有 `downloaded channel.json`；控制台运行状态页「版本信息」为"正常"。
+控制台只提醒、给出准确命令（`sh scripts/apply-release.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 可在 `.env`
+覆盖（fork 或镜像源），只接受 https。
+
+**回滚**：`docker compose stop update-feed`（或回退到上一版，compose 里不再有它，`docker compose up -d --remove-orphans`）；
+目录与文件留着无害。无 schema 变化。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

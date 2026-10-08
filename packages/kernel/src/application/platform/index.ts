@@ -59,6 +59,7 @@ export {
 export type { LlmAdminAuditEventInput } from './llm-admin-audit.js';
 export { recordLlmAdminAudit } from './llm-admin-audit.js';
 export { resolveActiveRuntimeImage } from './runtime.js';
+export { platformUpdatesHandler } from './updates.js';
 export {
   listRuntimeImagesHandler,
   piDriftHandler,

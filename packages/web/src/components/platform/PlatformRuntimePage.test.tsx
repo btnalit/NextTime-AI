@@ -11,6 +11,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { ToastProvider } from '../ui/Toast.js';
 import { PlatformRuntimePage } from './PlatformRuntimePage.js';
+import { piUpdate, platformUpdates } from './test-fixtures.js';
 
 afterEach(cleanup);
 
@@ -477,5 +478,70 @@ describe('PlatformRuntimePage', () => {
       expect(http.calls.some((c) => c.name === 'roll_entry_containers')).toBe(true),
     );
     expect(await screen.findByText(/已重建 1 个/)).toBeTruthy();
+  });
+
+  describe('S10 U1: the upstream pi row', () => {
+    const states = [
+      { state: 'up_to_date', text: '与本版一致', extra: {} },
+      { state: 'pending_release', text: '兼容性初查通过，等待平台发版', extra: {} },
+      { state: 'incompatible', text: '不兼容，暂不可升', extra: { sdkSuite: 'fail' } },
+      {
+        state: 'released',
+        text: '已由 v0.43.0 内置——升级平台即可获得',
+        extra: { bundledIn: 'v0.43.0' },
+      },
+      {
+        state: 'unknown',
+        text: '未取到上游版本信息',
+        extra: { upstreamLatest: null, checkedAt: null },
+      },
+    ] as const;
+
+    for (const { state, text, extra } of states) {
+      it(`${state}: shows the upstream version and "${text}"`, async () => {
+        const http = scriptedHttp({
+          runtime_inventory: () => inventory(),
+          pi_drift: () => piDrift({ status: 'consistent', pinnedPiVersion: '1.0.2' }),
+          list_workspaces: () => ({ items: [] }),
+          platform_updates: () =>
+            platformUpdates({ piUpdate: piUpdate({ state, upstreamLatest: '1.0.3', ...extra }) }),
+        });
+        renderPage(http);
+        const row = await screen.findByTestId('pi-runtime-upstream');
+        await waitFor(() =>
+          expect(within(row).getByTestId('pi-runtime-upstream-state').textContent).toBe(text),
+        );
+        expect(
+          within(row).getByTestId('pi-runtime-upstream-state').getAttribute('data-state'),
+        ).toBe(state);
+        expect(within(row).getByTestId('pi-runtime-upstream-version').textContent).toBe(
+          extra && 'upstreamLatest' in extra ? '—' : '1.0.3',
+        );
+        if (state === 'unknown') {
+          expect(within(row).queryByTestId('pi-runtime-upstream-checked')).toBeNull();
+        } else {
+          expect(within(row).getByTestId('pi-runtime-upstream-checked').textContent).toContain(
+            '检查于',
+          );
+        }
+      });
+    }
+
+    it('a failing platform_updates read only turns this row into "—"; the card still renders', async () => {
+      const http = scriptedHttp({
+        runtime_inventory: () => inventory(),
+        pi_drift: () => piDrift({ status: 'consistent', pinnedPiVersion: '1.0.2' }),
+        list_workspaces: () => ({ items: [] }),
+        platform_updates: () => {
+          throw new Error('boom');
+        },
+      });
+      renderPage(http);
+      const row = await screen.findByTestId('pi-runtime-upstream');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'platform_updates')).toBe(true));
+      expect(row.textContent).toBe('—');
+      expect(screen.getByTestId('pi-drift-body')).toBeTruthy();
+      expect(screen.queryByTestId('pi-drift-error')).toBeNull();
+    });
   });
 });

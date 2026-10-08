@@ -47,10 +47,16 @@ worker-supervisor / llm-proxy / egress-proxy / 门也各有一个小的 `/intern
 postgres ──(healthy)──> kernel ──(healthy)──> agent-host
                              │                     ↑(healthy)
                              │                docker-socket-proxy
-                             └──(healthy)──> caddy
+                             ├──(healthy)──> caddy
+                             ├──(healthy)──> gate-host
+                             └──(healthy)──> collector-host-inventory
+                                                   ↑(healthy)
+                                          docker-socket-proxy-collector
 
 docker-socket-proxy ──(healthy)──> agent-host
                      ──(healthy)──> worker-supervisor
+
+docker-socket-proxy-images ──(healthy)──> worker-supervisor
 
 docker-socket-proxy-gate ──(healthy)──> gatekeeper-docker
 
@@ -62,9 +68,10 @@ postgres ──(healthy)──> backup
 它们健康（它们的消费者是运行时 HTTP 调用失败重试，不是 compose 级别的启动顺序）。
 
 带 `healthcheck:` 的服务（`docker compose ps` 会显示 `healthy`/`unhealthy`/`starting`）：
-`postgres`、`kernel`、`docker-socket-proxy`、`docker-socket-proxy-gate`。其余服务（`agent-host`、
-`worker-supervisor`、`gatekeeper-docker`、`gatekeeper-ragflow`、`caddy`、`llm-proxy`、
-`egress-proxy`、`backup`）**没有** compose `healthcheck:`——`docker compose ps` 只能看到
+`postgres`、`kernel`、`docker-socket-proxy`、`docker-socket-proxy-images`、`docker-socket-proxy-gate`、
+`docker-socket-proxy-collector`、`gate-host`（打自己未鉴权的 `/healthz`）。其余服务（`agent-host`、
+`worker-supervisor`、`gatekeeper-docker`、`gatekeeper-ragflow`、`collector-host-inventory`、`caddy`、
+`llm-proxy`、`egress-proxy`、`backup`）**没有** compose `healthcheck:`——`docker compose ps` 只能看到
 `running`/`exited`，"真的可用"要按 §5 的清单逐个探测。
 
 `fake-llm`（`profiles: ["test"]`）与全部 `accept-s2-*`（`profiles: ["accept-s2"]`）、
@@ -86,9 +93,9 @@ set -a; . ./.env; set +a
 docker compose up -d postgres
 docker compose ps postgres          # 等 healthy
 
-# 2. Docker socket 代理（agent-host / worker-supervisor / gatekeeper-docker 依赖它们健康才起）
-docker compose up -d docker-socket-proxy docker-socket-proxy-gate
-docker compose ps docker-socket-proxy docker-socket-proxy-gate   # 等 healthy
+# 2. Docker socket 代理（agent-host / worker-supervisor / gatekeeper-docker / collector-host-inventory 依赖它们健康才起）
+docker compose up -d docker-socket-proxy docker-socket-proxy-images docker-socket-proxy-gate docker-socket-proxy-collector
+docker compose ps docker-socket-proxy docker-socket-proxy-images docker-socket-proxy-gate docker-socket-proxy-collector   # 等 healthy
 
 # 3. 内核（若数据库是全新的或刚从备份恢复，先跑一次迁移——幂等，可安全重复跑）
 # 目标主机通常没有 node/corepack（docs/runbooks/accept-s1.md §1 "主机上有 docker、curl；没有
@@ -100,7 +107,7 @@ docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js            
 docker compose up -d kernel
 docker compose ps kernel            # 等 healthy（healthcheck 打 GET /api/health）
 
-# 4. 其余全部服务——compose 自己会按 depends_on 图等 kernel/两个 socket 代理健康后再起
+# 4. 其余全部服务——compose 自己会按 depends_on 图等 kernel / 各 socket 代理健康后再起
 #    对应的消费者；一次性 up 即可，不需要再手动分批：
 docker compose up -d
 docker compose ps
@@ -143,7 +150,7 @@ Docker 会自动按它自己记录的容器状态把它们重新拉起，**不�
 ```bash
 cd <CODE_DIR>
 docker compose ps                      # 是否所有预期服务都在跑、健康检查是否通过
-docker compose ps postgres kernel docker-socket-proxy docker-socket-proxy-gate
+docker compose ps postgres kernel gate-host docker-socket-proxy docker-socket-proxy-images docker-socket-proxy-gate docker-socket-proxy-collector
 ```
 
 若 `kernel` 起来时 `postgres` 还没就绪（`unhealthy`/连接失败），Fastify 进程会在健康检查上体现为
@@ -170,7 +177,8 @@ docker compose up -d         # 见 §4.1，若数据库不是全新的可跳过�
 |---|---|---|
 | `postgres` | `docker compose ps postgres`（`healthcheck` 用 `pg_isready`） | `healthy` |
 | `kernel` | `docker compose ps kernel`（`healthcheck` 打容器内 `GET /api/health`）；从主机：`curl -sk "https://${KERNEL_BIND_ADDR}:8443/api/health"`（经 caddy 反代） | `healthy`；curl 返回 `200` |
-| `docker-socket-proxy` / `docker-socket-proxy-gate` | `docker compose ps docker-socket-proxy docker-socket-proxy-gate`（`healthcheck` 打 `/_ping`） | `healthy` |
+| `docker-socket-proxy` / `-images` / `-gate` / `-collector` | `docker compose ps docker-socket-proxy docker-socket-proxy-images docker-socket-proxy-gate docker-socket-proxy-collector`（`healthcheck` 打 `/_ping`） | `healthy` |
+| `gate-host` | `docker compose ps gate-host`（`healthcheck` 打容器内 `GET /healthz`，未鉴权；不经 caddy 对外） | `healthy` |
 | `agent-host` | 无 compose healthcheck；`docker compose logs --tail 50 agent-host` 里应能看到它已经连上 kernel 的 `/internal/agent-host` WS（不应有持续的连接失败/重连日志） | 无异常重连日志 |
 | `worker-supervisor` | 无 compose healthcheck；容器只在 `control` 网络，主机 curl 不到——用 `docker compose exec -T worker-supervisor node -e "fetch('http://localhost:8081/healthz').then(r=>r.text()).then(console.log)"` | `{"status":"ok"}` |
 | `gatekeeper-docker` / `gatekeeper-ragflow` | 无 compose healthcheck；用 `kernel` 容器内 `fetch` 打 `/gate/health`（需要 `gate_token`，见 `docs/runbooks/host-gatekeepers.md` §3 的完整命令） | `{"ok":true,"result":{"status":"ok"}}` |
@@ -196,6 +204,9 @@ docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Health}}'
   没有集中式日志收集（无 ELK/Loki 之类的 sidecar）——每个服务的日志只存在于该容器自己的日志驱动
   （Docker 默认 `json-file`）里，容器被 `docker rm` 后日志随之消失，除非在那之前已经 `docs compose
   logs` 导出。
+- **`update-feed`**（S10 U1，见 `release.md` §3.7）：`docker compose logs --tail 20 update-feed`——每次成功写
+  `downloaded channel.json (<n> bytes)`，失败写原因并保留上一份文件。它停了或 GitHub 不通，控制台运行状态页「版本信息」
+  在 48 小时后变成"陈旧"；记录格式不对则是"异常"。它只影响升级提醒，不影响任何其它功能。
 - **`audit_records` 表**（内核里唯一的持久化、可查询的操作记录，design §12"append-only"）：每次
   `dispatchCapability` 的成功调用、每次 Task/WorkerRun/ActionRequest 的领域状态转移都在这里落一行
   （`workspace_id`/`actor_principal_id`/`action`/`resource_type`/`resource_id`/`payload`/
@@ -225,7 +236,7 @@ exporter/collector 接入（`packages/kernel/src` 下没有 `prom-client`/`opent
 |---|---|
 | 待审批数 | `list_pending`（human 通道，`minRole: operator`）——web 控制台侧栏徽标就是这个；或 `select count(*) from action_requests where status = 'pending_approval' and workspace_id = '<ws>';` |
 | ActionRequest 终态分布 | `select status, count(*) from action_requests where workspace_id = '<ws>' group by status;`（`get_operation_stats{gatekeeperId?, days?}` 是一个更窄的、只覆盖 execute 类 Operation 的聚合读能力，见 `docs/runbooks/web-console.md` 已知缺口第 12 条） |
-| open Conflict 数 | `select count(*) from conflicts where status = 'open' and workspace_id = '<ws>';`（`list_conflicts` capability 已注册但**无 handler**，见 development-tasks.md S3.7 实现说明——只能直接查表） |
+| open Conflict 数 | `select count(*) from conflicts where status = 'open' and workspace_id = '<ws>';`（也可用 `list_conflicts` capability，`status:'open'`；handler 自 S3.2 起已挂，S3.7 "无 handler"清单已过时；这里直接查表只是不依赖内核在线） |
 | 每 Task 的 token 成本 | `select id, tokens_used from tasks where workspace_id = '<ws>' order by created_at desc;`；更细的 `llm_usage` 表按 provider/model 记录每次调用的 token 与估算成本 |
 | 入口 agent 重启次数 | `docker compose exec -T worker-supervisor node -e "fetch('http://localhost:8081/resident/<principalId>', {headers:{authorization:'Bearer '+require('fs').readFileSync('/run/secrets/internal_token','utf8').trim()}}).then(r=>r.json()).then(b=>console.log(b.restarts))"`（见 `docs/runbooks/host-worker-runtime.md` §9） |
 | Worker 失败率 | `select failure_reason, count(*) from tasks where workspace_id = '<ws>' and status = 'failed' group by failure_reason;`（`failure_reason` 取值见 `docs/runbooks/troubleshoot-task.md`） |

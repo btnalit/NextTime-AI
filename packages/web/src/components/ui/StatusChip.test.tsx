@@ -12,6 +12,7 @@ import {
   PiDriftStatusWireSchema,
   PlatformBackupStatusWireSchema,
   PlatformRoleWireSchema,
+  PlatformUpdateFeedStatusWireSchema,
   ROLE_VALUES,
   ServiceHealthWireSchema,
   TASK_STATUS_VALUES,
@@ -81,6 +82,7 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     { machine: 'platformRole', values: PlatformRoleWireSchema.options },
     { machine: 'piDrift', values: PiDriftStatusWireSchema.options },
     { machine: 'backupFreshness', values: PlatformBackupStatusWireSchema.options },
+    { machine: 'updateFeed', values: PlatformUpdateFeedStatusWireSchema.options },
   ];
 
 describe('StatusChip', () => {

@@ -310,6 +310,11 @@ list --label pi-drift` 查是否已有未关闭的，有就编辑标题/正文+�
 关闭该 issue。这个 workflow **没有** `pull_request`/`push` 触发器，永远不会出现在任何 PR 的
 required checks 里，`ci.yml` 完全不受影响。
 
+**成功路径（S10 U1）**：上游 `@latest` ≠ `pi.version` 且全部通过时，开 / 更新**同一个**带 `pi-upgrade-available`
+label 的 issue（"pi X 可升级、兼容测试通过"——它只是提醒，不开 PR；升级仍走第 4 节）；`pi.version` 追上后自动关闭。
+每次检查（通过或失败）的结论还会写进 ReleaseChannel 记录（`release.md` §3.7），控制台据此在概览提醒"pi 待发版"或
+"pi 不兼容"，并在运行层「pi 运行时」卡片显示「上游最新 pi」。
+
 **与控制台运行层页的「pi 运行时」卡片是两回事**。本节上面说的"漂移"是"pinned `pi.version` vs npm 上的
 `@latest`"（升级值不值得做，由 nightly workflow 的 issue 提醒——一个 pi 版本要进生产，必须走第 4 节
 的升级 PR，随发版一起交付）；控制台卡片问的是另一件事——"主机上的常驻智能体，是不是已经跑在**本版**
@@ -360,5 +365,6 @@ pi 本身没有运行时"回滚"的概念（它不是一个常驻服务，是每
      `operations.md` §13。
 2. 代码侧回滚：`git revert` 升级 PR（`pi.version`、两个 package.json 字段、`pnpm-lock.yaml`
    一起回退），重新构建镜像。
-3. `.github/workflows/pi-drift.yml`/`.github/dependabot.yml` 本身不涉及运行时，不需要回滚
-   流程——它们只在还没合并升级 PR 时持续提醒"什么时候能升"。
+3. `.github/workflows/pi-drift.yml` 本身不涉及运行时，不需要回滚流程——它只在还没合并升级 PR 时
+   持续提醒"什么时候能升"。（`.github/dependabot.yml` 已不存在，#287 决定不恢复：常规依赖升级不交给
+   bot、按波次手动做，见 `development-tasks.md` §S3.15；这里不再有 bot 提醒。）

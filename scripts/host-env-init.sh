@@ -243,6 +243,18 @@ fi
 # idempotent since S5.3); an existing one is left alone.
 mkdir -p "$CONFIG_DIR/ontology"
 
+# --- config/update-feed/: the update-feed service's one writable directory (S10 U1) -----------
+# docker-compose.yml's `update-feed` runs as its own uid:gid 10002:10002 and writes channel.json
+# here; the kernel reads it through the read-only config/ mount. Owned by that uid alone — config/
+# itself stays root-owned (S7-A ⑤) — and 0755 so the kernel's uid 10001 can traverse it (the
+# service writes the file 0644). Created before the first `up`: Docker would otherwise create a
+# root-owned directory the service cannot write into.
+UPDATE_FEED_UID=10002
+UPDATE_FEED_GID=10002
+mkdir -p "$CONFIG_DIR/update-feed"
+chown "${UPDATE_FEED_UID}:${UPDATE_FEED_GID}" "$CONFIG_DIR/update-feed"
+chmod 755 "$CONFIG_DIR/update-feed"
+
 # --- secrets/setup/: initial administrator password directory (S4.1, docker-compose.yml's own
 # kernel service comment) — the kernel writes admin's temporary password here (mode 0600) when no
 # platform administrator exists yet, so unlike the rest of secrets/ (root-owned, 0700 — see this script's

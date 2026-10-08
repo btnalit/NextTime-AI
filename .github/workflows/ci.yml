@@ -54,6 +54,9 @@ jobs:
       - name: Contract snapshot drift (S3.7, docs/wire-contract-conventions.md §4)
         run: pnpm contract:check
 
+      - name: Release channel record builder unit tests (S10 U1 — checked against the kernel's own ReleaseChannelSchema)
+        run: node --test scripts/release-channel.test.mjs
+
       - name: Vocabulary guard detector unit tests (S3.7)
         run: node --test scripts/guards/vocabulary.test.mjs
 

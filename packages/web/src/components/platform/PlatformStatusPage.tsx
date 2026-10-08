@@ -1,6 +1,7 @@
-import type { PlatformStatusWire } from '@nexttime/shared';
+import type { PlatformStatusWire, PlatformUpdatesWire } from '@nexttime/shared';
 import { useEffect } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
+import type { Resource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
@@ -45,12 +46,18 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
   const t = useT();
   const status = useCapability<PlatformStatusWire>(http, 'platform_status');
   const reload = status.reload;
+  // S10 U1: the update feed's freshness — its own read, so a failure here never blanks the page.
+  const updates = useCapability<PlatformUpdatesWire>(http, 'platform_updates');
+  const reloadUpdates = updates.reload;
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | undefined;
     function start(): void {
       if (timer !== undefined) return;
-      timer = setInterval(() => void reload(), AUTO_REFRESH_MS);
+      timer = setInterval(() => {
+        void reload();
+        void reloadUpdates();
+      }, AUTO_REFRESH_MS);
     }
     function stop(): void {
       if (timer === undefined) return;
@@ -60,6 +67,7 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
     function onVisibilityChange(): void {
       if (document.visibilityState === 'visible') {
         void reload();
+        void reloadUpdates();
         start();
       } else {
         stop();
@@ -71,7 +79,7 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
       stop();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [reload]);
+  }, [reload, reloadUpdates]);
 
   return (
     <div className="page" data-testid="platform-status-page">
@@ -86,7 +94,10 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
           <Button
             variant="ghost"
             icon="refresh"
-            onClick={() => void status.reload()}
+            onClick={() => {
+              void status.reload();
+              void updates.reload();
+            }}
             loading={status.state.status === 'ready' && status.state.refreshing}
             data-testid="status-refresh"
           >
@@ -109,13 +120,19 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
           testId="status-error"
         />
       ) : (
-        <StatusBody data={status.state.data} />
+        <StatusBody data={status.state.data} updates={updates} />
       )}
     </div>
   );
 }
 
-function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
+function StatusBody({
+  data,
+  updates,
+}: {
+  readonly data: PlatformStatusWire;
+  readonly updates: Resource<PlatformUpdatesWire>;
+}) {
   const t = useT();
   return (
     <>
@@ -149,6 +166,8 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
       </Card>
 
       <BackupCard backup={data.backup} />
+
+      <UpdateFeedCard updates={updates} />
 
       <Card title={t('30 天用量', '30-day usage')}>
         {/* ui-audit ST2 ("用量数字无千分位"): `.toLocaleString()` + the same `.tabular`
@@ -247,6 +266,93 @@ function BackupCard({ backup }: { readonly backup: PlatformStatusWire['backup'] 
         <summary>{t('技术细节', 'Technical details')}</summary>
         <p className="text-3 text-small" data-testid="status-backup-detail">
           {backup.detail}
+        </p>
+      </details>
+    </Card>
+  );
+}
+
+/**
+ * S10 U1: the version feed's freshness (`platform_updates.feedFreshness`) — whether the host's
+ * `update-feed` service is still bringing in `channel.json`, and whether the kernel accepts it.
+ * Same shape as `BackupCard`: a chip and one plain sentence, the times and limit underneath, the
+ * kernel's own `detail` behind "技术细节". Its own read: loading or failing only affects this card
+ * ("取数断网 48 小时后 feedFreshness 变陈旧并在运行状态页可见").
+ */
+function UpdateFeedCard({ updates }: { readonly updates: Resource<PlatformUpdatesWire> }) {
+  const t = useT();
+  const title = t('版本信息', 'Update feed');
+  if (updates.state.status === 'loading') {
+    return (
+      <Card title={title}>
+        <SkeletonRows
+          count={1}
+          label={t('正在加载版本信息…', 'Loading update feed')}
+          testId="status-update-feed-loading"
+        />
+      </Card>
+    );
+  }
+  if (updates.state.status === 'error') {
+    return (
+      <Card title={title}>
+        <ErrorBanner
+          error={updates.state.error}
+          title={t('无法加载版本信息', 'Could not load the update feed')}
+          onRetry={() => void updates.reload()}
+          testId="status-update-feed-error"
+        />
+      </Card>
+    );
+  }
+  const feed = updates.state.data.feedFreshness;
+  const hours = feed.maxAgeHours;
+  const summary =
+    feed.status === 'fresh'
+      ? t(`版本信息在 ${hours} 小时以内。`, `The version information is within ${hours} hours.`)
+      : feed.status === 'stale'
+        ? t(
+            `超过 ${hours} 小时没有取到新的版本信息——请在主机上查看 update-feed 服务的日志。`,
+            `No fresh version information for more than ${hours} hours — check the update-feed service's logs on the host.`,
+          )
+        : feed.status === 'invalid'
+          ? t(
+              '内核拒绝了下载到的版本记录，暂时不会据此提醒升级——详情见技术细节。',
+              'The kernel rejected the downloaded version record, so no upgrade reminders are shown from it for now — see the technical details.',
+            )
+          : t(
+              '还没有取到版本信息：update-feed 服务可能还没成功取过一次。',
+              'No version information yet: the update-feed service may not have fetched it successfully even once.',
+            );
+  return (
+    <Card title={title}>
+      <div className="row" data-testid="status-update-feed">
+        <StatusChip
+          machine="updateFeed"
+          status={feed.status}
+          size="s"
+          testId="status-update-feed-chip"
+        />
+        <span className="text-2">{summary}</span>
+      </div>
+      <dl className="definition-list" data-testid="status-update-feed-facts">
+        <dt>{t('上次取到', 'Last fetched')}</dt>
+        <dd className="tabular" title={feed.fetchedAt ?? undefined}>
+          {feed.fetchedAt
+            ? `${formatDateTime(feed.fetchedAt)} · ${formatRelative(feed.fetchedAt)}`
+            : '—'}
+        </dd>
+        <dt>{t('记录生成', 'Record generated')}</dt>
+        <dd className="tabular" title={feed.generatedAt ?? undefined}>
+          {feed.generatedAt ? formatDateTime(feed.generatedAt) : '—'}
+        </dd>
+        <dt>{t('陈旧阈值', 'Stale after')}</dt>
+        <dd className="tabular">{t(`${hours} 小时`, `${hours} hours`)}</dd>
+      </dl>
+      <details className="disclosure">
+        <summary>{t('技术细节', 'Technical details')}</summary>
+        <p className="text-3 text-small" data-testid="status-update-feed-detail">
+          {feed.detail}
         </p>
       </details>
     </Card>

@@ -118,6 +118,13 @@ if [ ! -e "$D/backups/last-success" ]; then
   : >"$D/backups/last-success" && chmod 644 "$D/backups/last-success" &&
     echo "STEP backup-marker created an empty backups/last-success (0644)"
 fi
+# S10 U1: the update-feed service (uid 10002) writes into config/update-feed/; Docker would create
+# a missing bind source root-owned and the service could never write. Same rule as host-env-init.sh.
+if [ ! -d "$D/config/update-feed" ]; then
+  mkdir -p "$D/config/update-feed" && chown 10002:10002 "$D/config/update-feed" &&
+    chmod 755 "$D/config/update-feed" &&
+    echo "STEP update-feed-dir created config/update-feed (10002:10002 0755)"
+fi
 FROM=$(git describe --tags --always HEAD 2>/dev/null || echo unknown)
 if [ "$FROM" = "$TAG" ]; then
   echo "STEP dump WARNING checkout already on $TAG (re-run) — this dump is not a pre-$TAG rollback point"
