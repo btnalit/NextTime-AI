@@ -43,12 +43,15 @@
 #     `models.json` at `${PI_CODING_AGENT_DIR}/models.json` (worker-supervisor's spawn spec) is
 #     exactly the path pi itself reads.
 #   - packages/coding-agent/src/core/extensions/loader.ts: `-e <path>` loads via jiti, which
-#     alias-resolves `@earendil-works/pi-*`/`typebox`/etc. imports against pi's OWN install (the
-#     pinned `npm ci` into /opt/pi below), never the extension's own `node_modules` — so
+#     serves `@earendil-works/pi-{coding-agent,ai,agent-core,tui}` and `typebox/{compile,value}`
+#     imports from pi's own copies, never the extension's own `node_modules` — so
 #     @nexttime/platform-extension's own `@earendil-works/pi-coding-agent` dependency (needed for
-#     its TS types) is redundant at runtime but harmless. `@nexttime/shared` is NOT one of pi's
-#     bundled/aliased modules, so it DOES need to resolve from the extension's own
-#     `node_modules`, which `pnpm deploy --prod` (build stage) provides.
+#     its TS types) is redundant at runtime but harmless. Since 0.99.2 `bin.pi` is
+#     `dist/bundle/cli.js`, a self-contained esbuild bundle with pi-ai / pi-agent-core / pi-tui
+#     inlined, and those copies are the bundle's `virtualModules` (bundle/chunks/jiti-loader-*.js),
+#     not files under /opt/pi/node_modules. `@nexttime/shared` is NOT one of them, so it DOES need
+#     to resolve from the extension's own `node_modules`, which `pnpm deploy --prod` (build stage)
+#     provides.
 #   - packages/coding-agent/src/core/tools/index.ts: built-in tools are bash/edit/find/grep/ls/
 #     powershell/read/write; pi's own default *active* set is only `read`/`bash`/`edit`/`write`
 #     (`core/sdk.js` `defaultActiveToolNames`, identical in 0.84.4 and 0.87.1; 0.99.2 moved it to
@@ -117,10 +120,14 @@ RUN apt-get update \
 # The whole dependency tree is pinned, not just pi: up to 0.99.2 pi published an
 # npm-shrinkwrap.json, so `npm install -g pi@<v>` was reproducible; 1.0.1 dropped it ("Use the
 # pi.dev installer for pinned installations"), after which a global install resolves pi's own
-# `^1.x` ranges (pi-ai, pi-agent-core, pi-mcp, …) to whatever is newest at build time — two builds
-# of the same commit could ship different pi-ai code. deploy/worker-runtime/pi/ holds a package.json
-# naming pi at exactly pi.version plus its package-lock.json, and `npm ci` installs exactly that
-# tree into /opt/pi (docs/runbooks/pi-upgrade.md §3).
+# `^1.x` ranges to whatever is newest at build time. The code `pi --mode rpc` runs does not drift
+# that way — the CLI is the self-contained bundle (header, loader.ts note), with pi-ai etc.
+# inlined — but the rest of /opt/pi would: the bundle's real externals (photon-node, typebox, the
+# optional aws-sdk crt signer), the files a later pi could start loading from node_modules if
+# upstream stops bundling, and the tree an image scan or audit sees. deploy/worker-runtime/pi/
+# holds a package.json naming pi at exactly pi.version plus its package-lock.json, and `npm ci`
+# installs exactly that tree into /opt/pi, so two builds of one commit get the same file tree
+# (docs/runbooks/pi-upgrade.md §3).
 #
 # Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file.
 # npm needs literal versions in package.json / package-lock.json (and pnpm in
@@ -195,7 +202,8 @@ ENV PI_OFFLINE=1
 # build context here too, and this image has no equivalent way to read
 # `packages/platform-extension/package.json`'s own version after `pnpm deploy` flattens it away).
 # `pi.version` stays the single source of truth for the *pinned dependency* (the `COPY pi.version`
-# + `npm install` above, unchanged) — `PI_VERSION` here is only the transient carrier that copies
+# + `npm ci` of deploy/worker-runtime/pi/ above, which asserts the installed pi equals it) —
+# `PI_VERSION` here is only the transient carrier that copies
 # that same file's content into this label, computed by the build invoker immediately before
 # `docker compose build worker-runtime`:
 #

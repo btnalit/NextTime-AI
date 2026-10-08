@@ -422,6 +422,31 @@ describe('stripProviderServerTools — anthropic-messages', () => {
     ]);
   });
 
+  it('filters tool_addition blocks in a block-array top-level system the same way', () => {
+    const body: Record<string, unknown> = {
+      model: 'claude-example',
+      system: [
+        { type: 'text', text: 'You are a probe agent.' },
+        inlineAddition(clientTool),
+        inlineAddition({ type: 'web_search_20250305', name: 'web_search' }),
+      ],
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [clientTool],
+    };
+    expect(stripProviderServerTools('anthropic-messages', body).strippedTools).toEqual([
+      'web_search_20250305',
+    ]);
+    expect(body.system).toEqual([
+      { type: 'text', text: 'You are a probe agent.' },
+      inlineAddition(clientTool),
+    ]);
+
+    const stringSystem = { model: 'claude-example', system: 'plain', messages: [] };
+    const before = structuredClone(stringSystem);
+    expect(stripProviderServerTools('anthropic-messages', stringSystem).strippedTools).toEqual([]);
+    expect(stringSystem).toEqual(before);
+  });
+
   it('tool_addition blocks are an Anthropic shape: an OpenAI-kind body keeps them as opaque content', () => {
     const body = {
       model: 'gpt-example',

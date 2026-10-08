@@ -205,37 +205,57 @@ function filterToolList(
 }
 
 /**
- * Filters the `tool_addition` blocks of Anthropic messages in place. pi 1.0.1+ declares a tool
- * added mid-conversation by value (`{type:'tool_addition', tool:{type:'tool_definition',
- * definition}}`, `inline-tools-2026-09-15`); pi 0.99 referenced an already-declared tool by name
- * (`tool:{type:'tool_reference', name}`), which carries no definition and is kept. A definition is
- * kept only when it is a client-side tool; any other `tool_addition` is removed.
+ * Filters the `tool_addition` blocks out of one Anthropic content-block array in place on
+ * `holder[key]`. pi 1.0.1+ declares a tool added mid-conversation by value
+ * (`{type:'tool_addition', tool:{type:'tool_definition', definition}}`, `inline-tools-2026-09-15`);
+ * pi 0.99 referenced an already-declared tool by name (`tool:{type:'tool_reference', name}`), which
+ * carries no definition and is kept. A definition is kept only when it is a client-side tool; any
+ * other `tool_addition` is removed. A message whose blocks were all removed is left as
+ * `content: []`, which the provider rejects with a 400 — fail-closed, like a `tool_choice` naming a
+ * removed tool.
  */
-function filterAnthropicToolAdditions(
-  messages: unknown,
+function filterToolAdditionBlocks(
+  holder: Record<string, unknown>,
+  key: string,
   allowed: ReadonlySet<string | undefined>,
   removed: string[],
 ): void {
-  if (!Array.isArray(messages)) return;
-  for (const message of messages) {
-    if (!isRecord(message) || !Array.isArray(message.content)) continue;
-    const content: unknown[] = message.content;
-    const kept = content.filter((block) => {
-      if (!isRecord(block) || block.type !== 'tool_addition') return true;
-      const tool = isRecord(block.tool) ? block.tool : undefined;
-      if (tool?.type === 'tool_reference') return true;
-      if (tool?.type === 'tool_definition' && isRecord(tool.definition)) {
-        const type = tool.definition.type;
-        const typeKey =
-          typeof type === 'string' ? type : type === undefined ? undefined : String(type);
-        if (allowed.has(typeKey)) return true;
-        removed.push(typeKey ?? '(none)');
-        return false;
-      }
-      removed.push(`tool_addition:${typeof tool?.type === 'string' ? tool.type : '(none)'}`);
+  const content = holder[key];
+  if (!Array.isArray(content)) return;
+  const kept = content.filter((block) => {
+    if (!isRecord(block) || block.type !== 'tool_addition') return true;
+    const tool = isRecord(block.tool) ? block.tool : undefined;
+    if (tool?.type === 'tool_reference') return true;
+    if (tool?.type === 'tool_definition' && isRecord(tool.definition)) {
+      const type = tool.definition.type;
+      const typeKey =
+        typeof type === 'string' ? type : type === undefined ? undefined : String(type);
+      if (allowed.has(typeKey)) return true;
+      removed.push(typeKey ?? '(none)');
       return false;
-    });
-    if (kept.length !== content.length) message.content = kept;
+    }
+    removed.push(`tool_addition:${typeof tool?.type === 'string' ? tool.type : '(none)'}`);
+    return false;
+  });
+  if (kept.length !== content.length) holder[key] = kept;
+}
+
+/**
+ * Anthropic `tool_addition` blocks wherever a block array can carry them: each message's
+ * `content` (where pi puts them, inside a role:system message) and a top-level `system` given as
+ * a block array. pi never sends the latter, but R-30's threat is a process holding the Handle
+ * that builds its own body, and whether the provider honours a `tool_addition` there is
+ * unverified — so it is filtered the same way.
+ */
+function filterAnthropicToolAdditions(
+  body: Record<string, unknown>,
+  allowed: ReadonlySet<string | undefined>,
+  removed: string[],
+): void {
+  filterToolAdditionBlocks(body, 'system', allowed, removed);
+  if (!Array.isArray(body.messages)) return;
+  for (const message of body.messages) {
+    if (isRecord(message)) filterToolAdditionBlocks(message, 'content', allowed, removed);
   }
 }
 
@@ -256,7 +276,7 @@ export function stripProviderServerTools(
   filterToolList(body, 'tools', allowed, strippedTools);
   // Tool lists nested in the conversation: pi's mid-conversation tool additions for the OpenAI
   // kinds (a `messages[]` entry with `tools`; Responses `additional_tools` / `tool_search_output`
-  // input items) and Anthropic's `tool_addition` content blocks.
+  // input items) and Anthropic's `tool_addition` content blocks (messages and a block-array `system`).
   const nestedHolder =
     api === 'openai-completions'
       ? body.messages
@@ -269,7 +289,7 @@ export function stripProviderServerTools(
     }
   }
   if (api === 'anthropic-messages') {
-    filterAnthropicToolAdditions(body.messages, allowed, strippedTools);
+    filterAnthropicToolAdditions(body, allowed, strippedTools);
   }
 
   for (const param of SERVER_TOOL_PARAMS[api]) {

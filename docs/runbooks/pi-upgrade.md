@@ -242,7 +242,10 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
 - **静态**：两版 `pi-coding-agent` 及其 `@earendil-works/*` 依赖装进仓库外临时目录，逐文件 diff `dist/*.js`/`*.d.ts`/`docs/`，
   跑两版 `pi --help`、`pi --version`。`dist/modes/rpc/{rpc-mode,jsonl,rpc-types}.js`、`modes/json-event.js`、
   `core/session-manager.js`、`core/resolve-config-value.js`、`extensions/index.js`、`utils/version-check.js`、
-  `docs/{containerization,rpc,rpc-commands,session-format}.md` 两版逐字相同。
+  `docs/{containerization,rpc,rpc-commands,session-format}.md` 两版逐字相同。下表引用的 `dist/**.js` 行号都是包里
+  **模块化**那份（`dist/index.js` 一侧）；CLI 实际跑的是 `dist/bundle/` 里的同源代码。`entry/worker.sdk.test.ts` 与
+  `pi-drift.yml` 测的也是模块化运行时加 pnpm 依赖树，不是容器里执行的 bundle——行为结论靠下面两种真实 `pi --mode rpc`
+  运行支撑。bundle 里 `chunks/anthropic-messages-*.js` 的 beta 常量集合与 `node_modules` 里 pi-ai 1.1.0 相同。
 - **真实运行（开发机）**：Linux + node 22.22，两版 CLI 各跑三种：不带扩展（两轮）；带真实平台扩展 entry 模式（普通一轮、
   调用逐轮投射出的门工具 `accept_s2_api_stock_get` 一轮、`switch_session` 后再一轮、`abort`）；worker 模式（自驱动一轮后
   退出）。上游 `deploy/fake-llm`，内核用一个只实现扩展所调能力的假内核，`settings.json` 写七个 `defaultTools`，
@@ -261,8 +264,8 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
 | 行 | 结论 | 证据 |
 |---|---|---|
 | `platform-extension/package.json` | 已适配 | 两个字段改为 `1.1.0`，`pnpm-lock.yaml` 随 `pnpm install` 更新（`@anthropic-ai/sdk` 0.124 → 0.129 等传递依赖随之变化）；`check-pi-version-consistency.sh` 通过。pnpm 的 `minimumReleaseAge` 在 1.1.0 发布不满一天时自动写入的 `minimumReleaseAgeExclude` 没有保留（同 2.4 末条） |
-| `Dockerfile` 安装方式 | **已适配** | **1.0.1 起 npm 包不再带 `npm-shrinkwrap.json`**（CHANGELOG 1.0.1 "Removed"）。此前 `npm install -g pi@<v>` 的整棵依赖树由 shrinkwrap 钉死；之后全局安装会把 pi 自己的 `^1.x` 范围（`pi-ai`、`pi-agent-core`、`pi-mcp`……）解析成构建当时的最新版，同一 commit 两次构建可能装进不同的 `pi-ai`，`pi.version` 不再是镜像里 pi 代码的唯一来源。改为 `deploy/worker-runtime/pi/{package.json,package-lock.json}` + `npm ci --omit=dev --ignore-scripts` 装入 `/opt/pi`、`/usr/local/bin/pi` 软链；构建时校验已装 pi 等于 `pi.version`；`check-pi-version-consistency.sh` 增加两条（`pi/package.json` 依赖与锁文件的 pi 版本都等于 `pi.version`）。镜像内 `pi --version` = 1.1.0，`pi-ai`/`pi-agent-core`/`pi-mcp`/`pi-codemode`/`pi-tui`/`chord` 均为锁文件里的 1.1.0 |
-| `index.ts` 默认导出 | 未变 | `core/extensions/loader.js:481-486` 仍是 jiti `{default: true}` + `typeof factory === 'function'`；新增 `ExtensionAPI.registerToolRenderer`（只影响 TUI）；三处真实运行 `-e` 均加载成功，含镜像内从 `/opt/pi` 解析 `@earendil-works/*` 别名 |
+| `Dockerfile` 安装方式 | **已适配** | **1.0.1 起 npm 包不再带 `npm-shrinkwrap.json`**（CHANGELOG 1.0.1 "Removed"）。此前 `npm install -g pi@<v>` 的整棵依赖树由 shrinkwrap 钉死；之后全局安装会把 pi 自己的 `^1.x` 范围解析成构建当时的最新版。`pi --mode rpc` 实际执行的代码不受影响：0.99.2 起 `bin.pi` 是 `dist/bundle/cli.js`，自包含的 esbuild bundle，`pi-ai`/`pi-agent-core`/`pi-tui` 已内联，扩展对 `@earendil-works/*` 的 import 由 bundle 的 `virtualModules` 提供；会漂的是 `/opt/pi` 其余部分——bundle 真正的外部依赖（`photon-node`、`typebox`、可选的 aws-sdk crt 签名器）、上游哪天不再打 bundle 时会从 `node_modules` 加载的文件、镜像扫描与审计看到的那棵树。为了同一 commit 两次构建得到相同的文件树，改为 `deploy/worker-runtime/pi/{package.json,package-lock.json}` + `npm ci --omit=dev --ignore-scripts` 装入 `/opt/pi`、`/usr/local/bin/pi` 软链；构建时校验已装 pi 等于 `pi.version`；`check-pi-version-consistency.sh` 增加两条（`pi/package.json` 依赖与锁文件的 pi 版本都等于 `pi.version`）。镜像内 `pi --version` = 1.1.0，`pi-ai`/`pi-agent-core`/`pi-mcp`/`pi-codemode`/`pi-tui`/`chord` 均为锁文件里的 1.1.0。两棵依赖树有小漂移：npm 锁里 `ws` 8.22.0、`@aws-sdk/credential-provider-node` 3.972.84，pnpm 树里 8.21.3、3.972.82（pi 家族两边一致；运行路径是 bundle，影响很小） |
+| `index.ts` 默认导出 | 未变 | `core/extensions/loader.js:481-486` 仍是 jiti `{default: true}` + `typeof factory === 'function'`；新增 `ExtensionAPI.registerToolRenderer`（只影响 TUI）；三处真实运行 `-e` 均加载成功，镜像内 `@earendil-works/*` 由 bundle 的 `virtualModules` 提供 |
 | `modes/{entry,worker}.ts` | 未变 | 所用事件仍在 `ExtensionEvent`（`types.d.ts:1057`）；`AgentSettledEvent` 新增必填 `aborted: boolean`（`:777-780`）、`ToolExecutionEndEvent` 新增可选 `durationMs`（`:848-857`）——本仓库都不读；`execute()` 返回契约与 `ExtensionToolContext` 不变；`pnpm -r typecheck` 无需改任何代码；真实运行会话文件里没有 `nexttime-*-context` |
 | `tool-schema.ts` | 未变 | `loader.js:231-241` object 形状 `parameters` 校验不变 |
 | `{entry,worker,interactive}.sdk.test.ts` | 未变 | 具名导出全在；`pnpm --filter @nexttime/platform-extension test` 124/124（与 `pi-drift.yml` 10-04 对 1.0.2 的 124 / 124 一致，S10 方案 §1） |
@@ -278,7 +281,7 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
 | `driver.mjs` `transcript-stats` | 未变 | 同一轮真实运行（entry、worker）两版会话文件输出逐字相同（镜像内亦同）；assistant / toolResult 消息多可选 `durationMs`，`read` 结果可能带 `structuredContent`（都不读） |
 | 2.2 内置工具全开 | 未变 | `--tools` 仍是覆盖扩展工具的允许清单，1.0.4 起另加 MCP 工具例外与 `*` 模式（本仓库不用 `--tools`）；扩展工具激活条件不变（`agent-session.js:2898-2900`） |
 | 2.3 逐轮工具投射 | 未变 | "处理器没改 `selectedTools` 就用实时装载"（`agent-session.js:1590-1598`）、`setActiveTools` 整体替换并忽略未知 / hidden（`:1099-1108`）、`registerTool` bind 后可用且新名字自动激活均不变。新增 `_pendingToolNames`：恢复 / 重载的 transcript 里列着但尚未注册的工具名，注册时重新激活；它在每次 `_runAgentPrompt` 开头清空（`:1387`），早于 `before_agent_start`，不影响投射。真实运行里 `switch_session` 后新会话 `session_start` 再投射一次、门工具照常被调用 |
-| **`llm-proxy` `outbound-policy.ts`**（本次补入第 2 节表） | **已适配** | 遗留 123 记的"`anthropic-beta` 白名单绑定 pi 0.99 的取值"。1.0.1 起 pi 对 Anthropic 的中途工具变更改为**按值内联定义**：beta 由 `mid-conversation-tool-changes-2026-07-01` 换成 `inline-tools-2026-09-15`，`tool_addition` 块从 `{tool:{type:'tool_reference', name}}` 变成 `{tool:{type:'tool_definition', definition}}`（pi-ai `api/anthropic-messages.js:119,855,1039-1040`）。只在模型 `compat` 声明 `supportsMidConvoSystemMessages` 与 `supportsMidConvoToolChanges` 时才走这条路；`gen-models-json.ts` 不写 `compat`，所以平台流量今天不发这个 beta（用真实 pi-ai 1.1.0 抓包确认：不开 compat 时请求里没有 beta、工具整表下发；开了时请求带 `inline-tools-2026-09-15` 与内联定义）。但内联定义是一条新的工具声明通道：若只放行 beta 而不看消息里的定义，agent 可以把 `web_fetch` / `mcp_toolset` 之类服务端工具塞进 `tool_addition` 绕过 R-30 / D-29。本 PR：白名单加 `inline-tools-2026-09-15`（保留旧值，给回滚到 `:pi-0.99.2` 镜像用）；`stripProviderServerTools` 对 Anthropic 消息里的 `tool_addition` 同样只保留客户端工具定义，`tool_reference` 原样保留，其它形状一律剥离并记日志；抓到的真实 pi 1.1 请求经过滤后逐字节不变。OpenAI 两种 api 的工具列表形状 1.x 未变 |
+| **`llm-proxy` `outbound-policy.ts`**（本次补入第 2 节表） | **已适配** | 遗留 123 记的"`anthropic-beta` 白名单绑定 pi 0.99 的取值"。1.0.1 起 pi 对 Anthropic 的中途工具变更改为**按值内联定义**：beta 由 `mid-conversation-tool-changes-2026-07-01` 换成 `inline-tools-2026-09-15`，`tool_addition` 块从 `{tool:{type:'tool_reference', name}}` 变成 `{tool:{type:'tool_definition', definition}}`（pi-ai `api/anthropic-messages.js:119,855,1039-1040`）。只在模型 `compat` 声明 `supportsMidConvoSystemMessages` 与 `supportsMidConvoToolChanges` 时才走这条路；`gen-models-json.ts` 不写 `compat`，所以平台流量今天不发这个 beta（用真实 pi-ai 1.1.0 抓包确认：不开 compat 时请求里没有 beta、工具整表下发；开了时请求带 `inline-tools-2026-09-15` 与内联定义）。但内联定义是一条新的工具声明通道：若只放行 beta 而不看消息里的定义，agent 可以把 `web_fetch` / `mcp_toolset` 之类服务端工具塞进 `tool_addition` 绕过 R-30 / D-29。本 PR：白名单加 `inline-tools-2026-09-15`（保留旧值，给回滚到 `:pi-0.99.2` 镜像用）；`stripProviderServerTools` 对 Anthropic 消息里（以及数组形态的顶层 `system` 里——pi 不往那放，但 R-30 防的是持 Handle 自己拼请求体的进程）的 `tool_addition` 同样只保留客户端工具定义，`tool_reference` 原样保留，其它形状一律剥离并记日志；一条消息的块被剥光会剩 `content: []`、供应商回 400，属于 fail-closed；抓到的真实 pi 1.1 请求经过滤后逐字节不变。OpenAI 两种 api 的工具列表形状 1.x 未变 |
 | 文档 | 已适配 | 见 2 节表最后一行 |
 
 1.0–1.1 里本仓库不依赖、但值得知道的变化：
@@ -307,7 +310,8 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
 - `deploy/worker-runtime/Dockerfile`：`runtime` 阶段 `COPY pi.version` 与 `deploy/worker-runtime/pi/` 的
   `package.json` + `package-lock.json`，`npm ci` 装锁文件里的整棵树，然后比对已装 pi 的版本与 `pi.version`，不等就构建
   失败——镜像机制上不可能装进别的 pi。之所以要一份锁文件而不是 `npm install -g pi@<pi.version>`：1.0.1 起 pi 不再发布
-  `npm-shrinkwrap.json`，全局安装会把 `pi-ai` 等依赖解析成构建当时的最新版（2.5）。锁文件与它的 `package.json` 是
+  `npm-shrinkwrap.json`，全局安装的依赖树会随构建时间漂移。pi CLI 本身是自包含 bundle，所以漂的不是它执行的代码，而是
+  bundle 的外部依赖与 `/opt/pi` 的文件树（2.5）；锁文件让同一 commit 的两次构建得到同一棵树。锁文件与它的 `package.json` 是
   `pi.version` 之外的两份拷贝，同样由下面的守卫保证一致。
 - `packages/platform-extension/package.json` 的 `dependencies["@earendil-works/pi-coding-
   agent"]` 与 `devDependencies["@earendil-works/pi-ai"]`：**没有**做成自动读取——pnpm/npm 的
