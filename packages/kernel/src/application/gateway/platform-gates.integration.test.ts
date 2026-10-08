@@ -1032,6 +1032,52 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
       });
 
+      // L4-13 (S10 K4): the same endpoint redeployed under a new GATE_ID would have linked the one
+      // Gatekeeper a second time (`readGateLinkPolicy` then read whichever row came first). Both
+      // preview and enable now refuse it; core 0042's unique index is the wall behind them.
+      it('refuses gatekeeper_already_linked when the endpoint’s Gatekeeper is linked to another gate instance, and writes nothing', async () => {
+        const GATE_ID_FIRST = 'fixture-mcp-gate-relinked-first';
+        const GATE_ID_SECOND = 'fixture-mcp-gate-relinked-second';
+        const ENDPOINT = 'http://127.0.0.1:1/relinked/';
+
+        for (const gateId of [GATE_ID_FIRST, GATE_ID_SECOND]) {
+          const announced = await announce({
+            gateId,
+            connector: 'fixture-mcp',
+            transportKind: 'http',
+            target: `http://${gateId}:9000`,
+            endpoint: ENDPOINT,
+            displayName: `Fixture MCP (${gateId})`,
+            operations: [OBSERVE_OP],
+          });
+          expect(announced.statusCode).toBe(200);
+          await callAsAdmin('update_gate_instance', { gateId, status: 'enabled' });
+        }
+
+        const first = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: GATE_ID_FIRST,
+        });
+        expect(await countGateLinkRows(GATE_ID_FIRST)).toBe(1);
+        const gatekeeperObjectsBefore = await countObjectsByType('Gatekeeper');
+
+        await expect(
+          callAsOwner('preview_gate_instance_enable', { gateId: GATE_ID_SECOND }),
+        ).rejects.toMatchObject({ code: 'gatekeeper_already_linked' });
+        await expect(
+          callAsOwner('enable_gate_instance', { gateId: GATE_ID_SECOND }),
+        ).rejects.toMatchObject({ code: 'gatekeeper_already_linked' });
+
+        expect(await countGateLinkRows(GATE_ID_SECOND)).toBe(0);
+        expect(await countGateLinkRows(GATE_ID_FIRST)).toBe(1);
+        expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
+
+        // Re-enabling the instance that already holds the link stays idempotent.
+        const again = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: GATE_ID_FIRST,
+        });
+        expect(again.gatekeeperId).toBe(first.gatekeeperId);
+      });
+
       // R-08 (review 2026-10-02): enabling a gate instance that links to this Gatekeeper used to
       // import over a pending revision draft, drop its `draftOf`, and publish it — v1 and v2 both
       // `published`, and `getPublishedOperation` returned either one.

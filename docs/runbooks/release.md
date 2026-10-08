@@ -432,6 +432,30 @@ rollback;"
 结果记 `docs/private/`；空表 = 没有要处理的。不为空时先别应用，把结果带回来单独评审迁移方案（把其中一个族的
 类型改名为新版本，旧版本保留可读——S10 方案 §8）。
 
+### 3.8 一个 Gatekeeper 只关联一个平台门实例（L4-13，S10 K4，core 0042）
+
+**变化**：`workspace_gate_links` 的 `(workspace_id, gatekeeper_object_id)` 改为唯一索引。同一个端点换了
+GATE_ID 重新部署后，`preview_gate_instance_enable` / `enable_gate_instance` 会拒绝把已关联的 Gatekeeper
+再关联一次（409 `gatekeeper_already_linked`，什么都不写），不再留下两条关联让信任级别与停用 Operation 列表
+取决于哪一行先读到。同一迁移把四个 `security definer` 函数绑定到事务自己的工作区（L4-11 余项），并收回
+`nexttime_app` 对 `workspace_gate_links` 的 DELETE（内核没有删关联的路径）。
+
+**升级前只读预检**：已有的重复关联会让 0042 建唯一索引失败、整个迁移回滚，所以先确认没有——在主机上：
+
+```bash
+docker compose exec -T postgres psql -U nexttime -d nexttime -c "
+begin transaction read only;
+select workspace_id, gatekeeper_object_id, array_agg(gate_id order by enabled_at) as gate_ids
+  from workspace_gate_links
+ group by workspace_id, gatekeeper_object_id
+having count(*) > 1
+ order by workspace_id, gatekeeper_object_id;
+rollback;"
+```
+
+结果记 `docs/private/`；空表 = 可以直接应用。不为空时先别应用：每组留下当前在用的那个门实例的关联，其余的按
+`docs/runbooks/add-gatekeeper.md` §11.1 层 1（登录角色上删 `workspace_gate_links` 一行）删掉，并把删了哪几行记进 `docs/private/`，再重跑预检到空。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -524,6 +548,7 @@ schema 兼容性**，不覆盖依赖生产数据的问题；v(n) 改了 v(n-1) �
 | v0.40.0 之后的下一版 | llm-usage `0002_usage_request_id`（R-67 / L6-13）：`llm_usage` 新增可空 `request_id`（uuid）——llm-proxy 为每个上游请求铸的用量标识，重放时不变；加部分唯一索引 `llm_usage_request_id_uidx (workspace_id, request_id) where request_id is not null`。0001 的唯一键 `(workspace_id, jti, started_at)` **保留**：同一 Handle 在同一毫秒开始的两个请求，后一个存在该毫秒内往后几微秒（不出这一毫秒，低于 llm-proxy 的测量精度）。没有 `request_id` 的记录（R-67 之前的 llm-proxy，只在滚动升级窗口里）照旧按 0001 的键去重。不回填、不改既有行 | 可逆 | 只加一列（可空、无默认值）和一个只覆盖非空行的部分唯一索引。读了 v0.40.0 的 `governance/llm-usage/service.ts`：插入是显式列清单，不写新列（恒为空，新索引不收录），`on conflict (workspace_id, jti, started_at)` 只能推断出一个**非部分**、恰好这三列的唯一索引——正因如此 0001 的键原样保留（删掉或改成部分索引，回退后旧代码的每次用量写入都会 42P10 失败）；新代码写入的行在这三列上也互不相同（微秒错位），所以旧代码的去重语义不变；读路径（日成本 / token 汇总、平台 30 天用量）都是显式列，不读新列。回退后旧代码回到"同一毫秒的并发请求被合并"（即 R-67 本身），新代码期间写入的行原样保留、照常计入汇总 | 只需回退代码；若要连 schema 一起撤：`drop index llm_usage_request_id_uidx; alter table llm_usage drop column request_id`（不撤也无害） |
 | v0.41.0 之后的下一版 | core `0040_audit_unattributed_observation_compaction`（遗留 103）：把 `audit_records_actor_shape` 里 0032 / 0036 的无操作者例外（`actor_user_id` 为空且 `payload -> 'attributedActor'` 是 JSON 布尔 `false`）再扩一个动作 `cli.observations_compacted`——`compact-observations --yes` 的平台审计行，`apply-release.sh` 无人值守地跑它时可能解析不出操作者；其余无操作者的平台行照旧拒绝。不改数据 | 可逆 | 只放宽（widening）：凡满足 0036 约束的行必然满足新约束，重新加约束校验既有行不会失败，无需回填。读了 v0.41.0：没有 `compact-observations`，也没有任何路径写 `cli.observations_compacted`，旧代码从不触发新加的合法分支；旧测试 `writer.test.ts` 断言的拒绝情形（其他动作、缺标记）在新约束下仍被拒。回退后压缩命令不存在（回退目标的 `apply-release.sh` 也不跑它），已写入的 `cli.observations_compacted` 行留在表里、旧代码的 `platform_audit_query` 照常列出；已删掉的观察行不随回退恢复——它们按规则本来就不被任何读者用到，要找回只能用压缩前那份 `BACKUP_NOW` dump | 只需回退代码；若要连 schema 一起撤：按 0036 的定义重建 `audit_records_actor_shape`（前提是先删掉无操作者的 `cli.observations_compacted` 行，否则重建失败；不撤也无害） |
 | v0.42.0 之后的下一版 | core `0041_drop_workspace_ontology_enforcement_allowance`（S10 P0，遗留 123 跟进）：删 0035 的 `workspaces_own_ontology_enforcement` 策略，`workspaces_block_workspace_plane_update` 去掉 `ontology_enforcement` 一列的例外——工作区事务改不了任何 `workspaces` 行（RLS 隐藏，0 行）。不改数据、不加列 | 可逆 | v0.42.0 的产品代码只在平台事务（`update_workspace`）或登录角色上写 `workspaces`，没有路径用过这条放行；v0.42.0 套件里依赖它的只有 `write-confinement.integration.test.ts` 的两个用例（"兼容放行"，以及"自己工作区的其他列被触发器报错拒绝"——现在是 RLS 隐藏、0 行而不是报错），它们断言的正是这次有意改变的约束，探针里这两个用例失败属"旧测试断言了新迁移有意改变的约束"；`ontology-guard` / `worker-result` 自 0035 起已改在登录角色上改该列 | 只需回退代码；若要连 schema 一起撤：按 0035 重建该策略与触发器函数 |
+| v0.42.0 之后的下一版 | core `0042_definer_functions_bound_to_workspace`（S10 K4，遗留 123 的 L4-11 余项与 L4-13）：`find_active_fact_for_identity` / `latest_fact_invalidated_for_identity` 遇到不是 `app_workspace()` 的工作区参数报 42501，`link_visible_to_caller` / `conflict_visible_to_caller` 对它答 false；`workspace_gate_links_gatekeeper_idx` 换成唯一索引 `workspace_gate_links_gatekeeper_key (workspace_id, gatekeeper_object_id)`；收回 `nexttime_app` 对 `workspace_gate_links` 的 DELETE。不改数据、不加列 | 可逆（先过 §3.8 预检） | v0.42.0 的调用方都在 `withWorkspace` 里、传的都是本事务的工作区（GUC 对登录角色也设置），答案不变；v0.42.0 没有删关联的内核路径，手工解除关联走登录角色；v0.42.0 只在一个 Gatekeeper 还没有关联时插入关联（重复关联正是被拦下的情形）。已有重复关联时迁移本身失败、整体回滚，所以要先跑 §3.8 预检 | 只需回退代码；若要连 schema 一起撤：按 0013 / 0017 / 0027 / 0029 重建四个函数（`create or replace` 保留 0035 的授权），`drop index workspace_gate_links_gatekeeper_key` 后按 0023 重建非唯一索引，`grant delete on workspace_gate_links to nexttime_app` |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

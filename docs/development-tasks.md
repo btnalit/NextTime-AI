@@ -3600,6 +3600,28 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   新族，正是 I-P1 现在拒绝的写法）；`write-confinement.integration.test.ts` 改断言工作区事务改不了自己工作区的任何列；
   web `ModulesTab.test.tsx` 断言模块安装撞名显示映射后的文案与原始 code。
 
+**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**
+
+- L4-11 余项：四个 `security definer` 函数不再信任调用方给的 `p_workspace_id`。`find_active_fact_for_identity` /
+  `latest_fact_invalidated_for_identity` 由图存储直接调用，参数不是 `app_workspace()` 时报 42501（不返回空——"没有活跃
+  Fact"会把调用方带进插入分支）；`link_visible_to_caller` / `conflict_visible_to_caller` 是 RLS 谓词，扫描时可能先于策略里
+  `workspace_id = app_workspace()` 那一支求值，所以只答 false（隐藏），从不报错。所有调用方都在 `withWorkspace` 里，
+  登录角色也设置 `app.workspace_id`，现有路径答案不变；`create or replace` 保留 0035 的授权。
+- L4-13：`workspace_gate_links (workspace_id, gatekeeper_object_id)` 改唯一索引；`resolveGateLinkTarget` 唯一匹配的
+  Gatekeeper 已关联到别的门实例时，预览与启用都拒绝 `gatekeeper_already_linked`（HTTP 409，什么都不写），索引是第二道墙。
+  0035 留到"L4-13 之前"的 `workspace_gate_links` DELETE 授权一并收回（内核无删关联路径，手工解除关联走登录角色）。
+  控制台：错误码进 `platform-errors.ts`，启用预览失败的提示改走映射文案。
+- 主机只读预检：`runbooks/release.md` §3.8（已有重复关联会让建索引失败、整个迁移回滚）；可逆性见同文件 §6。
+- L5-16 推迟：人类主体的 user 在 principal 行插入**之后**才由 `ensureUserForHumanPrincipal` 补上，CHECK 不能延迟；
+  改成提交时检查的约束触发器会拒绝大量直接插裸人类主体的测试夹具，还会让可逆性探针里旧套件成片失败。
+  理由写在 `users.ts` 该函数注释里，遗留 123 继续记着。
+- L1-14 余项（`register-gatekeeper --publish` 补审计）随 W2 P0b"接入路径统一"做（§5h 表），不在本 PR。
+- L4 注释漂移：`users.ts` `ensureUserForHumanPrincipal` 注释订正（`create_principal` 早已不调用它；`users` 插入在
+  `nexttime_app` 上只有平台事务过得了 RLS）；`gates/store.ts` `findGateLinkByGatekeeper` 注释改为指向唯一索引。
+- 测试：`write-confinement.integration.test.ts` 新增 K4 三例（跨工作区调用两个直调函数报 42501、两个谓词答 false、
+  `workspace_gate_links` 上存在 `(workspace_id, gatekeeper_object_id)` 唯一索引）并把该表 DELETE 列入已收回清单；`platform-gates.integration.test.ts`
+  新增同一端点换 GATE_ID 后预览 / 启用都被拒、不落行、原实例重复启用仍幂等；web `EnableGateConfirm.test.tsx` 新增预览被拒的文案。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
