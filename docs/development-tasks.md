@@ -3541,6 +3541,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 触发：改动 `packages/kernel/migrations/**` 的 PR（BASE = 最新发布 tag）；`workflow_dispatch` 补历史。非必过检查。
 - 自 v0.13.2 起所有 tag 都是 pnpm 11.25.0 + Node 22（`pnpm/setup`），两份检出用同一套工具链安装。
 - 边界：空库上的 schema 兼容性，不覆盖依赖生产数据的迁移问题（那部分仍靠"读代码推理"与发版前 dump）。
+- 声明式有意改变（#482，2026-10-08 合入）：此前探针红只能在 PR 里口头解释。现在 BASE 套件以 JSON reporter 运行，`scripts/reversibility-triage.mjs` 给结论：有意改变旧断言的迁移在 `packages/kernel/migrations/reversibility-deltas.json` 声明（迁移、被改变的 BASE 测试、HEAD 里替代它的新断言、`release.md` §6 依据）；只有 HEAD 新增的迁移激活声明；声明的测试必须真的失败，替代断言必须是本 PR 新增（不在 BASE 结果里）且在 HEAD 通过，被声明的 BASE 测试文件必须在 HEAD 有改动；报告的失败数、BASE 退出码、至少一个通过、跳过不超过 5% 必须对得上；文件级错误与未处理错误都算失败。未声明的失败照旧红，没有整体跳过。单元测试 `scripts/reversibility-triage.test.mjs` 在 CI `quality` 里跑。
 
 ## 5h. S10 — 底座演进：可升级运行时 · 受治理的自进化 · 能力包（2026-10-04 立项，11 项决定全部落定）
 
@@ -3575,7 +3576,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 ### S10 实现说明
 
-**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**
+**P0 — 本体命名空间不变量 I-P1（遗留 124）+ 两个前置跟进**（#477，2026-10-08 合入）
 
 - `substrate/ontology/namespace.ts`：`assertOntologyNamespace(client, workspaceId, candidateId, definition)` 拿候选定义与
   工作区内**其他每个族的最新已发布版本**比较（与 `loadPublishedLinkTypes` 判定写入时用的是同一口径），ObjectType 名、
@@ -3606,7 +3607,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 可逆性探针：`packages/kernel/migrations/reversibility-deltas.json` 声明 0041 有意改变、v0.42.0 套件里两个
   `write-confinement` 断言，由本 PR 的新断言替代（机制见 `runbooks/release.md` §6）。
 
-**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**
+**K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**（#478，2026-10-08 合入）
 
 - L4-11 余项：四个 `security definer` 函数不再信任调用方给的 `p_workspace_id`。`find_active_fact_for_identity` /
   `latest_fact_invalidated_for_identity` 由图存储直接调用，参数不是 `app_workspace()` 时报 42501（不返回空——"没有活跃
