@@ -1,0 +1,112 @@
+# Runbook：staging-rehearsal（云端发版预演）
+
+对应脚本：`scripts/staging-rehearsal.sh`；调用方：`.github/workflows/staging.yml`。
+前置阅读：`docs/runbooks/release.md` §3（主机上的 `apply-release.sh`）、
+`docs/runbooks/host-accept-real-model.md`（`--real` 模式）。
+
+## 1. 目的
+
+在一台**一次性**的 Docker 主机（GitHub-hosted runner）上，把"生产主机今天在跑的发布版 → 本次要上
+的版本"完整走一遍，结论是：**这个提交能在生产现状之上 apply，并且在那里通过 S3/S1/S2/S4**。
+
+它是主机 apply 之前的预发环境，不是主机 apply 本身：主机上的 apply、主机验收记录、回滚决定仍然
+在生产主机上做（见 §5"仍然只能在生产主机上做的事"）。
+
+## 2. 它做了什么（与生产主机的对应关系）
+
+| 步骤 | 预演里怎么做 | 生产主机上对应的是 |
+|---|---|---|
+| preflight | 目标版本的 `host-preflight.sh`，另查内核 IPv6（docker-socket-proxy 绑 `[::]:2375`） | `host-preflight.md` |
+| 检出 | 本仓库的本地克隆，停在 `--from` tag | `host-checkout.md` |
+| 主机初始化 | `--from` 版本自己的 `host-bootstrap` / `host-env-init` / `host-llm-proxy-init` / `gen-handle-keys` / `derive-internal-tokens` | `README.md` ① |
+| `.env` | `KERNEL_BIND_ADDR=127.0.0.1`、文档网段 `203.0.113.0/24` / `203.0.114.0/24`、`WORKER_RUNTIME`、`COMPOSE_FILE` 加 staging overlay | 主机自己的 `.env` |
+| 镜像 | `--from` 的 `pull-images.sh`（cosign 验签） | `apply-release.sh --pull` |
+| 迁移 | `migrate.js` | 同 |
+| 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、集成页启用门实例 |
+| 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
+| apply | **`--from` 版本自己的** `apply-release.sh [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | 同一个脚本 |
+| 真实模型（可选） | 写入 providers yaml + key env → 重建 llm-proxy → `gen-models` → `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
+
+staging overlay（写在数据目录 `staging/docker-compose.staging.yml`，不在检出里，所以对 from / to
+两个版本都生效）只做一件事：把 `gatekeeper-ragflow` 移到一个不启用的 profile——预演环境没有
+RagFlow 上游，它会因 `RAGFLOW_BASE_URL` 未设一直重启。验收脚本自己用显式 `-f` 起服务，不读
+overlay，这不影响它们（它们从不启动 RagFlow 门）。
+
+非 tag 的目标（PR、main）会得到一个本地、从不推送的 tag `vA.(B+1).0-staging.<sha>`，因为
+`apply-release.sh` 只接受 tag；脚本退出时删除。`KERNEL_VERSION` 因此显示这个 tag，仅展示用。
+
+## 3. 怎么跑
+
+### 3.1 自动触发
+
+PR 或 main push 改到发布路径（`packages/kernel/migrations/**`、`docker-compose.yml`、
+`scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh`、
+`scripts/lib/**`、`deploy/accept/**`、本 workflow）时自动跑：from = 目标之下最新的 `vX.Y.Z`，
+to = PR 合并提交 / main 头，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
+
+### 3.2 手动（workflow_dispatch）
+
+Actions → `staging` → Run workflow：
+
+| 输入 | 含义 |
+|---|---|
+| `to` | 空 = 选中的分支头；`vX.Y.Z` = 已发布 tag，用已签名镜像（`--pull`）预演发版本身 |
+| `from` | 空 = `to` 之下最新 tag（即生产当前版本，前提是生产没落后） |
+| `worker_runtime` | `auto`（preflight 结论）/ `runc` / `runsc`——**与生产主机 `.env` 保持一致** |
+| `seed` | 默认开；关掉省一轮基线时间，但迁移只面对空表 |
+| `real_model` / `runs` | 见 §4 |
+
+### 3.3 本地（任何一次性 Linux + Docker 主机）
+
+```bash
+# 以 root，在本仓库完整克隆（含 tag）的根目录
+sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --work /srv/staging
+```
+
+脚本拒绝已有 `nexttime-ai` 容器的主机和非空的 `--work`。**不要在生产主机上跑。**
+
+## 4. 真实模型回归
+
+只在手动触发且 `real_model: true` 时跑，job 进入 `staging-real-model` environment。一次性设置
+（仓库 Settings → Environments）：
+
+1. 新建 environment `staging-real-model`，**加 required reviewer**（每次都花真钱，审批即授权）；
+   Deployment branches 限制为 `main`。
+2. 在该 environment 下加三个 secret：
+   - `STAGING_LLM_PROVIDERS_YAML`：一份完整的 `llm-providers.yaml`（格式见
+     `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
+   - `STAGING_LLM_PROXY_ENV`：`KEY=VALUE` 行，键名即 yaml 里各 provider 的 `api_key_env`；
+   - `STAGING_REAL_MODEL`：`<provider/model>`，必须是上面 yaml 生成的 `models.json` 里的 id。
+3. Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归）。
+
+日志与 artifact 是公开的：workflow 对模型 id、它的两段、yaml 里的 provider 名与上游 URL 做
+`::add-mask::`，上传前对日志文件逐一替换成 `<redacted>`。读数规则同 `host-accept-real-model.md`
+§5（`REAL scenario=… ok=k/n`），计数记录规则同其 §6——供应商与模型名仍只进 `docs/private/`。
+
+## 5. 仍然只能在生产主机上做的事
+
+| 项 | 为什么预演覆盖不了 |
+|---|---|
+| 生产数据上的迁移 | 预演的表由基线验收填充，形状接近但不是生产数据；`release.md` 里针对既有数据的 preflight SQL（如 §3.7/§3.8 类检查）仍在主机跑 |
+| RagFlow 门与 S4 的 ragflow 部分 | 没有 RagFlow 上游；预演的 S4 只覆盖 docker 门 |
+| 局域网 / 路由侧、主机上其他服务 | runner 是孤立的公网 VM |
+| 长期运行性质 | 重启恢复、夜间备份计划、日志与磁盘增长——runner 跑完即销毁 |
+| 生产上的回滚 | 预演只证明前滚；回滚演练见 `drill-upgrade.sh`（在主机或另一台一次性主机上） |
+| 发版授权 | 预演绿不等于可以上生产；生产 apply 仍需维护者明确同意 |
+
+## 6. 怎么读输出
+
+与 `apply-release.sh` 同格式：每步一行 `STEP …`，停止时 `FAIL <step>`，最后一行
+`RESULT ok` / `RESULT failed-at=<step>` / `RESULT acceptance-failures=<n>` /
+`RESULT real-model-failures=<n>`，只有 `RESULT ok` 退出 0。`STEP apply | …` 是
+`apply-release.sh` 自己日志里的行。完整日志在 artifact `staging-logs`（保留 7 天）：
+`baseline-<from>-s{1..4}.log`、`apply-<tag>-<ts>[-sN].log`、`compose-logs.txt` 等。
+
+## 7. 常见问题
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `FAIL preflight … IPv6 disabled` | 主机内核关了 IPv6，docker-socket-proxy 起不来 | 换主机；GitHub runner 没有这个问题 |
+| `FAIL baseline …` | `--from` 版本在这台主机上就过不了验收——环境与生产不等价，预演结论不可信 | 读 `baseline-*.log`；确认是环境差异后可 `--allow-baseline-failures`，并在结论里写明 |
+| S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 时 gVisor 网络栈访问不到 Docker 内嵌 DNS（`127.0.0.11`），入口容器解析不了 `kernel` / `llm-proxy` | `worker_runtime` 设成与生产一致；若生产也是 `runsc` 却能通过，说明两边 gVisor 版本 / 配置不同，记入遗留 |
+| S3 `seed-domain-pack` 失败 | `config/ontology/` 里没有 `ops-assets-*.yaml` | 预演脚本已复制；主机上按 `add-domain-pack.md` 放入 |

@@ -111,14 +111,10 @@ CREATED_TAG=
 cleanup() { [ -n "$CREATED_TAG" ] && git -C "$REPO" tag -d "$CREATED_TAG" >/dev/null 2>&1; }
 trap cleanup EXIT
 
-# The registry pull-images.sh would derive from the checkout's origin — the staging checkout's
-# origin is this local clone, so derive it here from this clone's own origin instead.
-if [ -z "${NEXTTIME_IMAGE_REGISTRY:-}" ]; then
-  slug=$(git config --get remote.origin.url 2>/dev/null | sed -n 's#^.*github\.com[:/]\([^/]*/[^/]*\)$#\1#p' | sed 's#\.git$##')
-  [ -n "$slug" ] || die "cannot derive the image registry from origin; set NEXTTIME_IMAGE_REGISTRY=ghcr.io/<owner>"
-  NEXTTIME_IMAGE_REGISTRY="ghcr.io/$(printf '%s' "${slug%%/*}" | tr '[:upper:]' '[:lower:]')"
-fi
-export NEXTTIME_IMAGE_REGISTRY
+# The staging checkout's origin must be this repository on GitHub, exactly like the production
+# checkout: pull-images.sh derives the registry AND the cosign signer identity from it.
+ORIGIN_URL=$(git config --get remote.origin.url 2>/dev/null)
+case "$ORIGIN_URL" in *github.com[:/]*) ;; *) die "this clone's origin ('$ORIGIN_URL') is not a GitHub URL — pull-images.sh needs it to verify signatures" ;; esac
 
 # --to: a release tag is applied as itself (published images); anything else gets a staging tag.
 pull_flag=
@@ -146,9 +142,11 @@ sed 's/^/STEP preflight /' "$LOGS/preflight.log" | grep -E 'FAIL|WARN|WORKER_RUN
 [ -n "$RUNTIME" ] || RUNTIME=runc
 step "preflight ok worker-runtime=$RUNTIME"
 
-# 2. checkout — a clone of this repository at --from; its origin is this clone, so
-#    apply-release.sh's own `git fetch origin --tags` finds the staging tag without a network.
-git clone -q "$REPO" "$CODE" && git -C "$CODE" checkout -q "$FROM" || fail checkout
+# 2. checkout — cloned from this clone (so a local staging tag comes along), then origin pointed at
+#    GitHub like the production checkout. apply-release.sh's `git fetch origin --tags` never deletes
+#    a local tag, so the staging tag survives it.
+git clone -q "$REPO" "$CODE" && git -C "$CODE" remote set-url origin "$ORIGIN_URL" &&
+  git -C "$CODE" checkout -q "$FROM" || fail checkout
 cd "$CODE" || fail checkout
 step "checkout $(git describe --tags --always HEAD)"
 
