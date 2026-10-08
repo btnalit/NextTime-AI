@@ -426,8 +426,10 @@ names as (
 select workspace_id, kind, name, array_agg(id order by id) as families
   from names group by workspace_id, kind, name having count(*) > 1
  order by workspace_id, kind, name;
-rollback;"
+rollback;" </dev/null
 ```
+
+（`</dev/null`：经 ssh 在脚本里跑时，不让 `docker compose exec` 吞掉后续命令的标准输入；本机直接跑无影响。）
 
 结果记 `docs/private/`；空表 = 没有要处理的。不为空时先别应用，把结果带回来单独评审迁移方案（把其中一个族的
 类型改名为新版本，旧版本保留可读——S10 方案 §8）。
