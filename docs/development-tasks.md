@@ -3704,6 +3704,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   pi 不兼容；版本信息陈旧 / 异常），每条"知道了"按版本键存 localStorage（换版本或换状态再出现）；没有任何升级按钮（决定 2 / 3）。
   「pi 运行时」卡片加「上游最新 pi」一行；运行状态页加「版本信息」块（`updateFeed` 状态机：fresh / stale / invalid / missing）。
   W2 余项：侧栏提醒点、四版本并排。
+- **复核后续（#489，2026-10-08 合入）**：陈旧原因由内核给出（`feedFreshness.staleCause`：`download` 先于 `ci`），前端不再用浏览器时钟重判 48 h；每条发版记录带 `previousVersion`（紧挨着的上一个 tag，必须早于本版），只有主机版本早于窗口起点才标"迁移列表不完整"，旧记录没有该字段时退回"最旧列出的发版"；内核用 `ReleaseChannelReaderSchema` 读取（已知字段照旧严格、未知字段逐层剥离、不拒收也不使用），CI 仍用 strict 的 `ReleaseChannelSchema` 校验产出，`schema` 只在不兼容变更时提升；`UPDATE_FEED_URL` 只在 fork 时覆盖，且必须是该 fork 的 GitHub release 下载地址。
 - **验证**：内核单测 16 条 + 集成 3 条（真库）、共享 schema 单测、脚本 `node --test` 6 条、web 单测；本地起真实内核
   （`AGENT_RUNTIME=fake`）与 vite 截图核对概览 / 运行层 / 运行状态的亮暗、1280 / 390 两档与五种状态；`update-feed` 脚本在
   钉住的镜像里以 uid 10002、只读根实测成功、404、超限、非 https 四条路径。主机步骤与四种状态的核对见 `runbooks/operations.md` §16。
