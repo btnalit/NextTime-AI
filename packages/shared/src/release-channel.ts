@@ -52,10 +52,14 @@ const IsoUtcSchema = z.string().datetime();
 export const ReleaseChannelReleaseSchema = z
   .object({
     version: PlatformReleaseVersionSchema,
+    /** The release tag just before this one — what `migrations` is counted from; null for the
+     *  repository's first release. Optional: records written before the field existed lack it,
+     *  and a reader must still accept them (it then cannot place the window's start exactly). */
+    previousVersion: PlatformReleaseVersionSchema.nullable().optional(),
     publishedAt: IsoUtcSchema,
     /** The pi this release's images carry (`pi.version` at the tag); null for a tag that has none. */
     pi: PiReleaseVersionSchema.nullable(),
-    /** Migrations this release adds over the previous one, in apply order. */
+    /** Migrations this release adds over `previousVersion`, in apply order. */
     migrations: z.array(MigrationRefSchema).max(200),
     /** release-please marked the release `⚠ BREAKING CHANGES`. */
     breaking: z.boolean(),

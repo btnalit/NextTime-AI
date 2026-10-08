@@ -21,9 +21,16 @@ const HOUR = 3_600_000;
 const REPO = 'https://github.com/example/nexttime-ai';
 const FEED_REPO = 'example/nexttime-ai';
 
+/** The fixtures' releases are consecutive minors: v0.44.0 follows v0.43.0, and so on. */
+function previousOf(version: string): string {
+  const minor = Number(/^v0\.(\d+)\.0$/.exec(version)?.[1]);
+  return `v0.${minor - 1}.0`;
+}
+
 function release(version: string, pi: string, migrations: string[] = [], breaking = false) {
   return {
     version,
+    previousVersion: previousOf(version),
     publishedAt: '2026-10-05T10:00:00Z',
     pi,
     migrations,
@@ -93,15 +100,21 @@ describe('releaseChannelFromFile', () => {
 
   it('is stale after 48 h without a successful download, and still keeps the record', () => {
     expect(readOf(channel(), 48).feed.status).toBe('fresh');
+    expect(readOf(channel(), 48).feed.staleCause).toBeNull();
     const stale = readOf(channel(), 49);
-    expect(stale.feed.status).toBe('stale');
+    expect(stale.feed).toMatchObject({ status: 'stale', staleCause: 'download' });
     expect(stale.feed.detail).toContain('update-feed');
     expect(stale.channel).not.toBeNull();
   });
 
   it('is stale when CI stopped writing the record, even if the download is fresh', () => {
     const read = readOf(channel({ generatedAt: '2026-10-05T03:00:00Z' }));
-    expect(read.feed.status).toBe('stale');
+    expect(read.feed).toMatchObject({ status: 'stale', staleCause: 'ci' });
+    // Both halves stale: the download is the cause — a record not being fetched says nothing
+    // about CI.
+    expect(readOf(channel({ generatedAt: '2026-10-05T03:00:00Z' }), 49).feed.staleCause).toBe(
+      'download',
+    );
     expect(read.feed.detail).toContain('CI last wrote the record');
   });
 
@@ -161,15 +174,41 @@ describe('derivePlatformUpdates', () => {
     });
   });
 
-  it('flags the migration list as partial when this version predates the listed window', () => {
-    // The record lists v0.41.0 and newer; v0.40.0 → the migrations v0.41.0 added over v0.40.x and
-    // anything before are not in it (apply-release still runs them).
-    expect(derive(readOf(channel()), 'v0.40.0 (aaa1111)').platformUpdate).toMatchObject({
+  it('flags the migration list as partial only when this version predates the window base', () => {
+    // The record lists v0.41.0 and newer, counted from v0.40.0 (v0.41.0's previousVersion): a
+    // host on v0.40.0 gets every migration it will cross; one on v0.39.0 misses what v0.40.0
+    // added (apply-release still runs them).
+    expect(derive(readOf(channel()), 'v0.39.0 (aaa1111)').platformUpdate).toMatchObject({
       available: true,
       migrationsIncomplete: true,
     });
+    for (const current of ['v0.40.0 (aaa1111)', 'v0.41.0 (bbb2222)']) {
+      expect(derive(readOf(channel()), current).platformUpdate?.migrationsIncomplete).toBe(false);
+    }
+    // A record written before previousVersion existed is still valid; without the window base the
+    // oldest listed release is the bound (the pre-field judgment).
+    const legacy = channel();
+    const legacyReleases = legacy.platform.releases.map(({ previousVersion: _, ...r }) => r);
+    const legacyRead = releaseChannelFromFile(
+      '/f',
+      JSON.stringify({ ...legacy, platform: { ...legacy.platform, releases: legacyReleases } }),
+      NOW,
+      NOW,
+      FEED_REPO,
+    );
+    expect(legacyRead.feed.status).toBe('fresh');
+    expect(derive(legacyRead, 'v0.40.0 (aaa1111)').platformUpdate?.migrationsIncomplete).toBe(true);
+    expect(derive(legacyRead, 'v0.41.0 (bbb2222)').platformUpdate?.migrationsIncomplete).toBe(
+      false,
+    );
+    // The window reaches back to the repository's first release: nothing is missing.
+    const fromFirst = channel();
+    const releases = fromFirst.platform.releases.map((r, i, all) =>
+      i === all.length - 1 ? { ...r, previousVersion: null } : r,
+    );
     expect(
-      derive(readOf(channel()), 'v0.41.0 (bbb2222)').platformUpdate?.migrationsIncomplete,
+      derive(readOf({ ...fromFirst, platform: { ...fromFirst.platform, releases } }), 'v0.30.0 (c)')
+        .platformUpdate?.migrationsIncomplete,
     ).toBe(false);
   });
 

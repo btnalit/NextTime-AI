@@ -172,15 +172,16 @@ describe('buildUpdateNotices', () => {
     });
   });
 
-  it('feed stale while downloads are recent: CI stopped writing — age from generatedAt', () => {
-    // Downloaded 5 h ago (well inside 48 h), so the kernel can only have called it stale for the
-    // record's own age: the cause is CI, not the host.
+  it('feed stale for CI: the kernel cause wins, the age comes from generatedAt', () => {
+    // The kernel says CI stopped writing the record; the browser never second-guesses it from its
+    // own clock — even with a download older than maxAgeHours by the browser's reckoning.
     const generatedAt = '2026-10-04T00:00:00.000Z';
     const [notice] = buildUpdateNotices(
       platformUpdates({
         feedFreshness: feedFreshness({
           status: 'stale',
-          fetchedAt: '2026-10-07T19:00:00.000Z',
+          staleCause: 'ci',
+          fetchedAt: '2026-10-05T00:00:00.000Z',
           generatedAt,
         }),
       }),

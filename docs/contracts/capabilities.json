@@ -14586,6 +14586,20 @@
               "exclusiveMinimum": 0,
               "type": "integer"
             },
+            "staleCause": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "download",
+                    "ci"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "enum": [
                 "fresh",
@@ -14598,6 +14612,7 @@
           },
           "required": [
             "status",
+            "staleCause",
             "fetchedAt",
             "generatedAt",
             "maxAgeHours",
@@ -14777,6 +14792,17 @@
                         "anyOf": [
                           {
                             "pattern": "^(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})(?:-([0-9A-Za-z.-]{1,32}))?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "previousVersion": {
+                        "anyOf": [
+                          {
+                            "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
                             "type": "string"
                           },
                           {

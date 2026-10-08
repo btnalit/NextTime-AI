@@ -6,6 +6,7 @@ import {
   type PlatformUpdatesWire,
   RELEASE_CHANNEL_MAX_BYTES,
   type ReleaseChannel,
+  type ReleaseChannelRelease,
   ReleaseChannelSchema,
   comparePiVersions,
   comparePlatformVersions,
@@ -86,8 +87,16 @@ function feedOf(
   detail: string,
   fetchedAt: string | null = null,
   generatedAt: string | null = null,
+  staleCause: PlatformUpdateFeedWire['staleCause'] = null,
 ): PlatformUpdateFeedWire {
-  return { status, fetchedAt, generatedAt, maxAgeHours: UPDATE_FEED_MAX_AGE_HOURS, detail };
+  return {
+    status,
+    staleCause,
+    fetchedAt,
+    generatedAt,
+    maxAgeHours: UPDATE_FEED_MAX_AGE_HOURS,
+    detail,
+  };
 }
 
 function ageText(ms: number): string {
@@ -153,6 +162,9 @@ export function releaseChannelFromFile(
   const fetchStale = fetchAge > UPDATE_FEED_MAX_AGE_HOURS * 3_600_000;
   const generatedStale = generatedAge > UPDATE_FEED_GENERATED_MAX_AGE_HOURS * 3_600_000;
   let detail: string;
+  // The download is checked first: a record that is not being fetched cannot say anything about
+  // CI. The console words the reminder by this cause and never re-derives it from its own clock.
+  const staleCause = fetchStale ? 'download' : generatedStale ? 'ci' : null;
   if (fetchStale) {
     detail = `last successful download ${fetchedAt} is ${ageText(fetchAge)} (> ${UPDATE_FEED_MAX_AGE_HOURS}h) — check the update-feed service's logs on the host`;
   } else if (generatedStale) {
@@ -162,10 +174,11 @@ export function releaseChannelFromFile(
   }
   return {
     feed: feedOf(
-      fetchStale || generatedStale ? 'stale' : 'fresh',
+      staleCause === null ? 'fresh' : 'stale',
       detail,
       fetchedAt,
       channel.generatedAt,
+      staleCause,
     ),
     channel,
   };
@@ -247,13 +260,24 @@ function derivePlatformUpdate(
           .filter((release) => (comparePlatformVersions(release.version, currentVersion) ?? 0) > 0)
           .sort((a, b) => comparePlatformVersions(b.version, a.version) ?? 0);
   const newest = newer[0];
-  const oldestListed = channel.platform.releases.reduce<string | null>(
+  // The window starts from the oldest listed release's predecessor: its migrations are counted
+  // from there, so a host on exactly that release still gets the full list. A null predecessor
+  // means the record reaches back to the repository's first release. A record from before
+  // `previousVersion` existed lacks it: fall back to the oldest listed release itself, which errs
+  // towards "partial" by one release rather than hiding a gap.
+  const oldestListed = channel.platform.releases.reduce<ReleaseChannelRelease | null>(
     (oldest, release) =>
-      oldest === null || (comparePlatformVersions(release.version, oldest) ?? 0) < 0
-        ? release.version
+      oldest === null || (comparePlatformVersions(release.version, oldest.version) ?? 0) < 0
+        ? release
         : oldest,
     null,
   );
+  const windowBase =
+    oldestListed === null
+      ? null
+      : oldestListed.previousVersion === undefined
+        ? oldestListed.version
+        : oldestListed.previousVersion;
   return {
     currentVersion,
     latestVersion: channel.platform.latest,
@@ -264,8 +288,8 @@ function derivePlatformUpdate(
     migrationsIncomplete:
       newest !== undefined &&
       currentVersion !== null &&
-      oldestListed !== null &&
-      (comparePlatformVersions(currentVersion, oldestListed) ?? 0) < 0,
+      windowBase !== null &&
+      (comparePlatformVersions(currentVersion, windowBase) ?? 0) < 0,
     breaking: newer.some((release) => release.breaking),
     notesUrl: newest?.notesUrl ?? null,
     applyCommand: newest ? `sh scripts/apply-release.sh --pull ${newest.version}` : null,

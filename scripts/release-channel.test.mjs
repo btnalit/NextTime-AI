@@ -12,6 +12,7 @@ const { ReleaseChannelSchema } = await import(
 const RELEASES = [
   {
     version: 'v0.43.0',
+    previousVersion: 'v0.42.0',
     publishedAt: '2026-10-09T10:00:00.000Z',
     pi: '1.0.2',
     migrations: ['core 0041'],
@@ -19,6 +20,7 @@ const RELEASES = [
   },
   {
     version: 'v0.42.0',
+    previousVersion: 'v0.41.0',
     publishedAt: '2026-10-04T10:07:13.000Z',
     pi: '0.99.2',
     migrations: ['core 0040'],
