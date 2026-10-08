@@ -527,7 +527,7 @@ function SkillLoads({
   return (
     <span className="text-small">
       {skills.map((skill, index) => (
-        <span key={skill.skillId} title={skill.skillId}>
+        <span key={skill.skillId} title={skill.skillId} className="whitespace-nowrap">
           {index > 0 ? ', ' : null}
           {skill.name} v{skill.version}
         </span>
