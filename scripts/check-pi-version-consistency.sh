@@ -40,6 +40,25 @@ if [ "$AI_DEP" != "$VERSION" ]; then
   fail=1
 fi
 
+# The worker-runtime image installs pi from deploy/worker-runtime/pi/ (package.json + package-lock.json,
+# `npm ci`), because pi 1.0.1+ no longer ships an npm-shrinkwrap.json (docs/runbooks/pi-upgrade.md §3).
+RUNTIME_PKG=deploy/worker-runtime/pi/package.json
+RUNTIME_LOCK=deploy/worker-runtime/pi/package-lock.json
+RUNTIME_DEP=$(grep -m1 '"@earendil-works/pi-coding-agent"' "$RUNTIME_PKG" | sed -E 's/.*"@earendil-works\/pi-coding-agent" *: *"([^"]*)".*/\1/')
+if [ "$RUNTIME_DEP" != "$VERSION" ]; then
+  echo "check-pi-version-consistency: $RUNTIME_PKG dependencies['@earendil-works/pi-coding-agent']=$RUNTIME_DEP does not match pi.version=$VERSION" >&2
+  fail=1
+fi
+LOCK_VERSION=$(node -e '
+  const lock = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const root = lock.packages?.[""]?.dependencies?.["@earendil-works/pi-coding-agent"];
+  const installed = lock.packages?.["node_modules/@earendil-works/pi-coding-agent"]?.version;
+  process.stdout.write(root === installed ? String(installed) : `root=${root},installed=${installed}`);
+' "$RUNTIME_LOCK")
+if [ "$LOCK_VERSION" != "$VERSION" ]; then
+  echo "check-pi-version-consistency: $RUNTIME_LOCK pins pi-coding-agent $LOCK_VERSION, not pi.version=$VERSION (regenerate: cd deploy/worker-runtime/pi && npm install --package-lock-only --ignore-scripts)" >&2
+  fail=1
+fi
 if ! grep -q 'COPY pi.version /tmp/pi.version' deploy/worker-runtime/Dockerfile; then
   echo "check-pi-version-consistency: deploy/worker-runtime/Dockerfile no longer reads pi.version (see docs/runbooks/pi-upgrade.md)" >&2
   fail=1
