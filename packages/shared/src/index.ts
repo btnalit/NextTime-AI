@@ -29,6 +29,7 @@ export * from './correlation.js';
 export * from './metrics.js';
 export * from './net-address.js';
 export * from './outbound-target.js';
+export * from './release-channel.js';
 export * from './wire/index.js';
 
 export const VERSION = '0.1.0';

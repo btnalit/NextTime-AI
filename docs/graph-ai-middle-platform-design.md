@@ -397,7 +397,7 @@ flowchart TB
 
 ### 7.9 出网代理
 
-一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。宿主网络若是 fake-IP 式透明代理（解析器把所有公网域名答成某个私有段，由本地代理映射回真实目标），用 `EGRESS_TRUSTED_RESOLVED_CIDRS` 声明该段：**域名**解析进该段视为公网，字面 IP 与平台子网仍拒绝；正常网络留空。这种解析器对内网主机名也答同一段，名字成了唯一信号，所以代理内置按名字拒绝的私网后缀（`localhost` / `local` / `lan` / `home.arpa` / `internal`），站点自己的内网域用 `EGRESS_DENY_HOST_SUFFIXES` 追加。
+一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单（`egressDeny` 目前只做拒绝清单；条目**只与请求的主机名比较**——精确匹配或 `.` 后缀匹配、不分大小写，如 `example.com` 同时挡 `a.example.com`；IP、CIDR、端口、路径、`host:port` 写进去永远不会命中，字面 IP 与内网段由代理内置的私网判定拒绝，不靠这张清单）；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。宿主网络若是 fake-IP 式透明代理（解析器把所有公网域名答成某个私有段，由本地代理映射回真实目标），用 `EGRESS_TRUSTED_RESOLVED_CIDRS` 声明该段：**域名**解析进该段视为公网，字面 IP 与平台子网仍拒绝；正常网络留空。这种解析器对内网主机名也答同一段，名字成了唯一信号，所以代理内置按名字拒绝的私网后缀（`localhost` / `local` / `lan` / `home.arpa` / `internal`），站点自己的内网域用 `EGRESS_DENY_HOST_SUFFIXES` 追加。
 
 ### 7.10 内核内部分层、模块契约、领域事件
 
@@ -720,8 +720,8 @@ create table worker_definitions (
 | meta | `propose_operation` / `propose_skill` / `propose_procedure` | propose | 私有草稿（I16）；Operation 草稿另对 owner、builder 可见（D-26：成员 Worker 的提案要由 owner 在能力目录审核发布） |
 | | `publish_skill` / `publish_procedure` / `deprecate_*` | human | D-24：所有 `publish_*` / `deprecate_*` 为 `minRole: builder`，且只有该行的提案人或 owner 能发布 / 弃用；发布会替代（或弃用）别人提议的在用版本时，也要那位提案人或 owner（`publish_ontology_version` 仍只认提案人，`publish_manifest` 仍是 owner） |
 | | `update_operation_description` | human（write） | 原地改描述、不走草稿；描述会进每个 agent 的工具列表，所以同 D-24：`minRole: builder`，且只有该 Operation 的提案人或 owner 能改（门导入的 Operation 提案人是 owner）（遗留 123） |
-| | `assert_fact` / `supersede_fact` / `invalidate_fact` | propose | 状态由调用方类型决定 |
-| epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / propose | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
+| | `assert_fact` / `supersede_fact` / `invalidate_fact` | write | 直接写入图（不是 `propose` 草稿）；认知状态由调用方类型决定 |
+| epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / write | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |
 | | `attest_fact` | human（write） | 人工确认证据（§5.6，遗留 89）；与 `verify_fact` 同一角色门 |
 | governance | `request_action` | execute | Worker |
 | | `approve` / `reject` / `list_pending` / `set_auto_approved_action_kind` | human | I14 |

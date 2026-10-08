@@ -60,3 +60,14 @@ jobs:
     uses: ./.github/workflows/publish-images.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+
+  # S10 U1: announce the release on the rolling `channel` feed only once its images are
+  # published — a host's update reminder must never point at a release it cannot pull yet. The
+  # pi half of the record is carried over from the previous one (pi-drift.yml writes it nightly).
+  release-channel:
+    name: release-channel
+    needs: [release-please, publish-images]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-channel.yml

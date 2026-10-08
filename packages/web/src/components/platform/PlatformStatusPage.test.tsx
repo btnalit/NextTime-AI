@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { PlatformStatusPage } from './PlatformStatusPage.js';
+import { feedFreshness, platformUpdates } from './test-fixtures.js';
 
 afterEach(cleanup);
 
@@ -215,5 +216,75 @@ describe('PlatformStatusPage', () => {
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'platform_status').length).toBeGreaterThan(before),
     );
+  });
+
+  describe('S10 U1: the update feed block', () => {
+    it('fresh: a green chip, the times and the limit', async () => {
+      const http = scriptedHttp({
+        platform_status: () => status(),
+        platform_updates: () => platformUpdates(),
+      });
+      renderPage(http);
+      const block = await screen.findByTestId('status-update-feed');
+      expect(block.textContent).toContain('正常');
+      expect(block.textContent).toContain('48 小时以内');
+      const chip = screen.getByTestId('status-update-feed-chip');
+      expect(chip.getAttribute('data-status')).toBe('fresh');
+      expect(chip.getAttribute('data-tone')).toBe('ok');
+      const facts = screen.getByTestId('status-update-feed-facts').textContent ?? '';
+      expect(facts).toContain('10-07');
+      expect(facts).toContain('48 小时');
+      expect(screen.getByTestId('status-update-feed-detail').textContent).toContain(
+        'channel.json fetched',
+      );
+    });
+
+    const cases = [
+      { status: 'stale', tone: 'warn', label: '已陈旧', text: 'update-feed 服务的日志' },
+      { status: 'invalid', tone: 'danger', label: '异常', text: '内核拒绝了下载到的版本记录' },
+      { status: 'missing', tone: 'neutral', label: '尚未取到', text: '还没有取到版本信息' },
+    ] as const;
+    for (const c of cases) {
+      it(`${c.status}: ${c.tone} chip "${c.label}" and what it means`, async () => {
+        const missing = c.status === 'missing';
+        const http = scriptedHttp({
+          platform_status: () => status(),
+          platform_updates: () =>
+            platformUpdates({
+              feedFreshness: feedFreshness({
+                status: c.status,
+                fetchedAt: missing || c.status === 'invalid' ? null : '2026-10-05T04:00:00.000Z',
+                generatedAt: missing || c.status === 'invalid' ? null : '2026-10-05T03:00:00.000Z',
+                detail: `detail for ${c.status}`,
+              }),
+            }),
+        });
+        renderPage(http);
+        const block = await screen.findByTestId('status-update-feed');
+        const chip = screen.getByTestId('status-update-feed-chip');
+        expect(chip.getAttribute('data-status')).toBe(c.status);
+        expect(chip.getAttribute('data-tone')).toBe(c.tone);
+        expect(chip.textContent).toBe(c.label);
+        expect(block.textContent).toContain(c.text);
+        const facts = screen.getByTestId('status-update-feed-facts').textContent ?? '';
+        if (missing || c.status === 'invalid') expect(facts).toContain('—');
+        expect(screen.getByTestId('status-update-feed-detail').textContent).toBe(
+          `detail for ${c.status}`,
+        );
+      });
+    }
+
+    it('a failing platform_updates read is contained to this block', async () => {
+      const http = scriptedHttp({
+        platform_status: () => status(),
+        platform_updates: () => {
+          throw new Error('boom');
+        },
+      });
+      renderPage(http);
+      expect(await screen.findByTestId('status-update-feed-error')).toBeTruthy();
+      expect(screen.getByTestId('status-health')).toBeTruthy();
+      expect(screen.getByTestId('status-backup')).toBeTruthy();
+    });
   });
 });

@@ -763,10 +763,12 @@ export async function deleteWorkspace(
 }
 
 /**
- * Resolves the acting administrator for a CLI-driven purge's audit row: `--actor <login>` when
- * given (must exist — a typo must not silently drop the audit row), else the first login of
- * `NEXTTIME_PLATFORM_ADMINS` if that user exists, else `undefined` (no audit row; the caller
- * prints the structured stderr event and says so).
+ * Resolves the acting administrator for a CLI mutation's audit row (purge and the `cli.*` identity
+ * mutations): `--actor <login>` when given (must exist — a typo must not silently fall back to
+ * another actor), else the first login of `NEXTTIME_PLATFORM_ADMINS` if that user
+ * exists, else `undefined`. `undefined` does NOT skip the audit row (遗留 54 / R-28: audit only
+ * grows): the row is still written, unattributed (`actor_user_id` null, `payload.attributedActor:
+ * false`); a CLI purge additionally prints its structured stderr event.
  */
 async function resolveCliActor(
   pool: PoolLike,

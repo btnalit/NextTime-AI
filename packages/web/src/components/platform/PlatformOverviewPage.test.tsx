@@ -5,11 +5,12 @@ import type {
   PlatformWorkspaceWire,
 } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { PlatformOverviewPage } from './PlatformOverviewPage.js';
+import { availablePlatformUpdate, platformUpdates } from './test-fixtures.js';
 
 afterEach(cleanup);
 
@@ -541,5 +542,47 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
     expect(screen.getAllByTestId('platform-overview-audit-row')).toHaveLength(5);
     expect(audit.textContent).toContain('action_0');
     expect(audit.textContent).not.toContain('action_7');
+  });
+
+  describe('S10 U1: the update reminder', () => {
+    beforeEach(() => window.localStorage.clear());
+
+    it('sits above the residue banner, and dismissing it leaves the page alone', async () => {
+      const http = scriptedHttp({
+        platform_overview: () => overview(),
+        list_workspaces: () => ({
+          items: [
+            defaultWorkspaceRow(),
+            defaultWorkspaceRow({ id: 'ws-2', name: 'Old', isDefault: false, status: 'disabled' }),
+          ],
+        }),
+        platform_updates: () => platformUpdates({ platformUpdate: availablePlatformUpdate() }),
+      });
+      renderPage(http);
+      const reminder = await screen.findByTestId('update-reminder');
+      const residue = await screen.findByTestId('platform-residue-banner');
+      expect(
+        reminder.compareDocumentPosition(residue) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.getByTestId('update-notice-platform-command').textContent).toContain('v0.43.0');
+      fireEvent.click(screen.getByTestId('update-notice-platform-dismiss'));
+      expect(screen.queryByTestId('update-reminder')).toBeNull();
+      expect(screen.getByTestId('platform-residue-banner')).toBeTruthy();
+    });
+
+    it('a failed platform_updates read never blocks or errors the overview', async () => {
+      const http = scriptedHttp({
+        platform_overview: () => overview(),
+        list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+        platform_updates: () => {
+          throw new Error('boom');
+        },
+      });
+      renderPage(http);
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'platform_updates')).toBe(true));
+      expect(await screen.findByText('0.6.0', { exact: false })).toBeTruthy();
+      expect(screen.queryByTestId('update-reminder')).toBeNull();
+      expect(screen.queryByTestId('platform-overview-error')).toBeNull();
+    });
   });
 });
