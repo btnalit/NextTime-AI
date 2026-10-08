@@ -500,6 +500,59 @@ async function checkIS53(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-P1 — an ObjectType / ActionType name has at most one owning published ontology family.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * S10 P0 (docs/s10-evolution-plan-2026-10-04.md §3.3; `substrate/ontology/namespace.ts`): within
+ * one workspace, the latest published version of each family is compared with every other
+ * family's — the same "latest published per family" set `assertOntologyNamespace` checks at write
+ * time and `loadPublishedLinkTypes` reads writes against. Both publish paths refuse a collision
+ * under a workspace-wide advisory lock, so this is defence in depth on that mechanism (the I4 / I7
+ * / I12 posture): it reads non-zero only for a collision written before the check existed (the
+ * host precheck in docs/runbooks/release.md §3.7 must be empty before core 0041 is applied), or by
+ * a path that bypasses both publish functions. Names are unique per kind, not across kinds;
+ * LinkTypes may share names and are not counted. Drafts are not part of the namespace.
+ */
+async function checkIP1(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    kind: string;
+    name: string;
+    families: string[];
+  }>(
+    `with heads as (
+       select t.workspace_id, t.id, t.definition
+       from ontology_versions t
+       where t.status = 'published'
+         and t.version = (
+           select max(t2.version) from ontology_versions t2
+           where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+         )
+     ),
+     names as (
+       select workspace_id, id, 'object' as kind, e ->> 'name' as name
+       from heads, jsonb_array_elements(coalesce(definition -> 'objectTypes', '[]'::jsonb)) e
+       union all
+       select workspace_id, id, 'action', e ->> 'name'
+       from heads, jsonb_array_elements(coalesce(definition -> 'actionTypes', '[]'::jsonb)) e
+     )
+     select workspace_id, kind, name, array_agg(distinct id::text order by id::text) as families
+     from names
+     group by workspace_id, kind, name
+     having count(distinct id) > 1
+     order by workspace_id, kind, name`,
+  );
+  return {
+    invariant: 'I-P1',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.kind}:${row.name} (${row.families.join(', ')})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -626,6 +679,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-1',
   'I-S5-2',
   'I-S5-3',
+  'I-P1',
   'ops.one_running_turn',
   'ops.outbox_stuck',
   'ops.collector_silent',
@@ -659,6 +713,7 @@ export async function runInvariantChecks(
       await checkIS51(client),
       await checkIS52(client),
       await checkIS53(client),
+      await checkIP1(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
       await checkCollectorSilent(client, collectorSilenceMs),

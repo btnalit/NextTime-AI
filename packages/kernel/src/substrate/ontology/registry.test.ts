@@ -5,7 +5,12 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { deriveOntologyPackId, publishOntologyDomainPack } from './loader.js';
+import {
+  deriveOntologyPackId,
+  publishOntologyDomainPack,
+  publishOntologyVersion,
+} from './loader.js';
+import { OntologyNamespaceConflictError } from './namespace.js';
 import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
@@ -31,19 +36,30 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const REPO_ROOT = path.resolve(KERNEL_ROOT, '..', '..');
 const ONTOLOGY_DIR = path.join(REPO_ROOT, 'ontology');
 
-const MINIMAL_DEFINITION = {
-  objectTypes: [{ name: 'Widget', description: 'A widget.', identityKey: ['widgetId'] }],
-  linkTypes: [{ name: 'connects', domain: 'Widget', range: 'Widget', description: 'd' }],
-  actionTypes: [
-    {
-      name: 'spin',
-      description: 'Spin a Widget.',
-      mode: 'execute',
-      blastRadius: 'low',
-      autoApprovable: true,
+/** I-P1 (`namespace.ts`): published families may not share an ObjectType / ActionType name, and
+ *  every test here publishes into the same workspace — so each call names its types uniquely. */
+function minimalDefinition() {
+  const tag = randomUUID().slice(0, 8);
+  const widget = `Widget_${tag}`;
+  const spin = `spin_${tag}`;
+  return {
+    widget,
+    spin,
+    definition: {
+      objectTypes: [{ name: widget, description: 'A widget.', identityKey: ['widgetId'] }],
+      linkTypes: [{ name: 'connects', domain: widget, range: widget, description: 'd' }],
+      actionTypes: [
+        {
+          name: spin,
+          description: 'Spin a Widget.',
+          mode: 'execute' as const,
+          blastRadius: 'low' as const,
+          autoApprovable: true,
+        },
+      ],
     },
-  ],
-};
+  };
+}
 
 describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integration)', () => {
   let pool: Pool;
@@ -192,9 +208,10 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
 
   describe('proposeOntologyChange / publishOntologyDraft — I16 draft isolation', () => {
     it('a proposed draft is invisible to another principal, and disappears once published', async () => {
+      const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
-          change: MINIMAL_DEFINITION,
+          change: fixture.definition,
           proposedBy: alice,
         }),
       );
@@ -203,20 +220,22 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
 
       // Alice (the proposer) sees her own draft.
       const aliceSees = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
-        getType(client, workspaceId, alice, 'Widget'),
+        getType(client, workspaceId, alice, fixture.widget),
       );
       expect(aliceSees?.kind).toBe('object');
 
       // Bob does not — the draft is private to its proposer (I16).
       const bobSees = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
-        getType(client, workspaceId, bob, 'Widget'),
+        getType(client, workspaceId, bob, fixture.widget),
       );
       expect(bobSees).toBeNull();
 
       const listedForBob = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
         listTypes(client, workspaceId, bob, 'object'),
       );
-      expect(listedForBob.some((t) => t.kind === 'object' && t.name === 'Widget')).toBe(false);
+      expect(listedForBob.some((t) => t.kind === 'object' && t.name === fixture.widget)).toBe(
+        false,
+      );
 
       // Once published, everyone sees it.
       const published = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
@@ -229,24 +248,25 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       expect(published.status).toBe('published');
 
       const bobSeesNow = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
-        getType(client, workspaceId, bob, 'Widget'),
+        getType(client, workspaceId, bob, fixture.widget),
       );
       expect(bobSeesNow?.kind).toBe('object');
     });
 
     it('get_type/list_types round-trip an ActionType’s mode/blastRadius (S2.1’s own dependency)', async () => {
+      const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
-          change: MINIMAL_DEFINITION,
+          change: fixture.definition,
           proposedBy: alice,
         }),
       );
       const spin = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
-        getType(client, workspaceId, alice, 'spin'),
+        getType(client, workspaceId, alice, fixture.spin),
       );
       expect(spin).toEqual({
         kind: 'action',
-        name: 'spin',
+        name: fixture.spin,
         description: 'Spin a Widget.',
         mode: 'execute',
         blastRadius: 'low',
@@ -269,9 +289,10 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
     });
 
     it('publishOntologyDraft throws OntologyDraftNotFoundError for an already-published row', async () => {
+      const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
-          change: MINIMAL_DEFINITION,
+          change: fixture.definition,
           proposedBy: alice,
         }),
       );
@@ -297,9 +318,10 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
     // STATUS leftover 100: only the proposer may publish. Bob never saw Alice's draft (I16's read
     // half), so his publish must not land — and must read exactly like a missing row.
     it('publishOntologyDraft by another principal throws OntologyDraftNotFoundError and leaves the draft untouched', async () => {
+      const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
-          change: MINIMAL_DEFINITION,
+          change: fixture.definition,
           proposedBy: alice,
         }),
       );
@@ -349,9 +371,10 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
   // for `get_type`/`list_types` above.
   describe('listOntologyVersions', () => {
     it('shows every published row plus the caller’s own drafts, never another principal’s draft', async () => {
+      const fixture = minimalDefinition();
       const alicesDraft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
-          change: MINIMAL_DEFINITION,
+          change: fixture.definition,
           proposedBy: alice,
         }),
       );
@@ -401,7 +424,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
         (item) => item.id === alicesDraft.id && item.version === alicesDraft.version,
       );
       expect(bobSeesPublished?.status).toBe('published');
-      expect(bobSeesPublished?.definition).toEqual(MINIMAL_DEFINITION);
+      expect(bobSeesPublished?.definition).toEqual(fixture.definition);
     });
 
     it('keyset-paginates newest created_at first', async () => {
@@ -419,6 +442,235 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       expect(`${nextPage.items[0]?.id}:${nextPage.items[0]?.version}`).not.toBe(
         `${page.items[0]?.id}:${page.items[0]?.version}`,
       );
+    });
+
+    it('a page boundary between two versions of one family created in the same millisecond skips neither', async () => {
+      // Its own workspace: rows inserted on the login role with one fixed created_at, so the tie
+      // is deterministic rather than hoped for.
+      const ws = await adminInsertWorkspace('ontology-keyset-tie-workspace');
+      const owner = randomUUID();
+      const family = randomUUID();
+      const fixture = minimalDefinition();
+      await withWorkspace(
+        pool,
+        { workspaceId: ws, principalId: owner },
+        async (client) => {
+          await client.query(
+            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', 'owner', 'owner')",
+            [ws, owner],
+          );
+          for (const version of [1, 2, 3]) {
+            await client.query(
+              `insert into ontology_versions
+                 (workspace_id, id, version, status, definition, proposed_by, published_by,
+                  created_at, published_at)
+               values ($1, $2, $3, 'published', $4::jsonb, $5, $5,
+                       '2026-10-08T00:00:00.123Z', now())`,
+              [ws, family, version, JSON.stringify(fixture.definition), owner],
+            );
+          }
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const seen: number[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const result = await withWorkspace(
+          pool,
+          { workspaceId: ws, principalId: owner },
+          (client) =>
+            listOntologyVersions(client, ws, owner, { limit: 1, ...(cursor ? { cursor } : {}) }),
+        );
+        seen.push(...result.items.map((item) => item.version));
+        cursor = result.nextCursor;
+        if (!cursor) break;
+      }
+      expect(seen).toEqual([3, 2, 1]);
+
+      // A two-part cursor issued before the version was added keeps its old meaning: everything
+      // after that (createdAt, id), i.e. none of the family's three tied rows again.
+      const legacy = Buffer.from(`2026-10-08T00:00:00.123Z|${family}`, 'utf8').toString(
+        'base64url',
+      );
+      const afterLegacy = await withWorkspace(
+        pool,
+        { workspaceId: ws, principalId: owner },
+        (client) => listOntologyVersions(client, ws, owner, { limit: 10, cursor: legacy }),
+      );
+      expect(afterLegacy.items).toEqual([]);
+    });
+  });
+
+  // I-P1 (docs/s10-evolution-plan-2026-10-04.md §3.3, STATUS leftover 124): within a workspace an
+  // ObjectType / ActionType name belongs to one published family; both publish paths refuse a
+  // second owner and write nothing.
+  describe('I-P1 — ObjectType / ActionType names are unique across published families', () => {
+    it('publishOntologyDraft refuses a draft that redeclares another family’s ObjectType; the draft stays a draft', async () => {
+      const owner = minimalDefinition();
+      const ownerDraft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        proposeOntologyChange(client, workspaceId, { change: owner.definition, proposedBy: alice }),
+      );
+      await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyDraft(client, workspaceId, {
+          id: ownerDraft.id,
+          version: ownerDraft.version,
+          publishedBy: alice,
+        }),
+      );
+
+      const other = minimalDefinition();
+      const clash = {
+        ...other.definition,
+        objectTypes: [
+          ...other.definition.objectTypes,
+          { name: owner.widget, description: 'mine now' },
+        ],
+      };
+      const clashDraft = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        proposeOntologyChange(client, workspaceId, { change: clash, proposedBy: bob }),
+      );
+      const refusal = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        publishOntologyDraft(client, workspaceId, {
+          id: clashDraft.id,
+          version: clashDraft.version,
+          publishedBy: bob,
+        }),
+      ).catch((err: unknown) => err);
+      expect(refusal).toBeInstanceOf(OntologyNamespaceConflictError);
+      expect((refusal as OntologyNamespaceConflictError).code).toBe('ontology_namespace_conflict');
+      expect((refusal as OntologyNamespaceConflictError).conflicts).toEqual([
+        { kind: 'object', name: owner.widget, ontologyId: ownerDraft.id },
+      ]);
+
+      const bobsRows = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        listOntologyVersions(client, workspaceId, bob),
+      );
+      expect(bobsRows.items.find((item) => item.id === clashDraft.id)?.status).toBe('draft');
+      // Everyone still reads the owner family's definition of the type.
+      const seen = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        getType(client, workspaceId, alice, owner.widget),
+      );
+      expect(seen).toMatchObject({ kind: 'object', description: 'A widget.' });
+    });
+
+    it('the loader path (seed, domain pack, install_module) refuses a new family that reuses an ActionType name, and writes no row', async () => {
+      const owner = minimalDefinition();
+      await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          definition: owner.definition,
+          principalId: alice,
+        }),
+      );
+      const other = minimalDefinition();
+      const clash = { ...other.definition, actionTypes: owner.definition.actionTypes };
+      const countRows = async (): Promise<number> =>
+        (
+          await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+            client.query<{ n: number }>(
+              'select count(*)::int as n from ontology_versions where workspace_id = $1',
+              [workspaceId],
+            ),
+          )
+        ).rows[0]?.n ?? -1;
+      const before = await countRows();
+
+      await expect(
+        withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+          publishOntologyVersion(client, workspaceId, { definition: clash, principalId: alice }),
+        ),
+      ).rejects.toThrow(OntologyNamespaceConflictError);
+      expect(await countRows()).toBe(before);
+    });
+
+    it('two concurrent publishes of the same new ObjectType name: the namespace lock lets exactly one family own it', async () => {
+      const first = minimalDefinition();
+      const second = minimalDefinition();
+      const clash = {
+        ...second.definition,
+        objectTypes: [
+          ...second.definition.objectTypes,
+          { name: first.widget, description: 'mine too' },
+        ],
+      };
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      // A publishes and keeps its transaction (and the workspace namespace lock) open.
+      let aPublished!: () => void;
+      const aReady = new Promise<void>((resolve) => {
+        aPublished = resolve;
+      });
+      const a = withWorkspace(pool, { workspaceId, principalId: alice }, async (client) => {
+        const row = await publishOntologyVersion(client, workspaceId, {
+          definition: first.definition,
+          principalId: alice,
+        });
+        aPublished();
+        await held;
+        return row;
+      });
+      await aReady;
+
+      // B starts while A is uncommitted: it must wait on the advisory lock, not race past the check.
+      const b = withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        publishOntologyVersion(client, workspaceId, { definition: clash, principalId: bob }),
+      ).catch((err: unknown) => err);
+      const waiting = async (): Promise<number> =>
+        (
+          await pool.query<{ n: number }>(
+            `select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`,
+          )
+        ).rows[0]?.n ?? 0;
+      for (let i = 0; i < 100 && (await waiting()) === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(await waiting()).toBeGreaterThan(0);
+
+      release();
+      const winner = await a;
+      const loser = await b;
+      expect(loser).toBeInstanceOf(OntologyNamespaceConflictError);
+      expect((loser as OntologyNamespaceConflictError).conflicts).toEqual([
+        { kind: 'object', name: first.widget, ontologyId: winner.id },
+      ]);
+      const owners = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        client.query<{ id: string }>(
+          `select distinct t.id from ontology_versions t, jsonb_array_elements(t.definition -> 'objectTypes') e
+            where t.workspace_id = $1 and t.status = 'published' and e ->> 'name' = $2`,
+          [workspaceId, first.widget],
+        ),
+      );
+      expect(owners.rows.map((row) => row.id)).toEqual([winner.id]);
+    });
+
+    it('a family’s next version keeps its own names; LinkType names may repeat across families', async () => {
+      const first = minimalDefinition();
+      const v1 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          definition: first.definition,
+          principalId: alice,
+        }),
+      );
+      const v2 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          id: v1.id,
+          definition: first.definition,
+          principalId: alice,
+        }),
+      );
+      expect(v2.version).toBe(2);
+      // `connects` is declared by every minimalDefinition() family already published here.
+      const second = minimalDefinition();
+      const sibling = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        publishOntologyVersion(client, workspaceId, {
+          definition: second.definition,
+          principalId: alice,
+        }),
+      );
+      expect(sibling.status).toBe('published');
     });
   });
 });

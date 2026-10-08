@@ -67,6 +67,14 @@ export type {
 } from './meta-objects.js';
 
 export {
+  OntologyNamespaceConflictError,
+  assertOntologyNamespace,
+  findOntologyNamespaceConflicts,
+  lockOntologyNamespace,
+} from './namespace.js';
+export type { OntologyNamespaceConflict, OntologyNamespaceKind } from './namespace.js';
+
+export {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,

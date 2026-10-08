@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Role } from '@nexttime/shared';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
@@ -324,10 +324,20 @@ describe.runIf(DATABASE_URL !== undefined)(
     // drop what the first added (or, with the lower number, publish into nothing). The second
     // publish is now refused 409 `ontology_base_moved` and the first one's types stay in force.
     describe('R-60: a draft whose base is no longer the published head is refused', () => {
-      const BASE_CHANGE = {
-        objectTypes: [{ name: 'Valve', description: 'A valve.', identityKey: ['valveId'] }],
-        linkTypes: [{ name: 'valve_feeds', domain: 'Valve', range: 'Valve', description: 'd' }],
-      };
+      // I-P1: every test publishes its own family into the same workspace, and published families
+      // may not share an ObjectType name — so each test's family names its type afresh.
+      function baseChange(valve: string) {
+        return {
+          objectTypes: [{ name: valve, description: 'A valve.', identityKey: ['valveId'] }],
+          linkTypes: [{ name: 'valve_feeds', domain: valve, range: valve, description: 'd' }],
+        };
+      }
+      let VALVE = 'Valve';
+      let BASE_CHANGE = baseChange(VALVE);
+      beforeEach(() => {
+        VALVE = `Valve_${randomUUID().slice(0, 8)}`;
+        BASE_CHANGE = baseChange(VALVE);
+      });
       function withLinkType(...names: string[]) {
         return {
           ...BASE_CHANGE,
@@ -335,8 +345,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             ...BASE_CHANGE.linkTypes,
             ...names.map((name) => ({
               name,
-              domain: 'Valve',
-              range: 'Valve',
+              domain: VALVE,
+              range: VALVE,
               description: `${name} (R-60 fixture)`,
             })),
           ],
@@ -409,7 +419,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { pool },
           handleCaller(workspaceId, carolId, ONTOLOGY_HANDLE_CAPABILITIES),
           'validate',
-          { link: { linkType: 'valve_alice_rel', sourceType: 'Valve', targetType: 'Valve' } },
+          { link: { linkType: 'valve_alice_rel', sourceType: VALVE, targetType: VALVE } },
         )) as { valid: boolean };
         expect(carolValidates.valid).toBe(true);
 
