@@ -57,6 +57,8 @@ import {
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
+  ObjectiveOutcomeConflictError,
+  ObjectiveOutcomeForbiddenError,
   QuotaExceededError,
   TaskNotFoundError,
   TaskRuntimeNotConfiguredError,
@@ -412,6 +414,13 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof TaskNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // S10 E1 — WS equivalents of capability-route.ts's own mappings for these two classes.
+  if (err instanceof ObjectiveOutcomeForbiddenError) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  if (err instanceof ObjectiveOutcomeConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // `explain` (substrate/epistemic/explain.ts) on an id that does not resolve to a Fact/Activity/
   // Decision — same mapping as interfaces/http/capability-route.ts (lane-4 hookup).

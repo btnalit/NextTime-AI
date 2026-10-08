@@ -429,6 +429,12 @@
             },
             "text": {
               "type": "string"
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

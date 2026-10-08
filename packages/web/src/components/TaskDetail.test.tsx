@@ -224,4 +224,85 @@ describe('TaskDetail', () => {
     const chip = screen.getByTestId('task-definition');
     expect(within(chip).getByTestId('task-definition-fallback')).toBeTruthy();
   });
+
+  describe('attribution (S10 E1 结果归因)', () => {
+    it('a Task from before E1 reads 未记录 everywhere, never a guessed value', () => {
+      renderDetail();
+      const section = screen.getByTestId('task-attribution');
+      expect(within(section).getAllByText('未记录')).toHaveLength(4);
+      expect(within(screen.getByTestId('worker-run-skills')).getByText('未记录')).toBeTruthy();
+    });
+
+    it('shows Skill versions, the Turn, the claimed Procedure and both outcomes with who gave them', () => {
+      renderDetail({
+        turnId: 'turn-1',
+        objectiveOutcome: {
+          outcome: 'achieved',
+          givenBy: 'p-1',
+          givenAt: '2026-09-03T00:01:00.000Z',
+          revision: 2,
+          previousOutcome: 'not_achieved',
+        },
+        turn: {
+          id: 'turn-1',
+          chatId: 'chat-1',
+          startedBy: 'p-1',
+          status: 'completed',
+          startedAt: '2026-09-03T00:00:00.000Z',
+          endedAt: '2026-09-03T00:02:00.000Z',
+          procedure: {
+            procedureId: 'proc-1',
+            version: 3,
+            name: 'diagnose-flow',
+            basis: 'claimed',
+            claimedAt: '2026-09-03T00:00:10.000Z',
+          },
+          outcome: null,
+        },
+        workerRuns: [
+          {
+            id: 'run-1',
+            status: 'terminated',
+            containerId: null,
+            depth: 1,
+            attempt: 1,
+            startedAt: '2026-09-03T00:00:00.000Z',
+            terminatedAt: '2026-09-03T00:01:00.000Z',
+            skills: [{ skillId: 'sk-1', version: 2, name: 'diagnose' }],
+          },
+        ],
+      });
+      const section = screen.getByTestId('task-attribution');
+      expect(within(section).getByText('达成')).toBeTruthy();
+      expect(within(section).getByText(/已更正，原为 未达成/)).toBeTruthy();
+      expect(within(section).getByText(/Alice/)).toBeTruthy();
+      expect(within(section).getByText('diagnose-flow v3')).toBeTruthy();
+      expect(within(section).getByText('agent 自报')).toBeTruthy();
+      expect(screen.getByTestId('task-turn-link').getAttribute('href')).toBe('#/work/chats/chat-1');
+      // The Turn's own outcome: nobody marked it yet.
+      expect(within(section).getAllByText('未记录')).toHaveLength(1);
+      expect(screen.getByTestId('worker-run-skills').textContent).toBe('diagnose v2');
+    });
+
+    it('a run that loaded no Skill reads 无, not 未记录; a Turn in an invisible chat says so', () => {
+      renderDetail({
+        turnId: 'turn-9',
+        turn: null,
+        workerRuns: [
+          {
+            id: 'run-1',
+            status: 'running',
+            containerId: null,
+            depth: 0,
+            attempt: 1,
+            startedAt: '2026-09-03T00:00:00.000Z',
+            terminatedAt: null,
+            skills: [],
+          },
+        ],
+      });
+      expect(screen.getByTestId('worker-run-skills').textContent).toBe('无');
+      expect(screen.getByText(/所在对话对你不可见/)).toBeTruthy();
+    });
+  });
 });

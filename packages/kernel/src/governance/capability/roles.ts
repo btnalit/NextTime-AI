@@ -85,6 +85,7 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set([
   'list_chats',
   'get_chat_history',
   'subscribe_chat',
+  'list_chat_turns',
 ]);
 
 /** See `AUDITOR_READ_CAPABILITIES`: the writes an auditor's own conversation with its read-only

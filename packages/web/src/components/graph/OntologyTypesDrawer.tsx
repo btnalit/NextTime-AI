@@ -13,6 +13,7 @@ import { type OntologyProposalDiffEntry, ontologyProposalDiff } from '../../lib/
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
+import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -846,6 +847,7 @@ function DiscardProposalButton({
 }) {
   const permissions = usePermissions();
   const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
 
   // Same hide-after-a-real-403 idiom (and `&& !open` rule) as `PublishProposalButton` above.
   if (permissions.isDenied('discard_draft') && !open) return null;
@@ -854,7 +856,10 @@ function DiscardProposalButton({
     <Confirm
       tier="medium"
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setReason('');
+      }}
       anchor={
         <Button
           variant="ghost"
@@ -879,6 +884,7 @@ function DiscardProposalButton({
             kind: 'ontology_version',
             id: row.id,
             version: row.version,
+            ...(reason.trim() !== '' ? { reason: reason.trim() } : {}),
           });
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('discard_draft');
@@ -887,6 +893,8 @@ function DiscardProposalButton({
         onDiscarded();
       }}
       testId="graph-proposal-discard-confirm"
-    />
+    >
+      <DiscardReasonField id="graph-proposal-discard-reason" value={reason} onChange={setReason} />
+    </Confirm>
   );
 }

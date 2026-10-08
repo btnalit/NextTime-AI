@@ -3573,6 +3573,44 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 不变量与"明确不做"见方案 §3.3、§5.7：包不携带凭证、不自授权、不带 SQL 迁移；代码组件只经平台管理员、按 digest 验签；
 平台代码、内核、镜像、Policy / Grant 永不因经验自动改变；评测只给证据、不替人发布。
 
+### E1 实现说明（2026-10-08）
+
+- **迁移只用 task / worker 模块，不碰 core**（main 当时最高：core 0040、task 0005、worker 0003）：
+  `task/0006_objective_outcome.sql`——`tasks` 加目标结果五列（`objective_outcome` / `outcome_given_by` /
+  `outcome_given_at` / `outcome_revision` / `outcome_previous`，CHECK 保证"全空，或第 1 版无前值，或第 2 版前值是另一值"），
+  `worker_runs.skills_recorded`（默认 false，旧行读作"未记录"），新表 `turn_outcomes`（Turn 级目标结果，同一 CHECK）；
+  `worker/0004_skill_procedure_attribution.sql`——`worker_run_skills`（FK 到 `skills(ws, id, version)`）与
+  `turn_procedure_claims`（FK 到 `procedures`），两表只授 `select, insert`（只追加）。均为工作区 RLS。
+- **三类记录的认知地位不同，读模型照实标出**：Skill 加载是内核在建 WorkerRun 的同一事务里写的（`spawn.ts`，
+  `resolveSkillsInline` 解析出的版本；重入队的新 run 重新记录），权威；Procedure 是入口 agent 自报，线上
+  `basis: 'claimed'`，界面标"agent 自报"，第一次声明为准（`on conflict do nothing`）；目标结果在 Turn 上由请求者
+  （`started_by`）给，在 Task 上由委派它的 agent 的 verify 步骤给（只限 `on_behalf_of` 是调用者的 Task、且已终态）。
+  目标结果与执行状态分开：`unknown`（无行 / 全空）→ `achieved | not_achieved`，同一给出者可更正一次（第 2 版，保留前值），
+  重复同值是 no-op，第三次 409；他人 403；进行中的 Turn / 未终态的 Task 409。
+- **新能力**：`list_chat_turns`（human，观察，auditor 可读）、`mark_turn_outcome`（human，member）、
+  `record_procedure_followed`、`report_task_outcome`（entry Handle，进入入口天花板，不进 Worker 天花板）；`get_task` /
+  `list_tasks` 的 Task 线上形状加 `turnId` / `turn` / `objectiveOutcome`，WorkerRun 加 `skills`（`null` = 未记录）；
+  `chat.message` 加 `turnId`。`discard_draft` 加可选 `reason`（≤ 500 字），随调用自己的 AuditRecord 落库，不另建表。
+- **与方案的偏离**：方案写"`report_turn` 可选 `procedureRef`"。`report_turn` 是扩展在 `agent_settled` 时自己调用的，
+  模型看不到也传不了参数，所以改成模型可调用的 `record_procedure_followed(procedureId, version)`，归到调用者正在
+  运行的 Turn（与 `record_decision` 同一规则、同一 409）；只接受已发布的版本，草稿与不存在都是 404。
+- **遗留 123 两项**：嵌套 Worker 的 Task 没有 Turn 归属——已修，`invoke_worker` 由 WorkerRun 调用时继承根 Task 的
+  `created_by_activity_id`，不再取调用者此刻在跑的 Turn（`invoke.ts`）。`sources` 每个 WorkerRun 一行无上限增长——
+  **不在本批关**：每个写入的 WorkerRun 一个 Source 是遗留 16 认知语义要求的（Fact 溯源到具体的 run），增长与
+  `worker_runs` / `activities` 同阶；要收住需要 core 侧的保留 / 归档策略，按"只用 task / worker 迁移"的约束转给
+  core 车道（P0 / K4 之后）。
+- **入口 agent 的 prompt**：`ontology/entry-agent.yaml` 加了两件工具的用法（照已发布 Procedure 做时先声明；verify 步骤
+  报告 Task 结果）。只影响新建工作区的种子；已有工作区的入口定义仍是已发布的旧版本，要在控制台发新版本才会用上。
+- **界面**：对话里每个已结束 Turn 的最后一条回复下方一行——自报的 Procedure（标"agent 自报"）与请求者的
+  达成 / 未达成按钮，更正一次走 `medium` 确认；任务详情加"结果归因"一节（Task 目标结果、所属 Turn、流程、Turn 目标结果）
+  与 WorkerRun 的 Skill 列，旧数据一律显示"未记录"（与"无"区分）；目录与本体抽屉的丢弃确认加"丢弃原因（可选）"。
+- **已知缺口**：入口 agent 自己挂载的 Skill（agent-host 运行时加载）不记录，`worker_run_skills` 只覆盖 WorkerRun；
+  对话超过 500 个 Turn 时只有最新 500 个显示结果控件。
+- **验证**：`attribution.integration.test.ts`（真实 Postgres，10 例：加载记录与重入队、旧 run 为 `null`、弃用 Skill 不记、
+  嵌套 Task 继承根 Turn、Turn 结果的首标 / no-op / 更正 / 第三次 409 / 他人 403 / 进行中 409 / 不可见、DB CHECK、
+  Procedure 首声明为准与草稿拒绝、Task 结果的终态与归属）；内核全量 179 文件 2127 例通过。主机侧：应用迁移、S1–S4、
+  真实模型回归待维护者主机执行。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |

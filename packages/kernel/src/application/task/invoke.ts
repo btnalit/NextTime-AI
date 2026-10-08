@@ -196,6 +196,20 @@ async function resolveCallerWorkerRun(
   return row ? mapWorkerRunRow(row) : null;
 }
 
+/** S10 E1: the Turn that generated `taskId` (`tasks.created_by_activity_id`), inherited by every
+ *  Task a Worker of that Task invokes. */
+async function readTaskGeneratingTurnId(
+  client: PoolClient,
+  workspaceId: string,
+  taskId: string,
+): Promise<string | null> {
+  const result = await client.query<{ created_by_activity_id: string | null }>(
+    'select created_by_activity_id from tasks where workspace_id = $1 and id = $2',
+    [workspaceId, taskId],
+  );
+  return result.rows[0]?.created_by_activity_id ?? null;
+}
+
 /**
  * The Task a call with `idempotencyKey` returns instead of creating one, if any (R-54 / D-12): an
  * explicit key matches its one Task in any status; a derived key (`auto:` prefix) matches only a
@@ -357,6 +371,13 @@ async function insertQueuedTaskWithQuotaCheck(
         ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
         : null;
       const depth = (callerWorkerRun?.depth ?? 0) + 1;
+      // S10 E1 (leftover 123 "嵌套 Worker 的 Task 没有 Turn 归属"): a Worker's own `invoke_worker`
+      // belongs to the Turn that generated its root Task — read off the caller's own Task, never
+      // `caller.turnId`, which the handler resolves from the *human* principal's running Turn
+      // (whatever chat they are in now, or none). Lineage stays in `parent_worker_run_id`.
+      const generatingTurnId = callerWorkerRun
+        ? await readTaskGeneratingTurnId(client, workspaceId, callerWorkerRun.taskId)
+        : (caller.turnId ?? null);
       const resolvedQuotas = await resolveQuotas(client, workspaceId);
 
       if (depth > resolvedQuotas.maxDepth) {
@@ -403,7 +424,7 @@ async function insertQueuedTaskWithQuotaCheck(
         [
           workspaceId,
           caller.principalId,
-          caller.turnId ?? null,
+          generatingTurnId,
           input.definitionId,
           input.version,
           JSON.stringify(input.input ?? null),
@@ -480,13 +501,13 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, skillsInline, effectiveModel, agentProfile, systemPrompt, image } =
+  const { parentAuthority, resolvedSkills, effectiveModel, agentProfile, systemPrompt, image } =
     await withWorkspace(
       deps.pool,
       { workspaceId, principalId: caller.principalId },
       async (client) => ({
         parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
-        skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+        resolvedSkills: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
         // P-A2: the Worker's system prompt = its WorkerDefinition's own `systemPrompt` + the
         // platform's `instanceInstructions` (docs/platform-admin-design.md §6.6), read fresh here.
         systemPrompt: composeSystemPrompt({
@@ -600,7 +621,8 @@ export async function invokeWorkerCreate(
       // WorkerDefinition declares none — never overrides an explicit WorkerDefinition.model.
       model: content.model ?? effectiveModel ?? undefined,
       definitionName,
-      skillsInline,
+      skillsInline: resolvedSkills.skillsInline,
+      loadedSkills: resolvedSkills.loadedSkills,
       egressDeny: content.egressDeny,
       systemPrompt,
       image,

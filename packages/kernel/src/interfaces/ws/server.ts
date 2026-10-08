@@ -249,7 +249,7 @@ function parseFrame(raw: RawData): unknown {
  */
 function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
   const params = (rawParams ?? {}) as { chatId?: unknown; text?: unknown };
-  const result = callResult as { messageId?: unknown; sequence?: unknown };
+  const result = callResult as { messageId?: unknown; sequence?: unknown; turnId?: unknown };
   if (typeof params.chatId !== 'string' || typeof params.text !== 'string') return;
   if (typeof result.messageId !== 'string' || typeof result.sequence !== 'number') return;
 
@@ -271,6 +271,7 @@ function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
       sequence: result.sequence,
       kind: chatMessageKind(content),
       content,
+      turnId: typeof result.turnId === 'string' ? result.turnId : null,
     },
   });
 }

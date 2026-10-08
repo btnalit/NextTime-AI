@@ -609,7 +609,7 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
-  const { model, skillsInline, definitionName, egressDeny, systemPrompt, image } =
+  const { model, skillsInline, loadedSkills, definitionName, egressDeny, systemPrompt, image } =
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
       const definition = await getWorkerDefinition(client, workspaceId, {
         definitionId: task.workerDefinitionId,
@@ -623,6 +623,7 @@ async function spawnWorkerRunForRetry(
         return {
           model: undefined,
           skillsInline: [],
+          loadedSkills: [],
           definitionName: task.workerDefinitionId,
           egressDeny: undefined,
           systemPrompt: undefined,
@@ -641,9 +642,13 @@ async function spawnWorkerRunForRetry(
         content.model === undefined
           ? (await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)).model || undefined
           : undefined;
+      // S10 E1: re-resolved for the retry — a Skill may have been deprecated or superseded since
+      // the first attempt, and the new WorkerRun records what *it* loads (worker_run_skills).
+      const resolvedSkills = await resolveSkillsInline(client, workspaceId, content.skills ?? []);
       return {
         model: content.model ?? effectiveModel ?? undefined,
-        skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+        skillsInline: resolvedSkills.skillsInline,
+        loadedSkills: resolvedSkills.loadedSkills,
         definitionName:
           typeof definition.definition.name === 'string'
             ? definition.definition.name
@@ -678,6 +683,7 @@ async function spawnWorkerRunForRetry(
       model,
       definitionName,
       skillsInline,
+      loadedSkills,
       egressDeny,
       systemPrompt,
       image,

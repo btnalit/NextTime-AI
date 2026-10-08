@@ -86,6 +86,8 @@ import {
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
+  ObjectiveOutcomeConflictError,
+  ObjectiveOutcomeForbiddenError,
   QuotaExceededError,
   TaskNotFoundError,
   TaskRuntimeNotConfiguredError,
@@ -490,6 +492,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof TaskNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see
+  // the Turn / Task but may not judge it (403), or one its state forbids — not finished yet, or its
+  // one correction already used (409, the same "current state forbids it" family as
+  // IllegalTransition).
+  if (err instanceof ObjectiveOutcomeForbiddenError) {
+    return { status: 403, code: 'forbidden', message: err.message };
+  }
+  if (err instanceof ObjectiveOutcomeConflictError) {
+    return { status: 409, code: 'conflict', message: err.message };
   }
   // `explain` (substrate/epistemic/explain.ts) on an id that does not resolve to a Fact/Activity/
   // Decision — found on the host as a 500 (lane-4 hookup: re-exported through
