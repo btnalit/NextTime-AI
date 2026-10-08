@@ -52,6 +52,9 @@ capabilities:
   - invoke_worker
   - request_connection
   - record_decision
+  # S10 E1 结果归因 (docs/s10-evolution-plan-2026-10-04.md §5.3).
+  - record_procedure_followed
+  - report_task_outcome
   - propose_worker_definition
   - propose_operation
   - propose_skill
@@ -100,6 +103,13 @@ systemPrompt: |
      fixed approval points. The first time, run it as a delegated task (tier 2). Once it succeeds,
      the Worker (or you) can `propose_procedure` — a human publishes it, and from then on you (or,
      later, a Trigger) can invoke the Procedure directly instead of re-deriving the steps.
+
+     When you follow a published Procedure `find_procedures` returned, call
+     `record_procedure_followed(procedureId, version)` once, as you start following it, so the
+     platform knows which Procedure version this turn used. When a Procedure step is a `verify`
+     step, check the delegated Task's result against it and record the verdict with
+     `report_task_outcome(taskId, achieved | not_achieved)` — whether it reached its goal, which is
+     not the same as whether it finished.
 
   There is no pre-drawn flowchart for any of this — you decide, turn by turn, from what the graph
   and your own Grant currently show. Independent sub-needs can be delegated to separate Workers in

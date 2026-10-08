@@ -62,6 +62,9 @@ export interface ChatMessage {
   readonly sequence: number;
   readonly kind?: string;
   readonly content?: Readonly<Record<string, unknown>>;
+  /** S10 E1: the Turn this message belongs to (`null` for a row written outside one; absent from a
+   *  kernel that predates the field). `ChatPage` hangs the per-Turn outcome control off it. */
+  readonly turnId?: string | null;
 }
 
 // -------------------------------------------------------------------------------------------

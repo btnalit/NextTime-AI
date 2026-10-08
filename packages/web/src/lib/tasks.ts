@@ -1,4 +1,9 @@
-import type { TaskStatus } from '@nexttime/shared';
+import type {
+  ObjectiveOutcomeWire,
+  SkillLoadWire,
+  TaskStatus,
+  TurnAttributionWire,
+} from '@nexttime/shared';
 import { TASK_EDGES, TASK_TRANSITIONS, canTransition } from '@nexttime/shared';
 
 /**
@@ -14,6 +19,9 @@ export interface WorkerRunSummary {
   readonly attempt: number;
   readonly startedAt: string;
   readonly terminatedAt: string | null;
+  /** S10 E1: the Skill versions this run loaded — `null` (or absent, from a kernel that predates
+   *  E1) means 未记录, `[]` means the run loaded none. */
+  readonly skills?: readonly SkillLoadWire[] | null;
 }
 
 export interface TaskSummary {
@@ -33,6 +41,13 @@ export interface TaskSummary {
   readonly failedAt: string | null;
   readonly cancelledAt: string | null;
   readonly workerRuns: readonly WorkerRunSummary[];
+  /** S10 E1 结果归因 (`wire/attribution.ts`). `turnId` is the generating Turn (`null` for a Task
+   *  started outside a Turn, or before Turns were recorded); `turn` is that Turn's attribution when
+   *  the caller can see its Chat; `objectiveOutcome` is the Task's own outcome, reported by the
+   *  delegating agent's verify step. All three absent from a kernel that predates E1. */
+  readonly turnId?: string | null;
+  readonly turn?: TurnAttributionWire | null;
+  readonly objectiveOutcome?: ObjectiveOutcomeWire | null;
 }
 
 /** `list_worker_definitions` row (`toWireWorkerDefinition`, handlers.ts) — only what the Tasks

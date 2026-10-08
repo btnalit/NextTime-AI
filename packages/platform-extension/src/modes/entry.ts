@@ -78,6 +78,10 @@ const ENTRY_TOOL_CAPABILITY_NAMES = [
   'invoke_worker',
   'request_connection',
   'record_decision',
+  // S10 E1 (docs/s10-evolution-plan-2026-10-04.md §5.3): which Procedure this Turn follows (a
+  // claim), and the verdict of a Procedure verify step on a Task.
+  'record_procedure_followed',
+  'report_task_outcome',
   'propose_worker_definition',
   'propose_operation',
   'propose_skill',

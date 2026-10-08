@@ -6,7 +6,7 @@ import {
   RoleSchema,
   WorkerDefinitionKindSchema,
 } from './enums.js';
-import { ActionRequestStatusSchema } from './enums.js';
+import { ActionRequestStatusSchema, ObjectiveOutcomeSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
 import { CapabilityScopeSchema } from './handle-token.js';
@@ -318,6 +318,45 @@ const chatCapabilities: readonly Capability[] = [
     resultSchema: wire.ChatWireSchema,
     description:
       'Set a Chat’s title (trimmed, single line, at most 200 characters). Own Chat only; 403 otherwise. A renamed title is never overwritten by the auto-title later messages would produce. Audit: chat.rename.',
+  },
+  // -----------------------------------------------------------------------------------------
+  // S10 E1 结果归因 (docs/s10-evolution-plan-2026-10-04.md §3.4 / §5.3 / §5.6): the requester marks
+  // whether a Turn achieved its goal — the objective outcome, apart from the Turn's execution
+  // status. `list_chat_turns` is the per-Turn read the console shows it from (with the Procedure
+  // the Turn's entry agent claimed to follow, `record_procedure_followed`).
+  // -----------------------------------------------------------------------------------------
+  {
+    name: 'list_chat_turns',
+    group: 'chat',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        chatId: id,
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.TurnAttributionWireSchema),
+    description:
+      'List a visible Chat’s Turns, newest first, each with its execution status, the Procedure ' +
+      'its entry agent claimed to follow (agent-reported), and the requester’s objective outcome ' +
+      '(null = unknown); keyset-paginated (limit, cursor → nextCursor).',
+  },
+  {
+    name: 'mark_turn_outcome',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ turnId: id, outcome: ObjectiveOutcomeSchema }).strict(),
+    resultSchema: wire.TurnAttributionWireSchema,
+    description:
+      'Mark whether a finished Turn of your own achieved its goal (achieved / not_achieved). Only ' +
+      'the person who sent the Turn’s message may mark it; they may correct it once afterwards ' +
+      '(409 after that). Repeating the current value is a no-op. Independent of the Turn’s ' +
+      'execution status.',
   },
 ];
 
@@ -2032,6 +2071,41 @@ const taskCapabilities: readonly Capability[] = [
       'once per Turn on its own; interactive sessions have no Turn to report.',
   },
   {
+    // S10 E1 (docs/s10-evolution-plan-2026-10-04.md §3.2 `Turn followed ProcedureVersion`, §5.3):
+    // the entry agent says which published Procedure version it is following this Turn — a claim
+    // (agent-reported), hung on the running Turn the same way `record_decision` attributes a
+    // Decision. A separate capability, not a `report_turn` param: the entry runtime, not the
+    // model, calls `report_turn`, so the model has no way to hand it a Procedure.
+    name: 'record_procedure_followed',
+    group: 'task',
+    mode: 'write',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ procedureId: id, version: z.number().int().positive() }).strict(),
+    resultSchema: wire.ProcedureClaimWireSchema,
+    description:
+      'Record that this Turn follows a published Procedure (procedureId@version from ' +
+      'find_procedures). Call it once, when you start following the Procedure; the first ' +
+      'Procedure recorded for a Turn stands and a later call returns it unchanged. Stored as your ' +
+      'own claim and shown to people as agent-reported.',
+  },
+  {
+    // S10 E1 (§3.4, maintainer decision 7): a Procedure's `verify` step reports whether a Task it
+    // delegated achieved its goal. Entry ceiling only — a Worker never grades its own Task — and
+    // only for a Task acting for the caller's own principal.
+    name: 'report_task_outcome',
+    group: 'task',
+    mode: 'write',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ taskId: id, outcome: ObjectiveOutcomeSchema }).strict(),
+    resultSchema: wire.ObjectiveOutcomeWireSchema,
+    description:
+      'Report, from a Procedure’s verify step, whether a finished Task you delegated achieved its ' +
+      'goal (achieved / not_achieved) — separate from its execution status. You may correct it ' +
+      'once; repeating the current value is a no-op.',
+  },
+  {
     name: 'invoke_worker',
     group: 'task',
     mode: 'write',
@@ -2255,11 +2329,18 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z
-      .object({ kind: DraftKindSchema, id: id, version: z.number().int().positive() })
+      .object({
+        kind: DraftKindSchema,
+        id: id,
+        version: z.number().int().positive(),
+        // S10 E1 (§5.3 "草稿被丢弃时记录原因"): optional, free text — kept in this call's AuditRecord
+        // as a signal for the evolution loop (why a proposal was not wanted).
+        reason: z.string().max(500).optional(),
+      })
       .strict(),
     resultSchema: wire.DiscardDraftResultWireSchema,
     description:
-      'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
+      'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16), with an optional reason (kept in the audit record). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
   },
   {
     name: 'list_worker_definitions',

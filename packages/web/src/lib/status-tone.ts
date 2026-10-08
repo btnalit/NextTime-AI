@@ -6,6 +6,7 @@ import type {
   GateInstanceStatusWire,
   GateTrustWire,
   GrantStatus,
+  ObjectiveOutcome,
   OperationMode,
   PiDriftStatusWire,
   PlatformBackupStatusWire,
@@ -27,6 +28,7 @@ import {
   GateHealthWireSchema,
   GateInstanceStatusWireSchema,
   GateTrustWireSchema,
+  OBJECTIVE_OUTCOME_VALUES,
   OPERATION_MODE_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
@@ -109,7 +111,8 @@ export type StatusMachine =
   | 'serviceHealth'
   | 'platformRole'
   | 'piDrift'
-  | 'backupFreshness';
+  | 'backupFreshness'
+  | 'objectiveOutcome';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -318,6 +321,13 @@ export const PI_DRIFT_TONES: Readonly<Record<PiDriftStatusWire, ChipStyle>> = {
   unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 
+/** S10 E1: a Turn's or Task's objective outcome (`wire/attribution.ts`). No value at all is
+ *  rendered by the caller as 未记录, not as a third tone here — "nobody said" is not an outcome. */
+export const OBJECTIVE_OUTCOME_TONES: Readonly<Record<ObjectiveOutcome, ChipStyle>> = {
+  achieved: { tone: 'ok', label: { zh: '达成', en: 'Achieved' } },
+  not_achieved: { tone: 'danger', label: { zh: '未达成', en: 'Not achieved' } },
+};
+
 /** `platform_status.backup.status` (review 2026-10-02 D-28): the nightly backup's freshness, from
  *  the backup service's `last-success` marker — `unknown` when the kernel cannot read one. */
 export const BACKUP_FRESHNESS_TONES: Readonly<Record<PlatformBackupStatusWire, ChipStyle>> = {
@@ -356,6 +366,7 @@ const MACHINES: Readonly<
     values: PlatformBackupStatusWireSchema.options,
     tones: BACKUP_FRESHNESS_TONES,
   },
+  objectiveOutcome: { values: OBJECTIVE_OUTCOME_VALUES, tones: OBJECTIVE_OUTCOME_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

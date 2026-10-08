@@ -6,6 +6,7 @@
  * never a second, independently-typed copy of the same shape.
  */
 
+export * from './attribution.js';
 export * from './chat.js';
 export * from './graph.js';
 export * from './ontology.js';
