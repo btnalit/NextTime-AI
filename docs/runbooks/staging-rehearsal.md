@@ -16,6 +16,7 @@
 
 | 步骤 | 预演里怎么做 | 生产主机上对应的是 |
 |---|---|---|
+| gVisor | 与生产主机同样注册 `runsc`（`runtimeArgs: ["--network=host"]`） | 主机 `/etc/docker/daemon.json` |
 | preflight | 目标版本的 `host-preflight.sh`，另查内核 IPv6（docker-socket-proxy 绑 `[::]:2375`） | `host-preflight.md` |
 | 检出 | 本仓库的本地克隆，停在 `--from` tag | `host-checkout.md` |
 | 主机初始化 | `--from` 版本自己的 `host-bootstrap` / `host-env-init` / `host-llm-proxy-init` / `gen-handle-keys` / `derive-internal-tokens` | `README.md` ① |
@@ -108,5 +109,5 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 |---|---|---|
 | `FAIL preflight … IPv6 disabled` | 主机内核关了 IPv6，docker-socket-proxy 起不来 | 换主机；GitHub runner 没有这个问题 |
 | `FAIL baseline …` | `--from` 版本在这台主机上就过不了验收——环境与生产不等价，预演结论不可信 | 读 `baseline-*.log`；确认是环境差异后可 `--allow-baseline-failures`，并在结论里写明 |
-| S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 时 gVisor 网络栈访问不到 Docker 内嵌 DNS（`127.0.0.11`），入口容器解析不了 `kernel` / `llm-proxy` | `worker_runtime` 设成与生产一致；若生产也是 `runsc` 却能通过，说明两边 gVisor 版本 / 配置不同，记入遗留 |
+| S1 `chat-alice` 失败、入口容器日志 `fetch failed` | `WORKER_RUNTIME=runsc` 而 runsc 用 gVisor 默认网络栈注册：它访问不到 Docker 内嵌 DNS（`127.0.0.11`，gVisor FAQ 列出的限制），入口容器解析不了 `kernel` / `llm-proxy` | 按生产主机的方式注册：`runsc install -- --network=host`（`daemon.json` 里 `runtimes.runsc.runtimeArgs=["--network=host"]`），workflow 已这样装 |
 | S3 `seed-domain-pack` 失败 | `config/ontology/` 里没有 `ops-assets-*.yaml` | 预演脚本已复制；主机上按 `add-domain-pack.md` 放入 |

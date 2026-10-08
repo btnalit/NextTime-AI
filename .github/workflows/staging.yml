@@ -108,7 +108,10 @@ jobs:
           sudo docker image prune -af >/dev/null
           df -h / | tail -n 1
 
-      - name: Install gVisor (runsc) — host-preflight.sh fails without it
+      # Registered exactly like the production host's runsc (runtimeArgs --network=host): with
+      # gVisor's default netstack an entry container cannot reach Docker's embedded DNS
+      # (127.0.0.11, a gVisor FAQ limitation) and cannot resolve kernel / llm-proxy.
+      - name: Install gVisor (runsc, --network=host like production) — host-preflight.sh fails without it
         env:
           GVISOR_RELEASE: '20260928'
           GVISOR_SHA512: c8d3a9fd4d4c4f5b8ff213caa4517356be128d18659ec4cde37828fe797f61a9725a602a846c81a8ed19c057a996515d31c081eba343ed4613a89951ba32ed59
@@ -120,7 +123,8 @@ jobs:
           tar -xjf "$dir/gvisor.tar.bz2" -C "$dir"
           sudo install -m 755 "$dir/runsc" "$dir/containerd-shim-runsc-v1" /usr/local/bin/
           sudo cp -r "$dir/gvisor-bin" /usr/local/bin/
-          sudo /usr/local/bin/runsc install
+          sudo /usr/local/bin/runsc install -- --network=host
+          cat /etc/docker/daemon.json
           sudo systemctl restart docker
           sudo docker run --rm --runtime=runsc alpine:3.20 true
           runsc --version | head -n 1
