@@ -3599,6 +3599,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   同族新版本与跨族同名 LinkType 照常）与 keyset 同毫秒三版本翻页；原有夹具改为每次用唯一类型名（同一工作区里反复发布同名
   新族，正是 I-P1 现在拒绝的写法）；`write-confinement.integration.test.ts` 改断言工作区事务改不了自己工作区的任何列；
   web `ModulesTab.test.tsx` 断言模块安装撞名显示映射后的文案与原始 code。
+- 评审跟进（#477）：`registry.test.ts` 加并发用例——两个连接同时把同一个新 ObjectType 名发布进两个新族，第二个必须在
+  工作区命名空间锁上等待（断言 `pg_locks` 里有未授予的 advisory 锁），第一个提交后它被 `ontology_namespace_conflict`
+  拒绝，最终只有一个族拥有该名字；不变量巡检（`substrate/audit/invariant-checks.ts`）加 `I-P1`：按"各族最新已发布版本"
+  数工作区内同种类同名、属于不止一个族的类型（与 §3.7 主机预检同一查询），进 `/internal/metrics`，对写入点的锁与检查做纵深防御。
+- 可逆性探针：`packages/kernel/migrations/reversibility-deltas.json` 声明 0041 有意改变、v0.42.0 套件里两个
+  `write-confinement` 断言，由本 PR 的新断言替代（机制见 `runbooks/release.md` §6）。
 
 **K4 — 数据库与身份纵深（遗留 123 车道 K4；单独 PR，core 0042）**
 

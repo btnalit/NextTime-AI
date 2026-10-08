@@ -583,6 +583,69 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       expect(await countRows()).toBe(before);
     });
 
+    it('two concurrent publishes of the same new ObjectType name: the namespace lock lets exactly one family own it', async () => {
+      const first = minimalDefinition();
+      const second = minimalDefinition();
+      const clash = {
+        ...second.definition,
+        objectTypes: [
+          ...second.definition.objectTypes,
+          { name: first.widget, description: 'mine too' },
+        ],
+      };
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      // A publishes and keeps its transaction (and the workspace namespace lock) open.
+      let aPublished!: () => void;
+      const aReady = new Promise<void>((resolve) => {
+        aPublished = resolve;
+      });
+      const a = withWorkspace(pool, { workspaceId, principalId: alice }, async (client) => {
+        const row = await publishOntologyVersion(client, workspaceId, {
+          definition: first.definition,
+          principalId: alice,
+        });
+        aPublished();
+        await held;
+        return row;
+      });
+      await aReady;
+
+      // B starts while A is uncommitted: it must wait on the advisory lock, not race past the check.
+      const b = withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
+        publishOntologyVersion(client, workspaceId, { definition: clash, principalId: bob }),
+      ).catch((err: unknown) => err);
+      const waiting = async (): Promise<number> =>
+        (
+          await pool.query<{ n: number }>(
+            `select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`,
+          )
+        ).rows[0]?.n ?? 0;
+      for (let i = 0; i < 100 && (await waiting()) === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(await waiting()).toBeGreaterThan(0);
+
+      release();
+      const winner = await a;
+      const loser = await b;
+      expect(loser).toBeInstanceOf(OntologyNamespaceConflictError);
+      expect((loser as OntologyNamespaceConflictError).conflicts).toEqual([
+        { kind: 'object', name: first.widget, ontologyId: winner.id },
+      ]);
+      const owners = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
+        client.query<{ id: string }>(
+          `select distinct t.id from ontology_versions t, jsonb_array_elements(t.definition -> 'objectTypes') e
+            where t.workspace_id = $1 and t.status = 'published' and e ->> 'name' = $2`,
+          [workspaceId, first.widget],
+        ),
+      );
+      expect(owners.rows.map((row) => row.id)).toEqual([winner.id]);
+    });
+
     it('a family’s next version keeps its own names; LinkType names may repeat across families', async () => {
       const first = minimalDefinition();
       const v1 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
