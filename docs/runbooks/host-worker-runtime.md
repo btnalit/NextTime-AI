@@ -10,9 +10,10 @@
 的 `DOCKER_GID` 因此不再是这个服务的前置条件（下面 §10 那条 EACCES crash-loop 记录已成历史，见该
 条自己的更新说明）——`DOCKER_GID` 本身仍要设置，只是现在只服务于 `gatekeeper-docker`（见
 `docs/runbooks/host-gatekeepers.md`），不在本 runbook 的验收路径上。
-`${NEXTTIME_DATA}/config/egress-sources.json` 建议 `chown 10001:10001`（同一原因——写入会
-`EACCES`，但 S1.5a 已把这个失败改成 best-effort，不会挡住 spawn，只是那次 egress 登记不生效，
-见 §10）。
+`${NEXTTIME_DATA}/config/egress-sources.json` 必须是 `10001:10001 0644`（worker-supervisor 每次
+spawn / stop 原地改写它；root 属主时写入 `EACCES`，S1.5a 起不挡 spawn，但登记不生效，egress-proxy
+把该容器的出网判为 unknown-source 拒绝，见 §10）。v0.43.0 起 `scripts/host-env-init.sh` 与
+`scripts/apply-release.sh` 每次运行都把它设成这个属主与权限，不再需要手工 `chown`。
 
 ## 1. 目的
 
@@ -68,9 +69,10 @@ cat "${NEXTTIME_DATA}/models/models.json"   # S1.7 未接入真实 provider 时�
 ```bash
 cd <CODE_DIR>
 set -a; . ./.env; set +a
-# 让 worker-supervisor（非 root uid 10001）能写 egress 登记文件 —— 不做这步 spawn 仍会成功
-# （S1.5a 把这个失败改成了 best-effort），只是那次的 egress 来源登记不会真的写进去。
-chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json" || true
+# 让 worker-supervisor（非 root uid 10001）能写 egress 登记文件。v0.43.0 起 host-env-init.sh /
+# apply-release.sh 每次都会设好；更早的检出手工补这一行（不做时 spawn 仍成功，但登记写不进去，
+# egress-proxy 按 unknown-source 拒绝该容器出网）。
+chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json" && chmod 644 "${NEXTTIME_DATA}/config/egress-sources.json"
 docker compose up -d egress-proxy worker-supervisor
 docker compose ps egress-proxy worker-supervisor
 ```
