@@ -81,12 +81,12 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 第三方镜像、`docker/dockerfile:1.7` 和验收 fixture 的基础镜像（只补缺失的）。**不重打 tag、不切检出、
 不碰在跑的栈和数据库**，随时可跑、可重跑（已在的跳过）。每次拉取限时（`PULL_ATTEMPT_TIMEOUT`，默认
 7200 s）、失败重试两次，超时那次已下完的层留在本机、重试接着拉；`RESULT failed-at=prefetch` 时看同目录的
-`-pull.log`，单项拉不下来的会列在最后，重跑即可。
+`-pull.log`：平台镜像拉取或验签失败会在那一个镜像上直接停下，第三方镜像、frontend 和 fixture 基础镜像拉不下来的则继续、列在最后；两种都重跑即可。
 
 窗口内的 `--pull` 第一步（在备份、dump、切 tag 之前）离线核对镜像都已预拉：没有就
 `FAIL not-prefetched`，主机上什么都没改，先补 `--prefetch` 再来。确实要在窗口内现拉（每个镜像最坏
 3 × 2 h）时用 `--pull --allow-long-pull vX.Y.Z`，日志留 `STEP prefetch-check WARNING`。之后日志里每个镜像
-一行 `present, not pulled again`，验签照做；拉取或验签失败就在 `up` 之前停下（`FAIL images`，检出切回、
+一行 `present, not pulled again`，验签照做（每个镜像一次小请求，访问 GHCR 签名与 Sigstore，限时 600 s、重试两次——窗口内仍要联网的一步，遗留 141）；拉取或验签失败就在 `up` 之前停下（`FAIL images`，检出切回、
 栈不动），**不再退回源码构建**——那条路要现场走 npm / apt，且验收的会是未签名的主机构建。`--pull` 应用后的
 验收只认带发布标签的镜像（`ACCEPT_REQUIRE_RELEASE_IMAGES=1`）。
 预拉的镜像在下一次 `prune-images.sh` 前一直占盘（每个版本约 2.8 GB）；若预拉了 vX.Y.Z 却先应用了更低版本
