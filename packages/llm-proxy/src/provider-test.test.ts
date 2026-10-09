@@ -153,7 +153,8 @@ describe('runProviderTest', () => {
     expect(captured[0]?.apiKey).toBe(REAL_KEY);
     expect(captured[0]?.authorization).toBeUndefined();
     expect(seenVersions).toEqual(['2023-06-01', '2023-06-01']);
-    expect(captured[1]?.body.tool_choice).toEqual({ type: 'tool', name: 'ping' });
+    // Current Claude models reject a forced tool_choice (`tool` / `any`) with HTTP 400.
+    expect(captured[1]?.body.tool_choice).toEqual({ type: 'auto' });
   });
 
   it('reports a tool-call failure when the model answers in prose instead of calling the tool', async () => {
@@ -163,6 +164,53 @@ describe('runProviderTest', () => {
     }));
     const result = await runProviderTest({
       provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'error' });
+    expect(result.error).toContain('no call of "ping"');
+  });
+
+  it('anthropic-messages: a reply with only thinking and text (no tool_use) is a tool-call failure under auto tool_choice', async () => {
+    const { port } = await start((c) =>
+      c.body.tools
+        ? {
+            status: 200,
+            body: {
+              content: [
+                { type: 'thinking', thinking: '', signature: 'sig' },
+                { type: 'text', text: 'pong' },
+              ],
+              stop_reason: 'end_turn',
+            },
+          }
+        : { status: 200, body: { content: [{ type: 'text', text: 'OK' }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'error' });
+    expect(result.error).toContain('no call of "ping"');
+  });
+
+  it('anthropic-messages: a thinking-only reply (max_tokens hit before any tool_use) is a tool-call failure', async () => {
+    const { port } = await start((c) =>
+      c.body.tools
+        ? {
+            status: 200,
+            body: {
+              content: [{ type: 'thinking', thinking: '', signature: 'sig' }],
+              stop_reason: 'max_tokens',
+            },
+          }
+        : { status: 200, body: { content: [{ type: 'text', text: 'OK' }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
       model: 'm',
       realKey: REAL_KEY,
       timeoutMs: 2000,

@@ -8,11 +8,16 @@ import type { StoreTestResult } from './provider-store.js';
  *
  *   1. a plain completion ("reply with the single word OK") — proves base URL, api kind, auth
  *      header and key all line up;
- *   2. a forced tool call — the request declares one function (`ping`) and *forces* the model to
- *      call it (`tool_choice`, per api kind), then checks that the response actually carries a
- *      structured tool call for that name. Forcing matters: without it a model may legitimately
- *      answer in prose and the test would say nothing about whether tool calling works on this
- *      endpoint — the thing Workers and gate tools depend on.
+ *   2. a tool call — the request declares one function (`ping`) and asks the model to call it,
+ *      then checks that the response actually carries a structured tool call for that name. On
+ *      the OpenAI kinds the call is forced (`tool_choice` naming the function): without it a model
+ *      may legitimately answer in prose and the test would say nothing about whether tool calling
+ *      works on this endpoint — the thing Workers and gate tools depend on. On Anthropic Messages
+ *      it is `tool_choice: {type:'auto'}` plus the prompt's explicit instruction: the current
+ *      Claude models reject a forced `tool_choice` (`tool` / `any`) with HTTP 400 (`tool_choice:
+ *      type "tool" and "any" are not supported for this model`; found by the staging real-model
+ *      run 2026-10-09), so forcing would fail every one of them; a prose answer still reports
+ *      `tool_call: error`.
  *
  * Request shapes and the response fields inspected are the documented ones for each of the three
  * api kinds this proxy speaks (config.ts `ProviderApiKind`; the same three pi's own provider
@@ -20,10 +25,11 @@ import type { StoreTestResult } from './provider-store.js';
  * `tool_choice: {type:'function', function:{name}}` → `choices[0].message.tool_calls[]`), OpenAI
  * Responses (`tools: [{type:'function', name, parameters}]` + `tool_choice: {type:'function',
  * name}` → an `output[]` item of `type: 'function_call'`), Anthropic Messages (`tools` +
- * `tool_choice: {type:'tool', name}` → a `content[]` block of `type: 'tool_use'`; `max_tokens`
- * and `anthropic-version` are required there). No `max_tokens` is sent on the OpenAI kinds — the
- * newer reasoning models reject it in favour of `max_completion_tokens`, and the prompts are
- * short enough not to need a cap.
+ * `tool_choice: {type:'auto'}` → a `content[]` block of `type: 'tool_use'`; `max_tokens` and
+ * `anthropic-version` are required there, and the tool call's `max_tokens` leaves room for the
+ * adaptive thinking those models run by default before they call the tool). No `max_tokens` is
+ * sent on the OpenAI kinds — the newer reasoning models reject it in favour of
+ * `max_completion_tokens`, and the prompts are short enough not to need a cap.
  *
  * This is the one code path where this proxy uses a provider key on its *own* initiative rather
  * than on behalf of a Handle — bounded to these two fixed requests, never a caller-supplied body,
@@ -114,10 +120,10 @@ function toolCall(api: ProviderApiKind, model: string): UpstreamCall {
         path: '/v1/messages',
         body: {
           model,
-          max_tokens: 64,
+          max_tokens: 1024,
           messages: [{ role: 'user', content: TOOL_PROMPT }],
           tools: [{ name: TOOL_NAME, description: 'Echo test.', input_schema: TOOL_PARAMETERS }],
-          tool_choice: { type: 'tool', name: TOOL_NAME },
+          tool_choice: { type: 'auto' },
         },
         extraHeaders: { 'anthropic-version': '2023-06-01' },
       };
