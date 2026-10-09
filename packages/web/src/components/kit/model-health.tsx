@@ -81,7 +81,7 @@ function NextStep({
           ? t('去模型与供应商检查', 'Check Models & providers')
           : t('去模型与供应商修复', 'Fix it in Models & providers');
     return (
-      <a href={href} data-testid={`${testId}-fix`}>
+      <a href={href} className="link-inline" data-testid={`${testId}-fix`}>
         {label}
       </a>
     );
