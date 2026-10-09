@@ -138,6 +138,18 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     log,
   });
 
+  // A provider whose saved base URL breaks the bare-base rule is loaded but never used
+  // (catalog.ts `unsafeBaseUrls`) — say so at startup, once per provider.
+  for (const { id, problem } of catalog.unsafeBaseUrls()) {
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: `llm-proxy: provider "${id}" is not routed — its upstream base URL ${problem}; edit it in the console`,
+        providerId: id,
+      }),
+    );
+  }
+
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(
     buildModelsJsonFromCatalog(catalog, { llmProxyPort: config.port }),

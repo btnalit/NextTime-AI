@@ -262,6 +262,11 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
         '还没有可用的密钥：在表单里填写 API 密钥，或先在主机 secrets/llm-proxy.env 里设置环境变量。',
         'No key available yet — enter the API key in the form, or set the env var in secrets/llm-proxy.env on the host first.',
       );
+    case 'upstream_base_url_invalid':
+      return t(
+        '这个供应商保存的 Base URL 带有查询串（?）、片段（#）或用户名密码，代理不会向它发请求。编辑供应商，把 Base URL 改成纯源站地址。',
+        'This provider’s saved Base URL carries a query (?), fragment (#) or user name — the proxy will not call it. Edit the provider and set a plain origin.',
+      );
     case 'api_key_env_not_allowed':
       return t(
         '这个环境变量在代理里已经存着一把密钥，但没有配置给这个上游——为防止密钥被发往别处，不能这样用。请改为直接填写 API 密钥。',

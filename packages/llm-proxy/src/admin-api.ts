@@ -16,6 +16,7 @@ import {
   LlmProviderModelDiscoveryInputWireSchema,
   LlmProviderSecretInputWireSchema,
   LlmProviderTestInputWireSchema,
+  upstreamBaseUrlProblem,
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import { AdminAuthError, authenticateAdminRequest } from './admin-auth.js';
@@ -755,6 +756,15 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         const model = parsed.data.model ?? provider.config.models[0]?.id;
         if (!model || !provider.config.models.some((m) => m.id === model)) {
           throw new AdminApiError(400, 'model_not_allowed', 'model is not on this provider');
+        }
+        // A base saved before the bare-base rule (#510) is never called — not even to test it.
+        const baseProblem = upstreamBaseUrlProblem(provider.config.upstream_base_url);
+        if (baseProblem) {
+          throw new AdminApiError(
+            409,
+            'upstream_base_url_invalid',
+            `this provider's upstream base URL ${baseProblem} — edit the provider to fix it`,
+          );
         }
         // S7-A: same resolution order as proxy.ts and credentialSource() above — a console key
         // wins over apiKeyEnv, so the test exercises exactly the key a real request would use.

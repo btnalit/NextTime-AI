@@ -145,6 +145,38 @@ export const LlmProviderListWireSchema = z
   .strict();
 export type LlmProviderListWire = z.infer<typeof LlmProviderListWireSchema>;
 
+/** Why `upstreamBaseUrl` is not a bare upstream base, or `null` when it is one. llm-proxy builds
+ *  every upstream URL as `<base><path>` (`/v1/…`), so a base that is not a plain http(s) origin
+ *  plus optional path would let its writer pick the request: a `?` turns the appended path into a
+ *  query string and a `#` drops it, which makes the base an arbitrary-path request through the
+ *  proxy (SSRF, #510 review); userinfo would put a second credential in the URL. Private and LAN
+ *  hosts stay allowed — a local model server is a legitimate upstream, and each call is audited
+ *  with its full URL. Enforced at write time by the wire schemas below and at use time by
+ *  llm-proxy for rows saved before this rule existed. */
+export function upstreamBaseUrlProblem(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return 'must be an absolute URL';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'must use http or https';
+  if (url.username !== '' || url.password !== '') return 'must not contain a user name or password';
+  // `search` / `hash` are '' for a bare trailing `?` / `#` too, so check the raw text as well.
+  if (url.search !== '' || raw.includes('?')) return 'must not contain a query string (?)';
+  if (url.hash !== '' || raw.includes('#')) return 'must not contain a fragment (#)';
+  return null;
+}
+
+export const LlmProviderUpstreamBaseUrlWireSchema = z
+  .string()
+  .url()
+  .superRefine((value, ctx) => {
+    const problem = upstreamBaseUrlProblem(value);
+    if (problem)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `upstreamBaseUrl ${problem}` });
+  });
+
 /** `POST /providers` (all fields) and `PUT /providers/:id` (same, `id` must match the path).
  *  `apiKeyEnv` optional (S7-A): omitted means "no env var" — the console key (if any) is this
  *  provider's only credential source. A full replace on `PUT` clears a previously-set `apiKeyEnv`
@@ -156,7 +188,7 @@ export const LlmProviderInputWireSchema = z
     id: LlmProviderIdWireSchema,
     displayName: z.string().min(1).max(120).optional(),
     api: LlmProviderApiKindWireSchema,
-    upstreamBaseUrl: z.string().url(),
+    upstreamBaseUrl: LlmProviderUpstreamBaseUrlWireSchema,
     authHeader: LlmProviderAuthHeaderWireSchema,
     authScheme: z.literal('Bearer').nullable().optional(),
     apiKeyEnv: LlmProviderApiKeyEnvWireSchema.optional(),
@@ -218,7 +250,7 @@ export const LlmProviderModelDiscoveryInputWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,
     api: LlmProviderApiKindWireSchema,
-    upstreamBaseUrl: z.string().url(),
+    upstreamBaseUrl: LlmProviderUpstreamBaseUrlWireSchema,
     authHeader: LlmProviderAuthHeaderWireSchema,
     key: z
       .string()

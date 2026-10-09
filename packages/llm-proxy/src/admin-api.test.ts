@@ -1193,3 +1193,96 @@ describe('admin API — POST /model-discovery', () => {
     expect(h.listRuns).toEqual([]);
   });
 });
+
+// #510 review: `<base>/v1/…` is built by string concatenation, so a base carrying `?` or `#`
+// let its writer choose the whole request path (SSRF); userinfo would add a credential to the URL.
+describe('admin API — upstream base URL must be a bare http(s) base', () => {
+  const BAD_BASES = [
+    'http://internal.example.invalid/anything?x=',
+    'http://internal.example.invalid/anything#',
+    'http://internal.example.invalid/anything?',
+    'https://user:pass@acme.example.invalid',
+    'ftp://acme.example.invalid',
+  ];
+
+  it('refuses such a base on create, update and model discovery, before any upstream call', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    for (const upstreamBaseUrl of BAD_BASES) {
+      const created = await request(h.port, 'POST', '/admin/providers', {
+        headers: admin,
+        body: { ...NEW_PROVIDER, upstreamBaseUrl },
+      });
+      expect(created.status, upstreamBaseUrl).toBe(400);
+      const updated = await request(h.port, 'PUT', '/admin/providers/openai', {
+        headers: admin,
+        body: { ...NEW_PROVIDER, id: 'openai', upstreamBaseUrl },
+      });
+      expect(updated.status, upstreamBaseUrl).toBe(400);
+      const discovered = await request(h.port, 'POST', '/admin/model-discovery', {
+        headers: admin,
+        body: {
+          id: 'acme',
+          api: 'openai-completions',
+          upstreamBaseUrl,
+          authHeader: 'authorization',
+          key: 'sk-typed',
+        },
+      });
+      expect(discovered.status, upstreamBaseUrl).toBe(400);
+    }
+    expect(h.listRuns).toEqual([]);
+    expect(h.store.entries()).toEqual([]);
+  });
+
+  it('still accepts a LAN host and a path prefix', async () => {
+    const h = await harness();
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: 'http://192.0.2.10:11434/compatible-mode' },
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it('a row saved before the rule is neither tested, routed nor put in models.json', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file', LEGACY_KEY: 'sk-legacy' } });
+    // Written straight to the store, as v0.43.0's admin API could.
+    await h.store.upsert('legacy', {
+      api: 'openai-completions',
+      upstream_base_url: 'http://internal.example.invalid/anything?x=',
+      api_key_env: 'LEGACY_KEY',
+      auth: { header: 'authorization', scheme: 'Bearer' },
+      models: [{ id: 'm' }],
+      enabled: true,
+    });
+    const admin = await h.adminHeaders();
+    const tested = await request(h.port, 'POST', '/admin/providers/legacy/test', {
+      headers: admin,
+      body: {},
+    });
+    expect(tested.status).toBe(409);
+    expect((tested.body as { error: { code: string } }).error.code).toBe(
+      'upstream_base_url_invalid',
+    );
+    expect(h.testRuns).toEqual([]);
+
+    const routed = await request(h.port, 'GET', '/legacy/v1/models', {
+      headers: { authorization: `Bearer ${await h.handle()}` },
+    });
+    expect(routed.status).toBe(404);
+
+    // Any mutation rewrites models.json; the legacy row is left out of it.
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: NEW_PROVIDER,
+    });
+    expect(created.status).toBe(201);
+    const modelsJson = JSON.parse(readFileSync(h.modelsJsonFile, 'utf8')) as {
+      providers: Record<string, unknown>;
+    };
+    expect(Object.keys(modelsJson.providers).sort()).toEqual(['acme', 'openai']);
+    // Listing still shows it, so the administrator can find and fix it.
+    const list = await request(h.port, 'GET', '/admin/providers', { headers: admin });
+    expect(JSON.stringify(list.body)).toContain('"legacy"');
+  });
+});
