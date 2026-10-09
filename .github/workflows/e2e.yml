@@ -177,6 +177,20 @@ jobs:
             run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null \
             | sudo tee "$NEXTTIME_DATA/models/models.json" >/dev/null
 
+      # Console audit P0-2 / #530: llm-proxy writes provider-health.json next to models.json on a
+      # real host; it never runs as a service here, so the suite gets a synthetic one — a status
+      # kind and a time per provider, nothing else (the kernel parses it with a strict schema and
+      # treats anything else as unknown). `ok` is the main path every picker and screenshot shows;
+      # e2e/provider-health.spec.ts covers the unknown state by corrupting and removing this file
+      # (through WEB_E2E_PROVIDER_HEALTH_FILE) and restores it. Same owner and mode llm-proxy
+      # gives it on a host (uid 10001, 0644).
+      - name: Provider health fixture (fake provider tested ok)
+        run: |
+          set -euo pipefail
+          printf '%s\n' '{"version":1,"writtenAt":"2026-01-01T00:00:00.000Z","providers":{"fake":{"status":"ok","testedAt":"2026-01-01T00:00:00.000Z"}}}' \
+            | sudo install -m 0644 -o 10001 -g 10001 /dev/stdin "$NEXTTIME_DATA/models/provider-health.json"
+          echo "WEB_E2E_PROVIDER_HEALTH_FILE=$NEXTTIME_DATA/models/provider-health.json" >>"$GITHUB_ENV"
+
       - name: Start postgres
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
