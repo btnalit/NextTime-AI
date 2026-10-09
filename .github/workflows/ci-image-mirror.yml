@@ -1,0 +1,124 @@
+name: ci-image-mirror
+
+# Copies the third-party images that required checks start as containers to GHCR, so those checks
+# no longer pull anonymously from Docker Hub. On 2026-10-09 the `test` job of a PR failed twice at
+# `docker pull pgvector/pgvector:pg17` with `toomanyrequests` (Docker Hub's unauthenticated pull
+# limit, counted per runner address) before any test ran; the same pull also backs the
+# reversibility probe and the web-e2e stack.
+#
+# Copy by digest: `docker buildx imagetools create` with a single source and no annotations pushes
+# the source's manifest list and every platform manifest unchanged, so the GHCR copy has the same
+# digest as the pinned Docker Hub image. The job then reads the digest back and fails on any
+# mismatch. Consumers reference the copy by that digest, never by tag.
+#
+# The pin is the one docker-compose.yml already uses for `postgres` (a host runs exactly that
+# image); the job fails if the two drift. To move the pin: change both in one PR, merge, and this
+# workflow copies the new digest (push trigger below); then point the consumers at it.
+#
+# Triggers:
+#   - push to main that changes this file: a merged pin change is mirrored right away;
+#   - workflow_dispatch: copy again by hand (e.g. after a Docker Hub limit failed a run);
+#   - weekly schedule: re-asserts the copy (a deleted package comes back).
+# No retry loop: when Docker Hub still limits this run, it fails and a later trigger copies.
+#
+# Credentials: only GITHUB_TOKEN, with packages: write on this job alone. Every action is pinned to a
+# full commit SHA (same pins as publish-images.yml).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ci-image-mirror.yml
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-image-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: mirror (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pgvector
+            source: docker.io/pgvector/pgvector:pg17
+            digest: sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+            tag: pg17
+            # The line in docker-compose.yml that must carry the same pin.
+            compose_ref: pgvector/pgvector:pg17@
+    env:
+      NAME: ${{ matrix.name }}
+      SOURCE: ${{ matrix.source }}
+      DIGEST: ${{ matrix.digest }}
+      TAG: ${{ matrix.tag }}
+      COMPOSE_REF: ${{ matrix.compose_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pin matches docker-compose.yml
+        run: |
+          pinned=$(grep -o "${COMPOSE_REF}sha256:[0-9a-f]\{64\}" docker-compose.yml | sort -u)
+          if [ "$pinned" != "${COMPOSE_REF}${DIGEST}" ]; then
+            echo "::error::docker-compose.yml pins '${pinned:-nothing}', this workflow mirrors '${COMPOSE_REF}${DIGEST}'; change both in one PR"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy ${{ matrix.name }} by digest
+        id: copy
+        run: |
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          target="ghcr.io/${owner}/nexttime-ai-ci-mirror-${NAME}"
+          docker buildx imagetools create --tag "${target}:${TAG}" "${SOURCE}@${DIGEST}"
+          echo "target=${target}" >>"$GITHUB_OUTPUT"
+
+      - name: Verify the copy's digest
+        env:
+          TARGET: ${{ steps.copy.outputs.target }}
+        run: |
+          got=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${TARGET}:${TAG}")
+          if [ "$got" != "$DIGEST" ]; then
+            echo "::error::${TARGET}:${TAG} has digest '${got}', expected ${DIGEST}"
+            exit 1
+          fi
+          echo "${SOURCE}@${DIGEST} -> ${TARGET}@${got}" >>"$GITHUB_STEP_SUMMARY"
+
+      # Report only: consumers log in with GITHUB_TOKEN, so a private package still works for
+      # this repository's own runs. A public package also serves anyone without credentials.
+      - name: Anonymous pull access (report only)
+        env:
+          TARGET: ${{ steps.copy.outputs.target }}
+        run: |
+          repo=${TARGET#ghcr.io/}
+          token=$(curl -sS "https://ghcr.io/token?scope=repository:${repo}:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p') || true
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/${repo}/manifests/${DIGEST}")
+          echo "anonymous manifest fetch: HTTP ${code}" >>"$GITHUB_STEP_SUMMARY"
+          [ "$code" = 200 ] || echo "::warning::${TARGET} is not anonymously pullable (HTTP ${code}); runs of this repository still pull it with GITHUB_TOKEN"
