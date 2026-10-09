@@ -46,6 +46,13 @@ describe('derivedLogin', () => {
     expect(login.length).toBeLessThanOrEqual(64);
     expect(LOGIN_PATTERN.test(login)).toBe(true);
   });
+
+  it('trims the dashes a display name starts or ends with, in linear time', () => {
+    expect(derivedLogin('--Alice--', '0123456789abcdef')).toBe('alice-01234567');
+    const started = performance.now();
+    expect(derivedLogin(`x${'-'.repeat(200_000)}y`, '0123456789abcdef')).toBe('x-y-01234567');
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe('assertPasswordStrength', () => {

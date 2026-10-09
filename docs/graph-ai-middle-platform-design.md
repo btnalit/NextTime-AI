@@ -325,7 +325,7 @@ flowchart TB
 | gateway | 两类通道认证；解析 (principal, session, on_behalf_of, actor_runtime, capability, target)；限流；审计入口 | 无 |
 | chat | Chat / Turn 持久化；WS RPC（§9.4）；把宿主转发的 pi 事件变成流事件推给该用户；把待审批与任务状态作为卡片推送 | Chat / Message |
 | ontology | OntologyVersion 生命周期；类型校验；JSON Schema 投影；平台元本体 | 类型、WorkerDefinition、Gatekeeper、Capability 对象 |
-| graph | Object / Link / Fact 写入与查询；`traverse` / `search` / `list_facts` / `state_at`；`find_operations` / `find_workers` / `find_procedures` | Object / Link |
+| graph | Object / Link / Fact 写入与查询；`traverse` / `search` / `list_facts` / `graph_overview` / `state_at`；`find_operations` / `find_workers` / `find_procedures` | Object / Link |
 | epistemic | Activity / Observation / Evidence / Conflict / Decision；`explain`；可见性 | 同名对象 |
 | policy | 数据化规则；`evaluate`；双信号；`requester_can_approve` | Policy |
 | approval | ActionRequest 状态机；drain（每 Gatekeeper 单飞、升序、遇 pending 或 executing 停——串行是保证）；`approve` 同事务写 Approval Decision | ActionRequest |
@@ -712,7 +712,7 @@ create table worker_definitions (
 |----|-----------|------|------|
 | chat | `list_chats` / `new_chat` / `send_chat_message` / `stop_agent` / `get_chat_history` / `subscribe_chat` | human | 只走 human 通道 |
 | ontology | `publish_ontology_version` / `propose_ontology_change` / `get_type` / `list_types` / `validate` | execute（human）/ propose / observe | |
-| graph | `get_object` / `traverse` / `search` / `list_facts` / `state_at` / `find_operations` / `find_workers` / `find_procedures` | observe | 结果带 `epistemic_status`；`find_*` 与调用者 Grant 取交集 |
+| graph | `get_object` / `traverse` / `search` / `list_facts` / `graph_overview` / `state_at` / `find_operations` / `find_workers` / `find_procedures` | observe | 结果带 `epistemic_status`；`find_*` 与调用者 Grant 取交集 |
 | gate | `<gate>.<op>`（observe 类） | observe | 接口清单投影出的工具；入口与 Worker 均可 |
 | | `<gate>.<op>`（execute 类）经 `request_action` | execute | 只有 Worker 的 Handle 可含 |
 | connection | `request_connection` | propose（Handle 通道） | 产生连接请求卡片 |
@@ -739,6 +739,8 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 - 一个 WS 连接 `/ws`，human 通道认证后使用；JSON-RPC 2.0 请求 / 响应（带 `id`）+ 服务端推送通知（无 `id`）。
 - 推送事件（借 cloudflare-os `AiChatSubscriber`）：`chat.message`（持久消息）、`chat.stream`（`textDelta` / `toolCallStarted` / `toolCallEnded` / `workerSpawned` / `taskUpdated`）、`chat.metadata`、`action.pending` / `action.updated`（审批卡片）、`task.updated`。
 - **客户端规则：先 `subscribe_chat(chatId, startAfter)` 再 `get_chat_history` 翻页**，否则会丢事件。
+- `chat.stream` 本身不持久化。每个工具调用结束时（Turn 结束时仍未结束的记为 `not_finished`），内核另存一条 `role='tool'`、`kind:'tool_call'` 的消息，内容为工具名、结果状态、参数与结果预览，`chat.message` 推送、`get_chat_history` 读取，可见性与所在 Chat 相同。形状见 `packages/shared/src/chat-message-content.ts` 的 `ToolCallMessageContent`。预览先脱敏后截断：参数 4000 字符，结果 16000 字符；载荷只读到预览长度再多 4096 字符，超出部分不读。工具调用记录是 agent 运行时自己的报告，可信度与 assistant 文本相同；能力调用以审计记录为准。实现见 `packages/kernel/src/application/chat/tool-call-record.ts` 与 `event-sink.ts`。
+- **模型、工具与 Worker 输出的密钥脱敏**（`packages/kernel/src/governance/redaction/`）。入口容器里 pi 有 `bash`，Handle 在其环境变量里，一次 `env`（含被提示注入诱导的）就能把 Handle 写进工具结果或回复。内核在这些位置把形似密钥的值换成 `[redacted]`：实时 `chat.stream` 的文本（跨分段：末尾可能是密钥一部分的文本先扣住，最多 4096 字符，下一个非文本事件前放出；拼接后与整段脱敏逐字相同，单测在每个切点、每对切点上验证）与工具参数和结果、工具调用记录、落库的回复（超过 256 Ki 字符截断）、Handle 通道能力调用写入审计的参数副本（处理器仍拿原参数）、Worker 结果的报告部分（summary、findings、Facts、evidence、artifacts；提议的 Operation 与 Skill 原样保留，因为批准的就是将要执行的）。识别的形态：JWT（含 Handle）、`Authorization`/`Cookie` 头、Bearer/Basic、PEM 私钥、常见厂商 key、`NAME=value` 与带引号的 env 行、YAML/ini/JSON 中以密钥命名的键、`--password` 类参数、查询串、URL 中的密码，以及能力声明的敏感参数。名值对先判名字再取值，名字不是密钥名的一对不会把值里的密钥对吞掉（`note: password=…`）。所有模式线性时间，按 200 KB 对抗输入测试。**这只是纵深防御**：编码过（base64、拆字符）的密钥照样能出去，根治在 Handle 本身（作用域、有效期、模型的 shell 读不到它），另立安全设计项。
 - 一个 Chat 同时只允许一个进行中的 Turn；进行中时 `send_chat_message` 被拒，只能 `stop_agent`。
 - **认证前的资源上限**（2026-10-02 复审 L1-16 / L5-12(b)）。威胁：`/ws` 不登录就能连上，ws 默认单帧 100 MiB、不认证也不超时，一个人开很多 socket、每个灌大帧或一直不认证，就能把 kernel 堆打满、OOM 重启，所有工作区的聊天、审批、Task、门执行一起停，重启后还能重来。现行上限：单帧 ≤ 1 MiB（与 `/api/cap` 请求体上限相同；超出由 ws 以 1009 关闭）；升级后 10 s 内没认证成功即以 1008 关闭；凭证解析期间同时只解析一个，期间到达的帧最多排 32 帧 / 1 MiB，超出以 1008 关闭。1008 关闭前不发 `-32001`，控制台把它当普通断线按退避重连，不会被登出。`/internal/agent-host` 与 `/ws` 共用同一个 `@fastify/websocket` 注册，但在自己的 socket 上把上限放回 100 MiB（门的原始输出还走这条链路，等 L5-12(a) 在 bridge 截断后再收紧）；它在升级前就经过内部平面守卫。实现见 `packages/kernel/src/interfaces/ws/payload-limits.ts` 与 `server.ts`。
 

@@ -69,3 +69,58 @@ export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemActionUpdateContent,
 ]);
 export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
+
+/**
+ * A Turn's tool call as a persisted `role='tool'` chat message (`kind: 'tool_call'`). The live
+ * `chat.stream` `toolCallStarted`/`toolCallEnded` deltas are still never stored (§9.4); this is the
+ * record the kernel's chat event sink writes once a call ends — or, for a call still open when its
+ * Turn ends, as `not_finished` — so an operator who reloads the page can still see which tools a
+ * Turn called and what came back ("why did it say there is no data").
+ *
+ * It is the agent runtime's own report of its tool use, at the same trust level as the Turn's
+ * assistant text: not a verified record. A kernel capability call also has its audit record
+ * (`audit_records`, name and redacted params, no result), which stays the authoritative one.
+ *
+ * `args`/`result` are previews, not the payloads: read only up to a bound, secret-looking values
+ * replaced (`redactedValues` counts them), then cut at a fixed length (`truncated`, `totalChars`). `result.text` is the tool
+ * result's own text when it has any (pi's `content` text parts — a capability tool's is its JSON),
+ * otherwise the result as JSON. `startedAt`/`endedAt` are when the kernel received the events.
+ */
+export const TOOL_CALL_MESSAGE_KIND = 'tool_call' as const;
+
+export const TOOL_CALL_OUTCOME_VALUES = ['done', 'failed', 'not_finished'] as const;
+export type ToolCallOutcome = (typeof TOOL_CALL_OUTCOME_VALUES)[number];
+
+export const ToolCallPayloadPreviewSchema = z
+  .object({
+    text: z.string(),
+    /** How long the payload's text was before it was cut — a result's text as the tool returned
+     *  it; for a structured payload too large to read whole, a lower bound (`truncated` is then
+     *  true). Larger than `text.length` when it was cut. */
+    totalChars: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type ToolCallPayloadPreview = z.infer<typeof ToolCallPayloadPreviewSchema>;
+
+export const ToolCallMessageContentSchema = z
+  .object({
+    kind: z.literal(TOOL_CALL_MESSAGE_KIND),
+    /** One line for a client that reads only `content.text`: the tool's name. */
+    text: z.string(),
+    toolCallId: z.string(),
+    /** `null` only when the kernel saw neither the call's start nor a name on its end. */
+    name: z.string().nullable(),
+    /** `failed`: the runtime flagged the result as an error. `not_finished`: the Turn ended while
+     *  the call was still open (stopped, failed, or the runtime lost it). */
+    outcome: z.enum(TOOL_CALL_OUTCOME_VALUES),
+    /** Absent when the call's start (which carries the arguments) was not seen. */
+    args: ToolCallPayloadPreviewSchema.optional(),
+    /** Absent for a `not_finished` call, or when the runtime reported no result. */
+    result: ToolCallPayloadPreviewSchema.optional(),
+    redactedValues: z.number().int().nonnegative(),
+    startedAt: z.string().nullable(),
+    endedAt: z.string().nullable(),
+  })
+  .strict();
+export type ToolCallMessageContent = z.infer<typeof ToolCallMessageContentSchema>;

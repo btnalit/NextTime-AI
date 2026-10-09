@@ -1,3 +1,4 @@
+import type { ToolCallMessageContent } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
@@ -462,6 +463,49 @@ export async function insertChatMessage(
     if (existingRow !== undefined) return mapChatMessageRow(existingRow);
   }
   throw new Error('insertChatMessage: INSERT ... RETURNING produced no row');
+}
+
+/**
+ * Stores one tool call's record (`role='tool'`, `content` a `ToolCallMessageContent` —
+ * application/chat/tool-call-record.ts) on its Turn, under the same per-chat sequence lock as
+ * `insertChatMessage`. At most one record per `(turnId, toolCallId)`: a call already recorded for
+ * the Turn — a replayed frame, or a `not_finished` record whose end then arrived — inserts nothing
+ * and returns `null`, so the first record written stands (the transcript is append-only).
+ */
+export async function insertToolCallMessage(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly chatId: string;
+    readonly turnId: string;
+    readonly content: ToolCallMessageContent;
+  },
+): Promise<ChatMessageRow | null> {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [input.chatId]);
+
+  const result = await client.query<ChatMessageDbRow>(
+    `insert into chat_messages (workspace_id, chat_id, turn_id, role, content, sequence)
+     select $1, $2, $3, 'tool', $4::jsonb,
+       coalesce(
+         (select max(sequence) from chat_messages where workspace_id = $1 and chat_id = $2),
+         0
+       ) + 1
+     where not exists (
+       select 1 from chat_messages
+       where workspace_id = $1 and chat_id = $2 and turn_id = $3 and role = 'tool'
+         and content->>'toolCallId' = $5
+     )
+     returning ${CHAT_MESSAGE_COLUMNS}`,
+    [
+      workspaceId,
+      input.chatId,
+      input.turnId,
+      JSON.stringify(input.content),
+      input.content.toolCallId,
+    ],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : mapChatMessageRow(row);
 }
 
 // -------------------------------------------------------------------------------------------

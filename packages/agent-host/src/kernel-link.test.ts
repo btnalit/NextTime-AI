@@ -545,6 +545,50 @@ describe('createKernelLink — replay after a flap (R-56)', () => {
     expect(lines.filter((l) => l.includes('over the per-Turn bound'))).toHaveLength(1);
   });
 
+  it('under the per-Turn bound, text deltas go before tool events — the kernel stores a record of each tool call', async () => {
+    server = await startFakeKernelServer();
+    link = createKernelLink({
+      kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      maxBufferedFramesPerTurn: 4,
+      log: () => {},
+    });
+
+    link.sendTurnAccepted('turn-1');
+    link.sendRuntimeEvent({
+      type: 'toolCallStarted',
+      toolCallId: 'c1',
+      name: 'list_facts',
+      args: { linkType: 'depends_on' },
+      ...CORRELATION,
+      turnId: 'turn-1',
+    });
+    for (let i = 0; i < 10; i += 1) link.sendRuntimeEvent(textDelta('turn-1', `d${i}`));
+    link.sendRuntimeEvent({
+      type: 'toolCallEnded',
+      toolCallId: 'c1',
+      result: { content: [] },
+      ...CORRELATION,
+      turnId: 'turn-1',
+    });
+    link.sendRuntimeEvent(turnEnded('turn-1'));
+
+    const first = server.nextConnection();
+    link.start();
+    const received = collect(await first);
+    await vi.waitFor(() => expect(received).toHaveLength(5));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((received.slice(1) as ReceivedFrame[]).map(frameKind)).toEqual([
+      'turnAccepted',
+      'toolCallStarted',
+      'toolCallEnded',
+      'turnEnded',
+    ]);
+  });
+
   it('a ping the kernel never answers drops the link, and agent-host reconnects', async () => {
     const silent = new WebSocketServer({ port: 0, host: '127.0.0.1', autoPong: false });
     let connections = 0;

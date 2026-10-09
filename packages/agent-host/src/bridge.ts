@@ -59,12 +59,12 @@ import type { AgentRuntimeEventWire } from '@nexttime/shared';
  *     platform vocabulary slot in S1.
  *   - `message_end` becomes a persisted `message` event only for `role: 'assistant'` content with
  *     non-empty extracted text — an assistant message that is *only* tool calls (no text content)
- *     produces no persisted message (nothing textual to show; the tool activity itself already
- *     went out live via `toolCallStarted`/`toolCallEnded`). `role: 'toolResult'` is deliberately
- *     never translated to the platform's `message {role:'tool'}` variant: `FakeAgentRuntime`
- *     (S1.4) never emits that role either, so this keeps the real and fake runtimes' persisted-
- *     history shape aligned — a future task can revisit this table's own module doc note (right
- *     there in agent-runtime.ts) if a real need for a persisted tool-result transcript emerges.
+ *     produces no persisted message (nothing textual to show; the tool activity itself goes out
+ *     via `toolCallStarted`/`toolCallEnded`). `role: 'toolResult'` is deliberately never
+ *     translated to the platform's `message {role:'tool'}` variant: the kernel's chat event sink
+ *     builds the persisted tool-call record itself from `toolCallStarted`/`toolCallEnded`
+ *     (redacted and size-capped there, on the kernel's side of the trust boundary — kernel
+ *     `application/chat/tool-call-record.ts`), the same way for the real and the fake runtime.
  *   - One platform Turn = one pi `agent_start`...`agent_settled` run, exactly like
  *     `platform-extension/src/modes/entry.ts`'s own `nexttime_turn` bookkeeping — `agent_settled`
  *     is what ends a Turn, not `agent_end` (which can fire more than once per Turn: auto-retry,
@@ -158,11 +158,15 @@ function translateToolExecutionEnd(event: Record<string, unknown>): BridgeResult
   // type); forwarded so the platform stream can distinguish a failed tool call. Read defensively
   // like every other field here — absent or non-boolean degrades to "not reported".
   const isError = typeof event.isError === 'boolean' ? event.isError : undefined;
+  // The kernel names its persisted tool-call record from `toolCallStarted`; the end carries the
+  // name too, for a record whose start the kernel never saw (a kernel restart mid-call).
+  const name = typeof event.toolName === 'string' ? event.toolName : undefined;
   return {
     kind: 'event',
     fields: {
       type: 'toolCallEnded',
       toolCallId,
+      ...(name !== undefined ? { name } : {}),
       result: event.result,
       ...(isError !== undefined ? { isError } : {}),
     },
