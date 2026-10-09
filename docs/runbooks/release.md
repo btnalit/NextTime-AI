@@ -666,7 +666,7 @@ SQL
 
 `eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。0 行，或每行 `live_unrevoked = 0`，即无事。中间段解不出 `jti` 的（截断、损坏）直接跳过，不会让事务中止。有 `live_unrevoked > 0` 时，找维护者决定是否吊销：按 `jti` 吊销（`capability_handles.revoked_at`，每次调用都检查）是改主机数据的操作，须维护者明确同意，本手册不自动做。历史行是否清洗另行决定（审计只追加）。
 
-**B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，历史里能看到这一轮的工具调用和结果。
+**B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，回复上方能看到「调用了 N 个工具」组（#523），展开后每行有工具名、结果（完成 / 失败 / 未完成）、起止时间与参数和结果预览。
 
 **C. 输出里的 Handle 被替换**：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页里都应显示为 `[redacted]`。
 
