@@ -5,6 +5,7 @@ import type {
   LlmProviderCredentialSourceWire,
   LlmProviderInputWire,
   LlmProviderListWire,
+  LlmProviderModelDiscoveryResultWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
 } from '@nexttime/shared';
@@ -12,6 +13,7 @@ import {
   LLM_PROVIDER_RESERVED_IDS,
   LlmProviderIdWireSchema,
   LlmProviderInputWireSchema,
+  LlmProviderModelDiscoveryInputWireSchema,
   LlmProviderSecretInputWireSchema,
   LlmProviderTestInputWireSchema,
 } from '@nexttime/shared';
@@ -22,6 +24,7 @@ import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
+import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { ProviderStoreError } from './provider-store.js';
 
@@ -57,6 +60,11 @@ import { ProviderStoreError } from './provider-store.js';
  *   DELETE /providers/:id/secret clears the console key — falls back to `apiKeyEnv` (if any) or no
  *                                credential. Always 200, even when there was no console key to
  *                                clear (the end state already holds).
+ *   POST   /model-discovery      "从供应商获取模型": one `GET <upstream>/v1/models` for the upstream
+ *                                the console form describes (provider-models.ts), before or after
+ *                                the provider exists. Changes nothing; audit-logged like a test.
+ *                                Its own top-level segment, not `/providers/<x>`, so it can never
+ *                                collide with a provider id.
  *
  * S7-A (docs/STATUS.md 维护者决定 2026-09-22 ①: no approval flow, usability first): the console
  * may now set a provider's key directly — resolution order (proxy.ts, this module's own
@@ -99,7 +107,8 @@ export type KernelAuditAction =
   | 'provider_deleted'
   | 'provider_tested'
   | 'provider_secret_set'
-  | 'provider_secret_cleared';
+  | 'provider_secret_cleared'
+  | 'provider_models_listed';
 
 export interface KernelAuditEvent {
   readonly action: KernelAuditAction;
@@ -130,6 +139,11 @@ export interface AdminApiOptions {
     model: string,
     realKey: string,
   ) => Promise<StoreTestResult>;
+  /** provider-models.ts's `listUpstreamModels` (timeout bound by the caller), injectable for
+   *  tests. Absent = `POST /model-discovery` answers 501. */
+  readonly listModels?: (
+    options: Omit<ListUpstreamModelsOptions, 'timeoutMs' | 'fetchImpl'>,
+  ) => Promise<ListUpstreamModelsResult>;
   readonly maxRequestBodyBytes: number;
   readonly log?: (line: string) => void;
   readonly now?: () => Date;
@@ -455,6 +469,104 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     );
   }
 
+  /** `POST /model-discovery`. Credential choice, in order — each one under the rule that already
+   *  governs where that kind of key may go (R-23):
+   *    1. `key` in the body: the administrator's own input, sent only to the upstream named here
+   *       (exactly what saving the provider and setting that key would allow anyway);
+   *    2. the stored console key of provider `id`, only when the body's upstream is that
+   *       provider's current one (a console key belongs to the upstream it was entered for);
+   *    3. an environment key — `apiKeyEnv` from the body, else the existing provider's own — only
+   *       when `assertEnvKeyPairing` would accept that (name, upstream) pair on a save.
+   *  None of them → 409 `credential_missing`. The upstream's own failure is a 502 with a
+   *  sanitized message (`upstream_error` / `upstream_unreachable` / `upstream_invalid_response`). */
+  async function discoverModels(
+    claims: LlmAdminTokenClaims,
+    req: http.IncomingMessage,
+  ): Promise<LlmProviderModelDiscoveryResultWire> {
+    if (!options.listModels) {
+      throw new AdminApiError(501, 'not_implemented', 'model discovery is not configured');
+    }
+    const parsed = LlmProviderModelDiscoveryInputWireSchema.safeParse(await readJsonBody(req));
+    if (!parsed.success) {
+      throw new AdminApiError(
+        400,
+        'invalid_body',
+        'invalid discovery request',
+        parsed.error.issues,
+      );
+    }
+    const input = parsed.data;
+    const existing = options.catalog.get(input.id);
+    const sameUpstream =
+      existing !== undefined &&
+      upstreamKey(existing.config.upstream_base_url) === upstreamKey(input.upstreamBaseUrl);
+
+    let realKey: string | undefined;
+    let credentialSource: LlmProviderModelDiscoveryResultWire['credentialSource'] = 'inline';
+    if (input.key) {
+      realKey = input.key;
+    } else {
+      const consoleKey = sameUpstream ? options.keyStore.get(input.id) : undefined;
+      if (consoleKey !== undefined) {
+        realKey = consoleKey;
+        credentialSource = 'console';
+      } else {
+        const envName =
+          input.apiKeyEnv ?? (sameUpstream ? existing?.config.api_key_env : undefined);
+        const envValue = envName ? resolveApiKey(envName) : undefined;
+        if (envName && typeof envValue === 'string' && envValue.length > 0) {
+          assertEnvKeyPairing(
+            claims,
+            input.id,
+            { api_key_env: envName, upstream_base_url: input.upstreamBaseUrl },
+            existing?.config,
+          );
+          realKey = envValue;
+          credentialSource = 'env';
+        }
+      }
+    }
+    if (!realKey) {
+      throw new AdminApiError(
+        409,
+        'credential_missing',
+        'no key to list models with — enter the provider key in the form (or set the env var on the host first)',
+      );
+    }
+
+    const startedAt = now().getTime();
+    const result = await options.listModels({
+      api: input.api,
+      upstreamBaseUrl: input.upstreamBaseUrl.replace(/\/+$/, ''),
+      authHeader: input.authHeader,
+      realKey,
+    });
+    const latencyMs = Math.max(0, now().getTime() - startedAt);
+    audit(claims, 'provider_models_listed', input.id, {
+      upstreamBaseUrl: input.upstreamBaseUrl,
+      credentialSource,
+      existing: existing !== undefined,
+      ...(result.ok
+        ? { count: result.models.length }
+        : { failed: result.reason, status: result.status }),
+    });
+    if (!result.ok) {
+      const code =
+        result.reason === 'upstream_status'
+          ? 'upstream_error'
+          : result.reason === 'unreachable'
+            ? 'upstream_unreachable'
+            : 'upstream_invalid_response';
+      throw new AdminApiError(502, code, result.message, { status: result.status });
+    }
+    return {
+      models: [...result.models],
+      credentialSource,
+      truncated: result.truncated,
+      latencyMs,
+    };
+  }
+
   function toWire(provider: ResolvedProvider): LlmProviderWire {
     return toWireProvider(provider, credentialPresent(provider), credentialSource(provider));
   }
@@ -476,6 +588,13 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     const pathOnly = remainderPath.split('?')[0] ?? '';
     const segments = pathOnly.split('/').filter((segment) => segment.length > 0);
     const method = req.method ?? 'GET';
+
+    if (segments[0] === 'model-discovery' && segments.length === 1) {
+      if (method !== 'POST') {
+        throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');
+      }
+      return { status: 200, body: await discoverModels(claims, req) };
+    }
 
     if (segments[0] !== 'providers') {
       throw new AdminApiError(404, 'not_found', 'not found');

@@ -205,6 +205,61 @@ export const LlmProviderSecretInputWireSchema = z
   .strict();
 export type LlmProviderSecretInputWire = z.infer<typeof LlmProviderSecretInputWireSchema>;
 
+/** `POST /model-discovery` — "从供应商获取模型": one `GET <upstreamBaseUrl>/v1/models` against the
+ *  upstream the form describes, so the console can offer the provider's real model ids instead of
+ *  making the administrator type them. Works before the provider exists (the create form) and for
+ *  an existing one (the edit form). `id` is the provider id being created or edited — the audit
+ *  correlation key, and for an existing provider whose upstream is unchanged, the id whose stored
+ *  credential (console key, then `apiKeyEnv`) may be used when `key` is absent. The credential
+ *  rules are the write path's own (R-23): `key` is the administrator's own input and goes only to
+ *  the upstream named here; a stored console key only goes to the upstream it was entered for; an
+ *  environment key only to an upstream the configured provider set already pairs it with. */
+export const LlmProviderModelDiscoveryInputWireSchema = z
+  .object({
+    id: LlmProviderIdWireSchema,
+    api: LlmProviderApiKindWireSchema,
+    upstreamBaseUrl: z.string().url(),
+    authHeader: LlmProviderAuthHeaderWireSchema,
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(LLM_PROVIDER_SECRET_MAX_LENGTH)
+      .refine((value) => !hasControlCharacter(value), 'key must not contain control characters')
+      .optional(),
+    apiKeyEnv: LlmProviderApiKeyEnvWireSchema.optional(),
+  })
+  .strict();
+export type LlmProviderModelDiscoveryInputWire = z.infer<
+  typeof LlmProviderModelDiscoveryInputWireSchema
+>;
+
+export const LlmProviderDiscoveredModelWireSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    /** The upstream's own display name when it reports one (Anthropic's `display_name`). */
+    displayName: z.string().max(120).nullable(),
+  })
+  .strict();
+export type LlmProviderDiscoveredModelWire = z.infer<typeof LlmProviderDiscoveredModelWireSchema>;
+
+/** Which credential the discovery call used: the administrator's typed key (`inline`), the
+ *  provider's stored console key, or its environment key. Never the value. */
+export const LlmProviderDiscoveryCredentialWireSchema = z.enum(['inline', 'console', 'env']);
+
+export const LlmProviderModelDiscoveryResultWireSchema = z
+  .object({
+    models: z.array(LlmProviderDiscoveredModelWireSchema),
+    credentialSource: LlmProviderDiscoveryCredentialWireSchema,
+    /** `true` when the upstream listed more than the proxy returns (capped). */
+    truncated: z.boolean(),
+    latencyMs: z.number().int().nonnegative(),
+  })
+  .strict();
+export type LlmProviderModelDiscoveryResultWire = z.infer<
+  typeof LlmProviderModelDiscoveryResultWireSchema
+>;
+
 export const DeleteLlmProviderResultWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,

@@ -3,6 +3,8 @@ import type {
   LlmAdminTokenWire,
   LlmProviderInputWire,
   LlmProviderListWire,
+  LlmProviderModelDiscoveryInputWire,
+  LlmProviderModelDiscoveryResultWire,
   LlmProviderTestInputWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
@@ -211,6 +213,15 @@ export class LlmAdminClient {
     });
   }
 
+  /** 「从供应商获取模型」: one `GET <upstream>/v1/models` through the proxy for the upstream the
+   *  form describes (llm-proxy `POST /admin/model-discovery`). `key`, when given, is the typed key
+   *  — sent in this one request body, used only for this upstream, never stored by this call. */
+  discoverModels(
+    input: LlmProviderModelDiscoveryInputWire,
+  ): Promise<LlmProviderModelDiscoveryResultWire> {
+    return this.request<LlmProviderModelDiscoveryResultWire>('POST', '/model-discovery', input);
+  }
+
   /** Clears the console key for `id` — falls back to `apiKeyEnv` (if set) or no credential. */
   clearProviderSecret(id: string): Promise<LlmProviderWire> {
     return this.request<LlmProviderWire>('DELETE', `/providers/${encodeURIComponent(id)}/secret`);
@@ -248,8 +259,29 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
       );
     case 'credential_missing':
       return t(
-        '该供应商尚未配置密钥（控制台或 secrets/llm-proxy.env 均未设置）。',
-        'This provider has no key configured (neither the console nor secrets/llm-proxy.env).',
+        '还没有可用的密钥：在表单里填写 API 密钥，或先在主机 secrets/llm-proxy.env 里设置环境变量。',
+        'No key available yet — enter the API key in the form, or set the env var in secrets/llm-proxy.env on the host first.',
+      );
+    case 'api_key_env_not_allowed':
+      return t(
+        '这个环境变量在代理里已经存着一把密钥，但没有配置给这个上游——为防止密钥被发往别处，不能这样用。请改为直接填写 API 密钥。',
+        'That env var already holds a key in the proxy that is not configured for this upstream — so it cannot be sent here. Enter the API key directly instead.',
+      );
+    case 'upstream_error':
+    case 'upstream_unreachable':
+    case 'upstream_invalid_response': {
+      const prefix =
+        error.code === 'upstream_unreachable'
+          ? t('连不上供应商', 'Could not reach the provider')
+          : error.code === 'upstream_invalid_response'
+            ? t('供应商没有返回模型列表', 'The provider returned no model list')
+            : t('供应商拒绝了请求', 'The provider refused the request');
+      return `${prefix}：${error.message}`;
+    }
+    case 'invalid_body':
+      return t(
+        '代理认为提交的内容不合法，请检查各字段。',
+        'The proxy rejected the submitted fields — check them.',
       );
     case 'provider_exists':
       return t('已存在同名供应商。', 'A provider with this id already exists.');

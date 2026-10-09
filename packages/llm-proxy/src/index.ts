@@ -17,6 +17,7 @@ import {
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
 import { createProviderKeyResolver, loadProviderKeyFiles } from './provider-keys.js';
+import { listUpstreamModels } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import { runProviderTest } from './provider-test.js';
 import { createProxyServer } from './proxy.js';
@@ -193,6 +194,8 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
         : undefined,
     runTest: (provider, model, realKey) =>
       runProviderTest({ provider, model, realKey, timeoutMs: config.providerTestTimeoutMs }),
+    listModels: (request) =>
+      listUpstreamModels({ ...request, timeoutMs: config.providerTestTimeoutMs }),
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     log,
     resolveApiKey,

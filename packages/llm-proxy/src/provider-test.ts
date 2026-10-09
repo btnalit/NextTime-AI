@@ -194,7 +194,7 @@ const ERROR_TEXT_MAX_LENGTH = 200;
  *  truncates — truncation runs last so a redaction is never cut in half. Shared by
  *  `describeFailure` (a structured upstream error body) and `runProviderTest`'s own two
  *  `catch (err)` blocks (a thrown `Error`'s `String(err)`, which can embed the request URL/body). */
-function scrubUpstreamText(text: string, realKey: string): string {
+export function scrubUpstreamText(text: string, realKey: string): string {
   const scrubbed = text
     .split(realKey)
     .join('***')
@@ -204,7 +204,7 @@ function scrubUpstreamText(text: string, realKey: string): string {
 }
 
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */
-function describeFailure(status: number, body: unknown, realKey: string): string {
+export function describeFailure(status: number, body: unknown, realKey: string): string {
   let detail = '';
   if (isRecord(body)) {
     const error = body.error;
