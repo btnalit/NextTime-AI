@@ -82,4 +82,20 @@ describe('lib/provider-form', () => {
     );
     expect(explainUpstreamError(null, zh)).toBeNull();
   });
+
+  // 4.7b host check: DeepSeek thinking mode refused the probe's forced tool_choice.
+  it('tells a refused probe apart from a model that cannot call tools', () => {
+    const stored = 'HTTP 400: Thinking mode does not support this tool_choice (request_id: ***)';
+    expect(explainUpstreamError(stored, zh, 'tool_call')).toContain('不代表不能用工具');
+    const refused =
+      'HTTP 400: tools are not supported (retried with tool_choice auto after the forced tool_choice was rejected: HTTP 400: x)';
+    expect(explainUpstreamError(refused, zh, 'tool_call')).toContain('不支持工具调用');
+    expect(explainUpstreamError('HTTP 400: bad model', zh, 'completion')).toContain('请求参数');
+    const prose =
+      'tool-call response carried no call of "ping" (retried with tool_choice auto after the forced tool_choice was rejected: HTTP 400: x)';
+    expect(explainUpstreamError(prose, zh, 'tool_call')).toContain('没有按要求发起工具调用');
+    expect(explainUpstreamError('tool-call request failed: TypeError: fetch failed', zh)).toContain(
+      '连不上上游',
+    );
+  });
 });

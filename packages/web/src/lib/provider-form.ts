@@ -300,14 +300,42 @@ export function upstreamStatus(error: string | null): number | null {
   return match ? Number(match[1]) : null;
 }
 
-/** One plain sentence on what an upstream failure most likely means and what to change. */
-export function explainUpstreamError(error: string | null, t: Translate): string | null {
+/** One plain sentence on what an upstream failure most likely means and what to change.
+ *  `phase` says which round trip of a provider test failed (`'tool_call'` once the completion
+ *  passed): a 400 there means the endpoint refused a request carrying tools. */
+export function explainUpstreamError(
+  error: string | null,
+  t: Translate,
+  phase?: 'completion' | 'tool_call',
+): string | null {
   if (!error) return null;
+  // Checked first: when the forced tool_choice was refused and the retry answered in prose, the
+  // message also carries that first refusal's `HTTP 400`.
+  if (/^tool-call response carried no call of/.test(error)) {
+    return t(
+      '模型能回答，但没有按要求发起工具调用：这个模型或中转可能不支持工具调用，Worker 和门工具会用不了。',
+      'The model answered but did not call the tool — this model or relay may not support tool calling, so Workers and gate tools will not work.',
+    );
+  }
   const status = upstreamStatus(error);
   if (status === 401 || status === 403) {
     return t(
       '供应商拒绝了密钥：检查密钥是否完整、未过期、对这个模型有权限。',
       'The provider rejected the key — check it is complete, not expired, and allowed to use this model.',
+    );
+  }
+  // A result stored before the probe learned to retry: the upstream refused only the probe's
+  // forced tool_choice (DeepSeek thinking mode), which says nothing about tool support.
+  if ((status === 400 || status === 422) && /tool_choice/i.test(error) && !/retried/i.test(error)) {
+    return t(
+      '供应商只是不接受测试探针里强制指定的 tool_choice（如 DeepSeek 思考模式），不代表不能用工具。重新测试一次即可得到准确结果。',
+      'The provider only refused the probe’s forced tool_choice (e.g. DeepSeek thinking mode), which does not mean tools are unsupported. Run the test again for an accurate result.',
+    );
+  }
+  if (phase === 'tool_call' && (status === 400 || status === 422)) {
+    return t(
+      '能正常对话，但上游拒绝了带工具的请求：这个模型或中转多半不支持工具调用，Worker 和门工具会用不了，换一个支持工具调用的模型。',
+      'Chat works, but the upstream refused a request carrying tools — this model or relay most likely does not support tool calling, so Workers and gate tools will not work. Pick a model that does.',
     );
   }
   if (status === 404) {
@@ -338,12 +366,6 @@ export function explainUpstreamError(error: string | null, t: Translate): string
     return t(
       '连不上上游：检查 Base URL 拼写，以及主机能否访问这个地址（出网放行）。',
       'Could not reach the upstream — check the Base URL and that the host may reach it (egress).',
-    );
-  }
-  if (/no call of|tool-call/i.test(error)) {
-    return t(
-      '模型能回答，但没有按要求发起工具调用：这个模型或中转可能不支持工具调用，Worker 和门工具会用不了。',
-      'The model answered but did not call the tool — this model or relay may not support tool calling, so Workers and gate tools will not work.',
     );
   }
   return null;

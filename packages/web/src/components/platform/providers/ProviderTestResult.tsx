@@ -33,7 +33,11 @@ function outcomeLabel(outcome: LlmProviderTestResultWire['completion'], t: Trans
 export function ProviderTestResult({ result, testId }: ProviderTestResultProps) {
   const t = useT();
   const verdict = testVerdict(result);
-  const explanation = explainUpstreamError(result.error, t);
+  const explanation = explainUpstreamError(
+    result.error,
+    t,
+    result.completion === 'ok' ? 'tool_call' : 'completion',
+  );
   return (
     <div className="stack-s" data-testid={testId}>
       <div
