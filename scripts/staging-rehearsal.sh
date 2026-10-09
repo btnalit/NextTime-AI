@@ -23,7 +23,7 @@
 #                       directory that is not empty — never point it at a host with real data.
 #   --from vA.B.C       the release the staging host starts on (what production runs today).
 #   --to <ref>          what to apply. A vX.Y.Z tag is applied as itself with `--pull` (published
-#                       images; apply-release.sh falls back to a source build on its own). Anything
+#                       images, prefetched first; a failed pull stops the apply). Anything
 #                       else is resolved to a commit and given a local, never-pushed staging tag
 #                       vA.(B+1).0-staging.<sha> — apply-release.sh only takes tags — then built from
 #                       source; the tag is deleted again on exit.

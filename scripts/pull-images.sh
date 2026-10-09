@@ -52,6 +52,13 @@
 # two accept-s2 gates run this release's gate-host image (scripts/accept_s2.sh preflight).
 set -eu
 
+# Per-attempt bounds (legacy 137): a stalled transfer is killed and retried, never left hanging.
+# A pull attempt gets two hours by default; layers an attempt finished stay on the host, so a
+# retry after a timeout continues from them (the largest image, worker-runtime at ~1.2 GB, can
+# need more than one attempt at the host's slowest observed throughput — run it as a --prefetch,
+# outside the window). One verification gets ten minutes.
+PULL_ATTEMPT_TIMEOUT=${PULL_ATTEMPT_TIMEOUT:-7200}
+VERIFY_ATTEMPT_TIMEOUT=${VERIFY_ATTEMPT_TIMEOUT:-600}
 COSIGN_IMAGE=${COSIGN_IMAGE:-ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8}
 ALL_SERVICES="kernel agent-host worker-supervisor llm-proxy egress-proxy caddy worker-runtime gatekeeper-docker gatekeeper-ragflow gate-host collector-host-inventory"
 
@@ -129,7 +136,7 @@ local_name_of() {
 cosign_verify() {
   image_ref=$1
   shift
-  docker run --rm "$@" "$COSIGN_IMAGE" verify \
+  timeout "$VERIFY_ATTEMPT_TIMEOUT" docker run --rm "$@" "$COSIGN_IMAGE" verify \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     --certificate-identity "$IDENTITY" \
     --certificate-github-workflow-repository "$slug" \
@@ -171,7 +178,7 @@ for s in $SERVICES; do
     echo "pull-images: ${s} present, not pulled again"
     continue
   fi
-  retry docker pull -q "$ref" >/dev/null || die "pull failed: $ref"
+  retry timeout "$PULL_ATTEMPT_TIMEOUT" docker pull -q "$ref" >/dev/null || die "pull failed: $ref"
 done
 
 # One verification of an image@digest, anonymous first: the published packages are public. Only if
@@ -217,7 +224,7 @@ if [ "$prefetch" -eq 1 ]; then
     sed -n 's/^[[:space:]]*image:[[:space:]]*\([^[:space:]#]*@sha256:[0-9a-f]*\).*/\1/p' | sort -u) docker/dockerfile:1.7 $fixture_bases; do
     if docker image inspect "$ref" >/dev/null 2>&1; then
       echo "pull-images: ${ref} present"
-    elif retry docker pull -q "$ref" >/dev/null; then
+    elif retry timeout "$PULL_ATTEMPT_TIMEOUT" docker pull -q "$ref" >/dev/null; then
       echo "pull-images: ${ref} pulled"
     else
       missing="${missing:-} $ref"

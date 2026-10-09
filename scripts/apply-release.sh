@@ -5,10 +5,11 @@
 # /tmp/nt-apply.sh until S9); docs/runbooks/release.md §3 points here.
 #
 # Usage:
+#   sh scripts/apply-release.sh --pull vX.Y.Z    # published, signature-verified images
+#                                                # (scripts/pull-images.sh) — the host's mode
 #   sh scripts/apply-release.sh vX.Y.Z           # images built from source (scripts/build-images.sh)
-#   sh scripts/apply-release.sh --pull vX.Y.Z    # published images (scripts/pull-images.sh); falls
-#                                                # back to the source build if the pull or the
-#                                                # signature check fails, and says so in the log
+#                                                # — staging's unpublished commits, or an explicit
+#                                                # operator choice; never chosen automatically
 #   sh scripts/apply-release.sh --prefetch vX.Y.Z  # ahead of the maintenance window: fetch the tag,
 #                                                # pull and verify its images, nothing else (below)
 #
@@ -19,6 +20,12 @@
 # safe any time before the window and can be re-run. The later `--pull` apply then finds every
 # image present and only re-verifies it. Logs to ${NEXTTIME_DATA}/drills/prefetch-<tag>-<ts>.log;
 # last line "RESULT ok" or "RESULT failed-at=<step>".
+#
+# Network (legacy 137; maintainer 2026-10-09: the host's slow, lossy egress is permanent): a --pull
+# apply builds nothing from source — a failed pull or signature check stops it before anything is
+# touched ("FAIL images"), it never falls back to a build, so what is accepted is always the signed
+# release. Every network step is bounded: pulls and verifications retry inside pull-images.sh with a
+# per-attempt timeout, `git fetch` is time-limited and tolerated when the tag is already here.
 #
 # Long-running (build + four acceptance suites ≈ 20–40 min). Over ssh, run it as a background job
 # and follow the log; every step prints one "STEP <name> …" line, a fatal one prints "FAIL <name>"
@@ -91,7 +98,7 @@ fail() { echo "FAIL $1"; echo "RESULT failed-at=$1"; exit 1; }
 # Prefetch only: the tag's own pull-images.sh, taken with `git show` like this script itself (the
 # checkout stays on the running release), then stop.
 if [ "$prefetch" -eq 1 ]; then
-  git fetch -q origin --tags || echo "STEP fetch WARNING git fetch failed — using the tags already in this checkout"
+  timeout 300 git fetch -q origin --tags || echo "STEP fetch WARNING git fetch failed — using the tags already in this checkout"
   git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || fail fetch
   pull_script=$(mktemp /tmp/pull-images-prefetch.XXXXXX) || fail prefetch
   git show "$TAG:scripts/pull-images.sh" >"$pull_script" 2>/dev/null && grep -q -- '--prefetch' "$pull_script" ||
@@ -193,7 +200,7 @@ PREV_REF=$(git symbolic-ref -q --short HEAD || echo "$PREV_SHA")
 echo "STEP checkout-from $PREV_REF ($(git describe --tags --always HEAD 2>/dev/null || echo "$PREV_SHA"))"
 # A failed fetch is not fatal when the tag is already here (a prefetch fetched it): the host's
 # egress drops connections, and the tag is all this step needs from GitHub.
-if ! git fetch -q origin --tags; then
+if ! timeout 300 git fetch -q origin --tags; then
   git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || fail_before_up checkout
   echo "STEP checkout WARNING git fetch failed — $TAG is already in this checkout, using it"
 fi
@@ -225,7 +232,12 @@ if [ "$pull" -eq 1 ]; then
   if [ "$pull_rc" -eq 0 ]; then
     images_from=pull
   else
-    echo "STEP pull failed (rc=$pull_rc) — falling back to the source build"
+    # No fallback to a source build (legacy 137): it needs the npm / apt / Docker Hub egress this
+    # host does not reliably have, and it would accept unsigned host-built code instead of the
+    # release. Re-run the prefetch (idempotent) and the apply; a deliberate source build is the
+    # no-flag mode.
+    echo "STEP pull failed (rc=$pull_rc) — not falling back to a source build; see $LOG_DIR/apply-$TAG-$TS-pull.log, re-run --prefetch $TAG, then this apply"
+    fail_before_up images
   fi
 fi
 if [ "$images_from" = build ]; then
@@ -263,7 +275,7 @@ docker compose ps --format '{{.Service}} {{.Status}}'
 # 7. acceptance — the S2 fixtures build FROM docker/dockerfile:1.7; pre-pull it with retries unless
 #    it is already here (a prefetch, an earlier apply)
 docker image inspect docker/dockerfile:1.7 >/dev/null 2>&1 ||
-  for i in 1 2 3; do docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
+  for i in 1 2 3; do timeout 600 docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
 failures=0
 for s in 3 1 2 4; do
   [ -f "scripts/accept_s$s.sh" ] || { echo "STEP S$s skipped (not in this tag)"; continue; }
