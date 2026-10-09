@@ -3765,6 +3765,23 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   （`update → commit → push:chat.metadata`）、`turn-terminal.integration.test.ts`（真实 Postgres：慢 `message`、`report_turn` 抢先两种场景）。
   审查的非阻塞观察记为 STATUS 遗留 128–131。
 
+**消息存不下的 Turn 落 `failed`（#508，2026-10-09 合入，遗留 128）**
+
+- `turn-recovery.ts`：新增 `recordMessagePersistFailure`，单条 UPDATE 合并进 `activities.metadata.messagePersistFailure`
+  （最早的 `firstAt`、累加 `count`、保留第一次的 `errorCode` / SQLSTATE），不看 Turn 当前状态。`endTurn` 的 CASE 在
+  `stopRequestedAt → interrupted` 之后加一条：带这条记录的 Turn 收到 `completed` 时落 `failed`，走已有的 `running → fail` 边，
+  `TURN_TRANSITIONS` 不变；`endTurn` 仍是 Turn 终态的唯一写入方，`report_turn` 结束 Turn 时同样受约束。
+- `event-sink.ts`：`message` 写入失败后（原事务已回滚），sink 在新事务里写失败记录、打 error 日志，不再抛出；Turn 保持 `running`
+  直到 runtime 报告结束，后续消息照常入库。记录本身也写不进去时留在进程内 Map，在结束该 Turn 的事务里、`endTurn` 之前写入，
+  `turnEnded` 时删除。FakeAgentRuntime 因此不再因 sink 抛错让 Turn 卡在 `running`。
+- 无迁移、不改线上契约与 `AgentRuntime` 端口；记录由同一条按 Turn 串行的 sink 链写入、先于 `turnEnded`，#493 的顺序保证不变。
+- 回归测试先写、修复前稳定失败：`turn-terminal.integration.test.ts`（真实 Postgres，用含 U+0000 的回答触发 `jsonb` 22P05：
+  AgentHostRuntime 链路落 `failed`、`report_turn` 路径不落 `completed`、已请求 Stop 时仍为 `interrupted` 且 `count: 2`）、
+  `event-sink.test.ts`（失败后提交记录并正常 resolve；两次记录都失败、数据库恢复后在结束事务里补写）。
+- 边界：insert 已提交但 COMMIT 回包丢失会误记为丢失（往安全方向偏）；三次写入都失败时 Turn 停在 `running`，由启动扫描结束为
+  `interrupted`。未做：NUL 等无法存入 `jsonb` 的内容是否入库前清洗（provenance 取舍）、`chat.metadata` / `TurnCompleted` 是否带失败原因
+  （改线上契约）。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
