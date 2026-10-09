@@ -5,7 +5,8 @@ import {
   type ConnectionKind,
   type CreateConnectionResult,
 } from '../lib/connections.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
+import { transportKindLabel } from '../lib/labels.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { OnboardingWizardReview } from './OnboardingWizardReview.js';
 import { Button } from './ui/Button.js';
@@ -27,19 +28,37 @@ const STEP_LABELS: readonly {
   readonly zh: string;
   readonly en: string;
 }[] = [
-  { step: 'kind', zh: '① 类型', en: 'Kind' },
-  { step: 'connect', zh: '② 地址与凭证', en: 'Target & credential' },
-  { step: 'publish', zh: '③ 导入清单', en: 'Import manifest' },
-  { step: 'review', zh: '④ 审核', en: 'Operations Review' },
-  { step: 'done', zh: '⑤ 完成', en: 'Done' },
+  { step: 'kind', zh: '① 类型', en: '1 · Kind' },
+  { step: 'connect', zh: '② 地址与凭证', en: '2 · Target & credential' },
+  { step: 'publish', zh: '③ 导入清单', en: '3 · Import manifest' },
+  { step: 'review', zh: '④ 审核', en: '4 · Review operations' },
+  { step: 'done', zh: '⑤ 完成', en: '5 · Done' },
 ];
 
-const KIND_COPY: Readonly<Record<ConnectionKind, string>> = {
-  http: '一个 HTTP/OpenAPI 服务 — 从 OpenAPI 文档或门自身的 describe_operations 导入 Operation。',
-  mcp: '一个 MCP server — 本质上是 kind:"mcp" 的门；导入时调用其 tools/list，readOnlyHint 决定 observe/execute。',
-  cli: '一个 CLI 目标（如已部署的 docker 门）— 从门自身的 describe_operations 导入。',
-  ssh: '一个通过 SSH 访问的主机 — 从门自身的 describe_operations 导入。',
-};
+function kindCopy(kind: ConnectionKind, t: Translate): string {
+  switch (kind) {
+    case 'http':
+      return t(
+        '一个 HTTP/OpenAPI 服务：从 OpenAPI 文档或门自身的 describe_operations 导入 Operation。',
+        'An HTTP/OpenAPI service: Operations are imported from its OpenAPI document or from the gate’s own describe_operations.',
+      );
+    case 'mcp':
+      return t(
+        '一个 MCP 服务器：导入时调用它的 tools/list，按 readOnlyHint 判定是只读（observe）还是会执行（execute）。',
+        'An MCP server: the import calls its tools/list, and readOnlyHint decides whether each tool is read-only (observe) or executes.',
+      );
+    case 'cli':
+      return t(
+        '一个命令行目标（例如已部署的 docker 门）：从门自身的 describe_operations 导入。',
+        'A command-line target (for example a deployed docker gate): Operations are imported from the gate’s own describe_operations.',
+      );
+    case 'ssh':
+      return t(
+        '一台通过 SSH 访问的主机：从门自身的 describe_operations 导入。',
+        'A host reached over SSH: Operations are imported from the gate’s own describe_operations.',
+      );
+  }
+}
 
 /**
  * components/OnboardingWizard: 接入向导 (S3.12 deliverable) — a guided, five-step alternative to
@@ -108,15 +127,15 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
                     checked={kind === option}
                     onChange={() => setKind(option)}
                   />
-                  {option}
+                  {transportKindLabel(option, t)}
                 </label>
               ))}
             </div>
           </fieldset>
-          <Notice testId="wizard-kind-copy">{KIND_COPY[kind]}</Notice>
+          <Notice testId="wizard-kind-copy">{kindCopy(kind, t)}</Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={onCancel}>
-              Cancel
+              {t('取消', 'Cancel')}
             </Button>
             <Button variant="primary" onClick={() => setStep('connect')}>
               {t('下一步', 'Next')}
@@ -143,10 +162,25 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
       {step === 'publish' && connection ? (
         <div className="stack" data-testid="wizard-step-publish">
           <Notice>
-            已注册门 <code>{connection.gatekeeperId.slice(0, 8)}</code>，导入了{' '}
-            {connection.importedOperationNames.length} 个 Operation 草稿
-            {kind === 'mcp' ? '（来自 tools/list，readOnlyHint 为 observe，其余 execute）' : null}
-            。发布清单后它们才会对 <code>find_operations</code> 可见（I16/I17）。
+            {t(
+              <>
+                已注册门 <code>{connection.gatekeeperId.slice(0, 8)}</code>，导入了{' '}
+                {connection.importedOperationNames.length} 个 Operation 草稿
+                {kind === 'mcp'
+                  ? '（来自 tools/list，readOnlyHint 为 true 的算 observe，其余算 execute）'
+                  : null}
+                。发布清单后，它们才会对 <code>find_operations</code> 可见。
+              </>,
+              <>
+                Registered gate <code>{connection.gatekeeperId.slice(0, 8)}</code>; imported{' '}
+                {connection.importedOperationNames.length} Operation drafts
+                {kind === 'mcp'
+                  ? ' (from tools/list: readOnlyHint true counts as observe, the rest as execute)'
+                  : null}
+                . They only become visible to <code>find_operations</code> once the manifest is
+                published.
+              </>,
+            )}
           </Notice>
           {publishError !== null ? (
             <ErrorBanner
@@ -169,7 +203,12 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
         <div data-testid="wizard-step-review">
           {publishedCount !== null ? (
             <Notice tone="info">
-              {t(`已发布 ${publishedCount} 个 Operation`, `Published ${publishedCount}.`)}
+              {t(
+                `已发布 Operation 共 ${publishedCount} 个`,
+                publishedCount === 1
+                  ? 'Published 1 operation.'
+                  : `Published ${publishedCount} operations.`,
+              )}
             </Notice>
           ) : null}
           <OnboardingWizardReview
@@ -183,7 +222,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
       {step === 'done' && connection ? (
         <div className="stack" data-testid="wizard-step-done">
           <Notice tone="info">
-            {t('系统接入完成', 'System connected — gatekeeperId')}{' '}
+            {t('系统接入完成，门 ID：', 'System connected — gate ID:')}{' '}
             <code className="mono">{connection.gatekeeperId}</code>
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>

@@ -42,17 +42,50 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
     return null;
   }
 
-  const numeric = Number(value);
+  // Thousands separators are accepted and stripped ("1,000" / "1 000" / "1_000"); nothing else is
+  // guessed at ("10k" is not a number here — the error says what is).
+  const cleaned = value.replace(/[,_\s]/g, '');
+  const numeric = Number(cleaned);
+  // "留空 = 不限": `set_quota`'s `value` is `z.unknown()` and the kernel accepts `null` on the two
+  // nullable axes, so a blank field there is the same as ticking "不限" instead of an error.
+  const blankMeansUnlimited = info.nullable && cleaned === '';
+  const isUnlimited = unlimited || blankMeansUnlimited;
+  const rangeText =
+    info.max !== undefined
+      ? t(
+          `${info.min} 到 ${info.max} 的${info.integer ? '整数' : '数字'}`,
+          `${info.integer ? 'an integer' : 'a number'} from ${info.min} to ${info.max}`,
+        )
+      : t(
+          `不小于 ${info.min} 的${info.integer ? '整数' : '数字'}`,
+          `${info.integer ? 'an integer' : 'a number'} of at least ${info.min}`,
+        );
   const valueValid =
-    unlimited ||
-    (value.trim() !== '' &&
+    isUnlimited ||
+    (cleaned !== '' &&
       Number.isFinite(numeric) &&
       (!info.integer || Number.isInteger(numeric)) &&
       numeric >= info.min &&
       (info.max === undefined || numeric <= info.max));
+  const valueError = valueValid
+    ? null
+    : cleaned === '' || !Number.isFinite(numeric)
+      ? t(
+          `“${value.trim()}”不是有效的数字，请输入${rangeText}（可用 , 或空格分隔千位）。`,
+          `“${value.trim()}” is not a valid number — enter ${rangeText} (thousands separators , or spaces are fine).`,
+        )
+      : info.integer && !Number.isInteger(numeric)
+        ? t(
+            `这个配额只能是整数，请输入${rangeText}。`,
+            `This quota must be a whole number — enter ${rangeText}.`,
+          )
+        : t(
+            `${cleaned} 超出允许范围，请输入${rangeText}。`,
+            `${cleaned} is out of range — enter ${rangeText}.`,
+          );
   const canSubmit = valueValid && !submitting;
 
-  const nextValue: number | null = unlimited ? null : numeric;
+  const nextValue: number | null = isUnlimited ? null : numeric;
   // "Larger limit, or cleared to unlimited" = loosening; "smaller limit, or newly capped" =
   // tightening. `row.value === null` (currently unlimited) → anything finite is a tightening.
   const isLoosening =
@@ -93,27 +126,26 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
             label={label}
             hint={
               info.nullable
-                ? t('留空 / 勾选“不限”表示没有上限。', 'Leave empty / tick “unlimited” for no cap.')
-                : info.max !== undefined
-                  ? t(
-                      `必须是 ${info.min} 到 ${info.max} 的整数。`,
-                      `Must be an integer from ${info.min} to ${info.max}.`,
-                    )
-                  : t(
-                      `必须是不小于 ${info.min} 的${info.integer ? '整数' : '数字'}。`,
-                      `Must be a${info.integer ? 'n integer' : ' number'} of at least ${info.min}.`,
-                    )
+                ? t(
+                    `留空或勾选“不限”表示没有上限；否则填${rangeText}。`,
+                    `Leave empty or tick “unlimited” for no cap; otherwise enter ${rangeText}.`,
+                  )
+                : t(`必须是${rangeText}。`, `Must be ${rangeText}.`)
             }
-            error={valueValid ? null : t('数值不在允许范围内。', 'Value is out of range.')}
+            error={valueError}
           >
             <input
               id="qe-value"
               className="input mono"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
-              disabled={submitting || unlimited}
+              onChange={(event) => {
+                setValue(event.target.value);
+                // Typing a number is an explicit "not unlimited" — don't make the user untick first.
+                if (event.target.value.trim() !== '') setUnlimited(false);
+              }}
+              disabled={submitting}
               inputMode={info.integer ? 'numeric' : 'decimal'}
-              placeholder={info.unit}
+              placeholder={info.nullable ? t('不限', 'Unlimited') : info.unit}
             />
           </Field>
 

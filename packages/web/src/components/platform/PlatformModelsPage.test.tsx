@@ -138,6 +138,18 @@ function renderPage(http: CapabilityCaller, fetchImpl: typeof fetch) {
 }
 
 describe('PlatformModelsPage', () => {
+  it('P0-3: arriving with ?new=provider opens 新增供应商 and drops the query', async () => {
+    window.history.replaceState(null, '', '#/platform/models?new=provider');
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([]) }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    expect(await screen.findByTestId('provider-form')).toBeTruthy();
+    expect(window.location.hash).toBe('#/platform/models');
+    window.history.replaceState(null, '', '#/');
+  });
+
   it('lists providers with enabled / credential / source facts and mints one token for the burst', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({
@@ -317,6 +329,19 @@ describe('PlatformModelsPage', () => {
         items = items.map((row) => (row.id === 'deepseek' ? withKey : row));
         return { status: 200, body: withKey };
       },
+      'POST /model-probe': (body) => ({
+        status: 200,
+        body: {
+          credentialSource: 'inline',
+          results: (body as { models: string[] }).models.map((model) => ({
+            model,
+            completion: 'ok',
+            toolCall: 'ok',
+            latencyMs: 800,
+            error: null,
+          })),
+        },
+      }),
       'POST /providers/deepseek/test': () => ({
         status: 200,
         body: {
@@ -361,6 +386,18 @@ describe('PlatformModelsPage', () => {
     });
 
     fireEvent.click(within(form).getAllByTestId('provider-model-option')[0] as HTMLElement);
+    // Ticking a listed model checks it right away, with the same upstream and typed key.
+    await waitFor(() =>
+      expect(within(form).getByTestId('provider-model-probe').dataset.state).toBe('ok'),
+    );
+    expect(proxy.calls.find((c) => c.path === '/model-probe')?.body).toEqual({
+      id: 'deepseek',
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.deepseek.com',
+      authHeader: 'authorization',
+      key: 'sk-deepseek-typed-key',
+      models: ['deepseek-chat'],
+    });
     // A typed id the provider does not list is flagged, not refused.
     fireEvent.click(within(form).getByTestId('provider-model-add'));
     fireEvent.change(within(form).getAllByTestId('provider-model-id')[1] as HTMLElement, {
@@ -391,6 +428,7 @@ describe('PlatformModelsPage', () => {
     const order = proxy.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
     expect(order).toEqual([
       'POST /model-discovery',
+      'POST /model-probe',
       'POST /providers',
       'PUT /providers/deepseek/secret',
       'POST /providers/deepseek/test',
@@ -460,6 +498,71 @@ describe('PlatformModelsPage', () => {
     const error = await within(form).findByTestId('provider-discover-error');
     expect(error.textContent).toContain('供应商拒绝了请求');
     expect(error.textContent).toContain('密钥');
+  });
+
+  it('a relay without a model list: offers the preset’s suggestions and checks each one ticked', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+      'POST /model-discovery': () => ({
+        status: 502,
+        body: {
+          error: {
+            code: 'upstream_error',
+            message: 'HTTP 404: not found',
+            details: { status: 404 },
+          },
+        },
+      }),
+      'POST /model-probe': (body) => ({
+        status: 200,
+        body: {
+          credentialSource: 'inline',
+          results: (body as { models: string[] }).models.map((model) => ({
+            model,
+            completion: 'ok',
+            toolCall: model === 'deepseek-reasoner' ? 'error' : 'ok',
+            latencyMs: 700,
+            error:
+              model === 'deepseek-reasoner' ? 'tool-call response carried no call of "ping"' : null,
+          })),
+        },
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+    const keyInput = within(form).getByTestId('provider-key');
+    fireEvent.change(keyInput, { target: { value: 'sk-deepseek-typed-key' } });
+    fireEvent.blur(keyInput);
+    const suggestions = await within(form).findByTestId('provider-model-suggestions');
+    expect(suggestions.textContent).toContain('未用你的密钥核验');
+    const options = within(suggestions).getAllByTestId('provider-model-suggestion');
+    expect(options.map((o) => o.closest('label')?.textContent)).toEqual([
+      'deepseek-chat',
+      'deepseek-reasoner',
+    ]);
+    fireEvent.click(options[0] as HTMLElement);
+    fireEvent.click(options[1] as HTMLElement);
+    await waitFor(() =>
+      expect(
+        within(form)
+          .getAllByTestId('provider-model-probe')
+          .map((el) => el.dataset.state),
+      ).toEqual(['ok', 'chat-only']),
+    );
+    expect(within(form).getAllByTestId('provider-model-probe')[1]?.textContent).toContain(
+      '只能对话',
+    );
+    // 「验证所选模型」 re-checks every picked model in one call.
+    fireEvent.click(within(form).getByTestId('provider-probe-selected'));
+    await waitFor(() =>
+      expect(proxy.calls.filter((c) => c.path === '/model-probe').at(-1)?.body).toMatchObject({
+        models: ['deepseek-chat', 'deepseek-reasoner'],
+      }),
+    );
   });
 
   it('runs 测试调用', async () => {

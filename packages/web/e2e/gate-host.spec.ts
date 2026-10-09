@@ -65,7 +65,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
+  const changePasswordHeading = page.getByTestId('change-password-title');
   // The platform 工作区 nav item: rendered by `Sidebar` for `platformRole === 'admin'` whatever
   // route the admin lands on, so it is the one "we are past the login screen" signal that always
   // holds (same reasoning as `integrations.spec.ts`'s own copy of this helper).
@@ -81,7 +81,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
 
   if (await badCredentials.isVisible().catch(() => false)) {
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: '登录' }).click();
+    await page.getByTestId('login-submit').click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
@@ -89,15 +89,15 @@ async function signInAsAdmin(page: Page): Promise<void> {
     await page.locator('#cp-current-password').fill(initialPassword);
     await page.locator('#cp-new-password').fill(changedPassword);
     await page.locator('#cp-confirm-password').fill(changedPassword);
-    await page.getByRole('button', { name: /更改密码/ }).click();
+    await page.getByTestId('change-password-submit').click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /登出/ }).click();
-  await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+  await page.getByTestId('sign-out').click();
+  await expect(page.getByTestId('login-submit')).toBeVisible();
 }
 
 /** Same guard `integrations.spec.ts` uses before any workspace-scope page: the switcher only

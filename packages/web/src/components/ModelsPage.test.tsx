@@ -195,25 +195,78 @@ describe('ModelsPage', () => {
       list_policies: () => ({ items: [] }),
       get_workspace: () => workspace('owner'),
       set_agent_policy: (params) => {
-        expect(params).toEqual({
-          allowedModels: [],
-          defaultModel: 'anthropic/claude',
-          memberCanEditProfile: true,
-          maxPromptAddendumChars: 500,
-          allowedSkills: [],
-          allowedGatekeepers: [],
-          allowMemberAutoApproveLow: true,
-        });
-        return agentPolicy();
+        // A partial update: only the field the owner changed.
+        expect(params).toEqual({ memberCanEditProfile: false });
+        return agentPolicy({ memberCanEditProfile: false });
       },
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-policy-form');
     fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
+    expect(await within(form).findByTestId('agent-policy-no-changes')).toBeTruthy();
+    expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(false);
+    fireEvent.click(within(form).getByLabelText(/成员可编辑自己的智能体配置/));
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
   });
 
-  it('C11: un-ticking the current default model moves the default to the first remaining allowed model, on screen and on submit', async () => {
+  it('P0-1: an unset default model shows as 不设置 and is not written when another field is saved', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({
+        items: [
+          { id: 'anthropic/claude', provider: 'anthropic', model: 'claude' },
+          { id: 'openai/gpt', provider: 'openai', model: 'gpt' },
+        ],
+      }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({ items: [] }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () => agentPolicy({ defaultModel: null }),
+      set_agent_policy: (params) => {
+        expect(params).toEqual({ allowMemberAutoApproveLow: false });
+        return agentPolicy({ defaultModel: null, allowMemberAutoApproveLow: false });
+      },
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-policy-form');
+    const select = within(form).getByTestId('agent-policy-default-model') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(select.selectedOptions[0]?.textContent).toContain('不设置');
+    fireEvent.click(within(form).getByLabelText(/低风险动作可以自动批准/));
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
+  });
+
+  it('P0-1: un-ticking the default with several models left asks for a choice instead of picking one', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({
+        items: [
+          { id: 'anthropic/claude', provider: 'anthropic', model: 'claude' },
+          { id: 'openai/gpt', provider: 'openai', model: 'gpt' },
+          { id: 'deepseek/chat', provider: 'deepseek', model: 'chat' },
+        ],
+      }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({ items: [] }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () =>
+        agentPolicy({ allowedModels: ['anthropic/claude', 'openai/gpt', 'deepseek/chat'] }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-policy-form');
+    const select = within(form).getByTestId('agent-policy-default-model') as HTMLSelectElement;
+    fireEvent.click(
+      within(within(form).getByTestId('agent-policy-allowed-models')).getByLabelText(
+        'anthropic/claude',
+      ),
+    );
+    expect(select.value).toBe('');
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
+    expect(await within(form).findByText(/必须从中选一个默认模型/)).toBeTruthy();
+    expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(false);
+  });
+
+  it('C11: un-ticking the current default when one allowed model is left makes that model the default, on screen and on submit', async () => {
     const http = scriptedHttp({
       list_models: () => ({
         items: [

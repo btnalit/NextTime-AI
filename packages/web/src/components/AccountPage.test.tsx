@@ -175,13 +175,125 @@ describe('AccountPage: API-key mode (no user)', () => {
 
     // `.dot` passed the page's old local pattern but the kernel's `normalizeLogin` refuses it.
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: '.dot' } });
-    expect(screen.getByText('登录名格式不正确')).toBeTruthy();
+    expect(screen.getByText(/登录名格式不合法：必须以字母或数字开头/)).toBeTruthy();
+    // The rule stays visible next to the error.
+    expect(screen.getByText(/3–64 位，由小写字母、数字/)).toBeTruthy();
     expect(submit.disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'dot' } });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
-    await waitFor(() => expect(screen.getByText(/登录名格式不正确：3–64 位/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/登录名格式不合法。3–64 位/)).toBeTruthy());
+  });
+
+  it('normalizes the login like the kernel does: "Alice " is accepted and sent as "alice"', async () => {
+    const onClaimed = vi.fn();
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(200, {
+        ok: true,
+        result: {
+          user: {
+            id: 'u2',
+            login: 'alice',
+            displayName: 'Alice',
+            platformRole: 'user',
+            mustChangePassword: false,
+          },
+          memberships: [],
+          expiresAt: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+    );
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="sk-claim"
+        onClaimed={onClaimed}
+        fetchImpl={fetchImpl as unknown as typeof fetch}
+      />,
+    );
+    const login = screen.getByLabelText(/登录名/) as HTMLInputElement;
+    fireEvent.change(login, { target: { value: ' Alice ' } });
+    expect(screen.getByText(/将保存为 alice/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.blur(login);
+    expect(login.value).toBe('alice');
+
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Alice' } });
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: '设置密码' }));
+    await waitFor(() => expect(onClaimed).toHaveBeenCalledTimes(1));
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).login).toBe('alice');
+  });
+
+  it('a too-short password says how long it is and how long it must be, next to the hint', () => {
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="sk-claim"
+        onClaimed={vi.fn()}
+        fetchImpl={vi.fn() as unknown as typeof fetch}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'abc' } });
+    expect(screen.getByText(/密码太短：当前 3 位，至少需要 8 位/)).toBeTruthy();
+    expect(screen.getByText('至少 8 位')).toBeTruthy();
+  });
+});
+
+describe('AccountPage: API-key mode, display-name prefill', () => {
+  it("prefills the claim form's display name from get_workspace.caller, without overwriting an edit", async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        ...workspace('member'),
+        caller: { id: 'p-1', role: 'member', displayName: 'Dana Key', kind: 'human' },
+      }),
+    });
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="nt_k"
+        http={http}
+      />,
+    );
+    const name = screen.getByLabelText(/显示名/) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe('Dana Key'));
+    expect(screen.getByText(/已填入这个 API key 在工作区里的成员名/)).toBeTruthy();
+    fireEvent.change(name, { target: { value: 'Dana' } });
+    expect(name.value).toBe('Dana');
+    expect(screen.queryByText(/已填入这个 API key 在工作区里的成员名/)).toBeNull();
+  });
+
+  it('stays empty (and makes no capability call) without `http`, or when the Principal has no name', async () => {
+    render(<AccountPage user={null} memberships={[]} onUserChanged={vi.fn()} apiKey="nt_k" />);
+    expect((screen.getByLabelText(/显示名/) as HTMLInputElement).value).toBe('');
+    cleanup();
+
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        ...workspace('member'),
+        caller: { id: 'p-1', role: 'member', displayName: null, kind: 'human' },
+      }),
+    });
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="nt_k"
+        http={http}
+      />,
+    );
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect((screen.getByLabelText(/显示名/) as HTMLInputElement).value).toBe('');
   });
 });
 

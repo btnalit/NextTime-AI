@@ -46,6 +46,7 @@ export const LlmAdminAuditEventSchema = z
       'provider_secret_set',
       'provider_secret_cleared',
       'provider_models_listed',
+      'provider_models_probed',
     ]),
     providerId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
     actorUserId: z.string().uuid(),

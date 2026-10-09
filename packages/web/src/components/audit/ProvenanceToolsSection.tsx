@@ -3,11 +3,19 @@ import type {
   DecisionImpactResultWire,
   DecisionWire,
 } from '@nexttime/shared';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useMemo, useState } from 'react';
+import { AuditIdPicker } from '../../lib/audit-id-picker.js';
+import {
+  SINCE_PRESETS,
+  objectSource,
+  operationNameSource,
+  provenanceNodeSource,
+} from '../../lib/audit-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
-import { useT } from '../../lib/i18n.js';
+import { isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
+import { useLang, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -76,6 +84,8 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
   const [kind, setKind] = useState<'fact' | 'decision'>('fact');
   const [nodeId, setNodeId] = useState('');
   const [state, setState] = useState<CausalState>(CAUSAL_IDLE);
+  // Recent nodes of the chosen kind: Decisions from `query_decisions`, Facts from the audit log.
+  const source = useMemo(() => provenanceNodeSource(kind, t), [kind, t]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -113,15 +123,20 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
           <option value="fact">{t('事实', 'Fact')}</option>
           <option value="decision">{t('决定', 'Decision')}</option>
         </Select>
-        <Field id="causal-chain-node-id" label={t('id', 'id')}>
-          <input
-            id="causal-chain-node-id"
-            className="input input-mono"
-            value={nodeId}
-            onChange={(event) => setNodeId(event.target.value)}
-            disabled={state.busy}
-          />
-        </Field>
+        <AuditIdPicker
+          http={http}
+          id="causal-chain-node-id"
+          label={t('id', 'id')}
+          value={nodeId}
+          onChange={setNodeId}
+          source={source}
+          refusedNote={t(
+            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改选“决定”。',
+            'Fact suggestions come from the audit log (auditor role) — paste an id, or switch to Decision.',
+          )}
+          disabled={state.busy}
+          testId="causal-chain-node-id"
+        />
         <Button type="submit" variant="primary" disabled={!nodeId.trim() || state.busy}>
           {t('追溯', 'Trace')}
         </Button>
@@ -210,10 +225,22 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
 
 function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
+  const { lang } = useLang();
   const [objectId, setObjectId] = useState('');
   const [actionKindTag, setActionKindTag] = useState('');
+  // A `datetime-local` value (reader's zone); `query_decisions` gets it as an ISO instant.
   const [since, setSince] = useState('');
   const [state, setState] = useState<DecisionListState>(LIST_IDLE);
+  const objects = useMemo(() => objectSource(), []);
+  const operations = useMemo(() => operationNameSource(), []);
+  const sinceIso = localInputToIso(since);
+  // `find_precedents` answers nothing without an Object or an action kind (kernel
+  // `findPrecedents`), so the button waits for one of them.
+  const canFindPrecedents = objectId.trim() !== '' || actionKindTag.trim() !== '';
+
+  function applyPreset(ms: number): void {
+    setSince(isoToLocalInput(new Date(Date.now() - ms).toISOString()));
+  }
 
   async function run(mode: 'precedents' | 'query'): Promise<void> {
     if (state.busy) return;
@@ -233,7 +260,7 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
       } else {
         const result = await http.call<{ items: readonly DecisionWire[] }>('query_decisions', {
           ...(objectId.trim() ? { objectId: objectId.trim() } : {}),
-          ...(since.trim() ? { since: since.trim() } : {}),
+          ...(sinceIso ? { since: sinceIso } : {}),
         });
         setState({
           busy: false,
@@ -254,38 +281,83 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
         className="inline-form row-wrap"
         onSubmit={(event) => {
           event.preventDefault();
-          void run('precedents');
+          if (canFindPrecedents) void run('precedents');
         }}
         data-testid="precedents-form"
       >
-        <Field id="precedents-object-id" label={t('对象 id', 'Object id')}>
-          <input
-            id="precedents-object-id"
-            className="input input-mono"
-            value={objectId}
-            onChange={(event) => setObjectId(event.target.value)}
-            disabled={state.busy}
-          />
-        </Field>
-        <Field id="precedents-action-kind" label={t('动作种类', 'Action kind')}>
-          <input
-            id="precedents-action-kind"
-            className="input"
-            value={actionKindTag}
-            onChange={(event) => setActionKindTag(event.target.value)}
-            disabled={state.busy}
-          />
-        </Field>
-        <Field id="precedents-since" label={t('起始时间（ISO）', 'Since (ISO)')}>
+        <AuditIdPicker
+          http={http}
+          id="precedents-object-id"
+          label={t('对象 id', 'Object id')}
+          value={objectId}
+          onChange={setObjectId}
+          source={objects}
+          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          disabled={state.busy}
+          testId="precedents-object-id"
+        />
+        <AuditIdPicker
+          http={http}
+          id="precedents-action-kind"
+          label={t('动作种类', 'Action kind')}
+          value={actionKindTag}
+          onChange={setActionKindTag}
+          source={operations}
+          placeholder={t('输入操作名搜索', 'Type an operation name')}
+          disabled={state.busy}
+          testId="precedents-action-kind"
+        />
+        <Field
+          id="precedents-since"
+          label={t('起始时间', 'Since')}
+          hint={t('仅用于“查询决定”。', 'Used by "Query decisions" only.')}
+        >
           <input
             id="precedents-since"
+            type="datetime-local"
+            lang={lang}
             className="input"
             value={since}
             onChange={(event) => setSince(event.target.value)}
             disabled={state.busy}
+            data-testid="precedents-since"
           />
+          <div className="row-wrap">
+            {SINCE_PRESETS.map((preset) => (
+              <Button
+                key={preset.key}
+                variant="ghost"
+                size="s"
+                onClick={() => applyPreset(preset.ms)}
+                disabled={state.busy}
+                data-testid={`precedents-since-${preset.key}`}
+              >
+                {t(preset.zh, preset.en)}
+              </Button>
+            ))}
+            {since !== '' ? (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => setSince('')}
+                disabled={state.busy}
+                data-testid="precedents-since-clear"
+              >
+                {t('清除', 'Clear')}
+              </Button>
+            ) : null}
+          </div>
         </Field>
-        <Button type="submit" variant="secondary" disabled={state.busy}>
+        <Button
+          type="submit"
+          variant="secondary"
+          disabled={state.busy || !canFindPrecedents}
+          title={
+            canFindPrecedents
+              ? undefined
+              : t('先选择对象或动作种类', 'Choose an Object or an action kind first')
+          }
+        >
           {t('查找先例', 'Find precedents')}
         </Button>
         <Button

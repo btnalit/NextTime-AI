@@ -2,26 +2,23 @@ import { ROLE_VALUES, type Role, type UserMembershipWire, type UserWire } from '
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
-import type { WorkspaceOption } from '../../lib/platform-workspaces.js';
-import { Select } from '../kit/select.js';
+import { roleLabel } from '../../lib/labels.js';
+import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
-import { Field, Input, Select as LegacySelect } from '../ui/Field.js';
+import { Field, Select as LegacySelect } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface UserMembershipsPanelProps {
   readonly http: CapabilityCaller;
   readonly user: UserWire;
-  readonly workspaces: readonly WorkspaceOption[];
   /** A membership was added / re-roled / removed — the caller re-reads `list_users`, which is
    *  what carries `memberships` (there is no per-user read this panel could refresh on its own
    *  without dropping the row's other columns out of sync). */
   readonly onChanged: () => void;
   readonly onBack: () => void;
 }
-
-const OTHER_WORKSPACE = '__other__';
 
 /**
  * components/platform/UserMembershipsPanel: the 成员资格 Memberships drawer (P-A1, design §6.1
@@ -30,27 +27,20 @@ const OTHER_WORKSPACE = '__other__';
  * page's single-panel state union), never nested inside it: two focus traps on screen at once
  * fight over Tab and Esc.
  *
- * The workspace picker's options come from `lib/platform-workspaces.ts` (the union of the loaded
- * users' own memberships plus the platform default) and always include a typed-id escape hatch —
- * `list_workspaces` is a P-A2 capability, see that module's doc comment.
+ * The workspace picker lists every active workspace (`list_workspaces`, via
+ * `lib/users-workspace-picker.tsx`) minus the ones this user already holds a membership in —
+ * disabled memberships included, since `add_membership` would refuse those as duplicates.
  */
-export function UserMembershipsPanel({
-  http,
-  user,
-  workspaces,
-  onChanged,
-  onBack,
-}: UserMembershipsPanelProps) {
+export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMembershipsPanelProps) {
   const t = useT();
-  const held = new Set(user.memberships.map((membership) => membership.workspaceId));
+  const held = user.memberships.map((membership) => membership.workspaceId);
+  const workspaces = useActiveWorkspaces(http);
   const [workspaceChoice, setWorkspaceChoice] = useState('');
-  const [otherWorkspaceId, setOtherWorkspaceId] = useState('');
   const [role, setRole] = useState<Role>('member');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<unknown | null>(null);
 
-  const workspaceId =
-    workspaceChoice === OTHER_WORKSPACE ? otherWorkspaceId.trim() : workspaceChoice;
+  const workspaceId = workspaceChoice;
 
   async function add(): Promise<void> {
     if (workspaceId === '' || adding) return;
@@ -63,7 +53,6 @@ export function UserMembershipsPanel({
         role,
       });
       setWorkspaceChoice('');
-      setOtherWorkspaceId('');
       onChanged();
     } catch (err) {
       setAddError(err);
@@ -102,35 +91,18 @@ export function UserMembershipsPanel({
 
       <div className="divider" />
 
-      <Select
+      <WorkspacePicker
         id="um-workspace"
         label={t('加入工作区', 'Add to a workspace')}
         value={workspaceChoice}
-        onChange={(event) => setWorkspaceChoice(event.target.value)}
+        onChange={setWorkspaceChoice}
         disabled={adding}
-      >
-        <option value="">{t('选择工作区', 'Pick a workspace')}</option>
-        {workspaces
-          .filter((workspace) => !held.has(workspace.id))
-          .map((workspace) => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name}
-            </option>
-          ))}
-        <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
-      </Select>
-
-      {workspaceChoice === OTHER_WORKSPACE ? (
-        <Field id="um-workspace-id" label={t('工作区 id', 'Workspace id')} required>
-          <Input
-            id="um-workspace-id"
-            value={otherWorkspaceId}
-            onChange={(event) => setOtherWorkspaceId(event.target.value)}
-            disabled={adding}
-            mono
-          />
-        </Field>
-      ) : null}
+        workspaces={workspaces}
+        exclude={held}
+        leading={<option value="">{t('选择工作区', 'Pick a workspace')}</option>}
+        emptyText={t('已加入所有可用的工作区。', 'Already a member of every active workspace.')}
+        testId="user-memberships-workspace"
+      />
 
       <Field id="um-role" label={t('角色', 'Role')} required>
         <LegacySelect
@@ -141,7 +113,7 @@ export function UserMembershipsPanel({
         >
           {ROLE_VALUES.map((value) => (
             <option key={value} value={value}>
-              {value}
+              {roleLabel(value, t)}
             </option>
           ))}
         </LegacySelect>
@@ -225,9 +197,9 @@ function MembershipRow({
       <div className="data-row-main">
         <div className="data-row-title">
           <span className="truncate">{membership.workspaceName}</span>
-          {membership.disabled ? <span className="tag">disabled</span> : null}
+          {membership.disabled ? <span className="tag">{t('已停用', 'Disabled')}</span> : null}
           {membership.workspaceStatus === 'disabled' ? (
-            <span className="tag text-danger">workspace disabled</span>
+            <span className="tag text-danger">{t('工作区已停用', 'Workspace disabled')}</span>
           ) : null}
         </div>
         <div className="data-row-meta">
@@ -245,7 +217,7 @@ function MembershipRow({
           >
             {ROLE_VALUES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {roleLabel(value, t)}
               </option>
             ))}
           </LegacySelect>

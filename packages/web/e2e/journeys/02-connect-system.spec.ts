@@ -96,8 +96,8 @@ test.describe('Journey ②: 接入一个新系统', () => {
 
     // --- 0. 全新工作区 + 登入自己的 owner（"空"状态覆盖：见本文件顶部说明） -------------------
     const { ownerLogin, ownerTemporaryPassword } = await createFreshWorkspace(page);
-    await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+    await page.getByTestId('sign-out').click();
+    await expect(page.getByTestId('login-submit')).toBeVisible();
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     await selectOwnedWorkspace(page);
     await expect(page.getByTestId('nav-chats')).toBeVisible();

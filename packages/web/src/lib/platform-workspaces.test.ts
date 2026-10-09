@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { Translate } from './i18n.js';
 import {
   WORKSPACE_PURGE_RETENTION_DAYS,
-  deriveWorkspaceOptions,
   isExpiredEphemeral,
   isResidueWorkspace,
   purgeCountLabel,
@@ -23,41 +22,6 @@ const zhT: Translate = (zh) => zh;
 const enT: Translate = (_zh, en) => en;
 
 describe('platform-workspaces', () => {
-  it('deriveWorkspaceOptions unions memberships and adds the default workspace', () => {
-    const options = deriveWorkspaceOptions(
-      [
-        {
-          id: 'u-1',
-          login: 'a',
-          displayName: 'A',
-          platformRole: 'user',
-          status: 'active',
-          hasPassword: true,
-          mustChangePassword: false,
-          dailyCallLimit: null,
-          monthlyTokenBudget: null,
-          lastLoginAt: null,
-          createdAt: '2026-09-01T00:00:00.000Z',
-          memberships: [
-            {
-              workspaceId: 'ws-2',
-              workspaceName: 'Beta',
-              workspaceStatus: 'active',
-              principalId: 'p-1',
-              role: 'member',
-              disabled: false,
-            },
-          ],
-        },
-      ],
-      'ws-1',
-    );
-    expect(options).toEqual([
-      { id: 'ws-2', name: 'Beta' },
-      { id: 'ws-1', name: 'ws-1' },
-    ]);
-  });
-
   it('purgeRetention: null disabledAt (pre-0030) and an elapsed clock are purgeable now', () => {
     expect(purgeRetention(null, NOW)).toEqual({ purgeableAt: null, daysRemaining: 0 });
     expect(purgeRetention(new Date(NOW - 8 * DAY).toISOString(), NOW)).toEqual({

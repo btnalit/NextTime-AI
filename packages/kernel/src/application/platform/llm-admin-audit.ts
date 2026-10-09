@@ -20,7 +20,8 @@ export interface LlmAdminAuditEventInput {
     | 'provider_tested'
     | 'provider_secret_set'
     | 'provider_secret_cleared'
-    | 'provider_models_listed';
+    | 'provider_models_listed'
+    | 'provider_models_probed';
   readonly providerId: string;
   readonly actorUserId: string;
   readonly tokenJti: string;

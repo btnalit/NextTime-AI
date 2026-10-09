@@ -10,9 +10,9 @@ describe('kit/CopyButton', () => {
     const writeText = vi.fn(async () => undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     render(<CopyButton value="sk-once-fixture" label="API key" />);
-    const button = screen.getByRole('button', { name: /Copy API key/ });
+    const button = screen.getByRole('button', { name: /复制API key/ });
     fireEvent.click(button);
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('sk-once-fixture'));
-    await vi.waitFor(() => expect(button.getAttribute('aria-label')).toBe('Copied'));
+    await vi.waitFor(() => expect(button.getAttribute('aria-label')).toBe('已复制'));
   });
 });

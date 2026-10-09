@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from 'react';
 import { type MeResult, bindApiKey } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -13,18 +13,24 @@ export interface BindApiKeyFormProps {
   readonly fetchImpl?: typeof fetch;
 }
 
-/** Kernel wire code → the exact Chinese copy this form shows for a bind failure
+/** Kernel wire code → the bilingual copy this form shows for a bind failure
  *  (`auth-routes.ts` `POST /api/auth/bind-api-key`). Anything else falls back to the kernel's own
  *  message via `ErrorBanner`. */
-function bindErrorMessage(err: unknown): string | null {
+function bindErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   switch (err.code) {
     case 'invalid_api_key':
-      return '这把 API key 不属于任何成员';
+      return t(
+        '这把 API key 不属于任何成员，请检查有没有多复制或少复制字符',
+        'That API key does not belong to any member — check it was copied completely',
+      );
     case 'already_claimed':
-      return '这把 key 属于另一个已经设置了密码的账户';
+      return t(
+        '这把 key 属于另一个已经设置了密码的账户，不能合并',
+        'That key belongs to another account that already has a password, so it cannot be merged',
+      );
     case 'already_member':
-      return '你已经是该工作区的成员了';
+      return t('你已经是该工作区的成员了', 'You are already a member of that workspace');
     default:
       return null;
   }
@@ -62,16 +68,19 @@ export function BindApiKeyForm({ onBound, fetchImpl }: BindApiKeyFormProps) {
     }
   }
 
-  const inline = bindErrorMessage(error);
+  const inline = bindErrorMessage(error, t);
 
   return (
-    <Card title={t('绑定已有', 'API key Bind an existing API key')}>
+    <Card title={t('绑定已有 API key', 'Bind an existing API key')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
         <Field
           id="bind-api-key"
           label="API key"
           required
-          hint="把这把 key 所属的工作区成员资格归到当前账户；之后用密码登录即可进入该工作区。"
+          hint={t(
+            '把这把 key 所属的工作区成员资格归到当前账户；之后用密码登录即可进入该工作区。',
+            "Moves this key's workspace membership onto your account; afterwards you can sign in with your password to reach that workspace.",
+          )}
         >
           <Input
             id="bind-api-key"

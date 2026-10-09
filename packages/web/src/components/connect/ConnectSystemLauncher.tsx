@@ -6,10 +6,11 @@ import type {
   GateHostTokenWire,
   GateInstanceWire,
 } from '@nexttime/shared';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { normalizeGateIdInput } from '../../lib/gate-input.js';
 import {
   type GatePath,
   gateInstanceAnnounced,
@@ -502,6 +503,8 @@ function ConnectionStep({
   // auto-opened form. `ownInstance` no longer forces it open either; a freshly created instance is
   // already `selected` and shows in `SelectedGateSummary` below without the form staying open.
   const [creating, setCreating] = useState(false);
+  /** The last keystroke in the GATE_ID field was normalized (capitals, `_`, …) — said under it. */
+  const [gateIdAdjusted, setGateIdAdjusted] = useState(false);
   const showCreateForm = path === 'hosted' && isAdmin && creating;
 
   return (
@@ -516,20 +519,38 @@ function ConnectionStep({
           <Field
             id="launcher-intended-gate-id"
             label={t('它的 GATE_ID', 'Its GATE_ID')}
-            hint={t(
-              '可选：填了以后清单里的占位符会替换成它，自注册后自动选中。',
-              'Optional — fills the placeholders above and auto-selects the gate once it announces.',
-            )}
+            hint={
+              <>
+                {t(
+                  '可选：填了以后清单里的占位符会替换成它，自注册后自动选中。2–64 位小写字母、数字或连字符，以字母或数字开头；大写、下划线、空格和点会自动转换。',
+                  'Optional — fills the placeholders above and auto-selects the gate once it announces. Lowercase letters, digits and hyphens, 2–64 characters, starting with a letter or digit; capitals, underscores, spaces and dots are converted for you.',
+                )}
+                {gateIdAdjusted && intendedGateId.length > 0 ? (
+                  <span data-testid="launcher-intended-gate-id-adjusted">
+                    {' '}
+                    {t(`已调整为 ${intendedGateId}。`, `Adjusted to ${intendedGateId}.`)}
+                  </span>
+                ) : null}
+              </>
+            }
             error={
-              intendedGateId.length > 0 && !GATE_ID_PATTERN.test(intendedGateId.trim())
-                ? t('格式不合法', 'Invalid gate id')
+              intendedGateId.length > 0 && !GATE_ID_PATTERN.test(intendedGateId)
+                ? t(
+                    '至少需要 2 个字符：小写字母、数字或连字符，以字母或数字开头，例如 gatekeeper-ops-host。',
+                    'Needs at least 2 characters — lowercase letters, digits or hyphens, starting with a letter or digit, e.g. gatekeeper-ops-host.',
+                  )
                 : undefined
             }
           >
             <Input
               id="launcher-intended-gate-id"
               value={intendedGateId}
-              onChange={(event) => onIntendedGateId(event.target.value)}
+              onChange={(event) => {
+                const normalized = normalizeGateIdInput(event.target.value);
+                setGateIdAdjusted(normalized !== event.target.value);
+                onIntendedGateId(normalized);
+              }}
+              invalid={intendedGateId.length > 0 && !GATE_ID_PATTERN.test(intendedGateId)}
               mono
               placeholder="gatekeeper-<system>"
             />
@@ -537,13 +558,17 @@ function ConnectionStep({
         </>
       ) : !isAdmin ? (
         <Notice testId="launcher-needs-admin">
-          需要管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
           {t(
-            '页创建门宿主实例并启用它；之后它会出现在下面的目录里。',
-            'An administrator creates the gate-host instance on the platform',
+            <>
+              需要管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
+              页创建门宿主实例并启用它；之后它会出现在下面的目录里。
+            </>,
+            <>
+              An administrator creates the gate-host instance on the platform{' '}
+              <a href={hrefs.platformIntegrations()}>Integrations</a> page and enables it; it then
+              shows up in the catalog below.
+            </>,
           )}
-          <a href={hrefs.platformIntegrations()}>Integrations</a> page and enables it; it then shows
-          up in the catalog below.
         </Notice>
       ) : null}
 
@@ -712,7 +737,7 @@ function SelectedGateSummary({
         <dd>
           <StatusChip machine="gateHealth" status={gate.health} size="s" />
         </dd>
-        <dt>Operation 数</dt>
+        <dt>{t('Operation 数量', 'Operations')}</dt>
         <dd className="mono">{gate.operationCount}</dd>
       </dl>
       {!gate.announced ? (
@@ -792,9 +817,16 @@ function PolicyStep({
         <PlatformEnableSection http={http} gate={gate} onInstanceChanged={onInstanceChanged} />
       ) : (
         <Notice testId="launcher-policy-needs-admin">
-          平台侧的启用与接入包模式由管理员在<a href={hrefs.platformIntegrations()}>集成</a>
-          {t('页设置。', "The platform-side enable and connector mode are an administrator's, on")}{' '}
-          <a href={hrefs.platformIntegrations()}>Integrations</a>.
+          {t(
+            <>
+              平台侧的启用与接入包模式由管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
+              页设置。
+            </>,
+            <>
+              An administrator sets the platform-side enable and connector mode on the platform{' '}
+              <a href={hrefs.platformIntegrations()}>Integrations</a> page.
+            </>,
+          )}
         </Notice>
       )}
 
@@ -846,13 +878,16 @@ function PolicyStep({
         />
       ) : (
         <Notice testId="launcher-policy-workspace-link">
-          工作区侧的启用、Operation 分类审核与成员授权在工作区的
-          <a href={hrefs.systems()}>系统接入</a>
           {t(
-            '页完成（owner）。',
-            'A workspace owner enables it, reviews the classification and grants members on',
-          )}{' '}
-          <a href={hrefs.systems()}>{t('系统与授权', 'Systems & access')}</a>.
+            <>
+              工作区侧的启用、Operation 分类审核与成员授权，由工作区 owner 在
+              <a href={hrefs.systems()}>系统与授权</a>页完成。
+            </>,
+            <>
+              A workspace owner enables it, reviews the classification and grants members on the
+              workspace&apos;s <a href={hrefs.systems()}>Systems &amp; access</a> page.
+            </>,
+          )}
         </Notice>
       )}
     </div>
@@ -1170,6 +1205,17 @@ function HandshakeStep({
     }
   }
 
+  // Entering the step runs the test once on its own — the step exists to answer "does it
+  // connect?", so the administrator should not have to press a button to find out. The button
+  // stays for re-runs. (A ref, not state: StrictMode's double effect must not test twice.)
+  const autoTested = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once per mount, not per `test` identity
+  useEffect(() => {
+    if (!isAdmin || autoTested.current) return;
+    autoTested.current = true;
+    void test();
+  }, [isAdmin]);
+
   return (
     <div className="stack" data-testid="launcher-step-handshake-body">
       <dl className="definition-list">
@@ -1232,7 +1278,9 @@ function HandshakeStep({
               loading={testing}
               data-testid="launcher-test-connection"
             >
-              {t('测试连接', 'Test connection')}
+              {result !== null || error !== null
+                ? t('重新测试', 'Test again')
+                : t('测试连接', 'Test connection')}
             </Button>
           </div>
           <PlatformError
@@ -1241,7 +1289,7 @@ function HandshakeStep({
           />
           {result ? (
             <dl className="definition-list" data-testid="launcher-test-result">
-              <dt>描述的 Operation 数</dt>
+              <dt>{t('描述的 Operation 数量', 'Described operations')}</dt>
               <dd className="mono">{result.describedOperationCount ?? '—'}</dd>
               <dt>{t('检查时间', 'Checked')}</dt>
               <dd>

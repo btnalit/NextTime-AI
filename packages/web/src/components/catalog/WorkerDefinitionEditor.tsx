@@ -1,6 +1,17 @@
-import { WORKER_DEFINITION_KIND_VALUES, type WorkerDefinitionKind } from '@nexttime/shared';
+import {
+  type AvailableGateInstanceWire,
+  WORKER_DEFINITION_KIND_VALUES,
+  type WorkerDefinitionKind,
+} from '@nexttime/shared';
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
+import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { type EgressDenyNormalization, normalizeEgressDenyText } from '../../lib/catalog-input.js';
+import {
+  capabilityModeLabel,
+  egressHostSuggestions,
+  groupCapabilitiesByMode,
+} from '../../lib/catalog-pickers.js';
 import {
   EMPTY_WORKER_DEFINITION_FORM,
   type FieldErrors,
@@ -137,6 +148,158 @@ function CheckboxListField({
 }
 
 /**
+ * The capability checklist (console-ux-3): `list_capability_names` returns 100+ names, so they are
+ * grouped by the `mode` each row already carries (observe / write / propose / execute), with a
+ * name filter and a "select all" per group that acts on the rows the filter leaves visible.
+ * Selected names outside the directory are kept in their own group, as `CheckboxListField` does.
+ */
+function CapabilityPickerField({
+  hint,
+  error,
+  required,
+  rows,
+  selected,
+  onChange,
+  disabled,
+  emptyHint,
+}: {
+  readonly hint?: ReactNode;
+  readonly error?: string | null;
+  readonly required?: boolean;
+  readonly rows: readonly CapabilityNameRow[];
+  readonly selected: readonly string[];
+  readonly onChange: (next: readonly string[]) => void;
+  readonly disabled?: boolean;
+  readonly emptyHint: ReactNode;
+}) {
+  const t = useT();
+  const [filter, setFilter] = useState('');
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const known = new Set(rows.map((row) => row.name));
+  const extraRows = selected
+    .filter((name) => !known.has(name))
+    .map((name) => ({ name, mode: '__unlisted__' }));
+  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter);
+  const filtering = filter.trim() !== '';
+
+  function setGroup(names: readonly string[], on: boolean): void {
+    if (on) onChange([...selected, ...names.filter((name) => !selected.includes(name))]);
+    else onChange(selected.filter((name) => !names.includes(name)));
+  }
+
+  function toggleCollapsed(mode: string): void {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(mode)) next.delete(mode);
+      else next.add(mode);
+      return next;
+    });
+  }
+
+  return (
+    <div className="field" data-testid="wd-capabilities">
+      <span className="field-label">
+        {t('能力', 'capabilities')}
+        {required ? (
+          <span className="field-required" aria-hidden>
+            *
+          </span>
+        ) : null}
+      </span>
+      {rows.length + extraRows.length === 0 ? (
+        <p className="text-3 text-small">{emptyHint}</p>
+      ) : (
+        <>
+          <div className="row-wrap">
+            <Input
+              id="wd-capabilities-filter"
+              aria-label={t('筛选能力', 'Filter capabilities')}
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder={t('按名称筛选…', 'Filter by name…')}
+              mono
+              data-testid="wd-capabilities-filter"
+            />
+            <span className="text-3 text-small" data-testid="wd-capabilities-count">
+              {t(`已选 ${selected.length} 个`, `${selected.length} selected`)}
+            </span>
+          </div>
+          {groups.length === 0 ? (
+            <p className="text-3 text-small" data-testid="wd-capabilities-no-match">
+              {t('没有名称匹配的能力。', 'No capability name matches.')}
+            </p>
+          ) : null}
+          {groups.map((group) => {
+            const names = group.rows.map((row) => row.name);
+            const allOn = names.every((name) => selected.includes(name));
+            const pickedInGroup = names.filter((name) => selected.includes(name)).length;
+            const groupLabel =
+              group.mode === '__unlisted__'
+                ? t('目录外（已选）', 'Not in the directory (selected)')
+                : capabilityModeLabel(group.mode, t);
+            const open = filtering || !collapsed.has(group.mode);
+            return (
+              <fieldset
+                key={group.mode}
+                className="stack-s"
+                aria-label={groupLabel}
+                data-testid={`wd-capabilities-group-${group.mode}`}
+              >
+                <div className="row-wrap">
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => toggleCollapsed(group.mode)}
+                    aria-expanded={open}
+                    disabled={filtering}
+                  >
+                    {open ? '▾' : '▸'} {groupLabel} ({pickedInGroup}/{names.length})
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => setGroup(names, !allOn)}
+                    disabled={disabled}
+                    data-testid={`wd-capabilities-group-toggle-${group.mode}`}
+                  >
+                    {allOn
+                      ? filtering
+                        ? t('取消选择筛选结果', 'Clear the filtered ones')
+                        : t('取消本组', 'Clear group')
+                      : filtering
+                        ? t('全选筛选结果', 'Select the filtered ones')
+                        : t('全选本组', 'Select group')}
+                  </Button>
+                </div>
+                {open
+                  ? group.rows.map((row) => (
+                      <label className="checkbox" key={row.name}>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(row.name)}
+                          onChange={() => setGroup([row.name], !selected.includes(row.name))}
+                          disabled={disabled}
+                        />
+                        <span className="mono">{row.name}</span>
+                      </label>
+                    ))
+                  : null}
+              </fieldset>
+            );
+          })}
+        </>
+      )}
+      {hint !== undefined && !error ? <p className="field-hint">{hint}</p> : null}
+      {error ? (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * components/catalog/WorkerDefinitionEditor (S6-A A2 — docs/console-completion-plan.md §5.3;
  * S8 W2 U2, audit J7/R6/CW1): `kind` (entry / worker) plus the kind-specific `definition` record
  * (packages/shared/src/worker-definition.ts — systemPrompt, model, name, description,
@@ -184,7 +347,29 @@ export function WorkerDefinitionEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
+  /** The last egress-deny normalization's rewrites, shown under the field until the next edit. */
+  const [egressChanges, setEgressChanges] = useState<EgressDenyNormalization['changes']>([]);
   const content = useMemo(() => workerDefinitionContentFromForm(form), [form]);
+  // console-ux-3: the hosts of the systems this workspace has enabled are offered as one-click
+  // egress-deny entries (`list_available_gate_instances` rows with a `gatekeeperId`, member-visible)
+  // — a Worker that must reach them only through its gates can be fenced off from them directly.
+  const gateInstances = useCapabilityList<AvailableGateInstanceWire>(
+    http,
+    'list_available_gate_instances',
+    {},
+    { autoLoadAll: true },
+  );
+
+  /** console-ux-2: the proxy matches a deny entry against the request's bare hostname
+   *  (`matchesSuffix`, `@nexttime/shared` net-address.ts), so a pasted URL, a port or a leading
+   *  "*." / "." never matched anything. Reduce every entry to its host, on blur and on submit. */
+  function normalizeEgressDeny(current: WorkerDefinitionForm): WorkerDefinitionForm {
+    const normalized = normalizeEgressDenyText(current.egressDeny);
+    setEgressChanges(normalized.changes);
+    return normalized.text === current.egressDeny
+      ? current
+      : { ...current, egressDeny: normalized.text };
+  }
 
   function update<K extends keyof WorkerDefinitionForm>(key: K, value: WorkerDefinitionForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -200,7 +385,9 @@ export function WorkerDefinitionEditor({
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
-    const validated = validateWorkerDefinition(form);
+    const normalizedForm = normalizeEgressDeny(form);
+    if (normalizedForm !== form) setForm(normalizedForm);
+    const validated = validateWorkerDefinition(normalizedForm);
     if (!validated.ok) {
       setErrors(validated.errors);
       setView('form');
@@ -212,10 +399,10 @@ export function WorkerDefinitionEditor({
     try {
       const result = await http.call<ProposedDraft>('propose_worker_definition', {
         ...(newVersionOf ? { definitionId: newVersionOf.id } : {}),
-        kind: form.kind,
+        kind: normalizedForm.kind,
         definition: validated.value,
       });
-      setProposed({ ...result, name: form.name.trim() || undefined });
+      setProposed({ ...result, name: normalizedForm.name.trim() || undefined });
       onProposed(result);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('propose_worker_definition');
@@ -228,7 +415,7 @@ export function WorkerDefinitionEditor({
   if (proposed) {
     return (
       <DraftProposed
-        kindLabel="Worker definition"
+        kindLabel={t('Worker 定义', 'Worker definition')}
         draft={proposed}
         onPublish={
           permissions.isDenied('publish_worker_definition')
@@ -263,6 +450,25 @@ export function WorkerDefinitionEditor({
   const modelOptions = models ?? [];
   const modelValueKnown = form.model === '' || modelOptions.some((m) => m.id === form.model);
   const publishedSkills = (skills ?? []).filter((skill) => skill.status === 'published');
+  const egressSuggestions =
+    gateInstances.state.status === 'ready'
+      ? egressHostSuggestions(gateInstances.state.data.items, splitList(form.egressDeny))
+      : [];
+  const gateInstancesRefused =
+    gateInstances.state.status === 'error' && isForbiddenError(gateInstances.state.error);
+  const enabledInstanceCount =
+    gateInstances.state.status === 'ready'
+      ? gateInstances.state.data.items.filter((row) => row.gatekeeperId !== null).length
+      : 0;
+
+  function addEgressHost(host: string): void {
+    update('egressDeny', joinList([...splitList(form.egressDeny), host]));
+    setEgressChanges([]);
+  }
+
+  const newVersionName = newVersionOf
+    ? (definitionName([newVersionOf], newVersionOf.id, newVersionOf.version) ?? newVersionOf.id)
+    : null;
 
   return (
     <form
@@ -272,19 +478,15 @@ export function WorkerDefinitionEditor({
     >
       {newVersionOf ? (
         <Notice testId="worker-new-version-notice">
-          为{' '}
-          <strong>
-            {definitionName([newVersionOf], newVersionOf.id, newVersionOf.version) ??
-              newVersionOf.id}
-          </strong>{' '}
           {t(
             <>
-              提议下一个版本（当前 v{newVersionOf.version}）：同一 definitionId，kind
-              不可更改；发布前只有你可见。
+              为 <strong>{newVersionName}</strong> 提议下一个版本（当前 v{newVersionOf.version}
+              ）：沿用同一个定义，类型不可更改；发布前只有你可见。
             </>,
             <>
-              Proposing the next version of this family (current v{newVersionOf.version}): same
-              definitionId, kind is immutable; private to you until published.
+              Proposing the next version of <strong>{newVersionName}</strong> (current v
+              {newVersionOf.version}): same definition, the kind cannot change; private to you until
+              published.
             </>,
           )}
         </Notice>
@@ -303,7 +505,7 @@ export function WorkerDefinitionEditor({
       )}
 
       <Tabs<View>
-        ariaLabel="Worker definition view"
+        ariaLabel={t('Worker 定义视图', 'Worker definition view')}
         value={view}
         onChange={setView}
         options={[
@@ -415,8 +617,7 @@ export function WorkerDefinitionEditor({
             />
           </Field>
           <div className="row-wrap">
-            <CheckboxListField
-              legend={t('能力', 'capabilities')}
+            <CapabilityPickerField
               required={!isWorker}
               hint={
                 isWorker
@@ -432,13 +633,10 @@ export function WorkerDefinitionEditor({
                     )
               }
               error={fieldError('capabilities')}
-              options={(capabilityNames ?? []).map((c) => ({ id: c.name, label: c.name }))}
+              rows={capabilityNames ?? []}
               selected={splitList(form.capabilities)}
-              onToggle={(name) =>
-                update('capabilities', joinList(toggleListItem(splitList(form.capabilities), name)))
-              }
+              onChange={(next) => update('capabilities', joinList(next))}
               disabled={busy}
-              testId="wd-capabilities"
               emptyHint={t(
                 '暂无可选能力（能力目录尚未加载或为空）。',
                 'No capabilities available yet (the capability directory has not loaded, or is empty).',
@@ -447,21 +645,96 @@ export function WorkerDefinitionEditor({
             <Field
               id="wd-egress-deny"
               label={t('出网拒绝', 'egressDeny')}
-              hint={t(
-                '每行一个主机名或 .后缀（如 .internal.example，匹配该域名及其所有子域名）；命中的出网请求会被拒绝，叠加在平台的固定拒绝清单之上；可留空（不额外收紧）。',
-                'One hostname or .suffix per line (e.g. .internal.example, matching that domain and every subdomain); a matching egress request is denied, on top of the platform’s own fixed deny list; optional (leaving it blank tightens nothing further).',
-              )}
+              hint={
+                <>
+                  {t(
+                    '每行一个主机名，例如 internal.example——同时拒绝它的所有子域名；命中的出网请求会被拒绝，叠加在平台的固定拒绝清单之上；可留空（不额外收紧）。粘贴的网址会自动只保留主机名（去掉 https://、路径和端口）。',
+                    'One hostname per line, e.g. internal.example — every subdomain is denied too; a matching egress request is denied on top of the platform’s own fixed deny list; optional (blank tightens nothing further). A pasted URL is reduced to its hostname (scheme, path and port removed).',
+                  )}
+                  {egressChanges.length > 0 ? (
+                    <span className="block" data-testid="wd-egress-deny-normalized">
+                      {t('已转换：', 'Converted: ')}
+                      {egressChanges
+                        .map((change) =>
+                          change.to === ''
+                            ? t(
+                                `${change.from}（无主机名，已去掉）`,
+                                `${change.from} (no hostname, removed)`,
+                              )
+                            : `${change.from} → ${change.to}`,
+                        )
+                        .join(t('；', '; '))}
+                    </span>
+                  ) : null}
+                </>
+              }
               error={fieldError('egressDeny')}
             >
               <Textarea
                 id="wd-egress-deny"
                 value={form.egressDeny}
-                onChange={(event) => update('egressDeny', event.target.value)}
+                onChange={(event) => {
+                  update('egressDeny', event.target.value);
+                  setEgressChanges([]);
+                }}
+                onBlur={() => setForm((prev) => normalizeEgressDeny(prev))}
                 rows={4}
                 mono
                 disabled={busy}
                 invalid={!!errors.egressDeny}
+                placeholder="internal.example"
               />
+              {egressSuggestions.length > 0 ? (
+                <div className="row-wrap" data-testid="wd-egress-suggestions">
+                  <span className="text-3 text-small">
+                    {t('工作区系统的主机：', 'Hosts of this workspace’s systems:')}
+                  </span>
+                  {egressSuggestions.map((suggestion) => (
+                    <Button
+                      key={suggestion.host}
+                      variant="ghost"
+                      size="s"
+                      onClick={() => addEgressHost(suggestion.host)}
+                      disabled={busy}
+                      title={suggestion.systems.join(', ')}
+                      data-testid="wd-egress-suggestion"
+                    >
+                      + {suggestion.host}
+                    </Button>
+                  ))}
+                </div>
+              ) : gateInstances.state.status === 'loading' ? (
+                <span className="text-3 text-small" data-testid="wd-egress-suggestions-loading">
+                  {t('正在读取工作区系统的主机…', 'Reading the hosts of this workspace’s systems…')}
+                </span>
+              ) : gateInstancesRefused ? (
+                <span className="text-3 text-small" data-testid="wd-egress-suggestions-refused">
+                  {t(
+                    '无权读取工作区的系统列表，请手动输入主机名。',
+                    'Not allowed to read this workspace’s systems — type the hostnames instead.',
+                  )}
+                </span>
+              ) : gateInstances.state.status === 'ready' ? (
+                <span className="text-3 text-small" data-testid="wd-egress-suggestions-empty">
+                  {enabledInstanceCount === 0
+                    ? t(
+                        '工作区还没有启用平台门实例，没有可推荐的主机。',
+                        'No platform gate instance is enabled in this workspace — no host to suggest.',
+                      )
+                    : t(
+                        '工作区系统的主机都已在列表中。',
+                        'Every host of this workspace’s systems is already listed.',
+                      )}
+                </span>
+              ) : null}
+              {gateInstances.state.status === 'error' && !gateInstancesRefused ? (
+                <ErrorBanner
+                  error={gateInstances.state.error}
+                  title={t('无法读取工作区的系统列表', 'Could not read this workspace’s systems')}
+                  onRetry={() => void gateInstances.reload()}
+                  testId="wd-egress-suggestions-error"
+                />
+              ) : null}
             </Field>
           </div>
           {isWorker ? (

@@ -148,16 +148,16 @@ export async function createPlatformUser(
 ): Promise<{ readonly login: string; readonly temporaryPassword: string }> {
   const login = `journey${Date.now().toString(36)}`;
   await goToByLabel(page, '用户');
-  await page.getByRole('button', { name: /新建用户/ }).click();
+  await page.getByTestId('new-user').click();
   const userDrawer = page.getByTestId('create-user-drawer');
   await expect(userDrawer.getByTestId('create-user-form')).toBeVisible();
   await userDrawer.locator('#cu-login').fill(login);
   await userDrawer.locator('#cu-display-name').fill(displayName);
-  await userDrawer.getByRole('button', { name: /创建/ }).click();
+  await userDrawer.getByTestId('create-user-submit').click();
   const password = page.getByTestId('temporary-password-value');
   await expect(password).toBeVisible({ timeout: 15_000 });
   const temporaryPassword = (await password.textContent())?.trim() ?? '';
-  await page.getByRole('button', { name: /我已保存/ }).click();
+  await page.getByTestId('temporary-password-ack').click();
   await expect(page.getByTestId('temporary-password-dialog')).toBeHidden();
   return { login, temporaryPassword };
 }
@@ -190,14 +190,14 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(wsDrawer.getByTestId('create-workspace-form')).toBeVisible();
   await wsDrawer.locator('#cw-name').fill(workspaceName);
   await wsDrawer.locator('#cw-owner-query').fill(ownerLogin);
-  await wsDrawer.getByRole('button', { name: /搜索/ }).click();
+  await wsDrawer.getByTestId('cw-owner-search').click();
   const ownerSelect = wsDrawer.getByTestId('create-workspace-owner');
   await expect(ownerSelect).toBeEnabled();
   const ownerOption = ownerSelect.locator('option', { hasText: ownerLogin });
   await expect(ownerOption).toHaveCount(1);
   const ownerUserId = await ownerOption.getAttribute('value');
   await ownerSelect.selectOption(ownerUserId as string);
-  await wsDrawer.getByRole('button', { name: /创建/ }).click();
+  await wsDrawer.getByTestId('create-workspace-submit').click();
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
   // `PlatformWorkspacesPage`'s `handleCreated` swaps the same drawer over to the new workspace's
   // own detail panel, so an overlay stays up and intercepts every click outside it (the sidebar's
@@ -228,14 +228,14 @@ export async function signInAsFreshOwner(
   await page.goto('/');
   await reachLoginForm(page);
   await loginWithPassword(page, login, temporaryPassword);
-  await expect(page.getByRole('heading', { name: /需要更改密码/ })).toBeVisible({
+  await expect(page.getByTestId('change-password-title')).toBeVisible({
     timeout: 15_000,
   });
   const newPassword = `${temporaryPassword}-1`;
   await page.locator('#cp-current-password').fill(temporaryPassword);
   await page.locator('#cp-new-password').fill(newPassword);
   await page.locator('#cp-confirm-password').fill(newPassword);
-  await page.getByRole('button', { name: /更改密码/ }).click();
+  await page.getByTestId('change-password-submit').click();
   return newPassword;
 }
 

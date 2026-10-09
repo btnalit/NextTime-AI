@@ -46,6 +46,14 @@ export default defineConfig({
   // "flaky" in the always-uploaded HTML report rather than failing a required check outright; a
   // local run keeps 0 so a real regression is never masked while iterating.
   retries: process.env.CI ? 1 : 0,
+  // Fail fast when something breaks the whole suite at once (a renamed sign-in button once made
+  // every test after the first wait out its full 90 s slow-test timeout, twice, and the job ran
+  // for 25+ minutes before anyone cancelled it). In CI the run stops after a handful of failed
+  // tests, and the whole run has a ceiling well under the job's own `timeout-minutes` so the
+  // report still gets uploaded. A baseline-regeneration run (E2E_GATE_UPDATE_BASELINE) keeps
+  // going: it is expected to differ everywhere and its job is to write every baseline.
+  maxFailures: process.env.CI && !process.env.E2E_GATE_UPDATE_BASELINE ? 6 : 0,
+  globalTimeout: process.env.CI ? 12 * 60_000 : 0,
   // CI additionally gets an HTML report written to disk (never auto-opened — `open: 'never'`) so
   // `.github/workflows/e2e.yml` has something to upload as an artifact on failure; local runs stay
   // console-only, matching this suite's existing convention.
@@ -55,6 +63,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.WEB_E2E_BASE_URL,
     trace: 'retain-on-failure',
+    // A click or fill on an element that never appears fails here, not at the end of the test's
+    // own (possibly test.slow()-tripled) timeout. Long waits are explicit `expect(...)` timeouts.
+    actionTimeout: 20_000,
+    navigationTimeout: 30_000,
     // Every target this suite runs against — a `docker compose up` deployment or the CI stack —
     // serves the web UI through caddy's own internal-CA, self-signed TLS (deploy/caddy/Caddyfile
     // `tls internal { on_demand }`; docs/runbooks/web-console.md), never a publicly trusted cert.

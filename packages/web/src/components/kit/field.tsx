@@ -38,7 +38,7 @@ export function Field({ id, label, hint, error, required = false, children }: Fi
         ) : null}
       </label>
       {children}
-      {hint !== undefined && !error ? (
+      {hint !== undefined ? (
         <p className="field-hint" id={`${id}-hint`}>
           {hint}
         </p>

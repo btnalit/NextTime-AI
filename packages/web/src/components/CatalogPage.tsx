@@ -19,6 +19,7 @@ import {
 import { type Translate, useT } from '../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { platformErrorMessage } from '../lib/platform-errors.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -738,8 +739,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: `Could not update ${row.name}`,
-        description: describeError(err).message,
+        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        description: platformErrorMessage(err, t) ?? describeError(err).message,
       });
     } finally {
       setBusy(null);
@@ -1132,8 +1133,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: `Could not update ${row.name}`,
-        description: describeError(err).message,
+        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        description: platformErrorMessage(err, t) ?? describeError(err).message,
       });
     } finally {
       setBusy(null);
@@ -1465,8 +1466,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: `Could not update ${row.name}`,
-        description: describeError(err).message,
+        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        description: platformErrorMessage(err, t) ?? describeError(err).message,
       });
     } finally {
       setBusy(null);

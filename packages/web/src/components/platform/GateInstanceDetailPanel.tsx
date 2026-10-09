@@ -203,7 +203,7 @@ export function GateInstanceDetailPanel({
        *  entry's token button through `gate-instance-hosted-definition`, so it cannot split across
        *  sections without breaking that lookup. */}
       <DrawerSections>
-        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+        <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
             <dt>Gate id</dt>
             <dd>
@@ -244,34 +244,6 @@ export function GateInstanceDetailPanel({
             <dt>{t('启用它的工作区数', 'Enabling workspaces')}</dt>
             <dd className="mono">{instance.enabledWorkspaceCount}</dd>
           </dl>
-
-          {testResult ? (
-            <div className="stack-s" data-testid="gate-instance-test-result">
-              <dl className="definition-list">
-                {/* "状态", not "健康": the `ok` tone's own label text is also "健康" — pairing a
-                 *  "健康" row label with a "健康" chip value read as a stutter ("健康健康") once
-                 *  the raw enum stopped being shown verbatim. "状态" describes the field, the chip
-                 *  still carries the actual health value (`data-status`, e2e's own stable hook). */}
-                <dt>{t('状态', 'Status')}</dt>
-                <dd>
-                  <StatusChip
-                    machine="gateHealth"
-                    status={testResult.health}
-                    size="s"
-                    testId="gate-instance-test-health"
-                  />
-                </dd>
-                <dt>{t('描述的 Operation 数', 'Described operations')}</dt>
-                <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
-                <dt>{t('检查时间', 'Checked')}</dt>
-                <dd>
-                  <time title={formatDateTime(testResult.checkedAt)}>
-                    {formatRelative(testResult.checkedAt)}
-                  </time>
-                </dd>
-              </dl>
-            </div>
-          ) : null}
 
           <div className="stack-s">
             <span>
@@ -342,11 +314,11 @@ export function GateInstanceDetailPanel({
           ) : null}
         </DrawerSection>
 
-        <DrawerSection title={t('相关链接 Related links', 'Related links')}>
+        <DrawerSection title={t('相关链接', 'Related links')}>
           <WorkspacesUsingSection http={http} instance={instance} />
         </DrawerSection>
 
-        <DrawerSection title={t('编辑 Edit', 'Edit')}>
+        <DrawerSection title={t('编辑', 'Edit')}>
           <Field id="gid-display-name" label={t('名称', 'Display name')}>
             <Input
               id="gid-display-name"
@@ -395,8 +367,8 @@ export function GateInstanceDetailPanel({
               <div className="divider" />
               <Notice>
                 {t(
-                  '只对 MCP 类型生效：标记为 vetted 后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销， 并且每次审批决策都会重新读取这个标记。 MCP only —',
-                  'marking an instance vetted allows auto-approval of non-destructive, idempotent tool calls; it is revocable any time and read fresh at every approval decision.',
+                  '只对 MCP 类型生效：标记为 vetted 后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销，并且每次审批决策都会重新读取这个标记。',
+                  'MCP only — marking an instance vetted allows auto-approval of non-destructive, idempotent tool calls; it is revocable any time and read fresh at every approval decision.',
                 )}
               </Notice>
               <PlatformError
@@ -441,6 +413,52 @@ export function GateInstanceDetailPanel({
             error={testError}
             title={t('无法测试连接', 'Could not test this connection')}
           />
+          {testResult ? (
+            <div className="stack-s" data-testid="gate-instance-test-result">
+              <dl className="definition-list">
+                {/* "状态", not "健康": the `ok` tone's own label text is also "健康" — pairing a
+                 *  "健康" row label with a "健康" chip value read as a stutter ("健康健康") once
+                 *  the raw enum stopped being shown verbatim. "状态" describes the field, the chip
+                 *  still carries the actual health value (`data-status`, e2e's own stable hook). */}
+                <dt>{t('状态', 'Status')}</dt>
+                <dd>
+                  <StatusChip
+                    machine="gateHealth"
+                    status={testResult.health}
+                    size="s"
+                    testId="gate-instance-test-health"
+                  />
+                </dd>
+                <dt>{t('描述的 Operation 数', 'Described operations')}</dt>
+                <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
+                <dt>{t('检查时间', 'Checked')}</dt>
+                <dd>
+                  <time title={formatDateTime(testResult.checkedAt)}>
+                    {formatRelative(testResult.checkedAt)}
+                  </time>
+                </dd>
+              </dl>
+              {testResult.health !== 'ok' ? (
+                <p className="text-3 text-small" data-testid="gate-instance-test-no-reason">
+                  {testResult.health === 'unreachable'
+                    ? t(
+                        '连不上这个门：请检查目标地址、端口和网络是否可达。',
+                        'Could not reach this gate — check the target address, port and network.',
+                      )
+                    : testResult.health === 'unauthorized'
+                      ? t(
+                          '门拒绝了凭证：请重新录入共享凭证，或检查目标系统上的权限。',
+                          'The gate refused the credential — re-enter the shared credential or check the permissions on the target system.',
+                        )
+                      : t('探测没有得出结论。', 'The probe was inconclusive.')}{' '}
+                  {t(
+                    '服务端目前不返回具体错误，详情请查看门宿主（或门服务）的日志。',
+                    'The server does not return the underlying error yet — see the gate host (or gate service) logs for details.',
+                  )}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {instance.hosted && instance.definition ? (
             <>

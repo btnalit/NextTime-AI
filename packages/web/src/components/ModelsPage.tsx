@@ -361,7 +361,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
             </Notice>
             <dl className="definition-list">
               <dt>{t('默认模型', 'Default model')}</dt>
-              <dd className="mono">{agentPolicy.state.data.defaultModel}</dd>
+              <dd className={agentPolicy.state.data.defaultModel ? 'mono' : undefined}>
+                {agentPolicy.state.data.defaultModel ?? t('未设置', 'Not set')}
+              </dd>
               <dt>{t('成员可编辑自己的配置', 'Member can edit own profile')}</dt>
               <dd>
                 {agentPolicy.state.data.memberCanEditProfile ? t('是', 'Yes') : t('否', 'No')}

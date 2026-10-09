@@ -88,7 +88,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
           <span className="mono" data-testid="created-api-key">
             {created.apiKey}
           </span>
-          <CopyButton value={created.apiKey} label="API key" />
+          <CopyButton value={created.apiKey} label={t('API 密钥', 'API key')} />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button

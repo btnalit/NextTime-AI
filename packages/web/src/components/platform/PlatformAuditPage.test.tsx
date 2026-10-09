@@ -220,4 +220,105 @@ describe('PlatformAuditPage', () => {
     expect(list.textContent).toContain('主机操作员（未署名）');
     expect(list.textContent).not.toContain('null');
   });
+
+  it('field-inventory §11: the action box suggests platform-scope capability names and platform lifecycle actions only', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-audit-empty');
+    const input = screen.getByLabelText('动作') as HTMLInputElement;
+    expect(input.getAttribute('list')).toBe('platform-audit-action-options');
+    const values = Array.from(
+      screen.getByTestId('platform-audit-action-options').querySelectorAll('option'),
+    ).map((option) => option.getAttribute('value'));
+    expect(values).toContain('create_user');
+    expect(values).toContain('platform_audit_query');
+    expect(values).toContain('platform.workspace_purged');
+    expect(values).toContain('workspace.created');
+    // A workspace-scope capability never lands in the platform stream.
+    expect(values).not.toContain('audit_query');
+  });
+
+  it('field-inventory §11: typing in the actor search re-asks list_users{query}, so users past the first page are reachable; the picked actor keeps its name', async () => {
+    const http = scriptedHttp({
+      list_users: (params) =>
+        (params as { query?: string }).query === 'bob'
+          ? { items: [user({ id: 'u-bob', login: 'bob', displayName: 'Bob' })] }
+          : { items: [user()] },
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const select = await screen.findByTestId('platform-audit-actor-select');
+    await waitFor(() => expect(select.textContent).toContain('Administrator (admin)'));
+
+    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
+      target: { value: 'bob' },
+    });
+    await waitFor(() => expect(select.textContent).toContain('Bob (bob)'));
+    expect(
+      http.calls.find((c) => c.name === 'list_users' && c.params && 'query' in (c.params as object))
+        ?.params,
+    ).toEqual({ query: 'bob', limit: 50 });
+
+    fireEvent.change(select, { target: { value: 'u-bob' } });
+    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
+      target: { value: '' },
+    });
+    await waitFor(() => expect(select.textContent).toContain('Administrator (admin)'));
+    expect((select as HTMLSelectElement).value).toBe('u-bob');
+    expect(select.textContent).toContain('Bob (bob)');
+
+    fireEvent.click(
+      within(screen.getByTestId('platform-audit-filter-form')).getByRole('button', {
+        name: '应用',
+      }),
+    );
+    await waitFor(() =>
+      expect(http.calls.at(-1)).toEqual({
+        name: 'platform_audit_query',
+        params: { limit: 50, actorUserId: 'u-bob' },
+      }),
+    );
+  });
+
+  it('a search with no match says so', async () => {
+    const http = scriptedHttp({
+      list_users: (params) =>
+        (params as { query?: string }).query ? { items: [] } : { items: [user()] },
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-audit-actor-select');
+    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
+      target: { value: 'nobody' },
+    });
+    await screen.findByTestId('platform-audit-actor-empty');
+  });
+
+  it('list_users refused → the id box with a one-line note; any other failure → the id box plus a retryable banner', async () => {
+    const refused = scriptedHttp({
+      list_users: () => Promise.reject(new HttpError('capability_error', 'role', 'forbidden')),
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(refused);
+    await screen.findByTestId('platform-audit-actor-input');
+    expect(screen.getByText(/无权读取用户目录/)).toBeTruthy();
+    expect(screen.queryByTestId('platform-audit-users-error')).toBeNull();
+    cleanup();
+
+    let fail = true;
+    const flaky = scriptedHttp({
+      list_users: () =>
+        fail ? Promise.reject(new HttpError('network', 'boom')) : { items: [user()] },
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(flaky);
+    const banner = await screen.findByTestId('platform-audit-users-error');
+    expect(screen.getByTestId('platform-audit-actor-input')).toBeTruthy();
+    fail = false;
+    fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
+    await screen.findByTestId('platform-audit-actor-select');
+  });
 });

@@ -5,7 +5,9 @@ import type {
   LlmProviderCredentialSourceWire,
   LlmProviderInputWire,
   LlmProviderListWire,
+  LlmProviderModelDiscoveryInputWire,
   LlmProviderModelDiscoveryResultWire,
+  LlmProviderModelProbeResultWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
 } from '@nexttime/shared';
@@ -14,6 +16,7 @@ import {
   LlmProviderIdWireSchema,
   LlmProviderInputWireSchema,
   LlmProviderModelDiscoveryInputWireSchema,
+  LlmProviderModelProbeInputWireSchema,
   LlmProviderSecretInputWireSchema,
   LlmProviderTestInputWireSchema,
   upstreamBaseUrlProblem,
@@ -109,7 +112,8 @@ export type KernelAuditAction =
   | 'provider_tested'
   | 'provider_secret_set'
   | 'provider_secret_cleared'
-  | 'provider_models_listed';
+  | 'provider_models_listed'
+  | 'provider_models_probed';
 
 export interface KernelAuditEvent {
   readonly action: KernelAuditAction;
@@ -480,23 +484,18 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
    *       when `assertEnvKeyPairing` would accept that (name, upstream) pair on a save.
    *  None of them → 409 `credential_missing`. The upstream's own failure is a 502 with a
    *  sanitized message (`upstream_error` / `upstream_unreachable` / `upstream_invalid_response`). */
-  async function discoverModels(
+  /** The credential a form-driven upstream call (`/model-discovery`, `/model-probe`) may use —
+   *  R-23's write-path rules: the typed `key` goes only to the upstream named in the form; a stored
+   *  console key only to the upstream it was entered for; an environment key only to an upstream
+   *  the configured provider set already pairs it with. */
+  function resolveFormCredential(
     claims: LlmAdminTokenClaims,
-    req: http.IncomingMessage,
-  ): Promise<LlmProviderModelDiscoveryResultWire> {
-    if (!options.listModels) {
-      throw new AdminApiError(501, 'not_implemented', 'model discovery is not configured');
-    }
-    const parsed = LlmProviderModelDiscoveryInputWireSchema.safeParse(await readJsonBody(req));
-    if (!parsed.success) {
-      throw new AdminApiError(
-        400,
-        'invalid_body',
-        'invalid discovery request',
-        parsed.error.issues,
-      );
-    }
-    const input = parsed.data;
+    input: LlmProviderModelDiscoveryInputWire,
+  ): {
+    realKey: string;
+    credentialSource: LlmProviderModelDiscoveryResultWire['credentialSource'];
+    existing: ResolvedProvider | undefined;
+  } {
     const existing = options.catalog.get(input.id);
     const sameUpstream =
       existing !== undefined &&
@@ -531,9 +530,30 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
       throw new AdminApiError(
         409,
         'credential_missing',
-        'no key to list models with — enter the provider key in the form (or set the env var on the host first)',
+        'no key to call the provider with — enter the provider key in the form (or set the env var on the host first)',
       );
     }
+    return { realKey, credentialSource, existing };
+  }
+
+  async function discoverModels(
+    claims: LlmAdminTokenClaims,
+    req: http.IncomingMessage,
+  ): Promise<LlmProviderModelDiscoveryResultWire> {
+    if (!options.listModels) {
+      throw new AdminApiError(501, 'not_implemented', 'model discovery is not configured');
+    }
+    const parsed = LlmProviderModelDiscoveryInputWireSchema.safeParse(await readJsonBody(req));
+    if (!parsed.success) {
+      throw new AdminApiError(
+        400,
+        'invalid_body',
+        'invalid discovery request',
+        parsed.error.issues,
+      );
+    }
+    const input = parsed.data;
+    const { realKey, credentialSource, existing } = resolveFormCredential(claims, input);
 
     const startedAt = now().getTime();
     const result = await options.listModels({
@@ -568,6 +588,61 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     };
   }
 
+  /** `POST /model-probe`: provider-test.ts's two round trips against each picked model, with the
+   *  form's own upstream and credential (resolveFormCredential) — so a model list can be checked
+   *  before the provider is saved. Three at a time; nothing is stored; one audit row per call. */
+  async function probeModels(
+    claims: LlmAdminTokenClaims,
+    req: http.IncomingMessage,
+  ): Promise<LlmProviderModelProbeResultWire> {
+    const parsed = LlmProviderModelProbeInputWireSchema.safeParse(await readJsonBody(req));
+    if (!parsed.success) {
+      throw new AdminApiError(400, 'invalid_body', 'invalid probe request', parsed.error.issues);
+    }
+    const input = parsed.data;
+    const models = [...new Set(input.models)];
+    const { realKey, credentialSource, existing } = resolveFormCredential(claims, input);
+    const config: ProviderConfig = {
+      api: input.api,
+      upstream_base_url: input.upstreamBaseUrl.replace(/\/+$/, ''),
+      auth: {
+        header: input.authHeader,
+        ...(input.authHeader === 'authorization' ? { scheme: 'Bearer' as const } : {}),
+      },
+      models: models.map((id) => ({ id })),
+    };
+    const outcomes: StoreTestResult[] = new Array(models.length);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < models.length) {
+        const index = next;
+        next += 1;
+        outcomes[index] = await options.runTest(config, models[index] as string, realKey);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, models.length) }, worker));
+    audit(claims, 'provider_models_probed', input.id, {
+      upstreamBaseUrl: input.upstreamBaseUrl,
+      credentialSource,
+      existing: existing !== undefined,
+      results: outcomes.map((o) => ({
+        model: o.model,
+        completion: o.completion,
+        toolCall: o.tool_call,
+      })),
+    });
+    return {
+      results: outcomes.map((o) => ({
+        model: o.model,
+        completion: o.completion,
+        toolCall: o.tool_call,
+        latencyMs: o.latency_ms,
+        error: o.error,
+      })),
+      credentialSource,
+    };
+  }
+
   function toWire(provider: ResolvedProvider): LlmProviderWire {
     return toWireProvider(provider, credentialPresent(provider), credentialSource(provider));
   }
@@ -590,6 +665,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     const segments = pathOnly.split('/').filter((segment) => segment.length > 0);
     const method = req.method ?? 'GET';
 
+    if (segments[0] === 'model-probe' && segments.length === 1) {
+      if (method !== 'POST') {
+        throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');
+      }
+      return { status: 200, body: await probeModels(claims, req) };
+    }
     if (segments[0] === 'model-discovery' && segments.length === 1) {
       if (method !== 'POST') {
         throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');

@@ -31,7 +31,7 @@ export function ConnectionSecretReveal({ secret, testId }: ConnectionSecretRevea
         <span className="mono pre-wrap" data-testid="connection-secret-value">
           {secret}
         </span>
-        <CopyButton value={secret} label="connection secret" />
+        <CopyButton value={secret} label={t('连接密钥', 'connection secret')} />
       </div>
     </div>
   );

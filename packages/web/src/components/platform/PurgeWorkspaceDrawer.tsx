@@ -213,7 +213,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
             />
             <span>
               {t(
-                '采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程立刻 401（遗留 41 的来源）。先把它指回正确的工作区，再回来清除。',
+                '采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程会立刻收到 401。先把它指回正确的工作区，再回来清除。',
                 'A collector or external runtime may still be calling with it — it gets 401 the moment the purge runs. Point that process at the right workspace first.',
               )}
             </span>
@@ -229,7 +229,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
           <StatusChip machine="workspaceStatus" status={result.status} size="s" />{' '}
           <StatusChip machine="workspacePurpose" status={result.purpose} size="s" />
         </dd>
-        <dt>{t('有效', 'Handle Live Handles')}</dt>
+        <dt>{t('有效 Handle', 'Live Handles')}</dt>
         <dd className="mono" data-testid="purge-preview-active-handles">
           {result.activeHandles}
         </dd>

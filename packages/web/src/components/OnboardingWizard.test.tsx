@@ -99,7 +99,7 @@ describe('OnboardingWizard', () => {
     render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={onFinished} />);
 
     // Step ① kind
-    fireEvent.click(screen.getByRole('radio', { name: 'mcp' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'MCP' }));
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
     // Step ② connect (CompleteConnectionForm, kind hidden and pre-set to mcp)
@@ -185,8 +185,8 @@ describe('OnboardingWizard', () => {
     await screen.findByTestId('wizard-review-table');
     fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
     const form = await screen.findByTestId('wizard-review-reclassify-form');
-    fireEvent.change(within(form).getByLabelText('Mode'), { target: { value: 'execute' } });
-    fireEvent.change(within(form).getByLabelText('Blast radius'), {
+    fireEvent.change(within(form).getByLabelText('模式'), { target: { value: 'execute' } });
+    fireEvent.change(within(form).getByLabelText('影响范围'), {
       target: { value: 'medium' },
     });
     fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
@@ -232,7 +232,7 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
     const form = await screen.findByTestId('wizard-review-reclassify-form');
-    fireEvent.change(within(form).getByLabelText('Mode'), { target: { value: 'observe' } });
+    fireEvent.change(within(form).getByLabelText('模式'), { target: { value: 'observe' } });
     fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
 
     const confirm = await screen.findByTestId('wizard-review-reclassify-confirm');

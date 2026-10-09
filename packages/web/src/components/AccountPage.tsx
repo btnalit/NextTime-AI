@@ -1,4 +1,6 @@
+import type { WorkspaceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
+import { useCapability } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import {
@@ -12,7 +14,13 @@ import {
 } from '../lib/auth-api.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
-import { useT } from '../lib/i18n.js';
+import { type Translate, useT } from '../lib/i18n.js';
+import {
+  loginError,
+  loginNormalizedNote,
+  loginRuleText,
+  normalizeLoginInput,
+} from '../lib/login-input.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
@@ -87,7 +95,16 @@ export function AccountPage({
     return (
       <div className="page">
         <PageHeader breadcrumb={breadcrumbFor('account')} title={t('我的账户', 'My Account')} />
-        <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
+        {http ? (
+          <ClaimPasswordCardForCaller
+            http={http}
+            apiKey={apiKey}
+            onClaimed={onClaimed}
+            fetchImpl={fetchImpl}
+          />
+        ) : (
+          <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
+        )}
         <LanguageCard />
       </div>
     );
@@ -153,43 +170,71 @@ function LanguageCard() {
 /** Kernel wire code → the exact Chinese copy this card shows for a claim failure
  *  (`auth-routes.ts` `POST /api/auth/claim`). Anything else falls back to the kernel's own
  *  message via `ErrorBanner`. */
-function claimErrorMessage(err: unknown): string | null {
+function claimErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   switch (err.code) {
     case 'already_claimed':
-      return '该身份已经有密码了；请登出后用密码登录';
+      return t(
+        '该身份已经有密码了；请登出后用密码登录',
+        'This identity already has a password — sign out and sign in with it.',
+      );
     // C4: the kernel's `normalizeLogin` (identity/users.ts) is the authority; the shared
     // `LOGIN_PATTERN` (lib/platform-errors.ts) mirrors it client-side, and this maps the wire
     // code for the case the mirror still lets through.
     case 'invalid_login':
-      return '登录名格式不正确：3–64 位，首字符须为字母或数字，仅小写字母、数字、. _ -';
+      return `${t('登录名格式不合法。', 'Invalid login.')}${loginRuleText(t)}`;
     default:
       return null;
   }
+}
+
+interface ClaimPasswordCardProps {
+  readonly apiKey?: string;
+  readonly onClaimed?: (result: SessionResult) => void;
+  readonly fetchImpl?: typeof fetch;
+}
+
+/** API-key mode with a workspace in scope: the key's own Principal already has a display name
+ *  (`get_workspace.caller.displayName` — the same read `useWorkspaceIdentity` makes, so it is
+ *  usually cached), and the claimed identity should start from it rather than from an empty box. */
+function ClaimPasswordCardForCaller({
+  http,
+  ...props
+}: ClaimPasswordCardProps & { readonly http: CapabilityCaller }) {
+  const workspace = useCapability<WorkspaceWire>(http, 'get_workspace');
+  const suggested =
+    workspace.state.status === 'ready' ? (workspace.state.data.caller.displayName ?? '') : '';
+  return <ClaimPasswordCard {...props} suggestedDisplayName={suggested} />;
 }
 
 function ClaimPasswordCard({
   apiKey,
   onClaimed,
   fetchImpl,
-}: {
-  readonly apiKey?: string;
-  readonly onClaimed?: (result: SessionResult) => void;
-  readonly fetchImpl?: typeof fetch;
-}) {
+  suggestedDisplayName = '',
+}: ClaimPasswordCardProps & { readonly suggestedDisplayName?: string }) {
   const t = useT();
   const [login, setLogin] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  // `null` until the reader edits it: until then the box shows the suggestion, which may arrive
+  // after the first render (the `get_workspace` read above) without overwriting anything typed.
+  const [editedDisplayName, setDisplayName] = useState<string | null>(null);
+  const displayName = editedDisplayName ?? suggestedDisplayName;
+  const displayNamePrefilled = editedDisplayName === null && suggestedDisplayName.trim() !== '';
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
-  const loginInvalid = login.length > 0 && !LOGIN_PATTERN.test(login);
+  // The kernel's `normalizeLogin` trims + lower-cases; so do we (and say what will be saved).
+  const normalizedLogin = normalizeLoginInput(login);
+  const loginMessage = loginError(normalizedLogin, t);
+  const loginInvalid = loginMessage !== null;
+  const loginNote = loginNormalizedNote(login, t);
+  const passwordTooShort = password.length > 0 && password.length < 8;
   const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
   const canSubmit =
     Boolean(apiKey) &&
-    LOGIN_PATTERN.test(login) &&
+    LOGIN_PATTERN.test(normalizedLogin) &&
     displayName.trim().length > 0 &&
     password.length >= 8 &&
     password === confirmPassword;
@@ -202,7 +247,7 @@ function ClaimPasswordCard({
     try {
       const result = await claimIdentity(
         apiKey,
-        { login, displayName: displayName.trim(), password },
+        { login: normalizedLogin, displayName: displayName.trim(), password },
         fetchImpl,
       );
       onClaimed?.(result);
@@ -213,7 +258,7 @@ function ClaimPasswordCard({
     }
   }
 
-  const inline = claimErrorMessage(error);
+  const inline = claimErrorMessage(error, t);
 
   return (
     <Card title={t('设置密码以启用密码登录', 'Set a password to enable password login')}>
@@ -222,23 +267,33 @@ function ClaimPasswordCard({
           id="account-claim-login"
           label={t('登录名', 'Login')}
           required
-          hint={t(
-            '3–64 位，首字符为字母或数字，仅小写字母、数字、. _ -',
-            '3–64 characters, starting with a letter or digit: lowercase letters, digits, . _ -',
-          )}
-          error={loginInvalid ? t('登录名格式不正确', 'Invalid login format') : null}
+          hint={loginNote ? `${loginRuleText(t)} ${loginNote}` : loginRuleText(t)}
+          error={loginMessage}
         >
           <Input
             id="account-claim-login"
             autoComplete="username"
             value={login}
             onChange={(event) => setLogin(event.target.value)}
+            onBlur={() => setLogin(normalizeLoginInput(login))}
             disabled={submitting}
             invalid={loginInvalid}
           />
         </Field>
 
-        <Field id="account-claim-display-name" label={t('显示名', 'Display name')} required>
+        <Field
+          id="account-claim-display-name"
+          label={t('显示名', 'Display name')}
+          required
+          hint={
+            displayNamePrefilled
+              ? t(
+                  '已填入这个 API key 在工作区里的成员名，可直接修改。',
+                  "Prefilled with this API key's member name in the workspace — edit it if you like.",
+                )
+              : undefined
+          }
+        >
           <Input
             id="account-claim-display-name"
             autoComplete="name"
@@ -253,6 +308,14 @@ function ClaimPasswordCard({
           label={t('密码', 'Password')}
           required
           hint={t('至少 8 位', 'At least 8 characters')}
+          error={
+            passwordTooShort
+              ? t(
+                  `密码太短：当前 ${password.length} 位，至少需要 8 位。`,
+                  `Password too short: ${password.length} characters, at least 8 are needed.`,
+                )
+              : null
+          }
         >
           <Input
             id="account-claim-password"
@@ -261,6 +324,7 @@ function ClaimPasswordCard({
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={submitting}
+            invalid={passwordTooShort}
           />
         </Field>
 
@@ -374,7 +438,12 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
   const [saved, setSaved] = useState(false);
 
   const passwordsMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
-  const canSubmit = currentPassword && newPassword && newPassword === confirmPassword;
+  const newPasswordTooShort = newPassword.length > 0 && newPassword.length < 8;
+  const canSubmit = currentPassword && newPassword.length >= 8 && newPassword === confirmPassword;
+  const newPasswordWeak =
+    error instanceof HttpError &&
+    error.kind === 'capability_error' &&
+    error.code === 'weak_password';
   const currentPasswordWrong =
     error instanceof HttpError &&
     error.kind === 'capability_error' &&
@@ -423,6 +492,19 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           label={t('新密码', 'New password')}
           required
           hint={t('至少 8 位', 'At least 8 characters')}
+          error={
+            newPasswordTooShort
+              ? t(
+                  `密码太短：当前 ${newPassword.length} 位，至少需要 8 位。`,
+                  `Password too short: ${newPassword.length} characters, at least 8 are needed.`,
+                )
+              : newPasswordWeak
+                ? t(
+                    '密码不满足平台的最短长度要求（平台设置的最短长度可能高于 8 位），请换一个更长的密码。',
+                    'The password is shorter than the platform minimum (which may be higher than 8) — use a longer one.',
+                  )
+                : null
+          }
         >
           <Input
             id="account-new-password"
@@ -431,6 +513,7 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
             disabled={submitting}
+            invalid={newPasswordTooShort || newPasswordWeak}
           />
         </Field>
         <Field
@@ -449,7 +532,7 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
             invalid={passwordsMismatch}
           />
         </Field>
-        {error !== null && !currentPasswordWrong ? (
+        {error !== null && !currentPasswordWrong && !newPasswordWeak ? (
           <ErrorBanner error={error} title={t('无法更改密码', 'Could not change password')} />
         ) : saved ? (
           <Notice tone="info">{t('密码已更改', 'Password changed')}</Notice>

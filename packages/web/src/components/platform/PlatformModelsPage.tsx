@@ -5,7 +5,7 @@ import type {
   LlmProviderWire,
   PlatformWorkspaceWire,
 } from '@nexttime/shared';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -14,6 +14,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { hrefs, readNewProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
@@ -91,7 +92,22 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   const list = useResource<LlmProviderListWire>(
     useCallback(() => client.listProviders(), [client]),
   );
-  const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
+  const [drawer, setDrawer] = useState<DrawerState>(() =>
+    readNewProviderPreset(window.location.hash) ? { kind: 'create' } : { kind: 'closed' },
+  );
+  // Audit P0-3: the overview's first-run step links straight to 新增供应商. The query is dropped
+  // once read, so closing the drawer and reloading does not open it again; a link followed while
+  // this page is already mounted opens it too.
+  useEffect(() => {
+    function consume(): void {
+      if (!readNewProviderPreset(window.location.hash)) return;
+      setDrawer({ kind: 'create' });
+      window.history.replaceState(null, '', hrefs.platformModels());
+    }
+    consume();
+    window.addEventListener('hashchange', consume);
+    return () => window.removeEventListener('hashchange', consume);
+  }, []);
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'none' });
   const { testing, testResults, rowError, replaceRow, save, setEnabled, remove, runTest } =
     useProviderActions(client, drawer, list, setDrawer, toast, t);

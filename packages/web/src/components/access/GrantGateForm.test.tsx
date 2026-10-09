@@ -290,4 +290,108 @@ describe('GrantGateForm', () => {
     expect(notice.textContent).toContain('Carol');
     expect(notice.textContent).toContain('所有动作的审批者');
   });
+
+  it('a failed member list renders an error with retry, not "没有匹配的成员"', async () => {
+    let attempts = 0;
+    const http = scriptedHttp({
+      list_principals: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('boom');
+        return {
+          items: [
+            {
+              id: 'p-1',
+              kind: 'human',
+              role: 'member',
+              displayName: 'Bob',
+              createdAt: '2026-09-01T00:00:00.000Z',
+              hasApiKey: false,
+            },
+          ],
+        };
+      },
+    });
+    render(<GrantGateForm http={http} onGranted={vi.fn()} />);
+    const banner = await screen.findByTestId('ggf-members-error');
+    expect(screen.queryByText('没有匹配的成员')).toBeNull();
+    fireEvent.click(within(banner).getByRole('button'));
+    await waitFor(() => expect(screen.queryByTestId('ggf-members-error')).toBeNull());
+    await selectMember('p-1');
+  });
+
+  it('a failed gate list renders an error with retry, not "没有匹配的门"', async () => {
+    const http = scriptedHttp({
+      list_gatekeepers: () => {
+        throw new Error('boom');
+      },
+    });
+    render(<GrantGateForm http={http} onGranted={vi.fn()} />);
+    const banner = await screen.findByTestId('ggf-gates-error');
+    expect(within(banner).getByRole('button')).toBeTruthy();
+    expect(screen.queryByText('没有匹配的门。')).toBeNull();
+  });
+
+  it('multi-gate: a later failure keeps the earlier success in the summary, reports it, and leaves only the unfinished gates selected', async () => {
+    const http = scriptedHttp({
+      grant_capability: (params) => {
+        const id = (params as { resourceId: string }).resourceId;
+        if (id === 'gk-2') throw new Error('nope');
+        return {
+          id: 'grant-1',
+          principalId: 'p-1',
+          resourceType: 'gatekeeper',
+          resourceId: id,
+          status: 'active',
+        };
+      },
+    });
+    const onGranted = vi.fn();
+    render(<GrantGateForm http={http} onGranted={onGranted} />);
+    await selectMember('p-1');
+    fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
+    fireEvent.click(await screen.findByTestId('ggf-gate-gk-2'));
+    fireEvent.click(screen.getByTestId('ggf-submit'));
+
+    const error = await screen.findByTestId('ggf-error');
+    expect(error.textContent).toContain('ragflow-gate');
+    const summary = screen.getByTestId('ggf-granted-summary');
+    expect(summary.textContent).toContain('Bob → docker-gate');
+    expect(summary.textContent).not.toContain('ragflow-gate');
+    expect(onGranted).toHaveBeenCalledTimes(1);
+    expect((onGranted.mock.calls[0]?.[0] as unknown[]).length).toBe(1);
+    expect((screen.getByTestId('ggf-gate-gk-1') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('ggf-gate-gk-2') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('the summary names who was granted which gates, and the button shows progress while granting', async () => {
+    let release: (() => void) | undefined;
+    const http = scriptedHttp({
+      grant_capability: (params) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              id: 'g',
+              principalId: 'p-1',
+              resourceType: 'gatekeeper',
+              resourceId: (params as { resourceId: string }).resourceId,
+              status: 'active',
+            });
+        }),
+    });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
+        onGranted={vi.fn()}
+      />,
+    );
+    await selectMember('p-1');
+    fireEvent.click(screen.getByTestId('ggf-submit'));
+    await waitFor(() => expect(screen.getByTestId('ggf-submit').textContent).toBe('授予中…'));
+    expect(screen.getByTestId('ggf-submit').getAttribute('aria-busy')).toBe('true');
+    release?.();
+    const summary = await screen.findByTestId('ggf-granted-summary');
+    expect(summary.textContent).toContain('Bob → docker-gate');
+    expect(screen.getByTestId('ggf-submit').textContent).toBe('授予');
+  });
 });

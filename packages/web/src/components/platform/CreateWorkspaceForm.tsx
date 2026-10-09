@@ -13,6 +13,10 @@ export interface CreateWorkspaceFormProps {
   readonly http: CapabilityCaller;
   /** The llm-proxy catalog (`list_platform_models`) — the allowed-model checklist's universe. */
   readonly models: readonly ModelRow[];
+  /** The signed-in administrator's user id: the first owner defaults to them (the usual case —
+   *  an admin creating a workspace for themselves), still changeable in the picker. Omitted = no
+   *  default. The form itself cannot know the current user; the page passes it when it does. */
+  readonly defaultOwnerUserId?: string;
   readonly onCreated: (workspace: PlatformWorkspaceWire) => void;
   readonly onCancel: () => void;
 }
@@ -32,12 +36,13 @@ export interface CreateWorkspaceFormProps {
 export function CreateWorkspaceForm({
   http,
   models,
+  defaultOwnerUserId,
   onCreated,
   onCancel,
 }: CreateWorkspaceFormProps) {
   const t = useT();
   const [name, setName] = useState('');
-  const [ownerUserId, setOwnerUserId] = useState('');
+  const [ownerUserId, setOwnerUserId] = useState(defaultOwnerUserId ?? '');
   const [entryModel, setEntryModel] = useState<string | null>(null);
   const [allowedModels, setAllowedModels] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -89,7 +94,10 @@ export function CreateWorkspaceForm({
         http={http}
         id="cw-owner"
         label={t('首位 owner', 'First owner')}
-        hint="这个用户会成为该工作区的 owner，并在「管理 → 工作区配置」里看到它。 This user becomes the workspace's owner and sees it under 管理 → 工作区配置."
+        hint={t(
+          '这个用户会成为该工作区的 owner，并在「管理 → 工作区配置」里看到它。',
+          "This user becomes the workspace's owner and sees it under Manage → Workspace config.",
+        )}
         value={ownerUserId}
         onChange={setOwnerUserId}
         disabled={submitting}
@@ -123,7 +131,13 @@ export function CreateWorkspaceForm({
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        <Button type="submit" variant="primary" loading={submitting} disabled={!ready}>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={submitting}
+          disabled={!ready}
+          data-testid="create-workspace-submit"
+        >
           {t('创建', 'Create')}
         </Button>
       </div>

@@ -17,7 +17,6 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
-import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -106,11 +105,6 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
   const envAdmins = settingsData?.envAdmins ?? [];
   const defaultWorkspaceId = settingsData?.defaultWorkspaceId ?? null;
 
-  const workspaces = useMemo(
-    () => deriveWorkspaceOptions(rows, defaultWorkspaceId),
-    [rows, defaultWorkspaceId],
-  );
-
   const openUserId =
     panel.kind === 'user' || panel.kind === 'memberships' ? panel.userId : undefined;
   const openUser = openUserId === undefined ? undefined : rows.find((row) => row.id === openUserId);
@@ -188,7 +182,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           'Who can sign in, which workspaces they belong to, and their budgets.',
         )}
         primaryAction={
-          <Button variant="primary" icon="plus" onClick={() => setPanel({ kind: 'create' })}>
+          <Button
+            variant="primary"
+            icon="plus"
+            onClick={() => setPanel({ kind: 'create' })}
+            data-testid="new-user"
+          >
             {t('新建用户', 'Create user')}
           </Button>
         }
@@ -313,7 +312,6 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
         {panel.kind === 'create' ? (
           <CreateUserForm
             http={http}
-            workspaces={workspaces}
             defaultWorkspaceId={defaultWorkspaceId}
             defaultPlatformRole={settingsData?.defaultPlatformRole ?? 'user'}
             onCreated={handleCreated}
@@ -334,7 +332,6 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             key={openUser.id}
             http={http}
             user={openUser}
-            users={rows}
             envAdmins={envAdmins}
             onChanged={replaceUser}
             onMerged={() => {
@@ -361,7 +358,6 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             key={openUser.id}
             http={http}
             user={openUser}
-            workspaces={workspaces}
             onChanged={reloadList}
             onBack={() => setPanel({ kind: 'user', userId: openUser.id })}
           />

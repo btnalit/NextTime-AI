@@ -82,7 +82,10 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A healthy run takes about ten minutes (three to bring the stack up, five or six of tests).
+    # The test steps carry their own, tighter limits below and playwright.config.ts stops after a
+    # handful of failures, so a suite-wide break costs a few minutes, not the whole budget.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -248,21 +251,34 @@ jobs:
       - name: Seed a discovered gate instance (announce)
         run: |
           set -euo pipefail
+          cat >"$RUNNER_TEMP/gate-announce.js" <<'JS'
+          const fs = require("node:fs");
+          const token = fs.readFileSync(0, "utf8").trim();
+          const op = (name, mode, extra) => ({ name, binding: { kind: "mcp", tool_name: name },
+          params_schema: { type: "object", properties: {} }, mode, blast_radius: mode === "observe" ? "low" : "medium",
+          reversibility: false, auto_approvable: mode === "observe", await_decision: mode === "execute", reads: [], writes: [], ...extra });
+          const body = { gateId: "ci-fixture-mcp", connector: "fixture-mcp", transportKind: "mcp",
+          target: "http://fixture-mcp.invalid:9000", endpoint: "http://127.0.0.1:1", displayName: "CI fixture MCP",
+          operations: [op("list_things", "observe", { read_only_hint: true }), op("restart_thing", "execute", { destructive_hint: false, idempotent_hint: true })] };
+          fetch("http://kernel:8080/internal/gates/announce", { method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body) })
+          .then(async (r) => { const text = await r.text(); console.log(r.status, text); if (!r.ok) process.exit(1); })
+          .catch((err) => { console.error(String(err)); process.exit(1); });
+
+          JS
+          cat >"$RUNNER_TEMP/gate-announce.sh" <<'SH'
           sudo cat "$NEXTTIME_DATA/secrets/internal-gate-to-kernel.token" | \
-            sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml exec -T gate-host node -e '
-            const fs = require("node:fs");
-            const token = fs.readFileSync(0, "utf8").trim();
-            const op = (name, mode, extra) => ({ name, binding: { kind: "mcp", tool_name: name },
-              params_schema: { type: "object", properties: {} }, mode, blast_radius: mode === "observe" ? "low" : "medium",
-              reversibility: false, auto_approvable: mode === "observe", await_decision: mode === "execute", reads: [], writes: [], ...extra });
-            const body = { gateId: "ci-fixture-mcp", connector: "fixture-mcp", transportKind: "mcp",
-              target: "http://fixture-mcp.invalid:9000", endpoint: "http://127.0.0.1:1", displayName: "CI fixture MCP",
-              operations: [op("list_things", "observe", { read_only_hint: true }), op("restart_thing", "execute", { destructive_hint: false, idempotent_hint: true })] };
-            fetch("http://kernel:8080/internal/gates/announce", { method: "POST",
-              headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body) })
-              .then(async (r) => { const text = await r.text(); console.log(r.status, text); if (!r.ok) process.exit(1); })
-              .catch((err) => { console.error(String(err)); process.exit(1); });
-          '
+            sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            exec -T gate-host node -e "$(cat "$RUNNER_TEMP/gate-announce.js")"
+          SH
+          sh "$RUNNER_TEMP/gate-announce.sh"
+          # A real packaged gate re-announces every GATE_ANNOUNCE_INTERVAL_SEC (60 s); the kernel marks
+          # one silent for 180 s `lost`, and a lost instance drops out of every workspace's catalog.
+          # Keep heartbeating for the rest of the job, the way the gate would, so the specs that
+          # use this instance late in the run (journeys/01, journeys/02) do not depend on the suite
+          # reaching them within three minutes of this step.
+          nohup sh -c 'while sleep 60; do sh "$RUNNER_TEMP/gate-announce.sh" >/dev/null 2>&1 || echo "re-announce failed"; done' \
+            >"$RUNNER_TEMP/gate-heartbeat.log" 2>&1 &
 
       - name: Read the initial admin password
         run: |
@@ -468,6 +484,7 @@ jobs:
       # shortcut.
       - name: Run web e2e
         if: ${{ github.event.inputs.update_baselines != 'true' }}
+        timeout-minutes: 13
         run: pnpm --filter @nexttime/web e2e
 
       # S8 W1-A3 follow-up: `pnpm --filter <pkg> <script> -- <args>` does NOT strip the `--`
@@ -482,6 +499,7 @@ jobs:
       # files, so unchanged surfaces produce no git diff.
       - name: Run web e2e (regenerate gate baselines)
         if: ${{ github.event.inputs.update_baselines == 'true' }}
+        timeout-minutes: 14
         env:
           E2E_GATE_UPDATE_BASELINE: '1'
           # Design system v2: 00-gates/review-capture.spec.ts writes dark-theme and 390px review
