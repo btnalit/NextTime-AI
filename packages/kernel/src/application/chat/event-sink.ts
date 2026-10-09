@@ -2,8 +2,19 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
-import { chatMessageKind, chatMessageText, insertChatMessage } from './service.js';
-import { endTurn, publishTurnEnded } from './turn-recovery.js';
+import {
+  type ChatMessageRow,
+  chatMessageKind,
+  chatMessageText,
+  insertChatMessage,
+} from './service.js';
+import {
+  type EndedTurn,
+  type MessagePersistFailure,
+  endTurn,
+  publishTurnEnded,
+  recordMessagePersistFailure,
+} from './turn-recovery.js';
 
 /**
  * application/chat/event-sink: `createChatEventSink` implements `application/host-bridge`'s
@@ -23,10 +34,26 @@ import { endTurn, publishTurnEnded } from './turn-recovery.js';
  * lands), not inside a request handler — so, unlike every `CAPABILITY_HANDLERS` entry in
  * gateway/handlers.ts, this sink opens its own `withWorkspace()` transaction per persisted write
  * rather than receiving an already-open `client`.
+ *
+ * A `message` it cannot store (legacy 128): the runtime acknowledged the frame on arrival, so
+ * agent-host will not send it again, and a later `completed` for the Turn would claim an answer the
+ * history does not have. The sink records the loss on the Turn (`recordMessagePersistFailure`, its
+ * own transaction — the insert's rolled back) so `endTurn` ends it `failed`, logs it, and does not
+ * throw: the Turn stays running until the runtime reports its end, and later messages are still
+ * stored. When the record cannot be written either (the database is unreachable), the loss is kept
+ * here and written in the transaction that ends the Turn, ahead of `endTurn`.
  */
 
 export interface ChatEventSinkDeps {
   readonly pool: PoolLike;
+  /** Structured log lines (JSON) — defaults to `console.error`, like `AgentHostRuntime`'s. */
+  readonly log?: (line: string) => void;
+}
+
+/** A pg error's SQLSTATE, or `null` for an error without one. */
+function sqlStateOf(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : null;
 }
 
 function toChatStreamPayload(
@@ -53,6 +80,53 @@ function toChatStreamPayload(
 }
 
 export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventSink {
+  const log = deps.log ?? ((line: string) => console.error(line));
+  /** Lost messages not yet recorded on their Turn, by turnId — written when the Turn ends. */
+  const unrecordedFailures = new Map<string, MessagePersistFailure>();
+
+  async function recordLostMessage(
+    event: Extract<AgentRuntimeEvent, { type: 'message' }>,
+    err: unknown,
+  ): Promise<void> {
+    const failure: MessagePersistFailure = {
+      firstAt: new Date(),
+      count: 1,
+      errorCode: sqlStateOf(err),
+    };
+    log(
+      JSON.stringify({
+        level: 'error',
+        msg: 'chat event sink: could not store a runtime message — its Turn will not end completed',
+        turnId: event.turnId,
+        role: event.role,
+        errorCode: failure.errorCode,
+        error: String(err),
+      }),
+    );
+    const earlier = unrecordedFailures.get(event.turnId);
+    const pending: MessagePersistFailure = earlier
+      ? { ...earlier, count: earlier.count + 1 }
+      : failure;
+    try {
+      await withWorkspace(
+        deps.pool,
+        { workspaceId: event.workspaceId, principalId: event.principalId },
+        (client) => recordMessagePersistFailure(client, event.workspaceId, event.turnId, pending),
+      );
+      unrecordedFailures.delete(event.turnId);
+    } catch (recordErr) {
+      unrecordedFailures.set(event.turnId, pending);
+      log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'chat event sink: could not record the lost message on its Turn — recording it when the Turn ends',
+          turnId: event.turnId,
+          error: String(recordErr),
+        }),
+      );
+    }
+  }
+
   return {
     async handle(event: AgentRuntimeEvent): Promise<void> {
       switch (event.type) {
@@ -69,17 +143,24 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           return;
 
         case 'message': {
-          const message = await withWorkspace(
-            deps.pool,
-            { workspaceId: event.workspaceId, principalId: event.principalId },
-            (client) =>
-              insertChatMessage(client, event.workspaceId, {
-                chatId: event.chatId,
-                turnId: event.turnId,
-                role: event.role,
-                content: event.content,
-              }),
-          );
+          let message: ChatMessageRow;
+          try {
+            message = await withWorkspace(
+              deps.pool,
+              { workspaceId: event.workspaceId, principalId: event.principalId },
+              (client) =>
+                insertChatMessage(client, event.workspaceId, {
+                  chatId: event.chatId,
+                  turnId: event.turnId,
+                  role: event.role,
+                  content: event.content,
+                }),
+            );
+          } catch (err) {
+            // Legacy 128 — module doc comment.
+            await recordLostMessage(event, err);
+            return;
+          }
           publishChatPushEvent({
             type: 'chat.message',
             chatId: event.chatId,
@@ -115,12 +196,31 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           // Turn it also enqueues `TurnCompleted` and pushes `chat.metadata` (§13 "未完成 Turn 标
           // interrupted；下一轮注入'上轮中断'" — how a connected client learns the Turn ended),
           // the push only once the transaction has committed, like `chat.message` above: a client
-          // told the Turn ended must find it ended, with its messages, when it reads history.
-          const ended = await withWorkspace(
-            deps.pool,
-            { workspaceId: event.workspaceId, principalId: event.principalId },
-            (client) => endTurn(client, event.workspaceId, event.turnId, event.status),
-          );
+          // told the Turn ended must find it ended, with its messages, when it reads history. A
+          // lost message not yet recorded on the Turn is recorded first, so a `completed` here
+          // ends it `failed` (legacy 128 — module doc comment).
+          const unrecorded = unrecordedFailures.get(event.turnId);
+          let ended: EndedTurn | undefined;
+          try {
+            ended = await withWorkspace(
+              deps.pool,
+              { workspaceId: event.workspaceId, principalId: event.principalId },
+              async (client) => {
+                if (unrecorded) {
+                  await recordMessagePersistFailure(
+                    client,
+                    event.workspaceId,
+                    event.turnId,
+                    unrecorded,
+                  );
+                }
+                return endTurn(client, event.workspaceId, event.turnId, event.status);
+              },
+            );
+          } finally {
+            // One `turnEnded` per Turn: nothing reads the entry after this, written or not.
+            unrecordedFailures.delete(event.turnId);
+          }
           publishTurnEnded(ended);
           return;
         }
