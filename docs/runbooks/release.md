@@ -476,6 +476,10 @@ rollback;" </dev/null
 
 v0.43.0 起的 `apply-release.sh` 在切 tag 之前把这个文件设成 `10001:10001 0644`（缺失则建成 `{}`，Docker 先建出的空目录会删掉，非空目录则 `FAIL egress-sources` 停下），应用日志多一行 `STEP egress-sources config/egress-sources.json is 10001:10001 0644`。改属主失败时只打 `STEP egress-sources WARNING could not set …`、不停下：看到这行要手工 `chown 10001:10001` + `chmod 644` 修好，否则 worker 写不进来源登记，出网会被 egress-proxy 当 unknown-source 拒绝。无 schema 变化。按 §3 的入口用目标 tag 的脚本副本时，第一次应用就生效；直接跑旧检出里的脚本不会做这一步（手工做法见 `docs/runbooks/host-worker-runtime.md` §4）。
 
+### 3.11 控制台「测试」对当前 Claude 模型不再误报 tool_call 失败（#502，v0.43.0 起）
+
+已知问题（v0.42.0 及之前）："添加 LLM 供应商"页的「测试」在 Anthropic Messages 供应商上强制 `tool_choice: {type:'tool'}`，当前 Claude 模型拒绝强制工具选择（HTTP 400），所以测试结果总是 `completion: ok`、`tool_call: error`。只影响测试按钮的显示：路由与 agent 调用不经过这个测试，照常工作。v0.43.0 起改为 `tool_choice: {type:'auto'}` 加提示词里的明确指令，无 schema 变化、无主机步骤。应用后可在控制台对已配置的 Anthropic 供应商点一次「测试」核对，两项都应是 ok（一次很短的真实调用）。STATUS 遗留 133。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
