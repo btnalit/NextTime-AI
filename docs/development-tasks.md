@@ -3716,8 +3716,10 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   docker 门实例 enabled）+ 上一个发布版自己的验收作基线（失败重跑一次，显式 `STEP … RETRY`；apply 阶段从不重跑）+ 目标版本自己的
   `apply-release.sh` 副本。非 tag 目标打本地不推送的 `vA.(B+1).0-staging.<sha>` tag，退出时删除；RagFlow 门经 staging overlay 移出默认 `up`。
   `--disposable-host` 必填，拒绝在已有容器或非空工作目录的主机上跑。
-- 真实模型回归：`plan` job 在审批前把 from / to / sha / runs / 配额写进 run 名称和摘要，`real_model` 要求从 main 触发、`to` 只能是已发布 tag
+- 真实模型回归：`plan` job 在进入 environment 前把 from / to / sha / runs / 配额写进 run 名称和摘要，`real_model` 要求从 main 触发、`to` 只能是已发布 tag
   或 main 上的提交；模型 id、供应商名、上游 URL、key 值全部 `::add-mask::`，上传的 artifact 先逐一 scrub。
+  2026-10-09 维护者取消 `staging-real-model` 的 required reviewer（长期自动化回归不依赖人工批准）；剩下的控制是
+  main-only、被测版本限制、`runs` ≤ 10 与 `token_budget` 配额，都只管单次运行（`staging-rehearsal.md` §4）。
 - 预演抓到的两个产品缺陷：`config/egress-sources.json` 属主（#491）、Turn 结束顺序竞态（#493）。预演脚本里的 chown 在 #491 后变成无害的重复。
 
 **Turn 结束顺序（#493，2026-10-08 合入）**
