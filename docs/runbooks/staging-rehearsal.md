@@ -26,6 +26,7 @@
 | 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
 | apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
+| 控制台 file probe | 一次性平台管理员经 caddy 登录 → `issue_llm_admin_token`；假供应商写进 `config/llm-providers.yaml`、假 key 文件放进 `secrets/llm-provider-keys/`，llm-proxy 须列出它（`source: file`、读到 key）且 `gen-models` 输出它，随后恢复原样（零 token） | `README.md` ①、`host-env-init.sh` |
 | 真实模型（可选） | 走控制台路径加供应商（管理员登录 → `issue_llm_admin_token` → `/api/llm-admin` 建供应商、设 key → llm-proxy 重写 models.json → 控制台"测试"）→ `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
 
 staging overlay（写在数据目录 `staging/docker-compose.staging.yml`，不在检出里，所以对 from / to
@@ -107,7 +108,14 @@ run（`plan` 查本 workflow 未结束的 `+ real model` dispatch，有就失败
 （`STAGING_LLM_PROVIDERS_YAML` 只是输入格式，先过 llm-proxy 自己的 schema），用 `PUT …/secret` 设控制台 key，确认 llm-proxy
 自己重写了 models.json（`modelsJsonError` 为空），最后对被测模型跑一次控制台的"测试"（一次真实补全加一次工具调用往返，
 `STEP real-setup console providers=… test HTTP … completion=… tool_call=…`），两项都 `ok` 才继续。密码、token、key
-只经 stdin 或 0700 目录里的 0600 文件，不上命令行。
+只经 stdin 或 0700 目录里的 0600 文件，不上命令行。阶段结束时脚本让这个管理员登出（撤销它的 session），密码只存在于脚本
+的 shell 里，之后这个账号无人能登录。
+
+每次预演（不论是否带真实模型）在升级之后都经控制台跑一次零 token 的 file probe，覆盖生产主机上的另一条路（`config/llm-providers.yaml` 加
+`secrets/llm-provider-keys/<api_key_env>` 的 key 文件，R-24）：写一个假供应商（上游 `.invalid`，不发任何请求）和一个按
+`host-env-init.sh` 约定权限的假 key 文件，重建 llm-proxy，要求控制台列表里它是 `source: file` 且读到了 key、`gen-models` 也输出它
+（`STEP file-probe providers HTTP … listed-with-key=… gen-models=…`），之后把 yaml 和 key 目录恢复原样；不带真实模型时
+临时管理员随即登出。
 
 真实模型阶段开始前，`--real` 的值必须是不含空白和控制字符的 `<provider>/<model id>`（入参检查，秒级失败）；
 llm-proxy 写出 models.json 后，脚本确认这个 provider 和模型都在其中（`STEP real-setup models.json providers=… provider_present=… model_present=…`，
@@ -115,7 +123,7 @@ llm-proxy 写出 models.json 后，脚本确认这个 provider 和模型都在�
 `accept_s2.sh --real` 的冒烟 Turn（`real-smoke`）失败时，它的 `DIAG` 行（入口容器状态与输出末尾，已脱敏）会转印到 job 日志，
 `accept_s3.sh --real` 不再运行。
 
-真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。runner 跑完即销毁，这一行是唯一留下的用量记录。
+真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。控制台"测试"直连上游、不经 proxy，不计入这一行，也不受 `token_budget` 约束（两次很小的调用）。runner 跑完即销毁，这一行是唯一留下的用量记录。
 
 secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** 并打 warning，不会显示为通过；预演本身
 照常运行、照常判定。

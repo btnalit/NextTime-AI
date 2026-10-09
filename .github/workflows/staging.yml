@@ -289,6 +289,9 @@ jobs:
           {
             printf '%s\n' "$REAL_MODEL" "${REAL_MODEL%%/*}" "${REAL_MODEL#*/}"
             sed -n 's/^  \([A-Za-z0-9_.-]*\):[[:space:]]*$/\1/p' "$dir/llm-providers.yaml"
+            # every model id in the file, not only the one under test: llm-proxy's provider_created
+            # audit line lists them all (compose-logs.txt)
+            sed -n 's/^[[:space:]]*\(-[[:space:]]*\)\{0,1\}id:[[:space:]]*\([^#]*\).*$/\2/p' "$dir/llm-providers.yaml" | tr -d "\"'" | sed 's/[[:space:]]*$//'
             sed -n 's/^[[:space:]]*upstream_base_url:[[:space:]]*\(.*\)$/\1/p' "$dir/llm-providers.yaml" | tr -d "\"'"
             # every line's value (a bare line is the key itself — staging-rehearsal.sh --real-env)
             sed -E 's/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=//; s/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$dir/llm-proxy.env" |
