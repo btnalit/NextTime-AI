@@ -3499,7 +3499,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformUpdatesWireSchema,
     description:
-      'S10 U1: what is newer than this deployment — newer platform releases (migrations crossed, breaking, the exact `apply-release.sh --pull` command, the rollback release) and the latest upstream pi with the nightly drift check’s verdict — read from the ReleaseChannel record the host’s update-feed service downloads (the kernel itself never goes online). Validates the file on every read (schema, 64 KiB cap); reports how fresh it is. Reminder only: nothing here upgrades anything.',
+      'S10 U1: what is newer than this deployment — newer platform releases (migrations crossed, breaking, the exact host commands — the target tag’s own `apply-release.sh --prefetch` before the maintenance window, then `--pull` in it — the rollback release) and the latest upstream pi with the nightly drift check’s verdict — read from the ReleaseChannel record the host’s update-feed service downloads (the kernel itself never goes online). Validates the file on every read (schema, 64 KiB cap); reports how fresh it is. Reminder only: nothing here upgrades anything.',
   },
   {
     name: 'platform_status',

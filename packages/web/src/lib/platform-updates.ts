@@ -40,6 +40,8 @@ export interface PlatformReleaseNotice {
   readonly migrationsIncomplete: boolean;
   readonly breaking: boolean;
   readonly notesUrl: string | null;
+  /** Run on the host before the maintenance window (release.md §3); empty when the kernel gave none. */
+  readonly prefetchCommands: readonly string[];
   readonly applyCommand: string | null;
   readonly rollbackVersion: string | null;
 }
@@ -148,6 +150,7 @@ export function buildUpdateNotices(
       migrationsIncomplete: platform.migrationsIncomplete,
       breaking: platform.breaking,
       notesUrl: safeUrl(platform.notesUrl),
+      prefetchCommands: platform.prefetchCommands,
       applyCommand: platform.applyCommand,
       rollbackVersion: platform.rollbackVersion,
     });
