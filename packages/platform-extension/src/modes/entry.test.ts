@@ -562,11 +562,11 @@ Hi`,
 
     const content = result.messages[0].content as string;
     expect(content).not.toContain('Relevant facts');
-    expect(content).toContain('- depends_on: 1');
-    expect(content).toContain('- runs_on: 102');
+    expect(content).toContain('- "depends_on": 1');
+    expect(content).toContain('- "runs_on": 102');
     expect(content).toContain('`list_facts`');
     expect(content).toContain('Most recently recorded facts (1 of 103; a recency sample');
-    expect(content.indexOf('depends_on: 1')).toBeLessThan(content.indexOf('Most recently'));
+    expect(content.indexOf('"depends_on": 1')).toBeLessThan(content.indexOf('Most recently'));
   });
 
   it('the list_facts tool calls the kernel capability with the model’s params', async () => {

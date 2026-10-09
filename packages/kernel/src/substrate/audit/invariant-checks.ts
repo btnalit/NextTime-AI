@@ -107,6 +107,10 @@ export interface RunInvariantChecksOptions {
   readonly collectorSilenceThresholdMs?: number;
 }
 
+/** Each check reports its full violation count and the first `SAMPLE_LIMIT` rows. Every sampled
+ *  query has an ORDER BY ending in a unique key, so the sample is the same rows on every run:
+ *  newest first for a violation (the one an operator just caused), oldest first for something
+ *  stuck (the one stuck longest). Without it the sample was whatever the heap returned. */
 const SAMPLE_LIMIT = 5;
 
 // -------------------------------------------------------------------------------------------
@@ -173,6 +177,8 @@ async function checkI6(client: PoolClient): Promise<InvariantCheckResult> {
   const result = await client.query<TransitionAuditRow>(
     `with transitions as (
        select workspace_id,
+              id as audit_id,
+              created_at,
               resource_id as action_request_id,
               payload ->> 'resultingStatus' as to_status,
               lag(payload ->> 'resultingStatus') over (
@@ -185,7 +191,8 @@ async function checkI6(client: PoolClient): Promise<InvariantCheckResult> {
      )
      select workspace_id, action_request_id, from_status, to_status
      from transitions
-     where from_status is not null`,
+     where from_status is not null
+     order by created_at desc, audit_id desc`,
   );
 
   const violations = result.rows.filter(
@@ -220,7 +227,8 @@ async function checkI7(client: PoolClient): Promise<InvariantCheckResult> {
             or (policy_decision = 'require_approval' and approval_decision_id is null)
           )
         )
-        or (status in ('approved', 'rejected') and approval_decision_id is null)`,
+        or (status in ('approved', 'rejected') and approval_decision_id is null)
+     order by requested_at desc, id desc`,
   );
   return {
     invariant: 'I7',
@@ -244,7 +252,8 @@ async function checkI11(client: PoolClient): Promise<InvariantCheckResult> {
          where au.workspace_id = ar.workspace_id
            and au.resource_type = 'action_request'
            and au.resource_id = ar.id
-       )`,
+       )
+     order by ar.requested_at desc, ar.id desc`,
   );
   return {
     invariant: 'I11',
@@ -270,7 +279,8 @@ async function checkI13(client: PoolClient): Promise<InvariantCheckResult> {
        and (
          child.on_behalf_of is distinct from parent.on_behalf_of
          or child.expires_at > parent.expires_at
-       )`,
+       )
+     order by child.created_at desc, child.jti desc`,
   );
   return {
     invariant: 'I13',
@@ -310,7 +320,8 @@ async function checkI14(client: PoolClient): Promise<InvariantCheckResult> {
                and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
              )
            )
-       )`,
+       )
+     order by ar.requested_at desc, ar.id desc`,
   );
   return {
     invariant: 'I14',
@@ -339,7 +350,8 @@ async function checkI16(client: PoolClient): Promise<InvariantCheckResult> {
     `select workspace_id, id, action
      from audit_records
      where action = any($1::text[])
-       and coalesce(payload ->> 'channel', '') <> 'human'`,
+       and coalesce(payload ->> 'channel', '') <> 'human'
+     order by created_at desc, id desc`,
     [META_ONTOLOGY_PUBLISH_ACTIONS],
   );
   return {
@@ -408,7 +420,8 @@ async function checkIS51(client: PoolClient): Promise<InvariantCheckResult> {
            and d.name = l.link_type
            and (d.domain = '*' or d.domain = s.object_type)
            and (d.range = '*' or d.range = t.object_type)
-       )`,
+       )
+     order by l.recorded_at desc, l.id desc`,
   );
   return {
     invariant: 'I-S5-1',
@@ -490,7 +503,8 @@ async function checkIS53(client: PoolClient): Promise<InvariantCheckResult> {
   const result = await client.query<{ workspace_id: string; id: string }>(
     `select workspace_id, id
      from tasks
-     where status = 'queued' and updated_at < now() - interval '5 minutes'`,
+     where status = 'queued' and updated_at < now() - interval '5 minutes'
+     order by updated_at, id`,
   );
   return {
     invariant: 'I-S5-3',
@@ -562,7 +576,8 @@ async function checkOneRunningTurn(client: PoolClient): Promise<InvariantCheckRe
      from activities
      where kind = 'agent_turn' and status = 'running' and chat_id is not null
      group by workspace_id, chat_id
-     having count(*) > 1`,
+     having count(*) > 1
+     order by workspace_id, chat_id`,
   );
   return {
     invariant: 'ops.one_running_turn',
@@ -582,7 +597,8 @@ async function checkOutboxStuck(
   const cutoff = new Date(Date.now() - thresholdMs).toISOString();
   const result = await client.query<{ workspace_id: string; id: string }>(
     `select workspace_id, id from outbox
-     where dispatched_at is null and created_at < $1::timestamptz`,
+     where dispatched_at is null and created_at < $1::timestamptz
+     order by created_at, id`,
     [cutoff],
   );
   return {

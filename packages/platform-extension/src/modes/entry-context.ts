@@ -33,7 +33,8 @@ function linkTypeCounts(items: unknown[] | undefined): LinkTypeCount[] | undefin
     return (
       typeof candidate?.linkType === 'string' &&
       typeof candidate.count === 'number' &&
-      Number.isFinite(candidate.count)
+      Number.isInteger(candidate.count) &&
+      candidate.count >= 0
     );
   });
 }
@@ -45,18 +46,49 @@ function renderSection(title: string, items: unknown[] | undefined): string | un
 
 const GRAPH_QUESTION_GUIDANCE =
   'To answer a question about relationships in the graph, enumerate the link type with ' +
-  '`list_facts` (follow `nextCursor` until it is absent) or `traverse` from a known Object. A ' +
-  'link type not listed here has no Facts: say the graph has no such data instead of guessing.';
+  '`list_facts` (follow `nextCursor` until it is absent) or `traverse` from a known Object.';
+const COMPLETE_OVERVIEW_GUIDANCE =
+  'A link type not listed here has no Facts: say the graph has no such data instead of guessing.';
+
+/** Overview lines rendered at most — the most common link types first. Without a published
+ *  ontology (or with it in warn mode) nothing bounds how many distinct link types a Worker or
+ *  collector can write, and this section is in every model call's context. */
+export const MAX_OVERVIEW_LINK_TYPES = 30;
+/** A link type longer than this is cut in the overview (and marked as cut). */
+export const MAX_OVERVIEW_LINK_TYPE_CHARS = 100;
+
+/** A link type is written by Workers and collectors, not by the platform: rendered as a JSON
+ *  string so a newline or `###` in it stays inside the quotes instead of opening a new context
+ *  section — the same quoting every other graph-sourced value here gets from `renderSection`. */
+function renderLinkType(linkType: string): string {
+  if (linkType.length <= MAX_OVERVIEW_LINK_TYPE_CHARS) return JSON.stringify(linkType);
+  return `${JSON.stringify(linkType.slice(0, MAX_OVERVIEW_LINK_TYPE_CHARS))} (name cut at ${MAX_OVERVIEW_LINK_TYPE_CHARS} characters)`;
+}
 
 function renderGraphOverview(counts: readonly LinkTypeCount[] | undefined): string | undefined {
   if (counts === undefined) return undefined;
   if (counts.length === 0) {
     return '### Knowledge graph overview\nThe knowledge graph has no active Facts yet.';
   }
+  const ranked = [...counts].sort(
+    (a, b) => b.count - a.count || (a.linkType < b.linkType ? -1 : a.linkType > b.linkType ? 1 : 0),
+  );
+  const shown = ranked.slice(0, MAX_OVERVIEW_LINK_TYPES);
+  const omitted = ranked.slice(MAX_OVERVIEW_LINK_TYPES);
+  const lines = shown.map(({ linkType, count }) => `- ${renderLinkType(linkType)}: ${count}`);
+  if (omitted.length === 0) {
+    return [
+      '### Knowledge graph overview — active Facts per link type (complete counts)',
+      ...lines,
+      `${GRAPH_QUESTION_GUIDANCE} ${COMPLETE_OVERVIEW_GUIDANCE}`,
+    ].join('\n');
+  }
+  const omittedFacts = omitted.reduce((sum, { count }) => sum + count, 0);
   return [
-    '### Knowledge graph overview — active Facts per link type (complete counts)',
-    ...counts.map(({ linkType, count }) => `- ${linkType}: ${count}`),
-    GRAPH_QUESTION_GUIDANCE,
+    `### Knowledge graph overview — active Facts per link type (the ${shown.length} most common of ${ranked.length})`,
+    ...lines,
+    `- …and ${omitted.length} more link types with ${omittedFacts} Facts in total, not listed`,
+    `${GRAPH_QUESTION_GUIDANCE} This list is cut: a link type not listed here may still have Facts, so check it with \`list_facts\` before saying the graph has none.`,
   ].join('\n');
 }
 

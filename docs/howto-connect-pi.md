@@ -100,5 +100,6 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
 | pi 启动就报 `NEXTTIME_MODE`/`KERNEL_URL`/`CAPABILITY_HANDLE` 未设置 | 三个环境变量都是必需的，检查拼写；`WORKSPACE_ID` 不需要设（见上）。 |
 | 工具调用返回 `unauthorized`/401 | Handle 过期或被间接撤销（disable_principal 撤销了你的账号，或它绑定的 workspace 出了问题）——回到第 1 步重新拿一个。 |
 | 某个工具报 `forbidden: ...` | 这个能力不在你 Handle 的 scope 里——回 `issue_handle` 那一步检查返回的 `scope` 字段，不是"发什么就给什么"（详见 `docs/howto-connect-claude-code.md`）。 |
+| `list_facts`（或其他新能力）报 `forbidden: ...`，工具却在列表里 | interactive 模式的工具表随扩展版本固定，但 Handle 的 scope 是签发那一刻的能力清单。这个 Handle 签发得比该能力上线早，重新签发一个即可。 |
 | 想要的 `<gate>.<op>` 工具没出现 | 你在这个 workspace 没有对应门的 `connect_gatekeeper` Grant，或 `list_allowed_operations` 内部调用失败（内核日志里找 `interactive` 相关的错误行——`[nexttime:interactive] kernel call "list_allowed_operations" failed: ...`）。 |
 | pi 报"扩展加载失败"/模块找不到 | 检查 `-e` 后面的路径是不是真的存在、是不是先跑过 `pnpm --filter @nexttime/shared build`（`platform-extension` 依赖 `@nexttime/shared` 的构建产物做类型解析，源码路径下 `development` export condition 会自动指回 `src/`，一般不需要单独 build shared，但排障时先确认一遍）。 |
