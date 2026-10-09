@@ -9,8 +9,9 @@ name: staging
 # what production runs today and passes the acceptance suites there"; the production apply and its
 # own acceptance stay on the host (the runbook lists what this cannot reproduce).
 #
-# Triggers: a pull request that touches the release path (migrations, compose, the host / apply /
-# acceptance scripts), and workflow_dispatch for any ref — including a published tag, which is then
+# Triggers: a pull request that touches the release path (migrations, compose and the deploy/
+# directories it builds or mounts, the host / apply / acceptance scripts and every script they call
+# — scripts/guards/staging-paths.mjs fails CI when the list below misses one), and workflow_dispatch for any ref — including a published tag, which is then
 # applied with `--pull` (its signed images) instead of a source build. Not a required check; the
 # review gate still waits for it whenever it runs. No push-to-main trigger: main only moves through
 # merges of PRs that branch protection keeps up to date (strict), so the PR's last run already
@@ -46,9 +47,18 @@ on:
       - scripts/host-*.sh
       - scripts/gen-handle-keys.sh
       - scripts/derive-internal-tokens.sh
+      - scripts/check-backup-freshness.sh
+      - scripts/prune-images.sh
+      - scripts/delete-workspaces-matching.sh
       - scripts/accept_s*.sh
       - scripts/lib/**
       - deploy/accept/**
+      - deploy/accept-s2/**
+      - deploy/backup/**
+      - deploy/caddy/**
+      - deploy/fake-llm/**
+      - deploy/update-feed/**
+      - deploy/worker-runtime/**
       - docker-compose.yml
       - packages/kernel/migrations/**
   workflow_dispatch:

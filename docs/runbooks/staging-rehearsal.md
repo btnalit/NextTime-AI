@@ -42,9 +42,13 @@ overlay，这不影响它们（它们从不启动 RagFlow 门）。
 ### 3.1 自动触发
 
 PR 改到发布路径（`packages/kernel/migrations/**`、`docker-compose.yml`、
-`scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh`、
-`scripts/lib/**`、`deploy/accept/**`、本 workflow）时自动跑：from = 目标之下最新的 `vX.Y.Z`，
-to = PR 合并提交，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
+`scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh` 及它们调用的
+脚本（`check-backup-freshness`、`prune-images`、`delete-workspaces-matching` 等）、`scripts/lib/**`、
+compose 构建或挂载的 `deploy/{accept,accept-s2,backup,caddy,fake-llm,update-feed,worker-runtime}/**`、
+本 workflow）时自动跑。这份清单由 `scripts/guards/staging-paths.mjs` 按依赖闭包核对（`pnpm ci:guards`
+与 CI `quality`），漏一个就红。产品代码（`packages/`、`gatekeepers/`、`collectors/`）不触发：它们每个 PR
+都过 `ci` / `e2e`，上生产前再由 tag 预演覆盖。自动运行的 from = 目标之下最新的
+`vX.Y.Z`，to = PR 合并提交，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
 同一 PR 的新推送会取消它上一轮；每次手动触发自成一组，不会被任何推送取消。
 main push 不触发：main 只经 PR 合并前进，分支保护（strict）要求 PR 与 main 同步，PR 最后一轮
 已经预演过落到 main 的那棵树；上生产前的关口是对发版 tag 的手动预演（`release.md` §1 第 5 步）。

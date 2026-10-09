@@ -19,8 +19,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Docs-only pull requests and pushes (every path under docs/ or ending in .md, docs/contracts/
+  # excepted) skip quality and test: nothing they run reads those files. guards always runs — it
+  # scans docs too (gitleaks, internal IP literals). A skipped job counts as passed for a required
+  # check, so quality / test skip only on a definite code=false (scripts/ci-docs-only.sh fails open)
+  # and still run when this job itself fails.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Docs-only change?
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/ci-docs-only.sh
+
   quality:
     name: quality
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -81,6 +111,12 @@ jobs:
       - name: CSS token guard (S6-A0, docs/console-completion-plan.md §5.9 — no colour / px font-size literals outside tokens.css)
         run: node scripts/guards/css-tokens.mjs
 
+      - name: Staging trigger paths guard unit tests
+        run: node --test scripts/guards/staging-paths.test.mjs
+
+      - name: Staging trigger paths cover the release rehearsal's scripts and deploy/ directories (scripts/guards/staging-paths.mjs)
+        run: node scripts/guards/staging-paths.mjs
+
       - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
         run: node scripts/validate-compose.mjs
 
@@ -89,6 +125,8 @@ jobs:
 
   test:
     name: test
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       postgres:
