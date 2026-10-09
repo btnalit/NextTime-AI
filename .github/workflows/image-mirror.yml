@@ -106,6 +106,9 @@ jobs:
       packages: write
     strategy:
       fail-fast: false
+      # GHCR limits writes per account (2000 requests a minute); ten multi-arch copies at once
+      # exceeded it, so copy two at a time and retry a throttled copy below.
+      max-parallel: 2
       matrix:
         include: ${{ fromJSON(needs.list.outputs.images) }}
     env:
@@ -121,8 +124,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A copy already at the pinned digest is left alone (the weekly run then writes nothing);
+      # otherwise copy, retrying a throttled (429) or dropped upload with backoff.
       - name: Copy ${{ matrix.name }} by digest
-        run: docker buildx imagetools create --tag "${TARGET}:${TAG}" "${SOURCE}@${DIGEST}"
+        run: |
+          have=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${TARGET}:${TAG}" 2>/dev/null) || true
+          if [ "$have" = "$DIGEST" ]; then
+            echo "${TARGET}:${TAG} is already ${DIGEST}"
+            exit 0
+          fi
+          for wait in 30 60 120 0; do
+            if docker buildx imagetools create --tag "${TARGET}:${TAG}" "${SOURCE}@${DIGEST}"; then exit 0; fi
+            if [ "$wait" = 0 ]; then break; fi
+            echo "copy failed; retrying in ${wait}s"
+            sleep "$wait"
+          done
+          echo "::error::could not copy ${SOURCE}@${DIGEST} to ${TARGET}:${TAG}"
+          exit 1
 
       - name: Verify the copy's digest
         run: |
