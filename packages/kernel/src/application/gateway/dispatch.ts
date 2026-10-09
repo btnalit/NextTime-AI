@@ -3,6 +3,7 @@ import { getCapability } from '@nexttime/shared';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { redactSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
@@ -160,19 +161,35 @@ function lookupCapabilityOrThrow(name: string): Capability {
  * comment, packages/shared/src/capabilities.ts): replaces every field named in
  * `capability.redactedParamKeys` with a fixed placeholder before the params are written into
  * `audit_records.payload` below — `create_connection`'s `credentials` field is the first (and, as
- * of this task, only) user. Every other capability has no `redactedParamKeys` and is unaffected —
- * `params` is audited verbatim, exactly as before this function existed.
+ * of this task, only) user.
+ *
+ * A Handle-channel call's params are also scrubbed of secret-looking values (governance/redaction):
+ * they come from an agent, which can be talked into passing its own Handle as an argument, and the
+ * audit log is read by every auditor. Only the audit copy is scrubbed — the handler still gets the
+ * params as sent — and the payload's `redactedValues` says how many values were replaced. A
+ * human-channel call's params are audited as before.
  */
-function redactAuditParams(
+function auditParams(
   capability: Capability,
   params: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!capability.redactedParamKeys || capability.redactedParamKeys.length === 0) return params;
-  const redacted = { ...params };
-  for (const key of capability.redactedParamKeys) {
-    if (key in redacted) redacted[key] = '[redacted]';
+  channel: ResolvedCaller['channel'],
+): { readonly params: Record<string, unknown>; readonly redactedValues?: number } {
+  let audited = params;
+  if (capability.redactedParamKeys && capability.redactedParamKeys.length > 0) {
+    audited = { ...params };
+    for (const key of capability.redactedParamKeys) {
+      if (key in audited) audited[key] = '[redacted]';
+    }
   }
-  return redacted;
+  if (channel !== 'handle') return { params: audited };
+  // Unbounded walk: the params already passed their schema, and the copy keeps their shape.
+  const scrubbed = redactSecrets(audited, { maxNodes: Number.POSITIVE_INFINITY });
+  return scrubbed.redactedValues > 0
+    ? {
+        params: scrubbed.value as Record<string, unknown>,
+        redactedValues: scrubbed.redactedValues,
+      }
+    : { params: audited };
 }
 
 /**
@@ -229,7 +246,7 @@ export async function dispatchCapability(
           payload: {
             channel: 'platform',
             actorLogin: platformUser.login,
-            params: redactAuditParams(capability, parsed.data as Record<string, unknown>),
+            ...auditParams(capability, parsed.data as Record<string, unknown>, 'platform'),
             ...(resourceRef.resourceRef !== undefined
               ? { resourceRef: resourceRef.resourceRef }
               : {}),
@@ -308,7 +325,7 @@ export async function dispatchCapability(
         payload: {
           channel: caller.channel,
           onBehalfOf,
-          params: redactAuditParams(capability, parsed.data as Record<string, unknown>),
+          ...auditParams(capability, parsed.data as Record<string, unknown>, caller.channel),
           ...(resourceRef.resourceRef !== undefined
             ? { resourceRef: resourceRef.resourceRef }
             : {}),

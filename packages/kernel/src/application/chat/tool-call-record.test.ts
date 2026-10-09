@@ -1,14 +1,17 @@
 import { ToolCallMessageContentSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
+import { REDACTED } from '../../governance/redaction/index.js';
 import {
-  REDACTED,
+  MESSAGE_TEXT_MAX_CHARS,
   TOOL_CALL_ARGS_PREVIEW_CHARS,
   TOOL_CALL_RESULT_PREVIEW_CHARS,
   buildToolCallRecord,
-  redactToolPayload,
+  redactMessageContent,
+  redactToolArgs,
 } from './tool-call-record.js';
 
-/** A Handle-shaped compact JWT (header `{"alg":"EdDSA"}`). */
+/** A Handle-shaped compact JWT (header `{"alg":"EdDSA"}`). Synthetic — `.gitleaks.toml` allows
+ *  this signature segment. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 
 function textResult(text: string) {
@@ -28,9 +31,9 @@ function record(overrides: Partial<Parameters<typeof buildToolCallRecord>[0]> = 
   });
 }
 
-describe('redactToolPayload — values that are secrets wherever they appear', () => {
+describe('redactToolArgs — values that are secrets wherever they appear', () => {
   it('replaces an agent’s own Handle in an `env` dump, once', () => {
-    const { value, redactedValues } = redactToolPayload(
+    const { value, redactedValues } = redactToolArgs(
       `HOME=/workspace\nCAPABILITY_HANDLE=${HANDLE}\nKERNEL_URL=http://kernel:8080`,
     );
     expect(value).toBe(
@@ -41,7 +44,8 @@ describe('redactToolPayload — values that are secrets wherever they appear', (
 
   it.each([
     ['a bare JWT', `token is ${HANDLE} ok`, `token is ${REDACTED} ok`],
-    ['a Bearer value', 'Authorization: Bearer abc.def-123456', `Authorization: Bearer ${REDACTED}`],
+    ['a Bearer value', 'use Bearer abc.def-123456 here', `use Bearer ${REDACTED} here`],
+    ['an Authorization header', 'Authorization: token abc123def', `Authorization: ${REDACTED}`],
     [
       'a PEM private key',
       '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----\nrest',
@@ -62,18 +66,18 @@ describe('redactToolPayload — values that are secrets wherever they appear', (
     ],
     ['a quoted JSON pair', '{"api_key": "abc123", "n": 1}', `{"api_key": "${REDACTED}", "n": 1}`],
   ])('replaces %s', (_label, input, expected) => {
-    expect(redactToolPayload(input).value).toBe(expected);
+    expect(redactToolArgs(input).value).toBe(expected);
   });
 
   it('leaves ordinary text alone — including names that only contain a secret word', () => {
     const text = 'max_tokens=1024; the depends_on edge kernel → postgres; tokenCount 3';
-    expect(redactToolPayload(text)).toEqual({ value: text, redactedValues: 0 });
+    expect(redactToolArgs(text)).toEqual({ value: text, redactedValues: 0, omitted: false });
   });
 });
 
-describe('redactToolPayload — structured arguments', () => {
+describe('redactToolArgs — structured arguments', () => {
   it('replaces a secret-named key and a capability’s declared secret params, keeping the shape', () => {
-    const { value, redactedValues } = redactToolPayload(
+    const { value, redactedValues } = redactToolArgs(
       {
         gatekeeperKind: 'http',
         connectionSecret: 'from-mint',
@@ -91,11 +95,15 @@ describe('redactToolPayload — structured arguments', () => {
     expect(redactedValues).toBe(4);
   });
 
-  it('bounds the walk over a huge value and still scrubs what is past the bound', () => {
+  it('reads a huge value only up to its bounds — what is past them is left out, never shown unscrubbed', () => {
     const wide = Array.from({ length: 6_000 }, (_, index) => ({ index }));
     wide.push({ index: -1, note: HANDLE } as { index: number });
-    const { value } = redactToolPayload(wide);
-    expect(JSON.stringify(value)).not.toContain('eyJhbGci');
+    const walked = redactToolArgs(wide);
+    expect(walked.omitted).toBe(true);
+    expect(JSON.stringify(walked.value)).not.toContain('eyJhbGci');
+    const long = redactToolArgs({ command: `${'y'.repeat(20_000)} ${HANDLE}` });
+    expect(long.omitted).toBe(true);
+    expect(JSON.stringify(long.value)).not.toContain('eyJhbGci');
   });
 });
 
@@ -139,10 +147,22 @@ describe('buildToolCallRecord', () => {
     const content = record({ result: textResult(`${filler} ${HANDLE}`), hasResult: true });
     expect(content.result).toEqual({
       text: `${filler} ${REDACTED}`.slice(0, TOOL_CALL_RESULT_PREVIEW_CHARS),
-      totalChars: filler.length + 1 + REDACTED.length,
+      totalChars: filler.length + 1 + HANDLE.length,
       truncated: true,
     });
     expect(content.result?.text).not.toContain('eyJ');
+  });
+
+  it('reads a huge result only as far as its preview needs, and says how long it was', () => {
+    const huge = `${'z'.repeat(5_000_000)} ${HANDLE}`;
+    const started = performance.now();
+    const content = record({ result: textResult(huge), hasResult: true });
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(content.result).toEqual({
+      text: 'z'.repeat(TOOL_CALL_RESULT_PREVIEW_CHARS),
+      totalChars: huge.length,
+      truncated: true,
+    });
   });
 
   it('cuts long args to their own, smaller preview', () => {
@@ -178,5 +198,18 @@ describe('buildToolCallRecord', () => {
     });
     expect(content).not.toHaveProperty('args');
     expect(content).not.toHaveProperty('result');
+  });
+});
+
+describe('redactMessageContent — a stored reply', () => {
+  it('scrubs a Handle the agent repeated, and cuts a reply past its bound before scrubbing', () => {
+    expect(redactMessageContent({ text: `我的 Handle 是 ${HANDLE}` })).toEqual({
+      value: { text: `我的 Handle 是 ${REDACTED}` },
+      redactedValues: 1,
+      cut: false,
+    });
+    const long = redactMessageContent({ text: 'a'.repeat(MESSAGE_TEXT_MAX_CHARS + 10) });
+    expect(long.cut).toBe(true);
+    expect(long.value.text).toBe(`${'a'.repeat(MESSAGE_TEXT_MAX_CHARS)}…`);
   });
 });

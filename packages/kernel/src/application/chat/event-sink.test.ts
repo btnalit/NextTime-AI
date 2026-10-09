@@ -263,6 +263,65 @@ describe('createChatEventSink — a Turn’s tool calls are stored, redacted (to
   });
 });
 
+describe('createChatEventSink — live text is scrubbed across deltas', () => {
+  function liveText(received: readonly ChatPushEvent[]): string[] {
+    return received.flatMap((e) =>
+      e.type === 'chat.stream' && e.payload.streamKind === 'textDelta' ? [e.payload.delta] : [],
+    );
+  }
+  const delta = (value: string): AgentRuntimeEvent => ({
+    ...correlation(),
+    type: 'textDelta',
+    delta: value,
+  });
+
+  it('a Handle split across deltas never goes out; what is held goes out, scrubbed, before the next event', async () => {
+    const { pool } = toolRecordPool([]);
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents('chat1', (e) => received.push(e));
+    const lines: string[] = [];
+    const sink = createChatEventSink({ pool, log: (line) => lines.push(line) });
+
+    for (const piece of [
+      '我的 Handle 是 ',
+      HANDLE.slice(0, 25),
+      HANDLE.slice(25, 60),
+      HANDLE.slice(60),
+    ]) {
+      await sink.handle(delta(piece));
+    }
+    await sink.handle(delta(' ，别外传'));
+    await sink.handle({
+      ...correlation(),
+      type: 'toolCallStarted',
+      toolCallId: 'tc1',
+      name: 'list_facts',
+      args: {},
+    });
+
+    expect(JSON.stringify(received)).not.toContain('eyJ');
+    expect(liveText(received).join('')).toBe('我的 Handle 是 [redacted] ，别外传');
+    const kinds = received.map((e) => (e.type === 'chat.stream' ? e.payload.streamKind : e.type));
+    expect(kinds.at(-1)).toBe('toolCallStarted');
+    expect(lines.some((line) => line.includes('live text of a Turn'))).toBe(true);
+  });
+
+  it('CAPABILITY_HANDLE= in one delta and its value in the next', async () => {
+    const { pool } = toolRecordPool([]);
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents('chat1', (e) => received.push(e));
+    const sink = createChatEventSink({ pool, log: () => {} });
+
+    await sink.handle(delta('env says CAPABILITY_HANDLE='));
+    await sink.handle(delta(`${HANDLE}\nHOME=/workspace`));
+    await sink.handle({ ...correlation(), type: 'turnEnded', status: 'completed' }).catch(() => {});
+
+    expect(liveText(received).join('')).toBe(
+      'env says CAPABILITY_HANDLE=[redacted]\nHOME=/workspace',
+    );
+  });
+});
+
 describe('createChatEventSink — turnEnded pushes only after its transaction commits', () => {
   it('commits the Turn end before chat.metadata tells a client it ended', async () => {
     const log: string[] = [];

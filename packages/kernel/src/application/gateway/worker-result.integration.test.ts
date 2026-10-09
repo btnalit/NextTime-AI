@@ -319,6 +319,69 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(explained.activity?.onBehalfOfPrincipal?.kind).toBe('human');
     });
 
+    it('a secret in the report half is scrubbed wherever it is written; the proposal half is kept as sent', async () => {
+      // Synthetic (`.gitleaks.toml` allows this signature segment and the a–z run).
+      const handle =
+        'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+      const password = 'PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123';
+      const { taskId, claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+      const skillName = `worker-skill-with-secret-${taskId}`;
+
+      const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+        summary: `env shows CAPABILITY_HANDLE=${handle}`,
+        findings: ['nothing else', `ran ${password} psql`],
+        evidence: [{ kind: 'note', content: { text: `token: ${handle}` } }],
+        proposedSkill: {
+          name: skillName,
+          description: 'Connect with the stored password.',
+          markdown: `Run ${password} psql.`,
+        },
+      })) as { status: string; activityId: string };
+      expect(result.status).toBe('completed');
+
+      const stored = await inTx(ownerId, async (client) => {
+        const task = await client.query<{ result: { summary: string; findings: string[] } }>(
+          'select result from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, taskId],
+        );
+        const activity = await client.query<{ metadata: Record<string, unknown> }>(
+          'select metadata from activities where workspace_id = $1 and id = $2',
+          [workspaceId, result.activityId],
+        );
+        const audit = await client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'report_task_result'
+              and payload -> 'params' ->> 'summary' like 'env shows %'`,
+          [workspaceId],
+        );
+        return { task: task.rows[0], activity: activity.rows[0], audit: audit.rows };
+      });
+
+      expect(stored.task?.result.summary).toBe('env shows CAPABILITY_HANDLE=[redacted]');
+      expect(stored.task?.result.findings).toEqual([
+        'nothing else',
+        'ran PGPASSWORD=[redacted] psql',
+      ]);
+      expect(stored.activity?.metadata.redactedValues).toBe(3);
+      expect(JSON.stringify(stored.activity?.metadata)).not.toContain('eyJ');
+
+      // The audit copy of the params is scrubbed too, the proposal included, and says how much.
+      expect(stored.audit).toHaveLength(1);
+      const audited = JSON.stringify(stored.audit[0]?.payload);
+      expect(audited).not.toContain('eyJ');
+      expect(audited).not.toContain('abcdefghijklmnopqrstuvwxyz');
+      expect(stored.audit[0]?.payload.redactedValues).toBe(4);
+
+      // What a person approves is what runs: the draft Skill keeps its text as sent.
+      const skills = await inTx(ownerId, (client) =>
+        listSkills(client, workspaceId, { principalId: ownerId, role: 'owner' }),
+      );
+      expect(skills.items.find((s) => s.name === skillName)?.markdown).toBe(
+        `Run ${password} psql.`,
+      );
+    });
+
     it('proposedSkill (S2.14) creates a draft Skill owned by the Task’s on_behalf_of principal, private until published', async () => {
       const { taskId, claims } = await spawnWorkerRun();
       const caller: ResolvedCaller = { channel: 'handle', claims };

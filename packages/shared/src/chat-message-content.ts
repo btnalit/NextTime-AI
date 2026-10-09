@@ -81,8 +81,8 @@ export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
  * assistant text: not a verified record. A kernel capability call also has its audit record
  * (`audit_records`, name and redacted params, no result), which stays the authoritative one.
  *
- * `args`/`result` are previews, not the payloads: secret-looking values replaced (`redactedValues`
- * counts them), then cut at a fixed length (`truncated`, `totalChars`). `result.text` is the tool
+ * `args`/`result` are previews, not the payloads: read only up to a bound, secret-looking values
+ * replaced (`redactedValues` counts them), then cut at a fixed length (`truncated`, `totalChars`). `result.text` is the tool
  * result's own text when it has any (pi's `content` text parts — a capability tool's is its JSON),
  * otherwise the result as JSON. `startedAt`/`endedAt` are when the kernel received the events.
  */
@@ -94,7 +94,9 @@ export type ToolCallOutcome = (typeof TOOL_CALL_OUTCOME_VALUES)[number];
 export const ToolCallPayloadPreviewSchema = z
   .object({
     text: z.string(),
-    /** Length of the whole redacted text; larger than `text.length` when it was cut. */
+    /** How long the payload's text was before it was cut — a result's text as the tool returned
+     *  it; for a structured payload too large to read whole, a lower bound (`truncated` is then
+     *  true). Larger than `text.length` when it was cut. */
     totalChars: z.number().int().nonnegative(),
     truncated: z.boolean(),
   })

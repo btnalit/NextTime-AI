@@ -1,5 +1,9 @@
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import {
+  type SecretStreamScrubber,
+  createSecretStreamScrubber,
+} from '../../governance/redaction/index.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
 import {
@@ -12,7 +16,8 @@ import {
 import {
   buildToolCallRecord,
   redactMessageContent,
-  redactToolPayload,
+  redactToolArgs,
+  redactToolResult,
 } from './tool-call-record.js';
 import {
   type EndedTurn,
@@ -49,8 +54,13 @@ import {
  * stored. When the record cannot be written either (the database is unreachable), the loss is kept
  * here and written in the transaction that ends the Turn, ahead of `endTurn`.
  *
- * A runtime `message` is stored with secret-looking values scrubbed (tool-call-record.ts's
- * `redactMessageContent` — the agent can repeat its own Handle in a reply).
+ * Nothing the agent produced reaches a person unscrubbed (governance/redaction — the agent can
+ * repeat its own Handle anywhere): a runtime `message` is stored with secret-looking values
+ * replaced (tool-call-record.ts's `redactMessageContent`), and the live `textDelta`s go through a
+ * per-Turn stream scrubber, which holds back the end of the text while it could still be part of
+ * a secret split across deltas. What it holds is emitted, scrubbed, before the Turn's next event
+ * of any other kind (a tool call, the stored message, the Turn's end), so the stream stays in
+ * order; it is dropped when the Turn ends.
  *
  * Tool calls: `toolCallStarted`/`toolCallEnded` still go out only as `chat.stream` deltas — with
  * their arguments and result redacted first (tool-call-record.ts: an agent's `bash` can print its
@@ -66,8 +76,8 @@ import {
  *  A runtime is not trusted to stop on its own — a looping agent, or a container writing forged
  *  events — and every record is a row in the Chat's history. */
 export const MAX_TOOL_CALL_RECORDS_PER_TURN = 200;
-/** Turns with tool-call state held at once — only reached if Turns stop ending (each `turnEnded`
- *  drops its own); past it the oldest Turn's open calls are forgotten. */
+/** Turns with live-text or tool-call state held at once — only reached if Turns stop ending (each
+ *  `turnEnded` drops its own); past it the Turn idle longest is forgotten (`turnEntry`). */
 const MAX_TRACKED_TURNS = 1_000;
 
 interface OpenToolCall {
@@ -99,24 +109,22 @@ function sqlStateOf(err: unknown): string | null {
 /** `toolName` names the capability whose declared secret params are redacted too — the call's
  *  start names it; an end carries it only from a newer runtime. */
 function toChatStreamPayload(
-  event: Extract<AgentRuntimeEvent, { type: 'textDelta' | 'toolCallStarted' | 'toolCallEnded' }>,
+  event: Extract<AgentRuntimeEvent, { type: 'toolCallStarted' | 'toolCallEnded' }>,
   toolName?: string,
 ) {
   switch (event.type) {
-    case 'textDelta':
-      return { streamKind: 'textDelta' as const, delta: event.delta };
     case 'toolCallStarted':
       return {
         streamKind: 'toolCallStarted' as const,
         toolCallId: event.toolCallId,
         name: event.name,
-        ...('args' in event ? { args: redactToolPayload(event.args, event.name).value } : {}),
+        ...('args' in event ? { args: redactToolArgs(event.args, event.name).value } : {}),
       };
     case 'toolCallEnded':
       return {
         streamKind: 'toolCallEnded' as const,
         toolCallId: event.toolCallId,
-        ...('result' in event ? { result: redactToolPayload(event.result, toolName).value } : {}),
+        ...('result' in event ? { result: redactToolResult(event.result, toolName).value } : {}),
         ...(event.isError !== undefined ? { isError: event.isError } : {}),
       };
   }
@@ -158,18 +166,78 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
   const unrecordedFailures = new Map<string, MessagePersistFailure>();
   /** Tool-call state per running Turn, by turnId — dropped when the Turn ends. */
   const toolCallsByTurn = new Map<string, TurnToolCalls>();
+  /** The live text's scrubber per running Turn, by turnId — dropped when the Turn ends. */
+  const textStreamsByTurn = new Map<string, SecretStreamScrubber>();
+
+  /** Publishes scrubbed live text, logging a replacement — the agent printed something that
+   *  looks like a secret. */
+  function publishText(
+    event: AgentRuntimeEvent,
+    text: { readonly value: string; readonly redactedValues: number },
+  ): void {
+    if (text.redactedValues > 0) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'chat event sink: replaced secret-looking values in the live text of a Turn',
+          turnId: event.turnId,
+          redactedValues: text.redactedValues,
+        }),
+      );
+    }
+    if (text.value === '') return;
+    publishChatPushEvent({
+      type: 'chat.stream',
+      chatId: event.chatId,
+      turnId: event.turnId,
+      payload: { streamKind: 'textDelta', delta: text.value },
+    });
+  }
+
+  /** Emits the live text a Turn's scrubber still holds — before any other event of the Turn. */
+  function flushText(event: AgentRuntimeEvent): void {
+    const stream = textStreamsByTurn.get(event.turnId);
+    if (stream !== undefined) publishText(event, stream.flush());
+  }
+
+  /** The Turn's entry in `byTurn`, made by `create` if it has none. Each use moves the entry to
+   *  the back, so past `MAX_TRACKED_TURNS` the Turn forgotten is the one idle longest — a running
+   *  Turn's state (its record count among it) is only lost if a thousand other Turns were active
+   *  since its last event. That is logged. */
+  function turnEntry<T>(byTurn: Map<string, T>, turnId: string, create: () => T): T {
+    let entry = byTurn.get(turnId);
+    if (entry !== undefined) {
+      byTurn.delete(turnId);
+    } else {
+      entry = create();
+      if (byTurn.size >= MAX_TRACKED_TURNS) {
+        const idlest = byTurn.keys().next().value;
+        if (idlest !== undefined) {
+          byTurn.delete(idlest);
+          log(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'chat event sink: over its bound of tracked Turns — forgot the one idle longest',
+              turnId: idlest,
+            }),
+          );
+        }
+      }
+    }
+    byTurn.set(turnId, entry);
+    return entry;
+  }
+
+  function textStreamOf(turnId: string): SecretStreamScrubber {
+    return turnEntry(textStreamsByTurn, turnId, createSecretStreamScrubber);
+  }
 
   function toolCallsOf(turnId: string): TurnToolCalls {
-    let calls = toolCallsByTurn.get(turnId);
-    if (calls === undefined) {
-      if (toolCallsByTurn.size >= MAX_TRACKED_TURNS) {
-        const oldest = toolCallsByTurn.keys().next().value;
-        if (oldest !== undefined) toolCallsByTurn.delete(oldest);
-      }
-      calls = { open: new Map(), records: 0, overLimitLogged: false };
-      toolCallsByTurn.set(turnId, calls);
-    }
-    return calls;
+    return turnEntry(toolCallsByTurn, turnId, () => ({
+      open: new Map(),
+      records: 0,
+      overLimitLogged: false,
+    }));
   }
 
   /** Whether one more record fits the Turn's bound (counting it if so). */
@@ -278,15 +346,11 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
 
   return {
     async handle(event: AgentRuntimeEvent): Promise<void> {
+      if (event.type !== 'textDelta') flushText(event);
       switch (event.type) {
         case 'textDelta':
-          // Ephemeral (§9.4 "chat.stream 永不持久化") — no DB write, straight to the push bus.
-          publishChatPushEvent({
-            type: 'chat.stream',
-            chatId: event.chatId,
-            turnId: event.turnId,
-            payload: toChatStreamPayload(event),
-          });
+          // Ephemeral (§9.4 "chat.stream 永不持久化") — no DB write, scrubbed and pushed.
+          publishText(event, textStreamOf(event.turnId).push(event.delta));
           return;
 
         case 'toolCallStarted': {
@@ -338,13 +402,14 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
 
         case 'message': {
           const scrubbed = redactMessageContent(event.content);
-          if (scrubbed.redactedValues > 0) {
+          if (scrubbed.redactedValues > 0 || scrubbed.cut) {
             log(
               JSON.stringify({
                 level: 'warn',
-                msg: 'chat event sink: replaced secret-looking values in a runtime message before storing it',
+                msg: 'chat event sink: replaced secret-looking values in, or cut, a runtime message before storing it',
                 turnId: event.turnId,
                 redactedValues: scrubbed.redactedValues,
+                cut: scrubbed.cut,
               }),
             );
           }
@@ -358,7 +423,7 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                   chatId: event.chatId,
                   turnId: event.turnId,
                   role: event.role,
-                  content: scrubbed.content,
+                  content: scrubbed.value,
                 }),
             );
           } catch (err) {
@@ -382,6 +447,7 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           // ends it `failed` (legacy 128 — module doc comment).
           // Calls still open are recorded `not_finished` first, so a client told the Turn ended
           // finds every one of its tool calls in the history.
+          textStreamsByTurn.delete(event.turnId);
           const calls = toolCallsByTurn.get(event.turnId);
           toolCallsByTurn.delete(event.turnId);
           if (calls !== undefined && calls.open.size > 0) {

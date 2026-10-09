@@ -116,6 +116,10 @@ export interface PostWorkerResultInput {
   /** Entries the gateway handler already refused before this write (see
    *  `ContractPreRejections`); absent means "nothing pre-refused". */
   readonly preRejected?: ContractPreRejections;
+  /** How many secret-looking values the gateway handler replaced in the contract's report half
+   *  before this write (`worker-result-handler.ts`'s `scrubReport`) — recorded on the
+   *  `worker_result` Activity so `explain` shows the report was altered. */
+  readonly redactedValues?: number;
 }
 
 /** Why one `factsToAssert[]` entry was refused (module doc comment, "per-entry refusals"):
@@ -204,6 +208,9 @@ export async function postWorkerResult(
   };
   if (contract.evidence && contract.evidence.length > 0) {
     activityMetadata.evidence = contract.evidence;
+  }
+  if (input.redactedValues !== undefined && input.redactedValues > 0) {
+    activityMetadata.redactedValues = input.redactedValues;
   }
 
   const activity = await startActivity(client, workspaceId, {
