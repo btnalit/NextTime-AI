@@ -3745,7 +3745,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - 结果（main e68ef76）：完整预演 push run 37894663047（v0.42.0 基线 S1–S4 → apply → S1–S4，`RESULT ok`）；控制台路径真实模型冒烟
     run 37894674445（seed=0、无基线，runs=1）：测试 completion / tool_call 均 ok，5 个核心场景全过，S2 51 / S3 32 零失败，19 次调用约 $0.45
     （按牌价估算；平台未配单价，`cost_usd` 记 0）。这是冒烟，不替代主机验收的 S5.7（runs=10，每场景 ≥ 8/10）。STATUS 遗留 133 / 134 由 #502 关闭。
-  - extended（run 37896150189，main e68ef76，runs=3，`token_budget` 6M）：预演部分同上全过；真实模型 S2 53 / S3 32 零失败，123 次调用（`STEP real-usage` 只给 token 数；平台未配单价，花费以供应商账单为准）。concurrent / deny / docker / memory / observe / ssh_approve / stop / worker_egress 各 3/3、
+  - extended（run 37896150189，main e68ef76，runs=3，`token_budget` 6M；不替代主机 S5.7）：apply 后 S1–S4 全过（seed=0、无基线；带基线的完整预演是 push run 37894663047）；真实模型 S2 53 / S3 32 零失败，123 次调用（`STEP real-usage` 只给 token 数；平台未配单价，花费以供应商账单为准）。concurrent / deny / docker / memory / observe / ssh_approve / stop / worker_egress 各 3/3、
     ssh_auto 1/1；docker_observe 2/3、dependency_chat 1/3。逐条 `RUN` 行看下来两项都不是产品回归：docker 门的观察结果（`docker-client.ts`
     `summaryFromListEntry` / `summaryFromInspect`）不含容器命令，场景却要求答出主进程命令（场景缺陷，STATUS 遗留 136）；dependency_chat 失败的两次
     只调了 `get_object`、没走 `search` / `traverse`，入口上下文是最近 20 条 Fact（`get_entry_context`），又没有按关系类型列 Fact 的能力（能力缺口，遗留 135）。
