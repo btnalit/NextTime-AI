@@ -72,8 +72,11 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 只在手动触发且 `real_model: true` 时跑，job 进入 `staging-real-model` environment。一次性设置
 （仓库 Settings → Environments）：
 
-1. 新建 environment `staging-real-model`，**加 required reviewer**（每次都花真钱，审批即授权）；
-   Deployment branches 限制为 `main`。
+1. 新建 environment `staging-real-model`，Deployment branches 限制为 `main`，**不设 required reviewer**。
+   这是有意的取舍（2026-10-09 维护者决定）：真实模型回归要能长期自动跑，不依赖人工点批准。花钱的边界由系统
+   控制兜住，而不是靠审批：①只能从 main 触发（environment 的 deployment branch，`plan` 再核对 `GITHUB_REF`）；
+   ②被测版本只能是已发布 tag 或 main 上的提交（见下）；③`runs` ≤ 10；④每个验收工作区的每日 token 硬配额
+   `token_budget`（见"成本上限"）。
 2. 在该 environment 下加三个 secret：
    - `STAGING_LLM_PROVIDERS_YAML`：一份完整的 `llm-providers.yaml`（格式见
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
@@ -86,8 +89,8 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
    花费约三倍，job 超时相应从 180 放宽到 330 分钟。
 
 被测版本受限：`to` 只能是已发布的 `vX.Y.Z` tag 或已经在 main 上的提交（留空 = main 头），否则 `plan`
-job 直接失败，不进入审批。`plan` 不在 environment 里，先于审批跑完：run 名称与它的 job 摘要里写着
-from / to / 提交 sha / runs / 配额——审批人批的就是这一行；之后 `rehearsal` 开头再核对 sha，不一致就失败。
+job 直接失败，不进入 environment。`plan` 不在 environment 里，先于真实模型 job 跑完：run 名称与它的 job 摘要里写着
+from / to / 提交 sha / runs / 配额——要跑的就是这一行；之后 `rehearsal` 开头再核对 sha，不一致就失败。
 
 成本上限：真实模型阶段开始前，脚本把内核自己的每工作区每日 token 配额 `LLM_DAILY_TOKEN_BUDGET` 设为
 `token_budget`（默认 3000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，

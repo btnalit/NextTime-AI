@@ -15,8 +15,8 @@ name: staging
 # required check; the review gate still waits for it whenever it runs.
 #
 # Real-model regression (docs/runbooks/host-accept-real-model.md) runs only on a dispatch with
-# `real_model: true`, in the `staging-real-model` environment — give that environment a required
-# reviewer, since every run spends real tokens. Its secrets: STAGING_LLM_PROVIDERS_YAML (a whole
+# `real_model: true`, in the `staging-real-model` environment (main-only deployment branch; no required
+# reviewer by design, see docs/runbooks/staging-rehearsal.md §4). Its secrets: STAGING_LLM_PROVIDERS_YAML (a whole
 # llm-providers.yaml), STAGING_LLM_PROXY_ENV (NAME=value per api_key_env it names, or just the
 # key when it names one), STAGING_REAL_MODEL (<provider/model>). This repository is public and so are its run logs and
 # artifacts: the model id and provider names are masked in the log and scrubbed from the uploaded
@@ -112,8 +112,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Runs before (and without) the staging-real-model environment, so what an approval would run is
-  # fixed and on the run page before anyone approves it.
+  # Runs before (and without) the staging-real-model environment, so what the real-model job will run
+  # is fixed and on the run page before it starts.
   plan:
     name: plan
     runs-on: ubuntu-24.04
