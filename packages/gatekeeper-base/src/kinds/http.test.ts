@@ -11,6 +11,7 @@ import {
   encodePathSegment,
   importOpenApi,
   isGateOwnedHeader,
+  isGateOwnedQueryParam,
   resolveBindingUrl,
 } from './http.js';
 
@@ -86,6 +87,7 @@ describe('importOpenApi — what the gate owns is never a param (review of #532)
               { name: 'Authorization', in: 'header', required: true },
               { name: 'X-Scope-OrgID', in: 'header' },
               { name: 'X-Page-Token', in: 'header' },
+              { name: '$skipToken', in: 'query' },
               { name: 'session', in: 'cookie' },
             ],
           },
@@ -96,7 +98,12 @@ describe('importOpenApi — what the gate owns is never a param (review of #532)
       properties?: Record<string, unknown>;
       required?: string[];
     };
-    expect(Object.keys(schema.properties ?? {})).toEqual(['q', 'page_token', 'X-Page-Token']);
+    expect(Object.keys(schema.properties ?? {})).toEqual([
+      'q',
+      'page_token',
+      'X-Page-Token',
+      '$skipToken',
+    ]);
     expect(schema.required).toEqual(['q']);
   });
 });
@@ -486,7 +493,36 @@ describe('HttpTransport', () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
-    it.each(['page_token', 'pageToken', 'next_token', 'cursor', 'key', 'q', 'limit'])(
+    /** Pagination cursors and retry keys whose names end in `token` (review of #532, round 3). */
+    const PAGINATION_TOKENS = [
+      'page_token',
+      'pageToken',
+      'startPageToken',
+      'prevPageToken',
+      'next_token',
+      'NextToken',
+      'PaginationToken',
+      'pagination_token',
+      'continuation-token',
+      'continuationToken',
+      'x-ms-continuationtoken',
+      'syncToken',
+      '$skipToken',
+      '$skiptoken',
+      'skipToken',
+      '$deltatoken',
+      'starting_token',
+      'resumeToken',
+      'resume_token',
+      'after_token',
+      'before_token',
+      'nextForwardToken',
+      'scroll_token',
+      'x-nextpagetoken',
+      'Idempotency-Token',
+    ];
+
+    it.each([...PAGINATION_TOKENS, 'cursor', 'key', 'q', 'limit'])(
       'sends a %s query param as before',
       async (name) => {
         const fetchImpl = vi.fn(
@@ -528,6 +564,43 @@ describe('HttpTransport', () => {
       expect(isGateOwnedHeader('X-Custom', new Set(['x-custom']))).toBe(true);
       expect(isGateOwnedHeader('x-page-token')).toBe(false);
       expect(isGateOwnedHeader('x-csrf-token')).toBe(true);
+    });
+
+    it('tells a pagination token from a credential by the word before `token`', () => {
+      for (const name of PAGINATION_TOKENS) {
+        expect(isGateOwnedQueryParam(name), name).toBe(false);
+        expect(isGateOwnedHeader(name), name).toBe(false);
+      }
+      for (const name of [
+        'access_token',
+        'refreshToken',
+        'id_token',
+        'auth_token',
+        'sessionToken',
+        'X-Session-Token',
+        'pageAccessToken',
+        'nextAuthToken',
+        'x-pagesessiontoken',
+      ]) {
+        expect(isGateOwnedQueryParam(name), name).toBe(true);
+        expect(isGateOwnedHeader(name), name).toBe(true);
+      }
+    });
+
+    it('compares a binding’s own query without case', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const fixed: Operation = {
+        ...withHeaderParam('x-trace-id'),
+        binding: { kind: 'http', method: 'GET', path: '/items?api-version=1' },
+        params_schema: {},
+      };
+      const thrown = await transport
+        .invoke(fixed, { 'API-Version': '2' }, {})
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+      expect((thrown as GateOwnedParamRefusedError).location).toBe('binding');
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
   });
 });

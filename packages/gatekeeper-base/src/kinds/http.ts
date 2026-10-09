@@ -192,13 +192,28 @@ const GATE_OWNED_HEADER_PREFIX =
  *  `X-Client-Secret`. */
 const CREDENTIAL_NAME =
   /(?:token|apikey|(?:^|[-_])(?:api|access|secret|private|subscription|auth|session|security|master|client|license|app|application|consumer|developer|service)[-_]?key|secret|password|passwd|passphrase|credentials?|(?:^|[-_])auth)$/;
-/** A name ending in `token` that is a pagination cursor or a retry key, not who is calling:
- *  `X-Page-Token`, `X-Next-Page-Token`, `X-Continuation-Token`, `next_token`, `Idempotency-Token`. */
+/** A name ending in `token` that is a pagination cursor or a retry key, not who is calling — the
+ *  word before `token` says so: `X-Page-Token`, `pageToken`, `startPageToken`, `NextToken`,
+ *  `PaginationToken`, `continuation-token`, `x-ms-continuationtoken`, `syncToken`, Microsoft's
+ *  `$skipToken` / `$deltatoken`, `starting_token`, `resumeToken`, `after_token`,
+ *  `nextForwardToken`, `Idempotency-Token`. Matched on `nameWords` (camelCase split), so
+ *  `pageAccessToken` or `nextAuthToken` — whose last word is a credential's — stays refused. */
 const NOT_A_CREDENTIAL_TOKEN =
-  /(?:^|[-_])(?:page|next|next[-_]?page|pagination|continuation|cursor|scroll|sync|marker|idempotency)[-_]?token$/;
+  /(?:^|[-_$])(?:(?:next|prev|previous|start)[-_]?)?(?:page|paging|pagination|next|prev|previous|continuation|continue|cursor|scroll|sync|delta|marker|skip|start|starting|resume|after|before|forward|backward|offset|idempotency)[-_]?token$/;
 
-function namesACredential(lower: string): boolean {
-  return CREDENTIAL_NAME.test(lower) && !NOT_A_CREDENTIAL_TOKEN.test(lower);
+/** `startPageToken` → `start_page_token`: lower-cased with its camelCase words split, so a word
+ *  is found whatever the casing (`$skipToken` and `$skiptoken` alike). */
+function nameWords(name: string): string {
+  return name
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase();
+}
+
+function namesACredential(name: string): boolean {
+  return (
+    CREDENTIAL_NAME.test(name.trim().toLowerCase()) && !NOT_A_CREDENTIAL_TOKEN.test(nameWords(name))
+  );
 }
 
 /**
@@ -216,7 +231,7 @@ export function isGateOwnedHeader(
     GATE_OWNED_HEADERS.has(lower) ||
     injected.has(lower) ||
     GATE_OWNED_HEADER_PREFIX.test(lower) ||
-    namesACredential(lower)
+    namesACredential(name)
   );
 }
 
@@ -234,7 +249,7 @@ const GATE_OWNED_QUERY_PARAMS = new Set(['sudo', 'sig', 'signature']);
 export function isGateOwnedQueryParam(name: string): boolean {
   const lower = name.trim().toLowerCase();
   return (
-    GATE_OWNED_QUERY_PARAMS.has(lower) || /^x-(?:amz|goog)-/.test(lower) || namesACredential(lower)
+    GATE_OWNED_QUERY_PARAMS.has(lower) || /^x-(?:amz|goog)-/.test(lower) || namesACredential(name)
   );
 }
 
@@ -304,9 +319,12 @@ export class HttpTransport implements Transport {
       ...INJECTED_HEADER_NAMES,
       ...Object.keys(credentialHeaders(ctx.credential)).map((name) => name.toLowerCase()),
     ]);
-    const fixedQuery = new Set(url.searchParams.keys());
+    // Compared without case: many servers (ASP.NET, so Azure) read `API-Version` as `api-version`.
+    const fixedQuery = new Set([...url.searchParams.keys()].map((key) => key.toLowerCase()));
     const toQuery = (key: string, value: unknown): void => {
-      if (fixedQuery.has(key)) throw new GateOwnedParamRefusedError(operation.name, key, 'binding');
+      if (fixedQuery.has(key.toLowerCase())) {
+        throw new GateOwnedParamRefusedError(operation.name, key, 'binding');
+      }
       if (isGateOwnedQueryParam(key)) {
         throw new GateOwnedParamRefusedError(operation.name, key, 'query');
       }
