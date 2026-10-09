@@ -45,7 +45,7 @@ const MCP_SERVER_VERSION = '0.1.0';
  *  shorter: a tool result only needs a readable message for the calling agent, not a wire-stable
  *  HTTP status/code pair (nothing parses `tools/call` error text programmatically the way an HTTP
  *  client branches on `error.code`). The four capability-dispatch error classes, and a refused
- *  observe's credential-looking params, get a short, stable prefix; every other error (an
+ *  observe's literal-credential params, get a short, stable prefix; every other error (an
  *  unmapped domain error from inside a handler — e.g. a Fact-not-found) falls through to its own
  *  `.message`, which is already a readable sentence in this codebase's conventions (every thrown
  *  error here is authored for a human to read, not a machine to parse). */
@@ -56,8 +56,8 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
   else if (err instanceof CapabilityNotImplementedError)
     message = `not_implemented: ${err.message}`;
   else if (err instanceof ForbiddenError) message = `forbidden: ${err.message}`;
-  // Legacy 175: an observe tool's params carrying a credential-looking value — the message says
-  // what to do instead; the code tells it apart from a schema mistake.
+  // Legacy 175: an observe tool's params carrying a literal credential — the message says what to
+  // do instead; the code tells it apart from a schema mistake.
   else if (err instanceof ObserveParamsCarryCredentialsError)
     message = `${err.code}: ${err.message}`;
   else message = err instanceof Error ? err.message : String(err);

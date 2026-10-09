@@ -296,8 +296,9 @@ async function recordWorkerGateObservationSafely(
 
 /** One observation, for both ways in (`observe_operation`, `request_action`'s observe branch),
  *  once the caller may observe. First the params' credential review (legacy 175,
- *  governance/redaction's `reviewObserveParams`): a value that looks like a credential is refused
- *  before the Activity starts or the gate is called; one only under a secret-named field is
+ *  governance/redaction's `reviewObserveParams`): a literal credential (a JWT, a vendor key, a
+ *  Bearer token, …) is refused before the Activity starts or the gate is called; any other
+ *  suspected value — under a secret-named field, or query text that only mentions one — is
  *  recorded in the audit row (`auditPayload.credentialReview`). */
 async function runObserve(
   client: PoolClient,
@@ -1099,9 +1100,8 @@ async function resolveRequesterScope(
  *     Grant); its execute-class and unclassified paths keep `assertHumanGatekeeperAccess`.
  *
  * Either way the params pass the same credential review first (`runObserve`, legacy 175) — a
- * credential-looking value is a 400 `credentials_in_observe_params`, nothing reaches the gate —
- * and the call is audited by `dispatch.ts`, with `credentialReview` when a value sits under a
- * secret-named field.
+ * literal credential is a 400 `credentials_in_observe_params`, nothing reaches the gate — and the
+ * call is audited by `dispatch.ts`, with `credentialReview` when any other value is suspect.
  */
 export const observeOperationHandler: CapabilityHandler = async (
   client,

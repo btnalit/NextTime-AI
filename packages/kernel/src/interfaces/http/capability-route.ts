@@ -327,7 +327,7 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy 175 (governance/redaction/credential-review.ts `reviewObserveParams`): an observe-class
-  // Operation's params carrying a credential-looking value — refused before the gate is called;
+  // Operation's params carrying a literal credential — refused before the gate is called;
   // the message tells the agent not to pass credentials, `details` says how many and where.
   if (err instanceof ObserveParamsCarryCredentialsError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };

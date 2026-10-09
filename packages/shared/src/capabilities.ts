@@ -749,7 +749,7 @@ const gateCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: gateObserveResultSchema,
     description:
-      'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused. Params carrying a value that looks like a credential (a token, key or password, an Authorization header, a URL with a password) are refused before the gate is called — 400 credentials_in_observe_params (details: suspectedSecretValues, suspectedSecretPaths); a gate authenticates with the credentials configured on it. A value under a secret-named field (pageToken) passes, and the audit row records how many and where.',
+      'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused. Params carrying a literal credential (a JWT, a vendor API key, a private key, a Bearer token, a URL with a password) are refused before the gate is called — 400 credentials_in_observe_params (details: suspectedSecretValues, suspectedSecretPaths); a gate authenticates with the credentials configured on it. Any other suspected value passes and the audit row records how many and where: one under a secret-named field (pageToken), or query text that only mentions a credential (an Authorization header name, token=expired, a $VAR placeholder).',
   },
   {
     // Placeholder pattern (this group's own module doc comment: "not dispatchable — the real

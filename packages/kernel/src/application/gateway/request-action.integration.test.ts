@@ -471,9 +471,10 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     // Legacy 175 (governance/redaction/credential-review.ts `reviewObserveParams`): both ways into
-    // an observation review its params first, on every channel. A credential-looking value is
-    // refused before anything happens; a value only under a secret-named field passes, reaches the
-    // gate as sent, and the audit row records how many and where — its audit copy redacted.
+    // an observation review its params first, on every channel. A literal credential (a JWT, a
+    // vendor key, a Bearer token, …) is refused before anything happens; any other suspected value
+    // — under a secret-named field, or query text that only mentions one — passes, reaches the
+    // gate as sent, and the audit row records how many and where, its audit copy redacted.
     describe('observe params credential review (legacy 175)', () => {
       /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
       const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
@@ -532,7 +533,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       it.each(ways)(
-        '%s (%s channel) refuses a credential-looking value: nothing reaches the gate, nothing is written',
+        '%s (%s channel) refuses a literal credential: nothing reaches the gate, nothing is written',
         async (capability, channel) => {
           const callsBefore = transport.calls['observe.stock'] ?? 0;
           const auditBefore = (await auditRows(capability)).length;
@@ -586,6 +587,33 @@ describe.runIf(DATABASE_URL !== undefined)(
               gatekeeperId,
               operation: 'observe.stock',
               params: { pageToken: '[redacted]', pageSize: 50 },
+            },
+            redactedValues: 1,
+          });
+        },
+      );
+
+      it.each(ways)(
+        '%s (%s channel) passes query text that only mentions a credential, and the audit row records it redacted',
+        async (capability, channel) => {
+          const marker = `north-${randomUUID()}`;
+          const filter = '{app="api"} |= "Authorization: failed"';
+          const result = (await dispatchCapability({ pool }, callerFor(channel), capability, {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: { warehouse: marker, filter },
+          })) as { status: string };
+          expect(result.status).toBe('ok');
+          expect(transport.lastParams['observe.stock']).toEqual({ warehouse: marker, filter });
+
+          const row = (await auditRows(capability)).find((r) =>
+            JSON.stringify(r.payload).includes(marker),
+          );
+          expect(row?.payload).toMatchObject({
+            channel,
+            credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['filter'] },
+            params: {
+              params: { warehouse: marker, filter: '{app="api"} |= "Authorization: [redacted]' },
             },
             redactedValues: 1,
           });

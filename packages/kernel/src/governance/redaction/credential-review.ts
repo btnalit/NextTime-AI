@@ -1,4 +1,5 @@
 import {
+  HIGH_CONFIDENCE_SECRET_PATTERNS,
   type RedactSecretsOptions,
   namesASecretField,
   redactSecrets,
@@ -39,8 +40,8 @@ import {
  * is the content with exactly these values replaced (`redactSuspectedSecrets`, call-argument rule;
  * `application/gateway/dispatch.ts`'s `auditParams`). An observe-class Operation's params, which
  * no decision reads, are reviewed when the call is made (`reviewObserveParams`, legacy 175): a
- * value that looks like a credential whatever holds it is refused, one only under a secret-named
- * field is recorded in the audit row.
+ * value that is almost certainly a credential is refused, every other suspected value is recorded
+ * in the audit row.
  */
 
 export interface SuspectedSecretsOptions {
@@ -75,7 +76,7 @@ export interface SuspectedSecrets {
  *  stored draft), so the walk is unbounded. */
 function detect(
   value: unknown,
-  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals'>,
+  rule: Pick<RedactSecretsOptions, 'isSecretKey' | 'schemaLiterals' | 'patterns'>,
 ): SuspectedSecrets & { readonly value: unknown } {
   const paths: string[] = [];
   const redacted = redactSecrets(value, {
@@ -130,14 +131,14 @@ export function redactedForAudit(fields: Record<string, unknown>): Record<string
   return redactSuspectedSecrets(fields, { secretFields: true }).value as Record<string, unknown>;
 }
 
-/** Only the values that look like a credential whatever field holds them — the value patterns
- *  (`SECRET_VALUE_PATTERNS`: a JWT, `Bearer …`, an `Authorization:` header, a vendor key,
- *  `PGPASSWORD=…`, a `token=…` / `"apiKey": "…"` pair written inside a string, a URL's password),
- *  with no field-name rule: neither a value under a secret-named field nor a schema literal under
- *  one counts. For refusing content outright, where a field's name alone (`pageToken`,
- *  `accessKeyId`) is too often an ordinary cursor or id. */
-export function findSecretLookingValues(value: unknown): SuspectedSecrets {
-  const { count, paths } = detect(value, {});
+/** Only the values that are almost certainly a credential themselves, whatever field holds them
+ *  (`HIGH_CONFIDENCE_SECRET_PATTERNS`: a PEM private key, a JWT, a vendor key, an issued-looking
+ *  `Bearer` value, a URL's literal password), with no field-name rule. For refusing content
+ *  outright: a field's name alone (`pageToken`, `accessKeyId`) is too often an ordinary cursor or
+ *  id, and the other value patterns hit ordinary query text (`|= "Authorization: failed"`,
+ *  `token=expired`, `--password=$VAR`). Whatever this finds, `findSuspectedSecrets` finds too. */
+export function findCredentialValues(value: unknown): SuspectedSecrets {
+  const { count, paths } = detect(value, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
   return { count, paths };
 }
 
@@ -223,12 +224,12 @@ export function assertDraftCredentialsReviewed(
 }
 
 /**
- * An observe-class Operation's params carrying a value that looks like a credential whatever field
- * holds it (`findSecretLookingValues`: a JWT, `Bearer …`, an `Authorization:` header, a vendor
- * key, `PGPASSWORD=…`, `?token=…`, a URL's password). Refused before anything reaches the gate:
- * an observation runs with no approval (design doc §11 "观察免审"), so nobody would see a credential
- * an agent was talked into sending. A gate authenticates with the credentials configured on it,
- * never with one in a call's params. Maps to HTTP 400 / WS invalid-params with
+ * An observe-class Operation's params carrying a value that is almost certainly a credential,
+ * whatever field holds it (`findCredentialValues`: a PEM private key, a JWT, a vendor key, an
+ * issued-looking `Bearer` value, a URL's literal password). Refused before anything reaches the
+ * gate: an observation runs with no approval (design doc §11 "观察免审"), so nobody would see a
+ * credential an agent was talked into sending. A gate authenticates with the credentials
+ * configured on it, never with one in a call's params. Maps to HTTP 400 / WS invalid-params with
  * `code = 'credentials_in_observe_params'` and `details: { suspectedSecretValues,
  * suspectedSecretPaths }` — paths within the Operation's params, never a fragment of a value.
  */
@@ -241,7 +242,7 @@ export class ObserveParamsCarryCredentialsError extends Error {
   constructor(gateName: string, operation: string, found: SuspectedSecrets) {
     const where = found.paths.length > 0 ? ` (at ${found.paths.join(', ')})` : '';
     super(
-      `${gateName}.${operation}: the params carry ${found.count} value(s) that look like a credential${where} — refused, nothing was sent to the gate. Do not pass credentials (tokens, keys, passwords, Authorization headers, a URL with a password) as Operation params: the gate authenticates with the credentials configured on it.`,
+      `${gateName}.${operation}: the params carry ${found.count} credential value(s)${where} (a JWT, a vendor API key, a private key, a literal Bearer token or a URL's password) — refused, nothing was sent to the gate. Do not pass credentials as Operation params: the gate authenticates with the credentials configured on it. Text that only mentions one is fine (an Authorization header name, token=expired, a $VAR placeholder).`,
     );
     this.name = 'ObserveParamsCarryCredentialsError';
     this.details = { suspectedSecretValues: found.count, suspectedSecretPaths: found.paths };
@@ -252,11 +253,14 @@ export class ObserveParamsCarryCredentialsError extends Error {
  * The credential review of an observe-class Operation's params (legacy 175), run by both ways in
  * — `observe_operation` and `request_action`'s observe branch, through `request-action-handler.ts`'s
  * `runObserve` — before anything else, on every channel (the rule is about the content):
- *   - a value that looks like a credential whatever holds it is refused
- *     (`ObserveParamsCarryCredentialsError`);
- *   - a value only under a secret-named field (`pageToken`, `nextPageToken`, `secretName`,
- *     `accessKeyId` — names that are as often an ordinary cursor or resource id) passes, and the
- *     audit row records how many and where.
+ *   - a value that is almost certainly a credential whatever holds it is refused
+ *     (`findCredentialValues`, `ObserveParamsCarryCredentialsError`);
+ *   - every other suspected value passes, and the audit row records how many and where
+ *     (`findSuspectedSecrets`, call-argument rule): one under a secret-named field (`pageToken`,
+ *     `nextPageToken`, `secretName`, `accessKeyId` — as often an ordinary cursor or resource id),
+ *     and one only the text patterns hit — observe params are mostly query text, where
+ *     `|= "Authorization: failed"`, `level=error token=expired`, `Authorization: Bearer $TOKEN`
+ *     and `--password=$MYSQL_PWD` are searches and placeholders, not credentials.
  * Returns the audit payload fields: `credentialReview: { suspectedSecretValues,
  * suspectedSecretPaths }` (count and paths within the params, the same as an ActionRequest's), or
  * nothing when no value is suspect. Unlike an approval's `credentialReview`, it has no
@@ -267,7 +271,7 @@ export function reviewObserveParams(
   operation: string,
   params: unknown,
 ): Record<string, unknown> {
-  const refused = findSecretLookingValues(params);
+  const refused = findCredentialValues(params);
   if (refused.count > 0) {
     throw new ObserveParamsCarryCredentialsError(gateName, operation, refused);
   }
