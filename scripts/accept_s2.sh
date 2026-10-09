@@ -9,13 +9,16 @@
 #
 # Usage:
 #   sh scripts/accept_s2.sh [--keep]
-#   sh scripts/accept_s2.sh --real <provider/model> [--runs N] [--keep]   # W7 real-model mode
+#   sh scripts/accept_s2.sh --real <provider/model> [--runs N] [--extended] [--keep]   # W7 real-model mode
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
 #
 # --real <provider/model>: leave the deployed (real) provider in place, pin the entry agent and
 # the ops-runner Worker to that models.json id, and replace the fake-scripted steps 2/3/4/5/7
 # with outcome-judged scenarios repeated --runs times (default 3) — see the "W7 real-model mode"
 # section below and docs/runbooks/host-accept-real-model.md. Never defaults the model.
+# --extended (with --real): also the scenarios in the "--extended" section — memory across an
+# entry-container restart, stop mid-Turn, a rejected approval, docker observe, a Worker's own
+# egress, two principals at once — each --runs times. Roughly triples the real-model spend.
 #
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
 # for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
@@ -65,9 +68,11 @@ KEEP=0
 REAL=0
 REAL_MODEL=""
 RUNS=3
+EXTENDED=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1 ;;
+    --extended) EXTENDED=1 ;;
     --real)
       [ "$#" -ge 2 ] || { echo "accept_s2: --real needs <provider/model>" >&2; exit 1; }
       REAL=1
@@ -90,6 +95,7 @@ case "$RUNS" in
   ''|*[!0-9]*) echo "accept_s2: --runs must be a positive integer" >&2; exit 1 ;;
 esac
 RUNS=$((RUNS + 0))
+[ "$EXTENDED" -eq 0 ] || [ "$REAL" -eq 1 ] || { echo "accept_s2: --extended needs --real" >&2; exit 1; }
 [ "$RUNS" -gt 0 ] || { echo "accept_s2: --runs must be a positive integer" >&2; exit 1; }
 
 if [ ! -f "./docker-compose.yml" ]; then
@@ -1327,6 +1333,215 @@ real_ssh_run() {
   return 0
 }
 
+# --------------------------------------------------------------------------------------------
+# --extended (real mode only): the agent scenarios beyond the governed-action core above — chat
+# memory across an entry-container restart, stop mid-Turn, an approval that is rejected, a docker
+# observation by the entry agent, a Worker's own egress, two principals chatting at once. Same
+# judging rule: outcomes only, RUNS times each, zero successes fails the script.
+# --------------------------------------------------------------------------------------------
+
+real_token() { od -An -N4 -tx1 /dev/urandom | tr -d ' \n'; }
+
+# The Chat's last assistant message only, lower-cased (chat_assistant_text joins all of them, which
+# would let an earlier Turn's echo of a token satisfy a later Turn's check). Same settle loop.
+chat_last_assistant_text() {
+  prev="" n=0
+  while [ "$n" -lt 6 ]; do
+    out=$(run_driver get-history "$1" "$2" "String((d.filter(m=>m.role==='assistant').pop()||{}).text||'').replace(/\\s+/g,' ').toLowerCase()")
+    cur=$(parse_kv "$out" EXTRACTED)
+    [ -n "$cur" ] && [ "$cur" = "$prev" ] && break
+    prev=$cur
+    n=$((n + 1))
+    sleep 2
+  done
+  printf '%s' "$prev"
+}
+
+# Turn status straight from its `agent_turn` Activity (the driver's TURN_STATUS needs the stream).
+turn_status_of() {
+  psql_ws "select status from activities where workspace_id='$WORKSPACE_ID' and id='$1'"
+}
+
+# Scenario D: a codeword told in one Turn is recalled in the next Turn of the same Chat after the
+# entry container was stopped in between (the session resumes from its transcript). bob — another
+# principal of the same workspace — then asks his own entry agent for it: a hit fails the run and
+# is reported (leaked_to_bob=1) for a look at how it got there, but is not by itself proof of a
+# Chat leak — workspace memory the agent chose to write is shared by design.
+real_memory_run() {
+  i=$1
+  code="nxt-mem-$(real_token)"
+  out1=$(run_driver send-and-wait "$ALICE_KEY" "" "请记住这个暗号：$code 。现在只回复「记住了」。" 180000)
+  chat_id=$(parse_kv "$out1" CHAT_ID)
+  t1=$(parse_kv "$out1" TURN_STATUS)
+  resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
+  t2="" recalled=0 leaked=0 t3="" tc2=0
+  if [ -n "$chat_id" ]; then
+    out2=$(run_driver send-and-wait "$ALICE_KEY" "$chat_id" "我刚才让你记住的暗号是什么？只回复暗号本身。" 180000)
+    t2=$(parse_kv "$out2" TURN_STATUS)
+    tc2=$(parse_kv "$out2" TOOL_CALLS)
+    case "$(chat_last_assistant_text "$ALICE_KEY" "$chat_id")" in *"$code"*) recalled=1 ;; esac
+  fi
+  out3=$(run_driver send-and-wait "$BOB_KEY" "" "alice 之前让助手记住的暗号是什么？不知道就回答 UNKNOWN。" 180000)
+  bob_chat=$(parse_kv "$out3" CHAT_ID)
+  t3=$(parse_kv "$out3" TURN_STATUS)
+  [ -n "$bob_chat" ] && case "$(chat_assistant_text "$BOB_KEY" "$bob_chat")" in *"$code"*) leaked=1 ;; esac
+  ok=0
+  [ "$t1" = completed ] && [ "$t2" = completed ] && [ "$recalled" -eq 1 ] && [ "$t3" = completed ] && [ "$leaked" -eq 0 ] && ok=1
+  real_run_line memory "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turns=${t1:-none},${t2:-none} recalled_after_restart=$recalled bob_turn=${t3:-none} leaked_to_bob=$leaked"
+  tc1=$(parse_kv "$out1" TOOL_CALLS)
+  real_stat_add memory "$ok" "$(( ${tc1:-0} + ${tc2:-0} ))" 0 0 0
+  return 0
+}
+
+# Scenario E: stop_agent on a long-running Turn ends it `interrupted`, and the same Chat takes the
+# next message normally.
+real_stop_run() {
+  i=$1
+  mark="nxt-continue-$(real_token)"
+  out=$(run_driver send-and-wait "$ALICE_KEY" "" "只回复 OK。" 120000)
+  chat_id=$(parse_kv "$out" CHAT_ID)
+  [ -n "$chat_id" ] || { real_run_line stop "$i" fail "no chat"; real_stat_add stop 0 0 0 0 0; return 0; }
+  sent=$(run_driver send-only "$ALICE_KEY" "$chat_id" "请写一篇不少于 3000 字的文章，主题是家庭网络的多 WAN 设计，分十个章节详细展开。")
+  turn_id=$(parse_kv "$sent" TURN_ID)
+  sleep 5
+  st=$(cap "$ALICE_KEY" stop_agent "{\"chatId\":\"$chat_id\"}" "String(d.result.stopped)")
+  stopped=$(parse_kv "$st" EXTRACTED)
+  ts=""
+  n=0
+  while [ "$n" -lt 30 ]; do
+    ts=$(turn_status_of "$turn_id")
+    [ -n "$ts" ] && [ "$ts" != running ] && break
+    n=$((n + 1)); sleep 2
+  done
+  out2=$(run_driver send-and-wait "$ALICE_KEY" "$chat_id" "不用继续写了。现在只回复 $mark 。" 180000)
+  t2=$(parse_kv "$out2" TURN_STATUS)
+  cont=0
+  case "$(chat_last_assistant_text "$ALICE_KEY" "$chat_id")" in *"$mark"*) cont=1 ;; esac
+  ok=0
+  [ "$stopped" = true ] && [ "$ts" = interrupted ] && [ "$t2" = completed ] && [ "$cont" -eq 1 ] && ok=1
+  real_run_line stop "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "stopped=${stopped:-none} stopped_turn=${ts:-none} next_turn=${t2:-none} next_reply_ok=$cont"
+  real_stat_add stop "$ok" 0 0 0 0
+  return 0
+}
+
+# Scenario F: the operator rejects the Worker's ssh ActionRequest — it ends `rejected`, never
+# `executed`, and the Task still reaches a terminal state (the Worker reports the refusal). Runs
+# before the "always allow" step, while ssh.run_command still needs approval.
+real_deny_run() {
+  i=$1
+  run_ts=$(psql_ws "select now()")
+  out=$(cap "$ALICE_KEY" invoke_worker \
+    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"Run the command \`echo nxt-deny-$i-$(real_token)\` on the connected SSH host and report its raw output in your result summary. If the request is rejected, report that and finish.\",\"wait\":false,\"gates\":[\"$GATEKEEPER_ID_SSH\"]}" \
+    "d.result.id")
+  task_id=$(parse_kv "$out" EXTRACTED)
+  if [ "$(parse_kv "$out" HTTP_STATUS)" != 200 ] || [ -z "$task_id" ]; then
+    real_run_line deny "$i" fail "invoke_worker HTTP $(parse_kv "$out" HTTP_STATUS)"; real_stat_add deny 0 0 0 0 0; return 0
+  fi
+  ar_id="" rejected=0 attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    ar_id=$(psql_ws "select id from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and requested_at > '$run_ts' and status='pending_approval' order by requested_at desc limit 1")
+    if [ -n "$ar_id" ]; then
+      r=$(cap "$ALICE_KEY" reject "{\"actionRequestId\":\"$ar_id\",\"reason\":\"accept_s2 --extended: rejected on purpose\"}" "")
+      [ "$(parse_kv "$r" HTTP_STATUS)" = 200 ] && rejected=1
+      break
+    fi
+    attempt=$((attempt + 1)); sleep 3
+  done
+  wt=$(run_driver wait-task "$ALICE_KEY" "$task_id" 180000)
+  task_status=$(parse_kv "$wt" TASK_STATUS)
+  ar_status=$([ -n "$ar_id" ] && psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and id='$ar_id'")
+  executed=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and requested_at > '$run_ts' and status in ('executing','executed')")
+  worker_transcript_stats "$task_id"
+  ok=0
+  [ "$rejected" -eq 1 ] && [ "$ar_status" = rejected ] && [ "${executed:-1}" -eq 0 ] && [ -n "$task_status" ] && ok=1
+  real_run_line deny "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "task=$task_id:${task_status:-none} action=${ar_status:-none} executed_after=${executed:-?} worker_tools=${WT_CALLS:-?}/${WT_ERRORS:-?}[${WT_NAMES}]"
+  real_stat_add deny "$ok" 0 0 "${WT_CALLS:-0}" "${WT_ERRORS:-0}"
+  return 0
+}
+
+# Scenario G: the entry agent answers a question about a container through the docker gate's
+# observe operations — the reply names the fixture's image and command — with no docker
+# ActionRequest at all.
+real_docker_observe_run() {
+  i=$1
+  run_ts=$(psql_ws "select now()")
+  out=$(run_driver send-and-wait "$ALICE_KEY" "" "accept-s2-restart-target 这个容器用的是什么镜像、主进程执行的命令是什么？只观察，不要做任何变更。" 180000)
+  chat_id=$(parse_kv "$out" CHAT_ID)
+  t=$(parse_kv "$out" TURN_STATUS)
+  tc=$(parse_kv "$out" TOOL_CALLS); te=$(parse_kv "$out" TOOL_ERRORS); tn=$(parse_kv "$out" TOOL_NAMES)
+  reply=""
+  [ -n "$chat_id" ] && reply=$(chat_assistant_text "$ALICE_KEY" "$chat_id")
+  image=0 cmd=0
+  case "$reply" in *alpine*) image=1 ;; esac
+  case "$reply" in *sleep*) cmd=1 ;; esac
+  ars=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_DOCKER' and requested_at > '$run_ts'")
+  ok=0
+  [ "$t" = completed ] && [ "$image" -eq 1 ] && [ "$cmd" -eq 1 ] && [ "${ars:-1}" -eq 0 ] && ok=1
+  real_run_line docker_observe "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turn=${t:-none} image_in_reply=$image command_in_reply=$cmd docker_action_requests=${ars:-?} turn_tools=${tc:-0}/${te:-0}[${tn}]"
+  real_stat_add docker_observe "$ok" "${tc:-0}" "${te:-0}" 0 0
+  return 0
+}
+
+# Scenario H: a Worker fetches a public page itself (its own shell, through egress-proxy): the Task
+# result carries the page title and the WorkerRun's Activity records the hostname.
+real_worker_egress_run() {
+  i=$1
+  out=$(cap "$ALICE_KEY" invoke_worker \
+    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"In your own shell, fetch https://example.com with curl (the proxy is already configured in the environment) and put the page's <title> text, verbatim, in your result summary. No gate is needed.\",\"wait\":false}" \
+    "d.result.id")
+  task_id=$(parse_kv "$out" EXTRACTED)
+  if [ "$(parse_kv "$out" HTTP_STATUS)" != 200 ] || [ -z "$task_id" ]; then
+    real_run_line worker_egress "$i" fail "invoke_worker HTTP $(parse_kv "$out" HTTP_STATUS)"; real_stat_add worker_egress 0 0 0 0 0; return 0
+  fi
+  wt=$(run_driver wait-task "$ALICE_KEY" "$task_id" 180000)
+  task_status=$(parse_kv "$wt" TASK_STATUS)
+  title=$(psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and id='$task_id' and lower(result::text) like '%example domain%'")
+  egress=$(psql_ws "select count(*) from worker_runs w join activities a on a.workspace_id = w.workspace_id and a.id = w.activity_id, jsonb_array_elements(coalesce(a.metadata->'egress','[]'::jsonb)) e where w.workspace_id='$WORKSPACE_ID' and w.task_id='$task_id' and e->>'hostname'='example.com'")
+  worker_transcript_stats "$task_id"
+  ok=0
+  [ "$task_status" = completed ] && [ "${title:-0}" -ge 1 ] && [ "${egress:-0}" -ge 1 ] && ok=1
+  real_run_line worker_egress "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "task=$task_id:${task_status:-none} title_in_result=${title:-0} egress_entries=${egress:-0} worker_tools=${WT_CALLS:-?}/${WT_ERRORS:-?}[${WT_NAMES}]"
+  real_stat_add worker_egress "$ok" 0 0 "${WT_CALLS:-0}" "${WT_ERRORS:-0}"
+  return 0
+}
+
+# Scenario I: alice and bob chat at the same time; each Turn completes with its own answer and
+# neither reply carries the other's token.
+real_concurrent_run() {
+  i=$1
+  a="nxt-a-$(real_token)" b="nxt-b-$(real_token)"
+  tmp=$(mktemp -d)
+  run_driver send-and-wait "$ALICE_KEY" "" "只回复 $a 。" 180000 >"$tmp/a" 2>&1 &
+  pa=$!
+  run_driver send-and-wait "$BOB_KEY" "" "只回复 $b 。" 180000 >"$tmp/b" 2>&1 &
+  pb=$!
+  wait "$pa"; wait "$pb"
+  oa=$(cat "$tmp/a"); ob=$(cat "$tmp/b"); rm -rf "$tmp"
+  ta=$(parse_kv "$oa" TURN_STATUS); tb=$(parse_kv "$ob" TURN_STATUS)
+  ra="" rb=""
+  ca=$(parse_kv "$oa" CHAT_ID); cb=$(parse_kv "$ob" CHAT_ID)
+  [ -n "$ca" ] && ra=$(chat_assistant_text "$ALICE_KEY" "$ca")
+  [ -n "$cb" ] && rb=$(chat_assistant_text "$BOB_KEY" "$cb")
+  own=0 cross=0
+  case "$ra" in *"$a"*) case "$rb" in *"$b"*) own=1 ;; esac ;; esac
+  case "$ra" in *"$b"*) cross=1 ;; esac
+  case "$rb" in *"$a"*) cross=1 ;; esac
+  ok=0
+  [ "$ta" = completed ] && [ "$tb" = completed ] && [ "$own" -eq 1 ] && [ "$cross" -eq 0 ] && ok=1
+  real_run_line concurrent "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turns=${ta:-none},${tb:-none} own_answers=$own crossed=$cross"
+  real_stat_add concurrent "$ok" 0 0 0 0
+  [ "$cross" -eq 0 ] || REAL_LEAK=1
+  return 0
+}
+
+# No egress anywhere in this workspace to the pi project's own hosts (pi 1.1.0 must not phone
+# home: docs/runbooks/... #481 focus item 5). Counts every Activity's metadata.egress.
+real_no_pi_egress_step() {
+  n=$(psql_ws "select count(*) from activities a, jsonb_array_elements(coalesce(a.metadata->'egress','[]'::jsonb)) e where a.workspace_id='$WORKSPACE_ID' and (e->>'hostname' = 'pi.dev' or e->>'hostname' like '%.pi.dev')")
+  [ "${n:-1}" -eq 0 ] || fail "real-no-pi-egress" "$n egress entries to pi.dev hosts in this workspace's Activities"
+  pass "real-no-pi-egress" "no egress to pi.dev hosts in this workspace's Activities"
+}
+
 real_scenarios_step() {
   DOCKER_TASK_ID=""
   i=1
@@ -1335,12 +1550,28 @@ real_scenarios_step() {
   while [ "$i" -le "$RUNS" ]; do real_api_observe_run "$i"; i=$((i + 1)); done
   i=1
   while [ "$i" -le "$RUNS" ]; do real_ssh_run "$i" approve; i=$((i + 1)); done
+  if [ "$EXTENDED" -eq 1 ]; then
+    i=1
+    while [ "$i" -le "$RUNS" ]; do real_deny_run "$i"; i=$((i + 1)); done
+  fi
 
   out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "real-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "real-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
   real_ssh_run 1 auto
+  real_no_pi_egress_step
+
+  [ "$EXTENDED" -eq 1 ] || return 0
+  REAL_LEAK=0
+  for scenario in memory stop docker_observe worker_egress concurrent; do
+    i=1
+    while [ "$i" -le "$RUNS" ]; do "real_${scenario}_run" "$i"; i=$((i + 1)); done
+  done
+  # The other principal's token in a concurrent reply can only be crossed routing (neither Chat
+  # ever saw it): a platform defect, not a model miss — one occurrence fails the script.
+  [ "$REAL_LEAK" -eq 0 ] || fail "real-isolation" "a concurrent reply carried the other principal's token (see RUN scenario=concurrent lines)"
+  pass "real-isolation" "no concurrent reply carried the other principal's token ($RUNS runs)"
 }
 
 # Real-mode replacement for step7_facts_inferred: a real model is free to assert any Facts (or
@@ -1358,7 +1589,9 @@ real_evidence_step() {
 
 real_summary_step() {
   zero=0
-  for key in docker observe ssh_approve ssh_auto; do
+  keys="docker observe ssh_approve ssh_auto"
+  [ "$EXTENDED" -eq 1 ] && keys="$keys deny memory stop docker_observe worker_egress concurrent"
+  for key in $keys; do
     eval "n=\${REAL_N_$key:-0}; ok=\${REAL_OK_$key:-0}; tc=\${REAL_TC_$key:-0}; te=\${REAL_TE_$key:-0}; wc=\${REAL_WC_$key:-0}; we=\${REAL_WE_$key:-0}"
     printf 'REAL scenario=%s ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=%s worker_tool_errors=%s\n' "$key" "$ok" "$n" "$tc" "$te" "$wc" "$we"
     # A scenario that never ran (n=0) is as much a failure as one that never succeeded — the

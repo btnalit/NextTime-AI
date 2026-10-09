@@ -15,7 +15,7 @@
 #   sh scripts/staging-rehearsal.sh --disposable-host --from vA.B.C --to <tag|commit-ish> --work <dir>
 #        [--worker-runtime runc|runsc] [--no-seed] [--no-verify] [--allow-baseline-failures]
 #        [--real <provider/model> --real-providers <llm-providers.yaml> --real-env <file> [--runs N]
-#         [--real-token-budget TOKENS]]
+#         [--real-token-budget TOKENS] [--real-extended]]
 #
 #   --disposable-host   required acknowledgement: this script bootstraps a fresh NEXTTIME_DATA,
 #                       starts the whole `nexttime-ai` compose project and leaves it running. It
@@ -45,7 +45,8 @@
 #                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 3000000) first,
 #                       so a runaway scenario is refused by the platform, not by luck. The model id and provider names are never printed by
 #                       this script; the accept scripts do print the model id — callers scrub logs
-#                       before publishing them (staging.yml does).
+#                       before publishing them (staging.yml does). --real-extended adds
+#                       accept_s2.sh --extended (its further agent scenarios, about 3x the spend).
 #
 # Output follows apply-release.sh: one "STEP <name> …" line per step, "FAIL <name>" on a stop, and
 # a last line "RESULT ok" or "RESULT failed-at=<step>" / "RESULT acceptance-failures=<n>" /
@@ -60,7 +61,7 @@ set -u
 die() { echo "staging-rehearsal: $*" >&2; exit 2; }
 
 disposable=0 FROM= TO= WORK= RUNTIME= seed=1 verify_flag= allow_baseline=0
-REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=3000000
+REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=3000000 REAL_EXTENDED=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --disposable-host) disposable=1 ;;
@@ -76,6 +77,7 @@ while [ "$#" -gt 0 ]; do
     --real-env) REAL_ENV=${2:-}; shift ;;
     --runs) RUNS=${2:-}; shift ;;
     --real-token-budget) BUDGET=${2:-}; shift ;;
+    --real-extended) REAL_EXTENDED=--extended ;;
     *) die "unknown argument '$1' (see this script's header comment)" ;;
   esac
   shift
@@ -110,7 +112,7 @@ mkdir -p "$LOGS" || die "cannot create $LOGS"
 # --real: one file per provider key, named by its api_key_env (R-24: secrets/llm-provider-keys/<NAME>,
 # the production host's layout — a key never sits in container env). Checked here, before anything
 # is installed, so a malformed --real-env fails in seconds rather than after the apply. The env file
-# holds NAME=value lines (`export ` and quotes allowed), or — when the yaml names exactly one
+# holds NAME=value lines (`export `, quotes and a trailing ` # comment` allowed), or — when the yaml names exactly one
 # api_key_env — just the key itself. Only counts are ever printed, never names or values.
 REAL_KEYS="$WORK/real-keys"
 if [ -n "$REAL_MODEL" ]; then
@@ -124,23 +126,23 @@ if [ -n "$REAL_MODEL" ]; then
     }
     function put(name, v,  f) { v = unquote(v); if (v == "") return; f = dir "/" name; printf "%s", v > f; close(f) }
     BEGIN { n = split(names, list, " ") }
-    { sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+    { sub(/\r$/, ""); sub(/[ \t]+#.*$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
     $0 == "" || $0 ~ /^#/ { next }
     { lines++; last = $0 }
     match($0, /^(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) {
       kv++; name = substr($0, 1, RLENGTH - 1); sub(/^export[ \t]+/, "", name)
       put(name, substr($0, RLENGTH + 1))
     }
-    END { if (kv == 0 && lines == 1 && n == 1 && last !~ /[ \t]/) put(list[1], last); printf "lines=%d name=value=%d", lines, kv }
+    END { if (kv == 0 && lines == 1 && n == 1 && last !~ /[ \t]/ && last !~ /^[A-Za-z_][A-Za-z0-9_]*:/) put(list[1], last); printf "lines=%d name=value=%d", lines, kv }
   ' "$REAL_ENV") || die "--real-env: cannot read it"
   n_names=0 missing=0
   for k in $key_names; do
     n_names=$((n_names + 1))
     [ -s "$REAL_KEYS/$k" ] || missing=$((missing + 1))
   done
-  [ "$n_names" -gt 0 ] || die "--real-providers names no api_key_env"
-  [ "$missing" -eq 0 ] ||
-    die "--real-env ($env_shape) lacks $missing of the $n_names api_key_env name(s) in --real-providers — give NAME=value per name (or just the key when there is exactly one)"
+  [ "$n_names" -gt 0 ] || { rm -rf "$REAL_KEYS"; die "--real-providers names no api_key_env"; }
+  [ "$missing" -eq 0 ] || { rm -rf "$REAL_KEYS"
+    die "--real-env ($env_shape) lacks $missing of the $n_names api_key_env name(s) in --real-providers — give NAME=value per name (or just the key when there is exactly one)"; }
 fi
 
 STEP_T0=$(date +%s)
@@ -149,7 +151,11 @@ fail() { echo "FAIL $1${2:+ — $2}"; echo "RESULT failed-at=$1"; exit 1; }
 
 # A staging tag this run created in $REPO is removed again however the run ends.
 CREATED_TAG=
-cleanup() { [ -n "$CREATED_TAG" ] && git -C "$REPO" tag -d "$CREATED_TAG" >/dev/null 2>&1; }
+# So are the real-model key files, if the run stops before real-setup moved them into the data root.
+cleanup() {
+  [ -n "$CREATED_TAG" ] && git -C "$REPO" tag -d "$CREATED_TAG" >/dev/null 2>&1
+  rm -rf "$WORK/real-keys"
+}
 trap cleanup EXIT
 
 # The staging checkout's origin must be this repository on GitHub, exactly like the production
@@ -364,7 +370,7 @@ if [ -n "$REAL_MODEL" ]; then
   step "real-setup ok token-budget-per-workspace=$BUDGET"
   real_fail=0
   real_since=$(psql_q "select now()")
-  accept "real-s2" scripts/accept_s2.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
+  accept "real-s2" scripts/accept_s2.sh --real "$REAL_MODEL" --runs "$RUNS" $REAL_EXTENDED || real_fail=$((real_fail + 1))
   accept "real-s3" scripts/accept_s3.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
   # What the real-model phase spent, from the kernel's own llm_usage ledger (one row per proxied
   # call; the runner and its database are gone after the job), real provider only — the scripts'

@@ -96,6 +96,10 @@ on:
         description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs'
         type: string
         default: '3000000'
+      extended:
+        description: 'With real_model: also accept_s2 --extended (memory, stop, reject, docker observe, Worker egress, concurrency; about 3x the spend)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -132,6 +136,7 @@ jobs:
           IN_FROM: ${{ inputs.from }}
           REAL: ${{ inputs.real_model || false }}
           RUNS: ${{ inputs.runs || '3' }}
+          EXTENDED: ${{ inputs.extended || false }}
           BUDGET: ${{ inputs.token_budget || '3000000' }}
         run: |
           set -euo pipefail
@@ -178,7 +183,7 @@ jobs:
             echo "| from | to | commit | real model |"
             echo "|---|---|---|---|"
             if [ "$REAL" = true ]; then
-              echo "| \`$from\` | \`$to\` ($what) | \`$to_sha\` | yes: runs=$RUNS, token budget per workspace=$BUDGET |"
+              echo "| \`$from\` | \`$to\` ($what) | \`$to_sha\` | yes: runs=$RUNS, extended=$EXTENDED, token budget per workspace=$BUDGET |"
             else
               echo "| \`$from\` | \`$to\` | \`$to_sha\` | no |"
             fi
@@ -189,7 +194,8 @@ jobs:
     name: rehearsal
     needs: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # --extended adds six scenarios × runs on top of the core ones.
+    timeout-minutes: ${{ inputs.extended && 330 || 180 }}
     environment: ${{ inputs.real_model && 'staging-real-model' || '' }}
     steps:
       - name: Checkout (full history and tags)
@@ -266,7 +272,7 @@ jobs:
             sed -n 's/^  \([A-Za-z0-9_.-]*\):[[:space:]]*$/\1/p' "$dir/llm-providers.yaml"
             sed -n 's/^[[:space:]]*upstream_base_url:[[:space:]]*\(.*\)$/\1/p' "$dir/llm-providers.yaml" | tr -d "\"'"
             # every line's value (a bare line is the key itself — staging-rehearsal.sh --real-env)
-            sed -E 's/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$dir/llm-proxy.env" |
+            sed -E 's/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=//; s/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$dir/llm-proxy.env" |
               tr -d "\"'\r" | grep -E '^.{8,}$' || true
           } | grep -v '^$' | sort -u >"$dir/scrub"
           while IFS= read -r s; do echo "::add-mask::$s"; done <"$dir/scrub"
@@ -281,6 +287,7 @@ jobs:
           REAL: ${{ steps.real.outputs.enabled || 'false' }}
           BUDGET: ${{ inputs.token_budget || '3000000' }}
           RUNS: ${{ inputs.runs || '3' }}
+          EXTENDED: ${{ inputs.extended || false }}
         run: |
           set -eu
           sudo git config --system --add safe.directory "$GITHUB_WORKSPACE"
@@ -290,6 +297,7 @@ jobs:
           if [ "$REAL" = true ]; then
             set -- "$@" --real "$(cat "$RUNNER_TEMP/real/model")" --runs "$RUNS" --real-token-budget "$BUDGET" \
               --real-providers "$RUNNER_TEMP/real/llm-providers.yaml" --real-env "$RUNNER_TEMP/real/llm-proxy.env"
+            [ "$EXTENDED" = true ] && set -- "$@" --real-extended
           fi
           sudo sh scripts/staging-rehearsal.sh "$@"
 
