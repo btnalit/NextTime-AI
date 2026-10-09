@@ -41,11 +41,13 @@ overlay，这不影响它们（它们从不启动 RagFlow 门）。
 
 ### 3.1 自动触发
 
-PR 或 main push 改到发布路径（`packages/kernel/migrations/**`、`docker-compose.yml`、
+PR 改到发布路径（`packages/kernel/migrations/**`、`docker-compose.yml`、
 `scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh`、
 `scripts/lib/**`、`deploy/accept/**`、本 workflow）时自动跑：from = 目标之下最新的 `vX.Y.Z`，
-to = PR 合并提交 / main 头，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
-同一 PR 的新推送会取消它上一轮；main push 排队、不互相取消；每次手动触发自成一组，不会被任何推送取消。
+to = PR 合并提交，带基线。不是 required check，但审查线程按"全部检查绿"规则等它。
+同一 PR 的新推送会取消它上一轮；每次手动触发自成一组，不会被任何推送取消。
+main push 不触发：main 只经 PR 合并前进，分支保护（strict）要求 PR 与 main 同步，PR 最后一轮
+已经预演过落到 main 的那棵树；上生产前的关口是对发版 tag 的手动预演（`release.md` §1 第 5 步）。
 
 ### 3.2 手动（workflow_dispatch）
 
