@@ -757,3 +757,124 @@ describe('ChatPage per-Turn outcome (S10 E1)', () => {
     expect(lastReply?.nextElementSibling).toBe(control);
   });
 });
+
+describe('ChatPage persisted tool calls', () => {
+  function toolRecord(
+    sequence: number,
+    toolCallId: string,
+    overrides: Record<string, unknown> = {},
+  ): ChatMessage {
+    return {
+      id: `m${sequence}`,
+      role: 'tool',
+      text: String(overrides.name ?? 'list_facts'),
+      createdAt: '2026-10-09T00:00:00.000Z',
+      sequence,
+      turnId: 'turn-1',
+      kind: 'tool_call',
+      content: {
+        kind: 'tool_call',
+        text: String(overrides.name ?? 'list_facts'),
+        toolCallId,
+        name: 'list_facts',
+        outcome: 'done',
+        args: { text: '{"linkType":"depends_on"}', totalChars: 25, truncated: false },
+        result: { text: '{"items":[]}', totalChars: 12, truncated: false },
+        redactedValues: 0,
+        startedAt: '2026-10-09T00:00:01.000Z',
+        endedAt: '2026-10-09T00:00:02.000Z',
+        ...overrides,
+      },
+    };
+  }
+
+  it('after a reload, folds the Turn’s tool calls into one group above the reply; a failure opens it', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver({ ...persisted(1, 'user', 'what depends on web?'), turnId: 'turn-1' });
+      fake.deliver(toolRecord(2, 'call-1'));
+      fake.deliver(
+        toolRecord(3, 'call-2', {
+          name: 'bash',
+          outcome: 'failed',
+          args: { text: 'env | grep TOKEN', totalChars: 16, truncated: false },
+          result: { text: 'x'.repeat(100), totalChars: 30000, truncated: true },
+          redactedValues: 2,
+        }),
+      );
+      fake.deliver({ ...persisted(4, 'assistant', 'Nothing depends on web.'), turnId: 'turn-1' });
+      fake.caughtUp();
+    });
+
+    const group = await screen.findByTestId('tool-call-group');
+    expect(screen.getAllByTestId('tool-call-group')).toHaveLength(1);
+    expect(group.textContent).toContain('本轮调用了 2 个工具');
+    expect(group.textContent).toContain('1 个失败');
+    expect((group as HTMLDetailsElement).open).toBe(true);
+    // Reported by the agent; the audit log is the authoritative record.
+    expect(within(group).getByRole('link').getAttribute('href')).toBe('#/govern/audit');
+    const rows = within(group).getAllByTestId('tool-call-record');
+    expect(rows.map((row) => row.querySelector('[data-tool-outcome]')?.textContent)).toEqual([
+      '完成',
+      '失败',
+    ]);
+    // JSON previews are indented; a cut one says so; hidden values are counted.
+    expect(rows[0]?.querySelector('pre')?.textContent).toBe('{\n  "linkType": "depends_on"\n}');
+    expect(rows[1]?.textContent).toContain('已截断，共 30000 字符');
+    expect(within(rows[1] as HTMLElement).getByTestId('tool-call-redacted').textContent).toContain(
+      '2',
+    );
+    // The group sits right above the reply, and no bare "工具" bubble is left.
+    const reply = Array.from(document.querySelectorAll('.message-assistant')).at(-1);
+    expect(group.nextElementSibling).toBe(reply);
+    expect(document.querySelector('.message-tool')).toBeNull();
+  });
+
+  it('while the Turn runs, a call shows once: its live row gives way to the persisted record', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'go' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await screen.findByText('回复中');
+    act(() => {
+      fake.deliver({ ...persisted(1, 'user', 'go'), turnId: 'turn-1' });
+      fake.stream('turn-1', {
+        streamKind: 'toolCallStarted',
+        toolCallId: 'call-1',
+        name: 'list_facts',
+        args: {},
+      });
+      fake.stream('turn-1', {
+        streamKind: 'toolCallStarted',
+        toolCallId: 'call-2',
+        name: 'search',
+        args: {},
+      });
+    });
+    expect(document.querySelectorAll('.message-streaming .tool-call-row')).toHaveLength(2);
+
+    act(() => fake.deliver(toolRecord(2, 'call-1')));
+    const live = document.querySelectorAll('.message-streaming .tool-call-row');
+    expect(live).toHaveLength(1);
+    expect(live[0]?.textContent).toContain('search');
+    expect(screen.getAllByTestId('tool-call-record')).toHaveLength(1);
+    // Nothing failed: the group stays folded.
+    expect((screen.getByTestId('tool-call-group') as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it('a malformed tool record falls back to an ordinary row instead of disappearing', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(toolRecord(1, 'call-1', { outcome: 'exploded' }));
+      fake.caughtUp();
+    });
+    expect(screen.queryByTestId('tool-call-group')).toBeNull();
+    expect(document.querySelector('.message-tool')?.textContent).toContain('list_facts');
+  });
+});

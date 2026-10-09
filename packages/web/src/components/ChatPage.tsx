@@ -3,8 +3,9 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { useT } from '../lib/i18n.js';
+import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
-import { ToolCallRowView } from './ToolCallRowView.js';
+import { ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
 import { ChatHeader } from './chat/ChatHeader.js';
 import { ChatListPane } from './chat/ChatListPane.js';
 import { ChatMessageRow } from './chat/ChatMessageRow.js';
@@ -107,6 +108,12 @@ export function ChatPage({
     return new Set(last.values());
   }, [messages]);
 
+  // A Turn's tool calls are persisted as each one ends (`lib/tool-call-record`): fold them into one
+  // group per Turn, and drop a live row once its persisted record has arrived.
+  const items = useMemo(() => threadItems(messages), [messages]);
+  const persistedIds = useMemo(() => persistedToolCallIds(messages), [messages]);
+  const liveToolCalls = turn.toolCalls.filter((row) => !persistedIds.has(row.toolCallId));
+
   const canAlwaysAllow = !permissions.isDenied('set_auto_approved_action_kind');
   const { chat, archived } = chatSummary;
 
@@ -147,7 +154,11 @@ export function ChatPage({
                   )}
                 </p>
               ) : null}
-              {messages.map((message) => {
+              {items.map((item) => {
+                if (item.kind === 'tools') {
+                  return <ToolCallGroupView key={`tools-${item.key}`} records={item.records} />;
+                }
+                const { message } = item;
                 const turnAttribution =
                   message.turnId && lastReplyOfTurn.has(message.sequence)
                     ? turnAttributions.byTurn.get(message.turnId)
@@ -196,9 +207,9 @@ export function ChatPage({
                     text={turn.streamingText}
                     trailing={<span className="streaming-caret" aria-hidden />}
                   />
-                  {turn.toolCalls.length > 0 ? (
+                  {liveToolCalls.length > 0 ? (
                     <div className="tool-calls">
-                      {turn.toolCalls.map((row) => (
+                      {liveToolCalls.map((row) => (
                         <ToolCallRowView key={row.toolCallId} row={row} />
                       ))}
                     </div>

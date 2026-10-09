@@ -586,6 +586,31 @@
   overflow: auto;
 }
 
+/* A Turn's persisted tool calls (ToolCallGroupView), folded above its reply. */
+.tool-call-group {
+  align-self: stretch;
+  font-size: var(--fs-13);
+}
+
+.tool-call-group > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.tool-call-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call-group[open] > summary .icon-chevron,
+.tool-call-row[open] > summary .icon-chevron {
+  transform: rotate(90deg);
+}
+
 .system-status-line {
   align-self: center;
   display: inline-flex;
