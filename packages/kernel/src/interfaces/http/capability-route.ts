@@ -126,6 +126,7 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
+import { CredentialReviewRequiredError } from '../../governance/redaction/index.js';
 import type { SourceBinding } from '../source-binding/index.js';
 
 /**
@@ -314,6 +315,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // radius makes mandatory, so a 400 with its own code (the console requires the field too).
   if (err instanceof ApprovalReasonRequiredError) {
     return { status: 400, code: err.code, message: err.message };
+  }
+  // Decision 2026-10-09 "二次确认" (governance/redaction/credential-review.ts): `approve` /
+  // `publish_*` on content carrying suspected credentials without `credentialsReviewed: true` —
+  // 400 with `details` (subject, count), so the console can ask for the confirmation it may not
+  // have known was needed.
+  if (err instanceof CredentialReviewRequiredError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

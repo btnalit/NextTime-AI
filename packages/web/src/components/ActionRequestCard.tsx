@@ -5,6 +5,7 @@ import {
   FALLBACK_BLAST_RADIUS,
   isDecidable,
 } from '../lib/action-card.js';
+import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
@@ -90,6 +91,10 @@ export function ActionRequestCard({
   // the rule is keyed by (gate, action kind), so a card whose gate is not known offers none.
   const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high' && card.gatekeeperId !== '';
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
+  // Decision 2026-10-09 "二次确认": the kernel's count, from the card's own content, else from its
+  // 400 on an approve (a card written before the count existed carries none). Either way the card
+  // then sends the approver to the approvals page instead of approving here.
+  const suspectedSecretValues = card.suspectedSecretValues ?? credentialReviewCount(error) ?? 0;
 
   const approvalCard = (
     <ApprovalCard
@@ -102,6 +107,7 @@ export function ActionRequestCard({
       policySummary={card.policyDecision ? card.policyDecision : undefined}
       approvalsHref={hrefs.approval(card.actionRequestId)}
       readOnly={!decidable}
+      suspectedSecretValues={suspectedSecretValues}
       onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
       onReject={(reason) => onReject(card.actionRequestId, reason)}
       onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
@@ -173,7 +179,10 @@ export function ActionRequestCard({
         }}
         testId="action-card-always-allow-confirm"
       />
-      {error !== null && error !== undefined ? <ErrorBanner error={error} /> : null}
+      {/* The credential 400 is answered by the card's own pointer to the approvals page. */}
+      {error !== null && error !== undefined && credentialReviewCount(error) === null ? (
+        <ErrorBanner error={error} />
+      ) : null}
       {outcome}
     </div>
   );

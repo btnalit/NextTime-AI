@@ -7,8 +7,8 @@ import {
 } from '@nexttime/shared';
 import {
   type RedactedValue,
-  SECRET_FIELD_NAME,
   type Scrubbed,
+  namesASecretField,
   redactSecrets,
   safeStringify,
   scrubSecretValues,
@@ -24,8 +24,9 @@ import {
  * Handle into a tool result, and it went out on `chat.stream` to every subscriber of the Chat.
  * Values are scrubbed with governance/redaction (what counts as a secret, why the kernel is where
  * it happens, and what it cannot stop); on top of that, an object key that names a secret
- * (`SECRET_FIELD_NAME`), or a param the capability itself declares secret (`redactedParamKeys` —
- * the same list `dispatch.ts` keeps out of the audit log), is replaced whatever its value.
+ * (`namesASecretField`), or a param the capability itself declares secret (`redactedParamKeys` —
+ * the same list `dispatch.ts` keeps out of the audit log), has every string and number under it
+ * replaced, whatever it looks like.
  *
  * Size, and time: a runtime frame may be up to 100 MiB, and redaction runs on the kernel's event
  * loop. So nothing past what is shown is read at all: a payload is read up to its preview length
@@ -59,7 +60,7 @@ function capabilitySensitiveKeys(toolName: string | null | undefined): ReadonlyS
 function redactPayload(value: unknown, toolName: string | null | undefined, maxChars: number) {
   const declared = capabilitySensitiveKeys(toolName);
   return redactSecrets(value, {
-    isSecretKey: (key) => declared.has(key) || SECRET_FIELD_NAME.test(key),
+    isSecretKey: (key) => declared.has(key) || namesASecretField(key),
     maxChars,
   });
 }

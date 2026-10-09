@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { usePublishCredentialReview } from '../../lib/credential-review.js';
 import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
+import { CredentialReview } from '../kit/credential-review.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -19,8 +21,12 @@ export interface ProposedDraft {
 export interface DraftProposedProps {
   readonly kindLabel: string;
   readonly draft: ProposedDraft;
-  /** The `publish_*` call for this draft; `undefined` hides the button (permission denied). */
-  readonly onPublish?: () => Promise<{ readonly status: string }>;
+  /** The `publish_*` call for this draft; `undefined` hides the button (permission denied). The
+   *  caller spreads `review` into its params — the credential confirmation once it was given
+   *  (decision 2026-10-09 "二次确认", lib/credential-review.ts). */
+  readonly onPublish?: (review: {
+    readonly credentialsReviewed?: true;
+  }) => Promise<{ readonly status: string }>;
   readonly onDone: () => void;
   /** Extra caveat (e.g. "the Workers tab only lists published versions"). */
   readonly note?: string;
@@ -35,6 +41,12 @@ export interface DraftProposedProps {
   /** Skill / Procedure drafts are also visible to the workspace owner and builders, who review
    *  and publish them (D-26 rule); WorkerDefinition drafts stay the proposer's alone. */
   readonly reviewersSeeDraft?: boolean;
+  /** The draft's detail in the catalog, where its content is shown — the credential question
+   *  (decision 2026-10-09 "二次确认") points there, since this screen does not show the content. */
+  readonly detailHref?: string;
+  /** The editor's names for the content's top-level fields, so a flagged path reads as its label
+   *  (`lib/credential-review.ts` `reviewFieldNames`). */
+  readonly fieldNames?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -51,6 +63,8 @@ export function DraftProposed({
   note,
   unpublishedConsequence,
   reviewersSeeDraft = false,
+  detailHref,
+  fieldNames,
 }: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
@@ -58,6 +72,7 @@ export function DraftProposed({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
+  const credentialReview = usePublishCredentialReview(`${draft.id}@${draft.version}`);
 
   // Focuses Publish once, on mount only — a later status change (e.g. after publishing) must not
   // steal focus back.
@@ -73,13 +88,15 @@ export function DraftProposed({
     setBusy(true);
     setError(null);
     try {
-      const result = await onPublish();
+      const result = await onPublish(credentialReview.params());
       setStatus(result.status);
       toast.push({
         tone: 'ok',
         title: t(`已发布 · ${draft.name ?? draft.id}`, `Published · ${draft.name ?? draft.id}`),
       });
     } catch (err) {
+      // The kernel's credential question — answered next to Publish, not as a failure.
+      if (credentialReview.capture(err)) return;
       setError(err);
       toast.push({
         tone: 'danger',
@@ -126,12 +143,36 @@ export function DraftProposed({
           : ''}
       </Notice>
       {error !== null ? <ErrorBanner error={error} testId="draft-publish-error" /> : null}
+      {status === 'draft' && onPublish ? (
+        <CredentialReview
+          count={credentialReview.count}
+          paths={credentialReview.paths}
+          fieldNames={fieldNames}
+          subject="publish"
+          where={
+            detailHref !== undefined ? (
+              <a href={detailHref} data-testid="draft-credential-detail-link">
+                {t('查看草稿内容后再确认', 'See the draft’s content before confirming')}
+              </a>
+            ) : (
+              t(
+                '这一页不显示内容：可在能力目录里打开这个草稿核对。',
+                'This screen does not show the content: open this draft in the catalog to check it.',
+              )
+            )
+          }
+          checked={credentialReview.checked}
+          onChange={credentialReview.setChecked}
+          disabled={busy}
+        />
+      ) : null}
       <div className="row">
         {status === 'draft' && onPublish ? (
           <Button
             ref={publishRef}
             variant="primary"
             loading={busy}
+            disabled={credentialReview.blocked}
             onClick={() => void publish()}
             data-testid="draft-publish"
           >

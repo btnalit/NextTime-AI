@@ -12,6 +12,7 @@ import {
   type PublishActor,
   assertPublishAuthority,
 } from '../../governance/capability/index.js';
+import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { projectWorkerDefinitionObject } from '../../substrate/ontology/index.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
@@ -319,6 +320,15 @@ export async function publishWorkerDefinition(
   });
 
   validateWorkerDefinitionContent(row.kind, row.definition);
+  // Decision 2026-10-09 "二次确认": the definition (its prompt, its settings) is what a Worker runs
+  // with; a value under a secret-named field counts too.
+  assertDraftCredentialsReviewed(
+    'worker_definition',
+    `${row.id}@${row.version}`,
+    row.definition,
+    actor,
+    { secretFields: true },
+  );
 
   const result = await client.query<WorkerDefinitionDbRow>(
     `update worker_definitions

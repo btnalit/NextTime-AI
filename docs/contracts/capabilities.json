@@ -224,6 +224,9 @@
           "minLength": 1,
           "type": "string"
         },
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
         "reason": {
           "type": "string"
         }
@@ -362,6 +365,17 @@
             "compensated"
           ],
           "type": "string"
+        },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "suspectedSecretValues": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -5625,6 +5639,17 @@
             "compensated"
           ],
           "type": "string"
+        },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "suspectedSecretValues": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -9024,6 +9049,17 @@
                   "compensated"
                 ],
                 "type": "string"
+              },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -11685,6 +11721,17 @@
                   "compensated"
                 ],
                 "type": "string"
+              },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "suspectedSecretValues": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -16075,6 +16122,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
@@ -16366,6 +16416,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
         "procedureId": {
           "minLength": 1,
           "type": "string"
@@ -16415,6 +16468,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
         "skillId": {
           "minLength": 1,
           "type": "string"
@@ -16464,6 +16520,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
         "definitionId": {
           "minLength": 1,
           "type": "string"
@@ -17660,6 +17719,17 @@
             "compensated"
           ],
           "type": "string"
+        },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "suspectedSecretValues": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -18589,6 +18659,17 @@
                 "compensated"
               ],
               "type": "string"
+            },
+            "suspectedSecretPaths": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "suspectedSecretValues": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
             }
           },
           "required": [

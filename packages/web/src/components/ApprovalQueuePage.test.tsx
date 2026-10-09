@@ -162,6 +162,22 @@ describe('ApprovalQueuePage state machine', () => {
     expect(rowEl.textContent).not.toContain('→');
   });
 
+  it('a row whose params carry suspected credentials is marked in the list (decision 2026-10-09)', async () => {
+    const http = scriptedHttp([
+      () =>
+        Promise.resolve([
+          row({ id: 'ar-1', suspectedSecretValues: 2, suspectedSecretPaths: ['token', 'apiKey'] }),
+          row({ id: 'ar-2' }),
+        ]),
+    ]);
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    const rows = await screen.findAllByTestId('approval-row');
+    expect(within(rows[0] as HTMLElement).getByTestId('approval-row-credentials').textContent).toBe(
+      '含凭据',
+    );
+    expect(within(rows[1] as HTMLElement).queryByTestId('approval-row-credentials')).toBeNull();
+  });
+
   it('shows an operator-role explanation (not a generic error) on 403 forbidden', async () => {
     const http = scriptedHttp([
       () =>

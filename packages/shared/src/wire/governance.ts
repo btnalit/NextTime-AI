@@ -50,6 +50,13 @@ export const ActionRequestWireSchema = z
     decisionReason: z.string().nullable().optional(),
     decidedBy: z.string().nullable().optional(),
     decidedAt: z.string().nullable().optional(),
+    // Decision 2026-10-09 "二次确认": how many suspected credential values `params` carries —
+    // the count `approve` requires `credentialsReviewed: true` for (kernel governance/redaction/
+    // credential-review.ts, the same detector that scrubs agent output). Absent when zero.
+    suspectedSecretValues: z.number().int().positive().optional(),
+    // Where in `params` they are: dot paths (`headers.Authorization`, `[i]` for array items, at
+    // most 20) naming fields only, never a fragment of a value. Present exactly when the count is.
+    suspectedSecretPaths: z.array(z.string()).max(20).optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;

@@ -45,6 +45,9 @@ export interface ActionRequestRowLike {
   readonly requestedAt?: string;
   readonly executedAt?: string | null;
   readonly failedAt?: string | null;
+  readonly suspectedSecretValues?: number;
+  /** Where in `params` (field paths only), alongside the count. */
+  readonly suspectedSecretPaths?: readonly string[];
 }
 
 export interface ActionCardData {
@@ -74,6 +77,10 @@ export interface ActionCardData {
   readonly requestedAt: string | undefined;
   readonly executedAt: string | null | undefined;
   readonly failedAt: string | null | undefined;
+  /** The kernel's suspected credential count for `params` (decision 2026-10-09 "二次确认") — from
+   *  the persisted card content or the wire row; `undefined` from a live push, which carries
+   *  none (the 400 `credentials_review_required` then supplies it, lib/credential-review.ts). */
+  readonly suspectedSecretValues?: number | undefined;
 }
 
 /** "docker.container_restart" -> "docker container restart" — the kernel's own convention
@@ -89,6 +96,7 @@ const NO_ROW_FIELDS = {
   requestedAt: undefined,
   executedAt: undefined,
   failedAt: undefined,
+  suspectedSecretValues: undefined,
 } as const;
 
 /** Builds an `ActionCardData` from a live `action.pending` push — the richest source for text. */
@@ -146,6 +154,10 @@ export function actionCardFromPendingContent(
       ? content.blastRadius
       : undefined;
   const awaitDecision = typeof content.awaitDecision === 'boolean' ? content.awaitDecision : false;
+  const suspectedSecretValues =
+    typeof content.suspectedSecretValues === 'number' && content.suspectedSecretValues > 0
+      ? content.suspectedSecretValues
+      : undefined;
 
   return {
     actionRequestId,
@@ -161,6 +173,7 @@ export function actionCardFromPendingContent(
     status: 'pending_approval',
     isHolder,
     ...NO_ROW_FIELDS,
+    suspectedSecretValues,
   };
 }
 
@@ -192,6 +205,7 @@ export function actionCardFromRow(
     requestedAt: row.requestedAt,
     executedAt: row.executedAt,
     failedAt: row.failedAt,
+    suspectedSecretValues: row.suspectedSecretValues,
   };
 }
 

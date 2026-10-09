@@ -32,6 +32,7 @@ import type {
 } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
 import { Button } from '../ui/Button.js';
@@ -417,13 +418,15 @@ export function WorkerDefinitionEditor({
       <DraftProposed
         kindLabel={t('Worker 定义', 'Worker definition')}
         draft={proposed}
+        detailHref={hrefs.catalog('workers', `${proposed.id}@${proposed.version}`)}
         onPublish={
           permissions.isDenied('publish_worker_definition')
             ? undefined
-            : () =>
+            : (review) =>
                 http.call<{ status: string }>('publish_worker_definition', {
                   definitionId: proposed.id,
                   version: proposed.version,
+                  ...review,
                 })
         }
         onDone={onDone}

@@ -105,4 +105,33 @@ describe('ApprovalCard', () => {
     expect(screen.queryByTestId('approval-reason')).toBeNull();
     expect(screen.getByTestId('approval-open-page')).toBeTruthy();
   });
+
+  it('with suspected credentials, offers no Approve / Always allow here — it points to the approvals page; Reject stays (decision 2026-10-09)', () => {
+    const onReject = vi.fn();
+    render(
+      <ApprovalCard
+        actionRequestId="ar-3"
+        actionKind="db.rotate_password"
+        blastRadius="medium"
+        target="db-1"
+        approvalsHref="#/work/approvals/ar-3"
+        suspectedSecretValues={2}
+        onApprove={vi.fn()}
+        onReject={onReject}
+        onAlwaysAllow={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('approval-credential-review').textContent).toContain(
+      '含 2 处疑似凭据',
+    );
+    expect(screen.queryByTestId('approval-approve')).toBeNull();
+    expect(screen.queryByTestId('approval-always-allow')).toBeNull();
+    expect(screen.getByTestId('approval-review-on-page').getAttribute('href')).toBe(
+      '#/work/approvals/ar-3',
+    );
+    // One pointer to the page, not two.
+    expect(screen.queryByTestId('approval-open-page')).toBeNull();
+    fireEvent.click(screen.getByTestId('approval-reject'));
+    expect(onReject).toHaveBeenCalled();
+  });
 });

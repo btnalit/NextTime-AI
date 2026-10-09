@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import { isDecidable } from '../../lib/action-card.js';
 import { auditHref } from '../../lib/audit.js';
+import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
 import {
   formatDateTime,
   formatRelative,
@@ -13,6 +14,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { CredentialReview } from '../kit/credential-review.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field, describedBy } from '../kit/field.js';
 import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
@@ -28,6 +30,8 @@ export interface ApprovalDecisionInput {
   /** "总是允许 Always allow this kind" — approve, then `set_auto_approved_action_kind` (the
    *  pre-S6-A semantics of the same checkbox, kept: the two are one gesture). */
   readonly alwaysAllow: boolean;
+  /** The reader ticked 「已核对凭据」 (decision 2026-10-09 "二次确认"); absent means `false`. */
+  readonly credentialsReviewed?: boolean;
 }
 
 export interface ApprovalDetailProps {
@@ -58,6 +62,7 @@ export type PendingConfirm =
       readonly kind: 'approve';
       readonly reason: string | undefined;
       readonly alwaysAllow: boolean;
+      readonly credentialsReviewed: boolean;
     }
   | { readonly kind: 'reject'; readonly reason: string | undefined };
 
@@ -94,6 +99,7 @@ export function ApprovalDetail({
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
+  const [credentialsReviewed, setCredentialsReviewed] = useState(false);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const reasonId = useId();
 
@@ -107,6 +113,11 @@ export function ApprovalDetail({
   const offerAlwaysAllow = canAlwaysAllow && row.blastRadius !== 'high';
   const alwaysAllowChosen = offerAlwaysAllow && alwaysAllow;
   const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId;
+  // The kernel's count (the wire row's, else its 400 on a first attempt) — never the console's own.
+  const suspectedSecretValues = row.suspectedSecretValues ?? credentialReviewCount(error) ?? 0;
+  const suspectedSecretPaths = row.suspectedSecretPaths ?? credentialReviewPaths(error);
+  const reviewed = suspectedSecretValues > 0 && credentialsReviewed;
+  const approveBlocked = suspectedSecretValues > 0 && !credentialsReviewed;
   const provenance = auditHref({
     actionRequestId: row.id,
     ...(row.approvalDecisionId ? { nodeId: row.approvalDecisionId } : {}),
@@ -121,10 +132,20 @@ export function ApprovalDetail({
    *  the error inline and keeps the popover open. */
   function requestApprove(reasonValue: string | undefined): void {
     if (row.blastRadius === 'high' || alwaysAllowChosen) {
-      onPendingChange({ kind: 'approve', reason: reasonValue, alwaysAllow: alwaysAllowChosen });
+      onPendingChange({
+        kind: 'approve',
+        reason: reasonValue,
+        alwaysAllow: alwaysAllowChosen,
+        credentialsReviewed: reviewed,
+      });
       return;
     }
-    onApprove({ actionRequestId: row.id, reason: reasonValue, alwaysAllow: false }).catch(() => {});
+    onApprove({
+      actionRequestId: row.id,
+      reason: reasonValue,
+      alwaysAllow: false,
+      credentialsReviewed: reviewed,
+    }).catch(() => {});
   }
 
   function requestReject(reasonValue: string | undefined): void {
@@ -157,6 +178,7 @@ export function ApprovalDetail({
         actionRequestId: row.id,
         reason: pending.reason,
         alwaysAllow: pending.alwaysAllow,
+        credentialsReviewed: pending.credentialsReviewed,
       });
     } else {
       await onReject({ actionRequestId: row.id, reason: pending.reason });
@@ -428,11 +450,25 @@ export function ApprovalDetail({
                 </label>
               ) : null}
 
+              <CredentialReview
+                count={suspectedSecretValues}
+                paths={suspectedSecretPaths}
+                subject="approve"
+                checked={credentialsReviewed}
+                onChange={setCredentialsReviewed}
+                disabled={busy !== null}
+              />
+
               <div className="row-wrap">
                 <Button
                   variant="primary"
                   aria-busy={busy === 'approve'}
-                  disabled={busy !== null}
+                  disabled={approveBlocked || busy !== null}
+                  title={
+                    approveBlocked
+                      ? t('先勾选「已核对凭据」', 'Tick “Credentials reviewed” first')
+                      : undefined
+                  }
                   onClick={() => void decide('approve')}
                   data-testid="approval-approve"
                 >
@@ -549,7 +585,8 @@ export function ApprovalDetail({
         ) : null}
       </Confirm>
 
-      {error !== null && error !== undefined ? (
+      {/* A 400 credentials_review_required is answered by the confirmation it opened above. */}
+      {error !== null && error !== undefined && credentialReviewCount(error) === null ? (
         <ErrorBanner error={error} testId="approval-decision-error" />
       ) : null}
     </div>

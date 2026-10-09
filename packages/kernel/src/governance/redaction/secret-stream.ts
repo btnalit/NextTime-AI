@@ -1,9 +1,9 @@
 import {
   JSON_SECRET_PAIR,
   REDACTED,
-  SECRET_FIELD_NAME,
   SECRET_VALUE_PATTERNS,
   type Scrubbed,
+  namesASecretField,
   namesASecretValue,
   scrubSecretValues,
   secretMatches,
@@ -73,14 +73,14 @@ function secretNameStart(before: string): number | undefined {
   const slice = before.slice(-160);
   const offset = before.length - slice.length;
   const jsonKey = JSON_KEY_AND_COLON_AT_END.exec(slice);
-  if (jsonKey?.[1] !== undefined && SECRET_FIELD_NAME.test(jsonKey[1])) {
+  if (jsonKey?.[1] !== undefined && namesASecretField(jsonKey[1])) {
     return offset + jsonKey.index;
   }
   const named = NAME_AND_SEPARATOR_AT_END.exec(slice);
   const name = named?.[2];
   if (named === null || name === undefined) return undefined;
   const quotedKey = named[3] !== '';
-  return namesASecretValue(name) || (quotedKey && SECRET_FIELD_NAME.test(name))
+  return namesASecretValue(name) || (quotedKey && namesASecretField(name))
     ? offset + named.index
     : undefined;
 }

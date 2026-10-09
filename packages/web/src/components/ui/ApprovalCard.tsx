@@ -33,6 +33,11 @@ export interface ApprovalCardProps {
   readonly reasonRequired?: boolean;
   /** "在审批页打开" — the queue page's deep link; omitted when already there. */
   readonly approvalsHref?: string;
+  /** The kernel's suspected credential count for the params (decision 2026-10-09 "二次确认").
+   *  Above 0 the card offers no Approve / Always allow: approving needs the params in view and an
+   *  explicit confirmation, which the approvals page gives — the card says so and links there.
+   *  Reject stays. */
+  readonly suspectedSecretValues?: number;
   readonly onApprove?: (reason: string | undefined) => void | Promise<void>;
   readonly onReject?: (reason: string | undefined) => void | Promise<void>;
   /** "总是允许 Always allow this kind" — operator+ only; omit to hide. */
@@ -66,6 +71,7 @@ export function ApprovalCard({
   children,
   reasonRequired,
   approvalsHref,
+  suspectedSecretValues = 0,
   onApprove,
   onReject,
   onAlwaysAllow,
@@ -101,6 +107,9 @@ export function ApprovalCard({
     }
   }
 
+  const needsReview = suspectedSecretValues > 0;
+  const approveHere = needsReview ? undefined : onApprove;
+  const alwaysAllowHere = needsReview ? undefined : onAlwaysAllow;
   const showActions = !readOnly && (onApprove || onReject || onAlwaysAllow);
   return (
     <article
@@ -210,8 +219,27 @@ export function ApprovalCard({
               data-testid="approval-reason"
             />
           </Field>
+          {needsReview ? (
+            <p className="notice notice-warn m-0" data-testid="approval-credential-review">
+              <strong>
+                {t(
+                  `含 ${suspectedSecretValues} 处疑似凭据。`,
+                  `${suspectedSecretValues} suspected credential value(s).`,
+                )}
+              </strong>{' '}
+              {t(
+                '批准前要看清参数并确认，这一步只能在审批页做。',
+                'Approving needs the parameters in view and an explicit confirmation — only on the approvals page.',
+              )}{' '}
+              {approvalsHref !== undefined ? (
+                <a href={approvalsHref} data-testid="approval-review-on-page">
+                  {t('去审批页核对', 'Review on the approvals page')}
+                </a>
+              ) : null}
+            </p>
+          ) : null}
           <div className="approval-card-actions">
-            {onApprove ? (
+            {approveHere ? (
               <Button
                 variant="primary"
                 loading={busy === 'approve'}
@@ -233,7 +261,7 @@ export function ApprovalCard({
                 {t('拒绝', 'Reject')}
               </Button>
             ) : null}
-            {onAlwaysAllow ? (
+            {alwaysAllowHere ? (
               <Button
                 variant="secondary"
                 loading={busy === 'always'}
@@ -244,7 +272,7 @@ export function ApprovalCard({
                 {t('总是允许', 'Always allow')}
               </Button>
             ) : null}
-            {approvalsHref !== undefined ? (
+            {approvalsHref !== undefined && !needsReview ? (
               <a
                 className="approval-card-link"
                 href={approvalsHref}

@@ -34,6 +34,10 @@ import { roleSatisfiesMinRole } from './roles.js';
 export interface PublishActor {
   readonly principalId: string;
   readonly role: Role;
+  /** The caller confirmed the draft's suspected credentials (decision 2026-10-09 "二次确认",
+   *  governance/redaction/credential-review.ts) — required by `publish_*` when the draft carries
+   *  any, ignored otherwise. */
+  readonly credentialsReviewed?: boolean;
 }
 
 /**

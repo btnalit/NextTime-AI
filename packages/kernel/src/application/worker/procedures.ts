@@ -8,6 +8,7 @@ import {
 import type { PoolClient } from 'pg';
 import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
@@ -283,6 +284,13 @@ async function resolveStepTargets(
   return targets;
 }
 
+/** What a Procedure makes take effect when published — the content `publish_procedure`'s
+ *  suspected-credential count reads (governance/redaction/credential-review.ts). Steps can carry
+ *  call arguments, so a value under a secret-named field counts too. */
+export function procedureReviewContent(row: ProcedureRow): unknown {
+  return { name: row.name, description: row.description, steps: row.steps };
+}
+
 /** Publishes the latest draft version of `procedureId` (human channel only): validates the
  *  transition, requires at least one step, resolves every `operation`/`worker` step against the
  *  graph (`resolveStepTargets` — throws `ProcedureStepReferenceError` on the first bad reference),
@@ -315,6 +323,13 @@ export async function publishProcedure(
   if (row.steps.length === 0) {
     throw new ProcedureStepReferenceError(-1, 'a Procedure must have at least one step to publish');
   }
+  assertDraftCredentialsReviewed(
+    'procedure',
+    `${row.id}@${row.version}`,
+    procedureReviewContent(row),
+    actor,
+    { secretFields: true },
+  );
   const targets = await resolveStepTargets(client, workspaceId, row.steps);
 
   const result = await client.query<ProcedureDbRow>(

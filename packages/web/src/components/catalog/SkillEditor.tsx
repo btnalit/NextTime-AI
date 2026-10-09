@@ -17,11 +17,13 @@ import {
   validateSkill,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { reviewFieldNames } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { SkillRow } from '../../lib/governance.js';
 import { objectTypeOptions } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import { Combobox, ComboboxChips } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -182,10 +184,13 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       <DraftProposed
         kindLabel="Skill"
         draft={proposed}
+        detailHref={hrefs.catalog('skills', proposed.id)}
+        fieldNames={reviewFieldNames('skill', t)}
         onPublish={
           permissions.isDenied('publish_skill')
             ? undefined
-            : () => http.call<{ status: string }>('publish_skill', { skillId: proposed.id })
+            : (review) =>
+                http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })
         }
         onDone={onDone}
         reviewersSeeDraft

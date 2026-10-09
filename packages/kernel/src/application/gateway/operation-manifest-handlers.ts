@@ -10,6 +10,7 @@ import {
   publishOperation,
   updateOperationDescription,
 } from '../../governance/gatekeepers/index.js';
+import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
@@ -129,9 +130,13 @@ export const publishOperationHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { gatekeeperId, name } = params as { gatekeeperId: string; name: string };
+  const { gatekeeperId, name, credentialsReviewed } = params as {
+    gatekeeperId: string;
+    name: string;
+    credentialsReviewed?: boolean;
+  };
   // D-24: the draft's proposer or the owner (checked on the row being published).
-  const actor = publishActorOf('publish_operation', ctx);
+  const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
   const record = await publishOperation(client, workspaceId, { gatekeeperId, name, actor });
 
   const activity = await startActivity(client, workspaceId, {
@@ -154,6 +159,7 @@ export const publishOperationHandler: CapabilityHandler = async (
     },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
+    auditPayload: credentialReviewAudit(countSuspectedSecrets(record.operation)),
   };
 };
 

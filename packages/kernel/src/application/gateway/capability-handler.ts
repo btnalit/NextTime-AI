@@ -34,6 +34,10 @@ export interface CapabilityHandlerResult {
    * (request-action-handler.ts) is the first user.
    */
   readonly afterCommit?: (pool: PoolLike) => Promise<unknown>;
+  /** Fields the handler adds to this call's audit row (`dispatch.ts`), after the params — what the
+   *  call's params alone do not say (e.g. the suspected-credential count a `publish_*` caller
+   *  confirmed). Never a credential. Workspace-channel calls only. */
+  readonly auditPayload?: Record<string, unknown>;
 }
 
 /**

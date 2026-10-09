@@ -96,6 +96,7 @@ import {
   setAutoApprovedActionKind,
   setPolicy,
 } from '../../governance/policy/index.js';
+import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
@@ -1004,19 +1005,26 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
 // the service checks the locked row's proposer against the caller (owner exempt) —
 // `governance/capability/publish-authority.ts`.
 const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { definitionId, version } = params as { definitionId: string; version: number };
+  const { definitionId, version, credentialsReviewed } = params as {
+    definitionId: string;
+    version: number;
+    credentialsReviewed?: boolean;
+  };
   const caller = await currentPrincipalRole(client, workspaceId);
   const row = await publishWorkerDefinition(
     client,
     workspaceId,
     caller.id,
     { definitionId, version },
-    { principalId: caller.id, role: caller.role },
+    { principalId: caller.id, role: caller.role, credentialsReviewed },
   );
   return {
     result: toWireWorkerDefinition(row),
     resourceType: 'worker_definition',
     resourceId: row.id,
+    auditPayload: credentialReviewAudit(
+      countSuspectedSecrets(row.definition, { secretFields: true }),
+    ),
   };
 };
 
@@ -1145,13 +1153,18 @@ async function oneWithApprovalDecision(
 }
 
 const approveHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { actionRequestId, reason } = params as { actionRequestId: string; reason?: string };
+  const { actionRequestId, reason, credentialsReviewed } = params as {
+    actionRequestId: string;
+    reason?: string;
+    credentialsReviewed?: boolean;
+  };
   const caller = await currentPrincipalRole(client, workspaceId);
   const result = await approveActionRequest(client, workspaceId, {
     actionRequestId,
     approverPrincipalId: caller.id,
     approverRole: caller.role,
     reason,
+    credentialsReviewed,
   });
   return {
     result: await oneWithApprovalDecision(client, workspaceId, result),

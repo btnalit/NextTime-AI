@@ -338,3 +338,24 @@ describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoAp
     expect(notAutoApprovable.decision).toBe('require_approval');
   });
 });
+
+describe('evaluate — params carrying suspected credentials (decision 2026-10-09 "二次确认")', () => {
+  it('never auto-approves, even an auto_approvable low-blast operation with an "always allow" rule', () => {
+    const result = evaluate(
+      baseInput({
+        paramsCarrySuspectedSecrets: true,
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('params_carry_suspected_credentials');
+  });
+
+  it('still denies an uncovered gatekeeper (deny outranks it), and is a no-op when false', () => {
+    expect(
+      evaluate(baseInput({ paramsCarrySuspectedSecrets: true, requesterScope: NON_COVERING_SCOPE }))
+        .decision,
+    ).toBe('deny');
+    expect(evaluate(baseInput({ paramsCarrySuspectedSecrets: false })).decision).toBe('allow');
+  });
+});

@@ -10,6 +10,7 @@ import {
 import type { PoolClient } from 'pg';
 import { stringify as stringifyYaml } from 'yaml';
 import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
+import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
@@ -252,6 +253,17 @@ function requireSkillAuthority(
   );
 }
 
+/** What a Skill makes take effect when published — the content `publish_skill`'s suspected-
+ *  credential count reads (governance/redaction/credential-review.ts). */
+export function skillReviewContent(row: SkillRow): unknown {
+  return {
+    name: row.name,
+    description: row.description,
+    markdown: row.markdown,
+    applicable: row.applicable,
+  };
+}
+
 /** Publishes the latest draft version of `skillId` (human channel only — enforced at the gateway):
  *  validates the transition (`IllegalTransition` on anything but `draft -> published`), validates
  *  content (`validateSkillContent`), sets `published_by`/`published_at`, and projects the Skill
@@ -280,6 +292,12 @@ export async function publishSkill(
     actor,
   });
   validateSkillContent(row);
+  assertDraftCredentialsReviewed(
+    'skill',
+    `${row.id}@${row.version}`,
+    skillReviewContent(row),
+    actor,
+  );
 
   const result = await client.query<SkillDbRow>(
     `update skills

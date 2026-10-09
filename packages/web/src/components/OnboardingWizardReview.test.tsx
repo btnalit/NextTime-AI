@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { GraphObjectRow } from '../lib/connections.js';
+import { HttpError } from '../lib/http-client.js';
 import { OnboardingWizardReview, loadGateOperations } from './OnboardingWizardReview.js';
 
 afterEach(cleanup);
@@ -100,5 +101,55 @@ describe('OnboardingWizardReview', () => {
     } as CapabilityCaller;
     render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
     expect(await screen.findByText('这个门没有导入任何 Operation')).toBeTruthy();
+  });
+});
+
+// Decision 2026-10-09 "二次确认": the reclassification's publish is refused while its definition
+// carries suspected credentials; the row asks, and the next Submit carries the confirmation.
+describe('OnboardingWizardReview — credential confirmation', () => {
+  it('a refused publish keeps the draft, opens the question, and the confirmed Submit publishes', async () => {
+    const calls: { name: string; params: unknown }[] = [];
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') return { items: [operationObject('gk-1', 'rotate_key')] };
+        calls.push({ name, params: p });
+        if (name === 'propose_operation') return { governanceChange: null };
+        if (name === 'publish_operation') {
+          if (calls.filter((c) => c.name === 'publish_operation').length === 1) {
+            throw new HttpError(
+              'capability_error',
+              'operation carries suspected credentials',
+              'credentials_review_required',
+              {
+                subject: 'operation',
+                suspectedSecretValues: 1,
+              },
+            );
+          }
+          return { status: 'published' };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
+
+    const review = await within(form).findByTestId('credential-review');
+    expect(review.getAttribute('data-count')).toBe('1');
+    expect(within(form).getByTestId('wizard-review-draft-kept')).toBeTruthy();
+    const submit = within(form).getByRole('button', { name: /提交/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.click(within(form).getByTestId('credential-review-confirm'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+        { gatekeeperId: 'gk-1', name: 'rotate_key' },
+        { gatekeeperId: 'gk-1', name: 'rotate_key', credentialsReviewed: true },
+      ]),
+    );
   });
 });

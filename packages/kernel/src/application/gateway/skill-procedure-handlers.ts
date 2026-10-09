@@ -6,11 +6,14 @@ import {
   getSkill,
   listProcedures,
   listSkills,
+  procedureReviewContent,
   proposeProcedure,
   proposeSkill,
   publishProcedure,
   publishSkill,
+  skillReviewContent,
 } from '../../application/worker/index.js';
+import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftViewerOf } from './draft-viewer.js';
@@ -54,13 +57,18 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
 };
 
 const publishSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId } = params as { skillId: string };
-  const actor = publishActorOf('publish_skill', ctx);
+  const { skillId, credentialsReviewed } = params as {
+    skillId: string;
+    credentialsReviewed?: boolean;
+  };
+  const actor = { ...publishActorOf('publish_skill', ctx), credentialsReviewed };
   const record = await publishSkill(client, workspaceId, actor.principalId, skillId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'skill',
     resourceId: record.id,
+    // The published row is the locked draft the service counted (publishing changes no content).
+    auditPayload: credentialReviewAudit(countSuspectedSecrets(skillReviewContent(record))),
   };
 };
 
@@ -145,13 +153,19 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
 };
 
 const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedureId } = params as { procedureId: string };
-  const actor = publishActorOf('publish_procedure', ctx);
+  const { procedureId, credentialsReviewed } = params as {
+    procedureId: string;
+    credentialsReviewed?: boolean;
+  };
+  const actor = { ...publishActorOf('publish_procedure', ctx), credentialsReviewed };
   const record = await publishProcedure(client, workspaceId, actor.principalId, procedureId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'procedure',
     resourceId: record.id,
+    auditPayload: credentialReviewAudit(
+      countSuspectedSecrets(procedureReviewContent(record), { secretFields: true }),
+    ),
   };
 };
 
