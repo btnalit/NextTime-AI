@@ -63,9 +63,35 @@ git push
 ```
 git fetch -q origin --tags
 git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
-sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z    # 拉取发布镜像（失败自动退回源码构建）
-sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z           # 或：源码构建镜像
+sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z  # 维护窗口之前：预拉并验签，必须 RESULT ok（见下）
+sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z      # 窗口内：用已预拉、已验签的发布镜像应用（没预拉完就拒绝；失败即停，不回退构建）
+sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码构建（主机出网不可靠，不作为常规路径）
 ```
+
+**维护窗口之前先预拉，是 `--pull` 的前置条件（遗留 137，#513 起）**：v0.43.0 的维护窗口里光拉 11 个镜像
+就用了约 53 分钟，而主机出网是长期约束（维护者 2026-10-09：不再调优）。提前（比如前一天）把目标版本的镜像
+拉好并验签：
+
+    git fetch -q origin --tags
+    git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
+    sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z    # 日志 drills/prefetch-vX.Y.Z-<ts>.log，最后一行必须是 RESULT ok
+
+`--prefetch` 只跑目标 tag 自己的 `pull-images.sh --prefetch`：拉取 + 验签 11 个平台镜像（每个的
+`org.opencontainers.image.revision` 必须等于 tag 的 commit），再补拉目标 compose 文件里钉 digest 的
+第三方镜像、`docker/dockerfile:1.7` 和验收 fixture 的基础镜像（只补缺失的）。**不重打 tag、不切检出、
+不碰在跑的栈和数据库**，随时可跑、可重跑（已在的跳过）。每次拉取限时（`PULL_ATTEMPT_TIMEOUT`，默认
+7200 s）、失败重试两次，超时那次已下完的层留在本机、重试接着拉；`RESULT failed-at=prefetch` 时看同目录的
+`-pull.log`，单项拉不下来的会列在最后，重跑即可。
+
+窗口内的 `--pull` 第一步（在备份、dump、切 tag 之前）离线核对镜像都已预拉：没有就
+`FAIL not-prefetched`，主机上什么都没改，先补 `--prefetch` 再来。确实要在窗口内现拉（每个镜像最坏
+3 × 2 h）时用 `--pull --allow-long-pull vX.Y.Z`，日志留 `STEP prefetch-check WARNING`。之后日志里每个镜像
+一行 `present, not pulled again`，验签照做；拉取或验签失败就在 `up` 之前停下（`FAIL images`，检出切回、
+栈不动），**不再退回源码构建**——那条路要现场走 npm / apt，且验收的会是未签名的主机构建。`--pull` 应用后的
+验收只认带发布标签的镜像（`ACCEPT_REQUIRE_RELEASE_IMAGES=1`）。
+预拉的镜像在下一次 `prune-images.sh` 前一直占盘（每个版本约 2.8 GB）；若预拉了 vX.Y.Z 却先应用了更低版本
+的 hotfix，`prune-images.sh --keep 2` 会把预拉的版本算作最新两个之一，上一版的回滚镜像可能因此被清掉，
+这种情况先删掉预拉的镜像或用 `--keep 3`。
 
 为什么不直接 `sh scripts/apply-release.sh`：检出目录此时还停在**正在运行的旧版本**上，
 `scripts/apply-release.sh` 是旧 tag 的副本——它切到新 tag 后仍按旧流程往下走，新版本加进流程的步骤
@@ -92,6 +118,7 @@ S4 → `BACKUP_NOW` → 只留 3 份发版前 dump → 镜像保留（`scripts/p
 再按 §5 / §6 决定是修好重跑还是恢复 dump（R-71）。`up` 本身失败时检出留在新 tag 上（部分容器可能已是新版本），
 按 §5 手动回滚，日志里的 `checkout-from` 就是上一版的位置；
 验收失败只计数不中止（栈已在新版本上，读各套日志后按 §5 决定是否回滚）。主机差异只来自 `.env`。
+第 3 步 `git fetch` 限时 300 s，失败而 tag 已在本地（预拉时 fetch 过）时继续，日志 `STEP checkout WARNING git fetch failed — … using it`。
 下面各小节保留为每一步的背景与手动做法。
 
 `scripts/host-checkout.sh`（`docs/runbooks/host-checkout.md` E3.1）默认把检出目录重置到
@@ -128,8 +155,12 @@ docker compose up -d --no-build
 2026-10-02 核实匿名可拉），主机不需要任何 registry 凭证；若以后改成私有，先 `docker login ghcr.io`（read:packages
 令牌，放主机 `secrets/`，不进仓库），验签会在匿名失败后带上 docker 配置重试。重打 tag 之后 compose、worker-supervisor 白名单、`activeRuntimeImage`、
 「pi 运行时」卡片看到的名字与标签和源码构建完全一样。`.env` 里 `EXPLORER_BUILD=1` 的主机：发布的 caddy
-不含 Explorer bundle，caddy 仍用 `sh scripts/build-images.sh caddy` 构建。验收夹具（accept-s2 / fake-llm）
-不发布，照旧在主机构建。拉取或验签失败就退回 `build-images.sh`，并记进主机私有记录。
+不含 Explorer bundle，caddy 仍用 `sh scripts/build-images.sh caddy` 构建。验收不在主机上源码构建任何平台镜像（遗留 137）：S3 的采集器、S2 的两个门（与 `gate-host` 同一个
+gatekeeper-base 镜像）都直接用本次装上的镜像，发布镜像的 revision 必须等于检出 commit。三个裸 fixture
+（accept-s2 sshd / openapi / mcp）和 fake-llm 仍在主机构建：基础镜像 + COPY，sshd 另有一层
+`apk add openssh-server`。基础镜像和构建缓存都在时不出网；新主机或清过构建缓存后，sshd 那层要访问
+Alpine 源——这是验收仍剩的出网点（遗留 139）。拉取或验签失败时 `apply-release.sh --pull` 在 `up` 之前停下，
+不退回构建；查明原因（多半是出网）后重跑 `--prefetch` 再应用。
 
 下次要跟回 `main` 的最新提交，重新跑一次
 `scripts/host-checkout.sh`（它会把 detached HEAD 状态覆盖掉，重新 fetch + reset 到
