@@ -596,7 +596,7 @@ export async function listMemberships(pool: PoolLike, userId: string): Promise<M
          from principals p
          join workspaces w on w.id = p.workspace_id
         where p.user_id = $1 and p.kind = 'human'
-        order by w.created_at`,
+        order by w.created_at, w.id`,
       [userId],
     );
     return result.rows.map(mapMembership);

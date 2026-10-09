@@ -195,6 +195,7 @@ export const ALLOWED_NON_TOOL_WORDS = {
     'no_published_operation',
     'disabled_by_platform', // reachability.reason value (production incident 2026-09-26) — not a tool.
     'verify', // a Procedure step kind (packages/shared procedure.ts), named for S10 E1 — not a tool.
+    'nextCursor', // the keyset cursor field of list_facts' result (wire conventions §3), not a tool.
   ]),
   'ontology/ops-runner.yaml': new Set([
     'context', // the pi `context` event/injection mechanism, not a capability of this name.
@@ -254,6 +255,17 @@ const REPLY_LANGUAGE_REQUIRED_PHRASES = [
   'language to write its result summary',
 ];
 
+/** Rule 4 (real-model round 4, dependency_chat 0/10) — a graph question is answered by
+ *  enumerating, not from the injected recency sample, and missing or partial data is said out
+ *  loud rather than papered over. */
+const GRAPH_QUESTION_REQUIRED_PHRASES = [
+  'never the whole',
+  'list_facts',
+  'nextCursor',
+  'say so plainly',
+  'never present a partial answer as complete',
+];
+
 /** Checks one required-phrase list against `systemPrompt`, returning a violation naming every
  *  missing phrase (or `[]` when all are present). `ruleName` labels the violation so a failure
  *  names *which* of the three rules regressed, not just that "something" did. */
@@ -295,10 +307,21 @@ export function checkReplyLanguageDirective(relativePath, systemPrompt) {
   );
 }
 
+/** Rule 4 (real-model round 4): graph questions are enumerated, and gaps are said out loud. */
+export function checkGraphQuestionGuidance(relativePath, systemPrompt) {
+  return checkRequiredPhrases(
+    relativePath,
+    'answer graph questions by enumerating, and say when data is missing',
+    systemPrompt,
+    GRAPH_QUESTION_REQUIRED_PHRASES,
+  );
+}
+
 const ENTRY_PROMPT_CONTENT_CHECKS = [
   checkEmptyFindGuidance,
   checkConditionalOpsRunner,
   checkReplyLanguageDirective,
+  checkGraphQuestionGuidance,
 ];
 
 // -------------------------------------------------------------------------------------------

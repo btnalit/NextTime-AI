@@ -18,8 +18,10 @@
  */
 
 export {
+  DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
+  MAX_LIST_FACTS_LIMIT,
   MAX_SEARCH_LIMIT,
   DEFAULT_TRAVERSE_DEPTH,
   DEFAULT_TRAVERSE_DIRECTION,
@@ -41,11 +43,14 @@ export type {
   AssertFactResult,
   CallerPrincipal,
   Fact,
+  FactCountByLinkType,
   FactLifecycleState,
+  FactsPage,
   GraphObject,
   InvalidateUnobservedFactsInput,
   GraphStore,
   InvalidateFactInput,
+  ListFactsInput,
   NeighborsInput,
   SearchInput,
   SearchPage,

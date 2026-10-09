@@ -527,20 +527,27 @@ export async function decisionImpact(
   const rationaleFactIds = extractFactIdsFromRationale(decisionRow.rationale);
 
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  // Oldest first, `id` breaking ties: these reads had no ORDER BY, and a reader that shows one item
+  // (the explorer's decision chain takes `facts[0]` / `actionRequests[0]`) got whatever the heap
+  // returned — usually, not always, the first one written. Recording order makes that "the first
+  // effect of the decision" by definition, the same row every time.
   const byActivityResult = await client.query<FactDbRow>(
-    `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2`,
+    `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2
+     order by recorded_at, id`,
     [workspaceId, decisionRow.activityId],
   );
   const byIdResult =
     rationaleFactIds.length > 0
       ? await client.query<FactDbRow>(
-          `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])`,
+          `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])
+           order by recorded_at, id`,
           [workspaceId, rationaleFactIds],
         )
       : { rows: [] as FactDbRow[] };
   const actionRequestsResult = await client.query<ActionRequestDbRow>(
     `select id, status, action_kind, gatekeeper_id from action_requests
-     where workspace_id = $1 and approval_decision_id = $2`,
+     where workspace_id = $1 and approval_decision_id = $2
+     order by requested_at, id`,
     [workspaceId, input.decisionId],
   );
   const tasksByActivityResult = await client.query<{ id: string }>(

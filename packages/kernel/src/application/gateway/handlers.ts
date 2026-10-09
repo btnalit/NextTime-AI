@@ -99,8 +99,18 @@ import {
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
-import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
-import { MAX_SEARCH_LIMIT, SqlGraphStore, objectDisplayName } from '../../substrate/graph/index.js';
+import type {
+  GraphObject,
+  ListFactsInput,
+  SearchInput,
+  TraverseInput,
+} from '../../substrate/graph/index.js';
+import {
+  MAX_LIST_FACTS_LIMIT,
+  MAX_SEARCH_LIMIT,
+  SqlGraphStore,
+  objectDisplayName,
+} from '../../substrate/graph/index.js';
 import { readObserveExclusions } from '../gates/index.js';
 import {
   listRuntimeImagesHandler,
@@ -326,8 +336,8 @@ export type {
 
 const graphStore = new SqlGraphStore();
 
-// STATUS leftover 123 (D-26): the five generic graph reads below (`get_object`, `traverse`,
-// `search`, `state_at`, `explain`) and `get_entry_context`'s recent Facts are narrowed for the
+// STATUS leftover 123 (D-26): the generic graph reads below (`get_object`, `traverse`, `search`,
+// `list_facts`, `state_at`, `explain`) and `get_entry_context`'s Facts and counts are narrowed for the
 // caller (`graphReadViewerOf`: the human, or a Handle's `obo` with that principal's role) — an
 // Operation draft they may not see reads exactly like an unknown id, and no Fact touching it is
 // returned.
@@ -342,6 +352,25 @@ const getObjectHandler: CapabilityHandler = async (client, workspaceId, params, 
   };
 };
 
+/** `nodeDetails` for `traverse` / `list_facts`: one entry per id, same order. */
+function toNodeDetails(
+  nodeIds: readonly string[],
+  objectsById: ReadonlyMap<string, GraphObject>,
+): { id: string; typeName: string; name?: string }[] {
+  return nodeIds.map((nodeId) => {
+    const object = objectsById.get(nodeId);
+    // Defensive fallback only — every node id here is a Link endpoint in this same
+    // workspace/transaction, so `object` should always be found; a generic typeName here would
+    // only ever surface a genuine data inconsistency, never an ordinary "not found" case (unlike
+    // `resolve_refs`, which omits unmatched ids entirely).
+    return {
+      id: nodeId,
+      typeName: object?.objectType ?? 'Object',
+      ...(object ? { name: objectDisplayName(object) } : {}),
+    };
+  });
+}
+
 // S8 W1-C (leftover 48 "邻居名称 N × get_object"): `nodeDetails` is additive alongside the
 // pre-existing `nodes`/`edges` (a caller reading only those two sees identical behavior) — one
 // batched `getObjectsByIds` for every reached node, not one `get_object` per node.
@@ -350,19 +379,31 @@ const traverseHandler: CapabilityHandler = async (client, workspaceId, params, c
   const viewer = await graphReadViewerOf(client, workspaceId, ctx);
   const result = await graphStore.traverse(client, workspaceId, input, viewer);
   const objectsById = await graphStore.getObjectsByIds(client, workspaceId, result.nodes, viewer);
-  const nodeDetails = result.nodes.map((nodeId) => {
-    const object = objectsById.get(nodeId);
-    // Defensive fallback only — every traversed node id names a real Object in this same
-    // workspace/transaction (a Link's source/target always does), so `object` should always be
-    // found; a generic typeName here would only ever surface a genuine data inconsistency, never
-    // an ordinary "not found" case (unlike `resolve_refs`, which omits unmatched ids entirely).
-    return {
-      id: nodeId,
-      typeName: object?.objectType ?? 'Object',
-      ...(object ? { name: objectDisplayName(object) } : {}),
-    };
-  });
+  const nodeDetails = toNodeDetails(result.nodes, objectsById);
   return { result: { ...result, nodeDetails }, resourceType: 'object', resourceId: input.fromId };
+};
+
+// Real-model round 4 (dependency_chat 0/10): a relationship type across the whole graph, which
+// `traverse` (needs a start Object) and `search` (returns Objects) cannot list. `nodeDetails`
+// names every endpoint of the page in one batched read, in first-appearance order. `limit` above
+// `MAX_LIST_FACTS_LIMIT` is clamped by the store and reported as `truncated: true` (§3).
+const listFactsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const input = params as ListFactsInput;
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const page = await graphStore.listFactsPage(client, workspaceId, input, viewer);
+  const endpointIds = [
+    ...new Set(page.items.flatMap((fact) => [fact.sourceObjectId, fact.targetObjectId])),
+  ];
+  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, endpointIds, viewer);
+  const truncated = input.limit !== undefined && input.limit > MAX_LIST_FACTS_LIMIT;
+  return {
+    result: {
+      items: page.items.map(toWireFact),
+      nodeDetails: toNodeDetails(endpointIds, objectsById),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+  };
 };
 
 // S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — docs/wire-contract-
@@ -721,6 +762,9 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, pa
   // Leftover 123: no recent Fact names an Operation draft this caller may not see.
   const viewer = await graphReadViewerOf(client, workspaceId, ctx);
   const facts = await graphStore.listRecentFacts(client, workspaceId, undefined, viewer);
+  // Real-model round 4: the recent Facts are a recency sample, so the agent also gets the graph's
+  // whole relationship shape — what `list_facts` can enumerate — rather than guessing from them.
+  const factCountsByLinkType = await graphStore.countFactsByLinkType(client, workspaceId, viewer);
   const turn = await resolveEntryContextTurn(client, workspaceId, principalId, {
     turnId,
     sessionId: ctx?.claims?.sid,
@@ -733,6 +777,7 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, pa
       pendingApprovals: items.pendingApprovals,
       tasks: items.tasks,
       facts: facts.map(toWireFact),
+      factCountsByLinkType,
       precedents: [],
     },
   };
@@ -1824,6 +1869,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['traverse', traverseHandler],
   ['resolve_refs', resolveRefsHandler],
   ['search', searchHandler],
+  ['list_facts', listFactsHandler],
   ['state_at', stateAtHandler],
   ['explain', explainHandler],
   ['audit_query', auditQueryHandler],
