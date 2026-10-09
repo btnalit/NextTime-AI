@@ -109,6 +109,18 @@ describe('WorkspaceDetailPanel', () => {
     expect(save.hasAttribute('disabled')).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, name: 'Gamma' }));
+    // Success feedback until the next edit.
+    expect(await screen.findByTestId('workspace-basics-saved')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: 'Delta' } });
+    expect(screen.queryByTestId('workspace-basics-saved')).toBeNull();
+  });
+
+  it('section titles are single-language (no glued zh+en pairs)', () => {
+    renderPanel(scriptedHttp({ list_users: () => ({ items: [] }) }), workspace());
+    const detail = screen.getByTestId('workspace-detail');
+    expect(within(detail).getByText('相关链接')).toBeTruthy();
+    expect(within(detail).getByText('元数据')).toBeTruthy();
+    expect(detail.textContent).not.toMatch(/Related links|Metadata/);
   });
 
   it('entry model: options come from the saved allow-list; changing it enables the shared save button and posts only that field', async () => {

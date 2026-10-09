@@ -7,15 +7,20 @@ import {
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
-import { LOGIN_PATTERN } from '../../lib/platform-errors.js';
-import type { WorkspaceOption } from '../../lib/platform-workspaces.js';
+import { roleLabel } from '../../lib/labels.js';
+import {
+  loginError,
+  loginNormalizedNote,
+  loginRuleText,
+  normalizeLoginInput,
+} from '../../lib/login-input.js';
+import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface CreateUserFormProps {
   readonly http: CapabilityCaller;
-  readonly workspaces: readonly WorkspaceOption[];
   /** The platform default workspace, for the "默认工作区" option's own hint; `null` = none set. */
   readonly defaultWorkspaceId: string | null;
   readonly defaultPlatformRole: PlatformRoleWire;
@@ -23,11 +28,13 @@ export interface CreateUserFormProps {
   readonly onCancel: () => void;
 }
 
-/** The workspace picker's three non-workspace choices (`create_user`'s `workspaceId` is
+/** The workspace picker's two non-workspace choices (`create_user`'s `workspaceId` is
  *  "omit = platform default, `null` = none, a string = that workspace"). */
 const DEFAULT_WORKSPACE = '__default__';
 const NO_WORKSPACE = '__none__';
-const OTHER_WORKSPACE = '__other__';
+/** The platform setting `passwordMinLength` is validated >= 8 (PlatformSettingsPage), so 8 is a
+ *  safe client-side floor; a longer platform minimum is still enforced (and explained) by the kernel. */
+const MIN_PASSWORD_FLOOR = 8;
 
 /**
  * components/platform/CreateUserForm: `create_user` (P-A1, design §6.1 "新建：登录名、显示名、
@@ -42,7 +49,6 @@ const OTHER_WORKSPACE = '__other__';
  */
 export function CreateUserForm({
   http,
-  workspaces,
   defaultWorkspaceId,
   defaultPlatformRole,
   onCreated,
@@ -55,21 +61,34 @@ export function CreateUserForm({
   const [passwordMode, setPasswordMode] = useState<'auto' | 'custom'>('auto');
   const [password, setPassword] = useState('');
   const [workspaceChoice, setWorkspaceChoice] = useState<string>(DEFAULT_WORKSPACE);
-  const [otherWorkspaceId, setOtherWorkspaceId] = useState('');
   const [role, setRole] = useState<Role>('member');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
-  const trimmedLogin = login.trim();
-  const loginInvalid = trimmedLogin.length > 0 && !LOGIN_PATTERN.test(trimmedLogin);
-  const needsTypedWorkspace = workspaceChoice === OTHER_WORKSPACE;
+  const workspaces = useActiveWorkspaces(http);
+  const defaultWorkspace =
+    workspaces.state.status === 'ready'
+      ? workspaces.state.data.items.find((workspace) => workspace.id === defaultWorkspaceId)
+      : undefined;
+  // `undefined` while the list loads (the picker says so itself), `null` once it is known the
+  // default is not among the active workspaces (disabled, expired, or purged).
+  const defaultWorkspaceName =
+    defaultWorkspace?.name ?? (workspaces.state.status === 'ready' ? null : undefined);
+
+  // The kernel trims and lower-cases the login (`normalizeLogin`), so "Alice " is fine: we do the
+  // same, say what will be saved, and only reject what the kernel would also reject.
+  const trimmedLogin = normalizeLoginInput(login);
+  const loginMessage = loginError(trimmedLogin, t);
+  const loginInvalid = loginMessage !== null;
+  const loginNote = loginNormalizedNote(login, t);
+  const passwordTooShort =
+    passwordMode === 'custom' && password.length > 0 && password.length < MIN_PASSWORD_FLOOR;
   const joinsAWorkspace = workspaceChoice !== NO_WORKSPACE;
   const ready =
     trimmedLogin.length > 0 &&
     !loginInvalid &&
     displayName.trim().length > 0 &&
-    (passwordMode === 'auto' || password.length > 0) &&
-    (!needsTypedWorkspace || otherWorkspaceId.trim().length > 0);
+    (passwordMode === 'auto' || password.length >= MIN_PASSWORD_FLOOR);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -84,8 +103,7 @@ export function CreateUserForm({
       // Explicit `null` — "no membership at all", distinct from omitting the field.
       params.workspaceId = null;
     } else {
-      if (workspaceChoice === OTHER_WORKSPACE) params.workspaceId = otherWorkspaceId.trim();
-      else if (workspaceChoice !== DEFAULT_WORKSPACE) params.workspaceId = workspaceChoice;
+      if (workspaceChoice !== DEFAULT_WORKSPACE) params.workspaceId = workspaceChoice;
       params.role = role;
     }
     setSubmitting(true);
@@ -110,23 +128,14 @@ export function CreateUserForm({
         id="cu-login"
         label={t('登录名', 'Login')}
         required
-        hint={t(
-          '3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。',
-          '3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit.',
-        )}
-        error={
-          loginInvalid
-            ? t(
-                '登录名格式不合法：3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。',
-                'Invalid login — 3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit.',
-              )
-            : null
-        }
+        hint={loginNote ? `${loginRuleText(t)} ${loginNote}` : loginRuleText(t)}
+        error={loginMessage}
       >
         <Input
           id="cu-login"
           value={login}
           onChange={(event) => setLogin(event.target.value)}
+          onBlur={() => setLogin(normalizeLoginInput(login))}
           disabled={submitting}
           invalid={loginInvalid}
           autoComplete="off"
@@ -152,8 +161,8 @@ export function CreateUserForm({
           onChange={(event) => setPlatformRole(event.target.value as PlatformRoleWire)}
           disabled={submitting}
         >
-          <option value="user">{t('用户', 'user')}</option>
-          <option value="admin">{t('管理员', 'admin')}</option>
+          <option value="user">{t('用户', 'User')}</option>
+          <option value="admin">{t('管理员', 'Admin')}</option>
         </Select>
       </Field>
 
@@ -177,7 +186,23 @@ export function CreateUserForm({
       </Field>
 
       {passwordMode === 'custom' ? (
-        <Field id="cu-password" label={t('临时密码', 'Temporary password')} required>
+        <Field
+          id="cu-password"
+          label={t('临时密码', 'Temporary password')}
+          required
+          hint={t(
+            '至少 8 位（平台设置的最短长度更高时以平台为准）；不想自己想就选“自动生成”。',
+            'At least 8 characters (the platform minimum applies if it is higher); choose "Auto-generate" to skip this.',
+          )}
+          error={
+            passwordTooShort
+              ? t(
+                  `密码太短：当前 ${password.length} 位，至少需要 8 位。`,
+                  `Password too short: ${password.length} characters, at least 8 are needed.`,
+                )
+              : null
+          }
+        >
           <Input
             id="cu-password"
             type="password"
@@ -185,48 +210,43 @@ export function CreateUserForm({
             onChange={(event) => setPassword(event.target.value)}
             disabled={submitting}
             autoComplete="new-password"
+            invalid={passwordTooShort}
             mono
           />
         </Field>
       ) : null}
 
-      <Field
+      <WorkspacePicker
         id="cu-workspace"
         label={t('工作区', 'Workspace')}
         hint={
           defaultWorkspaceId === null
             ? t('平台还没有设置默认工作区。', 'No platform default workspace is set yet.')
-            : t(`默认工作区：${defaultWorkspaceId}`, `Default workspace: ${defaultWorkspaceId}`)
+            : defaultWorkspaceName === null
+              ? t(
+                  '平台默认工作区已停用或已过期，请直接选一个工作区。',
+                  'The platform default workspace is disabled or expired — pick a workspace directly.',
+                )
+              : defaultWorkspaceName === undefined
+                ? undefined
+                : t(
+                    `默认工作区：${defaultWorkspaceName}`,
+                    `Default workspace: ${defaultWorkspaceName}`,
+                  )
         }
-      >
-        <Select
-          id="cu-workspace"
-          value={workspaceChoice}
-          onChange={(event) => setWorkspaceChoice(event.target.value)}
-          disabled={submitting}
-        >
-          <option value={DEFAULT_WORKSPACE}>{t('默认工作区', 'Default workspace')}</option>
-          <option value={NO_WORKSPACE}>{t('无', 'None')}</option>
-          {workspaces.map((workspace) => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name}
-            </option>
-          ))}
-          <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
-        </Select>
-      </Field>
-
-      {needsTypedWorkspace ? (
-        <Field id="cu-workspace-id" label={t('工作区 id', 'Workspace id')} required>
-          <Input
-            id="cu-workspace-id"
-            value={otherWorkspaceId}
-            onChange={(event) => setOtherWorkspaceId(event.target.value)}
-            disabled={submitting}
-            mono
-          />
-        </Field>
-      ) : null}
+        value={workspaceChoice}
+        onChange={setWorkspaceChoice}
+        disabled={submitting}
+        workspaces={workspaces}
+        leading={
+          <>
+            <option value={DEFAULT_WORKSPACE}>{t('默认工作区', 'Default workspace')}</option>
+            <option value={NO_WORKSPACE}>{t('无', 'None')}</option>
+          </>
+        }
+        emptyText={t('还没有可加入的工作区。', 'There is no workspace to join yet.')}
+        testId="create-user-workspace"
+      />
 
       {joinsAWorkspace ? (
         <Field id="cu-role" label={t('工作区角色', 'Workspace role')} required>
@@ -238,7 +258,7 @@ export function CreateUserForm({
           >
             {ROLE_VALUES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {roleLabel(value, t)}
               </option>
             ))}
           </Select>

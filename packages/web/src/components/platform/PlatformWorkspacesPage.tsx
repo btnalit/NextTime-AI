@@ -33,6 +33,8 @@ export interface PlatformWorkspacesPageProps {
   readonly memberships: readonly WireMembership[];
   /** Switch the session to `workspaceId` and land on its 成员与授权 page. */
   readonly onOpenWorkspaceConfig: (workspaceId: string) => void;
+  /** The signed-in administrator's user id — the new-workspace form's default owner. */
+  readonly currentUserId?: string;
   /** R-64: owners were delegated or a workspace created — either may have added the signed-in
    *  administrator to a workspace, and `memberships` is otherwise a login-time snapshot, so the
    *  session re-reads `/api/auth/me` (the "打开工作区配置" entry and the switcher follow at once). */
@@ -127,6 +129,7 @@ export function PlatformWorkspacesPage({
   onOpenWorkspaceConfig,
   onMembershipsChanged,
   initialHash,
+  currentUserId,
 }: PlatformWorkspacesPageProps) {
   const t = useT();
   const toast = useToast();
@@ -355,6 +358,7 @@ export function PlatformWorkspacesPage({
           <CreateWorkspaceForm
             http={http}
             models={catalog}
+            defaultOwnerUserId={currentUserId}
             onCreated={handleCreated}
             onCancel={() => setPanel({ kind: 'closed' })}
           />

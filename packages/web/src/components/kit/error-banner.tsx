@@ -1,4 +1,6 @@
-import { describeError } from '../../lib/errors.js';
+import { describeError, localizedErrorTitle, transportErrorMessage } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
+import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Button } from './button.js';
 
 export interface ErrorBannerProps {
@@ -26,12 +28,20 @@ export interface ErrorBannerProps {
 export function ErrorBanner({
   error,
   onRetry,
-  retryLabel = 'Retry',
+  retryLabel,
   retrying = false,
   title,
   testId,
 }: ErrorBannerProps) {
+  const t = useT();
   const described = describeError(error);
+  // A kernel capability code `lib/platform-errors.ts` knows reads as its friendly sentence first;
+  // the kernel's own (English) text stays as a muted second line and the raw code stays in the title row.
+  // A transport failure ("Failed to fetch", a proxy's HTML error page) gets the same treatment.
+  const mapped = platformErrorMessage(error, t) ?? transportErrorMessage(error, t);
+  const raw = described.message.trim();
+  const primary = mapped ?? (raw.length > 0 && raw !== described.title ? described.message : null);
+  const secondary = mapped !== null && raw.length > 0 && raw !== mapped ? described.message : null;
   return (
     <div
       className="error-banner"
@@ -41,17 +51,23 @@ export function ErrorBanner({
     >
       <div className="error-banner-body">
         <div className="error-banner-title">
-          <span>{title ?? described.title}</span>
+          <span>{title ?? localizedErrorTitle(described, t)}</span>
           <code className="error-banner-code">{described.code}</code>
         </div>
-        {described.message && described.message !== described.title ? (
-          <p className="error-banner-message">{described.message}</p>
+        {primary ? <p className="error-banner-message">{primary}</p> : null}
+        {secondary ? (
+          <p
+            className="error-banner-message text-3"
+            data-testid={testId ? `${testId}-detail` : undefined}
+          >
+            {secondary}
+          </p>
         ) : null}
       </div>
       {onRetry ? (
         <div className="error-banner-actions">
           <Button variant="secondary" size="s" onClick={onRetry} disabled={retrying}>
-            {retryLabel}
+            {retryLabel ?? t('重试', 'Retry')}
           </Button>
         </div>
       ) : null}

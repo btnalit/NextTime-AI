@@ -88,6 +88,30 @@ describe('ChangePasswordPage', () => {
     expect(await screen.findByText(/当前密码不正确/)).toBeTruthy();
   });
 
+  it('shows the mapped Chinese copy for weak_password and keeps the kernel text secondary', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(400, {
+        ok: false,
+        error: { code: 'weak_password', message: 'password must be at least 12 characters' },
+      }),
+    );
+    render(
+      <ChangePasswordPage
+        user={USER}
+        onChanged={vi.fn()}
+        onLogout={vi.fn()}
+        fetchImpl={fetchImpl as unknown as typeof fetch}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/当前密码/), { target: { value: 'temp-pass' } });
+    fireEvent.change(screen.getByLabelText(/^新密码/), { target: { value: 'short' } });
+    fireEvent.change(screen.getByLabelText(/确认新密码/), { target: { value: 'short' } });
+    fireEvent.click(screen.getByRole('button', { name: /更改密码/ }));
+
+    expect(await screen.findByText('密码不满足平台的最短长度要求')).toBeTruthy();
+    expect(screen.getByText('password must be at least 12 characters')).toBeTruthy();
+  });
+
   it('offers only Change password and Sign out — calls onLogout', () => {
     const onLogout = vi.fn();
     render(<ChangePasswordPage user={USER} onChanged={vi.fn()} onLogout={onLogout} />);

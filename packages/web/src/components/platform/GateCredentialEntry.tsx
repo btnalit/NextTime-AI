@@ -23,6 +23,18 @@ type Phase =
   | { readonly kind: 'ready'; readonly tokenResult: GateHostTokenWire }
   | { readonly kind: 'stored' };
 
+/** A pasted `Authorization` header value ("Bearer sk-…") carries a scheme prefix the gate host
+ *  adds itself — keep only the token. Case-insensitive; `stripped` tells the caller to say so. */
+export function stripBearerPrefix(raw: string): {
+  readonly value: string;
+  readonly stripped: boolean;
+} {
+  const match = /^\s*bearer\s+/i.exec(raw);
+  return match
+    ? { value: raw.slice(match[0].length), stripped: true }
+    : { value: raw, stripped: false };
+}
+
 function formatCountdown(secondsLeft: number): string {
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
@@ -54,6 +66,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
 
   const [advanced, setAdvanced] = useState(false);
   const [bearerToken, setBearerToken] = useState('');
+  const [bearerStripped, setBearerStripped] = useState(false);
   const [rawJson, setRawJson] = useState('');
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -68,6 +81,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
 
   function clearFields(): void {
     setBearerToken('');
+    setBearerStripped(false);
     setRawJson('');
     setJsonError(null);
     setAdvanced(false);
@@ -96,17 +110,28 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
       try {
         parsed = JSON.parse(rawJson);
       } catch {
-        setJsonError(t('不是合法的', 'JSON Not valid JSON'));
+        setJsonError(
+          t(
+            '不是合法的 JSON；示例：{"apiKey": "..."}，注意键和字符串要用双引号',
+            'Not valid JSON — for example {"apiKey": "..."} (keys and strings use double quotes)',
+          ),
+        );
         return;
       }
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        setJsonError(t('必须是一个 JSON 对象', 'Must be a JSON object'));
+        setJsonError(
+          t(
+            '必须是一个 JSON 对象，用花括号包起来，例如 {"apiKey": "..."}',
+            'Must be a JSON object in curly braces, for example {"apiKey": "..."}',
+          ),
+        );
         return;
       }
       credential = parsed as Record<string, unknown>;
     } else {
-      if (bearerToken.trim().length === 0) return;
-      credential = { token: bearerToken.trim() };
+      const token = stripBearerPrefix(bearerToken).value.trim();
+      if (token.length === 0) return;
+      credential = { token };
     }
     setJsonError(null);
     setSubmitting(true);
@@ -183,13 +208,24 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
       ) : (
         <>
           {!advanced ? (
-            <Field id={`${domId}-token`} label="Bearer token">
+            <Field
+              id={`${domId}-token`}
+              label="Bearer token"
+              hint={t(
+                '只填令牌本身；粘贴时开头的 "Bearer " 会被自动去掉。',
+                'Paste the token itself — a leading "Bearer " is removed automatically.',
+              )}
+            >
               <Input
                 id={`${domId}-token`}
                 type="password"
                 autoComplete="off"
                 value={bearerToken}
-                onChange={(event) => setBearerToken(event.target.value)}
+                onChange={(event) => {
+                  const next = stripBearerPrefix(event.target.value);
+                  setBearerToken(next.value);
+                  setBearerStripped(next.stripped);
+                }}
                 disabled={submitting}
                 data-testid="gate-credential-token-input"
               />
@@ -197,7 +233,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
           ) : (
             <Field
               id={`${domId}-json`}
-              label={t('原始', 'JSON Raw JSON')}
+              label={t('原始 JSON', 'Raw JSON')}
               error={jsonError ?? undefined}
               hint={t('任意凭证对象，例如 {"apiKey": "..."}', 'Any credential object.')}
             >
@@ -212,6 +248,14 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
               />
             </Field>
           )}
+          {!advanced && bearerStripped ? (
+            <Notice testId="gate-credential-bearer-stripped">
+              {t(
+                '已去掉开头的 "Bearer "：门宿主会自己加上，这里只需要令牌本身。',
+                'Removed the leading "Bearer " — the gate host adds it itself, so only the token is needed.',
+              )}
+            </Notice>
+          ) : null}
           <label className="checkbox">
             <input
               type="checkbox"
@@ -219,7 +263,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
               onChange={(event) => setAdvanced(event.target.checked)}
               disabled={submitting}
             />
-            <span>{t('高级：原始', 'JSON Advanced: raw JSON')}</span>
+            <span>{t('高级：原始 JSON', 'Advanced: raw JSON')}</span>
           </label>
 
           <PlatformError
@@ -233,7 +277,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
               size="s"
               onClick={() => void submit()}
               loading={submitting}
-              disabled={!advanced && bearerToken.trim().length === 0}
+              disabled={!advanced && stripBearerPrefix(bearerToken).value.trim().length === 0}
               data-testid="gate-credential-submit"
             >
               {t('存入', 'Submit')}

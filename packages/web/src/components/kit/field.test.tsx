@@ -27,7 +27,7 @@ describe('kit/Field', () => {
     expect(label?.querySelector('.field-required')?.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('shows the hint when there is no error, and hides it once there is one', () => {
+  it('keeps the hint visible alongside the error so the rule stays on screen', () => {
     const { rerender } = render(
       <Field id="f3" label="邮箱" hint="用于登录">
         <input id="f3" />
@@ -40,7 +40,8 @@ describe('kit/Field', () => {
         <input id="f3" />
       </Field>,
     );
-    expect(screen.queryByText('用于登录')).toBeNull();
+    const hint = screen.getByText('用于登录');
+    expect(hint.id).toBe('f3-hint');
     const error = screen.getByRole('alert');
     expect(error.textContent).toBe('格式不对');
     expect(error.id).toBe('f3-error');

@@ -356,6 +356,26 @@ describe('PlatformUsersPage', () => {
         return { items: [alice, bob] };
       },
       get_platform_settings: () => settings(),
+      list_workspaces: () => ({
+        items: [
+          {
+            id: 'ws-1',
+            name: 'Acme',
+            status: 'active',
+            entryModel: null,
+            allowedModels: [],
+            ontologyEnforcement: 'reject',
+            purpose: 'standard',
+            expiresAt: null,
+            disabledAt: null,
+            purgeable: false,
+            isDefault: false,
+            memberCount: 1,
+            owners: [],
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
       add_membership: (params) => {
         expect(params).toEqual({ userId: 'u-2', workspaceId: 'ws-1', role: 'operator' });
         return {
@@ -376,6 +396,7 @@ describe('PlatformUsersPage', () => {
     fireEvent.click(within(detail).getByRole('button', { name: /管理成员资格/ }));
 
     const memberships = await screen.findByTestId('user-memberships');
+    await within(memberships).findByRole('option', { name: 'Acme' });
     fireEvent.change(within(memberships).getByLabelText(/加入工作区/), {
       target: { value: 'ws-1' },
     });

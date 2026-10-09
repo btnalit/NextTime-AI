@@ -124,7 +124,7 @@ afterEach(cleanup);
 async function signInWithApiKey(key: string): Promise<void> {
   fireEvent.click(await screen.findByText('用 API key 登录'));
   fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: key } });
-  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  fireEvent.click(screen.getByRole('button', { name: '用这把 key 登录' }));
 }
 
 describe('App: 我的账户', () => {
@@ -206,7 +206,7 @@ describe('App: 我的账户', () => {
     expect(screen.getByText(/no active membership in the requested workspace/)).toBeTruthy();
     // Still in the shell — not dropped to the login page.
     expect(screen.getByTestId('nav-agent')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '用这把 key 登录' })).toBeNull();
     // The membership list was re-read after the failure.
     await waitFor(() => expect(authApi.getMe).toHaveBeenCalledTimes(2));
   });

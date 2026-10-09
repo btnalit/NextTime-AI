@@ -10,17 +10,38 @@ export const LAUNCHER_KINDS: readonly LauncherKind[] = ['http', 'mcp', 'ssh', 'c
 const KIND_LABEL: Readonly<
   Record<
     LauncherKind,
-    { readonly titleZh: string; readonly titleEn: string; readonly hint: string }
+    {
+      readonly titleZh: string;
+      readonly titleEn: string;
+      readonly hintZh: string;
+      readonly hintEn: string;
+    }
   >
 > = {
   http: {
     titleZh: 'HTTP 门',
     titleEn: 'HTTP gate',
-    hint: 'REST / OpenAPI manifest behind a gatekeeper',
+    hintZh: '门后面的 REST / OpenAPI 服务（导入 OpenAPI 清单）',
+    hintEn: 'REST / OpenAPI manifest behind a gatekeeper',
   },
-  mcp: { titleZh: 'MCP 服务器', titleEn: 'MCP server', hint: 'Model Context Protocol tools' },
-  ssh: { titleZh: 'SSH 主机', titleEn: 'SSH host', hint: 'Commands on a remote host' },
-  cli: { titleZh: '命令行', titleEn: 'CLI', hint: 'A local command-line tool' },
+  mcp: {
+    titleZh: 'MCP 服务器',
+    titleEn: 'MCP server',
+    hintZh: '提供 Model Context Protocol 工具的服务器',
+    hintEn: 'Model Context Protocol tools',
+  },
+  ssh: {
+    titleZh: 'SSH 主机',
+    titleEn: 'SSH host',
+    hintZh: '在远程主机上执行命令',
+    hintEn: 'Commands on a remote host',
+  },
+  cli: {
+    titleZh: '命令行',
+    titleEn: 'CLI',
+    hintZh: '本机的命令行工具',
+    hintEn: 'A local command-line tool',
+  },
 };
 
 /** §5.9 / §5.6: 选类型 → 连接与凭证 → 能力与策略 → 握手验证. */
@@ -41,7 +62,7 @@ export interface LauncherProps {
   readonly onBack: () => void;
   /** Gate for 下一步; defaults to "a kind is chosen" on step 0 and `true` afterwards. */
   readonly canNext?: boolean;
-  /** Label of the forward button on the last step (defaults to 完成 Finish). */
+  /** Label of the forward button on the last step (defaults to the translated 完成 / Finish). */
   readonly finishLabel?: string;
   readonly busy?: boolean;
   /** Restrict the selectable kinds (e.g. the connectors the platform allows). */
@@ -95,10 +116,7 @@ export function Launcher({
               <span className="launcher-step-index" aria-hidden>
                 {index + 1}
               </span>
-              <span className="launcher-step-label">
-                {item.zh}
-                <span className="nav-label-sub">{item.en}</span>
-              </span>
+              <span className="launcher-step-label">{t(item.zh, item.en)}</span>
             </li>
           );
         })}
@@ -121,7 +139,9 @@ export function Launcher({
                   />
                   <span className="stack-s">
                     <span>{t(KIND_LABEL[option].titleZh, KIND_LABEL[option].titleEn)}</span>
-                    <span className="text-3 text-small">{KIND_LABEL[option].hint}</span>
+                    <span className="text-3 text-small">
+                      {t(KIND_LABEL[option].hintZh, KIND_LABEL[option].hintEn)}
+                    </span>
                   </span>
                 </label>
               ))}

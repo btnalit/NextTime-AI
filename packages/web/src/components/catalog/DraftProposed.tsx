@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
+import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -86,7 +87,7 @@ export function DraftProposed({
           `无法发布 ${draft.name ?? draft.id}`,
           `Could not publish ${draft.name ?? draft.id}`,
         ),
-        description: describeError(err).message,
+        description: platformErrorMessage(err, t) ?? describeError(err).message,
       });
     } finally {
       setBusy(false);
@@ -116,8 +117,8 @@ export function DraftProposed({
                 'Drafts are private to you, the proposer; publishing makes it visible and selectable for every member.',
               )
             : t(
-                '已发布：工作区所有成员现在可见。 Published —',
-                'visible to every member of the workspace now.',
+                '已发布：工作区所有成员现在可见。',
+                'Published — visible to every member of the workspace now.',
               )}
         {note ? ` ${note}` : ''}
         {unpublishedConsequence !== undefined && status === 'draft'

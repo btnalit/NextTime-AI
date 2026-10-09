@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LangProvider } from '../../lib/i18n.js';
 import { LAUNCHER_STEPS, Launcher } from './Launcher.js';
 
 afterEach(cleanup);
@@ -101,5 +102,45 @@ describe('Launcher', () => {
     );
     expect(screen.queryByTestId('launcher-kind-ssh')).toBeNull();
     expect(screen.getByTestId('launcher-kind-http')).toBeTruthy();
+  });
+
+  it('renders each step label and kind hint in one language only', () => {
+    const { unmount } = render(
+      <Launcher
+        step={0}
+        kind={null}
+        onKindChange={vi.fn()}
+        onNext={vi.fn()}
+        onBack={vi.fn()}
+        testId="l"
+      />,
+    );
+    expect(screen.getByTestId('launcher-step-kind').textContent).toBe('1选类型');
+    expect(screen.getByTestId('launcher-kind-ssh').closest('label')?.textContent).toBe(
+      'SSH 主机在远程主机上执行命令',
+    );
+    unmount();
+
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <Launcher
+            step={0}
+            kind={null}
+            onKindChange={vi.fn()}
+            onNext={vi.fn()}
+            onBack={vi.fn()}
+            testId="l"
+          />
+        </LangProvider>,
+      );
+      expect(screen.getByTestId('launcher-step-kind').textContent).toBe('1Type');
+      expect(screen.getByTestId('launcher-kind-ssh').closest('label')?.textContent).toBe(
+        'SSH hostCommands on a remote host',
+      );
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });

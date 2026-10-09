@@ -75,7 +75,10 @@ export function ChangePasswordPage({
             <div>
               <h1 className="login-title">{t('需要更改密码', 'Password change required')}</h1>
               <p className="login-subtitle">
-                {user.displayName} ({user.login}) is using a temporary password.
+                {t(
+                  `${user.displayName}（${user.login}）正在使用临时密码，请先设置自己的新密码。`,
+                  `${user.displayName} (${user.login}) is using a temporary password — set your own new password to continue.`,
+                )}
               </p>
             </div>
           </div>

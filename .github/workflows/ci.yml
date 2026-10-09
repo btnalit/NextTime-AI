@@ -121,6 +121,12 @@ jobs:
       - name: Staging trigger paths cover the release rehearsal's scripts and deploy/ directories (scripts/guards/staging-paths.mjs)
         run: node scripts/guards/staging-paths.mjs
 
+      - name: i18n pair guard detector unit tests (S8 W1-A9 / W1-A12)
+        run: node --test scripts/guards/i18n-pairs.test.mjs
+
+      - name: i18n pair guard (S8 W1-A9 — no glued "中文 English" literals or English-only copy outside t(zh, en))
+        run: node scripts/guards/i18n-pairs.mjs
+
       - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
         run: node scripts/validate-compose.mjs
 

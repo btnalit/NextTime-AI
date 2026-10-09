@@ -1,5 +1,5 @@
 import type { OperationSummaryWire } from '@nexttime/shared';
-import { useMemo, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -128,7 +128,17 @@ export function GrantGateForm({
   // ---- Submit -------------------------------------------------------------------------------
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
-  const [granted, setGranted] = useState<readonly GrantRow[]>([]);
+  const [failedGate, setFailedGate] = useState<string | null>(null);
+  /** What was granted in this drawer session, for the summary: who got which gates (`null` = every
+   *  gate). Kept as display data so the summary survives the form resetting for the next grant. */
+  const [grantedLog, setGrantedLog] = useState<
+    readonly { readonly member: string; readonly gate: string | null }[]
+  >([]);
+  // Names of every gate row seen, so the summary can name a gate even after a later search hides it.
+  const gateNames = useRef(new Map<string, string>());
+  for (const row of gateOptions) gateNames.current.set(row.id, row.name);
+  const gateName = (id: string): string =>
+    lockedGatekeeper?.id === id ? lockedGatekeeper.name : (gateNames.current.get(id) ?? id);
 
   const canSubmit =
     principalId !== '' &&
@@ -137,10 +147,15 @@ export function GrantGateForm({
 
   async function submit(): Promise<void> {
     if (!canSubmit) return;
+    const memberName = selectedPrincipal?.displayName ?? principalId;
     setSubmitting(true);
     setError(null);
+    // Grants that already landed stay in the summary (and are reported to the caller) even if a
+    // later gate in the same submit fails.
+    const results: GrantRow[] = [];
+    const doneGateIds: string[] = [];
+    let failedGateId: string | null = null;
     try {
-      const results: GrantRow[] = [];
       if (allGates) {
         results.push(
           await http.call<GrantRow>('grant_capability', {
@@ -153,6 +168,7 @@ export function GrantGateForm({
         // path, so offering an operations checklist would present a narrowing that does not exist
         // (a grant always covers the whole gate). The list below is shown read-only instead.
         for (const gatekeeperId of targetGateIds) {
+          failedGateId = gatekeeperId;
           results.push(
             await http.call<GrantRow>('grant_capability', {
               principalId,
@@ -160,9 +176,16 @@ export function GrantGateForm({
               resourceId: gatekeeperId,
             }),
           );
+          doneGateIds.push(gatekeeperId);
         }
+        failedGateId = null;
       }
-      setGranted((current) => [...current, ...results]);
+      setGrantedLog((current) => [
+        ...current,
+        ...(allGates
+          ? [{ member: memberName, gate: null }]
+          : doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) }))),
+      ]);
       onGranted(results);
       // Reset for another grant in the same drawer session — keep the drawer open so multi-gate
       // and repeat grants (a common "add another member" flow) do not each re-open it.
@@ -171,15 +194,23 @@ export function GrantGateForm({
       setAllGates(false);
     } catch (err) {
       setError(err);
+      setFailedGate(failedGateId === null ? null : gateName(failedGateId));
+      if (results.length > 0) {
+        // Partial success: record what landed, tell the caller, and leave only the gates that did
+        // not (the failed one and any not yet tried) selected so a retry does not re-grant.
+        setGrantedLog((current) => [
+          ...current,
+          ...doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) })),
+        ]);
+        onGranted(results);
+        setSelectedGateIds(new Set(targetGateIds.filter((id) => !doneGateIds.includes(id))));
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
-  const selectedGateNames = useMemo(
-    () => [...selectedGateIds].map((id) => gateOptions.find((row) => row.id === id)?.name ?? id),
-    [selectedGateIds, gateOptions],
-  );
+  const selectedGateNames = [...selectedGateIds].map((id) => gateName(id));
 
   return (
     <div className="stack" data-testid={testId ?? 'grant-gate-form'}>
@@ -211,9 +242,13 @@ export function GrantGateForm({
         data-testid="ggf-member-select"
       >
         <option value="">
-          {memberOptions.length === 0
-            ? t('没有匹配的成员', 'No matching member')
-            : t('— 选择 —', '— Choose —')}
+          {principals.state.status === 'loading'
+            ? t('正在加载…', 'Loading…')
+            : principals.state.status === 'error'
+              ? t('成员列表加载失败', 'Could not load members')
+              : memberOptions.length === 0
+                ? t('没有匹配的成员', 'No matching member')
+                : t('— 选择 —', '— Choose —')}
         </option>
         {memberOptions.map((row) => (
           <option key={row.id} value={row.id}>
@@ -221,14 +256,25 @@ export function GrantGateForm({
           </option>
         ))}
       </select>
-      {selectedPrincipal ? (
-        <RefChip
-          kind="principal"
-          id={selectedPrincipal.id}
-          name={selectedPrincipal.displayName}
-          size="s"
-          testId="ggf-member-chip"
+      {principals.state.status === 'error' ? (
+        <ErrorBanner
+          error={principals.state.error}
+          title={t('无法加载成员', 'Could not load members')}
+          onRetry={() => void principals.reload()}
+          testId="ggf-members-error"
         />
+      ) : null}
+      {selectedPrincipal ? (
+        // Wrapped so the chip keeps its own width instead of stretching across the column stack.
+        <div>
+          <RefChip
+            kind="principal"
+            id={selectedPrincipal.id}
+            name={selectedPrincipal.displayName}
+            size="s"
+            testId="ggf-member-chip"
+          />
+        </div>
       ) : null}
       {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
         <Notice tone="warn" testId="ggf-approver-notice">
@@ -241,12 +287,14 @@ export function GrantGateForm({
 
       {lockedGatekeeper ? (
         <Field id="ggf-locked-gate" label={t('门', 'Gatekeeper')}>
-          <RefChip
-            kind="gatekeeper"
-            id={lockedGatekeeper.id}
-            name={lockedGatekeeper.name}
-            testId="ggf-locked-gate-chip"
-          />
+          <div>
+            <RefChip
+              kind="gatekeeper"
+              id={lockedGatekeeper.id}
+              name={lockedGatekeeper.name}
+              testId="ggf-locked-gate-chip"
+            />
+          </div>
         </Field>
       ) : (
         <div className="stack-s" data-testid="ggf-gate-picker">
@@ -271,6 +319,13 @@ export function GrantGateForm({
           <div className="stack-s" data-testid="ggf-gate-list">
             {gatekeepers.state.status === 'loading' ? (
               <p className="text-3 text-small">{t('正在加载…', 'Loading…')}</p>
+            ) : gatekeepers.state.status === 'error' ? (
+              <ErrorBanner
+                error={gatekeepers.state.error}
+                title={t('无法加载门列表', 'Could not load gates')}
+                onRetry={() => void gatekeepers.reload()}
+                testId="ggf-gates-error"
+              />
             ) : gateOptions.length === 0 ? (
               <p className="text-3 text-small">{t('没有匹配的门。', 'No matching gate.')}</p>
             ) : (
@@ -346,6 +401,13 @@ export function GrantGateForm({
           </p>
           {operations.state.status === 'loading' ? (
             <p className="text-3 text-small">{t('正在加载…', 'Loading…')}</p>
+          ) : operations.state.status === 'error' ? (
+            <ErrorBanner
+              error={operations.state.error}
+              title={t('无法加载这个门的 Operation', "Could not load this gate's operations")}
+              onRetry={() => void operations.reload()}
+              testId="ggf-operations-error"
+            />
           ) : operationOptions.length === 0 ? (
             <p className="text-3 text-small">
               {t('这个门还没有已发布的 Operation。', 'This gate has no published operations yet.')}
@@ -377,15 +439,32 @@ export function GrantGateForm({
         </Notice>
       ) : null}
 
-      {granted.length > 0 ? (
+      {grantedLog.length > 0 ? (
         <Notice testId="ggf-granted-summary">
-          {t('本次已授予：', 'Granted so far: ')}
-          {granted.length}
+          <span>{t('本次已授予：', 'Granted so far:')}</span>
+          <ul style={{ margin: 0, paddingLeft: 'var(--space-4)' }}>
+            {grantedLog.map((entry, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: an append-only log; entries may repeat
+              <li key={index} data-testid="ggf-granted-entry">
+                {entry.gate === null
+                  ? t(`${entry.member} → 全部门`, `${entry.member} → every gate`)
+                  : `${entry.member} → ${entry.gate}`}
+              </li>
+            ))}
+          </ul>
         </Notice>
       ) : null}
 
       {error !== null ? (
-        <ErrorBanner error={error} title={t('无法授予', 'Could not grant')} testId="ggf-error" />
+        <ErrorBanner
+          error={error}
+          title={
+            failedGate === null
+              ? t('无法授予', 'Could not grant')
+              : t(`无法授予“${failedGate}”`, `Could not grant “${failedGate}”`)
+          }
+          testId="ggf-error"
+        />
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -398,9 +477,10 @@ export function GrantGateForm({
           variant="primary"
           onClick={() => void submit()}
           disabled={!canSubmit}
+          aria-busy={submitting || undefined}
           data-testid="ggf-submit"
         >
-          {submitLabel ?? t('授予', 'Grant')}
+          {submitting ? t('授予中…', 'Granting…') : (submitLabel ?? t('授予', 'Grant'))}
         </Button>
       </div>
     </div>

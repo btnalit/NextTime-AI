@@ -61,18 +61,25 @@ describe('CompleteConnectionForm', () => {
     expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe(request.target);
 
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    expect(await screen.findByText('门端点是必填项。')).toBeTruthy();
+    // The error says what a valid value looks like.
+    expect(
+      await screen.findByText(/门端点是必填项：填门自己的地址，例如 http:\/\/gate-host:8080/),
+    ).toBeTruthy();
     const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
     expect(endpoint.getAttribute('aria-invalid')).toBe('true');
-    // C16: with the error shown, `Field` no longer renders the hint — the control must point
-    // only at the error id, never at a `-hint` id that is not in the DOM.
-    expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-error');
+    // C16: `Field` now renders the hint alongside the error — the control points at both ids,
+    // each of which is in the DOM.
+    expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-hint cc-endpoint-error');
+    expect(document.getElementById('cc-endpoint-hint')).not.toBeNull();
     expect(document.getElementById('cc-endpoint-error')).not.toBeNull();
     expect(createCalls(http)).toBe(0);
   });
 
-  it('C15: rejects a Gatekeeper endpoint that is not a URL, on the field, before any call', async () => {
-    const http = httpWith(async () => ({}));
+  it('C15: an endpoint without a scheme gets http:// on blur (with a note) instead of an error; a malformed one is still refused', async () => {
+    const http = httpWith(async (_name, params) => {
+      expect((params as { endpoint: string }).endpoint).toBe('http://gate-host:8080');
+      return {};
+    });
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
     await secretShown();
     const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
@@ -80,12 +87,18 @@ describe('CompleteConnectionForm', () => {
     expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-hint');
 
     fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp' } });
-    fireEvent.change(endpoint, { target: { value: 'gate-host:8080' } });
+    // Malformed even with a scheme (a space in the host): refused on the field, with the shape.
+    fireEvent.change(endpoint, { target: { value: 'gate host:8080' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    expect(await screen.findByText(/必须是一个 URL/)).toBeTruthy();
+    expect(
+      await screen.findByText(/需要一个完整的地址，例如 http:\/\/gate-host:8080/),
+    ).toBeTruthy();
     expect(createCalls(http)).toBe(0);
 
-    fireEvent.change(endpoint, { target: { value: 'http://gate-host:8080' } });
+    fireEvent.change(endpoint, { target: { value: 'gate-host:8080' } });
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('http://gate-host:8080');
+    expect(screen.getByTestId('cc-endpoint-scheme-note').textContent).toContain('http://');
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     await waitFor(() => expect(createCalls(http)).toBe(1));
   });
@@ -122,6 +135,44 @@ describe('CompleteConnectionForm', () => {
     expect(screen.queryByLabelText(/清单来源/)).toBeNull();
     fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'mcp' } });
     expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
+  });
+
+  it('offers <target>/openapi.json as a one-click manifest source for an http gate, never sets it silently', async () => {
+    const http = httpWith(async (_name, params) => {
+      expect((params as { manifestSource?: string }).manifestSource).toBe(
+        'https://erp.example.com/api/openapi.json',
+      );
+      return {};
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    const manifest = screen.getByLabelText(/清单来源/) as HTMLInputElement;
+    // No target yet: nothing to suggest.
+    expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+    fireEvent.change(screen.getByLabelText(/目标系统/), {
+      target: { value: 'erp.example.com/api/' },
+    });
+    const suggest = screen.getByTestId('cc-manifest-suggest');
+    expect(suggest.textContent).toBe('使用 https://erp.example.com/api/openapi.json');
+    expect(manifest.value).toBe('');
+    fireEvent.click(suggest);
+    expect(manifest.value).toBe('https://erp.example.com/api/openapi.json');
+    expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+
+    // Only http imports an OpenAPI document; an mcp gate gets no such suggestion.
+    fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'mcp' } });
+    expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'http' } });
+    // A target that is not a host gives no suggestion either.
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: '://bad url' } });
+    expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+    fireEvent.change(screen.getByLabelText(/目标系统/), {
+      target: { value: 'erp.example.com/api/' },
+    });
+
+    fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
   it('submits the create_connection params the registry defines, clears credentials, and reports the result', async () => {
@@ -204,6 +255,9 @@ describe('CompleteConnectionForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     const fieldError = await screen.findByText(/no `credentials` was given/);
     expect(fieldError.getAttribute('id')).toBe('cc-credentials-error');
+    // A Chinese explanation leads; the kernel's raw English text is kept as the secondary detail.
+    expect(fieldError.textContent?.startsWith('门没有接受这份凭证')).toBe(true);
+    expect(fieldError.textContent).toContain('服务端原文：');
   });
 
   it('hideKindField hides the Kind select and initialKind still drives the submitted kind', async () => {
@@ -241,7 +295,7 @@ describe('CompleteConnectionForm', () => {
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
     await secretShown();
     expect(screen.getByTestId('connection-secret-value').textContent).toBe(SECRET);
-    expect(screen.getByRole('button', { name: 'Copy connection secret' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制连接密钥' })).toBeTruthy();
     expect(vi.mocked(http.call).mock.calls.map(([name]) => name)).toEqual([
       'mint_connection_secret',
     ]);
@@ -283,6 +337,91 @@ describe('CompleteConnectionForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     const fieldError = await screen.findByText(/is refused/);
     expect(fieldError.getAttribute('id')).toBe('cc-endpoint-error');
+    expect(fieldError.textContent).toContain('指向平台自身的服务');
+  });
+
+  it('picks "on behalf of" from list_principals (active humans only) and submits the chosen id', async () => {
+    const http = httpWith(async (name, params) => {
+      if (name === 'list_principals') {
+        return {
+          items: [
+            {
+              id: 'p-alice',
+              kind: 'human',
+              role: 'member',
+              displayName: 'Alice',
+              createdAt: '',
+              hasApiKey: false,
+            },
+            {
+              id: 'principal-b',
+              kind: 'human',
+              role: 'operator',
+              displayName: 'Bob',
+              createdAt: '',
+              hasApiKey: false,
+            },
+            {
+              id: 'p-gone',
+              kind: 'human',
+              role: 'member',
+              displayName: 'Gone',
+              createdAt: '',
+              hasApiKey: false,
+              disabledAt: '2026-09-01T00:00:00.000Z',
+            },
+            {
+              id: 'p-svc',
+              kind: 'service',
+              role: 'member',
+              displayName: 'svc',
+              createdAt: '',
+              hasApiKey: true,
+            },
+          ],
+        };
+      }
+      expect(name).toBe('create_connection');
+      expect((params as { onBehalfOf?: string }).onBehalfOf).toBe('p-alice');
+      return { gatekeeperId: 'gk-1', importedOperationNames: [], connectionRequestId: null };
+    });
+    render(
+      <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await secretShown();
+    // Not read until a per-member credential is chosen.
+    expect(vi.mocked(http.call).mock.calls.some(([name]) => name === 'list_principals')).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    const select = (await screen.findByTestId('cc-obo-select')) as HTMLSelectElement;
+    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
+    // The default names the requester; disabled and non-human principals are not offered.
+    expect(select.options[0]?.textContent).toMatch(/^默认：申请人\s*Bob$/);
+    expect(select.querySelector('option[value="p-gone"]')).toBeNull();
+    expect(select.querySelector('option[value="p-svc"]')).toBeNull();
+    fireEvent.change(select, { target: { value: 'p-alice' } });
+
+    fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
+    fireEvent.change(screen.getByLabelText(/^凭证(?!类型)/), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await waitFor(() => expect(createCalls(http)).toBe(1));
+  });
+
+  it('falls back to a manual principal-id box when list_principals cannot be read', async () => {
+    const http = httpWith(async (name) => {
+      if (name === 'list_principals') {
+        throw new HttpError('capability_error', 'forbidden', 'forbidden');
+      }
+      return {};
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    const manual = (await screen.findByTestId('cc-obo-manual')) as HTMLInputElement;
+    fireEvent.change(manual, { target: { value: '  p-x  ' } });
+    expect(manual.value).toBe('p-x');
+    expect(screen.getByText(/读不到成员列表/)).toBeTruthy();
   });
 
   it('parses credentials as JSON when they are JSON, raw otherwise; maps 400 messages to fields', () => {

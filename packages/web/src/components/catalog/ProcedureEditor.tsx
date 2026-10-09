@@ -14,10 +14,13 @@ import {
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
+import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
+import { Combobox } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -48,6 +51,197 @@ const STEP_KIND_LABEL: Readonly<
   approval: { zh: '审批', en: 'Approval' },
   verify: { zh: '验证', en: 'Verify' },
 };
+
+/** The note beside an Operation in the picker: its declared blast radius. */
+function operationSecondary(choice: OperationChoice, t: Translate): string | undefined {
+  if (choice.blastRadius === null) return undefined;
+  const label = BLAST_RADIUS_TONES[choice.blastRadius].label;
+  return typeof label === 'string' ? label : t(label.zh, label.en);
+}
+
+/**
+ * An `operation` step's gate + Operation (console-ux-2): the Operation is chosen from the picked
+ * gate's published Operations (`lib/gate-operations.ts`) instead of typed, so a typo can no longer
+ * save a step that fails at publish. "手动输入" stays as a fallback — and is what renders while the
+ * gate directory is unavailable (typed gate id), the list fails to load or is empty, or a
+ * prefilled name is not on the list (a copied step whose Operation has since changed).
+ */
+function OperationStepFields({
+  http,
+  prefix,
+  step,
+  gatekeepers,
+  busy,
+  gateError,
+  operationError,
+  onChange,
+}: {
+  readonly http: CapabilityCaller;
+  readonly prefix: string;
+  readonly step: ProcedureStepForm;
+  readonly gatekeepers?: readonly GatekeeperListRow[];
+  readonly busy: boolean;
+  readonly gateError: string | null;
+  readonly operationError: string | null;
+  readonly onChange: (patch: Partial<ProcedureStepForm>) => void;
+}) {
+  const t = useT();
+  const [manualChosen, setManualChosen] = useState(false);
+  const hasDirectory = gatekeepers !== undefined && gatekeepers.length > 0;
+  const gate = gatekeepers?.find((row) => row.id === step.gatekeeperId);
+  // Only a gate from the directory is queried — a half-typed id would be a 400 per keystroke.
+  const operations = useGateOperations(http, gate ? { gatekeeperId: gate.id } : null);
+  const choices: readonly OperationChoice[] =
+    operations.state.status === 'ready' ? operations.state.choices : [];
+  const name = step.operationName.trim();
+  const listUnavailable =
+    operations.state.status === 'error' ||
+    (operations.state.status === 'ready' && choices.length === 0);
+  const notOnList =
+    operations.state.status === 'ready' &&
+    name !== '' &&
+    !choices.some((choice) => choice.name === name);
+  const manual = !hasDirectory || manualChosen || listUnavailable || notOnList;
+
+  return (
+    <div className="stack-s">
+      <div className="row-wrap">
+        <Field id={`${prefix}-gatekeeper`} label={t('门', 'Gate')} required error={gateError}>
+          {hasDirectory ? (
+            <Select
+              id={`${prefix}-gatekeeper`}
+              value={step.gatekeeperId}
+              onChange={(event) =>
+                // A name picked from the previous gate's list may not exist on the new one; a
+                // typed name is the person's own and stays.
+                onChange({
+                  gatekeeperId: event.target.value,
+                  ...(manual ? {} : { operationName: '' }),
+                })
+              }
+              disabled={busy}
+            >
+              <option value="">{t('选择一个门…', 'Choose a gate…')}</option>
+              {gatekeepers.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name} · {row.kind}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <Input
+              id={`${prefix}-gatekeeper`}
+              value={step.gatekeeperId}
+              onChange={(event) => onChange({ gatekeeperId: event.target.value })}
+              onBlur={() => onChange({ gatekeeperId: step.gatekeeperId.trim() })}
+              disabled={busy}
+              mono
+            />
+          )}
+        </Field>
+        <Field
+          id={`${prefix}-operation`}
+          label={t('Operation 名', 'Operation')}
+          required
+          error={operationError}
+          hint={
+            manual
+              ? t(
+                  '手动输入：与门发布的 Operation 名完全一致（区分大小写）。',
+                  'Manual entry: the Operation name exactly as the gate publishes it (case-sensitive).',
+                )
+              : undefined
+          }
+        >
+          {manual ? (
+            <Input
+              id={`${prefix}-operation`}
+              value={step.operationName}
+              onChange={(event) => onChange({ operationName: event.target.value })}
+              onBlur={() => onChange({ operationName: step.operationName.trim() })}
+              disabled={busy}
+              invalid={!!operationError || notOnList}
+              mono
+              data-testid="procedure-step-operation-input"
+            />
+          ) : (
+            // console-ux-3: a gate imported from OpenAPI can publish hundreds of Operations —
+            // searchable instead of a native select.
+            <Combobox
+              id={`${prefix}-operation`}
+              options={choices.map((choice) => ({
+                value: choice.name,
+                label: choice.name,
+                secondary: operationSecondary(choice, t),
+              }))}
+              value={step.operationName}
+              onChange={(operationName) => onChange({ operationName })}
+              loading={operations.state.status === 'loading'}
+              disabled={busy || operations.state.status === 'idle'}
+              invalid={!!operationError}
+              mono
+              placeholder={
+                operations.state.status === 'idle'
+                  ? t('先选择门', 'Choose a gate first')
+                  : operations.state.status === 'loading'
+                    ? t('正在加载 Operation…', 'Loading Operations…')
+                    : t('输入以搜索 Operation…', 'Type to search Operations…')
+              }
+              testId="procedure-step-operation"
+            />
+          )}
+        </Field>
+      </div>
+      {operations.state.status === 'error' ? (
+        <Notice tone="warn" testId="procedure-step-operations-error">
+          {t(
+            '无法加载这个门的 Operation 列表，已切换为手动输入。',
+            'Could not load this gate’s Operations — switched to manual entry.',
+          )}{' '}
+          <Button variant="ghost" size="s" onClick={operations.reload}>
+            {t('重试', 'Retry')}
+          </Button>
+        </Notice>
+      ) : null}
+      {gate && operations.state.status === 'ready' && choices.length === 0 ? (
+        <span className="text-3 text-small" data-testid="procedure-step-operations-empty">
+          {t(
+            `门「${gate.name}」还没有已发布的 Operation，请手动输入名称。`,
+            `Gate “${gate.name}” has no published Operation yet — type the name manually.`,
+          )}
+        </span>
+      ) : null}
+      {gate && notOnList && choices.length > 0 ? (
+        <Notice tone="warn" testId="procedure-step-unknown-operation">
+          {t(
+            `门「${gate.name}」上没有已发布的「${name}」；发布这个 Procedure 时会失败。请从列表选择，或检查拼写。`,
+            `Gate “${gate.name}” publishes no “${name}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
+          )}
+        </Notice>
+      ) : null}
+      {gate && choices.length > 0 ? (
+        <div>
+          <Button
+            variant="ghost"
+            size="s"
+            disabled={busy}
+            onClick={() => {
+              if (manual) {
+                setManualChosen(false);
+                if (notOnList) onChange({ operationName: '' });
+              } else {
+                setManualChosen(true);
+              }
+            }}
+            data-testid="procedure-step-operation-mode"
+          >
+            {manual ? t('从列表选择', 'Choose from the list') : t('手动输入', 'Type it manually')}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * components/catalog/ProcedureEditor (S6-A A2 — docs/console-completion-plan.md §5.3): name,
@@ -162,23 +356,28 @@ export function ProcedureEditor({
     >
       {copyOf ? (
         <Notice tone="warn" testId="procedure-copy-notice">
-          从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：内核的 propose_procedure 不接受
-          procedureId，提交会创建一个<strong>新的</strong>{' '}
-          {t('Procedure（新 id、v1）。', 'Copied from')} {copyOf.name} v{copyOf.version}:
-          propose_procedure takes no procedureId, so submitting creates a <strong>new</strong>{' '}
-          Procedure (new id, v1).
+          {t(
+            <>
+              从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：提交会创建一个
+              <strong>新的</strong> Procedure（新 id、v1），不是同一 Procedure 的新版本。
+            </>,
+            <>
+              Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: submitting creates a{' '}
+              <strong>new</strong> Procedure (new id, v1), not a new version of this one.
+            </>,
+          )}
         </Notice>
       ) : (
         <Notice testId="procedure-private-notice">
           {t(
-            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见（I16）；发布时每个 operation / worker 步骤引用的对象必须已发布。',
-            'Until published, the draft is visible only to you, the workspace owner and builders (I16); publishing resolves every operation / worker step against published objects.',
+            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见；发布时每个 Operation / Worker 步骤引用的对象必须已发布。',
+            'Until published, the draft is visible only to you, the workspace owner and builders; publishing resolves every Operation / Worker step against published objects.',
           )}
         </Notice>
       )}
 
       <Tabs<View>
-        ariaLabel="Procedure view"
+        ariaLabel={t('Procedure 视图', 'Procedure view')}
         value={view}
         onChange={setView}
         options={[
@@ -291,7 +490,7 @@ export function ProcedureEditor({
                       size="s"
                       disabled={busy || index === 0}
                       onClick={() => moveStep(index, -1)}
-                      aria-label={`Move step ${index + 1} up`}
+                      aria-label={t(`上移第 ${index + 1} 步`, `Move step ${index + 1} up`)}
                     >
                       {t('上移', 'Up')}
                     </Button>
@@ -300,7 +499,7 @@ export function ProcedureEditor({
                       size="s"
                       disabled={busy || index === form.steps.length - 1}
                       onClick={() => moveStep(index, 1)}
-                      aria-label={`Move step ${index + 1} down`}
+                      aria-label={t(`下移第 ${index + 1} 步`, `Move step ${index + 1} down`)}
                     >
                       {t('下移', 'Down')}
                     </Button>
@@ -315,64 +514,22 @@ export function ProcedureEditor({
                           steps: prev.steps.filter((_, i) => i !== index),
                         }))
                       }
-                      aria-label={`Remove step ${index + 1}`}
+                      aria-label={t(`移除第 ${index + 1} 步`, `Remove step ${index + 1}`)}
                     >
                       {t('移除', 'Remove')}
                     </Button>
                   </div>
                   {step.kind === 'operation' ? (
-                    <div className="row-wrap">
-                      <Field
-                        id={`${prefix}-gatekeeper`}
-                        label={t('门', 'gatekeeperId')}
-                        required
-                        error={fieldError('gatekeeperId')}
-                      >
-                        {gatekeepers && gatekeepers.length > 0 ? (
-                          <Select
-                            id={`${prefix}-gatekeeper`}
-                            value={step.gatekeeperId}
-                            onChange={(event) =>
-                              updateStep(index, { gatekeeperId: event.target.value })
-                            }
-                            disabled={busy}
-                          >
-                            <option value="">选择 select…</option>
-                            {gatekeepers.map((gate) => (
-                              <option key={gate.id} value={gate.id}>
-                                {gate.name} · {gate.kind}
-                              </option>
-                            ))}
-                          </Select>
-                        ) : (
-                          <Input
-                            id={`${prefix}-gatekeeper`}
-                            value={step.gatekeeperId}
-                            onChange={(event) =>
-                              updateStep(index, { gatekeeperId: event.target.value })
-                            }
-                            disabled={busy}
-                            mono
-                          />
-                        )}
-                      </Field>
-                      <Field
-                        id={`${prefix}-operation`}
-                        label={t('Operation 名', 'operationName')}
-                        required
-                        error={fieldError('operationName')}
-                      >
-                        <Input
-                          id={`${prefix}-operation`}
-                          value={step.operationName}
-                          onChange={(event) =>
-                            updateStep(index, { operationName: event.target.value })
-                          }
-                          disabled={busy}
-                          mono
-                        />
-                      </Field>
-                    </div>
+                    <OperationStepFields
+                      http={http}
+                      prefix={prefix}
+                      step={step}
+                      gatekeepers={gatekeepers}
+                      busy={busy}
+                      gateError={fieldError('gatekeeperId')}
+                      operationError={fieldError('operationName')}
+                      onChange={(patch) => updateStep(index, patch)}
+                    />
                   ) : step.kind === 'worker' ? (
                     <div className="row-wrap">
                       <Field
@@ -396,7 +553,9 @@ export function ProcedureEditor({
                             }}
                             disabled={busy}
                           >
-                            <option value="">选择 select…</option>
+                            <option value="">
+                              {t('选择一个 Worker 定义…', 'Choose a Worker definition…')}
+                            </option>
                             {workerDefinitions.map((row) => (
                               <option key={`${row.id}@${row.version}`} value={row.id}>
                                 {definitionName([row], row.id, row.version) ?? row.id} v

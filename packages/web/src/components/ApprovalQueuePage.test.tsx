@@ -116,7 +116,7 @@ describe('ApprovalQueuePage state machine', () => {
     expect(screen.queryByTestId('approvals-loading')).toBeNull();
 
     // retry → loading → empty
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(screen.getByTestId('approvals-loading')).toBeTruthy();
     await screen.findByTestId('approvals-empty');
     expect(screen.queryByRole('alert')).toBeNull();

@@ -1,5 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { AuditIdPicker } from '../../lib/audit-id-picker.js';
+import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
 import {
   AUDIT_RESOURCE_TYPES,
   type AuditFilter,
@@ -44,9 +46,11 @@ const PAGE_SIZE = 50;
  * workspace audit stream (`audit_query`, auditor only) as a structured list — time, action,
  * actor (`RefChip` with the name from `list_principals`), resource (`RefChip`, linked to its
  * console page where one exists), payload behind a disclosure. Filters: actor (a `<select>` over
- * the principal directory when readable, a text input otherwise), action (free text with the
- * capability registry + lifecycle actions as suggestions), resource type (the enum of what
- * audit rows actually carry, `lib/audit.ts` `AUDIT_RESOURCE_TYPES`) and resource id. Keyset
+ * the principal directory when readable, otherwise an id box offering the actors of recent audit
+ * rows), action (free text with the capability registry + lifecycle actions as suggestions),
+ * resource type (the enum of what audit rows actually carry, `lib/audit.ts`
+ * `AUDIT_RESOURCE_TYPES`) and resource id (candidates from that type's list capability —
+ * `lib/audit-pickers.ts` `resourceIdSource`). Keyset
  * "加载更多" via `useCapabilityList` (S6-A: `audit_query{limit, cursor}` → `nextCursor`), the
  * same pattern as the platform audit page. "导出 Export" serializes the rows this page holds —
  * `export_prov` exports a provenance graph around one node, not an audit range (runbook 已知缺口
@@ -90,6 +94,11 @@ export function AuditLogSection({
   );
   const audit = useCapabilityList<AuditRecordRow>(http, 'audit_query', params);
   const suggestions = useMemo(() => auditActionSuggestions(), []);
+  // Candidates for the two id filters (field-inventory §11): the chosen resource type's own list
+  // capability (falling back to ids seen in the audit log), and — when `list_principals` is
+  // refused, e.g. for an auditor — the principals who acted in recent audit rows.
+  const resourceSource = useMemo(() => resourceIdSource(resourceType, t), [resourceType, t]);
+  const actorSource = useMemo(() => auditActorSource(t), [t]);
   const forbidden = audit.state.status === 'error' && isForbiddenError(audit.state.error);
   const rows = audit.state.status === 'ready' ? audit.state.data.items : [];
   const nextCursor = audit.state.status === 'ready' ? audit.state.data.nextCursor : undefined;
@@ -149,8 +158,8 @@ export function AuditLogSection({
         ) : null}
       </div>
       <form className="inline-form row-wrap" onSubmit={handleSubmit} data-testid="audit-query-form">
-        <Field id="audit-actor" label={t('操作者', 'Actor')}>
-          {actorSelect ? (
+        {actorSelect ? (
+          <Field id="audit-actor" label={t('操作者', 'Actor')}>
             <Select
               id="audit-actor"
               value={actor}
@@ -167,17 +176,27 @@ export function AuditLogSection({
                 <option value={actor}>{actor}</option>
               ) : null}
             </Select>
-          ) : (
-            <Input
-              id="audit-actor"
-              value={actor}
-              onChange={(event) => setActor(event.target.value)}
-              placeholder="principal id"
-              mono
-              data-testid="audit-actor-input"
-            />
-          )}
-        </Field>
+          </Field>
+        ) : (
+          <AuditIdPicker
+            http={http}
+            id="audit-actor"
+            label={t('操作者', 'Actor')}
+            hint={t(
+              '当前角色无权读取成员目录（list_principals 需要 operator），候选取自最近审计记录中的操作者。',
+              'Your role cannot read the member directory (list_principals needs operator); suggestions are the actors of recent audit rows.',
+            )}
+            value={actor}
+            onChange={setActor}
+            source={actorSource}
+            refusedNote={t(
+              '也无法读取审计记录，请直接粘贴 principal id。',
+              'The audit log is not readable either — paste a principal id.',
+            )}
+            placeholder={t('粘贴 principal id，或从下方选择', 'Paste a principal id or pick below')}
+            testId="audit-actor-input"
+          />
+        )}
         <Field id="audit-action" label={t('动作', 'Action')}>
           <Input
             id="audit-action"
@@ -210,14 +229,19 @@ export function AuditLogSection({
             ) : null}
           </Select>
         </Field>
-        <Field id="audit-resource-id" label={t('资源 id', 'Resource id')}>
-          <Input
-            id="audit-resource-id"
-            value={resourceId}
-            onChange={(event) => setResourceId(event.target.value)}
-            mono
-          />
-        </Field>
+        <AuditIdPicker
+          http={http}
+          id="audit-resource-id"
+          label={t('资源 id', 'Resource id')}
+          value={resourceId}
+          onChange={setResourceId}
+          source={resourceSource}
+          noSourceNote={t(
+            '先选择资源类型，即可从该类型的资源中选择。',
+            'Choose a resource type first to pick from its resources.',
+          )}
+          testId="audit-resource-id"
+        />
         <Button type="submit" variant="secondary" data-testid="audit-apply">
           {t('应用', 'Apply')}
         </Button>

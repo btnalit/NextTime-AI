@@ -163,8 +163,28 @@ describe('GateInstanceDetailPanel', () => {
     fireEvent.click(screen.getByTestId('gate-instance-test'));
     const result = await screen.findByTestId('gate-instance-test-result');
     expect(result.textContent).toContain('4');
+    // The result renders right after the button that produced it, not up in the metadata block.
+    const button = screen.getByTestId('gate-instance-test');
+    expect(button.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('gate-instance-test-no-reason')).toBeNull();
     fireEvent.click(screen.getByTestId('gate-instance-test'));
     await waitFor(() => expect(screen.getByText(/找不到该门实例/)).toBeTruthy());
+  });
+
+  it('an unhealthy test result says what the health value means and where to look', async () => {
+    const http = scriptedHttp({
+      test_gate_instance: () => ({
+        gateId: 'gate-1',
+        health: 'unreachable',
+        describedOperationCount: null,
+        checkedAt: '2026-09-11T00:00:00.000Z',
+      }),
+    });
+    renderPanel(http, gateInstance());
+    fireEvent.click(screen.getByTestId('gate-instance-test'));
+    const note = await screen.findByTestId('gate-instance-test-no-reason');
+    expect(note.textContent).toContain('连不上这个门');
+    expect(note.textContent).toContain('日志');
   });
 
   it('hosted + shared: shows the definition, the 5-minute token button and delete; delete posts delete_gate_instance', async () => {

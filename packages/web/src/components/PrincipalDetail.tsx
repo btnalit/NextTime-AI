@@ -311,7 +311,7 @@ export function PrincipalDetail({
                 </Notice>
                 <div className="code-block row" style={{ justifyContent: 'space-between' }}>
                   <span className="mono">{rotated.apiKey}</span>
-                  <CopyButton value={rotated.apiKey} label="API key" />
+                  <CopyButton value={rotated.apiKey} label={t('API 密钥', 'API key')} />
                 </div>
                 <div className="row" style={{ justifyContent: 'flex-end' }}>
                   <Button variant="secondary" size="s" onClick={() => setRotated(null)}>

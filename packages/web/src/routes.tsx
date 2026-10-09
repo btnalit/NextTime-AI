@@ -307,7 +307,9 @@ export function Routed({
       );
       break;
     case 'members':
-      page = <MembersPage http={session.http} />;
+      page = (
+        <MembersPage http={session.http} platformAdmin={session.user?.platformRole === 'admin'} />
+      );
       break;
     // Console redesign P2: 访问 and 系统接入 merged into one page (`components/systems/
     // SystemsPage.tsx`, docs/console-redesign-plan-2026-09-25.md §4) — `#/govern/access` keeps
@@ -366,6 +368,7 @@ export function Routed({
         <PlatformWorkspacesPage
           http={session.http}
           memberships={session.memberships ?? []}
+          currentUserId={session.user?.id}
           onMembershipsChanged={onMembershipsChanged}
           onOpenWorkspaceConfig={(workspaceId) => {
             // Already in it (the switcher would no-op) — just go to the owner pages.
