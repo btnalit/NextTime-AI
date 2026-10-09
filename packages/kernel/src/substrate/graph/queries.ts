@@ -4,9 +4,11 @@ import {
   operationDraftHiddenSql,
 } from './operation-draft-visibility.js';
 import {
+  DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   DEFAULT_TRAVERSE_DIRECTION,
+  type ListFactsInput,
   type NeighborsInput,
   type SearchInput,
   type StateAtInput,
@@ -511,7 +513,7 @@ export function buildNeighborsQuery(workspaceId: string, input: NeighborsInput):
         )
         and ($4::text is null or link_type = $4)
         and ${LINK_VISIBLE_PREDICATE}
-      order by recorded_at desc
+      order by recorded_at desc, id desc
     `,
     values: [workspaceId, input.objectId, direction, input.linkType ?? null],
   };
@@ -589,6 +591,12 @@ export function buildTraverseQuery(
  * for the workspace, newest `recorded_at` first — the same "active" filter
  * `buildNeighborsQuery`/`buildTraverseQuery` already use (`superseded_at is null and
  * invalidated_at is null`), with no anchor Object (workspace-wide, not `traverse`-from-a-node).
+ *
+ * `id` breaks `recorded_at` ties. `recorded_at` defaults to `now()`, the transaction's start, and
+ * a capability call is one transaction — a collector's `submit_observations` phase writes dozens
+ * of Facts with one shared `recorded_at`. Ordered by that alone, which of them fit under `limit`
+ * was Postgres's choice and could change from one call to the next (the entry agent's injected
+ * context changed with it — dependency_chat 0/10 in real-model round 4).
  */
 export function buildRecentFactsQuery(
   workspaceId: string,
@@ -605,10 +613,101 @@ export function buildRecentFactsQuery(
         and invalidated_at is null
         and ${LINK_VISIBLE_PREDICATE}
         ${filter.sql}
-      order by recorded_at desc
+      order by recorded_at desc, id desc
       limit $2
     `,
     values: [workspaceId, limit ?? DEFAULT_RECENT_FACTS_LIMIT, ...filter.values],
+  };
+}
+
+/** `list_facts` keyset cursor: the last row's `(recorded_at, id)`, the pair `buildListFactsQuery`
+ *  orders by. Same opaque `<iso>|<uuid>` base64url encoding, validation and millisecond rule as
+ *  `encodeSearchCursor` — a separate copy because the two cursors name different columns. */
+export function encodeFactsCursor(recordedAt: Date, id: string): string {
+  return Buffer.from(`${recordedAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+/** Never throws: a cursor that does not parse reads as "no cursor" (first page). */
+export function decodeFactsCursor(
+  cursor: string | undefined,
+): { readonly recordedAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const recordedAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!recordedAt || Number.isNaN(Date.parse(recordedAt)) || !UUID_PATTERN.test(id)) return null;
+    return { recordedAt, id };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `listFactsPage` (`list_facts`): every currently-active Fact of one `linkType`, workspace-wide,
+ * keyset-paginated on `(recorded_at desc, id desc)`. Same active filter, visibility predicate and
+ * viewer narrowing as `buildRecentFactsQuery`; same millisecond truncation on both sides of the
+ * keyset comparison as `buildSearchQuery` (a JS `Date` cursor carries milliseconds, Postgres
+ * stores microseconds), with `id` breaking the ties every Fact of one call has. `limit` is bound
+ * as given — the store clamps it and over-fetches by one.
+ */
+export function buildListFactsQuery(
+  workspaceId: string,
+  input: ListFactsInput,
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const cursor = decodeFactsCursor(input.cursor);
+  const filter = linkViewerFilter(viewer, 6);
+  return {
+    text: `
+      select ${FACT_COLUMNS}
+      from links l
+      where workspace_id = $1
+        and link_type = $2
+        and superseded_at is null
+        and invalidated_at is null
+        and (
+          $4::timestamptz is null
+          or (date_trunc('milliseconds', recorded_at), id) < ($4::timestamptz, $5::uuid)
+        )
+        and ${LINK_VISIBLE_PREDICATE}
+        ${filter.sql}
+      order by date_trunc('milliseconds', recorded_at) desc, id desc
+      limit $3
+    `,
+    values: [
+      workspaceId,
+      input.linkType,
+      input.limit ?? DEFAULT_LIST_FACTS_LIMIT,
+      cursor?.recordedAt ?? null,
+      cursor?.id ?? null,
+      ...filter.values,
+    ],
+  };
+}
+
+/** `countFactsByLinkType`: currently-active Facts per `link_type`, same filters as
+ *  `buildRecentFactsQuery`. `link_type` is unique per group, so the order is total. */
+export function buildFactCountsByLinkTypeQuery(
+  workspaceId: string,
+  viewer?: GraphReadViewer,
+): SqlQuery {
+  const filter = linkViewerFilter(viewer, 2);
+  return {
+    text: `
+      select link_type, count(*)::int as count
+      from links l
+      where workspace_id = $1
+        and superseded_at is null
+        and invalidated_at is null
+        and ${LINK_VISIBLE_PREDICATE}
+        ${filter.sql}
+      group by link_type
+      order by link_type
+    `,
+    values: [workspaceId, ...filter.values],
   };
 }
 
@@ -643,7 +742,7 @@ export function buildStateAtFactsQuery(
         and (valid_until is null or valid_until > $3)
         and ${LINK_VISIBLE_PREDICATE}
         ${filter.sql}
-      order by recorded_at desc
+      order by recorded_at desc, id desc
     `,
     values: [workspaceId, input.objectId, input.at, ...filter.values],
   };

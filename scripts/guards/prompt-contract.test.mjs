@@ -15,6 +15,7 @@ import {
   candidateIdentifier,
   checkConditionalOpsRunner,
   checkEmptyFindGuidance,
+  checkGraphQuestionGuidance,
   checkPromptFile,
   checkReplyLanguageDirective,
   extractBacktickSpans,
@@ -173,6 +174,8 @@ const GOOD_ENTRY_FIXTURE_PROMPT = [
   'Always answer in the language the user wrote their message in, including every intermediate',
   'status message. When you `invoke_worker` a Worker, tell it what language to write its result',
   'summary in.',
+  'The injected Facts are never the whole graph: call `list_facts` and follow its `nextCursor`.',
+  'If data is missing, say so plainly, and never present a partial answer as complete.',
 ].join(' ');
 
 test('checkEmptyFindGuidance', async (t) => {
@@ -213,6 +216,24 @@ test('checkReplyLanguageDirective', async (t) => {
     assert.equal(violations.length, 1);
     assert.match(violations[0], /reply in the user.s own language/);
   });
+});
+
+test('checkGraphQuestionGuidance', async (t) => {
+  await t.test('a prompt carrying every required phrase has no violations', () => {
+    assert.deepEqual(checkGraphQuestionGuidance('fixture.yaml', GOOD_ENTRY_FIXTURE_PROMPT), []);
+  });
+
+  await t.test(
+    'catches a regressed prompt that lets the agent answer from the recent sample',
+    () => {
+      const badPrompt =
+        'Answer from the Relevant facts in your context; use `list_facts` if unsure.';
+      const violations = checkGraphQuestionGuidance('fixture.yaml', badPrompt);
+      assert.equal(violations.length, 1);
+      assert.match(violations[0], /answer graph questions by enumerating/);
+      assert.match(violations[0], /"say so plainly"/);
+    },
+  );
 });
 
 test('ALLOWED_NON_TOOL_WORDS', async (t) => {

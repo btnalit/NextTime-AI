@@ -10,6 +10,7 @@ import { enqueue } from '../outbox/index.js';
 import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
 import type { GraphReadViewer } from './operation-draft-visibility.js';
 import {
+  buildFactCountsByLinkTypeQuery,
   buildFindActiveFactByIdentityQuery,
   buildGetFactForUpdateQuery,
   buildGetObjectByIdentityQuery,
@@ -18,6 +19,7 @@ import {
   buildInsertFactQuery,
   buildInvalidateUnobservedFactsQuery,
   buildLatestFactInvalidatedForIdentityQuery,
+  buildListFactsQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
@@ -28,19 +30,25 @@ import {
   buildTraverseQuery,
   buildUpsertObjectQuery,
   buildVerifyFactQuery,
+  encodeFactsCursor,
   encodeSearchCursor,
 } from './queries.js';
 import {
   type AssertFactInput,
   type AssertFactResult,
   type CallerPrincipal,
+  DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   type Fact,
+  type FactCountByLinkType,
   FactNotFoundError,
+  type FactsPage,
   type GraphObject,
   type GraphStore,
   type InvalidateFactInput,
   type InvalidateUnobservedFactsInput,
+  type ListFactsInput,
+  MAX_LIST_FACTS_LIMIT,
   MAX_SEARCH_LIMIT,
   type NeighborsInput,
   type SearchInput,
@@ -814,5 +822,38 @@ export class SqlGraphStore implements GraphStore {
     const query = buildRecentFactsQuery(workspaceId, limit, viewer);
     const result = await client.query<FactRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapFactRow);
+  }
+
+  async listFactsPage(
+    client: PoolClient,
+    workspaceId: string,
+    input: ListFactsInput,
+    viewer?: GraphReadViewer,
+  ): Promise<FactsPage> {
+    const limit = Math.min(
+      Math.max(input.limit ?? DEFAULT_LIST_FACTS_LIMIT, 1),
+      MAX_LIST_FACTS_LIMIT,
+    );
+    // Over-fetch by one, as `searchPage` does: a (limit + 1)th row proves a next page exists.
+    const query = buildListFactsQuery(workspaceId, { ...input, limit: limit + 1 }, viewer);
+    const result = await client.query<FactRow>(query.text, query.values as unknown[]);
+    const items = result.rows.slice(0, limit).map(mapFactRow);
+    const last = items[items.length - 1];
+    const nextCursor =
+      result.rows.length > limit && last ? encodeFactsCursor(last.recordedAt, last.id) : undefined;
+    return nextCursor === undefined ? { items } : { items, nextCursor };
+  }
+
+  async countFactsByLinkType(
+    client: PoolClient,
+    workspaceId: string,
+    viewer?: GraphReadViewer,
+  ): Promise<readonly FactCountByLinkType[]> {
+    const query = buildFactCountsByLinkTypeQuery(workspaceId, viewer);
+    const result = await client.query<{ link_type: string; count: number }>(
+      query.text,
+      query.values as unknown[],
+    );
+    return result.rows.map((row) => ({ linkType: row.link_type, count: row.count }));
   }
 }
