@@ -1592,8 +1592,9 @@ real_no_pi_egress_step() {
 real_entry_diagnostics() {
   c="nexttime-entry-$1"
   echo "DIAG entry-container $(docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$c" 2>/dev/null || echo 'status=absent')"
-  docker logs --tail 80 "$c" </dev/null 2>&1 | grep -v '"type":"message_update"' | cut -c1-400 |
-    sed -E 's/[A-Za-z0-9_=+-]{32,}/<redacted>/g; s/^/DIAG entry-log /'
+  # Redact before truncating, so a token cut at column 400 never leaves an unredacted prefix.
+  docker logs --tail 80 "$c" </dev/null 2>&1 | grep -v '"type":"message_update"' |
+    sed -E 's/[A-Za-z0-9_=+-]{32,}/<redacted>/g' | cut -c1-400 | sed 's/^/DIAG entry-log /'
 }
 
 # Real-model mode: one trivial Turn before any scenario. Every scenario needs the entry agent to
