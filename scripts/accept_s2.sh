@@ -31,7 +31,8 @@
 #     from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and
 #     ${NEXTTIME_DATA}/models/models.json are never modified — no manual provider switch is
 #     needed before or after.
-#   - `docker compose --profile accept-s2 build` has been run at least once (images built).
+#   - this release's gate-host image is on the host (scripts/pull-images.sh or build-images.sh);
+#     preflight builds the three bare fixtures and runs the two accept-s2 gates on that image.
 #   - `docker compose build worker-runtime` (profile build-only) has produced
 #     `nexttime-ai-worker-runtime` — step 6's fallback env/egress probe runs that image directly.
 #
@@ -238,12 +239,34 @@ preflight_step() {
   fi
   pass "preflight-worker-runtime-image" "nexttime-ai-worker-runtime present"
 
-  build_out=$(docker compose --profile accept-s2 build accept-s2-sshd accept-s2-openapi accept-s2-mcp accept-s2-ssh-gate accept-s2-http-gate 2>&1)
+  # The three bare fixtures are built here (base image + COPY, no package install: nothing to
+  # fetch once the base images and the BuildKit frontend are on the host). The two gates are the
+  # gatekeeper-base image the release itself ships as gate-host — same Dockerfile, same context,
+  # no build args — so they are that image under their own compose names, never a host source
+  # build of it: that needs npm egress at release time (legacy 137, lib/accept-common.sh) and
+  # would accept unverified host-built gate code instead of the release's.
+  build_out=$(docker compose --profile accept-s2 build accept-s2-sshd accept-s2-openapi accept-s2-mcp 2>&1)
   build_rc=$?
   if [ "$build_rc" -ne 0 ]; then
     fail "preflight-accept-s2-build" "docker compose --profile accept-s2 build failed: $(printf '%s' "$build_out" | tail -20)"
   fi
-  pass "preflight-accept-s2-build" "accept-s2 fixture/gate images built"
+  pass "preflight-accept-s2-build" "accept-s2 fixture images built (sshd, openapi, mcp)"
+
+  gate_image=$(compose_image_of gate-host) ||
+    fail "preflight-accept-s2-gate-image" "cannot resolve the local image name of gate-host (docker compose config --images)"
+  image_out=$(release_image_check "$gate_image")
+  case $? in
+    0) : ;;
+    2) fail "preflight-accept-s2-gate-image" "$image_out — install this release's images first: sh scripts/pull-images.sh <tag> gate-host (or sh scripts/build-images.sh gate-host)" ;;
+    *) fail "preflight-accept-s2-gate-image" "$image_out" ;;
+  esac
+  for g in accept-s2-ssh-gate accept-s2-http-gate; do
+    g_image=$(compose_image_of "$g" --profile accept-s2) ||
+      fail "preflight-accept-s2-gate-image" "cannot resolve the local image name of $g (docker compose --profile accept-s2 config --images)"
+    docker tag "$gate_image" "$g_image" ||
+      fail "preflight-accept-s2-gate-image" "docker tag $gate_image $g_image failed"
+  done
+  pass "preflight-accept-s2-gate-image" "accept-s2-ssh-gate / accept-s2-http-gate run $image_out"
 }
 
 bootstrap_step() {

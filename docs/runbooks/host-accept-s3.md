@@ -20,6 +20,14 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
   compose --profile test up -d --force-recreate fake-llm`，否则"哪个服务依赖哪个"这句话不会命中新
   场景，入口 agent 只会回 echo。
 - 迁移已跑到最新（脚本自己的 `preflight-migrations` 步骤会再核实一遍）。
+- `collector-host-inventory` 镜像已在主机上：`scripts/pull-images.sh` 拉取并验签的发布镜像，或
+  `scripts/build-images.sh` 的源码构建（`apply-release.sh` 第 4 步二者必居其一）。脚本**不再**在主机上
+  `docker compose build collector-host-inventory`（遗留 137）：那一步要现场走 npm / apt 出网，v0.43.0
+  首轮就因 `pnpm fetch` 断连失败；而且它会用一份没验过签的主机构建顶掉刚验签的发布镜像。
+  `preflight-collector-image` 只核对镜像在、来源对：发布镜像的 `org.opencontainers.image.revision`
+  必须等于检出的 commit（不等就 FAIL，说明镜像与检出不是同一个版本），源码构建报
+  `source build (no release labels)`。镜像不在时按 FAIL 提示补：
+  `sh scripts/pull-images.sh vX.Y.Z collector-host-inventory`。
 - `${NEXTTIME_DATA}/secrets/gate_token` 等 `docs/runbooks/host-bootstrap.md` 的首次引导已完成
   （本脚本不生成这些）。
 - 主机上有 `docker`、`docker compose`；**没有** `node`/`corepack`——脚本把每一次 kernel/Explorer/MCP
@@ -68,7 +76,7 @@ id/key 已脱敏）：
 PASS preflight-services running: postgres kernel llm-proxy egress-proxy worker-supervisor agent-host fake-llm docker-socket-proxy-collector
 PASS preflight-fake-provider fake provider configured in .../config/llm-providers.yaml
 PASS preflight-migrations up to date
-PASS preflight-collector-build collector-host-inventory image built
+PASS preflight-collector-image nexttime-ai-collector-host-inventory 3f9c0a1b2c3d published vX.Y.Z 4d6eead1a2b3
 PASS bootstrap-workspace workspace=<uuid> owner=<uuid> key=abc123...(redacted)
 PASS seed-domain-pack domain pack published: ops-assets (id=<uuid>, version=1)
 PASS collector-issue-service-handle token minted into a run-private file (never ${NEXTTIME_DATA}/secrets/collector-host-inventory.token): 9f3a1c...(redacted)

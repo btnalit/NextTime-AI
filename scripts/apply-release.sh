@@ -9,6 +9,16 @@
 #   sh scripts/apply-release.sh --pull vX.Y.Z    # published images (scripts/pull-images.sh); falls
 #                                                # back to the source build if the pull or the
 #                                                # signature check fails, and says so in the log
+#   sh scripts/apply-release.sh --prefetch vX.Y.Z  # ahead of the maintenance window: fetch the tag,
+#                                                # pull and verify its images, nothing else (below)
+#
+# Prefetch (legacy 137 — pulling eleven images took ~53 min on the host's egress during the
+# v0.43.0 window): runs the TAG's own scripts/pull-images.sh --prefetch, which pulls and verifies
+# the published images plus the third-party and fixture base images the apply needs, without
+# retagging anything. The checkout, the running stack and the database are not touched, so it is
+# safe any time before the window and can be re-run. The later `--pull` apply then finds every
+# image present and only re-verifies it. Logs to ${NEXTTIME_DATA}/drills/prefetch-<tag>-<ts>.log;
+# last line "RESULT ok" or "RESULT failed-at=<step>".
 #
 # Long-running (build + four acceptance suites ≈ 20–40 min). Over ssh, run it as a background job
 # and follow the log; every step prints one "STEP <name> …" line, a fatal one prints "FAIL <name>"
@@ -55,8 +65,12 @@ fi
 case "$0" in /tmp/apply-release.*) trap 'rm -f "$0"' EXIT ;; esac
 
 pull=0
-if [ "${1:-}" = "--pull" ]; then pull=1; shift; fi
-[ "$#" -eq 1 ] || { echo "usage: sh scripts/apply-release.sh [--pull] vX.Y.Z" >&2; exit 2; }
+prefetch=0
+case "${1:-}" in
+  --pull) pull=1; shift ;;
+  --prefetch) prefetch=1; shift ;;
+esac
+[ "$#" -eq 1 ] || { echo "usage: sh scripts/apply-release.sh [--pull | --prefetch] vX.Y.Z" >&2; exit 2; }
 TAG=$1
 case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "apply-release: tag must look like vX.Y.Z, got '$TAG'" >&2; exit 2 ;; esac
 [ -f docker-compose.yml ] && [ -f .env ] || { echo "apply-release: run from the checkout root (docker-compose.yml / .env not found)" >&2; exit 2; }
@@ -67,12 +81,30 @@ export NEXTTIME_DATA="$D"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 LOG_DIR=${APPLY_LOG_DIR:-$D/drills}
 mkdir -p "$LOG_DIR"
-LOG="$LOG_DIR/apply-$TAG-$TS.log"
+if [ "$prefetch" -eq 1 ]; then LOG="$LOG_DIR/prefetch-$TAG-$TS.log"; else LOG="$LOG_DIR/apply-$TAG-$TS.log"; fi
 echo "apply-release: logging to $LOG"
 exec >"$LOG" 2>&1
-echo "STEP start $TAG $TS pull=$pull"
+echo "STEP start $TAG $TS pull=$pull prefetch=$prefetch"
 
 fail() { echo "FAIL $1"; echo "RESULT failed-at=$1"; exit 1; }
+
+# Prefetch only: the tag's own pull-images.sh, taken with `git show` like this script itself (the
+# checkout stays on the running release), then stop.
+if [ "$prefetch" -eq 1 ]; then
+  git fetch -q origin --tags || echo "STEP fetch WARNING git fetch failed — using the tags already in this checkout"
+  git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || fail fetch
+  pull_script=$(mktemp /tmp/pull-images-prefetch.XXXXXX) || fail prefetch
+  git show "$TAG:scripts/pull-images.sh" >"$pull_script" 2>/dev/null && grep -q -- '--prefetch' "$pull_script" ||
+    { rm -f "$pull_script"; echo "STEP prefetch $TAG's scripts/pull-images.sh has no --prefetch"; fail prefetch; }
+  # Exit status from the script itself, not from a pipe into sed (same as step 4 below).
+  sh "$pull_script" --prefetch "$TAG" >"$LOG_DIR/prefetch-$TAG-$TS-pull.log" 2>&1 </dev/null
+  rc=$?
+  sed 's/^/STEP prefetch /' "$LOG_DIR/prefetch-$TAG-$TS-pull.log"
+  rm -f "$pull_script"
+  [ "$rc" -eq 0 ] || fail prefetch
+  echo "RESULT ok"
+  exit 0
+fi
 
 # R-71: a stop between checkout and `up` puts the checkout back where it was, so the next
 # `docker compose …` on this host does not run the new release's compose file against the old
@@ -159,7 +191,13 @@ echo "STEP dump $(stat -c %s "$DUMP") bytes $(docker compose exec -T postgres pg
 PREV_SHA=$(git rev-parse HEAD)
 PREV_REF=$(git symbolic-ref -q --short HEAD || echo "$PREV_SHA")
 echo "STEP checkout-from $PREV_REF ($(git describe --tags --always HEAD 2>/dev/null || echo "$PREV_SHA"))"
-git fetch -q origin --tags && git checkout -q "$TAG" || fail_before_up checkout
+# A failed fetch is not fatal when the tag is already here (a prefetch fetched it): the host's
+# egress drops connections, and the tag is all this step needs from GitHub.
+if ! git fetch -q origin --tags; then
+  git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || fail_before_up checkout
+  echo "STEP checkout WARNING git fetch failed — $TAG is already in this checkout, using it"
+fi
+git checkout -q "$TAG" || fail_before_up checkout
 KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
 export KERNEL_VERSION
 echo "STEP checkout $(git rev-parse --short HEAD) KV=$KERNEL_VERSION"
@@ -222,8 +260,10 @@ sleep 30
 echo "STEP up"
 docker compose ps --format '{{.Service}} {{.Status}}'
 
-# 7. acceptance — the S2 fixtures build FROM docker/dockerfile:1.7; pre-pull it with retries
-for i in 1 2 3; do docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
+# 7. acceptance — the S2 fixtures build FROM docker/dockerfile:1.7; pre-pull it with retries unless
+#    it is already here (a prefetch, an earlier apply)
+docker image inspect docker/dockerfile:1.7 >/dev/null 2>&1 ||
+  for i in 1 2 3; do docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
 failures=0
 for s in 3 1 2 4; do
   [ -f "scripts/accept_s$s.sh" ] || { echo "STEP S$s skipped (not in this tag)"; continue; }

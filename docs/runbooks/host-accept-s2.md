@@ -20,8 +20,15 @@
 - `docker compose --profile build-only build worker-runtime` 已跑过一次，产出
   `nexttime-ai-worker-runtime` 镜像（step 6 直接跑这个镜像做 env/egress 探测，见 §5 "已知偏离"）。
 - `docker compose --profile accept-s2 build` 未跑过也没关系——`scripts/accept_s2.sh` 自己的
-  preflight 步骤会构建 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/
-  `accept-s2-http-gate` 五个镜像（`accept-s2-restart-target` 直接用官方 `alpine:3.20`，无需构建）。
+  preflight 步骤会构建 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp` 三个裸 fixture 镜像
+  （基础镜像 + COPY，不装包；基础镜像与 BuildKit frontend 在主机上之后不再出网）。
+  `accept-s2-ssh-gate`/`accept-s2-http-gate` 两个门**不再**在主机上源码构建（遗留 137）：它们与
+  `gate-host` 是同一个 `packages/gatekeeper-base/Dockerfile`、同一个 context、没有 build args，
+  preflight 直接把本次发布装上的 `gate-host` 镜像（`pull-images.sh` 验过签的，或 `build-images.sh`
+  的）重打成这两个 compose 名字（`preflight-accept-s2-gate-image`，核对规则同
+  `host-accept-s3.md` 的 `preflight-collector-image`）。源码构建它们要现场走 npm 出网，
+  而且验收的会是一份没验过签的主机构建，而不是发布的门代码。
+  `accept-s2-restart-target` 直接用官方 `alpine:3.20`，无需构建。
   `accept-s2-mcp`（S3.12 新增）是 `connect-mcp-*` 步骤用的最小 MCP fixture（`initialize`/
   `tools/list`/`tools/call`，两个工具），没有独立前置门——`create_connection` 对 `kind:'mcp'` 的清单
   导入直接由内核进程调 `manifestSource`（`McpTransport.listTools`），不经过门；两个工具不需要凭证，
@@ -90,7 +97,8 @@ PASS preflight-services running: postgres kernel caddy llm-proxy egress-proxy wo
 PASS preflight-fake-provider fake provider configured in .../config/llm-providers.yaml
 PASS preflight-migrations up to date
 PASS preflight-worker-runtime-image nexttime-ai-worker-runtime present
-PASS preflight-accept-s2-build accept-s2 fixture/gate images built
+PASS preflight-accept-s2-build accept-s2 fixture images built (sshd, openapi, mcp)
+PASS preflight-accept-s2-gate-image accept-s2-ssh-gate / accept-s2-http-gate run nexttime-ai-gate-host 5e1d2c3b4a59 published vX.Y.Z 4d6eead1a2b3
 PASS bootstrap-workspace workspace=<uuid> alice=<uuid> key=abc123...(redacted)
 PASS bootstrap-bob bob=<uuid> (member) key=def456...(redacted)
 PASS fixtures-ssh-keygen keypair generated into ${NEXTTIME_DATA}/accept-s2/ssh/

@@ -336,3 +336,58 @@ reply_says_running() {
     *) echo 0 ;;
   esac
 }
+
+# --------------------------------------------------------------------------------------------
+# Release images under test (legacy 137). Acceptance runs against the images the release put on
+# the host — scripts/pull-images.sh (published, signature-verified) or scripts/build-images.sh —
+# and never rebuilds a platform image from source itself: a rebuild needs npm / apt / Docker Hub
+# egress at release time (the v0.43.0 S3 preflight failed on exactly that) and would replace the
+# verified image under the service's local name with an unverified host build.
+# --------------------------------------------------------------------------------------------
+
+# compose_image_of <service> [compose option...]: the local image name docker compose uses for
+# <service> (the same derivation as scripts/pull-images.sh's local_name_of — `config --images`
+# also prints the depends_on chain's images, so keep the one name ending in -<service>). Pass
+# `--profile <p>` for a service behind a profile. Prints nothing and returns 1 unless exactly one
+# name resolves.
+compose_image_of() {
+  _ci_svc=$1
+  shift
+  _ci_names=$(docker compose "$@" config --images "$_ci_svc" 2>/dev/null | grep -E "^[a-z0-9][a-z0-9_.-]*-${_ci_svc}\$" || true)
+  [ "$(printf '%s\n' "$_ci_names" | grep -c .)" -eq 1 ] || return 1
+  printf '%s\n' "$_ci_names"
+}
+
+# image_label <image> <label>: the label's value, empty when the image has no such label.
+image_label() {
+  _il_v=$(docker image inspect --format "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)
+  [ "$_il_v" = "<no value>" ] && _il_v=
+  printf '%s' "$_il_v"
+}
+
+# release_image_check <image>: one line saying where a local platform image came from. A published
+# image (pull-images.sh) carries .github/workflows/publish-images.yml's OCI labels — source = this
+# repository, revision = the commit it was built from — and that revision must be the checkout's
+# own commit, else the suite would accept another release's code: return 1. A source build
+# (build-images.sh) carries no such labels and is reported as one. Missing image: return 2.
+release_image_check() {
+  _ri_id=$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null) || { echo "$1 not present"; return 2; }
+  _ri_id=$(printf '%s' "${_ri_id#sha256:}" | cut -c1-12)
+  _ri_rev=$(image_label "$1" org.opencontainers.image.revision)
+  # The label carries the repository's own spelling (…/NextTime-AI), so compare case-blind.
+  case "$(image_label "$1" org.opencontainers.image.source | tr '[:upper:]' '[:lower:]')" in
+    */nexttime-ai) ;;
+    *) _ri_rev= ;;
+  esac
+  if [ -z "$_ri_rev" ]; then
+    echo "$1 $_ri_id source build (no release labels)"
+    return 0
+  fi
+  _ri_head=$(git rev-parse HEAD 2>/dev/null)
+  _ri_ver=$(image_label "$1" org.opencontainers.image.version)
+  if [ "$_ri_rev" != "$_ri_head" ]; then
+    echo "$1 $_ri_id is the published ${_ri_ver:-?} image of $(printf '%s' "$_ri_rev" | cut -c1-12), but the checkout is at $(printf '%s' "$_ri_head" | cut -c1-12)"
+    return 1
+  fi
+  echo "$1 $_ri_id published ${_ri_ver:-?} $(printf '%s' "$_ri_rev" | cut -c1-12)"
+}

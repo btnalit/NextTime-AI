@@ -225,9 +225,11 @@ preflight_step() {
   done
   [ -z "$missing" ] || step_fail preflight "services not running:$missing"
 
-  build_out=$(docker compose build collector-host-inventory 2>&1)
-  build_rc=$?
-  [ "$build_rc" -eq 0 ] || step_fail preflight "docker compose build collector-host-inventory failed: $(printf '%s' "$build_out" | tail -20)"
+  # The collector image the release installed, never rebuilt here (legacy 137, the same check as
+  # accept_s3.sh's preflight-collector-image).
+  collector_image=$(compose_image_of collector-host-inventory) ||
+    step_fail preflight "cannot resolve the local image name of collector-host-inventory (docker compose config --images)"
+  image_out=$(release_image_check "$collector_image") || step_fail preflight "$image_out"
 
   # accept-s2-restart-target (docker-compose.yml, profile "accept-s2"): the deterministic,
   # never-a-real-business-container restart target gatekeeper-docker acts on — same fixture
@@ -240,7 +242,7 @@ preflight_step() {
   RESTART_TARGET_ID=$(docker inspect "$restart_target_id" --format '{{.Id}}')
   [ -n "$RESTART_TARGET_ID" ] || step_fail preflight "could not resolve full container id for accept-s2-restart-target"
 
-  step_ok preflight "services up; collector image built; restart target=$RESTART_TARGET_ID"
+  step_ok preflight "services up; collector image $image_out; restart target=$RESTART_TARGET_ID"
 }
 
 # create-workspace --purpose ephemeral (design decision: never delete it — see cleanup_step).
