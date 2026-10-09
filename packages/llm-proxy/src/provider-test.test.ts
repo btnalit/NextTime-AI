@@ -172,6 +172,53 @@ describe('runProviderTest', () => {
     expect(result.error).toContain('no call of "ping"');
   });
 
+  it('anthropic-messages: a reply with only thinking and text (no tool_use) is a tool-call failure under auto tool_choice', async () => {
+    const { port } = await start((c) =>
+      c.body.tools
+        ? {
+            status: 200,
+            body: {
+              content: [
+                { type: 'thinking', thinking: '', signature: 'sig' },
+                { type: 'text', text: 'pong' },
+              ],
+              stop_reason: 'end_turn',
+            },
+          }
+        : { status: 200, body: { content: [{ type: 'text', text: 'OK' }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'error' });
+    expect(result.error).toContain('no call of "ping"');
+  });
+
+  it('anthropic-messages: a thinking-only reply (max_tokens hit before any tool_use) is a tool-call failure', async () => {
+    const { port } = await start((c) =>
+      c.body.tools
+        ? {
+            status: 200,
+            body: {
+              content: [{ type: 'thinking', thinking: '', signature: 'sig' }],
+              stop_reason: 'max_tokens',
+            },
+          }
+        : { status: 200, body: { content: [{ type: 'text', text: 'OK' }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('anthropic-messages', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'error' });
+    expect(result.error).toContain('no call of "ping"');
+  });
+
   it('reports an upstream 401 as a completion error with a scrubbed excerpt and skips the tool call', async () => {
     const { port, captured } = await start(() => ({
       status: 401,
