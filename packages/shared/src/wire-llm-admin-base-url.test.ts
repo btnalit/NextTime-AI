@@ -11,7 +11,7 @@ describe('upstreamBaseUrlProblem', () => {
       'https://openrouter.ai/api',
       'https://dashscope.aliyuncs.com/compatible-mode',
       'http://192.0.2.10:11434',
-      'http://llm.lan:8000/proxy',
+      'http://llm.example.invalid:8000/proxy',
     ]) {
       expect(upstreamBaseUrlProblem(ok), ok).toBeNull();
       expect(LlmProviderUpstreamBaseUrlWireSchema.safeParse(ok).success, ok).toBe(true);

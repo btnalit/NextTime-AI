@@ -53,8 +53,8 @@ describe('lib/provider-form', () => {
       value: 'https://openrouter.ai/api',
       changed: 'both',
     });
-    expect(normalizeBaseUrl('http://10.0.0.5:8000/')).toEqual({
-      value: 'http://10.0.0.5:8000',
+    expect(normalizeBaseUrl('http://192.0.2.5:8000/')).toEqual({
+      value: 'http://192.0.2.5:8000',
       changed: 'none',
     });
     expect(normalizeBaseUrl('https://dashscope.aliyuncs.com/compatible-mode/v1').value).toBe(
