@@ -437,7 +437,7 @@ salt，每次调用时用 `gate_token` 重新派生。owner 提供的 URL（`cre
 写回 env 文件再 `--force-recreate`。无 schema 变化。
 
 **不在本次范围**：worker / 入口容器的 `CAPABILITY_HANDLE` 仍以容器 env 传入（短时、按 scope 收窄的 Handle，
-不是 provider key），见 R-24 的后续项。
+不是 provider key），见 R-24 的后续项。——已由 #524 完成（v0.44.0 之后的下一版）：Handle 不再进入容器，见 §3.17。
 
 ### 3.7 本体类型名在工作区内唯一（I-P1，S10 P0，core 0041）
 
@@ -678,6 +678,68 @@ SQL
 
 应用后看一次日志：`docker compose logs llm-proxy | grep 'cannot carry'`。有输出就在控制台重新填写对应供应商的密钥（或修好密钥文件 / 环境变量），改之前这个供应商的模型对 agent 不可用。日志只有供应商 id 与来源，不含密钥值。
 
+### 3.17 Handle 移出 agent 容器：窗口前排空 Worker（#524，governance 0018，v0.44.0 之后的下一版起）
+
+入口 agent 与 WorkerRun 的 Handle 不再以 `CAPABILITY_HANDLE` 放进容器 env（容器里只剩标记 `source-bound`）。worker-supervisor
+把「容器在 `workers` 网络的地址 → Handle」写进新的 tmpfs 卷 `handle-bindings`，kernel 与 llm-proxy 对 `workers` 来源只认绑在
+对端地址上的 Handle，请求自带凭证即 401，`workers` 平面以外的路由 403（设计文档 I19，`host-worker-runtime.md`）。
+
+**窗口前（必须）**：
+1. **排空 Worker**：确认没有运行中的 WorkerRun——控制台任务列表没有进行中的任务，且
+   `docker ps --filter label=nexttime.role=worker` 为空。进行中的 WorkerRun 会失败：governance 0018 吊销它的 Handle，新的
+   supervisor 也不会为旧容器建绑定。入口容器不用管，下一个 Turn 会自动重签并重建。`apply-release.sh` 目前不替你检查这一步（遗留 170）。
+   排空之后到窗口结束之前不要新发起 Worker；`queued` 的 Task 在应用后由新代码起容器，不受影响。
+2. 照常 `--prefetch` 目标 tag 并确认 `RESULT ok`（§3）。
+
+**应用时会发生什么**：
+- governance `0018_container_held_handles_revoked`：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle（即上一版放进容器
+  env 的那些），每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked`，payload 带 `revokedHandleCount`。
+  llm-proxy 经吊销同步跟上。只改数据，可逆（§6）。
+- compose 新建卷 `handle-bindings`（目录 `0700 10001:10001`）；kernel、llm-proxy、worker-supervisor 随版本重建（`up` 本来就会）。
+  滚动重建的几秒里旧 llm-proxy 遇到带 `hld` 的新 token 会 401，属窗口内。
+- worker-runtime 镜像的自检多一行 `check=handle_binding`，入口容器与 WorkerRun 容器都跑（`NEXTTIME_MODE` 为 `entry` 或
+  `worker`）：在启动 pi 之前反复问内核 `GET /api/source-binding`，绑定指向本容器才继续，20 秒内等不到就退出
+  （`address_not_bound` / `address_bound_to_another_container` / `hostname_not_a_container_id`）。**这是 fail closed**：
+  绑定没建好时 agent 起不来，而不是带着别的凭证跑。
+
+**应用后核对**：
+- S1 多三步：`env-no-handle`（容器里读不到任何 JWT，扫全部进程环境）、`env-workers-plane`、`env-source-binding`（逐容器核对
+  地址不同、绑定指向该容器、从容器里问内核得到该容器 id、入口自检 `check=handle_binding result=ok`）；`env-capability-handle`
+  的文字变了。`apply-release.sh` 在一次运行里按 S3 → S1 → S2 → S4 跑完全部验收，失败只计数、不会停下，所以要在 apply 日志里
+  确认这三步都是 PASS：任何一步 FAIL 都视为来源绑定没有生效，按 §5 判断是否回滚，不能只看 `RESULT` 的失败计数。
+- 0018 只在执行那一刻存在未过期、未吊销的容器 Handle 时才写审计行 `principal.container_handles_revoked`（例如 24 h 内没有
+  Turn、也没有 Worker，就是 0 行，不代表失败）。所以用下面的只读 SQL 核对：应用前签发、至今仍有效的容器 Handle 应为 0
+  （`<apply 日志的开始时间>` 换成日志第一行的时间）：
+
+  ```sql
+  begin transaction read only;
+  select count(*) from capability_handles h
+    join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+   where s.kind in ('entry','worker_run') and h.revoked_at is null
+     and h.expires_at > now() and h.created_at < '<apply 日志的开始时间>';
+  rollback;
+  ```
+- 用 §3.15 A 的只读 SQL 再数一次历史 Handle 命中：容器 Handle 副本此时应已全部吊销，剩下的 `live_unrevoked` 是用户粘贴进去的
+  bearer Handle（遗留 157），结果记 `docs/private/`。
+
+**回滚**：旧代码不读绑定文件；旧 kernel / llm-proxy 的严格 claims schema 拒绝带 `hld` 的 token，入口 agent 会从旧内核拿到新
+Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不需要。卷可以留着。回滚后再升级的窗口见遗留 167。
+
+### 3.18 含疑似凭据的内容生效前须二次确认（#526，v0.44.0 之后的下一版起）
+
+无迁移、无部署变化。行为变化：`approve`（含「总是允许」）与 `publish_skill` / `publish_procedure` / `publish_operation` /
+`publish_worker_definition` 在要生效的内容含 N > 0 处疑似凭据时，须勾「已核对凭据」（调用带 `credentialsReviewed: true`），
+否则内核返回 400 `credentials_review_required`；含疑似凭据的参数不再被自动批准或「总是允许」放行。控制台的对话审批卡遇到
+这种请求只给「去审批页核对」与拒绝。用脚本或 CLI 批准 / 发布含凭据内容的调用方要显式带这个字段。
+
+**应用后核对**（只用合成值，不要用真实凭据或真实 Handle）：
+- (a) 一个参数为 `{"password": "abcdefghijklmnopqrstuvwxyz0123"}` 的审批请求（合成值放在 `password` 字段里，按字段名计数；
+  若把 `password=abc…` 整串放进别的字段，比如 `cmd`，路径显示的是 `cmd`），在审批页显示「含 1 处疑似凭据」和字段 `password`，勾选前「批准」不可用；对话审批卡
+  只链接到审批页，不能直接批准。
+- (b) 批准后，该审批的审计行带 `credentialReview`（`suspectedSecretValues: 1`、`confirmed: true`）。
+
+结果记 `docs/private/`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -781,6 +843,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.42.0 之后的下一版 | core `0041_drop_workspace_ontology_enforcement_allowance`（S10 P0，遗留 123 跟进）：删 0035 的 `workspaces_own_ontology_enforcement` 策略，`workspaces_block_workspace_plane_update` 去掉 `ontology_enforcement` 一列的例外——工作区事务改不了任何 `workspaces` 行（RLS 隐藏，0 行）。不改数据、不加列 | 可逆 | v0.42.0 的产品代码只在平台事务（`update_workspace`）或登录角色上写 `workspaces`，没有路径用过这条放行；v0.42.0 套件里依赖它的只有 `write-confinement.integration.test.ts` 的两个用例（"兼容放行"，以及"自己工作区的其他列被触发器报错拒绝"——现在是 RLS 隐藏、0 行而不是报错），它们断言的正是这次有意改变的约束，探针里这两个用例失败属"旧测试断言了新迁移有意改变的约束"；`ontology-guard` / `worker-result` 自 0035 起已改在登录角色上改该列 | 只需回退代码；若要连 schema 一起撤：按 0035 重建该策略与触发器函数 |
 | v0.42.0 之后的下一版 | core `0042_definer_functions_bound_to_workspace`（S10 K4，遗留 123 的 L4-11 余项与 L4-13）：`find_active_fact_for_identity` / `latest_fact_invalidated_for_identity` 遇到不是 `app_workspace()` 的工作区参数报 42501，`link_visible_to_caller` / `conflict_visible_to_caller` 对它答 false；`workspace_gate_links_gatekeeper_idx` 换成唯一索引 `workspace_gate_links_gatekeeper_key (workspace_id, gatekeeper_object_id)`；收回 `nexttime_app` 对 `workspace_gate_links` 的 DELETE。不改数据、不加列 | 可逆（先过 §3.8 预检） | v0.42.0 的调用方都在 `withWorkspace` 里、传的都是本事务的工作区（GUC 对登录角色也设置），答案不变；v0.42.0 没有删关联的内核路径，手工解除关联走登录角色；v0.42.0 只在一个 Gatekeeper 还没有关联时插入关联（重复关联正是被拦下的情形）。已有重复关联时迁移本身失败、整体回滚，所以要先跑 §3.8 预检 | 只需回退代码；若要连 schema 一起撤：按 0013 / 0017 / 0027 / 0029 重建四个函数（`create or replace` 保留 0035 的授权），`drop index workspace_gate_links_gatekeeper_key` 后按 0023 重建非唯一索引，`grant delete on workspace_gate_links to nexttime_app` |
 | v0.42.0 之后的下一版 | task `0006_objective_outcome` + worker `0004_skill_procedure_attribution`（S10 E1 结果归因）：`tasks` 加五个可空的目标结果列（CHECK `tasks_objective_outcome_check`：全空，或第 1 版无前值，或第 2 版前值是另一值），`worker_runs.skills_recorded boolean not null default false`（PG 11+ 常量默认值不重写表），新表 `turn_outcomes`、`worker_run_skills`、`turn_procedure_claims`（工作区 RLS；后两张只授 `select, insert`）。不改既有数据 | 可逆 | 只加可空列、带常量默认值的列与新表：v0.42.0 的写入不碰新列（`skills_recorded` 取默认 false，读作"未记录"），也不知道新表；迁移可逆性探针用 v0.42.0 的测试在新 schema 上跑过（#480，2116 例通过，首跑唯一失败是遗留 123 已记的 `turn-terminal` 偶发超时，下一次提交上全过；合入头 `11252f3` 上探针也是绿的，那次 HEAD 已同时带 core 0041 / 0042 与 #482 的声明式判定） | 只需回退代码；若要连 schema 一起撤：`drop table turn_procedure_claims, worker_run_skills, turn_outcomes; alter table worker_runs drop column skills_recorded; alter table tasks drop constraint tasks_objective_outcome_check, drop column objective_outcome, drop column outcome_given_by, drop column outcome_given_at, drop column outcome_revision, drop column outcome_previous`（并从 `schema_migrations` 删掉这两条；不撤也无害——已记录的归因随之丢失） |
+| v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
