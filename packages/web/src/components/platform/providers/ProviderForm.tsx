@@ -142,6 +142,21 @@ function rejectedCredential(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
+/** True when the failure looks like a relay without a model list (404 / 405 / 501, or a body that
+ *  is not a model list) — the only case where "type the model ids instead" is the right advice.
+ *  A refused key (401 / 403), a rate limit or an unreachable upstream must not suggest it. */
+function relayMayNotListModels(error: unknown): boolean {
+  if (!(error instanceof LlmAdminError)) return false;
+  if (error.code === 'upstream_invalid_response') return true;
+  if (error.code !== 'upstream_error') return false;
+  const details = error.details;
+  const status =
+    typeof details === 'object' && details !== null && 'status' in details
+      ? (details as { status: unknown }).status
+      : null;
+  return status === 404 || status === 405 || status === 501;
+}
+
 export function ProviderForm({
   initial,
   client,
@@ -772,12 +787,14 @@ export function ProviderForm({
             {discoveryErrorText ??
               (discoveryError instanceof Error ? discoveryError.message : String(discoveryError))}
             {discoveryExplain ? <div className="text-2">{discoveryExplain}</div> : null}
-            <div className="text-2">
-              {t(
-                '有些中转不提供模型列表：可以在下面手动填写模型 id。',
-                'Some relays do not list models — type the model ids below instead.',
-              )}
-            </div>
+            {relayMayNotListModels(discoveryError) ? (
+              <div className="text-2" data-testid="provider-discover-manual-hint">
+                {t(
+                  '有些中转不提供模型列表：可以在下面手动填写模型 id。',
+                  'Some relays do not list models — type the model ids below instead.',
+                )}
+              </div>
+            ) : null}
           </div>
         ) : null}
 

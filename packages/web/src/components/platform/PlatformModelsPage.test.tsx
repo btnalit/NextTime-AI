@@ -640,6 +640,37 @@ describe('PlatformModelsPage', () => {
     fireEvent.click(within(form).getByTestId('provider-discover'));
     const error = await within(form).findByTestId('provider-discover-error');
     expect(error.textContent).toContain('暂停了 25 秒');
+    expect(within(form).queryByTestId('provider-discover-manual-hint')).toBeNull();
+  });
+
+  it('suggests typing model ids only when the relay seems to have no model list', async () => {
+    for (const [status, hinted] of [
+      [404, true],
+      [401, false],
+    ] as const) {
+      const http = scriptedHttp();
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+        'POST /model-discovery': () => ({
+          status: 502,
+          body: {
+            error: { code: 'upstream_error', message: `HTTP ${status}`, details: { status } },
+          },
+        }),
+      });
+      renderPage(http, proxy.fetchImpl);
+      await screen.findByTestId('providers-table');
+      fireEvent.click(screen.getByTestId('provider-create'));
+      const form = await screen.findByTestId('provider-form');
+      fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+      fireEvent.change(within(form).getByTestId('provider-key'), {
+        target: { value: 'sk-right-key-0123456789' },
+      });
+      fireEvent.click(within(form).getByTestId('provider-discover'));
+      await within(form).findByTestId('provider-discover-error');
+      expect(within(form).queryByTestId('provider-discover-manual-hint') !== null).toBe(hinted);
+      cleanup();
+    }
   });
 
   it('runs 测试调用', async () => {
