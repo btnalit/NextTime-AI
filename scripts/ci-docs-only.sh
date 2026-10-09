@@ -1,8 +1,10 @@
 #!/bin/sh
 # Docs-only change detector for CI (ci.yml / e2e.yml `changes` job). Writes `code=true|false` to
-# $GITHUB_OUTPUT: false only when every changed path is documentation, i.e. ends in `.md` or sits
-# under docs/ — except docs/contracts/, which `pnpm contract:check` and the prompt-contract guard
-# read. No build, test or e2e step reads any other .md or docs/ file (checked 2026-10-09).
+# $GITHUB_OUTPUT: false only when every changed path is documentation: under docs/ (except
+# docs/contracts/, which `pnpm contract:check` and the prompt-contract guard read), a top-level
+# *.md, any README.md, or .github/*.md. Any other .md (a prompt or template under packages/,
+# ontology/, ...) counts as code, so it never skips the tests that may load it. No build, test or
+# e2e step reads the documentation paths above (checked 2026-10-09).
 #
 # Fails open: any event other than pull_request / push to main, a missing base commit, a failed
 # compare API call, an empty list or a list at the compare API's 300-file cap all mean code=true,
@@ -38,7 +40,7 @@ n=$(printf '%s\n' "$files" | grep -c .)
 [ "$n" -gt 0 ] || emit true "no changed files listed"
 [ "$n" -lt 300 ] || emit true "$n paths, at the compare API's file cap"
 
-code=$(printf '%s\n' "$files" | grep . | awk '!(/\.md$/ || (/^docs\// && !/^docs\/contracts\//))')
+code=$(printf '%s\n' "$files" | grep . | awk '!((/^docs\// && !/^docs\/contracts\//) || /^[^\/]+\.md$/ || /(^|\/)README\.md$/ || /^\.github\/[^\/]+\.md$/)')
 if [ -n "$code" ]; then
   emit true "non-docs paths changed, first: $(printf '%s\n' "$code" | head -n 1)"
 fi

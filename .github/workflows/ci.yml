@@ -19,9 +19,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Docs-only pull requests and pushes (every path under docs/ or ending in .md, docs/contracts/
-  # excepted) skip quality and test: nothing they run reads those files. guards always runs — it
-  # scans docs too (gitleaks, internal IP literals). A skipped job counts as passed for a required
+  # Docs-only pull requests and pushes (every path under docs/ except docs/contracts/, a top-level
+  # *.md, a README.md or .github/*.md — scripts/ci-docs-only.sh) skip quality and test: nothing
+  # they run reads those files. guards always runs — it scans docs too (gitleaks, internal IP
+  # literals). A skipped job counts as passed for a required
   # check, so quality / test skip only on a definite code=false (scripts/ci-docs-only.sh fails open)
   # and still run when this job itself fails.
   changes:
@@ -110,6 +111,9 @@ jobs:
 
       - name: CSS token guard (S6-A0, docs/console-completion-plan.md §5.9 — no colour / px font-size literals outside tokens.css)
         run: node scripts/guards/css-tokens.mjs
+
+      - name: Docs-only change detector tests (scripts/ci-docs-only.sh)
+        run: node --test scripts/ci-docs-only.test.mjs
 
       - name: Staging trigger paths guard unit tests
         run: node --test scripts/guards/staging-paths.test.mjs
