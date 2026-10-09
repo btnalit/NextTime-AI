@@ -239,8 +239,9 @@ preflight_step() {
   fi
   pass "preflight-worker-runtime-image" "nexttime-ai-worker-runtime present"
 
-  # The three bare fixtures are built here (base image + COPY, no package install: nothing to
-  # fetch once the base images and the BuildKit frontend are on the host). The two gates are the
+  # The three bare fixtures are built here: base image + COPY, and the sshd one also `apk add`s
+  # openssh-server — so a build without that cached layer (a new host, a pruned build cache)
+  # still reaches the Alpine CDN, the egress legacy 137 leaves. The two gates are the
   # gatekeeper-base image the release itself ships as gate-host — same Dockerfile, same context,
   # no build args — so they are that image under their own compose names, never a host source
   # build of it: that needs npm egress at release time (legacy 137, lib/accept-common.sh) and

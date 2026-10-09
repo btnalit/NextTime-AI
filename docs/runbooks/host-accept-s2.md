@@ -21,7 +21,9 @@
   `nexttime-ai-worker-runtime` 镜像（step 6 直接跑这个镜像做 env/egress 探测，见 §5 "已知偏离"）。
 - `docker compose --profile accept-s2 build` 未跑过也没关系——`scripts/accept_s2.sh` 自己的
   preflight 步骤会构建 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp` 三个裸 fixture 镜像
-  （基础镜像 + COPY，不装包；基础镜像与 BuildKit frontend 在主机上之后不再出网）。
+  （基础镜像 + COPY；sshd 另有一层 `apk add openssh-server`）。基础镜像、BuildKit frontend 和
+  构建缓存都在主机上时不出网；但新主机或 `docker builder prune` 之后，sshd 那一层要重新访问
+  Alpine CDN——这是遗留 137 之后验收仍剩的出网点，不是"完全离线"。
   `accept-s2-ssh-gate`/`accept-s2-http-gate` 两个门**不再**在主机上源码构建（遗留 137）：它们与
   `gate-host` 是同一个 `packages/gatekeeper-base/Dockerfile`、同一个 context、没有 build args，
   preflight 直接把本次发布装上的 `gate-host` 镜像（`pull-images.sh` 验过签的，或 `build-images.sh`

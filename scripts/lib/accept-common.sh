@@ -369,7 +369,10 @@ image_label() {
 # image (pull-images.sh) carries .github/workflows/publish-images.yml's OCI labels — source = this
 # repository, revision = the commit it was built from — and that revision must be the checkout's
 # own commit, else the suite would accept another release's code: return 1. A source build
-# (build-images.sh) carries no such labels and is reported as one. Missing image: return 2.
+# (build-images.sh) carries no such labels and is reported as one — unless
+# ACCEPT_REQUIRE_RELEASE_IMAGES=1 (apply-release.sh --pull sets it), where it too returns 1: that
+# apply verified published images, so an unlabelled one means something replaced them. Missing
+# image: return 2.
 release_image_check() {
   _ri_id=$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null) || { echo "$1 not present"; return 2; }
   _ri_id=$(printf '%s' "${_ri_id#sha256:}" | cut -c1-12)
@@ -380,6 +383,10 @@ release_image_check() {
     *) _ri_rev= ;;
   esac
   if [ -z "$_ri_rev" ]; then
+    if [ "${ACCEPT_REQUIRE_RELEASE_IMAGES:-0}" = 1 ]; then
+      echo "$1 $_ri_id has no release labels, but this apply installed published images — it was replaced by a local build"
+      return 1
+    fi
     echo "$1 $_ri_id source build (no release labels)"
     return 0
   fi

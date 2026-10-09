@@ -26,7 +26,9 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
   首轮就因 `pnpm fetch` 断连失败；而且它会用一份没验过签的主机构建顶掉刚验签的发布镜像。
   `preflight-collector-image` 只核对镜像在、来源对：发布镜像的 `org.opencontainers.image.revision`
   必须等于检出的 commit（不等就 FAIL，说明镜像与检出不是同一个版本），源码构建报
-  `source build (no release labels)`。镜像不在时按 FAIL 提示补：
+  `source build (no release labels)`；`apply-release.sh --pull` 跑验收时设
+  `ACCEPT_REQUIRE_RELEASE_IMAGES=1`，没有发布标签的镜像也判 FAIL（那次应用装的是验过签的发布镜像，
+  没标签说明被本地构建顶掉了）。镜像不在时按 FAIL 提示补：
   `sh scripts/pull-images.sh vX.Y.Z collector-host-inventory`。
 - `${NEXTTIME_DATA}/secrets/gate_token` 等 `docs/runbooks/host-bootstrap.md` 的首次引导已完成
   （本脚本不生成这些）。

@@ -10,6 +10,8 @@
 #                                                    # the host record — never the default)
 #   sh scripts/pull-images.sh --prefetch vX.Y.Z      # ahead of the maintenance window: pull and
 #                                                    # verify only (see "Prefetch" below)
+#   sh scripts/pull-images.sh --present vX.Y.Z       # no network: exit 0 if every image is already
+#                                                    # here (prefetched), else list the missing, exit 3
 #
 # What it does, in three passes so a failure never leaves the host half-retagged:
 #   1. pull   <registry>/nexttime-ai-<service>:<tag> for each service;
@@ -26,8 +28,8 @@
 #      scripts/build-images.sh. Nothing downstream changes: worker-supervisor's image allowlist,
 #      the activeRuntimeImage platform setting and the console's "pi 运行时" card all keep reading
 #      the same local names and labels.
-# Then start with `docker compose up -d --no-build`. scripts/build-images.sh stays the
-# source-build fallback.
+# Then start with `docker compose up -d --no-build`. scripts/build-images.sh is the separate,
+# explicit source-build mode — never a fallback for a failed pull or verification (legacy 137).
 #
 # Already present (legacy 137): an image whose <registry>/nexttime-ai-<service>:<tag> is on the
 # host with a repo digest — a --prefetch, or an earlier attempt — is not pulled again; it is still
@@ -48,8 +50,9 @@
 # Registry: NEXTTIME_IMAGE_REGISTRY (e.g. ghcr.io/<owner>) if set, else derived from the checkout's
 # GitHub origin remote. Pulling private packages needs a prior `docker login ghcr.io` with a
 # read:packages token; public packages need nothing. The bare acceptance fixtures (accept-s2-sshd /
-# -openapi / -mcp, fake-llm) are not published and build on the host from base images alone; the
-# two accept-s2 gates run this release's gate-host image (scripts/accept_s2.sh preflight).
+# -openapi / -mcp, fake-llm) are not published and build on the host from their base images (plus
+# sshd's `apk add`, which needs the Alpine CDN when its build cache is gone); the two accept-s2
+# gates run this release's gate-host image (scripts/accept_s2.sh preflight).
 set -eu
 
 # Per-attempt bounds (legacy 137): a stalled transfer is killed and retried, never left hanging.
@@ -66,15 +69,17 @@ die() { echo "pull-images: $*" >&2; exit 1; }
 
 verify=1
 prefetch=0
+present_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --no-verify) verify=0 ;;
     --prefetch) prefetch=1 ;;
+    --present) present_only=1 ;;
     *) break ;;
   esac
   shift
 done
-[ "$#" -ge 1 ] || die "usage: sh scripts/pull-images.sh [--no-verify] [--prefetch] vX.Y.Z [service...]"
+[ "$#" -ge 1 ] || die "usage: sh scripts/pull-images.sh [--no-verify] [--prefetch | --present] vX.Y.Z [service...]"
 TAG=$1; shift
 case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) die "tag must look like vX.Y.Z, got '$TAG'" ;; esac
 [ -f pi.version ] && [ -f docker-compose.yml ] || die "run from the checkout root (pi.version / docker-compose.yml not found)"
@@ -161,6 +166,21 @@ repo_digest_of() {
   docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null |
     sed -n "s#^${REGISTRY}/nexttime-ai-${2}@##p" | head -n 1
 }
+
+# --present: is every image already on the host (a finished prefetch)? Local only — apply-release.sh
+# --pull asks this before it touches anything, since pulling inside the window can take hours.
+if [ "$present_only" -eq 1 ]; then
+  absent=
+  for s in $SERVICES; do
+    [ -n "$(repo_digest_of "${REGISTRY}/nexttime-ai-${s}:${TAG}" "$s")" ] || absent="$absent $s"
+  done
+  if [ -n "$absent" ]; then
+    echo "pull-images: ${TAG} not prefetched — missing:${absent}"
+    exit 3
+  fi
+  echo "pull-images: ${TAG} all present — ${SERVICES}"
+  exit 0
+fi
 
 # 0. resolve every local name before touching the network (a prefetch does not retag)
 if [ "$prefetch" -eq 0 ]; then

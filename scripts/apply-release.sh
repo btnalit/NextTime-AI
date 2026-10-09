@@ -6,7 +6,9 @@
 #
 # Usage:
 #   sh scripts/apply-release.sh --pull vX.Y.Z    # published, signature-verified images
-#                                                # (scripts/pull-images.sh) — the host's mode
+#                                                # (scripts/pull-images.sh) — the host's mode;
+#                                                # needs a finished --prefetch (below) unless
+#                                                # --allow-long-pull is given
 #   sh scripts/apply-release.sh vX.Y.Z           # images built from source (scripts/build-images.sh)
 #                                                # — staging's unpublished commits, or an explicit
 #                                                # operator choice; never chosen automatically
@@ -26,6 +28,10 @@
 # touched ("FAIL images"), it never falls back to a build, so what is accepted is always the signed
 # release. Every network step is bounded: pulls and verifications retry inside pull-images.sh with a
 # per-attempt timeout, `git fetch` is time-limited and tolerated when the tag is already here.
+# A --pull apply first checks, without network, that every image is already on the host (the TAG's
+# pull-images.sh --present); if not, it stops before touching anything ("FAIL not-prefetched"):
+# pulling inside the window can take hours per image on this egress. `--pull --allow-long-pull`
+# proceeds anyway, with a WARNING line in the log.
 #
 # Long-running (build + four acceptance suites ≈ 20–40 min). Over ssh, run it as a background job
 # and follow the log; every step prints one "STEP <name> …" line, a fatal one prints "FAIL <name>"
@@ -73,11 +79,19 @@ case "$0" in /tmp/apply-release.*) trap 'rm -f "$0"' EXIT ;; esac
 
 pull=0
 prefetch=0
-case "${1:-}" in
-  --pull) pull=1; shift ;;
-  --prefetch) prefetch=1; shift ;;
-esac
-[ "$#" -eq 1 ] || { echo "usage: sh scripts/apply-release.sh [--pull | --prefetch] vX.Y.Z" >&2; exit 2; }
+allow_long_pull=0
+while [ "$#" -gt 1 ]; do
+  case "$1" in
+    --pull) pull=1 ;;
+    --prefetch) prefetch=1 ;;
+    --allow-long-pull) allow_long_pull=1 ;;
+    *) break ;;
+  esac
+  shift
+done
+usage="usage: sh scripts/apply-release.sh [--pull [--allow-long-pull] | --prefetch] vX.Y.Z"
+[ "$#" -eq 1 ] || { echo "$usage" >&2; exit 2; }
+[ $((pull + prefetch)) -le 1 ] && { [ "$allow_long_pull" -eq 0 ] || [ "$pull" -eq 1 ]; } || { echo "$usage" >&2; exit 2; }
 TAG=$1
 case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "apply-release: tag must look like vX.Y.Z, got '$TAG'" >&2; exit 2 ;; esac
 [ -f docker-compose.yml ] && [ -f .env ] || { echo "apply-release: run from the checkout root (docker-compose.yml / .env not found)" >&2; exit 2; }
@@ -91,7 +105,7 @@ mkdir -p "$LOG_DIR"
 if [ "$prefetch" -eq 1 ]; then LOG="$LOG_DIR/prefetch-$TAG-$TS.log"; else LOG="$LOG_DIR/apply-$TAG-$TS.log"; fi
 echo "apply-release: logging to $LOG"
 exec >"$LOG" 2>&1
-echo "STEP start $TAG $TS pull=$pull prefetch=$prefetch"
+echo "STEP start $TAG $TS pull=$pull prefetch=$prefetch allow-long-pull=$allow_long_pull"
 
 fail() { echo "FAIL $1"; echo "RESULT failed-at=$1"; exit 1; }
 
@@ -111,6 +125,33 @@ if [ "$prefetch" -eq 1 ]; then
   [ "$rc" -eq 0 ] || fail prefetch
   echo "RESULT ok"
   exit 0
+fi
+
+# --pull: were the images prefetched? Asked of the TAG's own pull-images.sh, locally, before the
+# dump, the checkout or anything else — so a refusal changes nothing on the host.
+if [ "$pull" -eq 1 ]; then
+  present_out="the tag is not in this checkout yet"
+  present_rc=1
+  if git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+    present_script=$(mktemp /tmp/pull-images-present.XXXXXX) || fail not-prefetched
+    if git show "$TAG:scripts/pull-images.sh" >"$present_script" 2>/dev/null && grep -q -- '--present' "$present_script"; then
+      present_out=$(sh "$present_script" --present "$TAG" 2>&1 </dev/null)
+      present_rc=$?
+    else
+      present_out="$TAG's scripts/pull-images.sh cannot tell (no --present)"
+    fi
+    rm -f "$present_script"
+  fi
+  if [ "$present_rc" -eq 0 ]; then
+    echo "STEP prefetch-check ok — $(printf '%s' "$present_out" | tail -n 1)"
+  elif [ "$allow_long_pull" -eq 1 ]; then
+    echo "STEP prefetch-check WARNING not prefetched ($(printf '%s' "$present_out" | tail -n 1)) — --allow-long-pull given, pulling inside the window"
+  else
+    echo "STEP prefetch-check not prefetched: $(printf '%s' "$present_out" | tail -n 1)"
+    echo "STEP prefetch-check run first, outside the window: apply-release.sh --prefetch $TAG (release.md §3), then this --pull apply"
+    echo "STEP prefetch-check or accept a pull of up to hours per image inside the window: --pull --allow-long-pull $TAG"
+    fail not-prefetched
+  fi
 fi
 
 # R-71: a stop between checkout and `up` puts the checkout back where it was, so the next
@@ -276,6 +317,9 @@ docker compose ps --format '{{.Service}} {{.Status}}'
 #    it is already here (a prefetch, an earlier apply)
 docker image inspect docker/dockerfile:1.7 >/dev/null 2>&1 ||
   for i in 1 2 3; do timeout 600 docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
+# A --pull apply accepts only the published images it just verified: the acceptance image checks
+# (lib/accept-common.sh release_image_check) then refuse an unlabelled image as well.
+if [ "$images_from" = pull ]; then export ACCEPT_REQUIRE_RELEASE_IMAGES=1; fi
 failures=0
 for s in 3 1 2 4; do
   [ -f "scripts/accept_s$s.sh" ] || { echo "STEP S$s skipped (not in this tag)"; continue; }
