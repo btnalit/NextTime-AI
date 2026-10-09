@@ -17,6 +17,7 @@ import {
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
 import { createProviderKeyResolver, loadProviderKeyFiles } from './provider-keys.js';
+import { listUpstreamModels } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import { runProviderTest } from './provider-test.js';
 import { createProxyServer } from './proxy.js';
@@ -137,6 +138,18 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     log,
   });
 
+  // A provider whose saved base URL breaks the bare-base rule is loaded but never used
+  // (catalog.ts `unsafeBaseUrls`) — say so at startup, once per provider.
+  for (const { id, problem } of catalog.unsafeBaseUrls()) {
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: `llm-proxy: provider "${id}" is not routed — its upstream base URL ${problem}; edit it in the console`,
+        providerId: id,
+      }),
+    );
+  }
+
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(
     buildModelsJsonFromCatalog(catalog, { llmProxyPort: config.port }),
@@ -193,6 +206,8 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
         : undefined,
     runTest: (provider, model, realKey) =>
       runProviderTest({ provider, model, realKey, timeoutMs: config.providerTestTimeoutMs }),
+    listModels: (request) =>
+      listUpstreamModels({ ...request, timeoutMs: config.providerTestTimeoutMs }),
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     log,
     resolveApiKey,

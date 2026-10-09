@@ -2,47 +2,79 @@ import type {
   LlmProviderApiKindWire,
   LlmProviderAuthHeaderWire,
   LlmProviderInputWire,
+  LlmProviderModelDiscoveryResultWire,
   LlmProviderWire,
 } from '@nexttime/shared';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useT } from '../../../lib/i18n.js';
-import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
+import {
+  type LlmAdminClient,
+  LlmAdminError,
+  llmAdminErrorMessage,
+} from '../../../lib/llm-admin.js';
+import {
+  PROVIDER_PRESETS,
+  type ProviderPreset,
+  defaultAuthHeader,
+  envNameProblem,
+  explainUpstreamError,
+  guessApiKind,
+  isHttpUrl,
+  normalizeBaseUrl,
+  normalizeEnvName,
+  providerIdFromUrl,
+  providerIdProblem,
+  slugifyProviderId,
+} from '../../../lib/provider-form.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../../ui/Field.js';
+import { Icon } from '../../ui/Icon.js';
 import { Notice } from '../../ui/Notice.js';
+
+/** What the page does after the provider row itself is saved: set the typed key as the
+ *  provider's console key, then run 测试调用. */
+export interface ProviderFormExtras {
+  /** The typed API key, trimmed; absent = leave the credential as it is. */
+  readonly key?: string;
+  readonly testAfterSave: boolean;
+}
 
 export interface ProviderFormProps {
   /** Editing an existing row (id locked) or creating a new one. */
   readonly initial?: LlmProviderWire;
-  readonly onSubmit: (input: LlmProviderInputWire) => Promise<void>;
+  /** For 「从供应商获取模型」. */
+  readonly client: Pick<LlmAdminClient, 'discoverModels'>;
+  /** Ids already taken — a create form flags a clash before the round trip. */
+  readonly existingIds?: readonly string[];
+  readonly onSubmit: (input: LlmProviderInputWire, extras: ProviderFormExtras) => Promise<void>;
   readonly onCancel: () => void;
 }
-
-/** Same rules as `@nexttime/shared` wire/llm-admin.ts (`LLM_PROVIDER_ID_PATTERN`,
- *  `LlmProviderApiKeyEnvWireSchema`) — type-only import there, so the two regexes are restated
- *  here; the proxy re-validates on every write. */
-const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const RESERVED_IDS = new Set(['admin', 'healthz', 'internal']);
-const API_KEY_ENV_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 const API_KINDS: ReadonlyArray<{
   value: LlmProviderApiKindWire;
   labelZh: string;
   labelEn: string;
+  path: string;
 }> = [
   {
     value: 'openai-completions',
-    labelZh: 'OpenAI 兼容 · chat/completions（OpenAI、DeepSeek、Gemini 兼容端点…）',
-    labelEn:
-      'OpenAI-compatible · chat/completions (OpenAI, DeepSeek, Gemini-compatible endpoints…)',
+    labelZh: 'OpenAI 兼容 · chat/completions（OpenAI、DeepSeek、OpenRouter、各类中转…）',
+    labelEn: 'OpenAI-compatible · chat/completions (OpenAI, DeepSeek, OpenRouter, relays…)',
+    path: '/v1/chat/completions',
   },
   {
     value: 'openai-responses',
     labelZh: 'OpenAI 兼容 · responses 接口',
     labelEn: 'OpenAI-compatible · responses',
+    path: '/v1/responses',
   },
-  { value: 'anthropic-messages', labelZh: 'Anthropic · messages', labelEn: 'Anthropic · messages' },
+  {
+    value: 'anthropic-messages',
+    labelZh: 'Anthropic · messages',
+    labelEn: 'Anthropic · messages',
+    path: '/v1/messages',
+  },
 ];
 
 interface ModelRowDraft {
@@ -51,35 +83,71 @@ interface ModelRowDraft {
   readonly displayName: string;
 }
 
-function isValidUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false;
-  }
+type Discovery =
+  | { readonly status: 'idle' }
+  | { readonly status: 'loading' }
+  | {
+      readonly status: 'ready';
+      readonly result: LlmProviderModelDiscoveryResultWire;
+      /** The (api, base URL, header, credential) the list was fetched for. */
+      readonly fingerprint: string;
+    }
+  | { readonly status: 'error'; readonly error: unknown };
+
+/** A short marker for "which credential" without keeping a second copy of the key around. */
+function credentialMarker(key: string, envName: string): string {
+  const typed = key.trim();
+  if (typed.length > 0) return `k:${typed.length}:${typed.slice(-4)}`;
+  return envName.length > 0 ? `e:${envName}` : 'stored';
 }
 
 /**
- * components/platform/providers/ProviderForm: 新增 / 编辑供应商 (S6-B, docs/console-completion-
- * plan.md §5.4 "名称、API 种类…base URL；鉴权头；模型清单与显示名；启用"). Produces exactly the
- * `LlmProviderInputWire` llm-proxy validates — and therefore has no key field at all: the key is
- * the env var the operator sets in `secrets/llm-proxy.env` (`apiKeyEnv` names it; the page shows
- * whether it is present). The auth header follows the api kind by default (`authorization` +
- * Bearer for the OpenAI family, `x-api-key` for Anthropic) but stays editable for a compatible
- * endpoint that wants the other one.
+ * components/platform/providers/ProviderForm: 新增 / 编辑 LLM 供应商 (S6-B, docs/console-completion-
+ * plan.md §5.4; S7-A console keys). Produces exactly the `LlmProviderInputWire` llm-proxy validates
+ * plus the extras the page applies after the row is saved — the typed key (set as this provider's
+ * console key through `PUT /providers/:id/secret`, never part of the provider row) and whether to
+ * run 测试调用 right away.
+ *
+ * What the form does for the administrator instead of refusing input:
+ *   - quick picks for vendors whose endpoint fits the proxy's `<base>/v1/…` rule (lib/provider-
+ *     form.ts `PROVIDER_PRESETS`) fill the API kind, Base URL and auth header;
+ *   - the id follows the name (or the host) until it is typed by hand;
+ *   - a pasted endpoint (`…/v1/chat/completions`, no scheme, trailing slash) becomes the bare base
+ *     on blur, and the field shows the exact URL the proxy will call;
+ *   - the env var name is normalized as typed (`deepseek-api-key` → `DEEPSEEK_API_KEY`,
+ *     `export X=…` → `X`), and a key pasted there is moved to the key field;
+ *   - 「从供应商获取模型」 lists the upstream's real model ids (llm-proxy `POST /model-discovery`,
+ *     run automatically once a key is entered), and every typed id is checked against that list;
+ *   - the submit button says what is still missing instead of being silently disabled.
  */
-export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps) {
+export function ProviderForm({
+  initial,
+  client,
+  existingIds = [],
+  onSubmit,
+  onCancel,
+}: ProviderFormProps) {
   const t = useT();
   const editing = initial !== undefined;
-  const [id, setId] = useState(initial?.id ?? '');
+  const [presetKey, setPresetKey] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
+  const [id, setId] = useState(initial?.id ?? '');
+  const [idTouched, setIdTouched] = useState(editing);
   const [api, setApi] = useState<LlmProviderApiKindWire>(initial?.api ?? 'openai-completions');
-  const [upstreamBaseUrl, setUpstreamBaseUrl] = useState(initial?.upstreamBaseUrl ?? '');
+  const [apiTouched, setApiTouched] = useState(editing);
+  const [baseUrl, setBaseUrl] = useState(initial?.upstreamBaseUrl ?? '');
+  const [baseNote, setBaseNote] = useState<'none' | 'scheme-added' | 'suffix-stripped' | 'both'>(
+    'none',
+  );
   const [authHeader, setAuthHeader] = useState<LlmProviderAuthHeaderWire>(
     initial?.authHeader ?? 'authorization',
   );
+  const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [apiKeyEnv, setApiKeyEnv] = useState(initial?.apiKeyEnv ?? '');
+  const [envNote, setEnvNote] = useState<'none' | 'normalized' | 'value-dropped' | 'secret'>(
+    'none',
+  );
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [models, setModels] = useState<ModelRowDraft[]>(() =>
     initial && initial.models.length > 0
@@ -90,41 +158,188 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         }))
       : [{ key: 0, id: '', displayName: '' }],
   );
-  const [nextKey, setNextKey] = useState(models.length);
+  const nextKey = useRef(models.length);
+  const [discovery, setDiscovery] = useState<Discovery>({ status: 'idle' });
+  const [filter, setFilter] = useState('');
+  const [testAfterSave, setTestAfterSave] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
+  const preset: ProviderPreset | undefined = PROVIDER_PRESETS.find((p) => p.key === presetKey);
+  const normalizedBase = normalizeBaseUrl(baseUrl).value;
+  const urlValid = isHttpUrl(normalizedBase);
+  const apiPath = API_KINDS.find((kind) => kind.value === api)?.path ?? '/v1';
+
   const idTrimmed = id.trim();
-  const idValid = PROVIDER_ID_PATTERN.test(idTrimmed) && !RESERVED_IDS.has(idTrimmed);
-  const urlValid = isValidUrl(upstreamBaseUrl.trim()) && !/\/v1\/?$/.test(upstreamBaseUrl.trim());
-  // S7-A: optional — a provider may rely purely on a console key (set separately, after
-  // creation, via ProviderSecretForm) and have no env var at all.
-  const envValid = apiKeyEnv.trim().length === 0 || API_KEY_ENV_PATTERN.test(apiKeyEnv.trim());
+  const idProblem = editing
+    ? null
+    : (providerIdProblem(idTrimmed, t) ??
+      (existingIds.includes(idTrimmed)
+        ? t(`已有 id 为「${idTrimmed}」的供应商，换一个`, `A provider "${idTrimmed}" exists`)
+        : null));
+  const envProblem = envNameProblem(apiKeyEnv, t);
+
   const modelIds = models.map((m) => m.id.trim()).filter((v) => v.length > 0);
-  const modelsValid = modelIds.length > 0 && new Set(modelIds).size === modelIds.length;
-  const ready = idValid && urlValid && envValid && modelsValid && !submitting;
+  const duplicateIds = modelIds.filter((v, i) => modelIds.indexOf(v) !== i);
+
+  const storedCredential = editing && initial.credentialPresent;
+  const upstreamChanged =
+    editing && normalizedBase.toLowerCase() !== initial.upstreamBaseUrl.toLowerCase();
+  const hasTypedKey = key.trim().length > 0;
+  const canDiscover =
+    urlValid &&
+    !submitting &&
+    (hasTypedKey ||
+      (apiKeyEnv.length > 0 && !envProblem) ||
+      (storedCredential && !upstreamChanged));
+  const fingerprint = `${api}|${normalizedBase}|${authHeader}|${credentialMarker(key, apiKeyEnv)}`;
+  const discovered = discovery.status === 'ready' ? discovery.result.models : null;
+  const discoveredIds = useMemo(() => new Set((discovered ?? []).map((m) => m.id)), [discovered]);
+  const discoveryStale = discovery.status === 'ready' && discovery.fingerprint !== fingerprint;
+  // A credential will resolve after saving: a typed key, an env var name (the proxy reports
+  // whether it is actually set), or the provider's existing credential on the same upstream.
+  const credentialAfterSave =
+    hasTypedKey || apiKeyEnv.length > 0 || (storedCredential && !upstreamChanged);
+
+  const missing: string[] = [];
+  if (!editing && idProblem) missing.push(t('有效的 id', 'a valid id'));
+  if (!urlValid) missing.push('Base URL');
+  if (envProblem) missing.push(t('合法的环境变量名', 'a valid env var name'));
+  if (modelIds.length === 0) missing.push(t('至少一个模型', 'at least one model'));
+  if (duplicateIds.length > 0) missing.push(t('去掉重复的模型', 'no duplicate models'));
+  const ready = missing.length === 0 && !submitting;
+
+  function applyPreset(next: ProviderPreset): void {
+    setPresetKey(next.key);
+    setDisplayName(next.displayName);
+    if (!idTouched) setId(next.id);
+    setApi(next.api);
+    setApiTouched(true);
+    setAuthHeader(defaultAuthHeader(next.api));
+    setBaseUrl(next.upstreamBaseUrl);
+    setBaseNote('none');
+    setDiscovery({ status: 'idle' });
+  }
+
+  function changeDisplayName(value: string): void {
+    setDisplayName(value);
+    if (!idTouched && !editing) {
+      setId(slugifyProviderId(value) || providerIdFromUrl(normalizedBase));
+    }
+  }
 
   function chooseApi(next: LlmProviderApiKindWire): void {
     setApi(next);
-    // Follow the api kind's own convention unless the operator already moved it.
-    setAuthHeader(next === 'anthropic-messages' ? 'x-api-key' : 'authorization');
+    setApiTouched(true);
+    setAuthHeader(defaultAuthHeader(next));
   }
 
-  function updateModel(key: number, patch: Partial<ModelRowDraft>): void {
-    setModels((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  function commitBaseUrl(): void {
+    const normalized = normalizeBaseUrl(baseUrl);
+    setBaseUrl(normalized.value);
+    setBaseNote(normalized.changed);
+    if (!apiTouched) {
+      const guessed = guessApiKind(normalized.value);
+      if (guessed) {
+        setApi(guessed);
+        setAuthHeader(defaultAuthHeader(guessed));
+      }
+    }
+    if (!idTouched && !editing && slugifyProviderId(displayName).length === 0) {
+      setId(providerIdFromUrl(normalized.value));
+    }
+  }
+
+  function changeEnvName(raw: string): void {
+    const normalized = normalizeEnvName(raw);
+    if (normalized.note === 'secret') {
+      // The key itself was pasted here — move it where it belongs instead of upper-casing it.
+      setKey(raw.trim());
+      setApiKeyEnv('');
+      setEnvNote('secret');
+      return;
+    }
+    setApiKeyEnv(normalized.value);
+    setEnvNote(normalized.note);
+  }
+
+  function addModelRow(modelId = '', name = ''): void {
+    const rowKey = nextKey.current;
+    nextKey.current += 1;
+    setModels((rows) => [...rows, { key: rowKey, id: modelId, displayName: name }]);
+  }
+
+  function toggleDiscovered(modelId: string, name: string | null): void {
+    setModels((rows) => {
+      if (rows.some((row) => row.id.trim() === modelId)) {
+        return rows.filter((row) => row.id.trim() !== modelId);
+      }
+      const rowKey = nextKey.current;
+      nextKey.current += 1;
+      // Fill the first empty manual row before adding a new one.
+      const emptyIndex = rows.findIndex((row) => row.id.trim().length === 0);
+      const added = { key: rowKey, id: modelId, displayName: name ?? '' };
+      if (emptyIndex >= 0) return rows.map((row, i) => (i === emptyIndex ? added : row));
+      return [...rows, added];
+    });
+  }
+
+  function updateModel(rowKey: number, patch: Partial<ModelRowDraft>): void {
+    setModels((rows) => rows.map((row) => (row.key === rowKey ? { ...row, ...patch } : row)));
+  }
+
+  async function discover(): Promise<void> {
+    if (!canDiscover) return;
+    const base = normalizeBaseUrl(baseUrl).value;
+    setBaseUrl(base);
+    const requestFingerprint = fingerprint;
+    setDiscovery({ status: 'loading' });
+    try {
+      const result = await client.discoverModels({
+        id: idTrimmed.length > 0 && !providerIdProblem(idTrimmed, t) ? idTrimmed : 'new-provider',
+        api,
+        upstreamBaseUrl: base,
+        authHeader,
+        ...(hasTypedKey ? { key: key.trim() } : {}),
+        ...(!hasTypedKey && apiKeyEnv.length > 0 && !envProblem ? { apiKeyEnv } : {}),
+      });
+      setDiscovery({ status: 'ready', result, fingerprint: requestFingerprint });
+      setFilter('');
+      if (result.models.length > 0 && result.models.length <= 3 && modelIds.length === 0) {
+        // A short list (a single-model relay, a fine-tune endpoint): take all of it, in place of
+        // the empty starter row.
+        setModels(
+          result.models.map((model) => {
+            const rowKey = nextKey.current;
+            nextKey.current += 1;
+            return { key: rowKey, id: model.id, displayName: model.displayName ?? '' };
+          }),
+        );
+      }
+    } catch (err) {
+      setDiscovery({ status: 'error', error: err });
+    }
+  }
+
+  function maybeAutoDiscover(): void {
+    // Once per (upstream, credential): entering a key is the natural moment to fetch the list.
+    if (!hasTypedKey || !canDiscover || discovery.status === 'loading') return;
+    if (discovery.status === 'ready' && discovery.fingerprint === fingerprint) return;
+    void discover();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!ready) return;
+    const base = normalizeBaseUrl(baseUrl).value;
     const input: LlmProviderInputWire = {
       id: idTrimmed,
       ...(displayName.trim().length > 0 ? { displayName: displayName.trim() } : {}),
       api,
-      upstreamBaseUrl: upstreamBaseUrl.trim().replace(/\/+$/, ''),
+      upstreamBaseUrl: base,
       authHeader,
       authScheme: authHeader === 'authorization' ? 'Bearer' : null,
-      ...(apiKeyEnv.trim().length > 0 ? { apiKeyEnv: apiKeyEnv.trim() } : {}),
+      ...(apiKeyEnv.length > 0 ? { apiKeyEnv } : {}),
       models: models
         .filter((m) => m.id.trim().length > 0)
         .map((m) => {
@@ -140,7 +355,11 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit(input);
+      await onSubmit(input, {
+        ...(hasTypedKey ? { key: key.trim() } : {}),
+        testAfterSave: testAfterSave && credentialAfterSave && enabled,
+      });
+      setKey('');
     } catch (err) {
       setError(err);
     } finally {
@@ -149,10 +368,24 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
   }
 
   const mapped = llmAdminErrorMessage(error, t);
+  const discoveryError = discovery.status === 'error' ? discovery.error : null;
+  const discoveryErrorText = discoveryError ? llmAdminErrorMessage(discoveryError, t) : null;
+  const discoveryExplain =
+    discoveryError instanceof LlmAdminError
+      ? explainUpstreamError(discoveryError.message, t)
+      : null;
+  const filterLower = filter.trim().toLowerCase();
+  const visibleDiscovered = (discovered ?? []).filter(
+    (m) =>
+      filterLower.length === 0 ||
+      m.id.toLowerCase().includes(filterLower) ||
+      (m.displayName ?? '').toLowerCase().includes(filterLower),
+  );
+  const selectedSet = new Set(modelIds);
 
   return (
     <form
-      className="stack"
+      className="stack provider-form"
       onSubmit={(event) => void handleSubmit(event)}
       noValidate
       data-testid="provider-form"
@@ -166,51 +399,83 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         </Notice>
       ) : null}
 
-      <Field
-        id="provider-id"
-        label="Id"
-        required
-        hint={t(
-          '小写字母/数字/连字符；成为代理路由 /<id>/v1 与 models.json 里的 provider 名。 Lowercase slug —',
-          'becomes the proxy route and the models.json provider name.',
-        )}
-        error={
-          id.length > 0 && !idValid
-            ? t('格式不合法或为保留名', 'Invalid or reserved id')
-            : undefined
-        }
-      >
-        <Input
+      {editing ? null : (
+        <div className="field" data-testid="provider-presets">
+          <span className="field-label">{t('快速选择', 'Quick pick')}</span>
+          <div className="provider-presets">
+            {PROVIDER_PRESETS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className="provider-preset"
+                aria-pressed={presetKey === item.key}
+                onClick={() => applyPreset(item)}
+                disabled={submitting}
+                data-testid={`provider-preset-${item.key}`}
+              >
+                {item.displayName}
+              </button>
+            ))}
+          </div>
+          <p className="field-hint">
+            {t(
+              '选一个会自动填好 API 种类、Base URL 和鉴权头；其他兼容 OpenAI 的服务或中转直接在下面填。',
+              'Fills the API kind, Base URL and auth header; any other OpenAI-compatible service or relay goes below.',
+            )}
+          </p>
+        </div>
+      )}
+
+      <div className="provider-form-grid">
+        <Field id="provider-display-name" label={t('名称', 'Display name')}>
+          <Input
+            id="provider-display-name"
+            value={displayName}
+            onChange={(event) => changeDisplayName(event.target.value)}
+            disabled={submitting}
+            placeholder={t('如 DeepSeek', 'e.g. DeepSeek')}
+            autoFocus={!editing}
+            data-testid="provider-display-name"
+          />
+        </Field>
+
+        <Field
           id="provider-id"
-          value={id}
-          onChange={(event) => setId(event.target.value)}
-          disabled={editing || submitting}
-          mono
-          autoFocus={!editing}
-          data-testid="provider-id"
-        />
-      </Field>
+          label="Id"
+          required
+          hint={
+            editing
+              ? t('id 创建后不能改。', 'The id cannot change after creation.')
+              : t(
+                  `跟随名称自动生成，也可以自己改；路由为 /${idTrimmed || '<id>'}/v1。`,
+                  `Follows the name unless you edit it; routed as /${idTrimmed || '<id>'}/v1.`,
+                )
+          }
+          error={!editing && (idTouched || id.length > 0) && idProblem ? idProblem : undefined}
+        >
+          <Input
+            id="provider-id"
+            value={id}
+            onChange={(event) => {
+              setIdTouched(true);
+              // Live form of slugifyProviderId: keeps a trailing hyphen so one can be typed.
+              setId(
+                event.target.value
+                  .toLowerCase()
+                  .replace(/[\s_.:/]+/g, '-')
+                  .replace(/[^a-z0-9-]/g, '')
+                  .slice(0, 63),
+              );
+            }}
+            disabled={editing || submitting}
+            mono
+            aria-invalid={!editing && id.length > 0 && idProblem !== null}
+            data-testid="provider-id"
+          />
+        </Field>
+      </div>
 
-      <Field id="provider-display-name" label={t('名称', 'Display name')}>
-        <Input
-          id="provider-display-name"
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-          disabled={submitting}
-          placeholder={idTrimmed || 'id'}
-          data-testid="provider-display-name"
-        />
-      </Field>
-
-      <Field
-        id="provider-api"
-        label={t('API 种类', 'API kind')}
-        required
-        hint={t(
-          'Gemini 走它的 OpenAI 兼容端点（§12 第 2 项：原生适配器不排期）。',
-          'Gemini goes through its OpenAI-compatible endpoint.',
-        )}
-      >
+      <Field id="provider-api" label={t('API 种类', 'API kind')} required>
         <Select
           id="provider-api"
           value={api}
@@ -230,151 +495,397 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         id="provider-base-url"
         label="Base URL"
         required
-        hint={t(
-          '供应商的源站，不带 /v1（代理自己拼路径），如 https://api.example.com。',
-          'The bare upstream origin, without /v1.',
-        )}
+        hint={
+          urlValid ? (
+            <span data-testid="provider-base-url-preview">
+              {baseNote === 'suffix-stripped' || baseNote === 'both'
+                ? t('已去掉末尾的 /v1 等路径（代理会自己拼）。', 'Trailing /v1 path removed. ')
+                : null}
+              {baseNote === 'scheme-added' || baseNote === 'both'
+                ? t('已补上 https://。', 'https:// added. ')
+                : null}
+              {t('代理实际请求：', 'The proxy calls: ')}
+              <span className="mono">
+                {normalizedBase}
+                {apiPath}
+              </span>
+            </span>
+          ) : (
+            t(
+              '供应商的地址，可以直接粘贴文档里的完整接口地址，会自动整理成源站。',
+              'Paste the provider’s endpoint as documented — it is trimmed to the origin.',
+            )
+          )
+        }
         error={
-          upstreamBaseUrl.length > 0 && !urlValid
-            ? t('需要 http(s) URL，且不能以 /v1 结尾', 'Needs an http(s) URL not ending in /v1')
+          baseUrl.trim().length > 0 && !urlValid
+            ? t(
+                '不是有效的网址，例如 https://api.deepseek.com',
+                'Not a valid URL, e.g. https://api.deepseek.com',
+              )
             : undefined
         }
       >
         <Input
           id="provider-base-url"
-          value={upstreamBaseUrl}
-          onChange={(event) => setUpstreamBaseUrl(event.target.value)}
+          value={baseUrl}
+          onChange={(event) => {
+            setBaseUrl(event.target.value);
+            setBaseNote('none');
+          }}
+          onBlur={commitBaseUrl}
           disabled={submitting}
           mono
           inputMode="url"
+          placeholder="https://api.example.com"
           data-testid="provider-base-url"
         />
       </Field>
+      {upstreamChanged && initial?.credentialSource === 'console' ? (
+        <Notice tone="warn" testId="provider-upstream-change-notice">
+          {t(
+            'Base URL 变了：保存时代理会清除原来的控制台密钥（密钥只发往它录入时的上游）。请在下面重新填写这个上游的密钥。',
+            'The Base URL changed — saving clears the stored console key (a key only goes to the upstream it was entered for). Enter the key for the new upstream below.',
+          )}
+        </Notice>
+      ) : null}
 
       <Field
-        id="provider-auth-header"
-        label={t('鉴权头', 'Auth header')}
-        required
-        hint={t(
-          '代理把真实密钥放进这个头发给上游：authorization 用 Bearer 前缀，x-api-key 不带前缀。',
-          'The header the proxy puts the real key in upstream.',
-        )}
-      >
-        <Select
-          id="provider-auth-header"
-          value={authHeader}
-          onChange={(event) => setAuthHeader(event.target.value as LlmProviderAuthHeaderWire)}
-          disabled={submitting}
-          data-testid="provider-auth-header"
-        >
-          <option value="authorization">authorization: Bearer &lt;key&gt;</option>
-          <option value="x-api-key">x-api-key: &lt;key&gt;</option>
-        </Select>
-      </Field>
-
-      <Field
-        id="provider-api-key-env"
-        label={t('密钥环境变量名', 'Key env var')}
-        hint={t(
-          '可选——只填变量名，值由操作员写进主机 secrets/llm-proxy.env 后重建 llm-proxy。留空也可以，保存后在下方为这个供应商单独设置控制台密钥（优先于环境变量）。 Optional —',
-          'the variable name only, its value set by the operator in secrets/llm-proxy.env on the host. Leave it blank and set a console key for this provider after saving instead (it takes priority over the env var).',
-        )}
-        error={
-          apiKeyEnv.length > 0 && !envValid
-            ? t('大写字母、数字、下划线', 'UPPER_CASE only')
-            : undefined
+        id="provider-key"
+        label={t('API 密钥', 'API key')}
+        hint={
+          editing && initial.credentialSource === 'console' && !upstreamChanged
+            ? t(
+                '已设置控制台密钥；留空保持不变，填写则更换。',
+                'A console key is set — leave blank to keep it, type to replace it.',
+              )
+            : t(
+                `只写不读：保存后存进代理自己的状态目录，从不回显。${preset ? `获取：${preset.keyHint}` : ''}`,
+                `Write-only — held in the proxy’s own state directory, never shown again.${preset ? ` Get one at ${preset.keyHint}` : ''}`,
+              )
         }
       >
-        <Input
-          id="provider-api-key-env"
-          value={apiKeyEnv}
-          onChange={(event) => setApiKeyEnv(event.target.value.toUpperCase())}
-          disabled={submitting}
-          mono
-          placeholder="EXAMPLE_API_KEY"
-          data-testid="provider-api-key-env"
-        />
+        <div className="input-group">
+          <Input
+            id="provider-key"
+            type={showKey ? 'text' : 'password'}
+            value={key}
+            onChange={(event) => {
+              setKey(event.target.value);
+              if (envNote === 'secret') setEnvNote('none');
+            }}
+            onBlur={maybeAutoDiscover}
+            autoComplete="new-password"
+            spellCheck={false}
+            disabled={submitting}
+            mono
+            placeholder={
+              editing && initial.credentialSource === 'console' && !upstreamChanged
+                ? '••••••••'
+                : 'sk-…'
+            }
+            data-testid="provider-key"
+          />
+          <Button
+            variant="ghost"
+            size="s"
+            icon={showKey ? 'eye-off' : 'eye'}
+            iconOnly
+            aria-label={showKey ? t('隐藏密钥', 'Hide key') : t('显示密钥', 'Show key')}
+            onClick={() => setShowKey((v) => !v)}
+            disabled={submitting}
+          />
+        </div>
       </Field>
+      {envNote === 'secret' ? (
+        <Notice testId="provider-env-was-secret">
+          {t(
+            '刚才粘进「环境变量名」的看起来是密钥本身，已移到「API 密钥」里（不会显示在环境变量栏）。',
+            'What was pasted into the env var field looks like the key itself — it was moved to the API key field.',
+          )}
+        </Notice>
+      ) : null}
 
-      <fieldset className="field" data-testid="provider-models">
+      <details
+        className="disclosure"
+        open={editing && initial.credentialSource === 'env' ? true : undefined}
+        data-testid="provider-env-disclosure"
+      >
+        <summary>
+          <Icon name="chevron-right" size="s" className="icon-chevron" />
+          {t('改用主机环境变量提供密钥（可选）', 'Use a host env var instead (optional)')}
+        </summary>
+        <div className="disclosure-body">
+          <Field
+            id="provider-api-key-env"
+            label={t('环境变量名', 'Env var name')}
+            hint={
+              envNote === 'value-dropped'
+                ? t(
+                    '只保留了变量名，等号后的值已丢弃——值只能写在主机上。',
+                    'Only the name was kept; the value after "=" was dropped — values live on the host only.',
+                  )
+                : t(
+                    `只填变量名，会自动转成大写和下划线。值由操作员写进主机 secrets/llm-proxy.env（${apiKeyEnv || preset?.apiKeyEnv || 'NAME'}=<密钥>）后重建 llm-proxy。上面填了 API 密钥就不需要它；两者都有时控制台密钥优先。`,
+                    `The name only, upper-cased automatically. The operator puts ${apiKeyEnv || preset?.apiKeyEnv || 'NAME'}=<key> in secrets/llm-proxy.env and recreates llm-proxy. Not needed when an API key is entered above; the console key wins when both exist.`,
+                  )
+            }
+            error={envProblem ?? undefined}
+          >
+            <Input
+              id="provider-api-key-env"
+              value={apiKeyEnv}
+              onChange={(event) => changeEnvName(event.target.value)}
+              disabled={submitting}
+              mono
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={preset?.apiKeyEnv ?? 'EXAMPLE_API_KEY'}
+              data-testid="provider-api-key-env"
+            />
+          </Field>
+        </div>
+      </details>
+
+      <fieldset className="field provider-models" data-testid="provider-models">
         <legend className="field-label">
-          {t('模型清单', 'Models')}{' '}
+          {t('模型', 'Models')}{' '}
           <span className="field-required" aria-hidden>
             *
           </span>
         </legend>
-        <p className="field-hint">
-          {t(
-            '模型 id 按供应商原样填（如 gpt-4.1-mini）；显示名可选，进 models.json 的 name。',
-            'The provider’s own model id; the display name is optional.',
-          )}
-        </p>
-        <div className="stack-s">
-          {models.map((row, index) => (
-            <div className="row" key={row.key} data-testid="provider-model-row">
-              <Input
-                aria-label={`Model ${index + 1} id`}
-                value={row.id}
-                onChange={(event) => updateModel(row.key, { id: event.target.value })}
-                disabled={submitting}
-                mono
-                placeholder="model-id"
-                data-testid="provider-model-id"
-              />
-              <Input
-                aria-label={`Model ${index + 1} display name`}
-                value={row.displayName}
-                onChange={(event) => updateModel(row.key, { displayName: event.target.value })}
-                disabled={submitting}
-                placeholder="显示名 display name（可选）"
-                data-testid="provider-model-display-name"
-              />
-              <Button
-                variant="ghost"
-                size="s"
-                icon="close"
-                iconOnly
-                aria-label={`Remove model ${index + 1}`}
-                disabled={submitting || models.length === 1}
-                onClick={() => setModels((rows) => rows.filter((r) => r.key !== row.key))}
-              />
+        <div className="row-wrap">
+          <Button
+            variant="secondary"
+            size="s"
+            icon="refresh"
+            onClick={() => void discover()}
+            loading={discovery.status === 'loading'}
+            disabled={!canDiscover || discovery.status === 'loading'}
+            data-testid="provider-discover"
+          >
+            {discovery.status === 'ready'
+              ? t('重新获取', 'Fetch again')
+              : t('从供应商获取模型', 'Fetch models from the provider')}
+          </Button>
+          <span className="text-small text-3" data-testid="provider-discover-status">
+            {!urlValid
+              ? t('先填 Base URL。', 'Enter the Base URL first.')
+              : !canDiscover
+                ? t(
+                    '填写 API 密钥（或环境变量名）后即可获取。',
+                    'Enter the API key (or an env var name) to fetch.',
+                  )
+                : discovery.status === 'ready'
+                  ? discoveryStale
+                    ? t('地址或密钥改了，建议重新获取。', 'Address or key changed — fetch again.')
+                    : t(
+                        `供应商列出 ${discovery.result.models.length} 个模型${discovery.result.truncated ? '（仅显示前 500 个）' : ''}，勾选要用的。`,
+                        `${discovery.result.models.length} models listed${discovery.result.truncated ? ' (first 500 shown)' : ''} — tick the ones to use.`,
+                      )
+                  : t(
+                      '会用上面的密钥调用一次供应商的模型列表接口，不保存任何东西。',
+                      'Calls the provider’s model list once with the key above; nothing is saved.',
+                    )}
+          </span>
+        </div>
+
+        {discoveryError !== null ? (
+          <div className="field-error" role="alert" data-testid="provider-discover-error">
+            {discoveryErrorText ??
+              (discoveryError instanceof Error ? discoveryError.message : String(discoveryError))}
+            {discoveryExplain ? <div className="text-2">{discoveryExplain}</div> : null}
+            <div className="text-2">
+              {t(
+                '有些中转不提供模型列表：可以在下面手动填写模型 id。',
+                'Some relays do not list models — type the model ids below instead.',
+              )}
             </div>
-          ))}
+          </div>
+        ) : null}
+
+        {discovered && discovered.length > 0 ? (
+          <div className="provider-model-picker" data-testid="provider-model-picker">
+            {discovered.length > 8 ? (
+              <Input
+                aria-label={t('筛选模型', 'Filter models')}
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder={t('筛选，如 sonnet / gpt-4.1 / chat', 'Filter, e.g. sonnet / gpt-4.1')}
+                data-testid="provider-model-filter"
+              />
+            ) : null}
+            <ul className="provider-model-options">
+              {visibleDiscovered.map((model) => (
+                <li key={model.id}>
+                  <label className="provider-model-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedSet.has(model.id)}
+                      onChange={() => toggleDiscovered(model.id, model.displayName)}
+                      disabled={submitting}
+                      data-testid="provider-model-option"
+                    />
+                    <span className="mono">{model.id}</span>
+                    {model.displayName ? (
+                      <span className="text-3 truncate">{model.displayName}</span>
+                    ) : null}
+                  </label>
+                </li>
+              ))}
+              {visibleDiscovered.length === 0 ? (
+                <li className="text-small text-3">{t('没有匹配的模型。', 'No model matches.')}</li>
+              ) : null}
+            </ul>
+          </div>
+        ) : discovered && discovered.length === 0 ? (
+          <p className="text-small text-3">
+            {t(
+              '供应商返回了空的模型列表，请手动填写模型 id。',
+              'The provider listed no models — type the model ids below.',
+            )}
+          </p>
+        ) : null}
+
+        <div className="stack-s">
+          {modelIds.length > 0 ? (
+            <span className="text-small text-2">
+              {t(`已选 ${modelIds.length} 个模型`, `${modelIds.length} selected`)}
+            </span>
+          ) : null}
+          {models.map((row, index) => {
+            const trimmed = row.id.trim();
+            const unlisted =
+              discovered !== null && trimmed.length > 0 && !discoveredIds.has(trimmed);
+            const duplicate = trimmed.length > 0 && duplicateIds.includes(trimmed);
+            return (
+              <div className="stack-s" key={row.key}>
+                <div className="row provider-model-row" data-testid="provider-model-row">
+                  <Input
+                    aria-label={t(`模型 ${index + 1} 的 id`, `Model ${index + 1} id`)}
+                    value={row.id}
+                    onChange={(event) => updateModel(row.key, { id: event.target.value })}
+                    onBlur={() => updateModel(row.key, { id: row.id.trim() })}
+                    disabled={submitting}
+                    mono
+                    placeholder={t('模型 id，如 deepseek-chat', 'model id, e.g. deepseek-chat')}
+                    aria-invalid={duplicate || undefined}
+                    data-testid="provider-model-id"
+                  />
+                  <Input
+                    aria-label={t(`模型 ${index + 1} 的显示名`, `Model ${index + 1} display name`)}
+                    value={row.displayName}
+                    onChange={(event) => updateModel(row.key, { displayName: event.target.value })}
+                    disabled={submitting}
+                    placeholder={t('显示名（可选）', 'Display name (optional)')}
+                    data-testid="provider-model-display-name"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    icon="close"
+                    iconOnly
+                    aria-label={t(`移除模型 ${index + 1}`, `Remove model ${index + 1}`)}
+                    disabled={submitting}
+                    onClick={() => setModels((rows) => rows.filter((r) => r.key !== row.key))}
+                  />
+                </div>
+                {duplicate ? (
+                  <p className="field-error">{t('这个 id 重复了', 'Duplicate id')}</p>
+                ) : unlisted ? (
+                  <p
+                    className="field-hint provider-model-unlisted"
+                    data-testid="provider-model-unlisted"
+                  >
+                    {t(
+                      '供应商的模型列表里没有这个 id——检查拼写；中转的别名可以保留，保存后用「测试」确认。',
+                      'Not in the provider’s list — check the spelling; a relay alias may still work, confirm with Test after saving.',
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
           <div>
             <Button
-              variant="secondary"
+              variant="ghost"
               size="s"
               icon="plus"
               disabled={submitting}
-              onClick={() => {
-                setModels((rows) => [...rows, { key: nextKey, id: '', displayName: '' }]);
-                setNextKey((k) => k + 1);
-              }}
+              onClick={() => addModelRow()}
               data-testid="provider-model-add"
             >
-              {t('添加模型', 'Add model')}
+              {t('手动添加模型', 'Add a model by id')}
             </Button>
           </div>
         </div>
-        {modelIds.length > 0 && !modelsValid ? (
-          <p className="field-error" role="alert">
-            {t('模型 id 重复', 'Duplicate model ids')}
-          </p>
-        ) : null}
       </fieldset>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => setEnabled(event.target.checked)}
-          disabled={submitting}
-          data-testid="provider-enabled"
-        />
-        <span>
-          {t('启用（可路由、进入 models.json）', 'Enabled — routable and listed in models.json')}
-        </span>
-      </label>
+      <details className="disclosure" data-testid="provider-advanced">
+        <summary>
+          <Icon name="chevron-right" size="s" className="icon-chevron" />
+          {t('高级：鉴权头', 'Advanced: auth header')}
+        </summary>
+        <div className="disclosure-body">
+          <Field
+            id="provider-auth-header"
+            label={t('鉴权头', 'Auth header')}
+            hint={t(
+              '已按 API 种类自动选好；只有接口要求另一种时才改。',
+              'Chosen from the API kind; change it only if the endpoint wants the other one.',
+            )}
+          >
+            <Select
+              id="provider-auth-header"
+              value={authHeader}
+              onChange={(event) => setAuthHeader(event.target.value as LlmProviderAuthHeaderWire)}
+              disabled={submitting}
+              data-testid="provider-auth-header"
+            >
+              <option value="authorization">authorization: Bearer &lt;key&gt;</option>
+              <option value="x-api-key">x-api-key: &lt;key&gt;</option>
+            </Select>
+          </Field>
+        </div>
+      </details>
+
+      <div className="stack-s">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+            disabled={submitting}
+            data-testid="provider-enabled"
+          />
+          <span>
+            {t(
+              '启用（可路由，工作区可以选它的模型）',
+              'Enabled — routable, workspaces can pick its models',
+            )}
+          </span>
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={testAfterSave && credentialAfterSave && enabled}
+            onChange={(event) => setTestAfterSave(event.target.checked)}
+            disabled={submitting || !credentialAfterSave || !enabled}
+            data-testid="provider-test-after-save"
+          />
+          <span>
+            {credentialAfterSave
+              ? t(
+                  '保存后立即测试（一次补全 + 一次工具调用，只花极少 token）',
+                  'Test right after saving (one completion + one tool call, a few tokens)',
+                )
+              : t(
+                  '保存后立即测试——需要先填 API 密钥或环境变量名',
+                  'Test right after saving — needs an API key or env var name',
+                )}
+          </span>
+        </label>
+      </div>
 
       {error !== null ? (
         mapped !== null ? (
@@ -395,7 +906,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         )
       ) : null}
 
-      <div className="row">
+      <div className="row-wrap">
         <Button
           type="submit"
           variant="primary"
@@ -408,6 +919,11 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
+        {missing.length > 0 && !submitting ? (
+          <span className="text-small text-3" data-testid="provider-form-missing">
+            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+          </span>
+        ) : null}
       </div>
     </form>
   );

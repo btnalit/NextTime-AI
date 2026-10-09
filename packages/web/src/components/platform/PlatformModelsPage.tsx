@@ -23,6 +23,7 @@ import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
+import { Select } from '../ui/Field.js';
 import { Icon } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
@@ -414,10 +415,9 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       ) : null}
       {meta?.modelsJsonError ? (
         <Notice tone="warn" testId="providers-models-json-error">
-          最近一次重写 models.json 失败（{meta.modelsJsonError}
           {t(
-            '）：代理已按新目录路由，但内核投影与新 容器仍看旧文件——操作员运行 scripts/host-llm-proxy-init.sh（config/ 归 10001）后重建 llm-proxy，或手动 make gen-models。 The last models.json rewrite failed —',
-            'the proxy routes the new catalog, but the kernel projection and new containers still see the old file; run scripts/host-llm-proxy-init.sh and recreate llm-proxy, or make gen-models.',
+            `最近一次重写 models.json 失败（${meta.modelsJsonError}）：代理已按新目录路由，但内核投影与新容器仍看旧文件——操作员运行 scripts/host-llm-proxy-init.sh（config/ 归 10001）后重建 llm-proxy，或手动 make gen-models。`,
+            `The last models.json rewrite failed (${meta.modelsJsonError}): the proxy routes the new catalog, but the kernel projection and new containers still see the old file; run scripts/host-llm-proxy-init.sh and recreate llm-proxy, or make gen-models.`,
           )}
         </Notice>
       ) : null}
@@ -429,11 +429,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           <h2 id="providers-title">{t('供应商', 'Providers')}</h2>
           {meta?.modelsJsonWrittenAt ? (
             <span className="text-small text-3" data-testid="providers-models-json-written">
-              models.json 已于{' '}
+              {t('models.json 重写于 ', 'models.json rewritten ')}
               <time title={formatDateTime(meta.modelsJsonWrittenAt)}>
                 {formatRelative(meta.modelsJsonWrittenAt)}
-              </time>{' '}
-              {t('重写', 'rewritten')}
+              </time>
             </span>
           ) : null}
         </div>
@@ -508,7 +507,9 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       >
         {drawer.kind === 'create' ? (
           <ProviderForm
-            onSubmit={(input) => save(input, undefined)}
+            client={client}
+            existingIds={providers.map((row) => row.id)}
+            onSubmit={(input, extras) => save(input, undefined, extras)}
             onCancel={() => setDrawer({ kind: 'closed' })}
           />
         ) : null}
@@ -516,7 +517,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
 
       <Drawer
         open={drawer.kind === 'edit' && drawerProvider !== undefined}
-        title={`编辑 ${drawerProvider?.displayName ?? ''}`}
+        title={t(
+          `编辑 ${drawerProvider?.displayName ?? ''}`,
+          `Edit ${drawerProvider?.displayName ?? ''}`,
+        )}
         subtitle={drawerProvider?.id}
         onClose={() => setDrawer({ kind: 'closed' })}
         wide
@@ -525,7 +529,8 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         {drawer.kind === 'edit' && drawerProvider ? (
           <ProviderForm
             initial={drawerProvider}
-            onSubmit={(input) => save(input, drawerProvider)}
+            client={client}
+            onSubmit={(input, extras) => save(input, drawerProvider, extras)}
             onCancel={() => setDrawer({ kind: 'closed' })}
           />
         ) : null}
@@ -542,7 +547,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           // S8 W1-A11 (audit L8): the drawer's fixed sections — metadata / edit form (no
           // related-object links here; a provider references nothing else in the console).
           <DrawerSections>
-            <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+            <DrawerSection title={t('元数据', 'Metadata')}>
               <dl className="definition-list">
                 <dt>API</dt>
                 <dd>{t(API_LABEL[drawerProvider.api].zh, API_LABEL[drawerProvider.api].en)}</dd>
@@ -555,12 +560,14 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 </dd>
                 <dt>{t('密钥环境变量', 'Key env var')}</dt>
                 <dd className="mono">
-                  {drawerProvider.apiKeyEnv ?? <span className="text-3">（未配置 none）</span>}
+                  {drawerProvider.apiKeyEnv ?? (
+                    <span className="text-3">{t('（未配置）', '(none)')}</span>
+                  )}
                 </dd>
                 <dt>{t('来源', 'Source')}</dt>
                 <dd>
                   {drawerProvider.source === 'file'
-                    ? 'llm-providers.yaml（主机，只读 host, read-only）'
+                    ? t('llm-providers.yaml（主机，只读）', 'llm-providers.yaml (host, read-only)')
                     : drawerProvider.overridesFile
                       ? t('控制台覆盖 yaml 同名条目', 'console override of the yaml entry')
                       : t('控制台', 'console store')}
@@ -592,21 +599,20 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                   ))}
                 </ul>
               </div>
-              {(testResults[drawerProvider.id] ?? drawerProvider.lastTest) ? (
-                <div className="stack-s">
-                  <span className="section-title">{t('最近测试', 'Last test')}</span>
-                  <ProviderTestResult
-                    result={
-                      (testResults[drawerProvider.id] ??
-                        drawerProvider.lastTest) as LlmProviderTestResultWire
-                    }
-                    testId="provider-detail-test"
-                  />
-                </div>
-              ) : null}
             </DrawerSection>
 
-            <DrawerSection title={t('编辑 Edit', 'Edit')}>
+            <DrawerSection title={t('连通性测试', 'Connectivity test')}>
+              <ProviderTestPanel
+                provider={drawerProvider}
+                result={testResults[drawerProvider.id] ?? drawerProvider.lastTest}
+                testing={testing === drawerProvider.id}
+                busy={testing !== null}
+                error={rowError && rowError.id === drawerProvider.id ? rowError.error : null}
+                onTest={(model) => void runTest(drawerProvider, model)}
+              />
+            </DrawerSection>
+
+            <DrawerSection title={t('密钥', 'Key')}>
               <ProviderSecretForm
                 provider={drawerProvider}
                 client={client}
@@ -616,6 +622,87 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           </DrawerSections>
         ) : null}
       </Drawer>
+    </div>
+  );
+}
+
+/**
+ * The detail drawer's 连通性测试 section: pick which of the provider's models to test (the proxy's
+ * `POST /providers/:id/test {model}`; it defaults to the first one), run it, and read the outcome
+ * in words (`ProviderTestResult`). A test that cannot start (no credential, a disabled provider)
+ * says why next to the button instead of only in a tooltip.
+ */
+function ProviderTestPanel({
+  provider,
+  result,
+  testing,
+  busy,
+  error,
+  onTest,
+}: {
+  readonly provider: LlmProviderWire;
+  readonly result: LlmProviderTestResultWire | null;
+  readonly testing: boolean;
+  readonly busy: boolean;
+  readonly error: unknown;
+  readonly onTest: (model: string) => void;
+}) {
+  const t = useT();
+  const [model, setModel] = useState(result?.model ?? provider.models[0]?.id ?? '');
+  const blocked = !provider.enabled
+    ? t('供应商已停用，启用后才能测试。', 'The provider is disabled — enable it to test.')
+    : !provider.credentialPresent
+      ? t('还没有可用的密钥：先在下方设置。', 'No key yet — set one below first.')
+      : null;
+  return (
+    <div className="stack-s" data-testid="provider-test-panel">
+      <div className="row-wrap">
+        {provider.models.length > 1 ? (
+          <Select
+            aria-label={t('测试哪个模型', 'Model to test')}
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            disabled={busy}
+            data-testid="provider-test-model"
+          >
+            {provider.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName ? `${m.displayName} (${m.id})` : m.id}
+              </option>
+            ))}
+          </Select>
+        ) : null}
+        <Button
+          variant="secondary"
+          size="s"
+          onClick={() => onTest(model)}
+          loading={testing}
+          disabled={busy || blocked !== null}
+          data-testid="provider-detail-run-test"
+        >
+          {result ? t('重新测试', 'Test again') : t('测试', 'Test')}
+        </Button>
+        {blocked ? <span className="text-small text-3">{blocked}</span> : null}
+      </div>
+      {testing ? (
+        <p className="text-small text-2" aria-live="polite">
+          {t(
+            '正在测试：一次补全 + 一次工具调用，通常几秒到二十几秒…',
+            'Testing — one completion and one tool call, usually a few seconds…',
+          )}
+        </p>
+      ) : null}
+      {error ? (
+        <div className="field-error" role="alert" data-testid="provider-detail-test-error">
+          {llmAdminErrorMessage(error, t) ??
+            (error instanceof Error ? error.message : String(error))}
+        </div>
+      ) : null}
+      {result && !testing ? (
+        <ProviderTestResult result={result} testId="provider-detail-test" />
+      ) : !testing && !error ? (
+        <p className="text-small text-3">{t('还没测试过。', 'Not tested yet.')}</p>
+      ) : null}
     </div>
   );
 }

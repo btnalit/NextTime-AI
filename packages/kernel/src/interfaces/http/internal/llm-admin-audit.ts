@@ -8,9 +8,10 @@ import { recordLlmAdminAudit } from '../../../application/platform/index.js';
  * completion-plan.md §6 "llm-proxy 自己的审计日志 + 内核平台审计一行（不含密钥）"; §8; S7-A,
  * docs/STATUS.md 维护者决定 2026-09-22 ① for `provider_secret_set`/`provider_secret_cleared`). The
  * model proxy posts one event here after every provider mutation it performs on an administrator's
- * behalf (its admin-api.ts: create / update / delete / test / secret set / secret cleared), and
- * this route turns it into one platform audit row — `platform.llm_provider_created` / `_updated` /
- * `_deleted` / `_tested` / `_secret_set` / `_secret_cleared` — next to every other administrator
+ * behalf (its admin-api.ts: create / update / delete / test / secret set / secret cleared / model
+ * listing), and this route turns it into one platform audit row — `platform.llm_provider_created`
+ * / `_updated` / `_deleted` / `_tested` / `_secret_set` / `_secret_cleared` / `_models_listed` —
+ * next to every other administrator
  * action `platform_audit_query` shows. That is the design line "隔离与审计只增不减" for a write
  * that, by design, never passes through a kernel capability.
  *
@@ -44,6 +45,7 @@ export const LlmAdminAuditEventSchema = z
       'provider_tested',
       'provider_secret_set',
       'provider_secret_cleared',
+      'provider_models_listed',
     ]),
     providerId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
     actorUserId: z.string().uuid(),

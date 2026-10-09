@@ -1209,3 +1209,179 @@
   width: auto;
   max-width: 360px;
 }
+
+/* ---- 新增 / 编辑 LLM 供应商 (providers/ProviderForm.tsx, ProviderTestResult.tsx) -------- */
+.provider-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.provider-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.provider-preset {
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-1);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.provider-preset:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.provider-preset:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.provider-preset[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.provider-preset:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.provider-models {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.provider-model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.provider-model-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.provider-model-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.provider-model-option:hover {
+  background: var(--surface-3);
+}
+
+.provider-model-option:has(input:checked) {
+  background: var(--accent-soft);
+}
+
+.provider-model-option input {
+  margin: 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.provider-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.provider-model-unlisted {
+  color: var(--warn);
+}
+
+.provider-test-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  font-size: var(--fs-13);
+}
+
+.provider-test-verdict[data-verdict="ok"] {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.provider-test-verdict[data-verdict="chat-only"] {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.provider-test-verdict[data-verdict="failed"] {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.provider-test-verdict strong {
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .provider-model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provider-model-row > .input:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+.provider-test-verdict-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: var(--fs-12);
+  font-weight: 700;
+  color: var(--text-on-accent);
+  background: var(--danger);
+}
+
+.provider-test-verdict[data-verdict="ok"] .provider-test-verdict-mark {
+  background: var(--ok);
+}
+
+.provider-test-verdict[data-verdict="chat-only"] .provider-test-verdict-mark {
+  background: var(--warn);
+}
