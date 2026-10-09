@@ -314,7 +314,10 @@ describe('createChatEventSink — live text is scrubbed across deltas', () => {
 
     await sink.handle(delta('env says CAPABILITY_HANDLE='));
     await sink.handle(delta(`${HANDLE}\nHOME=/workspace`));
-    await sink.handle({ ...correlation(), type: 'turnEnded', status: 'completed' }).catch(() => {});
+    // The Turn's end emits what is held before anything else (this fake pool has no Turn to end).
+    await Promise.resolve(
+      sink.handle({ ...correlation(), type: 'turnEnded', status: 'completed' }),
+    ).catch(() => {});
 
     expect(liveText(received).join('')).toBe(
       'env says CAPABILITY_HANDLE=[redacted]\nHOME=/workspace',
