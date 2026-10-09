@@ -4,7 +4,9 @@
  * as `@nexttime/egress-proxy`'s `policy.ts` `decideEgress`.
  *
  * Env is the security-critical part: **exactly** `KERNEL_URL`, `KERNEL_LLM_URL`,
- * `CAPABILITY_HANDLE`, `NEXTTIME_MODE=entry`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`,
+ * `CAPABILITY_HANDLE` (the fixed marker `SOURCE_BOUND_CAPABILITY_HANDLE`, never the Handle — the
+ * Handle is bound to the container's address, @nexttime/shared handle-binding.ts),
+ * `NEXTTIME_MODE=entry`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`,
  * `PI_CODING_AGENT_DIR`, `HOME=/workspace` — plus two additions beyond the task brief's list:
  *
  * - `WORKSPACE_ID`: `@nexttime/platform-extension`'s `index.ts` (`readRequiredEnv('WORKSPACE_ID')`)
@@ -41,6 +43,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { SOURCE_BOUND_CAPABILITY_HANDLE } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
@@ -113,7 +116,6 @@ export interface BuildSpawnSpecInput {
   readonly config: SupervisorConfig;
   readonly workspaceId: string;
   readonly principalId: string;
-  readonly handle: string;
   readonly kernelUrl?: string;
   readonly llmUrl?: string;
   readonly networkName: string;
@@ -149,7 +151,10 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
   const env: string[] = [
     `KERNEL_URL=${input.kernelUrl ?? config.kernelUrl}`,
     `KERNEL_LLM_URL=${input.llmUrl ?? config.kernelLlmUrl}`,
-    `CAPABILITY_HANDLE=${input.handle}`,
+    // Never the Handle itself (@nexttime/shared handle-binding.ts): the model's own shell reads
+    // this environment. The Handle is bound to the container's address instead (resident-service.ts
+    // `bindHandle`); the fixed marker keeps `$CAPABILITY_HANDLE` in models.json resolvable.
+    `CAPABILITY_HANDLE=${SOURCE_BOUND_CAPABILITY_HANDLE}`,
     // Required by @nexttime/platform-extension (index.ts readRequiredEnv) — see this module's
     // doc comment.
     `WORKSPACE_ID=${input.workspaceId}`,

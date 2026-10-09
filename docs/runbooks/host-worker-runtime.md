@@ -144,6 +144,9 @@ docker exec nexttime-entry-demo-alice env | sort
 HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PI_CODING_AGENT_DIR HOME`（大小写代理变量
 都设，见 §10 "httpoxy" 说明）加镜像自带的 `PIP_USER PYTHONUSERBASE PATH NODE_ENV` 等
 ——**没有任何 `*_API_KEY`**，也没有 supervisor 自己进程的其他 env（未继承宿主 env）。
+`CAPABILITY_HANDLE` 的值是固定标记 `source-bound`，不是 Handle：Handle 由 worker-supervisor 按容器
+地址写进 `handle-bindings` 卷，内核与 llm-proxy 按来源取用（设计文档 I19）；env 里出现 JWT 形态
+（`eyJ….eyJ….…`）的值即为异常，容器启动自检会以 `check=handle_env result=fail` 拒绝启动。
 
 ```bash
 docker exec nexttime-entry-demo-alice curl -sS -o /dev/null -w '%{http_code}\n' https://example.com
@@ -277,7 +280,8 @@ docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{.HostConfig.Readonly
 
 期望：env 恰好是 `KERNEL_URL KERNEL_LLM_URL CAPABILITY_HANDLE TASK_ID WORKSPACE_ID WORKER_RUN_ID
 NEXTTIME_MODE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy` 加镜像自带的
-`PIP_USER PYTHONUSERBASE PATH NODE_ENV HOME` 等——**没有任何 `*_API_KEY`**，也没有
+`PIP_USER PYTHONUSERBASE PATH NODE_ENV HOME` 等——**没有任何 `*_API_KEY`**，`CAPABILITY_HANDLE`
+是标记 `source-bound`（同 §6，WorkerRun 的 Handle 按容器地址绑定），也没有
 `PI_CODING_AGENT_DIR`（见 README"Spawn spec 关键决策"，默认值已经落在同一路径，不需要这个变量）；
 `Binds` 含 `.../workspaces/tasks/${TASK_ID}:/workspace` 与只读的 `models.json`；`Labels` 含
 `nexttime.role=worker`、`nexttime.task-id=${TASK_ID}`、`nexttime.worker-run-id=${WORKER_RUN_ID}`、

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  HANDLE_BINDINGS_FILE_ENV,
   INTERNAL_TOKEN_FILE_ENV,
   InternalTokenError,
   normalizeInternalToken,
@@ -259,6 +260,14 @@ export interface LlmProxyConfig {
   /** R-24: the directory of provider key files, one per `api_key_env` name (provider-keys.ts).
    *  Optional so a hand-built config keeps compiling; `loadConfig` always sets it. */
   readonly providerKeysDir?: string;
+  /** Source binding (source-binding.ts): `NEXTTIME_SUBNET_WORKERS`, the agent containers'
+   *  network. Unset → no source binding: every peer presents its Handle in a header, and a
+   *  container-held Handle is refused from all of them (no agent container can call this proxy). */
+  readonly workersSubnet?: string;
+  /** `HANDLE_BINDINGS_FILE` — worker-supervisor's bindings file (read-only mount of the
+   *  `handle-bindings` tmpfs volume). With `workersSubnet` set and this unset, every
+   *  `workers`-network request is refused (fail closed). */
+  readonly handleBindingsFile?: string;
 }
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
@@ -287,5 +296,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     budgetSyncIntervalMs: parseIntEnv(env.BUDGET_SYNC_INTERVAL_MS, 15_000),
     providerTestTimeoutMs: parseIntEnv(env.PROVIDER_TEST_TIMEOUT_MS, 30_000),
     providerKeysDir: env.LLM_PROVIDER_KEYS_DIR || DEFAULT_PROVIDER_KEYS_DIR,
+    workersSubnet: env.NEXTTIME_SUBNET_WORKERS?.trim() || undefined,
+    handleBindingsFile: env[HANDLE_BINDINGS_FILE_ENV]?.trim() || undefined,
   };
 }

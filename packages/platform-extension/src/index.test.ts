@@ -11,20 +11,25 @@ import { startFakeKernel } from './test-support/fake-kernel.js';
  * (exercised more thoroughly in modes/entry.test.ts and the real-SDK test).
  */
 
+// An agent container's CAPABILITY_HANDLE is only the `source-bound` marker (@nexttime/shared
+// handle-binding.ts) — entry / worker mode never read it.
 const REQUIRED_ENTRY_ENV = {
   NEXTTIME_MODE: 'entry',
   KERNEL_URL: 'http://127.0.0.1:1',
-  CAPABILITY_HANDLE: 'test-handle',
   WORKSPACE_ID: 'ws-1',
 } as const;
 
 const REQUIRED_WORKER_ENV = {
   NEXTTIME_MODE: 'worker',
   KERNEL_URL: 'http://127.0.0.1:1',
-  CAPABILITY_HANDLE: 'test-handle',
   WORKSPACE_ID: 'ws-1',
   TASK_ID: 'task-1',
 } as const;
+
+/** Shaped like a Handle but synthetic — the same allowlisted fixture the kernel's redaction tests
+ *  use (.gitleaks.toml: signature segment is base64 of "signature-bytes-here"). */
+const SYNTHETIC_HANDLE_SHAPED =
+  'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
 
 const REQUIRED_INTERACTIVE_ENV = {
   NEXTTIME_MODE: 'interactive',
@@ -88,7 +93,7 @@ describe('platformExtension() activation', () => {
     expect(pi.registerTool).not.toHaveBeenCalled();
   });
 
-  for (const missing of ['KERNEL_URL', 'CAPABILITY_HANDLE', 'WORKSPACE_ID'] as const) {
+  for (const missing of ['KERNEL_URL', 'WORKSPACE_ID'] as const) {
     it(`throws a clear error when ${missing} is missing in entry mode`, () => {
       for (const [key, value] of Object.entries(REQUIRED_ENTRY_ENV)) {
         if (key !== missing) process.env[key] = value;
@@ -128,7 +133,7 @@ describe('platformExtension() activation', () => {
     expect(() => platformExtension(fakePi())).not.toThrow();
   });
 
-  for (const missing of ['KERNEL_URL', 'CAPABILITY_HANDLE', 'WORKSPACE_ID', 'TASK_ID'] as const) {
+  for (const missing of ['KERNEL_URL', 'WORKSPACE_ID', 'TASK_ID'] as const) {
     it(`throws a clear error when ${missing} is missing in worker mode`, () => {
       for (const [key, value] of Object.entries(REQUIRED_WORKER_ENV)) {
         if (key !== missing) process.env[key] = value;
@@ -154,6 +159,40 @@ describe('platformExtension() activation', () => {
       expect.arrayContaining(['session_start', 'context', 'agent_end', 'agent_settled']),
     );
   });
+
+  // Source binding: an agent container presents no credential — the kernel takes the Handle bound
+  // to its address and refuses a request from the workers network that carries one. Whatever
+  // CAPABILITY_HANDLE holds (here a synthetic Handle-shaped string) never leaves the process;
+  // interactive mode, outside the platform, still presents its own Handle as a bearer.
+  for (const [mode, env] of [
+    ['entry', REQUIRED_ENTRY_ENV],
+    ['worker', REQUIRED_WORKER_ENV],
+    ['interactive', REQUIRED_INTERACTIVE_ENV],
+  ] as const) {
+    it(`${mode} mode: ${mode === 'interactive' ? 'presents CAPABILITY_HANDLE as a bearer' : 'sends no Authorization header, whatever CAPABILITY_HANDLE holds'}`, async () => {
+      const kernel = await startFakeKernel();
+      try {
+        kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+        for (const [key, value] of Object.entries(env)) process.env[key] = value;
+        process.env.KERNEL_URL = kernel.url;
+        process.env.CAPABILITY_HANDLE = SYNTHETIC_HANDLE_SHAPED;
+        const pi = { ...fakePi(), sendUserMessage: vi.fn() } as unknown as ExtensionAPI;
+        platformExtension(pi);
+        const sessionStart = vi
+          .mocked(pi.on)
+          .mock.calls.find(([event]) => (event as string) === 'session_start')?.[1] as
+          | ((event: unknown, ctx: unknown) => Promise<void>)
+          | undefined;
+        await sessionStart?.({}, { hasUI: false, ui: { notify: vi.fn() } });
+        expect(kernel.requests.map((r) => r.capability)).toEqual(['list_allowed_operations']);
+        expect(kernel.requests[0]?.authorization).toBe(
+          mode === 'interactive' ? `Bearer ${SYNTHETIC_HANDLE_SHAPED}` : undefined,
+        );
+      } finally {
+        await kernel.close();
+      }
+    });
+  }
 
   // Leftover 87: a Worker run's kernel calls carry the id it inherited from its delegating call.
   it('worker mode sends NEXTTIME_CORRELATION_ID as x-correlation-id on its kernel calls', async () => {

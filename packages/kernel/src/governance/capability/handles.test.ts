@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getCapability } from '@nexttime/shared';
+import { getCapability, handleHolderOf } from '@nexttime/shared';
 import { SignJWT } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,7 @@ import {
   attenuate,
   createDbRevocationCheck,
   entryScope,
+  holderForSessionKind,
   issueHandle,
   revokeEntrySessionHandles,
   revokeHandle,
@@ -57,6 +58,8 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 interface FakeSessionRow {
   workspaceId: string;
   onBehalfOf: string;
+  /** `sessions.kind` — omitted reads as `mcp_session`, a bearer Handle's kind. */
+  kind?: string;
 }
 
 interface FakeHandleRow {
@@ -76,11 +79,19 @@ function createFakeCapabilityClient() {
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
 
-    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
-        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rows: row
+          ? [
+              {
+                workspace_id: row.workspaceId,
+                on_behalf_of: row.onBehalfOf,
+                kind: row.kind ?? 'mcp_session',
+              },
+            ]
+          : [],
         rowCount: row ? 1 : 0,
       };
     }
@@ -184,6 +195,31 @@ describe('issueHandle / verifyHandle', () => {
     expect(claims.jti).toBe(issued.jti);
     expect(claims.scope).toEqual(scope);
     expect(claims.par).toBeUndefined();
+    expect(claims.hld).toBeUndefined();
+    expect(issued.holder).toBe('bearer');
+  });
+
+  it('marks an entry / worker_run Handle container-held (hld claim) and every other kind bearer, from the session row alone', async () => {
+    const { client, addSession } = createFakeCapabilityClient();
+    const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
+    const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
+
+    for (const [kind, holder] of [
+      ['entry', 'container'],
+      ['worker_run', 'container'],
+      ['mcp_session', 'bearer'],
+      ['service', 'bearer'],
+      ['web', 'bearer'],
+    ] as const) {
+      const sessionId = randomUUID();
+      addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID(), kind });
+      const issued = await issueHandle(client, { sessionId, scope, ttlSeconds: 60, privateKey });
+      const claims = await verifyHandle(issued.token, { publicKey, isRevoked: neverRevoked });
+      expect(issued.holder, kind).toBe(holder);
+      expect(handleHolderOf(claims), kind).toBe(holder);
+      expect(holderForSessionKind(kind), kind).toBe(holder);
+    }
+    expect(holderForSessionKind(undefined)).toBe('bearer');
   });
 
   it('rejects issuance for a sessionId with no session row', async () => {

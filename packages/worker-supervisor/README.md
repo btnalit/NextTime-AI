@@ -18,6 +18,23 @@ fix/runtime-hardening，lane-6 review P1-3）：早前这两组路由完全不�
 不鉴权，任何 `control` 网络上的服务都能杀掉任意 Task 容器）。只有 `GET /healthz` 不需要 token；
 `server.ts` 的 `onRoute` 钩子拒绝注册任何不在 `PUBLIC_ROUTES` 里却没挂守卫的路由，新路由默认关闭。
 
+## Handle 来源绑定（`src/handle-bindings.ts`）
+
+入口容器与 Task 容器的 Handle **不进容器**（设计文档 I19）：容器 env 里的 `CAPABILITY_HANDLE` 只是
+固定标记 `source-bound`（`@nexttime/shared` 的 `SOURCE_BOUND_CAPABILITY_HANDLE`，pi 的 `models.json`
+用它作 provider key 模板），`spawn-spec.ts` / `task-spawn-spec.ts` 的输入里根本没有 Handle 字段。
+Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.json`，compose 的
+`handle-bindings` tmpfs 卷；本服务可写，kernel 与 llm-proxy 只读）：`容器在 workers 网络的地址 →
+{handle, sourceId, containerId, boundAt}`，0600，写临时文件再 rename。
+
+- **绑定**：容器创建并启动后、spawn 返回前（常驻模式的每次复用也重写一次）；写失败则 spawn 失败
+  （Task 模式先删掉刚起的容器）——没有绑定的容器什么也调不了。
+- **解绑**：与 egress 来源反注册同一处（停止、空闲回收、崩溃、docker 退出事件、Task 回收 /
+  terminate），在 Docker 能把地址分给别的容器之前。
+- **对账**：启动时与每次 docker events 重连后 `retainLive`——只留下容器仍在跑、且地址没变的绑定。
+  文件在 tmpfs 卷上，本服务单独重启时它还在（kernel / llm-proxy 仍挂着卷），主机重启后为空。
+- 文件内容（Handle）从不进日志：读坏了只报原因（`not valid JSON` 等），不引用内容。
+
 ## 常驻模式（S1.5a）
 
 `POST /resident/spawn|stop`、`GET /resident/:principalId`、`POST /resident/:principalId/touch`。
@@ -130,7 +147,7 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 
 - **env 恰好是** `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID /
   WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP_PROXY / HTTPS_PROXY / http_proxy / https_proxy /
-  NO_PROXY / no_proxy`——大小写代理变量都设的原因见 `spawn-spec.ts`（resident 模式）已经记录的
+  NO_PROXY / no_proxy`（`CAPABILITY_HANDLE=source-bound`，见上文"Handle 来源绑定"）——大小写代理变量都设的原因见 `spawn-spec.ts`（resident 模式）已经记录的
   "httpoxy" 规避说明，同一理由，不重复验证。**没有** `PI_CODING_AGENT_DIR` 与 `HOME`：`HOME=/workspace`
   烘焙在 `deploy/worker-runtime/Dockerfile` 镜像层（不受本包 `Env` 数组影响），pi 0.84.4 未设
   `PI_CODING_AGENT_DIR` 时的默认值是 `join(homedir(), '.pi', 'agent')`（对照
@@ -230,6 +247,7 @@ resident 模式的 `reconcile()` 原本只在进程启动时跑一次（那时�
 | `TASK_MAX_RUNTIME_SEC` | `3600` | 单个 Task 容器的默认超时（秒），可被请求体 `timeoutSec` 覆盖。 |
 | `TASK_WORKDIR_RETENTION_HOURS` | `72` | 已结束 Task 工作目录保留多久后清理。 |
 | `WORKER_IMAGE_ALLOWLIST` | 空 | 逗号分隔的额外允许镜像列表；**追加**在默认 `WORKER_IMAGE` 之上，不会替换它。 |
+| `HANDLE_BINDINGS_FILE` | `/run/handle-bindings/bindings.json` | Handle 来源绑定文件（见上文），两种模式共用。 |
 
 ## 测试
 

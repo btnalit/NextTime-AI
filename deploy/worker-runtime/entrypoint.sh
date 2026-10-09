@@ -131,6 +131,23 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 	fi
 	echo "nexttime-selfcheck check=api_key_env result=ok"
 
+	# Source binding (@nexttime/shared handle-binding.ts; design doc §7.3): an entry agent's or a
+	# WorkerRun's Handle never enters this container — worker-supervisor binds it to the
+	# container's address, and the kernel / llm-proxy take it from there. `CAPABILITY_HANDLE` is
+	# only the `source-bound` marker pi's models.json resolves as the provider key; a JWT-shaped
+	# value (`eyJ….eyJ….…`, the form every Handle has) in any variable means a Handle leaked into
+	# the environment. Fatal, names only — never a value (I9).
+	if [ "${CAPABILITY_HANDLE:-}" != "source-bound" ]; then
+		echo "nexttime-selfcheck check=handle_env result=fail reason=capability_handle_not_source_bound"
+		exit 1
+	fi
+	if env | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}'; then
+		token_vars=$(env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}' | cut -d= -f1 | tr '\n' ',' | sed 's/,$//')
+		echo "nexttime-selfcheck check=handle_env result=fail reason=token_shaped_value vars=${token_vars}"
+		exit 1
+	fi
+	echo "nexttime-selfcheck check=handle_env result=ok"
+
 	# I10: this container must have no direct route out at all — only through the egress proxy
 	# (design doc §7.9 "容器没有直接路由"). Probes the same public domain the proxied check below
 	# uses, with the proxy explicitly bypassed (--noproxy '*'), so this needs no internal

@@ -4,6 +4,7 @@ import { createDockerClient } from './docker-client.js';
 import type { ContainerLifecycleEvent } from './docker-events.js';
 import { subscribeToContainerEvents } from './docker-events.js';
 import { createEgressMapStore } from './egress-map.js';
+import { createHandleBindingStore } from './handle-bindings.js';
 import { loadAgentHostToken, loadInternalToken } from './internal-auth.js';
 import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
@@ -30,6 +31,8 @@ export type { ContainerSpec, ContainerState, DockerClient } from './docker-clien
 export { subscribeToContainerEvents } from './docker-events.js';
 export type { ContainerEventsSubscriber, ContainerLifecycleEvent } from './docker-events.js';
 export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
+export { createHandleBindingStore } from './handle-bindings.js';
+export type { HandleBindingStore } from './handle-bindings.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
 export { loadAgentHostToken, loadInternalToken, requireInternalCaller } from './internal-auth.js';
 export type { SupervisorCaller, SupervisorCallerTokens } from './internal-auth.js';
@@ -91,17 +94,62 @@ export async function main(): Promise<void> {
   // same one.
   const imagesDocker = createDockerClient({ connection: config.dockerImagesConnection });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
-  const residentService = createResidentService({ config, docker, imagesDocker, egressMap });
+  // Agent containers' Handles (handle-bindings.ts): loaded from the file, which outlives a restart
+  // of this process, then pruned to the containers still running below.
+  const handleBindings = createHandleBindingStore(config.handleBindingsFile, {
+    onLoadError: (reason) =>
+      console.error(
+        JSON.stringify({ level: 'error', msg: `handle bindings file ${reason}; starting empty` }),
+      ),
+  });
+  const residentService = createResidentService({
+    config,
+    docker,
+    imagesDocker,
+    egressMap,
+    handleBindings,
+  });
   const metrics = createSupervisorMetrics();
   const taskService = createTaskService({
     config,
     docker,
     egressMap,
+    handleBindings,
     onTaskFinished: (event) => metrics.recordTaskFinished(event),
   });
 
+  // A binding is live while its container is running at that address; this process cannot
+  // re-create one (it never sees a Handle except in a spawn request), only drop the stale ones.
+  async function reconcileHandleBindings(): Promise<void> {
+    try {
+      const dropped = await handleBindings.retainLive(async (ip, binding) => {
+        if (!binding.containerId) return false;
+        const state = await docker.inspectByName(binding.containerId);
+        return Boolean(state?.running && state.ip === ip);
+      });
+      if (dropped.length > 0) {
+        console.log(
+          JSON.stringify({
+            level: 'info',
+            msg: 'handle bindings dropped for containers no longer running at their address',
+            addresses: dropped,
+          }),
+        );
+      }
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'handle binding reconcile failed (kept as they were)',
+          error: String(err),
+        }),
+      );
+    }
+  }
+
   await residentService.reconcile();
   await taskService.reconcile();
+  await reconcileHandleBindings();
 
   // feat/egress-docker-events: a containerId belongs to at most one of the two registries — try
   // resident mode first (arbitrary but fixed order), fall through to Task mode only if resident
@@ -135,6 +183,7 @@ export async function main(): Promise<void> {
     reconcile: async () => {
       await residentService.reconcile();
       await taskService.reconcile();
+      await reconcileHandleBindings();
     },
   });
 

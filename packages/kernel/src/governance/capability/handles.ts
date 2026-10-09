@@ -5,6 +5,7 @@ import {
   CapabilityScopeSchema,
   type HandleClaims,
   HandleClaimsSchema,
+  type HandleHolder,
   HandleTokenExpired,
   HandleTokenInvalid,
   type Role,
@@ -33,6 +34,14 @@ export type { CapabilityScope, HandleClaims };
  * — the token is self-describing to any verifier holding only the kernel's public key (llm-proxy,
  * S1.7, verifies locally with no DB round trip per request); this table is the kernel's own
  * revocation/lineage record.
+ *
+ * Holder (`HANDLE_HOLDERS`, @nexttime/shared handle-token.ts): a Handle issued under an `entry` or
+ * `worker_run` session is container-held — it carries `hld: 'container'`, never enters the agent
+ * container, and is only accepted from the container's own address through the source binding
+ * (@nexttime/shared handle-binding.ts); every other Handle is a bearer token. The holder follows
+ * from the session kind (`holderForSessionKind`), never from the caller, and every verifier in
+ * this kernel re-derives it from the session row too (application/gateway/handle-auth.ts), so a
+ * token minted without the claim — by a release that predates it — is still refused as a bearer.
  *
  * Every function that touches the database takes an already-open `PoolClient` (design doc S1.9
  * task brief: `issueHandle(client, ...)`) rather than a `Pool` — the caller is expected to already
@@ -439,17 +448,33 @@ export interface IssuedHandle {
   readonly issuedAt: Date;
   readonly expiresAt: Date;
   readonly parentJti?: string;
+  /** `container` for an `entry` / `worker_run` session's Handle (`holderForSessionKind`). */
+  readonly holder: HandleHolder;
 }
 
 interface SessionRow {
   workspace_id: string;
   on_behalf_of: string;
+  kind: string;
 }
 
 /**
- * Issues a new Handle: reads `workspace_id`/`on_behalf_of` from the `sessionId`'s session row
- * (I13 — `obo` is never accepted as a parameter), signs an EdDSA compact JWT, and records the
- * `capability_handles` row in the same transaction the caller's `client` is already part of.
+ * The session kinds whose Handles are container-held: the entry agent's (`entry`) and a
+ * WorkerRun's (`worker_run`). The platform mints these for an agent container it runs, so it can
+ * keep them outside that container; every other kind is a member's own client (`mcp_session`, via
+ * `issue_handle`) or an external runtime (`service`), which must hold its token itself.
+ */
+export const CONTAINER_HELD_SESSION_KINDS: ReadonlySet<string> = new Set(['entry', 'worker_run']);
+
+export function holderForSessionKind(kind: string | undefined): HandleHolder {
+  return kind !== undefined && CONTAINER_HELD_SESSION_KINDS.has(kind) ? 'container' : 'bearer';
+}
+
+/**
+ * Issues a new Handle: reads `workspace_id`/`on_behalf_of`/`kind` from the `sessionId`'s session
+ * row (I13 — `obo` is never accepted as a parameter; the holder follows from `kind`,
+ * `holderForSessionKind`), signs an EdDSA compact JWT, and records the `capability_handles` row in
+ * the same transaction the caller's `client` is already part of.
  *
  * `client` must already be inside a `withWorkspace(...)` transaction scoped to the session's
  * workspace (this function does not itself set RLS session variables or open a transaction) —
@@ -467,7 +492,7 @@ export async function issueHandle(
   }
 
   const sessionResult = await client.query<SessionRow>(
-    'select workspace_id, on_behalf_of from sessions where id = $1',
+    'select workspace_id, on_behalf_of, kind from sessions where id = $1',
     [params.sessionId],
   );
   const sessionRow = sessionResult.rows[0];
@@ -475,6 +500,7 @@ export async function issueHandle(
     throw new HandleIssuanceError(`no session found for sessionId "${params.sessionId}"`);
   }
 
+  const holder = holderForSessionKind(sessionRow.kind);
   const jti = randomUUID();
   const iatSeconds = Math.floor(Date.now() / 1000);
   const expSeconds = Math.min(
@@ -497,6 +523,7 @@ export async function issueHandle(
     iat: iatSeconds,
     exp: expSeconds,
     ...(params.parentJti !== undefined ? { par: params.parentJti } : {}),
+    ...(holder === 'container' ? { hld: 'container' as const } : {}),
   };
 
   const token = await new SignJWT(claims)
@@ -528,6 +555,7 @@ export async function issueHandle(
     issuedAt: new Date(iatSeconds * 1000),
     expiresAt: new Date(expSeconds * 1000),
     ...(params.parentJti !== undefined ? { parentJti: params.parentJti } : {}),
+    holder,
   };
 }
 

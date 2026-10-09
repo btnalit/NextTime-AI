@@ -2,13 +2,18 @@ import { capabilityRoute, correlationHeaders, isValidCorrelationId } from '@next
 
 /**
  * Thin fetch client over the HTTP capability-route convention (design doc §9.3, decided in
- * `packages/shared/src/http.ts`): `POST /api/cap/<capability_name>` with a JSON body of params and
- * `Authorization: Bearer <CAPABILITY_HANDLE>`; response `{ok:true, result}` or
- * `{ok:false, error:{code,message}}`. Used by every mode (entry now, worker/interactive later) to
- * call the kernel without depending on the kernel's internal HTTP framework.
+ * `packages/shared/src/http.ts`): `POST /api/cap/<capability_name>` with a JSON body of params;
+ * response `{ok:true, result}` or `{ok:false, error:{code,message}}`. Used by every mode to call
+ * the kernel without depending on the kernel's internal HTTP framework.
  *
- * The capability Handle is a bearer credential (S1.9): this module never logs it, never includes
- * it in a thrown error's message, and only ever places it in the `authorization` request header.
+ * Authentication depends on where the client runs (@nexttime/shared handle-binding.ts):
+ *   - entry / worker mode (an agent container on the `workers` network): no credential at all —
+ *     the kernel takes the Handle worker-supervisor bound to this container's address, and refuses
+ *     a request from that network that carries an `Authorization` header of its own;
+ *   - interactive mode (outside the platform): `Authorization: Bearer <CAPABILITY_HANDLE>`, the
+ *     member's `issue_handle` token. That Handle is a bearer credential (S1.9): this module never
+ *     logs it, never includes it in a thrown error's message, and only ever places it in the
+ *     `authorization` request header.
  *
  * Leftover 87: every call also carries the client's current correlation id as `x-correlation-id`
  * (`@nexttime/shared` correlation.ts) — entry mode keeps it equal to the current Turn id
@@ -23,8 +28,9 @@ export const DEFAULT_KERNEL_CLIENT_TIMEOUT_MS = 30_000;
 export interface KernelClientOptions {
   /** Base URL of the kernel, e.g. `http://kernel:8080` — no trailing slash required. */
   kernelUrl: string;
-  /** The CapabilityHandle (S1.9 JWT) sent as `Authorization: Bearer <handle>`. Never logged. */
-  capabilityHandle: string;
+  /** The CapabilityHandle (S1.9 JWT) sent as `Authorization: Bearer <handle>`. Never logged.
+   *  Absent in entry / worker mode: the kernel authenticates the container by its address. */
+  capabilityHandle?: string;
   /** Per-call timeout in milliseconds. Defaults to {@link DEFAULT_KERNEL_CLIENT_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Injectable `fetch` implementation, for tests. Defaults to the global `fetch`. */
@@ -96,7 +102,7 @@ function parseCapabilityEnvelope(
 
 export class KernelClient {
   private readonly kernelUrl: string;
-  private readonly capabilityHandle: string;
+  private readonly capabilityHandle: string | undefined;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private correlationId: string | undefined;
@@ -150,7 +156,9 @@ export class KernelClient {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${this.capabilityHandle}`,
+          ...(this.capabilityHandle !== undefined
+            ? { authorization: `Bearer ${this.capabilityHandle}` }
+            : {}),
           ...correlationHeaders(this.correlationId),
         },
         body: JSON.stringify(params ?? {}),

@@ -798,7 +798,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         // Sanity: the Handle verifies before the profile change.
         await expect(
-          authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+          authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
         ).resolves.toMatchObject({ obo: memberId });
 
         const member = humanCaller(workspaceId, memberId, 'member');

@@ -2,8 +2,10 @@
  * HTTP capability-route convention (S1.6, decided for S1.3 to implement the kernel side against):
  * every capability in the registry (capabilities.ts) is projected onto exactly one HTTP route,
  * `POST /api/cap/<capability_name>`, with a JSON body of the capability's params. The handle
- * channel authenticates with `Authorization: Bearer <CAPABILITY_HANDLE>`; the human channel uses
- * `X-API-Key` (§9.5) and is out of scope for this helper. Response envelope (both channels):
+ * channel authenticates with `Authorization: Bearer <handle>` — except from an agent container
+ * on the `workers` network, which sends no credential and is authenticated by the Handle bound to
+ * its address (handle-binding.ts); the human channel uses `X-API-Key` (§9.5) and is out of scope
+ * for this helper. Response envelope (both channels):
  * `{ok:true, result}` or `{ok:false, error:{code,message}}`.
  *
  * This is the single source of truth for the path shape, so the kernel (S1.3), the platform

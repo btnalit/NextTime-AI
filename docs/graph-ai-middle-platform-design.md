@@ -187,6 +187,7 @@ graph LR
 10. `on_behalf_of` 来自请求体而非 Handle。
 11. 入口 agent 的 Handle 含 execute 能力。
 12. 平台元本体对象（WorkerDefinition / Gatekeeper / Operation / Capability / Skill / Procedure）的**发布**经 Handle 通道完成；Handle 通道最多只能写对提议者私有的草稿。
+13. 入口 agent 或 WorkerRun 的 Handle 出现在模型可控进程能读到的任何地方（容器 env、文件、`/proc`），或在其容器地址之外被接受。
 
 ### 5.4 不变量与强制机制
 
@@ -210,6 +211,7 @@ graph LR
 | I16 | 平台元本体对象只能经 human 通道**发布**；Handle 通道只能写对提议者私有的草稿 | gateway 按 ObjectType 与状态判定：Handle 通道写入非 `draft` 状态或修改他人草稿一律拒绝 |
 | I17 | 未在接口清单中分类的操作一律 `require_approval`；分类只能经 human 通道发布 | 门在 `describe_operations` 之外的调用默认走审批；`propose_operation` 只产草稿 |
 | I18 | 失控防护：`invoke_worker` 派生链深度 ≤ 3；每用户并发 WorkerRun、每 Task 的 token 与时长、每工作区日成本都有上限 | 深度超限时内核拒绝 `invoke_worker` 并返回入口 agent 可转述的错误；token 到 80% 时 `llm-proxy` 上报、内核经 `context` 注入警告，到 100% 时 `llm-proxy` 返回预算耗尽错误，Worker 本轮结束、Task 进入 `failed: budget_exhausted`、入口 agent 得知；时长超限由 reaper 终止；配额是工作区策略数据，owner 可调 |
+| I19 | 模型可控进程（入口 / Worker 容器里的 pi 及其工具，同一 uid、同一 shell）读不到任何 Handle；容器持有的 Handle（`hld: container`）只在该容器的地址上有效 | **来源绑定**（§11「agent 容器」）：Handle 不进容器 env 与文件，worker-supervisor 把它按容器在 `workers` 网络上的地址写进只有平台服务能读的绑定文件；内核与 `llm-proxy` 对 `workers` 网络来的请求只认绑定在对端地址上的 Handle，请求自带凭证即拒；容器持有的 Handle 从任何其他来源出示一律拒；`workers` 网络只能到能力路由与模型路由；容器启动自检拒绝 JWT 形态的 env 值 |
 
 ### 5.5 状态机
 
@@ -354,7 +356,7 @@ flowchart TB
 - **镜像**：`node:24-bookworm-slim` + pi 1.1.0（`deploy/worker-runtime/pi/` 锁文件钉死整棵依赖树）+ 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
 - **真实工作环境（默认全开、只记录）**：读写自己的工作目录；跑 bash / python / node；装包（pip / npm / apt 经代理）；抓公网（HTTP / HTTPS、公开仓库 clone）；调模型（经 `llm-proxy`）；观察图。**只有经门去动有凭证的系统才受策略与审批。**
 - **出网**：容器没有直接路由；`HTTP_PROXY` / `HTTPS_PROXY` 指向出网代理（§7.9）。
-- **启动**：Worker 由 supervisor 一次性运行 `pi --mode rpc`（或 pi subagent 示例同款的 `--mode json -p`）；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE / HTTP(S)_PROXY`；**不继承宿主 env**。Task 工作目录 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` 挂载，Task 结束后保留为 artifact，按保留策略清理。
+- **启动**：Worker 由 supervisor 一次性运行 `pi --mode rpc`（或 pi subagent 示例同款的 `--mode json -p`）；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE / HTTP(S)_PROXY`；**不继承宿主 env**。`CAPABILITY_HANDLE` 只是固定标记 `source-bound`（`models.json` 用它作 provider key 模板），WorkerRun 的 Handle 本身按容器地址绑定，不进容器（I19，§11「agent 容器」）。Task 工作目录 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` 挂载，Task 结束后保留为 artifact，按保留策略清理。
 - **结果契约**：Worker 结束时返回结构化结果 `{summary, findings, facts_to_assert[], evidence[], artifacts[], proposed_skill?, proposed_operations?}`；内核把 `facts_to_assert` 以 `inferred` 状态写入、把证据挂到 Activity、把提议存为草稿。会话 JSONL 回流为私有 Source。
 
 ### 7.4 平台扩展（唯一的共享 TS 扩展，三种模式）
@@ -389,7 +391,7 @@ flowchart TB
 
 ### 7.7 模型策略
 
-不绑定单一厂商。Worker 与入口 agent 侧复用 pi-ai 的 provider 实现；独立的 `llm-proxy` 服务做按 provider 的透传代理：用内核公钥在本地验证 Handle 签名（不逐请求回调内核）、注入真实 key、模型白名单、入站头白名单且默认剥离供应商侧工具（web 搜索 / 抓取、代码执行、MCP 连接器等由供应商出网的工具，R-30）、SSE 原样、用量与 80% 预算警告上报内核；内核进程不持有任何 provider key。内核自用调用（P3 起）用 OpenAI 兼容子集，同样经 `llm-proxy`。厂商与模型是配置 `${NEXTTIME_DATA}/config/llm-providers.yaml`，同一份配置生成内核路由表与 `models.json`。成本元数据复用 pi-ai 的 `ModelCost`。
+不绑定单一厂商。Worker 与入口 agent 侧复用 pi-ai 的 provider 实现；独立的 `llm-proxy` 服务做按 provider 的透传代理：用内核公钥在本地验证 Handle 签名（不逐请求回调内核；agent 容器的请求用绑定在其地址上的 Handle，I19）、注入真实 key、模型白名单、入站头白名单且默认剥离供应商侧工具（web 搜索 / 抓取、代码执行、MCP 连接器等由供应商出网的工具，R-30）、SSE 原样、用量与 80% 预算警告上报内核；内核进程不持有任何 provider key。内核自用调用（P3 起）用 OpenAI 兼容子集，同样经 `llm-proxy`。厂商与模型是配置 `${NEXTTIME_DATA}/config/llm-providers.yaml`，同一份配置生成内核路由表与 `models.json`。成本元数据复用 pi-ai 的 `ModelCost`。
 
 ### 7.8 采集器（TS）
 
@@ -740,7 +742,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 - 推送事件（借 cloudflare-os `AiChatSubscriber`）：`chat.message`（持久消息）、`chat.stream`（`textDelta` / `toolCallStarted` / `toolCallEnded` / `workerSpawned` / `taskUpdated`）、`chat.metadata`、`action.pending` / `action.updated`（审批卡片）、`task.updated`。
 - **客户端规则：先 `subscribe_chat(chatId, startAfter)` 再 `get_chat_history` 翻页**，否则会丢事件。
 - `chat.stream` 本身不持久化。每个工具调用结束时（Turn 结束时仍未结束的记为 `not_finished`），内核另存一条 `role='tool'`、`kind:'tool_call'` 的消息，内容为工具名、结果状态、参数与结果预览，`chat.message` 推送、`get_chat_history` 读取，可见性与所在 Chat 相同。形状见 `packages/shared/src/chat-message-content.ts` 的 `ToolCallMessageContent`。预览先脱敏后截断：参数 4000 字符，结果 16000 字符；载荷只读到预览长度再多 4096 字符，超出部分不读。工具调用记录是 agent 运行时自己的报告，可信度与 assistant 文本相同；能力调用以审计记录为准。实现见 `packages/kernel/src/application/chat/tool-call-record.ts` 与 `event-sink.ts`。
-- **模型、工具与 Worker 输出的密钥脱敏**（`packages/kernel/src/governance/redaction/`）。入口容器里 pi 有 `bash`，Handle 在其环境变量里，一次 `env`（含被提示注入诱导的）就能把 Handle 写进工具结果或回复。内核在这些位置把形似密钥的值换成 `[redacted]`：实时 `chat.stream` 的文本（跨分段：末尾可能是密钥一部分的文本先扣住，最多 4096 字符，下一个非文本事件前放出；拼接后与整段脱敏逐字相同，单测在每个切点、每对切点上验证）与工具参数和结果、工具调用记录、落库的回复（超过 256 Ki 字符截断）、Handle 通道能力调用写入审计的参数副本（处理器仍拿原参数）、Worker 结果的报告部分（summary、findings、Facts、evidence、artifacts；提议的 Operation 与 Skill 原样保留，因为批准的就是将要执行的）。识别的形态：JWT（含 Handle）、`Authorization`/`Cookie` 头、Bearer/Basic、PEM 私钥、常见厂商 key、`NAME=value` 与带引号的 env 行、YAML/ini/JSON 中以密钥命名的键、`--password` 类参数、查询串、URL 中的密码，以及能力声明的敏感参数。名值对先判名字再取值，名字不是密钥名的一对不会把值里的密钥对吞掉（`note: password=…`）。所有模式线性时间，按 200 KB 对抗输入测试。**这只是纵深防御**：编码过（base64、拆字符）的密钥照样能出去，根治在 Handle 本身（作用域、有效期、模型的 shell 读不到它），另立安全设计项。
+- **模型、工具与 Worker 输出的密钥脱敏**（`packages/kernel/src/governance/redaction/`）。入口容器里 pi 有 `bash`；v0.43.0 及以前 Handle 在其环境变量里，一次 `env`（含被提示注入诱导的）就能把 Handle 写进工具结果或回复。Handle 现已不进容器（来源绑定，I19），脱敏保留，对付的是其他会话里拿到的凭证与工具输出里的第三方密钥。内核在这些位置把形似密钥的值换成 `[redacted]`：实时 `chat.stream` 的文本（跨分段：末尾可能是密钥一部分的文本先扣住，最多 4096 字符，下一个非文本事件前放出；拼接后与整段脱敏逐字相同，单测在每个切点、每对切点上验证）与工具参数和结果、工具调用记录、落库的回复（超过 256 Ki 字符截断）、Handle 通道能力调用写入审计的参数副本（处理器仍拿原参数）、Worker 结果的报告部分（summary、findings、Facts、evidence、artifacts；提议的 Operation 与 Skill 原样保留，因为批准的就是将要执行的）。识别的形态：JWT（含 Handle）、`Authorization`/`Cookie` 头、Bearer/Basic、PEM 私钥、常见厂商 key、`NAME=value` 与带引号的 env 行、YAML/ini/JSON 中以密钥命名的键、`--password` 类参数、查询串、URL 中的密码，以及能力声明的敏感参数。名值对先判名字再取值，名字不是密钥名的一对不会把值里的密钥对吞掉（`note: password=…`）。所有模式线性时间，按 200 KB 对抗输入测试。**这只是纵深防御**：编码过（base64、拆字符）的密钥照样能出去；对 Handle 的根治是来源绑定（I19，§11「agent 容器」）。
 - 一个 Chat 同时只允许一个进行中的 Turn；进行中时 `send_chat_message` 被拒，只能 `stop_agent`。
 - **认证前的资源上限**（2026-10-02 复审 L1-16 / L5-12(b)）。威胁：`/ws` 不登录就能连上，ws 默认单帧 100 MiB、不认证也不超时，一个人开很多 socket、每个灌大帧或一直不认证，就能把 kernel 堆打满、OOM 重启，所有工作区的聊天、审批、Task、门执行一起停，重启后还能重来。现行上限：单帧 ≤ 1 MiB（与 `/api/cap` 请求体上限相同；超出由 ws 以 1009 关闭）；升级后 10 s 内没认证成功即以 1008 关闭；凭证解析期间同时只解析一个，期间到达的帧最多排 32 帧 / 1 MiB，超出以 1008 关闭。1008 关闭前不发 `-32001`，控制台把它当普通断线按退避重连，不会被登出。`/internal/agent-host` 与 `/ws` 共用同一个 `@fastify/websocket` 注册，但在自己的 socket 上把上限放回 100 MiB（门的原始输出还走这条链路，等 L5-12(a) 在 bridge 截断后再收紧）；它在升级前就经过内部平面守卫。实现见 `packages/kernel/src/interfaces/ws/payload-limits.ts` 与 `server.ts`。
 
@@ -945,6 +947,12 @@ nexttime explain <turn_activity_id>
 
 - **网络**：只有 caddy 有公网面；内核不发布端口；agent 容器经出网代理上公网、到不了内网（I10）；Gatekeeper 只被内核访问；Postgres 只对内核。
 - **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
+- **来源绑定（I19）**：pi 与它的 `bash` 是同一 uid、同一进程树，容器里放什么模型都能读到，所以入口 agent 与 WorkerRun 的 Handle 不进容器。
+  - **持有方（Holder）**：Handle 签发时按会话种类定，不由调用方选——`entry` / `worker_run` 会话的 Handle 是 `container`（claims 带 `hld: container`），`mcp_session` / `service` / `web` 的是 `bearer`。内核验证时再从签发会话的种类推一次，所以不带 `hld` 的旧 Handle 与回滚期间签的 Handle 也按种类判定。
+  - **出示方式（Presentation）**：`container` Handle 只能以**来源**出示——worker-supervisor 起容器后把 `容器在 workers 网络的地址 → Handle` 写进绑定文件（tmpfs 命名卷 `handle-bindings`，0700 归 10001，supervisor 可写，内核与 `llm-proxy` 只读；Handle 不落盘），内核与 `llm-proxy` 对来自 `NEXTTIME_SUBNET_WORKERS` 的请求取对端地址（socket 本身的 `remoteAddress`，不看转发头）对应的 Handle；`bearer` Handle 只能放在请求头里出示，绑定来源出示它即拒。
+  - **workers 平面**：来自 `workers` 网络的请求，内核只放行 `POST /api/cap/:name` 与 `GET /api/health`，`llm-proxy` 只放行模型路由与 `/healthz`，其余（`/mcp`、`/ws`、`/api/auth/*`、Explorer、`/internal/*`、`/admin/*`）在看凭证之前 403；请求自带 `Authorization` 或 cookie（`llm-proxy` 上：provider 头里不是 `source-bound` 标记）即 401——容器里找到的别人的凭证在这里用不了。没有绑定的地址 401（先等最多 3 s，容器刚起、绑定可能还在路上）。
+  - **生命周期**：绑定随容器——起容器后、spawn 返回前写入（写失败则 spawn 失败）；常驻容器每次复用重写；停止、空闲回收、崩溃、退出事件与 Task 回收时删除（在 Docker 能把地址分给别的容器之前）；supervisor 启动与 docker events 重连时按存活容器对账。容器不能伪造源地址：`CapDrop ALL`（无 `NET_RAW` / `NET_ADMIN`），runsc。
+  - **泄露后的可用窗口**：容器 Handle 即使经旁路流出（日志、平台进程的内存转储），在平台外与其他容器地址上都被拒——可用面为零，窗口只剩它绑定的那个容器活着的时间；有效期仍是入口 24 h、WorkerRun 随 Task。`bearer` Handle 不变：`issue_handle` / MCP 会话最长 30 天、service 最长 365 天，由持有它的人或服务保管，泄露后到撤销或过期前可用；撤销即时生效（内核按 `capability_handles.revoked_at`，`llm-proxy` 按撤销同步，默认 15 s）。
 - **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。开启自动批准的规则必须指定门（`gatekeeper_policies`，门规则优先于工作区级规则），工作区级（所有门）规则只能收紧（R-20 / D-15）。AgentPolicy 的 `allowMemberAutoApproveLow` 是强制收窄：关闭后所有发起人的 low 都要人批，个人 AgentProfile 只能再收窄；默认开启（R-21 / D-16）。
 - **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
 - **门上的观察（决定 D4 撤回，2026-09-27 维护者确认"只读调用不需要授权"；人类通道同日一并放开——"也放开吧"）**：observe 类 Operation 对本工作区内任何 Handle（入口 agent、Worker、外部 Claude Code / pi 的凭证）和任何成员本人（人类通道，控制台 / API key）都可调，条件是——门已在本工作区启用、Operation 已发布且不在平台连接器禁用清单上；Handle 通道另加：门没有被工作区 AgentPolicy 上限或调用成员自己的 AgentProfile 排除（这两项是成员**智能体**的配置，不限制成员本人的读取）。`auditor` 角色仍不碰门（§5.1.1）。门 Grant 只管 execute 类：`request_action` 的执行类与未分类路径（含人类通道）照旧要 Grant + 审批，它读 observe 类 Operation 时与 `observe_operation` 同规则。每次观察照旧审计。实现上是一个谓词（`application/gates/observe-access.ts` 的 `observeRefusal`）：`observe_operation`（两个通道；人类通道以"无排除项"调用）/ `request_action` 的 observe 分支（两个通道）、`list_allowed_operations` 工具投射、可达性读模型、`find_procedures` 与「我的智能体」的可选系统清单都调它；Worker 的观察类工具走 `observe_operation`（Worker 基础能力，不随门范围衰减），执行类走 `request_action`；Handle 的 `resources.gatekeeper` 只表示执行授权（Grant 派生、按 Worker 衰减），不再决定能否观察（`productization-plan-v2-2026-09-26.md` §2 实现说明）。

@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
-import { CORRELATION_ID_HEADER, type HandleClaims, resolveCorrelationId } from '@nexttime/shared';
+import {
+  CORRELATION_ID_HEADER,
+  type HandleClaims,
+  SOURCE_BOUND_CAPABILITY_HANDLE,
+  handleHolderOf,
+  resolveCorrelationId,
+} from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { ExhaustedBudgetRow } from './budget-sync.js';
 import type { ProviderApiKind, ProviderConfig } from './config.js';
@@ -14,6 +20,7 @@ import {
   stripProviderServerTools,
 } from './outbound-policy.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
+import { type ProxySourceBinding, socketPeerAddress } from './source-binding.js';
 import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
 
 /**
@@ -23,8 +30,10 @@ import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } 
  * `ProviderConfigSchema.upstream_base_url` doc comment for exactly how an inbound path maps onto
  * the upstream URL (strip only the leading `/<provider>` segment, forward the rest verbatim).
  *
- * Request flow: parse `<provider>` from the path → verify the Handle from the provider's
- * configured header (401 on missing/invalid/expired/revoked) → for `GET .../v1/models`,
+ * Request flow: parse `<provider>` from the path → verify the Handle — from the provider's
+ * configured header, or, for an agent container on the `workers` network, the one bound to its
+ * address (source-binding.ts) — (401 on missing/invalid/expired/revoked, and on a container-held
+ * Handle presented anywhere but at its own container's address) → for `GET .../v1/models`,
  * synthesize the response from the provider's whitelist without ever calling upstream (never
  * leaks a non-whitelisted model id) → otherwise check the request against `ACTION_PATH_BY_API`
  * (design/review lane-6 P1-2): exactly one (method, path) per provider `api` kind is forwardable
@@ -175,6 +184,11 @@ export interface ProxyServerOptions {
     | ((name: string) => ProviderConfig | undefined);
   readonly publicKey: CryptoKey;
   readonly isRevoked: (jti: string) => boolean;
+  /** Source binding (source-binding.ts; `HANDLE_BINDINGS_FILE` + `NEXTTIME_SUBNET_WORKERS`): a
+   *  `workers`-network peer is authenticated by the Handle bound to its address and reaches only
+   *  the model routes and `/healthz`. Absent (tests, a dev proxy) → every peer presents its Handle
+   *  in the header, and a container-held Handle is refused from all of them. */
+  readonly sourceBinding?: ProxySourceBinding;
   /** S6-B leftover 19 (budget-sync.ts): consulted after Handle verification, before anything is
    *  forwarded. A row means "answer 402 `budget_exhausted` for this workspace" — see
    *  `BUDGET_EXHAUSTED_STATUS` below for why 402 and not 429. Optional: absent (tests, a kernel-
@@ -237,6 +251,58 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       : (name: string) => providersOption[name];
   const isBudgetExhausted = options.isBudgetExhausted ?? (() => undefined);
   const metrics = options.metrics ?? createLlmProxyMetrics();
+  const sourceBinding = options.sourceBinding;
+  const verifyOptions = { publicKey: options.publicKey, isRevoked: options.isRevoked };
+
+  /** A peer off the `workers` network: the Handle comes from the provider's configured header,
+   *  and must not be a container-held one (a copy that left its container). */
+  async function authenticateBearer(
+    req: http.IncomingMessage,
+    provider: ProviderConfig,
+  ): Promise<HandleClaims> {
+    const claims = await verifyInboundHandle(
+      extractHandleToken(req.headers, provider.auth),
+      verifyOptions,
+    );
+    if (handleHolderOf(claims) === 'container') {
+      throw new HandleAuthError(
+        'presentation_refused',
+        'a container-held handle is only accepted from its own container',
+      );
+    }
+    return claims;
+  }
+
+  /** A `workers`-network peer: the Handle worker-supervisor bound to its address. The header may
+   *  only carry the `source-bound` marker pi's SDK sends for `$CAPABILITY_HANDLE`. */
+  async function authenticateBoundSource(
+    req: http.IncomingMessage,
+    provider: ProviderConfig,
+    binding: ProxySourceBinding,
+    peerAddress: string,
+  ): Promise<HandleClaims> {
+    if (req.headers[provider.auth.header] !== undefined) {
+      const presented = extractHandleToken(req.headers, provider.auth);
+      if (presented !== SOURCE_BOUND_CAPABILITY_HANDLE) {
+        throw new HandleAuthError(
+          'credential_from_bound_source',
+          'a request from an agent container must not carry a handle of its own',
+        );
+      }
+    }
+    const bound = await binding.reader.lookup(peerAddress, { waitForRegistration: true });
+    if (!bound) {
+      throw new HandleAuthError('unbound_source', 'no handle is bound to this address');
+    }
+    const claims = await verifyInboundHandle(bound.handle, verifyOptions);
+    if (handleHolderOf(claims) !== 'container') {
+      throw new HandleAuthError(
+        'presentation_refused',
+        'the handle bound to this address is not container-held',
+      );
+    }
+    return claims;
+  }
 
   async function handleRequest(
     req: http.IncomingMessage,
@@ -248,6 +314,26 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
       sendJson(res, 200, { status: 'ok' });
+      return;
+    }
+
+    // Source binding (source-binding.ts): an agent container reaches the model routes only —
+    // `/internal/*` and `/admin/*` (both reserved provider names, config.ts) answer 403 before
+    // any credential is looked at.
+    const peer = socketPeerAddress(req.socket.remoteAddress);
+    const fromWorkersNetwork =
+      sourceBinding !== undefined && peer !== undefined && sourceBinding.isFromWorkersNetwork(peer);
+    const firstSegment = url.pathname.split('/').find((segment) => segment.length > 0);
+    if (fromWorkersNetwork && (firstSegment === 'internal' || firstSegment === 'admin')) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: workers-network peer refused outside the model routes',
+          correlationId,
+          route: firstSegment,
+        }),
+      );
+      sendJson(res, 403, { error: { code: 'forbidden', message: 'forbidden' } });
       return;
     }
 
@@ -284,11 +370,10 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
 
     let claims: HandleClaims;
     try {
-      const token = extractHandleToken(req.headers, provider.auth);
-      claims = await verifyInboundHandle(token, {
-        publicKey: options.publicKey,
-        isRevoked: options.isRevoked,
-      });
+      claims =
+        fromWorkersNetwork && sourceBinding && peer !== undefined
+          ? await authenticateBoundSource(req, provider, sourceBinding, peer)
+          : await authenticateBearer(req, provider);
     } catch (err) {
       if (err instanceof HandleAuthError) {
         log(

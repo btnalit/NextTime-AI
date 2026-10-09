@@ -1,7 +1,10 @@
 import { fileURLToPath } from 'node:url';
 import {
   CORRELATION_ID_HEADER,
+  HANDLE_BINDINGS_FILE_ENV,
+  type HandleBindingFileError,
   IllegalTransition,
+  createHandleBindingReader,
   internalAuthorizationHeader,
   resolveCorrelationId,
 } from '@nexttime/shared';
@@ -82,6 +85,12 @@ import {
   registerInternalPlaneGuard,
 } from './interfaces/internal-auth/index.js';
 import { registerMcpRoute } from './interfaces/mcp/index.js';
+import type { SourceBinding } from './interfaces/source-binding/index.js';
+import {
+  createFileHandleBindingReader,
+  createSourceBinding,
+  registerWorkersPlaneGuard,
+} from './interfaces/source-binding/index.js';
 import {
   registerAgentHostWsRoute,
   registerWsRoute,
@@ -206,9 +215,15 @@ export function createServer(
   // an `/internal/` route with no allow-list entry. With no `internalAuth` (tests that never
   // touch the internal plane) the guard is fail-closed, never open — `main()` always supplies one
   // and refuses to start without the root file (`loadInternalToken`).
+  //
+  // Agent containers (interfaces/source-binding): a peer on the `workers` network reaches only
+  // `POST /api/cap/:name` and `GET /api/health`, and is authenticated by the Handle
+  // worker-supervisor bound to its address — never by a credential it presents. First, so such a
+  // peer gets the same 403 everywhere else, `/internal/*` included.
+  registerWorkersPlaneGuard(app, options.sourceBinding);
   registerInternalPlaneGuard(app, options.internalAuth);
 
-  registerCapabilityRoutes(app, deps);
+  registerCapabilityRoutes(app, { ...deps, sourceBinding: options.sourceBinding });
   // S4.1: console login / first-run setup routes (interfaces/http/auth-routes.ts).
   registerAuthHttpRoutes(app, deps);
   // S3.5 (docs/development-tasks.md §S3.5, design doc §9.5): the nine Explorer endpoints, same
@@ -264,6 +279,11 @@ export interface CreateServerOptions {
    *  Omitted → the internal plane is fail-closed (every request 401), never unauthenticated; a
    *  test that exercises an internal route must pass one. */
   internalAuth?: InternalPlaneAuthConfig;
+  /** The `workers`-network source binding (interfaces/source-binding) — `main()` builds it from
+   *  `NEXTTIME_SUBNET_WORKERS` and `HANDLE_BINDINGS_FILE`. Omitted → no route allow-list for the
+   *  `workers` network and every request authenticated by its own credential (tests that never
+   *  model an agent container). */
+  sourceBinding?: SourceBinding;
   /**
    * Startup fail-fast followup (docs/development-tasks.md, "the health endpoint must not report
    * ok before background services are up"): `GET /api/health` calls this (when given) and reports
@@ -1140,6 +1160,21 @@ export function main(): void {
     workersSubnet: workersSubnet ? workersSubnet : undefined,
   };
   const supervisorToken = loadSupervisorToken(process.env, { optional: kind === 'fake' });
+  // Agent containers hold no Handle (interfaces/source-binding, @nexttime/shared handle-binding):
+  // with `NEXTTIME_SUBNET_WORKERS` set, a request from that subnet is authenticated by the Handle
+  // worker-supervisor bound to its address in `HANDLE_BINDINGS_FILE`. Without the file every such
+  // request is refused (fail closed) — logged once below, since the entry agent cannot work then.
+  const handleBindingsFile = process.env[HANDLE_BINDINGS_FILE_ENV]?.trim();
+  let logHandleBindingsError: (err: HandleBindingFileError) => void = (err) =>
+    console.error(JSON.stringify({ level: 'error', msg: err.message, reason: err.reason }));
+  const sourceBinding = workersSubnet
+    ? createSourceBinding({
+        workersSubnet,
+        reader: handleBindingsFile
+          ? createFileHandleBindingReader(handleBindingsFile, (err) => logHandleBindingsError(err))
+          : createHandleBindingReader({ source: { version: () => undefined, read: () => '{}' } }),
+      })
+    : undefined;
 
   // adapters/db/pool: `pg` raises idle-client failures (a Postgres restart / failover, a network
   // partition) on the Pool's 'error' event; `createPool` installs the listener so they can never
@@ -1168,10 +1203,18 @@ export function main(): void {
       logger: true,
       requestActionAwaitDecisionTimeoutMs,
       internalAuth,
+      sourceBinding,
       isBackgroundReady: () => backgroundReady,
     },
   );
   onPoolIdleClientError = (err) => app.log.error({ err }, 'adapters/db/pool: idle client error');
+  logHandleBindingsError = (err) =>
+    app.log.error({ reason: err.reason, code: err.code }, 'source binding: bindings file refused');
+  if (sourceBinding && !handleBindingsFile) {
+    app.log.error(
+      `${HANDLE_BINDINGS_FILE_ENV} is not set: every request from the workers network is refused, so agent containers cannot call the kernel`,
+    );
+  }
   if (supervisorToken === undefined) {
     app.log.warn(
       'AGENT_RUNTIME=fake and no worker-supervisor credential file — every call to worker-supervisor will be refused (scripts/derive-internal-tokens.sh)',

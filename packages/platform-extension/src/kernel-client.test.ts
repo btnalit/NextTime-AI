@@ -29,6 +29,13 @@ describe('KernelClient', () => {
     expect(kernel.requests[0]?.authorization).toBe('Bearer secret-handle');
   });
 
+  it('sends no Authorization header without a capabilityHandle (an agent container, source-bound)', async () => {
+    kernel.setHandler('get_object', () => ({ ok: true, result: {} }));
+    const client = new KernelClient({ kernelUrl: kernel.url });
+    await client.call('get_object', {});
+    expect(kernel.requests[0]?.authorization).toBeUndefined();
+  });
+
   // Leftover 87.
   it('sends x-correlation-id only when a valid id is set, and follows setCorrelationId', async () => {
     kernel.setHandler('get_object', () => ({ ok: true, result: {} }));

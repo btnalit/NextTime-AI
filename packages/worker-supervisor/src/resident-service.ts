@@ -43,6 +43,7 @@ import type { DockerClient, RuntimeImageInfo } from './docker-client.js';
 import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
+import type { HandleBindingStore } from './handle-bindings.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
@@ -178,6 +179,8 @@ export interface ResidentServiceDeps {
    *  passes a genuinely distinct client. */
   readonly imagesDocker?: DockerClient;
   readonly egressMap: EgressMapStore;
+  /** Where the container's Handle is bound to its address (handle-bindings.ts) — never its env. */
+  readonly handleBindings: HandleBindingStore;
   readonly now?: () => number;
 }
 
@@ -251,7 +254,7 @@ export interface RuntimeImageInventory {
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
-  const { config, docker, egressMap } = deps;
+  const { config, docker, egressMap, handleBindings } = deps;
   const imagesDocker = deps.imagesDocker ?? docker;
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
@@ -311,6 +314,40 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         }),
       );
     }
+    // The Handle binding goes with the egress registration (handle-bindings.ts): once this
+    // container is gone, nothing may be authenticated as it from that address.
+    try {
+      handleBindings.unbind(ip);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'handle unbinding failed (reconcile drops it later)',
+          ip,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
+  /** Binds the caller's current Handle to the container's address (handle-bindings.ts) — on
+   *  every spawn, reuse included, before it returns. Throws: a container without its binding
+   *  cannot call the kernel or the LLM, so the spawn must not report success. */
+  function bindHandle(
+    workspaceId: string,
+    principalId: string,
+    containerId: string,
+    ip: string | undefined,
+    handle: string,
+  ): void {
+    if (!ip) {
+      throw new Error(`entry container ${containerId} has no address on the workers network`);
+    }
+    handleBindings.bind(ip, {
+      handle,
+      sourceId: entrySourceId(workspaceId, principalId),
+      containerId,
+    });
   }
 
   // 遗留22 / code-review-2026-09-10.md §3.5: best-effort, same convention as
@@ -527,6 +564,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         // published *after* this container started still takes effect immediately, without
         // waiting for the container itself to restart — see registerEgress's own doc comment.
         registerEgress(workspaceId, principalId, existing.ip, egressDeny);
+        // The incoming Handle may be newer than the one bound when this container started (an
+        // older container without the jti label is reused across a reissue).
+        bindHandle(workspaceId, principalId, existing.id, existing.ip, handle);
         return {
           containerId: existing.id,
           ip: existing.ip,
@@ -568,7 +608,6 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         config,
         workspaceId,
         principalId,
-        handle,
         kernelUrl,
         llmUrl,
         networkName,
@@ -591,6 +630,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         lastAppliedEgressDeny: egressDeny,
       });
       registerEgress(workspaceId, principalId, created.ip, egressDeny);
+      bindHandle(workspaceId, principalId, created.id, created.ip, handle);
 
       return {
         containerId: created.id,

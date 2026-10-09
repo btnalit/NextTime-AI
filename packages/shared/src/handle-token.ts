@@ -40,9 +40,29 @@ export type CapabilityScope = z.infer<typeof CapabilityScopeSchema>;
 const uuidClaim = z.string().uuid();
 
 /**
+ * Who holds a Handle, and therefore how a verifier may receive it (handle-binding.ts):
+ *
+ *   - `container`: the platform holds it for one agent container (an entry agent's or a
+ *     WorkerRun's — the session kinds `entry` / `worker_run`). It never enters the container;
+ *     worker-supervisor binds it to the container's address on the `workers` network, and a
+ *     verifier takes it from that binding for a request coming from that address. Such a Handle
+ *     is refused whenever it arrives in a request header — copied out of a log, a table or a
+ *     backup it authorizes nothing.
+ *   - `bearer`: whoever holds the token presents it in a header — a member's own client
+ *     (`issue_handle`, session kind `mcp_session`) or an external runtime (`service`).
+ *
+ * Derived from the session kind at issuance, never chosen by the caller (kernel `issueHandle`;
+ * a database trigger refuses a mismatch).
+ */
+export const HANDLE_HOLDERS = ['container', 'bearer'] as const;
+export type HandleHolder = (typeof HANDLE_HOLDERS)[number];
+
+/**
  * The JWT Claims Set every Handle carries (design doc S1.9 task brief): `ws`=workspace_id,
  * `sid`=session_id, `obo`=on_behalf_of (I13), `scope`, `jti`, `exp`/`iat` (standard JWT claims,
- * seconds since epoch), `par`=parent_jti (present only on an attenuated child Handle).
+ * seconds since epoch), `par`=parent_jti (present only on an attenuated child Handle), and
+ * `hld: 'container'` on a container-held Handle (absent = `bearer`, which is also what every
+ * Handle minted before the claim existed is).
  */
 export const HandleClaimsSchema = z
   .object({
@@ -54,9 +74,15 @@ export const HandleClaimsSchema = z
     iat: z.number(),
     exp: z.number(),
     par: uuidClaim.optional(),
+    hld: z.literal('container').optional(),
   })
   .strict();
 export type HandleClaims = z.infer<typeof HandleClaimsSchema>;
+
+/** The holder a verified Handle's claims declare (see `HANDLE_HOLDERS`). */
+export function handleHolderOf(claims: Pick<HandleClaims, 'hld'>): HandleHolder {
+  return claims.hld === 'container' ? 'container' : 'bearer';
+}
 
 /** Thrown by `verifyHandleToken` when the token's `exp` claim is in the past. */
 export class HandleTokenExpired extends Error {

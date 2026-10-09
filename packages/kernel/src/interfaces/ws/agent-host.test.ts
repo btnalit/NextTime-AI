@@ -76,13 +76,15 @@ function createFakePool(): PoolLike {
       return { rows: [{ role: 'owner', disabled: false }], rowCount: 1 };
     }
 
-    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
       const [sessionId] = params as [string];
       const principalId = [...sessionIdByPrincipal.entries()].find(
         ([, id]) => id === sessionId,
       )?.[0];
       return {
-        rows: principalId ? [{ workspace_id: 'unused', on_behalf_of: principalId }] : [],
+        rows: principalId
+          ? [{ workspace_id: 'unused', on_behalf_of: principalId, kind: 'entry' }]
+          : [],
         rowCount: principalId ? 1 : 0,
       };
     }
