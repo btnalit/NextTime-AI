@@ -148,7 +148,7 @@
 | 133 | 控制台「测试」（"添加 LLM 供应商"页，`POST /admin/providers/:id/test`）在 Anthropic Messages 上强制 `tool_choice: {type:'tool'}`，当前 Claude 模型拒绝强制工具选择（400），测试一律报 `tool_call: error`；只影响测试按钮显示，不影响路由与 agent 调用。v0.42.0 主机上仍在，随 v0.43.0 消失 | P2 | — | **关闭（#502**，改为 `auto` 加提示词指令，纯文本 / 只有 thinking 的回复仍判失败；`release.md` §3.11） |
 | 134 | yaml + key 文件这条供应商路径（`config/llm-providers.yaml` + `secrets/llm-provider-keys/`，R-24）只有单测覆盖：fake 验收的 key 走 env，#501 之后预发真实模型又改走控制台（#501 审查记录） | P3 | — | **关闭（#502**，每次预演经控制台跑零 token 的 file probe：列出 `source: file` 且找到 key、`gen-models` 输出该供应商） |
 | 135 | 入口 agent 回答图谱问题不一定查图：没有按关系类型（`linkType`）在工作区内列 Fact 的能力（`traverse` 要 `fromId`），入口上下文只注入最近 20 条 active Fact（`get_entry_context`，不按相关性选），模型常凭注入对象的属性作答、不走 `search` / `traverse`；extended run 37896150189 的 dependency_chat 1/3 由此而来 | P3 | 下一波 | 开放：加按关系类型列 Fact 的能力，入口 agent 指令写明注入的只是最近的 Fact、图谱问题用 `search` / `traverse` 查 |
-| 136 | 扩展场景 docker_observe 要求答出容器主进程命令，但 docker 门的观察结果不含命令（`gatekeepers/docker/src/docker-client.ts` 的 summary 只有 id / name / image / state / status / labels），通过与否取决于模型从图里找到或猜到；extended run 37896150189 里 2/3 | P3 | 下一波 | 开放：场景只问门返回的字段（带 tag 的镜像、运行状态）；不为此往门里加 command（命令行可能带密钥，要先有脱敏） |
+| 136 | 扩展场景 docker_observe 要求答出容器主进程命令，但 docker 门的观察结果不含命令（`gatekeepers/docker/src/docker-client.ts` 的 summary 只有 id / name / image / state / status / labels），通过与否取决于模型从图里找到或猜到；extended run 37896150189 里 2/3 | P3 | 下一波 | 修复中（#506：场景只问门返回的字段，带 tag 的镜像与运行状态）；不为此往门里加 command（命令行可能带密钥，要先有脱敏） |
 
 ## 5. 更新规则
 
