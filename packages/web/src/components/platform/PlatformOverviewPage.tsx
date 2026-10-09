@@ -12,6 +12,7 @@ import { formatAuditActor, formatDateTime } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
+import { describeProviderHealth } from '../../lib/provider-status.js';
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
 import { EmptyState as KitEmptyState } from '../kit/empty-state.js';
@@ -76,8 +77,18 @@ function checklistDetail(
 ): string {
   switch (item.key) {
     case 'providers':
-      return item.done
-        ? t(`${counts.modelsAvailable} 个可用模型`, `${counts.modelsAvailable} model(s) available`)
+      if (item.done) {
+        return t(
+          `${counts.modelsAvailable} 个可用模型`,
+          `${counts.modelsAvailable} model(s) available`,
+        );
+      }
+      // Audit P0-2: models configured but none whose provider passed a test is not "no provider".
+      return counts.modelsConfigured > 0
+        ? t(
+            `已配置 ${counts.modelsConfigured} 个模型，但没有一个供应商测试通过——去测试或修复`,
+            `${counts.modelsConfigured} model(s) configured, but no provider has passed a test — test or fix it`,
+          )
         : t(
             '还没有模型供应商——在控制台添加一个（DeepSeek、Anthropic、OpenAI 等），填上密钥即可',
             'No model provider yet — add one in the console (DeepSeek, Anthropic, OpenAI, …); a key is all it needs',
@@ -383,6 +394,14 @@ function PlatformOverviewBody({
               deco="violet"
               label={t('可用模型', 'Models available')}
               value={data.counts.modelsAvailable}
+              sub={
+                data.counts.modelsConfigured > data.counts.modelsAvailable
+                  ? t(
+                      `已配置 ${data.counts.modelsConfigured} 个，只计测试通过的`,
+                      `${data.counts.modelsConfigured} configured; only tested ones count`,
+                    )
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -438,7 +457,7 @@ function PlatformOverviewBody({
                 defaultWorkspaceRowsReady,
                 t,
               )}
-              trailing={checklistTrailing(item, t)}
+              trailing={checklistTrailing(item, data.counts, t)}
             />
           ))}
         </DataList>
@@ -514,8 +533,8 @@ interface AttentionItem {
   readonly href: string;
 }
 
-/** O1's "需要人处理" list — composed client-side from `platform_overview`'s own `health` and
- *  `counts`, never a separate read (see this file's own module doc comment for why). A degraded
+/** O1's "需要人处理" list — composed client-side from `platform_overview`'s own `health`,
+ *  `modelProviders` and `counts`, never a separate read (see this file's own module doc comment for why). A degraded
  *  or down service and a pending-activation user count are both already surfaced elsewhere on
  *  this page (the health chips, the checklist's `users` row) — this list exists to pull the ones
  *  that need a *decision*, not just a status, into one place. */
@@ -544,6 +563,20 @@ function buildAttentionItems(
           ? t(`${entry.service} 服务离线`, `${entry.service} is down`)
           : t(`${entry.service} 服务异常`, `${entry.service} is degraded`),
       href: hrefs.platformStatus(),
+    });
+  }
+  // Audit P0-2: a provider whose models a member can pick but whose calls fail (or were never
+  // verified). Unknown health (`null`: llm-proxy wrote none) is not listed.
+  for (const provider of data.modelProviders) {
+    if (provider.health === null || provider.health.status === 'ok') continue;
+    const health = describeProviderHealth(provider.health.status);
+    items.push({
+      key: `model-provider-${provider.id}`,
+      title: t(
+        `模型供应商「${provider.id}」${health.zh}（${provider.models} 个模型）`,
+        `Model provider "${provider.id}": ${health.en} (${provider.models} model(s))`,
+      ),
+      href: hrefs.platformModels(),
     });
   }
   if (data.counts.pendingActivationUsers > 0) {
@@ -621,7 +654,24 @@ function CostCard({ status }: { readonly status: Resource<PlatformStatusWire> })
   );
 }
 
-function checklistTrailing(item: ChecklistItem, t: Translate) {
+function checklistTrailing(
+  item: ChecklistItem,
+  counts: PlatformOverviewWire['counts'],
+  t: Translate,
+) {
+  // Audit P0-2: models configured but none whose provider passed a test — the providers table,
+  // where 测试 is, not a new provider.
+  if (item.key === 'providers' && !item.done && counts.modelsConfigured > 0) {
+    return (
+      <a
+        href={hrefs.platformModels()}
+        className="inline-flex min-h-9 items-center"
+        data-testid="checklist-test-provider"
+      >
+        {t('去测试供应商', 'Test the providers')}
+      </a>
+    );
+  }
   // Audit P0-3: an undone 模型供应商 step opens 新增供应商 directly, named as what it does.
   if (item.key === 'providers' && !item.done) {
     return (
@@ -658,12 +708,15 @@ function CountTile({
   deco,
   label,
   value,
+  sub,
 }: {
   readonly testId: string;
   readonly icon: IconName;
   readonly deco: TileDeco;
   readonly label: string;
   readonly value: number;
+  /** A line under the value qualifying it. */
+  readonly sub?: string;
 }) {
   return (
     <div className="card platform-tile" data-testid={testId}>
@@ -674,6 +727,11 @@ function CountTile({
         <span className="platform-tile-label">{label}</span>
       </div>
       <div className="platform-tile-value">{value}</div>
+      {sub !== undefined ? (
+        <div className="text-3 text-small" data-testid={`${testId}-sub`}>
+          {sub}
+        </div>
+      ) : null}
     </div>
   );
 }

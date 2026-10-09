@@ -14,6 +14,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { ModelHealthTag, ModelOption } from '../kit/model-health.js';
 import { Select } from '../kit/select.js';
 import { useToast } from '../ui/Toast.js';
 
@@ -161,9 +162,12 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           {policyData?.defaultModel ? ` · ${modelLabel(policyData.defaultModel, models)}` : ''}
         </option>
         {allowed.map((m) => (
-          <option key={m.id} value={m.id}>
-            {modelLabel(m.id, models)}
-          </option>
+          <ModelOption
+            key={m.id}
+            model={m}
+            label={modelLabel(m.id, models)}
+            selected={m.id === override}
+          />
         ))}
         {overrideOutsideAllowList && override !== null ? (
           <option value={override} data-testid="chat-model-outside">
@@ -176,6 +180,12 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           {t('不在允许范围', 'Not in the allow-list')}
         </span>
       ) : null}
+      {/* Audit P0-2: the provider of the model this chat actually runs — the override, else the
+       *  workspace default — when it is not known to work; the tooltip says why. */}
+      <ModelHealthTag
+        model={models.find((m) => m.id === (override ?? policyData?.defaultModel))}
+        testId="chat-model-health"
+      />
       <span className="chat-model-source text-3 text-small" data-testid="chat-model-source">
         {t('来源：', 'Source: ')}
         {override === null ? t('工作区默认', 'Workspace default') : t('我的覆盖', 'My override')}

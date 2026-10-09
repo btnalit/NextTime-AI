@@ -15,6 +15,7 @@ import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
 import { KeyValue } from './kit/key-value.js';
+import { ModelHealthTag } from './kit/model-health.js';
 import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { RefChip } from './kit/ref-chip.js';
@@ -213,6 +214,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 skillNames={skillNames}
                 gatekeeperNames={gatekeeperNames}
                 workerDefinitionNames={workerDefinitionNames}
+                models={models.state.status === 'ready' ? models.state.data.items : []}
               />
             </aside>
           </div>
@@ -296,11 +298,14 @@ function EffectivePanel({
   skillNames,
   gatekeeperNames,
   workerDefinitionNames,
+  models,
 }: {
   readonly profile: AgentProfile;
   readonly skillNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
   readonly workerDefinitionNames: ReadonlyMap<string, string>;
+  /** `list_models`, for the effective model's provider health (audit P0-2). */
+  readonly models: readonly ModelRow[];
 }) {
   const t = useT();
   const effective = profile.effective;
@@ -318,7 +323,15 @@ function EffectivePanel({
           {
             key: 'model',
             label: t('模型', 'Model'),
-            value: <span className="mono">{effectiveModelText(profile, t)}</span>,
+            value: (
+              <span className="row-wrap">
+                <span className="mono">{effectiveModelText(profile, t)}</span>
+                <ModelHealthTag
+                  model={models.find((m) => m.id === effective.model)}
+                  testId="agent-profile-effective-model-health"
+                />
+              </span>
+            ),
           },
           {
             key: 'skills',

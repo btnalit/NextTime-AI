@@ -17,8 +17,14 @@ import {
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
 import {
+  buildProviderHealthFile,
+  providerHealthOutFile,
+  writeProviderHealthAtomic,
+} from './provider-health-file.js';
+import {
   createProviderKeyResolver,
   loadProviderKeyFiles,
+  providerCredentialFacts,
   reportUnusableProviderKeys,
 } from './provider-keys.js';
 import { listUpstreamModels } from './provider-models.js';
@@ -195,6 +201,32 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     log,
   );
 
+  // Provider health (provider-health-file.ts): written now — the env / key-file credentials are
+  // only known to this process — and after every admin change. Best effort: a failure is logged.
+  const providerHealthFile = providerHealthOutFile(config.modelsJsonOutFile);
+  const writeProviderHealth = () =>
+    writeProviderHealthAtomic(
+      providerHealthFile,
+      buildProviderHealthFile(catalog, (provider) =>
+        providerCredentialFacts(
+          provider.id,
+          provider.config.api_key_env,
+          (id) => keyStore.get(id),
+          resolveApiKey,
+        ),
+      ),
+    );
+  await writeProviderHealth().catch((err: unknown) => {
+    log(
+      JSON.stringify({
+        level: 'info',
+        msg: 'llm-proxy: provider-health.json not writable at startup (fine on a dev machine); model pickers show no provider health until it is',
+        providerHealthFile,
+        error: (err as NodeJS.ErrnoException | undefined)?.code ?? String(err).slice(0, 200),
+      }),
+    );
+  });
+
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(
     buildModelsJsonFromCatalog(catalog, { llmProxyPort: config.port }),
@@ -240,6 +272,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     store,
     keyStore,
     publicKey,
+    writeProviderHealth,
     writeModelsJson: () =>
       writeModelsJsonAtomic(
         config.modelsJsonOutFile,

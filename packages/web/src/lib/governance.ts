@@ -2,6 +2,7 @@ import {
   type GrantStatus,
   type OperationGovernanceChangeWire,
   type PrincipalKind,
+  type ProviderHealthWire,
   type Role,
   getCapability,
 } from '@nexttime/shared';
@@ -292,6 +293,8 @@ export interface ModelRow {
   readonly id: string;
   readonly provider: string;
   readonly model: string;
+  /** The provider's health as llm-proxy last wrote it (console audit P0-2); absent = unknown. */
+  readonly health?: ProviderHealthWire;
 }
 
 /** `list_capability_names` (S8 W1-C, F6 item 3 — `packages/shared/src/capabilities.ts`'s own

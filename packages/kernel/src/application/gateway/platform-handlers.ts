@@ -3,6 +3,7 @@ import type {
   PlatformAuditRecordWire,
   PlatformOverviewWire,
   PlatformWorkspaceWire,
+  ProviderHealthWire,
   PurgeUserOutcomeWire,
   PurgeUsersResultWire,
   PurgeWorkspaceResultWire,
@@ -1755,9 +1756,29 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
        from schema_migrations where module = 'core'`,
     );
   let modelsAvailable = 0;
+  let modelsConfigured = 0;
   let modelsStatus: 'ok' | 'down' = 'ok';
+  const modelProviders = new Map<
+    string,
+    { id: string; health: ProviderHealthWire | null; models: number }
+  >();
   try {
-    modelsAvailable = (await readModelCatalog()).length;
+    const catalog = await readModelCatalog();
+    // Console audit P0-2: "available" means a model whose provider's last applicable test passed.
+    // With no health written at all (an llm-proxy that predates it) every model counts — unknown
+    // is not failed, and the checklist must not regress on such a host.
+    const healthKnown = catalog.some((entry) => entry.health !== undefined);
+    modelsConfigured = catalog.length;
+    for (const entry of catalog) {
+      if (!healthKnown || entry.health?.status === 'ok') modelsAvailable += 1;
+      const provider = modelProviders.get(entry.provider) ?? {
+        id: entry.provider,
+        health: entry.health ?? null,
+        models: 0,
+      };
+      provider.models += 1;
+      modelProviders.set(entry.provider, provider);
+    }
   } catch {
     modelsStatus = 'down';
   }
@@ -1795,6 +1816,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
       activeWorkspaces: activeWorkspaces.length,
       gatekeepers,
       modelsAvailable,
+      modelsConfigured,
       pendingActionRequests,
       runningTasks,
     },
@@ -1815,6 +1837,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
             : 'models.json unreadable — provider configuration missing?',
       },
     ],
+    modelProviders: [...modelProviders.values()],
     checklist: [
       {
         key: 'providers',
@@ -1822,7 +1845,9 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
         detail:
           modelsAvailable > 0
             ? `${modelsAvailable} model(s) available; default ${settings.defaultEntryModel ?? DEFAULT_PLATFORM_SETTINGS.defaultEntryModel ?? 'pi default'}`
-            : 'no model available — configure a provider on the host (llm-providers.yaml)',
+            : modelsConfigured > 0
+              ? `${modelsConfigured} model(s) configured, none whose provider passed a test — test the provider in the console`
+              : 'no model provider yet — add one in the console',
       },
       {
         key: 'defaultWorkspace',

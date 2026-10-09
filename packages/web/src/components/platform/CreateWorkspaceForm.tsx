@@ -107,6 +107,7 @@ export function CreateWorkspaceForm({
       <EntryModelSelect
         id="cw-entry-model"
         options={entryModelOptions}
+        models={models}
         value={entryModelValue}
         onChange={setEntryModel}
         disabled={submitting}

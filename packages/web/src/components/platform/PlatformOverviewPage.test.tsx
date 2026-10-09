@@ -77,6 +77,7 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       activeWorkspaces: 1,
       gatekeepers: 2,
       modelsAvailable: 5,
+      modelsConfigured: 5,
       pendingActionRequests: 0,
       runningTasks: 0,
     },
@@ -85,6 +86,7 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       { service: 'kernel', status: 'ok' },
       { service: 'llm-proxy', status: 'degraded', detail: 'slow' },
     ],
+    modelProviders: [],
     checklist: [
       { key: 'providers', done: true, detail: 'anthropic configured' },
       { key: 'defaultWorkspace', done: true, detail: 'Acme' },
@@ -179,6 +181,7 @@ describe('PlatformOverviewPage', () => {
     const http = scriptedHttp({
       platform_overview: () => ({
         ...base,
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 0 },
         checklist: base.checklist.map((item) =>
           item.key === 'providers' ? { ...item, done: false } : item,
         ),
@@ -192,6 +195,45 @@ describe('PlatformOverviewPage', () => {
     expect(screen.getByTestId('checklist-add-provider').getAttribute('href')).toBe(
       '#/platform/models?new=provider',
     );
+  });
+
+  it('P0-2: models configured but no provider tested — the step says so and links to the providers table, the tile qualifies its count, 需要人处理 lists every provider that is not ok', async () => {
+    const base = overview();
+    const http = scriptedHttp({
+      platform_overview: () => ({
+        ...base,
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 3 },
+        modelProviders: [
+          {
+            id: 'deepseek',
+            health: { status: 'key_rejected', testedAt: '2026-10-09T00:00:00.000Z' },
+            models: 2,
+          },
+          { id: 'anthropic', health: { status: 'untested', testedAt: null }, models: 1 },
+          { id: 'legacy', health: null, models: 4 },
+        ],
+        checklist: base.checklist.map((item) =>
+          item.key === 'providers' ? { ...item, done: false } : item,
+        ),
+      }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+    });
+    renderPage(http);
+    const checklist = await screen.findByTestId('platform-checklist');
+    expect(checklist.textContent).toContain('已配置 3 个模型，但没有一个供应商测试通过');
+    expect(screen.getByTestId('checklist-test-provider').getAttribute('href')).toBe(
+      '#/platform/models',
+    );
+    expect(screen.queryByTestId('checklist-add-provider')).toBeNull();
+    expect(screen.getByTestId('platform-count-models').textContent).toContain('0');
+    expect(screen.getByTestId('platform-count-models-sub').textContent).toContain('已配置 3 个');
+    const items = screen
+      .getAllByTestId('platform-attention-item')
+      .map((item) => item.textContent ?? '');
+    expect(items.some((text) => text.includes('「deepseek」密钥被拒（2 个模型）'))).toBe(true);
+    expect(items.some((text) => text.includes('「anthropic」未测试（1 个模型）'))).toBe(true);
+    // Unknown health (llm-proxy wrote none) is not listed.
+    expect(items.some((text) => text.includes('legacy'))).toBe(false);
   });
 
   it('P0-4: a discovered, never-enabled gate instance is listed under 需要人处理 with a link to it', async () => {

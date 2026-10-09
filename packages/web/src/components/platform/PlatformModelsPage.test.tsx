@@ -182,7 +182,7 @@ describe('PlatformModelsPage', () => {
 
     const table = await screen.findByTestId('providers-table');
     const openai = within(table).getByTestId('provider-row-openai');
-    expect(within(openai).getByTestId('provider-enabled-chip').dataset.status).toBe('active');
+    expect(within(openai).getByTestId('provider-enabled-chip').dataset.status).toBe('untested');
     expect(within(openai).getByTestId('provider-credential').dataset.status).toBe('present');
     expect(within(openai).getByTestId('provider-source').textContent).toBe('yaml');
     expect(within(openai).queryByTestId('provider-delete')).toBeNull(); // file rows are not deletable

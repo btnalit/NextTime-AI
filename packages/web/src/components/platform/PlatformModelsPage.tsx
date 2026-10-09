@@ -19,6 +19,7 @@ import { hrefs, readNewProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { ModelHealthTag } from '../kit/model-health.js';
 import { PageHeader } from '../kit/page-header.js';
 import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
@@ -795,7 +796,12 @@ function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
     for (const model of modelRows) {
       base.push({
         id: `model:${model.id}`,
-        header: model.id,
+        // Audit P0-2: a column whose provider fails says so in its header.
+        header: (
+          <>
+            {model.id} <ModelHealthTag model={model} />
+          </>
+        ),
         headerClassName: 'mono',
         cell: (workspace) =>
           workspace.allowedModels.length === 0 || workspace.allowedModels.includes(model.id) ? (

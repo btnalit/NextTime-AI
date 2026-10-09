@@ -103,6 +103,34 @@ describe('ModelSwitcher', () => {
     );
   });
 
+  it('audit P0-2: a model whose provider fails is offered disabled with its status, and the running model’s provider status shows next to the select', async () => {
+    renderSwitcher(
+      http({
+        get_agent_profile: () => PROFILE,
+        get_agent_policy: () => policy([]),
+        list_models: () => ({
+          items: [
+            {
+              ...MODELS.items[0],
+              health: { status: 'untested', testedAt: null },
+            },
+            {
+              ...MODELS.items[1],
+              health: { status: 'key_rejected', testedAt: '2026-10-09T00:00:00.000Z' },
+            },
+          ],
+        }),
+      }),
+    );
+    const select = (await screen.findByTestId('chat-model-select')) as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(3));
+    const rejected = select.options[2] as HTMLOptionElement;
+    expect(rejected.disabled).toBe(true);
+    expect(rejected.textContent).toContain('密钥被拒');
+    // The workspace default (openai/gpt-4o) runs; its provider was never tested.
+    expect(screen.getByTestId('chat-model-health').textContent).toBe('未测试');
+  });
+
   it('falls back to the policy allow-list ids when the catalog read fails', async () => {
     renderSwitcher(
       http({

@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { ProviderHealthFileSchema, type ProviderHealthWire } from '@nexttime/shared';
 import { z } from 'zod';
 import type { CapabilityHandler } from './capability-handler.js';
 
@@ -57,6 +59,38 @@ export interface ModelCatalogEntry {
   readonly id: string;
   readonly provider: string;
   readonly model: string;
+  /** The provider's health as llm-proxy last wrote it (`readProviderHealth`); absent = unknown. */
+  readonly health?: ProviderHealthWire;
+}
+
+/** `provider-health.json` (llm-proxy provider-health-file.ts): next to `models.json` in the same
+ *  read-only mount unless `PROVIDER_HEALTH_FILE` says otherwise. */
+function resolveProviderHealthFile(env: NodeJS.ProcessEnv): string {
+  const configured = env.PROVIDER_HEALTH_FILE;
+  return configured && configured.length > 0
+    ? configured
+    : join(dirname(resolveModelsJsonFile(env)), 'provider-health.json');
+}
+
+/**
+ * Each provider's health (console audit P0-2; the rule is `@nexttime/shared`'s `providerHealth`)
+ * as llm-proxy last wrote it: a status kind and a test time per provider id — no credential, no
+ * upstream text. An observation, not authority: nothing here refuses a model, the console marks
+ * and disables options with it. Missing, unreadable or malformed → an empty map, so every model
+ * reads as "health unknown" and the catalog itself still answers (an llm-proxy that predates the
+ * file, a dev machine).
+ */
+export async function readProviderHealth(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ReadonlyMap<string, ProviderHealthWire>> {
+  try {
+    const parsed = ProviderHealthFileSchema.safeParse(
+      JSON.parse(await readFile(resolveProviderHealthFile(env), 'utf8')),
+    );
+    return parsed.success ? new Map(Object.entries(parsed.data.providers)) : new Map();
+  } catch {
+    return new Map();
+  }
 }
 
 /**
@@ -98,10 +132,17 @@ export async function readModelCatalog(
     );
   }
 
+  const health = await readProviderHealth(env);
   const items: ModelCatalogEntry[] = [];
   for (const [provider, providerConfig] of Object.entries(result.data.providers)) {
+    const providerHealth = health.get(provider);
     for (const model of providerConfig.models) {
-      items.push({ id: `${provider}/${model.id}`, provider, model: model.id });
+      items.push({
+        id: `${provider}/${model.id}`,
+        provider,
+        model: model.id,
+        ...(providerHealth ? { health: providerHealth } : {}),
+      });
     }
   }
   return items;

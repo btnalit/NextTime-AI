@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PrincipalKindSchema, RoleSchema } from '../enums.js';
+import { ProviderHealthWireSchema } from '../provider-health.js';
 
 /**
  * wire/identity: Principal / Workspace / AgentProfile / AgentPolicy wire shapes
@@ -128,11 +129,15 @@ export const AgentPolicyWireSchema = z
   .strict();
 export type AgentPolicyWire = z.infer<typeof AgentPolicyWireSchema>;
 
-/** `list_models` item shape (models-catalog-handler.ts's `ModelCatalogEntry`). */
+/** `list_models` / `list_platform_models` item shape (models-catalog-handler.ts's
+ *  `ModelCatalogEntry`). `health` is the model's provider health as llm-proxy last wrote it
+ *  (`provider-health.ts`); absent when the kernel could not read that file (an llm-proxy that
+ *  predates it, or a file not written yet) — unknown, not healthy. */
 export const ModelCatalogEntryWireSchema = z
   .object({
     id: z.string(),
     provider: z.string(),
     model: z.string(),
+    health: ProviderHealthWireSchema.optional(),
   })
   .strict();

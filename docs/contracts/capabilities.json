@@ -10912,6 +10912,36 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "health": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "disabled",
+                      "key_invalid",
+                      "key_missing",
+                      "url_unsafe",
+                      "key_rejected",
+                      "test_failed",
+                      "tools_failed",
+                      "untested",
+                      "ok"
+                    ],
+                    "type": "string"
+                  },
+                  "testedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "testedAt"
+                ],
+                "type": "object"
+              },
               "id": {
                 "type": "string"
               },
@@ -11792,6 +11822,36 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "health": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "disabled",
+                      "key_invalid",
+                      "key_missing",
+                      "url_unsafe",
+                      "key_rejected",
+                      "test_failed",
+                      "tools_failed",
+                      "untested",
+                      "ok"
+                    ],
+                    "type": "string"
+                  },
+                  "testedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "testedAt"
+                ],
+                "type": "object"
+              },
               "id": {
                 "type": "string"
               },
@@ -14490,6 +14550,10 @@
               "minimum": 0,
               "type": "integer"
             },
+            "modelsConfigured": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "pendingActionRequests": {
               "minimum": 0,
               "type": "integer"
@@ -14519,6 +14583,7 @@
             "activeWorkspaces",
             "gatekeepers",
             "modelsAvailable",
+            "modelsConfigured",
             "pendingActionRequests",
             "runningTasks"
           ],
@@ -14570,6 +14635,64 @@
             "required": [
               "service",
               "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "modelProviders": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "health": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "disabled",
+                          "key_invalid",
+                          "key_missing",
+                          "url_unsafe",
+                          "key_rejected",
+                          "test_failed",
+                          "tools_failed",
+                          "untested",
+                          "ok"
+                        ],
+                        "type": "string"
+                      },
+                      "testedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "testedAt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "models": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "health",
+              "models"
             ],
             "type": "object"
           },
@@ -14661,6 +14784,7 @@
         "counts",
         "graphFreshness",
         "health",
+        "modelProviders",
         "checklist",
         "recentAudit"
       ],

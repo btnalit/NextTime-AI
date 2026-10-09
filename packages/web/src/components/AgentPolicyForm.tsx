@@ -1,9 +1,10 @@
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import type { AgentPolicy, SetAgentPolicyParams } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { ModelHealthNote, ModelHealthTag, ModelOption } from './kit/model-health.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, describedBy } from './ui/Field.js';
@@ -69,7 +70,12 @@ function AllowListField({
   testId,
 }: {
   readonly legend: string;
-  readonly options: readonly { readonly id: string; readonly label: string }[];
+  readonly options: readonly {
+    readonly id: string;
+    readonly label: string;
+    /** Shown after the label (a model's provider health). */
+    readonly note?: ReactNode;
+  }[];
   readonly selected: readonly string[];
   readonly onChange: (next: readonly string[]) => void;
   readonly disabled: boolean;
@@ -113,6 +119,7 @@ function AllowListField({
                 disabled={disabled}
               />
               <span>{option.label}</span>
+              {option.note ?? null}
             </label>
           ))}
           {selected.length === 0 ? (
@@ -276,7 +283,11 @@ export function AgentPolicyForm({
     >
       <AllowListField
         legend={t('可选模型', 'Allowed models')}
-        options={models.map((m) => ({ id: m.id, label: m.id }))}
+        options={models.map((m) => ({
+          id: m.id,
+          label: m.id,
+          note: <ModelHealthTag model={m} />,
+        }))}
         selected={state.allowedModels}
         onChange={(next) => update('allowedModels', next)}
         disabled={submitting}
@@ -315,11 +326,19 @@ export function AgentPolicyForm({
             </option>
           ) : null}
           {defaultModelOptions.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
+            <ModelOption
+              key={id}
+              model={models.find((m) => m.id === id) ?? { id, provider: '' }}
+              selected={id === defaultModelValue}
+            />
           ))}
         </Select>
+        <ModelHealthNote
+          models={models.filter((m) => defaultModelOptions.includes(m.id))}
+          selectedId={defaultModelValue}
+          canFix={false}
+          testId="agent-policy-default-model-health"
+        />
       </Field>
 
       <label className="checkbox">
