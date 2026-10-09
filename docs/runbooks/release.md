@@ -63,8 +63,8 @@ git push
 ```
 git fetch -q origin --tags
 git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
-sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z  # 维护窗口之前：预拉并验签，必须 RESULT ok（见下）
-sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z      # 窗口内：用已预拉、已验签的发布镜像应用（没预拉完就拒绝；失败即停，不回退构建）
+sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z  # 维护窗口之前：预拉并验签；终端只打印日志路径，日志 drills/prefetch-vX.Y.Z-<ts>.log 最后一行必须是 RESULT ok（见下）
+sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z      # 窗口内：用已预拉、已验签的发布镜像应用（没预拉完就拒绝；失败即停，不回退构建）；经 SSH 时后台运行（nohup / tmux）并 tail -f 日志，见下
 sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码构建（主机出网不可靠，不作为常规路径）
 ```
 
@@ -510,6 +510,18 @@ v0.43.0 起的 `apply-release.sh` 在切 tag 之前把这个文件设成 `10001:
 ### 3.11 控制台「测试」对当前 Claude 模型不再误报 tool_call 失败（#502，v0.43.0 起）
 
 已知问题（v0.42.0 及之前）："添加 LLM 供应商"页的「测试」在 Anthropic Messages 供应商上强制 `tool_choice: {type:'tool'}`，当前 Claude 模型拒绝强制工具选择（HTTP 400），所以测试结果总是 `completion: ok`、`tool_call: error`。只影响测试按钮的显示：路由与 agent 调用不经过这个测试，照常工作。v0.43.0 起改为 `tool_choice: {type:'auto'}` 加提示词里的明确指令，无 schema 变化、无主机步骤。应用后可在控制台对已配置的 Anthropic 供应商点一次「测试」核对，两项都应是 ok（一次很短的真实调用）。STATUS 遗留 133。
+
+### 3.12 供应商 Base URL 规则与 `tool_call` 探测重试（#510，v0.44.0 起）
+
+上游 Base URL 只允许 http/https，不得带 userinfo、查询串或片段（`?` / `#` 能改写代理拼出的请求路径，userinfo 会在 URL 里夹带凭据）。控制台新建、修改供应商和拉取模型列表时，违规的地址返回 400。v0.43.0 及之前已经存进库里的违规行照常加载，但不路由、不测试（`/test` 返回 409 `upstream_base_url_invalid`）、不写进 models.json。llm-proxy 启动时为每一行打一条 warn：`provider "<id>" is not routed — its upstream base URL …; edit it in the console`。应用后看一次日志：`docker compose logs llm-proxy | grep 'is not routed'`。有输出就在控制台把对应供应商的 Base URL 改成源站（例如 `https://api.example.com`）。改之前，这个供应商的模型对 agent 不可用。`tool_call` 探测在 OpenAI 两种 API 上，遇到上游 400 / 422 会去掉 `tool_choice` 再试一次。这样 DeepSeek 思考模式下的「测试」不再误报（主机验收 4.7b），发版后在控制台对该供应商点一次「测试」核对。无 schema 变化。
+
+### 3.13 出网禁止名单的 `.x` / `*.x` 条目开始生效（#515，v0.44.0 起）
+
+行为变化：WorkerDefinition `egressDeny`、`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES` 以及出网源映射的 `deny` 里，写成 `.x` 或 `*.x` 的条目以前什么都不拒绝（fail-open），现在等同于 `x`，拒绝 `x` 本身及其全部子域。已发布的定义不需要重新发布就生效，某个 Worker 若曾依赖访问这类域名，应用后会收到 `403 source-deny`。allow 侧（`NEXTTIME_CONNECTION_ALLOW_HOSTS`、源映射 `allow`）保持严格：永远匹配不上的条目在启动或加载时打一条 error 日志并被忽略，不会导致启动失败，行为与修复前一样（从未放行过）。发布含 IP、URL、端口、CIDR 或通配符条目的新定义版本会被拒绝。应用后在主机跑 #515 PR 描述第 8 节的三项只读核对（A：库里受影响的 `egressDeny` 条目；B：`.env` 的 allow-hosts；C：egress-proxy 的环境变量与源映射），结果记 `docs/private/`。A 里 `status = 'published'` 且归为 `leading-dot-or-wildcard` 的行，应用后开始拒绝，要确认是预期的。
+
+### 3.14 新能力 `list_facts`；已签发的 Handle 不会自动获得（#514，v0.44.0 起）
+
+graph 组新增只读能力 `list_facts`（按链接类型列出工作区的活跃 Fact），`get_entry_context` 多返回 `factCountsByLinkType`。入口 agent 的注入上下文改为先给图概览、再给最近 Fact 样本。入口 Handle 在应用后重启时按新的能力上限重新签发，不需要操作。用户在控制台自助签发的 MCP / Claude Code / pi interactive Handle 的 scope 是签发那一刻的能力清单，调 `list_facts` 会返回 `forbidden`，需要重新签发（`howto-connect-pi.md` 排障表）。已有工作区的入口 systemPrompt 不会随模板更新，关键指引放在了注入上下文与工具描述里。无迁移。主机验收 S5.7 dependency_chat 按至少 8/10 判定。
 
 ## 4. Hotfix 流程
 
