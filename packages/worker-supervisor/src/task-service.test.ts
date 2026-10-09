@@ -602,4 +602,52 @@ describe('task-service Handle binding (the Handle never enters the container)', 
     expect(docker.removeCalls).toContain('nexttime-task-run-1');
     expect(await service.status('run-1')).toBeUndefined();
   });
+
+  it('address reuse: a Worker at the address of one that exited unseen replaces its stale binding', async () => {
+    const { service, docker, handleBindings } = setup();
+    const first = await service.spawn({ ...spawnInput, capabilityHandle: 'h1' });
+    // Exits on its own; Docker releases the address before reap() runs.
+    docker.simulateExit('nexttime-task-run-1', 0);
+    docker.assignNextIp(first.ip as string);
+    const second = await service.spawn({
+      ...spawnInput,
+      taskId: 'task-2',
+      workerRunId: 'run-2',
+      capabilityHandle: 'h2',
+    });
+    expect(second.ip).toBe(first.ip);
+    expect(handleBindings.snapshot().get(second.ip as string)).toMatchObject({
+      handle: 'h2',
+      containerId: second.containerId,
+    });
+  });
+
+  it('shared address: refuses a Worker at an address another running container holds, and removes it', async () => {
+    const { service, docker, handleBindings } = setup();
+    const first = await service.spawn({ ...spawnInput, capabilityHandle: 'h1' });
+    docker.assignNextIp(first.ip as string);
+    await expect(
+      service.spawn({
+        ...spawnInput,
+        taskId: 'task-2',
+        workerRunId: 'run-2',
+        capabilityHandle: 'h2',
+      }),
+    ).rejects.toThrow(/still running there/);
+    expect(docker.removeCalls).toContain('nexttime-task-run-2');
+    expect(handleBindings.snapshot().get(first.ip as string)?.handle).toBe('h1');
+  });
+
+  it('a terminate unbinds before it stops the Worker — while it still holds its address', async () => {
+    const { service, docker, handleBindings } = setup();
+    const outcome = await service.spawn(spawnInput);
+    const stop = docker.stop.bind(docker);
+    let boundAtStop: boolean | undefined;
+    docker.stop = async (name, timeout) => {
+      boundAtStop = handleBindings.snapshot().has(outcome.ip as string);
+      return stop(name, timeout);
+    };
+    await service.terminate('run-1');
+    expect(boundAtStop).toBe(false);
+  });
 });

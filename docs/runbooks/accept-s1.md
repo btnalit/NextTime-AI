@@ -82,6 +82,7 @@ PASS env-no-api-keys 0 *_API_KEY= vars in entry container env
 PASS env-capability-handle CAPABILITY_HANDLE=source-bound (the Handle is bound to the container's address)
 PASS env-no-handle no JWT-shaped value in any process environment or under /workspace /tmp /run
 PASS env-workers-plane kernel /api/auth/me and llm-proxy /admin/providers answer 403 from the entry container
+PASS env-source-binding alice and bob entry containers: <地址A> <地址B> — distinct addresses, each bound to its own container, confirmed from inside by the kernel and by each entrypoint
 PASS cleanup reclaimed alice/bob entry containers via the supervisor API; workspace retained: <uuid>
 S1 OK
 ```
@@ -102,7 +103,7 @@ S1 OK
 | `explain` | 溯源：`explain` 到 Source 与 Principal | 经 caddy（`alice` 的 API key）对第二个 Turn 调 `explain`，结果含 alice 的 principal id |
 | `egress-public-allowed` / `egress-internal-denied` | Agent：容器直连内网失败、经代理公网通 | 入口容器内 `curl` 公网通、内网/平台内部服务被拒（S1.11 既有能力） |
 | `egress-domain-recorded` | 出网代理记录目标域名到 Activity（设计 §7.9） | 新增的 `POST /internal/egress`（本任务的内核缺口）把 `example.com` 写进该 Turn 的 `activities.metadata.egress`；直接 `psql` 读（见下） |
-| `env-*` | Agent：入口容器内无凭证（I9、I19） | 无 `*_API_KEY=`；`CAPABILITY_HANDLE` 恰为标记 `source-bound`；任何进程的环境与 `/workspace` `/tmp` `/run` 下都没有 JWT 形态的值（只打印文件名）；容器访问内核 `/api/auth/me` 与 llm-proxy `/admin/providers` 得 403（workers 平面只到能力与模型路由） |
+| `env-*` | Agent：入口容器内无凭证（I9、I19） | 无 `*_API_KEY=`；`CAPABILITY_HANDLE` 恰为标记 `source-bound`；任何进程的环境与 `/workspace` `/tmp` `/run` 下都没有 JWT 形态的值（只打印文件名）；容器访问内核 `/api/auth/me` 与 llm-proxy `/admin/providers` 得 403（workers 平面只到能力与模型路由）；`env-source-binding`：alice 与 bob 的入口容器在 workers 网络上地址不同，绑定文件把每个地址绑到该容器本身，从容器内问内核 `GET /api/source-binding` 得到的也是自己的容器 id，入口自检有 `check=handle_binding result=ok`（只打印地址与容器 id）。这一步就是"按地址认 Handle"在部署运行时（`runsc --network=host`）下成立的证据 |
 | `cleanup` | — | 停容器，保留 workspace 行作审计留痕 |
 
 ## 5. 已知缺口

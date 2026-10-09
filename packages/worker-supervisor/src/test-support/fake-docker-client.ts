@@ -28,6 +28,9 @@ export interface FakeDockerClient extends DockerClient {
   /** S7-E: registers a fake host image `listImages`/`inspectImage` can find — tests never touch a
    *  real Docker image store. */
   registerImage(image: RuntimeImageInfo): void;
+  /** The address the next created container gets — Docker handing a released address (or, for
+   *  the shared-address case, one still in use) to a new container. */
+  assignNextIp(ip: string): void;
 }
 
 let ipCounter = 10;
@@ -43,6 +46,7 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
   const createCalls: ContainerSpec[] = [];
   const stopCalls: Array<{ name: string; timeoutSeconds: number }> = [];
   const removeCalls: string[] = [];
+  let pendingIp: string | undefined;
 
   return {
     createCalls,
@@ -59,7 +63,7 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
         running: true,
         status: 'running',
         startedAt: new Date().toISOString(),
-        ip: nextIp(),
+        ip: pendingIp ?? nextIp(),
         labels: { ...spec.labels },
         exitCode: undefined,
         // Deterministic per distinct `spec.image` — mirrors real Docker's own "same content ->
@@ -67,12 +71,14 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
         // for (resident-service.test.ts's own "image changed forces a recreate" case).
         imageId: `sha256:fake-${spec.image}`,
       };
+      pendingIp = undefined;
       containers.set(spec.name, state);
       return state;
     },
 
-    async inspectByName(name: string): Promise<ContainerState | undefined> {
-      return containers.get(name);
+    // Docker resolves a name or an id.
+    async inspectByName(nameOrId: string): Promise<ContainerState | undefined> {
+      return containers.get(nameOrId) ?? [...containers.values()].find((c) => c.id === nameOrId);
     },
 
     async stop(name: string, timeoutSeconds: number): Promise<void> {
@@ -152,6 +158,10 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
 
     registerImage(image: RuntimeImageInfo): void {
       images.push(image);
+    },
+
+    assignNextIp(ip: string): void {
+      pendingIp = ip;
     },
   };
 }

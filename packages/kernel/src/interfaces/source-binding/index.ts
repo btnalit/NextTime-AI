@@ -14,6 +14,8 @@ export {
   createFileHandleBindingReader,
   createFileHandleBindingSource,
   createSourceBinding,
+  SOURCE_BINDING_SELF_ROUTE,
+  registerSourceBindingSelfRoute,
   registerWorkersPlaneGuard,
 } from './source-binding.js';
 export type { SourceBinding, SourceBindingConfig } from './source-binding.js';

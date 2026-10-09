@@ -13,9 +13,15 @@ import { z } from 'zod';
  *   1. worker-supervisor, which already places each container on the `workers` network and
  *      registers its address with egress-proxy, writes `{ <container ip>: { handle, … } }` into the
  *      bindings file when it starts (or reuses) the container, and removes the entry when it stops
- *      it. Only worker-supervisor mounts the file writable; the kernel and llm-proxy mount it
- *      read-only. Agent containers can't spoof an address: they run with every capability dropped
- *      (no `NET_RAW` / `NET_ADMIN`).
+ *      it (before the stop, while the container still holds the address). Only worker-supervisor
+ *      mounts the file writable; the kernel and llm-proxy mount it read-only. Agent containers
+ *      can't spoof an address: they run with every capability dropped (no `NET_RAW` /
+ *      `NET_ADMIN`), and runsc keeps raw sockets off. Each running container has an address of its
+ *      own on the `workers` bridge (runsc's `--network=host` still runs in the container's own
+ *      network namespace); worker-supervisor refuses to bind an address another running container
+ *      holds, and a container's entrypoint starts pi only once the kernel reports the binding at
+ *      its address names that container — the moment after Docker reuses a crashed container's
+ *      address, before worker-supervisor rebinds it, runs nothing model-controlled.
  *   2. The container calls the kernel and llm-proxy with no credential. Each verifier takes the
  *      Handle bound to the request's TCP peer address (`decideHandlePresentation` below) and
  *      verifies it as before — signature, expiry, revocation — and additionally requires it to be

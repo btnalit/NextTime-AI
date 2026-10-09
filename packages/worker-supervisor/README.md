@@ -27,12 +27,20 @@ Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.jso
 `handle-bindings` tmpfs 卷；本服务可写，kernel 与 llm-proxy 只读）：`容器在 workers 网络的地址 →
 {handle, sourceId, containerId, boundAt}`，0600，写临时文件再 rename。
 
-- **绑定**：容器创建并启动后、spawn 返回前（常驻模式的每次复用也重写一次）；写失败则 spawn 失败
-  （Task 模式先删掉刚起的容器）——没有绑定的容器什么也调不了。
-- **解绑**：与 egress 来源反注册同一处（停止、空闲回收、崩溃、docker 退出事件、Task 回收 /
-  terminate），在 Docker 能把地址分给别的容器之前。
-- **对账**：启动时与每次 docker events 重连后 `retainLive`——只留下容器仍在跑、且地址没变的绑定。
-  文件在 tmpfs 卷上，本服务单独重启时它还在（kernel / llm-proxy 仍挂着卷），主机重启后为空。
+- **绑定**（`bindExclusive`）：容器创建并启动后、spawn 返回前（常驻模式的每次复用也重写一次）；
+  写失败则 spawn 失败，刚起的容器随即删除（两种模式都是）——没有绑定的容器什么也调不了，而它的
+  地址上可能还留着死容器的绑定。该地址已绑给另一个**仍在该地址运行**的容器时拒绝绑定
+  （`AddressHeldError`：两个运行中的容器共用地址，按地址认不出谁是谁），死容器留下的绑定才覆盖。
+- **解绑**：本服务主动停止或删除容器时（停止、空闲回收、轮换、回收、Task terminate）**先解绑再停**，
+  容器还占着地址时绑定就已不在；与 egress 来源反注册同一处再删一次（崩溃、docker 退出事件、Task
+  回收）。
+- **对账**：启动时（开始监听、受理 spawn 之前）与每次 docker events 重连后 `retainLive`——只留下
+  容器仍在跑、且地址没变的绑定。文件在 tmpfs 卷上，本服务单独重启时它还在（kernel / llm-proxy
+  仍挂着卷），主机重启后为空。
+- **镜像入口的确认**：容器自己退出时 Docker 先释放地址，本服务稍后才知道，新容器可能分到这个地址
+  而旧绑定还在、直到本服务绑定新容器。`entrypoint.sh` 在启动 pi 之前反复问内核
+  `GET /api/source-binding`，绑定指向本容器才继续（`check=handle_binding`），所以这段窗口里没有模型
+  可控的代码在跑。
 - 文件内容（Handle）从不进日志：读坏了只报原因（`not valid JSON` 等），不引用内容。
 
 ## 常驻模式（S1.5a）

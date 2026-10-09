@@ -55,7 +55,7 @@ import type { TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient } from './docker-client.js';
 import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
-import type { HandleBindingStore } from './handle-bindings.js';
+import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import {
   localTaskWorkspacesRootDir,
   taskSystemPromptPath,
@@ -215,6 +215,7 @@ export interface TaskService {
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
   const { config, docker, egressMap, handleBindings } = deps;
+  const isAt = containerAtAddress(docker);
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
   let cachedNetworkName: string | undefined;
@@ -275,6 +276,13 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     }
     // The Handle binding goes with the egress registration (handle-bindings.ts): once this
     // container is gone, nothing may be authenticated as it from that address.
+    unbindHandle(workerRunId, ip);
+  }
+
+  /** Removes the Handle bound to `ip` (handle-bindings.ts) — before a terminate stops the
+   *  container, while it still holds the address, and again with its egress unregistration. */
+  function unbindHandle(workerRunId: string, ip: string | undefined): void {
+    if (!ip) return;
     try {
       handleBindings.unbind(ip);
     } catch (err) {
@@ -345,6 +353,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   ): Promise<void> {
     entry.terminating = true;
     entry.reason = reason;
+    unbindHandle(workerRunId, entry.ip);
     await docker.stop(taskContainerName(workerRunId), TERMINATE_STOP_TIMEOUT_SECONDS);
     await reconcileOne(workerRunId, entry);
   }
@@ -448,15 +457,21 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         throw err;
       }
       // The Worker's Handle is bound to its address before this call returns (handle-bindings.ts)
-      // — never put in its environment. No binding means a Worker that cannot call anything, so a
+      // — never put in its environment. No binding means a Worker that cannot call anything, and
+      // an address another running container still holds is refused (`bindExclusive`), so a
       // failure here removes the container and fails the spawn, like a failed start above.
       try {
         if (!created.ip) throw new Error('the container has no address on the workers network');
-        handleBindings.bind(created.ip, {
-          handle: capabilityHandle,
-          sourceId: taskSourceId(workspaceId, workerRunId),
-          containerId: created.id,
-        });
+        await bindExclusive(
+          handleBindings,
+          created.ip,
+          {
+            handle: capabilityHandle,
+            sourceId: taskSourceId(workspaceId, workerRunId),
+            containerId: created.id,
+          },
+          isAt,
+        );
       } catch (err) {
         try {
           await docker.remove(spec.name);

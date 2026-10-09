@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   HANDLE_SIGNING_ALG,
   type HandleBinding,
+  type HandleBindingReader,
   SOURCE_BOUND_CAPABILITY_HANDLE,
   createHandleBindingReader,
 } from '@nexttime/shared';
@@ -19,6 +20,7 @@ import type { LlmUsageRecord } from './report.js';
 import {
   type ProxySourceBinding,
   createFileHandleBindingReader,
+  createFileHandleBindingSource,
   createProxySourceBinding,
 } from './source-binding.js';
 
@@ -120,7 +122,7 @@ function memoryReader(bindings: Map<string, HandleBinding>) {
   });
 }
 
-async function setUp(options: { workersSubnet?: string } = {}) {
+async function setUp(options: { workersSubnet?: string; reader?: HandleBindingReader } = {}) {
   const upstreamAuth: Array<{ authorization?: string; apiKey?: string }> = [];
   const upstream = http.createServer((req, res) => {
     upstreamAuth.push({
@@ -143,7 +145,7 @@ async function setUp(options: { workersSubnet?: string } = {}) {
   const sourceBinding: ProxySourceBinding | undefined = options.workersSubnet
     ? createProxySourceBinding({
         workersSubnet: options.workersSubnet,
-        reader: memoryReader(bindings),
+        reader: options.reader ?? memoryReader(bindings),
       })
     : undefined;
   const proxy = createProxyServer({
@@ -272,6 +274,28 @@ describe('llm-proxy source binding — an agent container (workers-network peer)
     expect(t.refusals()).toEqual(['unbound_source', 'presentation_refused']);
   });
 
+  it('refuses everything while the bindings file is missing (fail closed) — no fallback to a header', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'llm-proxy-bindings-missing-'));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const t = await setUp({
+      workersSubnet: LOOPBACK_WORKERS_SUBNET,
+      reader: createHandleBindingReader({
+        source: createFileHandleBindingSource(join(dir, 'bindings.json')),
+        registrationWaitMs: 50,
+        pollMs: 10,
+      }),
+    });
+    expect((await t.chat({ authorization: marker })).status).toBe(401);
+    expect((await t.chat({})).status).toBe(401);
+    expect((await t.chat({ authorization: `Bearer ${await t.handle()}` })).status).toBe(401);
+    expect(t.upstreamAuth).toEqual([]);
+    expect(t.refusals()).toEqual([
+      'unbound_source',
+      'unbound_source',
+      'credential_from_bound_source',
+    ]);
+  });
+
   it('refuses a bound Handle once it is revoked or expired', async () => {
     const t = await setUp({ workersSubnet: LOOPBACK_WORKERS_SUBNET });
     const jti = randomUUID();
@@ -303,6 +327,9 @@ describe('llm-proxy source binding — an agent container (workers-network peer)
 describe('llm-proxy source binding — every other peer', () => {
   it('refuses a container-held Handle presented in a header; a bearer Handle works as before', async () => {
     const t = await setUp({ workersSubnet: ELSEWHERE_WORKERS_SUBNET });
+    // Even one bound to this very peer address: a binding counts only for a peer on the workers
+    // network. This is also the host-network topology (containers sharing the host's loopback or
+    // address): no container is authenticated by address there — unusable, never open.
     // Even one that is bound somewhere: the binding is for its container's address, not this one.
     const leaked = await t.handle({ container: true });
     t.bind(leaked);

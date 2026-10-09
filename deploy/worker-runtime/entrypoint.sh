@@ -65,6 +65,9 @@
 # Isolation is already proven by the direct-route check; a proxy that is merely slow right now is
 # something the agent finds out on its first fetch. So that probe now reports `result=warn` and
 # continues. `no_proxy_configured` stays fatal: that is a misconfigured container, not weather.
+# The two source-binding checks are invariants too and fatal: `handle_env` (no Handle in the
+# environment) and `handle_binding` (pi starts only once this container's address is bound to this
+# container).
 
 set -eu
 
@@ -147,6 +150,40 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 		exit 1
 	fi
 	echo "nexttime-selfcheck check=handle_env result=ok"
+
+	# The other half: pi — the first model-controlled process here — starts only once the binding at
+	# this container's address names this container. Docker can hand a new container an address
+	# whose previous holder's binding is still in place (the previous container exited and
+	# worker-supervisor has not seen it yet); worker-supervisor replaces it right after this
+	# container starts. `GET /api/source-binding` answers with the id of the container bound to the
+	# caller's address — never the Handle — and this container's hostname is its own id's prefix.
+	# Bounded (20 s), fatal on timeout.
+	self_id=${HOSTNAME:-$(cat /etc/hostname 2>/dev/null || true)}
+	case "$self_id" in
+	"" | *[!0-9a-f]*)
+		echo "nexttime-selfcheck check=handle_binding result=fail reason=hostname_not_a_container_id"
+		exit 1
+		;;
+	esac
+	bound_id=""
+	binding_deadline=$(($(date +%s) + 20))
+	while :; do
+		binding_body=$(curl --noproxy '*' --max-time 5 -fsS "${KERNEL_URL%/}/api/source-binding" 2>/dev/null || true)
+		bound_id=$(printf '%s' "$binding_body" | sed -n 's/.*"containerId"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
+		case "$bound_id" in
+		"$self_id"*) break ;;
+		esac
+		if [ "$(date +%s)" -ge "$binding_deadline" ]; then
+			if [ -n "$bound_id" ]; then
+				echo "nexttime-selfcheck check=handle_binding result=fail reason=address_bound_to_another_container"
+			else
+				echo "nexttime-selfcheck check=handle_binding result=fail reason=address_not_bound"
+			fi
+			exit 1
+		fi
+		sleep 0.25
+	done
+	echo "nexttime-selfcheck check=handle_binding result=ok"
 
 	# I10: this container must have no direct route out at all — only through the egress proxy
 	# (design doc §7.9 "容器没有直接路由"). Probes the same public domain the proxied check below

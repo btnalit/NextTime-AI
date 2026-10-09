@@ -147,6 +147,10 @@ HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PI_CODING_AGENT_DIR HOME`�
 `CAPABILITY_HANDLE` 的值是固定标记 `source-bound`，不是 Handle：Handle 由 worker-supervisor 按容器
 地址写进 `handle-bindings` 卷，内核与 llm-proxy 按来源取用（设计文档 I19）；env 里出现 JWT 形态
 （`eyJ….eyJ….…`）的值即为异常，容器启动自检会以 `check=handle_env result=fail` 拒绝启动。
+自检随后向内核问 `GET /api/source-binding`（返回绑在本容器地址上的容器 id，不含 Handle），确认
+绑定指向自己（主机名是容器 id 的前缀）才启动 pi：`check=handle_binding result=ok`；20 秒内等不到
+则 `result=fail reason=address_not_bound` 或 `reason=address_bound_to_another_container` 并退出。
+后者说明有两个运行中的容器共用一个地址（拓扑不对），不要绕过。
 
 ```bash
 docker exec nexttime-entry-demo-alice curl -sS -o /dev/null -w '%{http_code}\n' https://example.com
@@ -932,6 +936,14 @@ docker compose logs worker-supervisor --since 30s | grep "docker events subscrip
   unknown-source 拒绝（§4、§15）。这一条依赖 `EGRESS_DENY_UNKNOWN_SOURCE=1`（compose 默认值；
   `.env` 里设成 `0` 会放行未登记来源，补偿控制随之失效，不要这样设）。该文件的属主由 `host-env-init.sh` / `apply-release.sh` 保证
   （v0.43.0 起）。
+- **与来源绑定的关系**（设计文档 I19）：内核与 llm-proxy 按对端地址认 Handle，前提是每个容器在
+  `workers` 网络上有自己的地址。`--network=host` 只换掉 gVisor 的网络实现，套接字仍建在 Docker 给
+  该容器的网络命名空间里，对端看到的是容器自己的 `workers` 地址（egress-proxy 按来源地址归因也依赖
+  同一点）。S1 的 `env-source-binding` 在这个运行时下逐容器核对：地址互不相同、绑定文件与内核都把
+  地址指回该容器。原始套接字双重关闭：容器 `CapDrop ALL`，runsc 的 `--net-raw` 默认关（会去掉
+  `CAP_NET_RAW`），所以容器发不出伪造源地址或 ARP 的包。若改成 `docker run --network host`，
+  容器拿不到 `workers` 地址，worker-supervisor 绑定失败、spawn 失败，内核与 llm-proxy 也不会按回环
+  或宿主地址认任何绑定——不可用，但不会放行。
 - **决定**：维护者 victor，2026-10-08，保持现状，作为已接受风险。不改运行时配置。
 - **重新评估的时机**：gVisor netstack 能解析内嵌 DNS（升级 gVisor 后复测），或者改为给容器显式配置
   DNS 或服务地址、不再依赖内嵌 DNS 时，去掉 `--network=host`，并把本节改为已关闭。

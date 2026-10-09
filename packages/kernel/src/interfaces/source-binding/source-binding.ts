@@ -21,7 +21,8 @@ import type { SubnetMatcher } from '../internal-auth/subnet.js';
  * to the container's address in the bindings file, and for a request whose TCP peer is on the
  * `workers` network the kernel:
  *
- *   - serves only `POST /api/cap/:name` and `GET /api/health` (`registerWorkersPlaneGuard`) —
+ *   - serves only `POST /api/cap/:name`, `GET /api/health` and `GET /api/source-binding`
+ *     (`registerWorkersPlaneGuard`) —
  *     everything else (`/mcp`, `/ws`, `/api/auth/*`, the Explorer routes, `/internal/*`) answers
  *     403 before any credential is looked at, so a container cannot act with a token it found
  *     somewhere (a member's `issue_handle` token pasted into a file, an API key);
@@ -30,7 +31,13 @@ import type { SubnetMatcher } from '../internal-auth/subnet.js';
  *     refused, and so is a peer with no binding. `Authorization: Bearer source-bound` is not a
  *     credential — it is what the platform extension of an older runtime image still sends (it
  *     forwards `CAPABILITY_HANDLE`, now the marker), and a runtime image can stay selectable
- *     across releases — so it counts as no header.
+ *     across releases — so it counts as no header;
+ *   - answers `GET /api/source-binding` (`registerSourceBindingSelfRoute`) with the id of the
+ *     container bound to the peer address — never the Handle. The runtime image's entrypoint polls
+ *     it and starts pi only once the binding at its own address names its own container: an
+ *     address handed to a new container may still carry a dead container's binding for the
+ *     moment before worker-supervisor binds the new one, and nothing model-controlled may run in
+ *     that moment.
  *
  * The peer address is the socket's own `remoteAddress` — never a forwarded-for header (nothing on
  * the `workers` network sits in front of the kernel), the same rule interfaces/internal-auth uses.
@@ -55,6 +62,12 @@ export interface SourceBinding {
    * other peer — the caller authenticates the request's own credential as before.
    */
   boundHandleFor(request: FastifyRequest): Promise<string | undefined>;
+  /**
+   * For a request from the `workers` network: the id of the container bound to its peer address
+   * (`null` for a binding written without one), after waiting for a registration that may still
+   * be landing; `undefined` when nothing is bound there or the peer is not on that network.
+   */
+  boundContainerFor(request: FastifyRequest): Promise<{ containerId: string | null } | undefined>;
 }
 
 /** Why `boundHandleFor` refused a request, on the `UnauthorizedError` it throws (`cause`). */
@@ -114,6 +127,12 @@ export function createSourceBinding(config: SourceBindingConfig): SourceBinding 
       }
       return presentation.binding.handle;
     },
+    async boundContainerFor(request) {
+      const peer = peerAddress(request);
+      if (peer === undefined || !inWorkersSubnet(peer)) return undefined;
+      const binding = await config.reader.lookup(peer, { waitForRegistration: true });
+      return binding ? { containerId: binding.containerId ?? null } : undefined;
+    },
   };
 }
 
@@ -143,12 +162,16 @@ export function createFileHandleBindingReader(
   return createHandleBindingReader({ source: createFileHandleBindingSource(filePath), onError });
 }
 
+/** Where an agent container asks which container its address is bound to. */
+export const SOURCE_BINDING_SELF_ROUTE = '/api/source-binding';
+
 /** The only routes a `workers`-network peer reaches (this module's own doc comment). Matched on
  *  Fastify's route pattern, so `/api/cap/<anything>` is one entry. */
 export const WORKERS_PLANE_ROUTES: readonly { readonly method: string; readonly url: string }[] =
   Object.freeze([
     { method: 'POST', url: '/api/cap/:name' },
     { method: 'GET', url: '/api/health' },
+    { method: 'GET', url: SOURCE_BINDING_SELF_ROUTE },
   ]);
 
 const FORBIDDEN_BODY = {
@@ -180,5 +203,31 @@ export function registerWorkersPlaneGuard(
       'workers-network peer refused outside the agent-container routes',
     );
     await reply.code(403).send(FORBIDDEN_BODY);
+  });
+}
+
+/**
+ * `GET /api/source-binding` (this module's doc comment): `200 {ok, containerId}` for a bound
+ * `workers` peer, `401 unbound_source` for an unbound one, `403` for any other peer. Carries no
+ * credential either way — the container id is the container's own (its hostname is its prefix).
+ * Not registered without `binding` (no `NEXTTIME_SUBNET_WORKERS`).
+ */
+export function registerSourceBindingSelfRoute(
+  app: FastifyInstance,
+  binding: SourceBinding | undefined,
+): void {
+  if (!binding) return;
+  app.get(SOURCE_BINDING_SELF_ROUTE, async (request, reply) => {
+    if (!binding.isFromWorkersNetwork(request)) {
+      return reply.code(403).send(FORBIDDEN_BODY);
+    }
+    const bound = await binding.boundContainerFor(request);
+    if (!bound) {
+      return reply.code(401).send({
+        ok: false,
+        error: { code: 'unbound_source', message: 'no Handle is bound to this address' },
+      });
+    }
+    return { ok: true, containerId: bound.containerId };
   });
 }

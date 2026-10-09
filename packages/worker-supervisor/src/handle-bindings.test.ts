@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HandleBindingFileSchema } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createHandleBindingStore } from './handle-bindings.js';
+import { AddressHeldError, bindExclusive, createHandleBindingStore } from './handle-bindings.js';
 
 let dir: string;
 let file: string;
@@ -98,5 +98,48 @@ describe('createHandleBindingStore', () => {
     expect(dropped).toEqual(['192.0.2.7']);
     expect(Object.keys(readBindings()).sort()).toEqual(['192.0.2.8', '192.0.2.9']);
     expect(readBindings()['192.0.2.9']?.containerId).toBe('new');
+  });
+});
+
+describe('bindExclusive', () => {
+  const binding = (handle: string, containerId: string) => ({
+    handle,
+    sourceId: `entry:ws:${containerId}`,
+    containerId,
+  });
+
+  it('replaces the binding of a container that is gone (Docker reused its address)', async () => {
+    const store = createHandleBindingStore(file, { now });
+    store.bind('192.0.2.7', binding('h.dead.1', 'dead'));
+    const asked: string[] = [];
+    await bindExclusive(store, '192.0.2.7', binding('h.new.1', 'new'), async (id) => {
+      asked.push(id);
+      return false;
+    });
+    expect(asked).toEqual(['dead']);
+    expect(readBindings()['192.0.2.7']).toMatchObject({ handle: 'h.new.1', containerId: 'new' });
+  });
+
+  it('refuses an address another container still runs at, and leaves its binding alone', async () => {
+    const store = createHandleBindingStore(file, { now });
+    store.bind('192.0.2.7', binding('h.live.1', 'live'));
+    await expect(
+      bindExclusive(store, '192.0.2.7', binding('h.new.1', 'new'), async () => true),
+    ).rejects.toBeInstanceOf(AddressHeldError);
+    expect(readBindings()['192.0.2.7']).toMatchObject({ handle: 'h.live.1', containerId: 'live' });
+  });
+
+  it('rebinds the same container without asking Docker, and replaces a binding with no container id', async () => {
+    const store = createHandleBindingStore(file, { now });
+    const never = async () => {
+      throw new Error('must not be asked');
+    };
+    store.bind('192.0.2.7', binding('h.c1.1', 'c1'));
+    await bindExclusive(store, '192.0.2.7', binding('h.c1.2', 'c1'), never);
+    expect(readBindings()['192.0.2.7']?.handle).toBe('h.c1.2');
+
+    store.bind('192.0.2.8', { handle: 'h.legacy.1', sourceId: 'entry:ws:legacy' });
+    await bindExclusive(store, '192.0.2.8', binding('h.c2.1', 'c2'), never);
+    expect(readBindings()['192.0.2.8']?.containerId).toBe('c2');
   });
 });

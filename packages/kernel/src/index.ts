@@ -89,6 +89,7 @@ import type { SourceBinding } from './interfaces/source-binding/index.js';
 import {
   createFileHandleBindingReader,
   createSourceBinding,
+  registerSourceBindingSelfRoute,
   registerWorkersPlaneGuard,
 } from './interfaces/source-binding/index.js';
 import {
@@ -217,13 +218,15 @@ export function createServer(
   // and refuses to start without the root file (`loadInternalToken`).
   //
   // Agent containers (interfaces/source-binding): a peer on the `workers` network reaches only
-  // `POST /api/cap/:name` and `GET /api/health`, and is authenticated by the Handle
+  // `POST /api/cap/:name`, `GET /api/health` and `GET /api/source-binding`, and is authenticated by the Handle
   // worker-supervisor bound to its address — never by a credential it presents. First, so such a
   // peer gets the same 403 everywhere else, `/internal/*` included.
   registerWorkersPlaneGuard(app, options.sourceBinding);
   registerInternalPlaneGuard(app, options.internalAuth);
 
   registerCapabilityRoutes(app, { ...deps, sourceBinding: options.sourceBinding });
+  // The entrypoint's "is my address bound to me" check (interfaces/source-binding).
+  registerSourceBindingSelfRoute(app, options.sourceBinding);
   // S4.1: console login / first-run setup routes (interfaces/http/auth-routes.ts).
   registerAuthHttpRoutes(app, deps);
   // S3.5 (docs/development-tasks.md §S3.5, design doc §9.5): the nine Explorer endpoints, same

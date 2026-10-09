@@ -1197,7 +1197,7 @@ describe('resident-service Handle binding (the Handle never enters the container
     expect(handleBindings.snapshot().size).toBe(0);
   });
 
-  it('fails the spawn when the Handle cannot be bound — a container without its binding is unusable', async () => {
+  it('fails the spawn when the Handle cannot be bound — a container without its binding is unusable, and is removed', async () => {
     const config = loadConfig({ NEXTTIME_DATA: '/host/data', LOCAL_DATA_DIR: dir });
     const docker = createFakeDockerClient();
     const service = createResidentService({
@@ -1209,5 +1209,72 @@ describe('resident-service Handle binding (the Handle never enters the container
     await expect(
       service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' }),
     ).rejects.toThrow(/EACCES/);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(await docker.inspectByName('nexttime-entry-alice')).toBeUndefined();
+  });
+
+  it('address reuse: a new container at a crashed container’s address replaces its stale binding', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    // Alice's container crashes; Docker releases the address before this process hears of it,
+    // so her binding is still there when Docker hands the address to Bob's new container.
+    docker.simulateExternalKill('nexttime-entry-alice');
+    docker.assignNextIp(alice.ip as string);
+    const bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+    expect(bob.ip).toBe(alice.ip);
+    expect(handleBindings.snapshot().get(bob.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob.containerId,
+      sourceId: 'entry:ws-1:bob',
+    });
+  });
+
+  it('shared address: refuses to bind over a container still running at that address, and removes the new one', async () => {
+    const { service, docker, handleBindings, egressMap } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    // A topology where two running containers share one address (a host-network runtime,
+    // containers sharing a network namespace) — source binding cannot tell them apart.
+    docker.assignNextIp(alice.ip as string);
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' }),
+    ).rejects.toThrow(/still running there/);
+    expect(docker.removeCalls).toContain('nexttime-entry-bob');
+    expect(handleBindings.snapshot().get(alice.ip as string)).toMatchObject({
+      handle: 'hA',
+      containerId: alice.containerId,
+    });
+    expect(egressMap.read()[alice.ip as string]?.sourceId).toBe('entry:ws-1:alice');
+  });
+
+  it('unbinds before stopping or removing a container — while it still holds its address', async () => {
+    const { service, docker, handleBindings, advanceClock } = setup();
+    const boundAtStop: boolean[] = [];
+    const stop = docker.stop.bind(docker);
+    const remove = docker.remove.bind(docker);
+    let ip: string | undefined;
+    docker.stop = async (name, timeout) => {
+      boundAtStop.push(handleBindings.snapshot().has(ip as string));
+      return stop(name, timeout);
+    };
+    docker.remove = async (name) => {
+      boundAtStop.push(handleBindings.snapshot().has(ip as string));
+      return remove(name);
+    };
+
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    await service.stop('alice'); // stop
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    advanceClock(2000);
+    await service.sweepIdle(); // idle sweep
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    await service.reclaim('alice'); // reclaim
+    ip = (
+      await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: fakeHandle('j1') })
+    ).ip;
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: fakeHandle('j2') }); // rotation
+    // stop, idle sweep, reclaim's remove, rotation's stop and remove (and the removes of stopped
+    // containers a later spawn recreates)
+    expect(boundAtStop.length).toBeGreaterThanOrEqual(5);
+    expect(boundAtStop).not.toContain(true);
   });
 });

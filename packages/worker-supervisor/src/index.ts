@@ -4,7 +4,7 @@ import { createDockerClient } from './docker-client.js';
 import type { ContainerLifecycleEvent } from './docker-events.js';
 import { subscribeToContainerEvents } from './docker-events.js';
 import { createEgressMapStore } from './egress-map.js';
-import { createHandleBindingStore } from './handle-bindings.js';
+import { containerAtAddress, createHandleBindingStore } from './handle-bindings.js';
 import { loadAgentHostToken, loadInternalToken } from './internal-auth.js';
 import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
@@ -122,11 +122,10 @@ export async function main(): Promise<void> {
   // re-create one (it never sees a Handle except in a spawn request), only drop the stale ones.
   async function reconcileHandleBindings(): Promise<void> {
     try {
-      const dropped = await handleBindings.retainLive(async (ip, binding) => {
-        if (!binding.containerId) return false;
-        const state = await docker.inspectByName(binding.containerId);
-        return Boolean(state?.running && state.ip === ip);
-      });
+      const isAt = containerAtAddress(docker);
+      const dropped = await handleBindings.retainLive(async (ip, binding) =>
+        binding.containerId ? isAt(binding.containerId, ip) : false,
+      );
       if (dropped.length > 0) {
         console.log(
           JSON.stringify({

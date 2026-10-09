@@ -43,7 +43,7 @@ import type { DockerClient, RuntimeImageInfo } from './docker-client.js';
 import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
-import type { HandleBindingStore } from './handle-bindings.js';
+import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
@@ -259,6 +259,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
   let cachedNetworkName: string | undefined;
+  const isAt = containerAtAddress(docker);
 
   async function resolveNetworkName(): Promise<string> {
     if (cachedNetworkName) return cachedNetworkName;
@@ -316,6 +317,14 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
     // The Handle binding goes with the egress registration (handle-bindings.ts): once this
     // container is gone, nothing may be authenticated as it from that address.
+    unbindHandle(ip);
+  }
+
+  /** Removes the Handle bound to `ip` (handle-bindings.ts). Called *before* this process stops or
+   *  removes a container, while the container still holds the address, and again with its egress
+   *  unregistration. A write failure is logged; startup reconcile drops the binding later. */
+  function unbindHandle(ip: string | undefined): void {
+    if (!ip) return;
     try {
       handleBindings.unbind(ip);
     } catch (err) {
@@ -332,22 +341,24 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
   /** Binds the caller's current Handle to the container's address (handle-bindings.ts) — on
    *  every spawn, reuse included, before it returns. Throws: a container without its binding
-   *  cannot call the kernel or the LLM, so the spawn must not report success. */
-  function bindHandle(
+   *  cannot call the kernel or the LLM, so the spawn must not report success — and so does an
+   *  address another running container still holds (`bindExclusive`). */
+  async function bindHandle(
     workspaceId: string,
     principalId: string,
     containerId: string,
     ip: string | undefined,
     handle: string,
-  ): void {
+  ): Promise<void> {
     if (!ip) {
       throw new Error(`entry container ${containerId} has no address on the workers network`);
     }
-    handleBindings.bind(ip, {
-      handle,
-      sourceId: entrySourceId(workspaceId, principalId),
-      containerId,
-    });
+    await bindExclusive(
+      handleBindings,
+      ip,
+      { handle, sourceId: entrySourceId(workspaceId, principalId), containerId },
+      isAt,
+    );
   }
 
   // 遗留22 / code-review-2026-09-10.md §3.5: best-effort, same convention as
@@ -566,7 +577,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         registerEgress(workspaceId, principalId, existing.ip, egressDeny);
         // The incoming Handle may be newer than the one bound when this container started (an
         // older container without the jti label is reused across a reissue).
-        bindHandle(workspaceId, principalId, existing.id, existing.ip, handle);
+        await bindHandle(workspaceId, principalId, existing.id, existing.ip, handle);
         return {
           containerId: existing.id,
           ip: existing.ip,
@@ -580,7 +591,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       if (existing) {
         if (existing.running) {
           // Rotation while otherwise healthy — retire it gracefully (same timeout an explicit
-          // /resident/stop uses) rather than force-killing outright.
+          // /resident/stop uses) rather than force-killing outright. Unbound first, while it
+          // still holds its address (handle-bindings.ts).
+          unbindHandle(existing.ip);
           await docker.stop(name, STOP_TIMEOUT_SECONDS);
           unregisterEgress(existing.ip);
         } else {
@@ -619,6 +632,27 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         image,
       });
       const created = await docker.createAndStart(spec);
+      // Bound before anything records the new container. One that cannot be bound is removed: it
+      // could call nothing, and its address may still carry a dead container's binding — it must
+      // not keep running there (handle-bindings.ts).
+      try {
+        await bindHandle(workspaceId, principalId, created.id, created.ip, handle);
+      } catch (err) {
+        registry.delete(principalId);
+        try {
+          await docker.remove(name);
+        } catch (removeErr) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'entry container removal failed after a failed handle binding',
+              principalId,
+              error: String(removeErr),
+            }),
+          );
+        }
+        throw err;
+      }
 
       registry.set(principalId, {
         workspaceId,
@@ -630,7 +664,6 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         lastAppliedEgressDeny: egressDeny,
       });
       registerEgress(workspaceId, principalId, created.ip, egressDeny);
-      bindHandle(workspaceId, principalId, created.id, created.ip, handle);
 
       return {
         containerId: created.id,
@@ -647,6 +680,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const existing = entry ? undefined : await docker.inspectByName(name);
       const ip = entry?.ip ?? existing?.ip;
 
+      unbindHandle(ip);
       await docker.stop(name, STOP_TIMEOUT_SECONDS);
       unregisterEgress(ip);
       registry.delete(principalId);
@@ -658,6 +692,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const existing = entry ? undefined : await docker.inspectByName(name);
       const ip = entry?.ip ?? existing?.ip;
 
+      unbindHandle(ip);
       await docker.remove(name);
       unregisterEgress(ip);
       registry.delete(principalId);
@@ -788,6 +823,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const idle = [...registry.entries()].filter(([, entry]) => entry.lastTouchedAt < cutoff);
       for (const [principalId, entry] of idle) {
         const name = entryContainerName(principalId);
+        unbindHandle(entry.ip);
         await docker.stop(name, STOP_TIMEOUT_SECONDS);
         unregisterEgress(entry.ip);
         registry.delete(principalId);

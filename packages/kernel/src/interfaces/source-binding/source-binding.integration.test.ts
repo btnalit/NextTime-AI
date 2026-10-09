@@ -63,24 +63,42 @@ describe.runIf(DATABASE_URL !== undefined)(
       version: () => String(bindingsVersion),
       read: () => JSON.stringify(bindings),
     };
-    function bind(address: string, handle: string): void {
+    function bind(address: string, handle: string, containerId?: string): void {
       bindings = {
         ...bindings,
-        [address]: { handle, sourceId: `entry:${workspaceId}:${memberId}`, boundAt: 'now' },
+        [address]: {
+          handle,
+          sourceId: `entry:${workspaceId}:${memberId}`,
+          boundAt: 'now',
+          ...(containerId !== undefined ? { containerId } : {}),
+        },
       };
       bindingsVersion += 1;
     }
+    function unbind(address: string): void {
+      const { [address]: _dropped, ...rest } = bindings;
+      bindings = rest;
+      bindingsVersion += 1;
+    }
 
-    function server() {
+    function server(bindingSource: HandleBindingSource = source) {
       return createServer(
         { pool, loadHandlePublicKey: async () => publicKey },
         {
           sourceBinding: createSourceBinding({
             workersSubnet: WORKERS_SUBNET,
-            reader: createHandleBindingReader({ source, registrationWaitMs: 50, pollMs: 10 }),
+            reader: createHandleBindingReader({
+              source: bindingSource,
+              registrationWaitMs: 50,
+              pollMs: 10,
+            }),
           }),
         },
       );
+    }
+
+    function selfCheck(app: ReturnType<typeof server>, remoteAddress: string) {
+      return app.inject({ method: 'GET', url: '/api/source-binding', remoteAddress });
     }
 
     async function mintHandle(
@@ -228,6 +246,113 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toBe(401);
     });
 
+    it('address reuse: an address authenticates as whichever container is bound there now, and as nothing once unbound', async () => {
+      const app = server();
+      const dead = await mintHandle('entry');
+      const next = await mintHandle('entry');
+
+      // The first container at this address; its Handle is the one used (revoking it refuses).
+      bind(CONTAINER_ADDRESS, dead.token, 'container-a');
+      expect((await selfCheck(app, CONTAINER_ADDRESS)).json()).toEqual({
+        ok: true,
+        containerId: 'container-a',
+      });
+      await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
+        revokeHandle(client, dead.jti),
+      );
+      expect((await getObject(app, CONTAINER_ADDRESS)).statusCode).toBe(401);
+
+      // Docker hands the address to a new container and worker-supervisor binds it: the dead
+      // container's Handle is gone from it, the new one is what authenticates.
+      bind(CONTAINER_ADDRESS, next.token, 'container-b');
+      expect((await selfCheck(app, CONTAINER_ADDRESS)).json()).toEqual({
+        ok: true,
+        containerId: 'container-b',
+      });
+      expect((await getObject(app, CONTAINER_ADDRESS)).statusCode).toBe(200);
+
+      // Unbound (the container stopped): refused, and the self-check says so.
+      unbind(CONTAINER_ADDRESS);
+      expect((await getObject(app, CONTAINER_ADDRESS)).statusCode).toBe(401);
+      const unbound = await selfCheck(app, CONTAINER_ADDRESS);
+      expect(unbound.statusCode).toBe(401);
+      expect(unbound.json().error.code).toBe('unbound_source');
+    });
+
+    it('the self-check names the bound container only, and only to the workers network', async () => {
+      const app = server();
+      const { token } = await mintHandle('entry');
+      bind(CONTAINER_ADDRESS, token, 'container-a');
+      const own = await selfCheck(app, CONTAINER_ADDRESS);
+      expect(own.statusCode).toBe(200);
+      expect(own.body).not.toContain(token);
+      expect((await selfCheck(app, OTHER_CONTAINER_ADDRESS)).statusCode).toBe(401);
+      expect((await selfCheck(app, CONTROL_ADDRESS)).statusCode).toBe(403);
+      // A binding written without a container id never matches any container.
+      bind(OTHER_CONTAINER_ADDRESS, token);
+      expect((await selfCheck(app, OTHER_CONTAINER_ADDRESS)).json()).toEqual({
+        ok: true,
+        containerId: null,
+      });
+    });
+
+    it('a missing or unreadable bindings file refuses every agent container (fail closed)', async () => {
+      const { token: entry } = await mintHandle('entry');
+      const { token: bearer } = await mintHandle('mcp_session');
+      const missing = server({ version: () => undefined, read: () => '{}' });
+      const unreadable = server({
+        version: () => 'v1',
+        read: () => {
+          throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        },
+      });
+      for (const [name, app] of [
+        ['missing', missing],
+        ['unreadable', unreadable],
+      ] as const) {
+        expect((await getObject(app, CONTAINER_ADDRESS)).statusCode, name).toBe(401);
+        expect(
+          (await getObject(app, CONTAINER_ADDRESS, { authorization: 'Bearer source-bound' }))
+            .statusCode,
+          name,
+        ).toBe(401);
+        // No fallback to a credential the container presents.
+        expect(
+          (await getObject(app, CONTAINER_ADDRESS, { authorization: `Bearer ${bearer}` }))
+            .statusCode,
+          name,
+        ).toBe(401);
+        expect(
+          (await getObject(app, CONTAINER_ADDRESS, { authorization: `Bearer ${entry}` }))
+            .statusCode,
+          name,
+        ).toBe(401);
+        expect((await selfCheck(app, CONTAINER_ADDRESS)).statusCode, name).toBe(401);
+      }
+    });
+
+    it('host-network topology: a peer outside the workers subnet is never authenticated by a binding', async () => {
+      // If agent containers shared the host's network (Docker `--network host`), their peer
+      // address would be loopback or the host's own — not on the workers network. Even a binding
+      // written for such an address authenticates nothing: agent containers are then refused
+      // outright (unusable, never open).
+      const app = server();
+      const { token } = await mintHandle('entry');
+      for (const address of ['127.0.0.1', '::1', CONTROL_ADDRESS]) {
+        bind(address, token, 'container-a');
+        expect((await getObject(app, address)).statusCode, address).toBe(401);
+        expect(
+          (await getObject(app, address, { authorization: 'Bearer source-bound' })).statusCode,
+          address,
+        ).toBe(401);
+        expect(
+          (await getObject(app, address, { authorization: `Bearer ${token}` })).statusCode,
+          address,
+        ).toBe(401);
+        expect((await selfCheck(app, address)).statusCode, address).toBe(403);
+      }
+    });
+
     it('revocation and scope still apply to a bound Handle', async () => {
       const app = server();
       const { token, jti } = await mintHandle('entry');
@@ -304,6 +429,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         remoteAddress: CONTAINER_ADDRESS,
       });
       expect(health.statusCode).toBe(200);
+      expect((await selfCheck(app, CONTAINER_ADDRESS)).statusCode).toBe(200);
 
       for (const request of [
         { method: 'POST' as const, url: '/mcp' },

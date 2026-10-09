@@ -1,6 +1,7 @@
 import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { type HandleBinding, HandleBindingFileSchema } from '@nexttime/shared';
+import type { DockerClient } from './docker-client.js';
 
 /**
  * handle-bindings: this process's half of the source binding (@nexttime/shared handle-binding.ts,
@@ -10,11 +11,14 @@ import { type HandleBinding, HandleBindingFileSchema } from '@nexttime/shared';
  * from this file for a request from that address.
  *
  * Who writes what, when (resident-service.ts / task-service.ts / index.ts):
- *   - `bind` right after a container is created and started, and on every resident reuse (the
- *     incoming Handle may be a newer one for the same container) — *before* the spawn call
- *     returns. A failed `bind` fails the spawn: a container with no binding cannot call anything.
- *   - `unbind` wherever its egress registration is removed (stop, idle sweep, crash, exit event,
- *     Task reap) — before Docker can hand the address to another container.
+ *   - `bind` (through `bindExclusive`) right after a container is created and started, and on
+ *     every resident reuse (the incoming Handle may be a newer one for the same container) —
+ *     *before* the spawn call returns. A failed `bind` fails the spawn and removes a just-created
+ *     container: it could call nothing, and its address may still carry a dead container's binding.
+ *   - `unbind` before this process stops or removes a container (stop, idle sweep, rotation,
+ *     reclaim, Task terminate) — while the container still holds the address, so Docker cannot
+ *     hand it to another container with the binding still in place — and again wherever its egress
+ *     registration is removed (crash, exit event, Task reap).
  *   - `retainLive` at startup and after every docker-events reconnect: drops every binding whose
  *     container is gone or no longer at that address. This process may restart while the file
  *     (on the shared tmpfs volume) outlives it.
@@ -37,6 +41,56 @@ export interface HandleBindingStore {
   ): Promise<readonly string[]>;
   /** The current bindings, by address (a copy). */
   snapshot(): ReadonlyMap<string, HandleBinding>;
+}
+
+/**
+ * Whether container `containerId` is running at `ip` right now (Docker's own view) — what decides
+ * that a binding is still live (`retainLive`) or that an address is still held (`bindExclusive`).
+ */
+export type ContainerAtAddress = (containerId: string, ip: string) => Promise<boolean>;
+
+export function containerAtAddress(
+  docker: Pick<DockerClient, 'inspectByName'>,
+): ContainerAtAddress {
+  return async (containerId, ip) => {
+    const state = await docker.inspectByName(containerId);
+    return Boolean(state?.running && state.ip === ip);
+  };
+}
+
+/** `bindExclusive` refused: another running container holds the address. */
+export class AddressHeldError extends Error {
+  constructor(ip: string, holderContainerId: string) {
+    super(
+      `address ${ip} is bound to container ${holderContainerId}, which is still running there: containers share an address, so a Handle cannot be bound to one of them (source binding needs one address per container on the workers network)`,
+    );
+    this.name = 'AddressHeldError';
+  }
+}
+
+/**
+ * `store.bind`, but never over a binding whose container is still running at that address. On the
+ * `workers` bridge network every running container has an address of its own, so such a binding
+ * means the topology is not one source binding works in (containers sharing a network namespace,
+ * a host-network runtime): binding over it would let one container act with another's Handle, so
+ * this throws `AddressHeldError` instead. A binding left by a container that is gone (its unbind
+ * failed, or Docker released the address before this process saw the exit) is replaced.
+ */
+export async function bindExclusive(
+  store: HandleBindingStore,
+  ip: string,
+  binding: Omit<HandleBinding, 'boundAt'> & { readonly containerId: string },
+  isAt: ContainerAtAddress,
+): Promise<void> {
+  const current = store.snapshot().get(ip);
+  if (
+    current?.containerId !== undefined &&
+    current.containerId !== binding.containerId &&
+    (await isAt(current.containerId, ip))
+  ) {
+    throw new AddressHeldError(ip, current.containerId);
+  }
+  store.bind(ip, binding);
 }
 
 export interface HandleBindingStoreOptions {
