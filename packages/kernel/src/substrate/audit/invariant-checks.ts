@@ -454,7 +454,7 @@ async function checkIS52(client: PoolClient): Promise<InvariantCheckResult> {
      where epistemic_status = 'observed'
        and observation_id is null
        and recorded_at > (select at from since)
-     order by recorded_at desc`,
+     order by recorded_at desc, id desc`,
   );
   return {
     invariant: 'I-S5-2',
@@ -645,7 +645,7 @@ async function checkCollectorSilent(
            where h.workspace_id = p.workspace_id and h.on_behalf_of = p.id
              and h.revoked_at is null and h.expires_at > now()
         )
-      order by o.last_observed_at`,
+      order by o.last_observed_at, s.workspace_id, s.id`,
     [cutoff],
   );
   return {

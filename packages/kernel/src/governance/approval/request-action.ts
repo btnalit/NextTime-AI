@@ -149,7 +149,7 @@ async function findReplayableActionRequest(
     ? await client.query<ActionRequestDbRow>(
         `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
          where workspace_id = $1 and idempotency_key = $2
-         order by requested_at desc
+         order by requested_at desc, id desc
          limit 1`,
         [workspaceId, idempotencyKey],
       )

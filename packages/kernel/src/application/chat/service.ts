@@ -291,7 +291,7 @@ export async function listChats(
      ${CHAT_ACTIVITY_JOIN_SQL}
      where c.workspace_id = $1 and c.owner_principal_id = $2
        and ($3::boolean or c.archived_at is null)
-     order by c.created_at desc`,
+     order by c.created_at desc, c.id desc`,
     [workspaceId, principalId, input.includeArchived === true],
   );
   return result.rows.map(mapChatRow);
@@ -372,7 +372,7 @@ export async function findChatIdForActionPending(
      where workspace_id = $1
        and content ->> 'kind' = 'system.action_pending'
        and content ->> 'actionRequestId' = $2
-     order by created_at desc
+     order by created_at desc, id desc
      limit 1`,
     [workspaceId, actionRequestId],
   );

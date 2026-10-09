@@ -528,19 +528,22 @@ export async function decisionImpact(
 
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const byActivityResult = await client.query<FactDbRow>(
-    `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2`,
+    `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2
+     order by recorded_at, id`,
     [workspaceId, decisionRow.activityId],
   );
   const byIdResult =
     rationaleFactIds.length > 0
       ? await client.query<FactDbRow>(
-          `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])`,
+          `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])
+           order by recorded_at, id`,
           [workspaceId, rationaleFactIds],
         )
       : { rows: [] as FactDbRow[] };
   const actionRequestsResult = await client.query<ActionRequestDbRow>(
     `select id, status, action_kind, gatekeeper_id from action_requests
-     where workspace_id = $1 and approval_decision_id = $2`,
+     where workspace_id = $1 and approval_decision_id = $2
+     order by requested_at, id`,
     [workspaceId, input.decisionId],
   );
   const tasksByActivityResult = await client.query<{ id: string }>(

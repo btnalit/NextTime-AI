@@ -36,12 +36,12 @@ export async function ensureDefaultWorkspace(
   const state = await withAdminClient(pool, async (client) => {
     const settings = await readPlatformSettings(client);
     const workspaces = await client.query<{ id: string; status: string }>(
-      'select id, status from workspaces order by created_at',
+      'select id, status from workspaces order by created_at, id',
     );
     const admin = await client.query<{ id: string; display_name: string }>(
       `select id, display_name from users
         where platform_role = 'admin' and status = 'active'
-        order by created_at limit 1`,
+        order by created_at, id limit 1`,
     );
     return { settings, workspaces: workspaces.rows, admin: admin.rows[0] };
   });
