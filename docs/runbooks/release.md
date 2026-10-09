@@ -752,6 +752,14 @@ digest 与上一版完全相同，镜像内容不变，只换来源。
   postgres 停几秒，`apply-release.sh` 在 `up` 之前已做 dump）。属预期，不是故障。
 - **回滚到 v0.44.0 及更早**：旧 tag 的 compose 仍引用 Docker Hub。本机已有的镜像按 digest 直接复用，缺的才从 Docker Hub
   拉（主机自己的匿名配额，429 只发生在共享出口的 CI runner 上）。
+  - 引用字符串又变回去，`up -d` 会**再次**重建 postgres 与四个 socket-proxy 容器（同一镜像，数据卷不动），同上属预期。
+  - 旧版 `restore.sh` 的 dry-run 用的是不带 digest 的 `postgres:17-alpine`，本机没有这个 tag 时会去 Docker Hub 拉浮动 tag。
+    回滚后要跑旧版恢复演练的，先用 GHCR 副本把这个 tag 补上（`docker run` 遇到本地已有的 tag 不会再拉）：
+    `docker pull ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`，
+    再 `docker tag ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 postgres:17-alpine`。
+- **不要删 `nexttime-mirror-*` 包的旧版本**（包括升级钉值后变成无 tag 的版本）：已发布版本的 Dockerfile / compose 按 digest
+  引用它们，删了就无法重建或回滚到那一版。仓库里没有任何删除包版本的工作流，`prune-images.sh` 只清主机本地的
+  `nexttime-ai-*`；GHCR 不会自动清理容器包版本。在 GitHub 包设置里手动清理时跳过这些包。
 
 ## 4. Hotfix 流程
 
