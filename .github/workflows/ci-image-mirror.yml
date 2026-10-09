@@ -18,8 +18,10 @@ name: ci-image-mirror
 # mismatch. Consumers reference the copy by that digest, never by tag.
 #
 # The pin is the one docker-compose.yml already uses for `postgres` (a host runs exactly that
-# image); the job fails if the two drift. To move the pin: change both in one PR, merge, and this
-# workflow copies the new digest (push trigger below); then point the consumers at it.
+# image), and every CI consumer references the GHCR copy by that same digest (ci.yml `test`,
+# reversibility-probe.yml, deploy/ci/docker-compose.ci.yml for web-e2e). The job fails if any of
+# them drift, so a pin move cannot leave CI testing the old image. To move the pin: change all of
+# them and this matrix in one PR; the pull_request trigger below copies the new digest first.
 #
 # Triggers:
 #   - push to main that changes this file: a merged pin change is mirrored right away;
@@ -30,6 +32,10 @@ name: ci-image-mirror
 #   - workflow_dispatch: copy again by hand (e.g. after a Docker Hub limit failed a run);
 #   - weekly schedule: re-asserts the copy (a deleted package comes back).
 # No retry loop: when Docker Hub still limits this run, it fails and a later trigger copies.
+#
+# Consumers pull the copy anonymously, so the package must stay public: the last step fails when
+# an anonymous manifest fetch does not return 200 (e.g. the weekly run after the package was made
+# private), before consumers start failing on it.
 #
 # Credentials: only GITHUB_TOKEN, with packages: write on this job alone. Every action is pinned to a
 # full commit SHA (same pins as publish-images.yml).
@@ -73,25 +79,35 @@ jobs:
             tag: pg17
             # The line in docker-compose.yml that must carry the same pin.
             compose_ref: pgvector/pgvector:pg17@
+            # Files whose GHCR references (nexttime-ai-ci-mirror-<name>@<digest>) must carry it.
+            consumers: .github/workflows/ci.yml .github/workflows/reversibility-probe.yml deploy/ci/docker-compose.ci.yml
     env:
       NAME: ${{ matrix.name }}
       SOURCE: ${{ matrix.source }}
       DIGEST: ${{ matrix.digest }}
       TAG: ${{ matrix.tag }}
       COMPOSE_REF: ${{ matrix.compose_ref }}
+      CONSUMERS: ${{ matrix.consumers }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Pin matches docker-compose.yml
+      - name: Pin matches docker-compose.yml and every CI consumer
         run: |
           pinned=$(grep -o "${COMPOSE_REF}sha256:[0-9a-f]\{64\}" docker-compose.yml | sort -u)
           if [ "$pinned" != "${COMPOSE_REF}${DIGEST}" ]; then
             echo "::error::docker-compose.yml pins '${pinned:-nothing}', this workflow mirrors '${COMPOSE_REF}${DIGEST}'; change both in one PR"
             exit 1
           fi
+          for f in $CONSUMERS; do
+            refs=$(grep -o "nexttime-ai-ci-mirror-${NAME}@sha256:[0-9a-f]\{64\}" "$f" | sort -u)
+            if [ "$refs" != "nexttime-ai-ci-mirror-${NAME}@${DIGEST}" ]; then
+              echo "::error::${f} references '${refs:-nothing}', expected nexttime-ai-ci-mirror-${NAME}@${DIGEST}; change it with the pin"
+              exit 1
+            fi
+          done
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -122,9 +138,8 @@ jobs:
           fi
           echo "${SOURCE}@${DIGEST} -> ${TARGET}@${got}" >>"$GITHUB_STEP_SUMMARY"
 
-      # Report only: consumers log in with GITHUB_TOKEN, so a private package still works for
-      # this repository's own runs. A public package also serves anyone without credentials.
-      - name: Anonymous pull access (report only)
+      # Consumers pull without credentials, so a copy that is not anonymously pullable is a failure.
+      - name: Anonymous pull access
         env:
           TARGET: ${{ steps.copy.outputs.target }}
         run: |
@@ -135,4 +150,7 @@ jobs:
             -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
             "https://ghcr.io/v2/${repo}/manifests/${DIGEST}")
           echo "anonymous manifest fetch: HTTP ${code}" >>"$GITHUB_STEP_SUMMARY"
-          [ "$code" = 200 ] || echo "::warning::${TARGET} is not anonymously pullable (HTTP ${code}); runs of this repository still pull it with GITHUB_TOKEN"
+          if [ "$code" != 200 ]; then
+            echo "::error::${TARGET} is not anonymously pullable (HTTP ${code}); CI consumers pull it without credentials, so make the package public again"
+            exit 1
+          fi
