@@ -115,3 +115,28 @@ describe('ProviderCatalog', () => {
     expect(catalog.get('openai')?.lastTest).toEqual(result);
   });
 });
+
+describe('ProviderCatalog — saved base URLs that break the bare-base rule (#510)', () => {
+  it('loads them but never routes them or writes them to models.json, and lists them', async () => {
+    const store = await freshStore();
+    await store.upsert('legacy', {
+      ...storeEntry,
+      upstream_base_url: 'https://store.example.invalid/x#',
+    });
+    const yamlBad: ProviderConfig = {
+      ...fileOpenAi,
+      upstream_base_url: 'https://file.example.invalid/y?z=',
+    };
+    const catalog = new ProviderCatalog({ openai: fileOpenAi, yamlbad: yamlBad }, store);
+
+    expect(catalog.resolve().map((p) => p.id)).toEqual(['openai', 'yamlbad', 'legacy']);
+    expect(catalog.getRoutable('legacy')).toBeUndefined();
+    expect(catalog.getRoutable('yamlbad')).toBeUndefined();
+    expect(catalog.getRoutable('openai')).toEqual(fileOpenAi);
+    expect(Object.keys(buildModelsJsonFromCatalog(catalog).providers)).toEqual(['openai']);
+    expect(catalog.unsafeBaseUrls()).toEqual([
+      { id: 'yamlbad', problem: 'must not contain a query string (?)' },
+      { id: 'legacy', problem: 'must not contain a fragment (#)' },
+    ]);
+  });
+});

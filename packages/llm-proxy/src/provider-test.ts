@@ -10,9 +10,16 @@ import type { StoreTestResult } from './provider-store.js';
  *      header and key all line up;
  *   2. a tool call — the request declares one function (`ping`) and asks the model to call it,
  *      then checks that the response actually carries a structured tool call for that name. On
- *      the OpenAI kinds the call is forced (`tool_choice` naming the function): without it a model
- *      may legitimately answer in prose and the test would say nothing about whether tool calling
- *      works on this endpoint — the thing Workers and gate tools depend on. On Anthropic Messages
+ *      the OpenAI kinds the call is forced first (`tool_choice` naming the function): without it a
+ *      model may legitimately answer in prose and the test would say nothing about whether tool
+ *      calling works on this endpoint — the thing Workers and gate tools depend on. Some
+ *      OpenAI-compatible endpoints reject the *forced* form while supporting tools fine: DeepSeek's
+ *      thinking mode answers HTTP 400 `Thinking mode does not support this tool_choice` (found by
+ *      the 4.7b host check 2026-10-09). So a 400 / 422 on the forced request is retried exactly
+ *      once with `tool_choice` left out (the API default, `auto`) and the same explicit prompt —
+ *      which is also what the runtime sends (pi passes `tool_choice` only when a caller sets
+ *      `toolChoice`, and nothing in this repo does). The retry's outcome is the result; when it
+ *      still fails, `error` says the forced form was rejected first. On Anthropic Messages
  *      it is `tool_choice: {type:'auto'}` plus the prompt's explicit instruction: the current
  *      Claude models reject a forced `tool_choice` (`tool` / `any`) with HTTP 400 (`tool_choice:
  *      type "tool" and "any" are not supported for this model`; found by the staging real-model
@@ -81,7 +88,9 @@ function completionCall(api: ProviderApiKind, model: string): UpstreamCall {
   }
 }
 
-function toolCall(api: ProviderApiKind, model: string): UpstreamCall {
+/** The tool-call request. `forced` (OpenAI kinds only) names the function in `tool_choice`;
+ *  without it `tool_choice` is omitted, i.e. the API default `auto`. */
+function toolCall(api: ProviderApiKind, model: string, forced: boolean): UpstreamCall {
   switch (api) {
     case 'openai-completions':
       return {
@@ -95,7 +104,7 @@ function toolCall(api: ProviderApiKind, model: string): UpstreamCall {
               function: { name: TOOL_NAME, description: 'Echo test.', parameters: TOOL_PARAMETERS },
             },
           ],
-          tool_choice: { type: 'function', function: { name: TOOL_NAME } },
+          ...(forced ? { tool_choice: { type: 'function', function: { name: TOOL_NAME } } } : {}),
         },
       };
     case 'openai-responses':
@@ -112,7 +121,7 @@ function toolCall(api: ProviderApiKind, model: string): UpstreamCall {
               parameters: TOOL_PARAMETERS,
             },
           ],
-          tool_choice: { type: 'function', name: TOOL_NAME },
+          ...(forced ? { tool_choice: { type: 'function', name: TOOL_NAME } } : {}),
         },
       };
     case 'anthropic-messages':
@@ -194,7 +203,7 @@ const ERROR_TEXT_MAX_LENGTH = 200;
  *  truncates — truncation runs last so a redaction is never cut in half. Shared by
  *  `describeFailure` (a structured upstream error body) and `runProviderTest`'s own two
  *  `catch (err)` blocks (a thrown `Error`'s `String(err)`, which can embed the request URL/body). */
-function scrubUpstreamText(text: string, realKey: string): string {
+export function scrubUpstreamText(text: string, realKey: string): string {
   const scrubbed = text
     .split(realKey)
     .join('***')
@@ -204,7 +213,7 @@ function scrubUpstreamText(text: string, realKey: string): string {
 }
 
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */
-function describeFailure(status: number, body: unknown, realKey: string): string {
+export function describeFailure(status: number, body: unknown, realKey: string): string {
   let detail = '';
   if (isRecord(body)) {
     const error = body.error;
@@ -285,14 +294,26 @@ export async function runProviderTest(options: ProviderTestOptions): Promise<Sto
 
   if (completion === 'ok') {
     try {
-      const second = await callUpstream(options, toolCall(api, options.model));
+      const forcible = api !== 'anthropic-messages';
+      let second = await callUpstream(options, toolCall(api, options.model, forcible));
+      // The forced form rejected (DeepSeek thinking mode, …): retry once with `tool_choice` left
+      // at its default — see the header comment. Only 400 / 422: a 401, 404, 429 or 5xx would
+      // fail the same way again.
+      let forcedRejected: string | null = null;
+      if (forcible && !second.ok && (second.status === 400 || second.status === 422)) {
+        forcedRejected = describeFailure(second.status, second.body, options.realKey);
+        second = await callUpstream(options, toolCall(api, options.model, false));
+      }
       if (second.ok && toolCallSucceeded(api, second.body)) {
         tool = 'ok';
       } else {
         tool = 'error';
-        error = second.ok
+        const failure = second.ok
           ? `tool-call response carried no call of "${TOOL_NAME}"`
           : describeFailure(second.status, second.body, options.realKey);
+        error = forcedRejected
+          ? `${failure} (retried with tool_choice auto after the forced tool_choice was rejected: ${forcedRejected})`
+          : failure;
       }
     } catch (err) {
       tool = 'error';

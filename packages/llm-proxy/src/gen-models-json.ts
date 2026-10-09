@@ -1,5 +1,6 @@
 import { rename, unlink, writeFile } from 'node:fs/promises';
 import type { ProviderCatalog } from './catalog.js';
+import { isRoutable } from './catalog.js';
 import { DEFAULT_LLM_PROXY_PORT, loadProvidersFile } from './config.js';
 import type { LlmProvidersFile, ModelCost, ProviderConfig } from './config.js';
 
@@ -142,7 +143,7 @@ export function buildModelsJsonFromCatalog(
   return buildModelsJsonFromEntries(
     catalog
       .resolve()
-      .filter((provider) => provider.enabled)
+      .filter(isRoutable)
       .map((provider) => ({ name: provider.id, config: provider.config })),
     options,
   );
