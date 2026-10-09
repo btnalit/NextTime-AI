@@ -261,6 +261,35 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
   });
 
   // S6-A C26 (docs/console-completion-plan.md §5.6, §6): the `requested → cancelled` edge.
+  it('cancelConnectionRequest: the audit copy of a target URL carrying a password has it redacted; the request keeps it as sent', async () => {
+    // Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet.
+    const target = 'https://ops:abcdefghijklmnopqrstuvwxyz0123@inventory.example.invalid/api';
+    const row = await inTx((client) =>
+      requestConnection(client, workspaceId, {
+        kind: 'http',
+        target,
+        requestedBy: { id: memberId, kind: 'human' },
+      }),
+    );
+    expect(row.target).toBe(target);
+    await inTx((client) =>
+      cancelConnectionRequest(client, workspaceId, {
+        connectionRequestId: row.id,
+        cancelledBy: memberId,
+      }),
+    );
+    const audit = await inTx((client) =>
+      client.query<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+         where workspace_id = $1 and action = 'connection.request_cancelled' and resource_id = $2`,
+        [workspaceId, row.id],
+      ),
+    );
+    expect(audit.rows[0]?.payload.target).toBe(
+      'https://ops:[redacted]@inventory.example.invalid/api',
+    );
+  });
+
   it('cancelConnectionRequest: requested → cancelled (I6), audited as connection.request_cancelled; a second cancel and a cancel of a completed row are IllegalTransition; unknown id is not found', async () => {
     const row = await inTx((client) =>
       requestConnection(client, workspaceId, {

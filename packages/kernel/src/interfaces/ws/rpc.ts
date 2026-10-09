@@ -96,7 +96,10 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
-import { CredentialReviewRequiredError } from '../../governance/redaction/index.js';
+import {
+  CredentialReviewRequiredError,
+  ObserveParamsCarryCredentialsError,
+} from '../../governance/redaction/index.js';
 import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
 
 /**
@@ -295,6 +298,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Suspected credentials not confirmed (see capability-route.ts's own mapping).
   if (err instanceof CredentialReviewRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Credential-looking observe params, refused (see capability-route.ts's own mapping).
+  if (err instanceof ObserveParamsCarryCredentialsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (

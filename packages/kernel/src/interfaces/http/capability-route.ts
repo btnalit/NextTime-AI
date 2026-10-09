@@ -126,7 +126,10 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
-import { CredentialReviewRequiredError } from '../../governance/redaction/index.js';
+import {
+  CredentialReviewRequiredError,
+  ObserveParamsCarryCredentialsError,
+} from '../../governance/redaction/index.js';
 import type { SourceBinding } from '../source-binding/index.js';
 
 /**
@@ -321,6 +324,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // 400 with `details` (subject, count), so the console can ask for the confirmation it may not
   // have known was needed.
   if (err instanceof CredentialReviewRequiredError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // Legacy 175 (governance/redaction/credential-review.ts `reviewObserveParams`): an observe-class
+  // Operation's params carrying a credential-looking value — refused before the gate is called;
+  // the message tells the agent not to pass credentials, `details` says how many and where.
+  if (err instanceof ObserveParamsCarryCredentialsError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (

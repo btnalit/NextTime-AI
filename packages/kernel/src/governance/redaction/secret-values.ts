@@ -42,8 +42,8 @@ import { SECRET_FIELD_MASK, isSecretFieldValue, namesASecretField } from '@nextt
  * pass on top of that (`redactSecrets`'s `maxChars`, the chat sink's own limits).
  *
  * Users: application/chat (a Turn's tool calls, the stored reply), application/gateway (the audit
- * copy of every Handle-channel call's params, a Worker's result report) and, for a stream,
- * `secret-stream.ts`.
+ * copy of every call's params — with the field rule, `credential-review.ts` — a Worker's result
+ * report) and, for a stream, `secret-stream.ts`.
  */
 
 export const REDACTED = SECRET_FIELD_MASK;

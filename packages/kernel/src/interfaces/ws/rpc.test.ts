@@ -15,6 +15,7 @@ import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
+import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
 /**
@@ -41,6 +42,19 @@ describe('mapDispatchError — S6-A / C25 approve.reason', () => {
     const mapped = mapDispatchError(new ApprovalReasonRequiredError('ar-1'));
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
     expect(mapped.message).toContain('reason');
+  });
+});
+
+describe('mapDispatchError — legacy 175 observe params', () => {
+  it('ObserveParamsCarryCredentialsError maps to INVALID_PARAMS with its message', () => {
+    const err = new ObserveParamsCarryCredentialsError('inventory', 'list_items', {
+      count: 1,
+      paths: ['q'],
+    });
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
   });
 });
 
