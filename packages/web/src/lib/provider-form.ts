@@ -37,6 +37,10 @@ export interface ProviderPreset {
   readonly apiKeyEnv: string;
   /** Where the administrator gets a key — shown next to the key field. */
   readonly keyHint: string;
+  /** Offered only when the provider's model list cannot be fetched (a relay without
+   *  `/v1/models`, a list error): common model ids for the vendor, shown as "未核验" until
+   *  「验证所选模型」 has run against them with the administrator's own key. */
+  readonly suggestedModels: readonly string[];
 }
 
 /**
@@ -54,6 +58,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://api.anthropic.com',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     keyHint: 'console.anthropic.com → API Keys',
+    suggestedModels: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
   },
   {
     key: 'openai',
@@ -63,6 +68,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://api.openai.com',
     apiKeyEnv: 'OPENAI_API_KEY',
     keyHint: 'platform.openai.com → API keys',
+    suggestedModels: ['gpt-4.1', 'gpt-4.1-mini', 'o4-mini'],
   },
   {
     key: 'deepseek',
@@ -72,6 +78,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     keyHint: 'platform.deepseek.com → API keys',
+    suggestedModels: ['deepseek-chat', 'deepseek-reasoner'],
   },
   {
     key: 'openrouter',
@@ -81,6 +88,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://openrouter.ai/api',
     apiKeyEnv: 'OPENROUTER_API_KEY',
     keyHint: 'openrouter.ai → Keys',
+    suggestedModels: [],
   },
   {
     key: 'moonshot',
@@ -90,6 +98,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://api.moonshot.cn',
     apiKeyEnv: 'MOONSHOT_API_KEY',
     keyHint: 'platform.moonshot.cn → API Key',
+    suggestedModels: ['kimi-k2-turbo-preview', 'moonshot-v1-32k'],
   },
   {
     key: 'dashscope',
@@ -99,6 +108,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
     apiKeyEnv: 'DASHSCOPE_API_KEY',
     keyHint: 'bailian.console.aliyun.com → API-KEY',
+    suggestedModels: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
   },
   {
     key: 'siliconflow',
@@ -108,8 +118,20 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     upstreamBaseUrl: 'https://api.siliconflow.cn',
     apiKeyEnv: 'SILICONFLOW_API_KEY',
     keyHint: 'cloud.siliconflow.cn → API 密钥',
+    suggestedModels: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-32B'],
   },
 ];
+
+/** The preset whose upstream host `baseUrl` points at, if any — so an edited provider, or one
+ *  whose URL was typed rather than picked, still gets the vendor's suggestions. */
+export function presetForBaseUrl(baseUrl: string): ProviderPreset | undefined {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return PROVIDER_PRESETS.find((p) => new URL(p.upstreamBaseUrl).hostname === host);
+  } catch {
+    return undefined;
+  }
+}
 
 /** The auth header each api kind's own SDK uses — the proxy sends the real key in it. */
 export function defaultAuthHeader(api: LlmProviderApiKindWire): LlmProviderAuthHeaderWire {

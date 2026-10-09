@@ -292,6 +292,42 @@ export type LlmProviderModelDiscoveryResultWire = z.infer<
   typeof LlmProviderModelDiscoveryResultWireSchema
 >;
 
+/** Most models one `POST /model-probe` checks — each costs two or three tiny upstream calls. */
+export const LLM_PROVIDER_PROBE_MAX_MODELS = 6;
+
+/** `POST /model-probe` — "验证所选模型": the provider test (a completion, then a tool call; llm-proxy
+ *  provider-test.ts) run against each listed model, before or after the provider exists. Same
+ *  upstream and credential fields and rules as `/model-discovery` (R-23, the bare-base rule); the
+ *  models are the ones the administrator picked. Nothing is stored. */
+export const LlmProviderModelProbeInputWireSchema = LlmProviderModelDiscoveryInputWireSchema.extend(
+  {
+    models: z.array(z.string().trim().min(1).max(200)).min(1).max(LLM_PROVIDER_PROBE_MAX_MODELS),
+  },
+).strict();
+export type LlmProviderModelProbeInputWire = z.infer<typeof LlmProviderModelProbeInputWireSchema>;
+
+export const LlmProviderModelProbeOutcomeWireSchema = z
+  .object({
+    model: z.string(),
+    completion: LlmProviderTestOutcomeWireSchema,
+    toolCall: LlmProviderTestOutcomeWireSchema,
+    latencyMs: z.number().int().nonnegative(),
+    /** Sanitized like the provider test's own `error` (never a key, never a full body). */
+    error: z.string().nullable(),
+  })
+  .strict();
+export type LlmProviderModelProbeOutcomeWire = z.infer<
+  typeof LlmProviderModelProbeOutcomeWireSchema
+>;
+
+export const LlmProviderModelProbeResultWireSchema = z
+  .object({
+    results: z.array(LlmProviderModelProbeOutcomeWireSchema),
+    credentialSource: LlmProviderDiscoveryCredentialWireSchema,
+  })
+  .strict();
+export type LlmProviderModelProbeResultWire = z.infer<typeof LlmProviderModelProbeResultWireSchema>;
+
 export const DeleteLlmProviderResultWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,
