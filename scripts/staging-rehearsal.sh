@@ -23,7 +23,7 @@
 #                       directory that is not empty — never point it at a host with real data.
 #   --from vA.B.C       the release the staging host starts on (what production runs today).
 #   --to <ref>          what to apply. A vX.Y.Z tag is applied as itself with `--pull` (published
-#                       images; apply-release.sh falls back to a source build on its own). Anything
+#                       images, prefetched first; a failed pull stops the apply). Anything
 #                       else is resolved to a commit and given a local, never-pushed staging tag
 #                       vA.(B+1).0-staging.<sha> — apply-release.sh only takes tags — then built from
 #                       source; the tag is deleted again on exit.
@@ -251,6 +251,28 @@ step "env ok"
 sh scripts/pull-images.sh $verify_flag "$FROM" >"$LOGS/pull-$FROM.log" 2>&1 </dev/null || fail images "pull-images.sh $FROM — see $LOGS/pull-$FROM.log"
 step "images pulled $FROM"
 
+# 5b. the TARGET's pull-images.sh --prefetch against the images just installed (legacy 137): the
+#     path a pre-window prefetch and then the apply's own pull take — every image already present
+#     is verified again, not pulled again, and must carry $FROM's own commit as its revision label.
+#     Run on every rehearsal, a source-built target included, since only $FROM's images are
+#     published. Services: those both versions publish.
+pull_target="$WORK/pull-images-$TO_TAG.sh"
+if git show "$TO_TAG:scripts/pull-images.sh" >"$pull_target" 2>/dev/null && grep -q -- '--prefetch' "$pull_target"; then
+  from_services=$(sed -n 's/^ALL_SERVICES="\(.*\)"$/\1/p' scripts/pull-images.sh)
+  to_services=$(sed -n 's/^ALL_SERVICES="\(.*\)"$/\1/p' "$pull_target")
+  probe_services=
+  for s in $from_services; do
+    case " $to_services " in *" $s "*) probe_services="$probe_services $s" ;; esac
+  done
+  sh "$pull_target" $verify_flag --prefetch "$FROM" $probe_services >"$LOGS/prefetch-probe-$FROM.log" 2>&1 </dev/null ||
+    fail prefetch-probe "$TO_TAG:scripts/pull-images.sh --prefetch $FROM — see $LOGS/prefetch-probe-$FROM.log"
+  probed=$(printf '%s\n' $probe_services | grep -c .)
+  present=$(grep -c ' present, not pulled again$' "$LOGS/prefetch-probe-$FROM.log")
+  [ "$present" -eq "$probed" ] ||
+    fail prefetch-probe "$present of $probed installed images were reused, the rest pulled again — see $LOGS/prefetch-probe-$FROM.log"
+  step "prefetch-probe ok $TO_TAG:scripts/pull-images.sh --prefetch $FROM: $present/$probed present, verified, revision = $FROM"
+fi
+
 # 6. database
 docker compose up -d --wait postgres </dev/null >>"$LOGS/stack.log" 2>&1 || fail postgres
 docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "create extension if not exists vector"' </dev/null || fail postgres "create extension vector"
@@ -362,11 +384,23 @@ if grep -q 'STEP egress-sources' "$apply_script"; then
     fail apply "reset config/egress-sources.json to root before the apply"
   step "egress-sources reset to root 0644 — the target's apply-release.sh must hand it to uid 10001"
 fi
+# A published target is prefetched first, as the host does ahead of its maintenance window
+# (release.md §3, legacy 137); the apply's own pull must then reuse every image.
+if [ -n "$pull_flag" ] && grep -q -- '--prefetch' "$apply_script"; then
+  APPLY_LOG_DIR="$LOGS" sh "$apply_script" --prefetch "$TO_TAG" </dev/null >/dev/null 2>&1
+  prefetch_log=$(ls -t "$LOGS"/prefetch-"$TO_TAG"-*Z.log 2>/dev/null | head -n 1)
+  prefetch_result=$(sed -n 's/^RESULT //p' "$prefetch_log" 2>/dev/null | tail -n 1)
+  [ "$prefetch_result" = ok ] || fail prefetch "${prefetch_result:-no RESULT line} — see ${prefetch_log:-$LOGS}"
+  step "prefetch ok $TO_TAG ($(grep -c 'verified=' "$prefetch_log") images verified)"
+fi
 APPLY_LOG_DIR="$LOGS" sh "$apply_script" $pull_flag "$TO_TAG" </dev/null >/dev/null 2>&1
 apply_log=$(ls -t "$LOGS"/apply-"$TO_TAG"-*Z.log 2>/dev/null | head -n 1)
 [ -n "$apply_log" ] || fail apply "apply-release.sh wrote no log"
 grep -E '^(STEP|FAIL|RESULT)' "$apply_log" | grep -vE '^STEP (pull|backup-freshness) ' | sed 's/^/STEP apply | /'
 apply_result=$(sed -n 's/^RESULT //p' "$apply_log" | tail -n 1)
+if [ -n "$pull_flag" ]; then
+  step "apply images $(grep -c 'present, not pulled again$' "$apply_log") of $(grep -c '^STEP pull pull-images: .* verified=' "$apply_log") reused from the prefetch, each verified again"
+fi
 case "$apply_result" in
   ok) step "apply ok $(git describe --tags --always HEAD)" ;;
   acceptance-failures=*) echo "RESULT $apply_result"; exit 1 ;;

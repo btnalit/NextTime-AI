@@ -274,6 +274,194 @@ describe('PlatformModelsPage', () => {
     await screen.findByTestId('provider-row-acme');
   });
 
+  it('preset + typed key: fetches the real model list, sets the key after the row exists, then tests and shows the verdict', async () => {
+    const http = scriptedHttp();
+    let items = [provider()];
+    let created: LlmProviderWire | null = null;
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire(items) }),
+      'POST /model-discovery': () => ({
+        status: 200,
+        body: {
+          models: [
+            { id: 'deepseek-chat', displayName: null },
+            { id: 'deepseek-reasoner', displayName: null },
+            { id: 'deepseek-coder', displayName: null },
+            { id: 'deepseek-v4', displayName: null },
+          ],
+          credentialSource: 'inline',
+          truncated: false,
+          latencyMs: 120,
+        },
+      }),
+      'POST /providers': (body) => {
+        const input = body as { id: string; displayName: string; models: Array<{ id: string }> };
+        created = provider({
+          id: input.id,
+          displayName: input.displayName,
+          apiKeyEnv: null,
+          source: 'store',
+          credentialPresent: false,
+          credentialSource: 'none',
+          models: input.models.map((m) => ({ id: m.id, displayName: null, cost: null })),
+        });
+        items = [...items, created];
+        return { status: 201, body: created };
+      },
+      'PUT /providers/deepseek/secret': () => {
+        const withKey = {
+          ...(created as LlmProviderWire),
+          credentialPresent: true,
+          credentialSource: 'console' as const,
+        };
+        items = items.map((row) => (row.id === 'deepseek' ? withKey : row));
+        return { status: 200, body: withKey };
+      },
+      'POST /providers/deepseek/test': () => ({
+        status: 200,
+        body: {
+          providerId: 'deepseek',
+          model: 'deepseek-chat',
+          completion: 'ok',
+          toolCall: 'ok',
+          latencyMs: 900,
+          error: null,
+          testedAt: '2026-10-09T00:00:00.000Z',
+        },
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+    expect((within(form).getByTestId('provider-id') as HTMLInputElement).value).toBe('deepseek');
+    expect((within(form).getByTestId('provider-base-url') as HTMLInputElement).value).toBe(
+      'https://api.deepseek.com',
+    );
+    expect(within(form).getByTestId('provider-base-url-preview').textContent).toContain(
+      'https://api.deepseek.com/v1/chat/completions',
+    );
+    // Not ready yet, and the form says why.
+    expect((within(form).getByTestId('provider-submit') as HTMLButtonElement).disabled).toBe(true);
+    expect(within(form).getByTestId('provider-form-missing').textContent).toContain('至少一个模型');
+
+    const keyInput = within(form).getByTestId('provider-key');
+    fireEvent.change(keyInput, { target: { value: ' sk-deepseek-typed-key ' } });
+    fireEvent.blur(keyInput); // entering a key fetches the list once
+    await within(form).findByTestId('provider-model-picker');
+    const discovery = proxy.calls.find((c) => c.path === '/model-discovery');
+    expect(discovery?.body).toEqual({
+      id: 'deepseek',
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.deepseek.com',
+      authHeader: 'authorization',
+      key: 'sk-deepseek-typed-key',
+    });
+
+    fireEvent.click(within(form).getAllByTestId('provider-model-option')[0] as HTMLElement);
+    // A typed id the provider does not list is flagged, not refused.
+    fireEvent.click(within(form).getByTestId('provider-model-add'));
+    fireEvent.change(within(form).getAllByTestId('provider-model-id')[1] as HTMLElement, {
+      target: { value: 'deepseek-chatt' },
+    });
+    expect(within(form).getAllByTestId('provider-model-unlisted')).toHaveLength(1);
+    fireEvent.click(within(form).getAllByRole('button', { name: '移除模型 2' })[0] as HTMLElement);
+
+    fireEvent.click(within(form).getByTestId('provider-submit'));
+
+    const verdict = await screen.findByTestId('provider-test-verdict');
+    expect(verdict.dataset.verdict).toBe('ok');
+    expect(screen.getByTestId('provider-detail-drawer')).toBeDefined();
+
+    const post = proxy.calls.find((c) => c.method === 'POST' && c.path === '/providers');
+    expect(post?.body).toEqual({
+      id: 'deepseek',
+      displayName: 'DeepSeek',
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.deepseek.com',
+      authHeader: 'authorization',
+      authScheme: 'Bearer',
+      models: [{ id: 'deepseek-chat', displayName: null, cost: null }],
+      enabled: true,
+    });
+    // The key never rides on the provider row; it goes in the one secret call, after the row.
+    expect(JSON.stringify(post?.body)).not.toContain('sk-deepseek');
+    const order = proxy.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
+    expect(order).toEqual([
+      'POST /model-discovery',
+      'POST /providers',
+      'PUT /providers/deepseek/secret',
+      'POST /providers/deepseek/test',
+    ]);
+    expect(proxy.calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      key: 'sk-deepseek-typed-key',
+    });
+  });
+
+  it('normalizes what is typed instead of refusing it: env var name, pasted key, pasted endpoint', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+
+    const base = within(form).getByTestId('provider-base-url');
+    fireEvent.change(base, { target: { value: 'relay.example.com/v1/chat/completions/' } });
+    fireEvent.blur(base);
+    expect((base as HTMLInputElement).value).toBe('https://relay.example.com');
+    // No name typed: the id follows the host.
+    expect((within(form).getByTestId('provider-id') as HTMLInputElement).value).toBe('example');
+
+    const env = within(form).getByTestId('provider-api-key-env');
+    fireEvent.change(env, { target: { value: 'my-relay.api key' } });
+    expect((env as HTMLInputElement).value).toBe('MY_RELAY_API_KEY');
+    expect(within(form).queryByRole('alert')).toBeNull();
+
+    fireEvent.change(env, { target: { value: 'export RELAY_KEY=abc' } });
+    expect((env as HTMLInputElement).value).toBe('RELAY_KEY');
+
+    fireEvent.change(env, { target: { value: 'sk-proj-AbCdEf0123456789xyz' } });
+    expect((env as HTMLInputElement).value).toBe('');
+    expect(within(form).getByTestId('provider-env-was-secret')).toBeDefined();
+    expect((within(form).getByTestId('provider-key') as HTMLInputElement).value).toBe(
+      'sk-proj-AbCdEf0123456789xyz',
+    );
+  });
+
+  it('shows why model discovery failed, with the plain-language cause', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+      'POST /model-discovery': () => ({
+        status: 502,
+        body: {
+          error: {
+            code: 'upstream_error',
+            message: 'HTTP 401: invalid api key',
+            details: { status: 401 },
+          },
+        },
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-openai'));
+    fireEvent.change(within(form).getByTestId('provider-key'), {
+      target: { value: 'sk-wrong-key-0123456789' },
+    });
+    fireEvent.click(within(form).getByTestId('provider-discover'));
+    const error = await within(form).findByTestId('provider-discover-error');
+    expect(error.textContent).toContain('供应商拒绝了请求');
+    expect(error.textContent).toContain('密钥');
+  });
+
   it('runs 测试调用', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({

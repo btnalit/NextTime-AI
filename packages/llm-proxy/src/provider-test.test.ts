@@ -157,6 +157,158 @@ describe('runProviderTest', () => {
     expect(captured[1]?.body.tool_choice).toEqual({ type: 'auto' });
   });
 
+  // 4.7b host check (2026-10-09): DeepSeek's thinking mode rejects a forced tool_choice with
+  // HTTP 400 although it calls tools fine under the default. The probe must retry without it.
+  it('openai-completions: a 400 on the forced tool_choice is retried once without tool_choice (DeepSeek thinking mode)', async () => {
+    const { port, captured } = await start((c) => {
+      if (!c.body.tools)
+        return { status: 200, body: { choices: [{ message: { content: 'OK' } }] } };
+      if (c.body.tool_choice) {
+        return {
+          status: 400,
+          body: {
+            error: {
+              message: 'Thinking mode does not support this tool_choice',
+              type: 'invalid_request_error',
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                reasoning_content: 'The user wants me to call ping.',
+                tool_calls: [
+                  { type: 'function', function: { name: 'ping', arguments: '{"text":"pong"}' } },
+                ],
+              },
+            },
+          ],
+        },
+      };
+    });
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'deepseek-reasoner',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'ok', error: null });
+    expect(captured).toHaveLength(3);
+    expect(captured[1]?.body.tool_choice).toEqual({ type: 'function', function: { name: 'ping' } });
+    expect(captured[2]?.body).not.toHaveProperty('tool_choice');
+    expect(captured[2]?.body.tools).toEqual(captured[1]?.body.tools);
+  });
+
+  it('openai-responses: the same retry applies to its forced tool_choice', async () => {
+    const { port, captured } = await start((c) => {
+      if (!c.body.tools) return { status: 200, body: { output: [{ type: 'message' }] } };
+      if (c.body.tool_choice) {
+        return { status: 422, body: { error: { message: 'tool_choice is not supported' } } };
+      }
+      return { status: 200, body: { output: [{ type: 'function_call', name: 'ping' }] } };
+    });
+    const result = await runProviderTest({
+      provider: provider('openai-responses', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'ok', error: null });
+    expect(captured).toHaveLength(3);
+    expect(captured[2]?.body).not.toHaveProperty('tool_choice');
+  });
+
+  // Every console preset (web lib/provider-form.ts PROVIDER_PRESETS) against both upstream
+  // behaviours the probe can meet: the forced tool_choice accepted, or refused with a 400. Only
+  // the DeepSeek text is verbatim (the 4.7b host check); the others stand for "a thinking / reasoning
+  // mode that allows only auto" and are not quotes. Anthropic never forces (see the header comment).
+  const PRESET_KINDS = [
+    ['openai', 'openai-completions', 'gpt-5'],
+    ['deepseek', 'openai-completions', 'deepseek-reasoner'],
+    ['openrouter', 'openai-completions', 'deepseek/deepseek-r1'],
+    ['moonshot', 'openai-completions', 'kimi-k2-thinking'],
+    ['dashscope', 'openai-completions', 'qwen3-max'],
+    ['siliconflow', 'openai-completions', 'Qwen/Qwen3-32B'],
+  ] as const;
+  const REFUSALS = {
+    deepseek: 'Thinking mode does not support this tool_choice',
+    other: 'tool_choice only supports "auto" or "none" when thinking is enabled',
+  } as const;
+  for (const [preset, api, model] of PRESET_KINDS) {
+    for (const refuses of [false, true]) {
+      it(`preset ${preset}: tool call ok when the forced tool_choice is ${refuses ? 'refused (retried without it)' : 'accepted'}`, async () => {
+        const { port, captured } = await start((c) => {
+          if (!c.body.tools) {
+            return { status: 200, body: { choices: [{ message: { content: 'OK' } }] } };
+          }
+          if (refuses && c.body.tool_choice) {
+            const message = preset === 'deepseek' ? REFUSALS.deepseek : REFUSALS.other;
+            return { status: 400, body: { error: { message } } };
+          }
+          return {
+            status: 200,
+            body: {
+              choices: [
+                { message: { tool_calls: [{ type: 'function', function: { name: 'ping' } }] } },
+              ],
+            },
+          };
+        });
+        const result = await runProviderTest({
+          provider: provider(api, port),
+          model,
+          realKey: REAL_KEY,
+          timeoutMs: 2000,
+        });
+        expect(result).toMatchObject({ completion: 'ok', tool_call: 'ok', error: null });
+        expect(captured).toHaveLength(refuses ? 3 : 2);
+      });
+    }
+  }
+
+  it('when the retry without tool_choice fails too, the error names both rejections', async () => {
+    const { port, captured } = await start((c) =>
+      c.body.tools
+        ? { status: 400, body: { error: { message: `tools are not supported (${REAL_KEY})` } } }
+        : { status: 200, body: { choices: [{ message: { content: 'OK' } }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'ok', tool_call: 'error' });
+    expect(captured).toHaveLength(3);
+    expect(result.error).toMatch(/^HTTP 400: tools are not supported/);
+    expect(result.error).toContain('forced tool_choice was rejected');
+    expect(JSON.stringify(result)).not.toContain(REAL_KEY);
+  });
+
+  it('does not retry a non-400 tool-call failure (401 / 429 / 5xx would fail the same way)', async () => {
+    const { port, captured } = await start((c) =>
+      c.body.tools
+        ? { status: 429, body: { error: { message: 'slow down' } } }
+        : { status: 200, body: { choices: [{ message: { content: 'OK' } }] } },
+    );
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({
+      completion: 'ok',
+      tool_call: 'error',
+      error: 'HTTP 429: slow down',
+    });
+    expect(captured).toHaveLength(2);
+  });
+
   it('reports a tool-call failure when the model answers in prose instead of calling the tool', async () => {
     const { port } = await start(() => ({
       status: 200,

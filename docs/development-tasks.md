@@ -3752,6 +3752,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
     三次运行的治理不变量都成立。据此发 v0.43.0（#483，tag 在 d8c545e）。
   - #504：失败的真实模型 run 把自己的 `RUN scenario=… outcome=fail …` 行（至多 30 行，只有结果、计数与工具名）打进 staging job 日志，
     部分通过不用下载 artifact 就能区分模型没答对还是产品缺陷。
+- **触发收紧（#509，2026-10-09）**：去掉 `push: main`（分支保护 strict，PR 最后一轮即落到 main 的树；带基线的完整预演证据此后来自 PR 最后一轮或 dispatch）；PR 路径过滤按依赖闭包补齐（`check-backup-freshness` / `prune-images` / `delete-workspaces-matching` 与 `deploy/{accept-s2,backup,caddy,fake-llm,update-feed,worker-runtime}/**`），`scripts/guards/staging-paths.mjs` 进 `ci:guards` 与 `quality`；`ci.yml` / `e2e.yml` 加 `changes` job（`scripts/ci-docs-only.sh`，fail-open），纯文档 PR 跳过 `quality` / `test` / `web-e2e`，"纯文档"只认 `docs/`（除 `docs/contracts/`）、根目录 `*.md`、任意层级的 `README.md` 与 `.github/` 下一层的 `*.md`；其余 `.md`（例如 `packages/` 下的提示词文件）按代码处理。CodeQL 对 PR 另用更宽的 paths-ignore（`docs/**`、`**/*.md`），它不是 required check。
 
 **Turn 结束顺序（#493，2026-10-08 合入）**
 
@@ -3764,6 +3765,49 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 回归测试先写、修复前稳定失败：`agent-host-runtime.test.ts`（gate 卡住 `message` 时 `turnEnded` 不进 sink）、`event-sink.test.ts`
   （`update → commit → push:chat.metadata`）、`turn-terminal.integration.test.ts`（真实 Postgres：慢 `message`、`report_turn` 抢先两种场景）。
   审查的非阻塞观察记为 STATUS 遗留 128–131。
+
+**消息存不下的 Turn 落 `failed`（#508，2026-10-09 合入，遗留 128）**
+
+- `turn-recovery.ts`：新增 `recordMessagePersistFailure`，单条 UPDATE 合并进 `activities.metadata.messagePersistFailure`
+  （最早的 `firstAt`、累加 `count`、保留第一次的 `errorCode` / SQLSTATE），不看 Turn 当前状态。`endTurn` 的 CASE 在
+  `stopRequestedAt → interrupted` 之后加一条：带这条记录的 Turn 收到 `completed` 时落 `failed`，走已有的 `running → fail` 边，
+  `TURN_TRANSITIONS` 不变；`endTurn` 仍是 Turn 终态的唯一写入方，`report_turn` 结束 Turn 时同样受约束。
+- `event-sink.ts`：`message` 写入失败后（原事务已回滚），sink 在新事务里写失败记录、打 error 日志，不再抛出；Turn 保持 `running`
+  直到 runtime 报告结束，后续消息照常入库。记录本身也写不进去时留在进程内 Map，在结束该 Turn 的事务里、`endTurn` 之前写入，
+  `turnEnded` 时删除。FakeAgentRuntime 因此不再因 sink 抛错让 Turn 卡在 `running`。
+- 无迁移、不改线上契约与 `AgentRuntime` 端口；记录由同一条按 Turn 串行的 sink 链写入、先于 `turnEnded`，#493 的顺序保证不变。
+- 回归测试先写、修复前稳定失败：`turn-terminal.integration.test.ts`（真实 Postgres，用含 U+0000 的回答触发 `jsonb` 22P05：
+  AgentHostRuntime 链路落 `failed`、`report_turn` 路径不落 `completed`、已请求 Stop 时仍为 `interrupted` 且 `count: 2`）、
+  `event-sink.test.ts`（失败后提交记录并正常 resolve；两次记录都失败、数据库恢复后在结束事务里补写）。
+- 边界：insert 已提交但 COMMIT 回包丢失会误记为丢失（往安全方向偏）；三次写入都失败时 Turn 停在 `running`，由启动扫描结束为
+  `interrupted`。未做：NUL 等无法存入 `jsonb` 的内容是否入库前清洗（provenance 取舍）、`chat.metadata` / `TurnCompleted` 是否带失败原因
+  （改线上契约）。
+
+**控制台供应商表单与 Base URL 规则（#510，2026-10-09 合入）**
+
+- 表单：快速选择预设（Anthropic / OpenAI / DeepSeek / OpenRouter / Moonshot / DashScope / SiliconFlow，只收路径符合 `<base>/v1/…` 的厂商），
+  默认 id 用 pi 内置 provider 名（agent 的 models.json 只剩 id 能让 pi 识别厂商），`platform-extension/src/pi-provider-ids.test.ts` 按锁定的 pi 校验；
+  Base URL 失焦整理为源站并显示代理实际请求地址；密钥在表单里填，供应商建好后经 `PUT /providers/:id/secret` 写入，可勾选保存后立即测试；
+  环境变量名移到可选区并按输入规范化（粘进来的若是密钥本身则移到密钥栏）；提交按钮旁写"还差：…"。
+- `POST /admin/model-discovery`：一次上游 `GET /v1/models`，密钥去向沿用 R-23（表单密钥只发往表单上游；已存控制台密钥只在上游不变时用；
+  环境变量密钥只发往已配对上游，否则 409 `api_key_env_not_allowed`；都没有时 409 `credential_missing`），重定向算失败，错误文本先脱敏，
+  写 proxy 审计与内核审计 `platform.llm_provider_models_listed`。
+- `tool_call` 探测：OpenAI 两种 API 先发强制 `tool_choice`，上游 400/422 时不带 `tool_choice` 用同一指令重试一次，以重试结果为准；
+  401/404/429/5xx 不重试。仓库里只有 `provider-test.ts` 发 `tool_choice`，运行时只在调用方设置 `toolChoice` 时发，本仓库没有设置。
+- Base URL 规则：shared `upstreamBaseUrlProblem` / `LlmProviderUpstreamBaseUrlWireSchema`，只允许 http/https，不允许 userinfo、查询串、片段，
+  局域网主机允许（本地模型服务）；create / update / discovery 违规返回 400；已存的违规行仍加载，但不路由（404）、不测试（409
+  `upstream_base_url_invalid`）、不写进 models.json，llm-proxy 启动时 warn。所有拼 `<base><path>` 的地方（discovery、`/test`、路由、models.json）都经这条规则。
+- 遗留 138：上游响应体无字节上限、`provider-models.ts` 的 `headers.set` 在 try 之外。
+
+**大流量拉镜像移出维护窗口、验收不在主机源码构建平台镜像（#513，2026-10-09 合入，遗留 137）**
+
+- 约束：维护者 2026-10-09 定主机出网为长期约束（慢、会断，不再调优）。设计因此是：发版关键路径上不在主机源码构建；镜像在窗口前预拉并验签；必须联网的步骤单次限时、有界重试、明确失败。
+- 验收：`scripts/lib/accept-common.sh` 新增 `compose_image_of`（与 `pull-images.sh` 的 `local_name_of` 同一推导）与 `release_image_check`——发布镜像的 `org.opencontainers.image.revision` 必须等于检出 commit；没有发布标签的报 `source build`，`ACCEPT_REQUIRE_RELEASE_IMAGES=1`（`apply-release.sh --pull` 设置）时判 FAIL。`accept_s3.sh` / `demo.sh` 的 `preflight-collector-build` 改为 `preflight-collector-image`（只核对不构建）；`accept_s2.sh` 只构建三个裸 fixture，两个门由 `preflight-accept-s2-gate-image` 把 gate-host 发布镜像重打成 compose 名字（同 Dockerfile、同 context、无 build args，`--dry-run` 确认重打后 `up` 不构建）。
+- `pull-images.sh`：本机已有带 repo digest 的 `<registry>/nexttime-ai-<svc>:<tag>` 不重拉，照样按 digest 验签，并新增 revision = tag commit 的核对；pull 与验签各重试两次（15 s / 30 s），单次限时 `PULL_ATTEMPT_TIMEOUT`（默认 7200 s）/ `VERIFY_ATTEMPT_TIMEOUT`（默认 600 s）。`--prefetch`：只拉取 + 验签，另补拉目标 compose 里钉 digest 的第三方镜像、BuildKit frontend 与 fixture 基础镜像（只补缺失），单项失败不中断、最后列出；`--present`：不联网，全在 exit 0，缺失 exit 3。
+- `apply-release.sh`：`--prefetch vX.Y.Z` 用 `git show` 取目标 tag 的 `pull-images.sh` 跑 `--prefetch`，检出、在跑的栈、数据库一概不碰；`--pull` 在备份新鲜度、dump、检出之前问目标 tag 的 `--present`，没预拉完 `FAIL not-prefetched`（`--allow-long-pull` 例外，留 WARNING）；`--pull` 拉取或验签失败 `fail_before_up images`，不再回退源码构建（源码构建只在不带 `--pull` 时显式选择，staging 未发布 commit 走这条）；第 3 步 `git fetch` 限时 300 s、tag 已在本地时失败不致命；`docker/dockerfile:1.7` 已在就不拉。
+- `staging-rehearsal.sh`：每次预演对刚装好的 from 镜像跑目标版本的 `pull-images.sh --prefetch <from>`，要求全部"已在、不重拉"、验签通过、revision 正确（`STEP prefetch-probe ok`）；tag 目标先 `--prefetch` 再 `--pull`。预演 S4 只有 docker 门（无 RagFlow 上游），计数 17，比主机 22 少的是 RagFlow 门部分，属预期。
+- 窗口内仍要联网的：每个镜像按 digest 重新验签（刻意保留，不缓存验签结果）、S1 / S2 出网探针（被测功能）、sshd fixture 缓存缺失时的 `apk add`；验签离线化是待评估的想法（遗留 141）。
+- 残留与后续：S2 三个裸 fixture 与 fake-llm 仍在主机构建，sshd 的 `apk add` 层依赖构建缓存，fake-llm 不随发版重建（遗留 139）；控制台 update-feed 的 `applyCommand` 跑检出里的旧脚本、不提示 `--prefetch`（遗留 140，`packages/kernel/src/application/platform/updates.ts`）。
 
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
