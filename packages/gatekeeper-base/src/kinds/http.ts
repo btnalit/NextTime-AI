@@ -80,11 +80,21 @@ function renderPath(
   params: Record<string, unknown>,
 ): { path: string; used: Set<string> } {
   const used = new Set<string>();
-  const rendered = path.replace(/\{([^}]+)\}/g, (_match, name: string) => {
+  // `[^{}]`, not `[^}]`: a run of `{` with no `}` would otherwise be rescanned from every `{`
+  // (quadratic — the path comes from the target's OpenAPI document).
+  const rendered = path.replace(/\{([^{}]+)\}/g, (_match, name: string) => {
     used.add(name);
     return encodePathSegment(name, params[name]);
   });
   return { path: rendered, used };
+}
+
+/** `path` without its trailing `/`s — a loop, not `/\/+$/`, which rescans a run of `/` from each
+ *  of its characters when something other than `/` follows it. */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charAt(end - 1) === '/') end -= 1;
+  return path.slice(0, end);
 }
 
 /**
@@ -97,7 +107,7 @@ export function resolveBindingUrl(baseUrl: string, bindingPath: string): URL {
   const url = new URL(baseUrl);
   const queryAt = bindingPath.indexOf('?');
   const pathPart = queryAt === -1 ? bindingPath : bindingPath.slice(0, queryAt);
-  const basePath = url.pathname.replace(/\/+$/, '');
+  const basePath = withoutTrailingSlashes(url.pathname);
   url.pathname = `${basePath}/${pathPart.replace(/^\/+/, '')}`;
   url.search = queryAt === -1 ? '' : bindingPath.slice(queryAt + 1);
   url.hash = '';

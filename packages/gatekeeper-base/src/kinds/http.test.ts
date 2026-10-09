@@ -226,6 +226,24 @@ describe('HttpTransport', () => {
       expect(resolveBindingUrl('https://h.test/base/', 'a?type=local').toString()).toBe(
         'https://h.test/base/a?type=local',
       );
+      expect(resolveBindingUrl('https://h.test/base///', '/a').toString()).toBe(
+        'https://h.test/base/a',
+      );
+    });
+
+    it('a binding path or base URL shaped to backtrack is handled in linear time', async () => {
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+      const transport = new HttpTransport({
+        baseUrl: `https://host.test/${'/'.repeat(200_000)}x`,
+        fetchImpl,
+      });
+      const braces: Operation = {
+        ...observeOperation,
+        binding: { kind: 'http', method: 'GET', path: `/${'{'.repeat(200_000)}` },
+      };
+      const started = performance.now();
+      await transport.invoke(braces, {}, {});
+      expect(performance.now() - started).toBeLessThan(250);
     });
   });
 
