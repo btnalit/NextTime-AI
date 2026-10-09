@@ -166,9 +166,7 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
     >
       <summary>
         <Icon name="chevron-right" size="s" className="icon-chevron" />
-        <span>
-          {t(`本轮调用了 ${records.length} 个工具`, `${records.length} tool call(s) this turn`)}
-        </span>
+        <span>{t(`调用了 ${records.length} 个工具`, `${records.length} tool call(s)`)}</span>
         {failed > 0 ? (
           <span className="chip chip-s chip-danger">
             {t(`${failed} 个失败`, `${failed} failed`)}

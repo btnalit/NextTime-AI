@@ -810,7 +810,9 @@ describe('ChatPage persisted tool calls', () => {
 
     const group = await screen.findByTestId('tool-call-group');
     expect(screen.getAllByTestId('tool-call-group')).toHaveLength(1);
-    expect(group.textContent).toContain('本轮调用了 2 个工具');
+    expect(group.textContent).toContain('调用了 2 个工具');
+    // A turn split by text renders several groups — none claims to be the whole turn.
+    expect(group.textContent).not.toContain('本轮');
     expect(group.textContent).toContain('1 个失败');
     expect((group as HTMLDetailsElement).open).toBe(true);
     // Reported by the agent; the audit log is the authoritative record.
