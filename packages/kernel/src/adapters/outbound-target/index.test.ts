@@ -61,6 +61,29 @@ describe('adapters/outbound-target (R-27)', () => {
     expect(() => outboundTargetPolicyFromEnv({ NEXTTIME_SUBNET_CONTROL: 'not-a-cidr' })).toThrow();
   });
 
+  // fix/egress-suffix-match: the allow-side rule is strict, so `.x` / `*.x` used to be silently
+  // inert here; it is refused at construction now (never widened into "x and its subdomains").
+  it('refuses an allow-host entry that could never match, naming the variable and the entry', () => {
+    for (const entry of [
+      '.lab.example',
+      '*.lab.example',
+      'http://lab.example',
+      'lab.example:8443',
+    ]) {
+      expect(() => outboundTargetPolicyFromEnv({ NEXTTIME_CONNECTION_ALLOW_HOSTS: entry })).toThrow(
+        `NEXTTIME_CONNECTION_ALLOW_HOSTS entry "${entry}"`,
+      );
+    }
+    expect(() =>
+      outboundTargetPolicyFromEnv({ NEXTTIME_CONNECTION_FIXTURE_HOSTS: 'accept-s2-mcp,.bad' }),
+    ).toThrow('NEXTTIME_CONNECTION_FIXTURE_HOSTS entry ".bad"');
+    expect(
+      outboundTargetPolicyFromEnv({
+        NEXTTIME_CONNECTION_ALLOW_HOSTS: 'lab.example,203.0.113.9,::1',
+      }).allowHosts,
+    ).toEqual(['lab.example', '203.0.113.9', '::1']);
+  });
+
   it('throws OutboundTargetRefusedError naming the field and the host, never resolving a compose name', async () => {
     const resolve = vi.fn(async () => [quad(10, 77, 0, 9)]);
     const guard = createOutboundTargetGuard({

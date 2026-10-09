@@ -5,6 +5,7 @@ import {
   type OutboundTargetResolver,
   decideOutboundTarget,
   describeOutboundTargetRefusal,
+  hostPatternProblem,
   parseCidr,
 } from '@nexttime/shared';
 
@@ -19,7 +20,12 @@ import {
  *     test, which then simply has no subnet rule; a malformed value throws at construction, never
  *     a rule that quietly turned itself off.
  *   - `NEXTTIME_CONNECTION_ALLOW_HOSTS` — optional, comma-separated: hosts an operator allows as a
- *     self-connected gate even though they live on the platform's networks.
+ *     self-connected gate even though they live on the platform's networks. A name matches itself
+ *     and its subdomains; an IP literal only itself. An entry that could never match — notably a
+ *     leading `.` / `*.` (fix/egress-suffix-match: the allow-side rule is strict, so such an entry
+ *     used to be silently inert) — throws at construction, like a malformed subnet. It is refused
+ *     rather than read as the bare name, because widening an allow-list entry that has never
+ *     matched would open the escape hatch for names nobody has seen it open for.
  *   - `NEXTTIME_CONNECTION_FIXTURE_HOSTS` — a constant the compose file sets: the acceptance
  *     fixtures (`accept-s2-*`) `scripts/accept_s2.sh` / `drill-add-gatekeeper.sh` connect through
  *     `create_connection`. Allowing them permanently grants nothing — they resolve only while their
@@ -68,12 +74,17 @@ export function outboundTargetPolicyFromEnv(
   const subnets = [env.NEXTTIME_SUBNET_CONTROL, env.NEXTTIME_SUBNET_WORKERS]
     .map((value) => value?.trim())
     .filter((value): value is string => value !== undefined && value.length > 0);
+  const allowHosts: string[] = [];
+  for (const name of ['NEXTTIME_CONNECTION_ALLOW_HOSTS', 'NEXTTIME_CONNECTION_FIXTURE_HOSTS']) {
+    for (const entry of splitList(env[name])) {
+      const problem = hostPatternProblem(entry);
+      if (problem) throw new Error(`${name} entry "${entry}" ${problem}`);
+      allowHosts.push(entry);
+    }
+  }
   return {
     platformSubnets: subnets.map((cidr) => parseCidr(cidr)),
-    allowHosts: [
-      ...splitList(env.NEXTTIME_CONNECTION_ALLOW_HOSTS),
-      ...splitList(env.NEXTTIME_CONNECTION_FIXTURE_HOSTS),
-    ],
+    allowHosts,
   };
 }
 

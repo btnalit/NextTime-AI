@@ -3,6 +3,8 @@ import {
   type CidrRange,
   INTERNAL_TOKEN_FILE_ENV,
   InternalTokenError,
+  hostPatternProblem,
+  normalizeDenyHostPattern,
   normalizeInternalToken,
   parseCidr,
   resolveInternalTokenFile,
@@ -29,7 +31,9 @@ export const DEFAULT_DENY_HOSTS = [
  * on a host whose resolver is a transparent fake-IP proxy (`EGRESS_TRUSTED_RESOLVED_CIDRS`), every
  * name — a LAN host's too — is answered from the trusted range, so for such names the name itself
  * is the only remaining signal that the target is not public. Operators add their own site
- * suffixes with `EGRESS_DENY_HOST_SUFFIXES`.
+ * suffixes with `EGRESS_DENY_HOST_SUFFIXES` — a bare name (`corp.example`) already denies the name
+ * and every subdomain; a leading `.` / `*.` is accepted as the same thing (policy.ts
+ * `matchesDenySuffix`, fix/egress-suffix-match: before that, such an entry silently denied nothing).
  */
 export const DEFAULT_DENY_SUFFIXES = [
   'localhost',
@@ -100,6 +104,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
     ...DEFAULT_DENY_SUFFIXES,
     ...splitList(env.EGRESS_DENY_HOST_SUFFIXES),
   ];
+  // An entry that can never match a host even after `.` / `*.` canonicalization (a URL, a port, a
+  // CIDR, a wildcard elsewhere) denies nothing. Said loudly rather than dropped or fatal: the rest
+  // of the list still applies, and refusing to start would cut every Worker's egress over one typo.
+  const unmatchableDeny = denyHosts.flatMap((entry) => {
+    const problem = hostPatternProblem(normalizeDenyHostPattern(entry));
+    return problem ? [{ entry, problem }] : [];
+  });
+  if (unmatchableDeny.length > 0) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        msg: 'egress-proxy: DENY_HOSTS / EGRESS_DENY_HOST_SUFFIXES entries that can never match a host — they deny nothing; fix them',
+        entries: unmatchableDeny,
+      }),
+    );
+  }
 
   const platformSubnets: CidrRange[] = [];
   const control = parseSubnetEnv(env.NEXTTIME_SUBNET_CONTROL, 'NEXTTIME_SUBNET_CONTROL');

@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalizeIpLiteral,
   classifyAddress,
+  hostPatternProblem,
   isInCidr,
   isIpLiteral,
+  matchesDenySuffix,
+  matchesSuffix,
   normalizeAddress,
+  normalizeDenyHostPattern,
   parseCidr,
   parseIPv4,
   parseIPv4Literal,
@@ -265,5 +269,60 @@ describe('classifyAddress', () => {
     it('accepts the embedded-IPv4 dotted form too (parseIPv6 already supports it)', () => {
       expect(classifyAddress('64:ff9b::127.0.0.1', noSubnets)).toBe('loopback');
     });
+  });
+});
+
+describe('hostname suffix patterns (fix/egress-suffix-match)', () => {
+  it('matchesSuffix (allow side) is strict: a bare name matches itself and subdomains, `.x` / `*.x` never match', () => {
+    expect(matchesSuffix('api.example.com', ['example.com'])).toBe(true);
+    expect(matchesSuffix('example.com', ['example.com'])).toBe(true);
+    expect(matchesSuffix('api.example.com', ['.example.com'])).toBe(false);
+    expect(matchesSuffix('example.com', ['.example.com'])).toBe(false);
+    expect(matchesSuffix('api.example.com', ['*.example.com'])).toBe(false);
+  });
+
+  it('matchesDenySuffix (deny side) treats `.x` and `*.x` as the bare name', () => {
+    for (const pattern of ['example.com', '.example.com', '*.example.com', '*.EXAMPLE.com.']) {
+      expect(matchesDenySuffix('example.com', [pattern]), pattern).toBe(true);
+      expect(matchesDenySuffix('api.example.com', [pattern]), pattern).toBe(true);
+      expect(matchesDenySuffix('notexample.com', [pattern]), pattern).toBe(false);
+    }
+    expect(matchesDenySuffix('example.com', undefined)).toBe(false);
+    expect(matchesDenySuffix('example.com', ['', '.', '*.'])).toBe(false);
+  });
+
+  it('normalizeDenyHostPattern strips exactly one leading `*.` or `.`', () => {
+    expect(normalizeDenyHostPattern(' *.Corp.Example. ')).toBe('corp.example');
+    expect(normalizeDenyHostPattern('.corp.example')).toBe('corp.example');
+    expect(normalizeDenyHostPattern('corp.example')).toBe('corp.example');
+    expect(normalizeDenyHostPattern('..corp.example')).toBe('.corp.example');
+    expect(normalizeDenyHostPattern('*.*.corp.example')).toBe('*.corp.example');
+  });
+
+  it('hostPatternProblem: null for a matchable name or an IP literal, a reason otherwise', () => {
+    for (const ok of [
+      'example.com',
+      'Example.COM.',
+      'intra',
+      'a_b-c.example',
+      '203.0.113.7',
+      '::1',
+    ]) {
+      expect(hostPatternProblem(ok), ok).toBeNull();
+    }
+    expect(hostPatternProblem('.example.com')).toContain('write the bare name "example.com"');
+    expect(hostPatternProblem('*.example.com')).toContain('starts with "*."');
+    expect(hostPatternProblem('a.*.example.com')).toContain('wildcards');
+    expect(hostPatternProblem('')).toBe('is empty');
+    for (const bad of [
+      'http://example.com',
+      'example.com:443',
+      '198.51.100.0/24',
+      'a b',
+      '[::1]',
+      'a..b',
+    ]) {
+      expect(hostPatternProblem(bad), bad).toContain('not a host name');
+    }
   });
 });

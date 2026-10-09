@@ -72,6 +72,21 @@ describe('loadConfig', () => {
     ).toEqual(['kernel', ...DEFAULT_DENY_SUFFIXES, 'corp.example']);
   });
 
+  it('keeps a `.x` / `*.x` deny suffix (policy canonicalizes it) and logs entries that can never match', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const config = loadConfig({ EGRESS_DENY_HOST_SUFFIXES: '.corp.example,*.intra' });
+    expect(config.denyHosts.slice(-2)).toEqual(['.corp.example', '*.intra']);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    loadConfig({ EGRESS_DENY_HOST_SUFFIXES: 'https://corp.example,corp.example:443,ok.example' });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const line = JSON.parse(String(errorSpy.mock.calls[0]?.[0])) as {
+      entries: { entry: string }[];
+    };
+    expect(line.entries.map((e) => e.entry)).toEqual(['https://corp.example', 'corp.example:443']);
+    errorSpy.mockRestore();
+  });
+
   it('parses platform subnets from CIDR env vars', () => {
     const config = loadConfig({
       NEXTTIME_SUBNET_CONTROL: '198.51.100.0/24',

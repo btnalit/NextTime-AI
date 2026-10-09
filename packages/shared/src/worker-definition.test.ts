@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EgressDenyListSchema,
   EntryWorkerDefinitionContentSchema,
   WorkerWorkerDefinitionContentSchema,
   workerDefinitionContentSchemaFor,
@@ -101,6 +102,66 @@ describe('worker-definition content schemas', () => {
         egressDeny: ['blocked.example.com'],
       });
       expect(result.success).toBe(true);
+    });
+  });
+
+  // fix/egress-suffix-match: the documented `.suffix` form was a silent no-op in the egress proxy;
+  // now it parses to the bare name, and anything the proxy could never match is refused.
+  describe('EgressDenyListSchema (both kinds)', () => {
+    it('parses a leading `.` or `*.` to the bare name (lower-cased, trailing root dot dropped)', () => {
+      expect(
+        EgressDenyListSchema.parse([
+          '.internal.example',
+          '*.Internal.Example.',
+          'blocked.example.com',
+          'intra',
+        ]),
+      ).toEqual(['internal.example', 'internal.example', 'blocked.example.com', 'intra']);
+    });
+
+    it.each([
+      ['*', 'wildcards'],
+      ['foo.*.example', 'wildcards'],
+      ['..internal.example', 'starts with'],
+      ['https://blocked.example.com', 'not a host name'],
+      ['blocked.example.com:443', 'not a host name'],
+      ['blocked.example.com/path', 'not a host name'],
+      ['198.51.100.0/24', 'not a host name'],
+      ['bad host.example', 'not a host name'],
+      ['例え.jp', 'not a host name'],
+      ['203.0.113.7', 'IP address'],
+      ['2001:db8::1', 'IP address'],
+      ['.', 'empty'],
+    ])('refuses %j with a reason naming the entry, on the field itself', (entry, reason) => {
+      const result = EgressDenyListSchema.safeParse(['ok.example', entry]);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0]?.path).toEqual([]);
+        expect(result.error.issues[0]?.message).toContain(`"${entry}"`);
+        expect(result.error.issues[0]?.message).toContain(reason);
+      }
+    });
+
+    it('both content schemas use it: parsed output is canonical, a bad entry fails the definition', () => {
+      const entry = EntryWorkerDefinitionContentSchema.safeParse({
+        systemPrompt: 'hi',
+        capabilities: [],
+        egressDeny: ['.internal.example', '*.corp.example'],
+      });
+      expect(entry.success && entry.data.egressDeny).toEqual(['internal.example', 'corp.example']);
+      const worker = WorkerWorkerDefinitionContentSchema.safeParse({
+        systemPrompt: 'hi',
+        egressDeny: ['.internal.example'],
+      });
+      expect(worker.success && worker.data.egressDeny).toEqual(['internal.example']);
+      const bad = WorkerWorkerDefinitionContentSchema.safeParse({
+        systemPrompt: 'hi',
+        egressDeny: ['*.*.example'],
+      });
+      expect(bad.success).toBe(false);
+      // The path a form keys its field errors by (packages/web catalog.ts fieldErrorsFromIssues).
+      expect(bad.success ? null : bad.error.issues[0]?.path).toEqual(['egressDeny']);
     });
   });
 

@@ -1,4 +1,5 @@
 import { type FSWatcher, readFileSync, watch } from 'node:fs';
+import { hostPatternProblem, normalizeDenyHostPattern } from '@nexttime/shared';
 import { z } from 'zod';
 import type { SourcePolicy } from './policy.js';
 
@@ -30,8 +31,51 @@ export interface SourceMap {
   close(): void;
 }
 
+/** One `allow` / `deny` entry that can never match a request host (`hostPatternProblem`). */
+export interface SourcePatternProblem {
+  readonly clientIp: string;
+  readonly sourceId: string;
+  readonly list: 'allow' | 'deny';
+  readonly entry: string;
+  readonly problem: string;
+}
+
+/**
+ * fix/egress-suffix-match: the entries of a loaded map that can never match. `deny` is checked
+ * after `normalizeDenyHostPattern` — `.x` / `*.x` deny like `x` there (policy.ts
+ * `matchesDenySuffix`), so only a form that is still unmatchable is reported. `allow` is checked as
+ * written: policy.ts matches it strictly, so a `.x` / `*.x` allow entry never matches and only
+ * narrows (fail-closed) — it is reported, never rewritten into a match (that would widen egress),
+ * and never makes the whole file fail to load (a rejected file freezes the map: new containers'
+ * registrations would stop applying while a stale IP kept a departed container's policy).
+ * No code path writes `allow` today (worker-supervisor writes only `deny`), so a reported `allow`
+ * entry is a hand edit.
+ */
+export function findSourcePatternProblems(
+  entries: Readonly<Record<string, SourcePolicy>>,
+): SourcePatternProblem[] {
+  const problems: SourcePatternProblem[] = [];
+  for (const [clientIp, source] of Object.entries(entries)) {
+    for (const entry of source.allow ?? []) {
+      const problem = hostPatternProblem(entry);
+      if (problem)
+        problems.push({ clientIp, sourceId: source.sourceId, list: 'allow', entry, problem });
+    }
+    for (const entry of source.deny ?? []) {
+      const problem = hostPatternProblem(normalizeDenyHostPattern(entry));
+      if (problem)
+        problems.push({ clientIp, sourceId: source.sourceId, list: 'deny', entry, problem });
+    }
+  }
+  return problems;
+}
+
 export interface CreateSourceMapOptions {
   onError?: (err: unknown) => void;
+  /** Called after a load whose unmatchable entries differ from the previous load's (so a busy
+   *  host rewriting the file per container event does not repeat the same report). Defaults to
+   *  one `error` log line. */
+  onPatternProblems?: (problems: readonly SourcePatternProblem[]) => void;
 }
 
 /** leftover 61: `egress-map.ts`'s writer is a plain, non-atomic `writeFileSync` (open + truncate +
@@ -70,13 +114,32 @@ export function createSourceMap(
       );
     });
 
+  const onPatternProblems =
+    options.onPatternProblems ??
+    ((problems: readonly SourcePatternProblem[]) => {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'egress-proxy: source map has allow/deny entries that can never match a host — an allow entry stays inert (fail-closed), a deny entry denies nothing; fix them',
+          problems,
+        }),
+      );
+    });
+
   let erroring = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastPatternReport = '';
 
   function readOnce(): void {
     const raw = readFileSync(filePath as string, 'utf8');
     entries = SourceMapFileSchema.parse(JSON.parse(raw));
     erroring = false;
+    const problems = findSourcePatternProblems(entries);
+    const report = JSON.stringify(problems);
+    if (report !== lastPatternReport) {
+      lastPatternReport = report;
+      if (problems.length > 0) onPatternProblems(problems);
+    }
   }
 
   function load(): void {

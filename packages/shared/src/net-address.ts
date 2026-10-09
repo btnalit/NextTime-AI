@@ -403,7 +403,15 @@ export function normalizeHostname(hostname: string): string {
 
 /**
  * Whether `hostname` matches any pattern in `patterns` as a suffix: an exact match, or the
- * pattern preceded by a `.` (so `deny: ["example.com"]` also blocks `sub.example.com`).
+ * pattern preceded by a `.` (so `deny: ["example.com"]` also blocks `sub.example.com`). A bare
+ * name is therefore already "this domain and every subdomain"; there is no other pattern syntax.
+ *
+ * Strict on purpose — this is the **allow-side** rule (an egress source's `allow` list, the
+ * kernel's `NEXTTIME_CONNECTION_ALLOW_HOSTS`): a pattern written as `.example.com` or
+ * `*.example.com` never matches here, so it can only ever fail closed. Deny lists go through
+ * `matchesDenySuffix` below, which accepts those spellings. Callers that load an allow list check
+ * entries with `hostPatternProblem` — the kernel refuses one at startup, the egress proxy's source
+ * map logs it — so such an entry is never silently inert.
  */
 export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false;
@@ -414,6 +422,56 @@ export function matchesSuffix(hostname: string, patterns: readonly string[] | un
     if (host === pattern || host.endsWith(`.${pattern}`)) return true;
   }
   return false;
+}
+
+/**
+ * A deny-list entry in its canonical form: `normalizeHostname`, then one leading `*.` or `.`
+ * removed (`*.Corp.Example` / `.corp.example` → `corp.example`). Both spellings were documented or
+ * natural for "this domain and its subdomains" yet never matched `matchesSuffix`, which made every
+ * such deny entry a silent no-op (fix/egress-suffix-match). Mapping them to the bare name can only
+ * deny more, never less: `*.x` also covers the apex `x` itself, a strict superset of what the
+ * wildcard alone would name. Never apply this to an allow list — there it would widen egress.
+ */
+export function normalizeDenyHostPattern(raw: string): string {
+  const pattern = normalizeHostname(raw);
+  if (pattern.startsWith('*.')) return pattern.slice(2);
+  if (pattern.startsWith('.')) return pattern.slice(1);
+  return pattern;
+}
+
+/** `matchesSuffix` for a **deny** list: every entry is canonicalized by `normalizeDenyHostPattern`
+ *  first, so `.x` and `*.x` deny `x` and every subdomain, like the bare `x`. */
+export function matchesDenySuffix(
+  hostname: string,
+  patterns: readonly string[] | undefined,
+): boolean {
+  if (!patterns || patterns.length === 0) return false;
+  return matchesSuffix(hostname, patterns.map(normalizeDenyHostPattern));
+}
+
+/** One DNS name as a request carries it: ASCII labels of letters, digits, `-` or `_`, joined by
+ *  single dots — no wildcard, scheme, port, path, CIDR, whitespace or non-ASCII (an IDN reaches
+ *  the proxy as its `xn--` form). */
+const HOST_PATTERN = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
+
+/**
+ * Why `raw` can never match a request host under `matchesSuffix`, or `null` when it can. Run on an
+ * allow-list entry as written, and on a deny-list entry after `normalizeDenyHostPattern`. An IP
+ * literal returns `null` (it matches only that literal target, exactly; whether a list accepts IPs
+ * at all is the list's own rule). Phrased to follow the entry in a message: `"x" ${problem}`.
+ */
+export function hostPatternProblem(raw: string): string | null {
+  const pattern = normalizeHostname(raw);
+  if (pattern === '') return 'is empty';
+  if (isIpLiteral(pattern)) return null;
+  if (pattern.startsWith('*.') || pattern.startsWith('.')) {
+    return `starts with "${pattern.startsWith('*.') ? '*.' : '.'}" — write the bare name "${normalizeDenyHostPattern(pattern)}", which already matches that domain and every subdomain`;
+  }
+  if (pattern.includes('*')) return 'contains "*" — wildcards are not supported';
+  if (!HOST_PATTERN.test(pattern)) {
+    return 'is not a host name (letters, digits, "-" or "_" labels joined by single dots; no scheme, port, path, CIDR or spaces; an internationalized name in its xn-- form)';
+  }
+  return null;
 }
 
 /** Bare hostnames (no dot) can't be real public domains — they're internal/Docker DNS names. */
