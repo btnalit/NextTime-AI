@@ -623,37 +623,52 @@ graph 组新增只读能力 `list_facts`（按链接类型列出工作区的活�
 
 **应用后**（窗口内，S1–S4 之后）三项核对，结果记 `docs/private/`。
 
-**A. Handle 历史命中**：v0.43.0 及之前的落库回复、Handle 通道审计参数、Task、Worker 写入的 Facts / evidence / decisions 都没有脱敏，可能含入口 Handle。在主机检出目录下执行，只出计数与最新时间，不打印任何值：
+**A. Handle 历史命中**：v0.43.0 及之前，agent 写出的内容都没有脱敏，可能含 Handle；#520 之后，Worker 提议与其他 `propose_*` / `request_action` 写入的内容仍原样保留（遗留 157）。所以除了聊天、审计、Task、Fact / evidence / decisions，还要扫 agent 能写入、以后还会被使用的位置：Skill 正文（发布后注入以后的 agent 上下文）、Procedure 步骤、ActionRequest 参数（批准后发往目标系统）、observations、待注入的上下文条目。这条正则匹配**所有** Handle，不只是入口 Handle：控制台自助签发的最长 30 天，服务 Handle 最长 365 天。所以不能看行的时间，要按每个 Handle 自己的 `jti` 查它是否仍有效、未吊销。在主机检出目录下执行；经 SSH 时与 §3.13 一样，把 heredoc 通过管道交给 ssh（不要加 `</dev/null`，stdin 就是 SQL）。输出只有计数和最晚过期时间，不打印 Handle 或 `jti`：
 
 ```sh
 docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
 begin transaction read only;
-with p as (select 'eyJhbGciOiJFZERTQSJ9\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}'::text as re)
-select 'chat_messages' as location, count(*) as rows, max(created_at) as newest
-  from chat_messages, p where content::text ~ p.re
-union all select 'audit_records', count(*), max(created_at)
-  from audit_records, p where payload::text ~ p.re
-union all select 'tasks', count(*), max(updated_at)
-  from tasks, p where coalesce(result::text, '') ~ p.re or input::text ~ p.re
-union all select 'activities', count(*), max(created_at)
-  from activities, p where metadata::text ~ p.re
-union all select 'objects', count(*), max(created_at)
-  from objects, p where properties::text ~ p.re
-union all select 'links', count(*), max(recorded_at)
-  from links, p where properties::text ~ p.re
-union all select 'evidence', count(*), max(created_at)
-  from evidence, p where content::text ~ p.re
-union all select 'decisions', count(*), max(created_at)
-  from decisions, p where coalesce(summary, '') || coalesce(rationale::text, '') ~ p.re;
+with p as (select 'eyJhbGciOiJFZERTQSJ9\.([A-Za-z0-9_-]{6,})\.[A-Za-z0-9_-]{6,}'::text as re),
+src(location, t) as (
+            select 'chat_messages', content::text from chat_messages
+  union all select 'audit_records', payload::text from audit_records
+  union all select 'tasks', input::text || ' ' || coalesce(result::text, '') from tasks
+  union all select 'activities', metadata::text from activities
+  union all select 'objects', properties::text from objects
+  union all select 'links', properties::text from links
+  union all select 'evidence', content::text from evidence
+  union all select 'decisions', coalesce(summary, '') || ' ' || coalesce(rationale::text, '') from decisions
+  union all select 'observations', content::text from observations
+  union all select 'skills', description || ' ' || markdown from skills
+  union all select 'procedures', description || ' ' || steps::text from procedures
+  union all select 'action_requests', params::text from action_requests
+  union all select 'pending_context_items', payload::text from pending_context_items
+), seg as (
+  select src.location, (regexp_matches(src.t, p.re, 'g'))[1] as s from src, p
+), jtis as (
+  select distinct location,
+         substring(encode(decode(rpad(translate(s, '-_', '+/'), (length(s) + 3) / 4 * 4, '='), 'base64'), 'escape')
+                   from '"jti":"([0-9a-f-]{36})"') as jti
+  from seg where length(s) % 4 <> 1
+)
+select j.location,
+       count(*) as distinct_handles,
+       count(*) filter (where h.jti is not null and h.revoked_at is null and h.expires_at > now()) as live_unrevoked,
+       count(*) filter (where h.jti is null) as not_found,
+       max(h.expires_at) filter (where h.revoked_at is null) as latest_expiry
+from jtis j left join capability_handles h on h.jti::text = j.jti
+where j.jti is not null
+group by j.location
+order by j.location;
 rollback;
 SQL
 ```
 
-`eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。全为 0 即无事。入口 Handle 默认 24 小时过期（除非 `.env` 改大了 `ENTRY_HANDLE_TTL_SECONDS`），只有 `newest` 仍在有效期内的命中才需要处理：按 `jti` 吊销（`capability_handles.revoked_at`）是改主机数据的操作，须维护者明确同意，不在本手册里自动做。历史行是否清洗另行决定（审计只追加）。
+`eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。0 行，或每行 `live_unrevoked = 0`，即无事。中间段解不出 `jti` 的（截断、损坏）直接跳过，不会让事务中止。有 `live_unrevoked > 0` 时，找维护者决定是否吊销：按 `jti` 吊销（`capability_handles.revoked_at`，每次调用都检查）是改主机数据的操作，须维护者明确同意，本手册不自动做。历史行是否清洗另行决定（审计只追加）。
 
 **B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，历史里能看到这一轮的工具调用和结果。
 
-**C. Handle 不出现在输出里**：让 agent 运行 `env`，实时流、刷新后的历史、审计页里都不出现 Handle（应为 `[redacted]`）。
+**C. 输出里的 Handle 被替换**：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页里都应显示为 `[redacted]`。
 
 ## 4. Hotfix 流程
 
