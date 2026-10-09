@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createProviderKeyResolver, loadProviderKeyFiles } from './provider-keys.js';
+import {
+  checkProviderKey,
+  createProviderKeyResolver,
+  loadProviderKeyFiles,
+  reportUnusableProviderKeys,
+} from './provider-keys.js';
 
 /** R-24: provider keys come from files (one per `api_key_env` name), the env var only as a
  *  deprecated fallback that keeps an un-migrated host working. */
@@ -84,5 +89,38 @@ describe('provider key files (R-24)', () => {
       log: () => undefined,
     });
     expect(resolve('LLM_KEY_STORE')).toBeUndefined();
+  });
+});
+
+describe('checkProviderKey / reportUnusableProviderKeys (review of #521)', () => {
+  it('trims, then accepts printable ASCII only', () => {
+    expect(checkProviderKey('  sk-abc123\r\n')).toEqual({ kind: 'ok', key: 'sk-abc123' });
+    expect(checkProviderKey(undefined)).toEqual({ kind: 'missing' });
+    expect(checkProviderKey(' \n')).toEqual({ kind: 'missing' });
+    expect(checkProviderKey('sk-abc def')).toEqual({ kind: 'invalid' });
+    expect(checkProviderKey('sk-abc\u3000def')).toEqual({ kind: 'invalid' });
+    expect(checkProviderKey('sk-abc\ndef')).toEqual({ kind: 'invalid' });
+    expect(checkProviderKey('sk-密钥')).toEqual({ kind: 'invalid' });
+  });
+
+  it('warns once per provider whose resolved key is unusable, naming the source, never the value', () => {
+    const lines: string[] = [];
+    const reported = reportUnusableProviderKeys(
+      [
+        { id: 'good', apiKeyEnv: 'GOOD_KEY' },
+        { id: 'bad-env', apiKeyEnv: 'BAD_KEY' },
+        { id: 'bad-console', apiKeyEnv: 'GOOD_KEY' },
+        { id: 'none', apiKeyEnv: undefined },
+      ],
+      (id) => (id === 'bad-console' ? 'sk-console\u3000secret-0123456789' : undefined),
+      (name) => (name === 'BAD_KEY' ? 'sk-env secret-0123456789' : 'sk-good'),
+      (line) => lines.push(line),
+    );
+    expect(reported).toEqual(['bad-env', 'bad-console']);
+    expect(lines.map((line) => JSON.parse(line))).toMatchObject([
+      { level: 'warn', providerId: 'bad-env', source: 'env', envVar: 'BAD_KEY' },
+      { level: 'warn', providerId: 'bad-console', source: 'console', envVar: null },
+    ]);
+    expect(lines.join('\n')).not.toContain('0123456789');
   });
 });

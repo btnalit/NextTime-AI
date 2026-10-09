@@ -16,7 +16,11 @@ import {
 } from './gen-models-json.js';
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
-import { createProviderKeyResolver, loadProviderKeyFiles } from './provider-keys.js';
+import {
+  createProviderKeyResolver,
+  loadProviderKeyFiles,
+  reportUnusableProviderKeys,
+} from './provider-keys.js';
 import { listUpstreamModels } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import { runProviderTest } from './provider-test.js';
@@ -178,6 +182,18 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
       }),
     );
   }
+
+  // A key no HTTP header can carry fails every call — say so at startup, once per provider,
+  // without the value (provider-keys.ts `reportUnusableProviderKeys`). Never blocks startup.
+  reportUnusableProviderKeys(
+    catalog.resolve().map((provider) => ({
+      id: provider.id,
+      apiKeyEnv: provider.config.api_key_env,
+    })),
+    (providerId) => keyStore.get(providerId),
+    resolveApiKey,
+    log,
+  );
 
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(

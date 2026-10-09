@@ -113,6 +113,11 @@ export const LlmProviderWireSchema = z
      *  value; see `credentialSource` for which one. */
     credentialPresent: z.boolean(),
     credentialSource: LlmProviderCredentialSourceWireSchema,
+    /** `true` when the credential that resolves (`credentialSource`) contains a character an HTTP
+     *  header cannot carry — a key stored before the console checked it, or an env / file key —
+     *  so every call with it fails (llm-proxy answers 502 `upstream_key_invalid`). Absent or
+     *  `false` otherwise. Never the value. */
+    credentialInvalid: z.boolean().optional(),
     enabled: z.boolean(),
     /** `file`: from the operator-managed `llm-providers.yaml` (read-only base). `store`: from
      *  llm-proxy's own `providers.json`, written through this API. */
@@ -219,6 +224,18 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+/** True when every character of `value` is printable ASCII other than the space (0x21–0x7E) —
+ *  the only characters a provider key is made of, and all an HTTP header carries as-is. A pasted
+ *  full-width character or an inner space would otherwise be stored and then fail every call with
+ *  a header error (STATUS leftover 138). Exported so the console checks the field the same way. */
+export function isHeaderSafeProviderKey(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
 /** S7-A: `PUT /providers/:id/secret` (set/replace) and `POST /providers/:id/secret` (alias, kept
  *  for the original design's route — plan §6/§12). `.trim()` runs during parsing so the stored
  *  value is exactly what the store persists; the control-character refine catches a pasted
@@ -232,7 +249,8 @@ export const LlmProviderSecretInputWireSchema = z
       .trim()
       .min(1)
       .max(LLM_PROVIDER_SECRET_MAX_LENGTH)
-      .refine((value) => !hasControlCharacter(value), 'key must not contain control characters'),
+      .refine((value) => !hasControlCharacter(value), 'key must not contain control characters')
+      .refine(isHeaderSafeProviderKey, 'key must be printable ASCII without spaces'),
   })
   .strict();
 export type LlmProviderSecretInputWire = z.infer<typeof LlmProviderSecretInputWireSchema>;
@@ -258,6 +276,7 @@ export const LlmProviderModelDiscoveryInputWireSchema = z
       .min(1)
       .max(LLM_PROVIDER_SECRET_MAX_LENGTH)
       .refine((value) => !hasControlCharacter(value), 'key must not contain control characters')
+      .refine(isHeaderSafeProviderKey, 'key must be printable ASCII without spaces')
       .optional(),
     apiKeyEnv: LlmProviderApiKeyEnvWireSchema.optional(),
   })

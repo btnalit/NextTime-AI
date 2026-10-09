@@ -3836,6 +3836,26 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
 - e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
 
+**本轮工具调用落库、agent 输出密钥脱敏与 `graph_overview`（#520，2026-10-09 合入；控制台审计 P1 / P2 的内核侧）**
+
+- 工具调用记录：shared 新增 `ToolCallMessageContentSchema`（`kind: 'tool_call'`：工具名、`toolCallId`、状态 `done` / `failed` / `not_finished`、参数与结果预览及 `truncated` / `redactedValues`、内核收到开始 / 结束事件的时间）。`event-sink.ts` 按 Turn 记住已开始的调用，结束或 Turn 结束时经 `service.ts` 的 `insertToolCallMessage` 写一条 `role='tool'` 消息（`chat_messages.role` 本来允许 `'tool'`，无迁移），在 chat 序号锁下按 `(turn_id, toolCallId)` 去重，先写的为准，`not_finished` 之后到达的结束事件不改写；每 Turn 至多 200 条，写入失败只记日志、不让 Turn 失败；最多同时跟踪 1000 个 Turn，超出淘汰空闲最久的并记日志。语义：agent 运行时对自己一次调用的报告，与 assistant 文本同一可信级别；能力调用的权威记录仍是审计。只有内核 sink 写，agent 读不到（`get_chat_history` 只走 human 通道）。
+- agent-host：`toolCallEnded` 增量转发 pi 的 `toolName`（可选字段，旧 agent-host 配新内核时用开始事件的名字；新 agent-host 配旧内核时结束帧被丢，界面上那次调用一直"运行中"到 Turn 结束，故须同版本）；工具事件在背压下的丢弃优先级与 `message` 相同。
+- 脱敏 `kernel/src/governance/redaction/`：`secret-values.ts`（`scrubSecretValues` / 结构化 `redactSecrets`）与 `secret-stream.ts`（流式脱敏器）。位置：实时 `textDelta`（每 Turn 一个流式脱敏器，扣住末尾可能仍是密钥一部分的文本，在下一个非文本事件之前放出，至多扣 4096 字符，超出丢弃所扣内容、发一个 `[redacted]`、本段不再流式输出）；实时工具参数与结果、工具调用记录（载荷只读到预览长度 + 4096 字符，参数 4000、结果 16000，先脱敏后截断）；落库回复（每个文本字段先截到 256 Ki 字符）；`dispatch.ts` 里 Handle 通道调用写进 `audit_records.payload` 的副本（加 `redactedValues`，处理器拿原参数，human 通道不变）；`worker-result-handler.ts` 的报告部分（summary、findings、factsToAssert、evidence、artifacts，Activity 元数据记 `redactedValues`），提议的 Operation / Skill 原样保留。
+- 形态：JWT（含 Handle）、`Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` 头、`Bearer` / `Basic`、PEM 私钥（含未闭合）、厂商前缀 key、大写 env `NAME=value`（含带引号的值）、YAML / ini / `key=value` / 查询串 / camelCase / `X-Api-Key:` 头里以密钥命名的键、`--password x` / `--api-key=x`、URL 的 `user:password@`、JSON 文本里以密钥命名的键，以及能力声明的 `redactedParamKeys`。`name: value`、`--flag value`、`NAME=value`、JSON 键值四类先匹配名字和分隔符，名字是密钥名才取值（否则从分隔符之后继续扫），修掉了"非密钥名的一对吞掉值里的密钥对"的整段漏项。
+- 线性时间：起点用 lookbehind 限定、前缀有长度上限、值模式分支互斥无嵌套量词；`secret-values.test.ts` 对 22 种对抗输入各跑 200 KB，要求低于 1 s。流式按 16 Ki 切片，每个分段重扫所扣文本（遗留 158）。
+- 流式规则：只扣末尾一个"词"；未完成的名值对（`password: `、`token `）、未闭合的引号值与 PEM 扣到值结束；行里最后一个 `"` 之后最多扣 128 字符（后面的文字还可能成为 JSON 键），已闭合的密钥 JSON 对的结尾引号除外；不跨中文扣留。`secret-stream.test.ts` 的切分属性测试：密钥名 × 9 种分隔符 × 4 种值，加 41 种其他形态 × 7 种上下文，每个切点两段、每对切点三段、随机 2–9 段，断言流式拼接与整段脱敏逐字相同、替换计数相同（换回 af43e28 的实现有 38 项失败）；逐字符推送时任何时刻都不发出 Handle 的任何部分。
+- `graph_overview`：graph 组 / observe / handle / member，auditor 可读，返回每种关系类型的活跃 Fact 计数，复用 #514 的 `GraphStore.countFactsByLinkType` 与草稿可见性；自动进入入口与 Worker 的能力上限，入口 agent 的工具表不加（注入上下文已有同样的计数）。契约快照 `capabilities.json` 已更新。
+- 同 PR 修的超线性正则：`interfaces/mcp/index.ts` 的 Bearer 解析改为前缀检查加切片；`identity/users.ts` 的 `derivedLogin` 去首尾 `-` 改为 `/^-|-$/g`；gatekeeper-base `kinds/http.ts` 路径模板改为 `[^{}]`、base URL 去尾 `/` 改为循环。Zod 3 的 `.max()` 不阻止 `.regex()` 执行，参数正则看到的输入上限是传输层的 1 MiB。
+- 控制台应显示什么（PR 描述"控制台（前端）应显示什么"，归「控制台前端易用性整改」）：持久化工具行与实时 `ToolCallRowView` 同形、按 Turn 归组、运行中按 `toolCallId` 去重、标注"agent 报告的工具调用"、按关系浏览（遗留 147）；扣留超限提示与审计页 `redactedValues` 提示（遗留 159）。
+- 遗留：155（Worker 运行中的工具调用）、156（Handle 对模型 shell 可读，P1 根因）、157（Worker 提议只计数）、158（流式增量扫描）、159（控制台脱敏提示）。
+
+**llm-proxy 管理接口限流、上游响应体上限与密钥检查（#521，2026-10-09 合入，遗留 138 关闭、151 部分关闭）**
+
+- 限流：`/model-discovery`、`/model-probe`、`/test` 按管理员（token `sub`）分桶，同时至多 2 个、再排队 4 个，每分钟至多 60 次上游调用，按最坏情况预扣（列模型 1、测试 3、每个探测模型 3）；超出返回 429 `rate_limited`，`details.reason` 与 `retryAfterSeconds`，不调上游，记一行 warn；控制台提示"暂停了 N 秒"。限额暂不可配置。
+- 响应体上限：测试与探测 256 KiB、模型列表 8 MiB、非流式 usage 拷贝与 SSE usage 解析各 16M 字符；转发主路径按 chunk 原样转发、不设上限（背压与断开不中止上游见遗留 161）。
+- 密钥：`provider-keys.ts` 的 `checkProviderKey`（trim 后用 shared 的 `isHeaderSafeProviderKey`）是密钥进 header 前的唯一检查点，覆盖转发主路径（502 `upstream_key_invalid`，日志只记供应商、来源与环境变量名）、启动检查（按供应商一行 warn，不阻断）与供应商列表的 `credentialInvalid: true`（控制台卡片、抽屉、测试面板与两种密钥输入框提示）。列模型被 401 / 403 拒绝后不再自动探测。
+- 控制台「状态」列：`lib/provider-status.ts` 按停用、密钥无效、缺少密钥、地址不可用（shared `upstreamBaseUrlProblem`）、上次测试 401 / 403、补全失败、工具调用失败的顺序取第一条；供应商在测试后被编辑（`updatedAt` 晚于 `testedAt`）或测试模型已不在列表时上次测试结果作废；标签中文 ≤ 6 字、英文 ≤ 12 字符，列宽 140。判断不了：所有模型是否可用（探测结果不保存）、上次测试之后上游才坏掉。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在

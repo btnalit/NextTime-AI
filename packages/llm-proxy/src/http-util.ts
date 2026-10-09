@@ -39,3 +39,45 @@ export function sendJson(res: http.ServerResponse, status: number, body: unknown
   });
   res.end(payload);
 }
+
+/** The outcome of {@link readUpstreamJson}: the parsed body (`undefined` when it is empty, not
+ *  JSON, or over the cap) and whether the cap cut it off. */
+export interface UpstreamJsonBody {
+  readonly body: unknown;
+  readonly tooLarge: boolean;
+}
+
+/**
+ * Reads an upstream `fetch` response body as JSON, at most `maxBytes` of it (STATUS leftover 138).
+ * The provider test, the model probe and the model listing call an administrator-chosen upstream;
+ * `res.json()` would buffer whatever that upstream sends, so one answer of a few hundred MB (or an
+ * endless stream until the timeout) could exhaust this process — and `/model-probe` makes up to
+ * eighteen such calls per request. A declared `content-length` over the cap is refused before
+ * reading; otherwise the stream is cancelled as soon as the running total passes the cap.
+ */
+export async function readUpstreamJson(res: Response, maxBytes: number): Promise<UpstreamJsonBody> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    return { body: undefined, tooLarge: true };
+  }
+  if (!res.body) return { body: undefined, tooLarge: false };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return { body: undefined, tooLarge: true };
+    }
+    chunks.push(value);
+  }
+  try {
+    return { body: JSON.parse(Buffer.concat(chunks).toString('utf8')), tooLarge: false };
+  } catch {
+    return { body: undefined, tooLarge: false };
+  }
+}

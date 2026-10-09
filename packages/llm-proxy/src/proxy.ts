@@ -19,9 +19,15 @@ import {
   buildOutboundSearch,
   stripProviderServerTools,
 } from './outbound-policy.js';
+import { checkProviderKey } from './provider-keys.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
 import { type ProxySourceBinding, socketPeerAddress } from './source-binding.js';
-import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
+import {
+  MAX_USAGE_SCAN_CHARS,
+  computeCostUsd,
+  createStreamUsageAccumulator,
+  parseUsageFromJsonBody,
+} from './usage.js';
 
 /**
  * proxy: the per-provider passthrough HTTP server (design doc §7.7; docs/development-tasks.md
@@ -474,10 +480,30 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
 
     // S7-A resolution order: a console key for this provider id, then the env var named by
     // `api_key_env` (now optional — a store provider may have none), else no key at all.
-    const realKey =
-      options.resolveConsoleKey?.(providerName) ??
-      (provider.api_key_env ? resolveApiKey(provider.api_key_env) : undefined);
-    if (!realKey) {
+    const consoleKey = options.resolveConsoleKey?.(providerName);
+    const keyCheck = checkProviderKey(
+      consoleKey ?? (provider.api_key_env ? resolveApiKey(provider.api_key_env) : undefined),
+    );
+    if (keyCheck.kind === 'invalid') {
+      // A console key stored before the form checked its characters, or an env / file key the
+      // schema never saw. Putting it in a header would throw a TypeError quoting the value — and
+      // the unhandled-error log line below would carry it. The value is never logged.
+      log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'llm-proxy: the provider key contains a character an HTTP header cannot carry — re-enter it in the console, or fix the key file / env var',
+          correlationId,
+          provider: providerName,
+          source: consoleKey !== undefined ? 'console' : 'env',
+          envVar: consoleKey !== undefined ? null : (provider.api_key_env ?? null),
+        }),
+      );
+      sendJson(res, 502, {
+        error: { code: 'upstream_key_invalid', message: 'upstream key is not usable' },
+      });
+      return;
+    }
+    if (keyCheck.kind === 'missing') {
       log(
         JSON.stringify({
           level: 'error',
@@ -496,7 +522,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     const { headers: outboundHeaders, droppedBetas } = buildOutboundHeaders(
       req.headers,
       provider,
-      realKey,
+      keyCheck.key,
     );
     if (outboundBody.length > 0) {
       outboundHeaders.set('content-length', String(outboundBody.length));
@@ -581,6 +607,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     const usageAccumulator = isSse ? createStreamUsageAccumulator(provider.api) : undefined;
     const decoder = new TextDecoder();
     let nonSseText = '';
+    let nonSseTooLarge = false;
     let streamError: unknown;
 
     if (upstreamRes.body) {
@@ -593,8 +620,12 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
           res.write(value);
           if (isSse) {
             usageAccumulator?.push(decoder.decode(value, { stream: true }));
-          } else {
+          } else if (!nonSseTooLarge) {
             nonSseText += decoder.decode(value, { stream: true });
+            if (nonSseText.length > MAX_USAGE_SCAN_CHARS) {
+              nonSseTooLarge = true;
+              nonSseText = '';
+            }
           }
         }
       } catch (err) {
@@ -605,6 +636,17 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     res.end();
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
+    if (nonSseTooLarge) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: response too large to read usage from; recorded without tokens',
+          provider: providerName,
+          model: modelId ?? 'unknown',
+          limitChars: MAX_USAGE_SCAN_CHARS,
+        }),
+      );
+    }
     if (!isSse && !streamError && nonSseText.length > 0) {
       try {
         parsedUsage = parseUsageFromJsonBody(provider.api, JSON.parse(nonSseText));
