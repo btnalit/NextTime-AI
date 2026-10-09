@@ -74,7 +74,7 @@ export function TemporaryPasswordDialog({
           </Button>
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="primary" onClick={onClose}>
+          <Button variant="primary" onClick={onClose} data-testid="temporary-password-ack">
             {t('我已保存', 'I have saved it')}
           </Button>
         </div>

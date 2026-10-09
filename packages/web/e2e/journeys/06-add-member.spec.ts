@@ -46,8 +46,8 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       page,
       `Journey member ${suffix}`,
     );
-    await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+    await page.getByTestId('sign-out').click();
+    await expect(page.getByTestId('login-submit')).toBeVisible();
 
     // Step 2: owner adds them by login, from 成员与授权's own "添加成员" entry point.
     await asOwner(page);
@@ -73,14 +73,14 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       await reachLoginForm(page);
     }
     await loginWithPassword(page, memberLogin, temporaryPassword);
-    await expect(page.getByRole('heading', { name: /需要更改密码/ })).toBeVisible({
+    await expect(page.getByTestId('change-password-title')).toBeVisible({
       timeout: 15_000,
     });
     const newPassword = `${temporaryPassword}-changed`;
     await page.locator('#cp-current-password').fill(temporaryPassword);
     await page.locator('#cp-new-password').fill(newPassword);
     await page.locator('#cp-confirm-password').fill(newPassword);
-    await page.getByRole('button', { name: /更改密码/ }).click();
+    await page.getByTestId('change-password-submit').click();
 
     // Step 4: switch to this workspace (the new member also belongs to the platform default
     // workspace from account creation — `createPlatformUser`'s own doc comment) and confirm 使用

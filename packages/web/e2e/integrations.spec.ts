@@ -57,7 +57,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
+  const changePasswordHeading = page.getByTestId('change-password-title');
   // The platform 工作区 nav item: rendered by `Sidebar` for `platformRole === 'admin'` whatever
   // route the admin lands on, so it is the one "we are past the login screen" signal that always
   // holds (same reasoning as `workspaces.spec.ts`'s own copy of this helper).
@@ -73,7 +73,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
 
   if (await badCredentials.isVisible().catch(() => false)) {
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: '登录' }).click();
+    await page.getByTestId('login-submit').click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
@@ -81,15 +81,15 @@ async function signInAsAdmin(page: Page): Promise<void> {
     await page.locator('#cp-current-password').fill(initialPassword);
     await page.locator('#cp-new-password').fill(changedPassword);
     await page.locator('#cp-confirm-password').fill(changedPassword);
-    await page.getByRole('button', { name: /更改密码/ }).click();
+    await page.getByTestId('change-password-submit').click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /登出/ }).click();
-  await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+  await page.getByTestId('sign-out').click();
+  await expect(page.getByTestId('login-submit')).toBeVisible();
 }
 
 /** `Sidebar`'s workspace switcher only renders for a cookie session with more than one active
@@ -439,7 +439,13 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     const principalId = await firstPrincipalOption.getAttribute('value');
     expect(principalId ?? '').not.toBe('');
     await principalSelect.selectOption(principalId as string);
-    await form.locator('#ish-scope').fill('get_task');
+    // The scope box is a search-or-paste combobox: a typed name only filters, a pasted list
+    // (trailing separator) ticks every issuable name in it at once. Tab closes its list, which
+    // otherwise sits over the submit button.
+    const scopeBox = form.getByTestId('ish-scope');
+    await scopeBox.fill('get_task ');
+    await expect(form.getByTestId('ish-scope-summary')).toContainText('get_task');
+    await scopeBox.press('Tab');
     await form.getByRole('button', { name: /签发/ }).click();
 
     // The issued result swaps into this same drawer (no second, nested `Drawer`) — still

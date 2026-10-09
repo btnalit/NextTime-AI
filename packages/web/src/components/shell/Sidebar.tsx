@@ -301,6 +301,7 @@ export function SidebarContent({
               iconOnly
               onClick={onLogout}
               title={t('登出', 'Sign out')}
+              data-testid="sign-out"
             >
               {t('登出', 'Sign out')}
             </Button>
@@ -312,6 +313,7 @@ export function SidebarContent({
               iconOnly
               onClick={onLogout}
               title={t('清除密钥', 'Forget key')}
+              data-testid="forget-key"
             >
               {t('清除密钥', 'Forget key')}
             </Button>

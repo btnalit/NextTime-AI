@@ -275,7 +275,13 @@ export function CreateUserForm({
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        <Button type="submit" variant="primary" loading={submitting} disabled={!ready}>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={submitting}
+          disabled={!ready}
+          data-testid="create-user-submit"
+        >
           {t('创建', 'Create')}
         </Button>
       </div>

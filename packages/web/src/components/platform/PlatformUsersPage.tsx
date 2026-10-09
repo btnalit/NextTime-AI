@@ -182,7 +182,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           'Who can sign in, which workspaces they belong to, and their budgets.',
         )}
         primaryAction={
-          <Button variant="primary" icon="plus" onClick={() => setPanel({ kind: 'create' })}>
+          <Button
+            variant="primary"
+            icon="plus"
+            onClick={() => setPanel({ kind: 'create' })}
+            data-testid="new-user"
+          >
             {t('新建用户', 'Create user')}
           </Button>
         }

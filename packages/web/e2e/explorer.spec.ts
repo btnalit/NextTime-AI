@@ -99,8 +99,8 @@ test.describe('S4.1: Explorer cookie auth', () => {
     await login(page, ownerLogin, ownerPassword);
     expect((await page.request.get('/api/graph/nodes')).status()).toBe(200);
 
-    await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+    await page.getByTestId('sign-out').click();
+    await expect(page.getByTestId('login-submit')).toBeVisible();
 
     await expect
       .poll(async () => (await page.request.get('/api/graph/nodes')).status(), { timeout: 10_000 })

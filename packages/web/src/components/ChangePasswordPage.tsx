@@ -73,7 +73,9 @@ export function ChangePasswordPage({
               N
             </div>
             <div>
-              <h1 className="login-title">{t('需要更改密码', 'Password change required')}</h1>
+              <h1 className="login-title" data-testid="change-password-title">
+                {t('需要更改密码', 'Password change required')}
+              </h1>
               <p className="login-subtitle">
                 {t(
                   `${user.displayName}（${user.login}）正在使用临时密码，请先设置自己的新密码。`,
@@ -139,7 +141,13 @@ export function ChangePasswordPage({
             <ErrorBanner error={error} title={t('无法更改密码', 'Could not change password')} />
           ) : null}
 
-          <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={submitting}
+            disabled={!canSubmit}
+            data-testid="change-password-submit"
+          >
             {t('更改密码', 'Change password')}
           </Button>
 

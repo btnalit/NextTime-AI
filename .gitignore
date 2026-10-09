@@ -47,3 +47,7 @@ packages/web/src/styles/fonts.css
 .idea/
 .DS_Store
 Thumbs.db
+
+# Playwright output (local and CI runs of packages/web/e2e)
+packages/web/test-results/
+packages/web/playwright-report/

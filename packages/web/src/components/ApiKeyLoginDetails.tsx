@@ -43,7 +43,9 @@ export function ApiKeyLoginDetails({
 
   return (
     <details className="api-key-login">
-      <summary>{t('用 API key 登录', 'Use an API key instead')}</summary>
+      <summary data-testid="api-key-login-toggle">
+        {t('用 API key 登录', 'Use an API key instead')}
+      </summary>
       <form className="stack" onSubmit={handleSubmit} noValidate>
         <Field
           id="api-key"
@@ -95,6 +97,7 @@ export function ApiKeyLoginDetails({
           variant="primary"
           loading={pending}
           disabled={apiKey.trim().length === 0}
+          data-testid="api-key-login-submit"
         >
           {t('用这把 key 登录', 'Sign in with this key')}
         </Button>

@@ -128,6 +128,7 @@ export function LoginPage({
             variant="primary"
             loading={submitting}
             disabled={!login.trim() || !password}
+            data-testid="login-submit"
           >
             {t('登录', 'Log in')}
           </Button>
