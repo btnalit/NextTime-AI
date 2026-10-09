@@ -322,8 +322,16 @@ if [ -n "$REAL_MODEL" ]; then
     mv "$D/models/models.json.tmp" "$D/models/models.json" || { rm -f "$D/models/models.json.tmp"; fail real-setup "gen-models"; }
   step "real-setup ok token-budget-per-workspace=$BUDGET"
   real_fail=0
+  real_since=$(psql_q "select now()")
   accept "real-s2" scripts/accept_s2.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
   accept "real-s3" scripts/accept_s3.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
+  # What the real-model phase spent, from the kernel's own llm_usage ledger (one row per proxied
+  # call; the runner and its database are gone after the job), real provider only — the scripts'
+  # provider-independent steps that follow on the fake provider are left out. Counts only.
+  usage=$(psql_q "select count(*), coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
+    coalesce(sum(cache_read_tokens),0), coalesce(sum(cache_write_tokens),0), coalesce(sum(cost_usd),0)
+    from llm_usage where started_at >= '$real_since' and provider <> 'fake'")
+  printf '%s\n' "$usage" | awk -F'|' '{ printf "STEP real-usage calls=%s input_tokens=%s output_tokens=%s cache_read_tokens=%s cache_write_tokens=%s cost_usd=%s\n", $1, $2, $3, $4, $5, $6 }'
   if [ "$real_fail" -gt 0 ]; then echo "RESULT real-model-failures=$real_fail"; exit 1; fi
 fi
 
