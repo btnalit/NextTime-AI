@@ -612,6 +612,49 @@ docker compose logs egress-proxy | grep 'can never match a host'
 
 graph 组新增只读能力 `list_facts`（按链接类型列出工作区的活跃 Fact），`get_entry_context` 多返回 `factCountsByLinkType`。入口 agent 的注入上下文改为先给图概览、再给最近 Fact 样本。入口 Handle 在应用后重启时按新的能力上限重新签发，不需要操作。用户在控制台自助签发的 MCP / Claude Code / pi interactive Handle 的 scope 是签发那一刻的能力清单，调 `list_facts` 会返回 `forbidden`，需要重新签发（`howto-connect-pi.md` 排障表）。已有工作区的入口 systemPrompt 不会随模板更新，关键指引放在了注入上下文与工具描述里。无迁移。主机验收 S5.7 dependency_chat 按至少 8/10 判定。
 
+### 3.15 agent-host 与 kernel 须同版本；agent 输出脱敏与发版后 Handle 核对（#520，v0.44.0 起）
+
+无迁移、无新的应用步骤。按 §3 入口整版应用即可，**agent-host 与 kernel 必须是同一版本**：新 agent-host 配旧内核时，旧内核会丢弃带 `name` 的工具结束帧，实时界面上那次调用一直显示"运行中"直到 Turn 结束；旧 agent-host 配新内核无害。gatekeeper-base 的路径模板正则有改动，门镜像随版本重建即可。
+
+行为变化：
+- 入口 Turn 的每个工具调用结束时，聊天历史里多一条 `role='tool'`、`kind: 'tool_call'` 的消息，刷新后仍可见，可见性与所在 Chat 相同；控制台的工具行渲染与本版同发。
+- 实时文本、工具调用、落库回复、Handle 通道调用的审计参数、Worker 报告里形似密钥的值显示为 `[redacted]`。实时文本会扣住末尾一个词，未完成的名值对和未闭合的引号值扣到值结束；4096 字符以上不断开的一段（压缩 JS、长 base64）实时只显示一个 `[redacted]`，Turn 结束后落库的回复照常显示。这是纵深防御：编码后的外带挡不住（STATUS 遗留 156）。
+- 新的只读能力 `graph_overview`。与 §3.14 一样，控制台自助签发的 Handle 要重新签发才能调用；入口 Handle 重启后自动按新上限签发。
+
+**应用后**（窗口内，S1–S4 之后）三项核对，结果记 `docs/private/`。
+
+**A. Handle 历史命中**：v0.43.0 及之前的落库回复、Handle 通道审计参数、Task、Worker 写入的 Facts / evidence / decisions 都没有脱敏，可能含入口 Handle。在主机检出目录下执行，只出计数与最新时间，不打印任何值：
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+with p as (select 'eyJhbGciOiJFZERTQSJ9\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}'::text as re)
+select 'chat_messages' as location, count(*) as rows, max(created_at) as newest
+  from chat_messages, p where content::text ~ p.re
+union all select 'audit_records', count(*), max(created_at)
+  from audit_records, p where payload::text ~ p.re
+union all select 'tasks', count(*), max(updated_at)
+  from tasks, p where coalesce(result::text, '') ~ p.re or input::text ~ p.re
+union all select 'activities', count(*), max(created_at)
+  from activities, p where metadata::text ~ p.re
+union all select 'objects', count(*), max(created_at)
+  from objects, p where properties::text ~ p.re
+union all select 'links', count(*), max(recorded_at)
+  from links, p where properties::text ~ p.re
+union all select 'evidence', count(*), max(created_at)
+  from evidence, p where content::text ~ p.re
+union all select 'decisions', count(*), max(created_at)
+  from decisions, p where coalesce(summary, '') || coalesce(rationale::text, '') ~ p.re;
+rollback;
+SQL
+```
+
+`eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。全为 0 即无事。入口 Handle 默认 24 小时过期（除非 `.env` 改大了 `ENTRY_HANDLE_TTL_SECONDS`），只有 `newest` 仍在有效期内的命中才需要处理：按 `jti` 吊销（`capability_handles.revoked_at`）是改主机数据的操作，须维护者明确同意，不在本手册里自动做。历史行是否清洗另行决定（审计只追加）。
+
+**B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，历史里能看到这一轮的工具调用和结果。
+
+**C. Handle 不出现在输出里**：让 agent 运行 `env`，实时流、刷新后的历史、审计页里都不出现 Handle（应为 `[redacted]`）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
