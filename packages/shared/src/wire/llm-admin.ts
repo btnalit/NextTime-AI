@@ -113,6 +113,11 @@ export const LlmProviderWireSchema = z
      *  value; see `credentialSource` for which one. */
     credentialPresent: z.boolean(),
     credentialSource: LlmProviderCredentialSourceWireSchema,
+    /** `true` when the credential that resolves (`credentialSource`) contains a character an HTTP
+     *  header cannot carry — a key stored before the console checked it, or an env / file key —
+     *  so every call with it fails (llm-proxy answers 502 `upstream_key_invalid`). Absent or
+     *  `false` otherwise. Never the value. */
+    credentialInvalid: z.boolean().optional(),
     enabled: z.boolean(),
     /** `file`: from the operator-managed `llm-providers.yaml` (read-only base). `store`: from
      *  llm-proxy's own `providers.json`, written through this API. */

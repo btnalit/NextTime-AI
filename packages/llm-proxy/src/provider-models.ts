@@ -1,7 +1,8 @@
 import type { LlmProviderDiscoveredModelWire } from '@nexttime/shared';
 import type { ProviderApiKind } from './config.js';
 import { readUpstreamJson } from './http-util.js';
-import { describeFailure, scrubUpstreamText } from './provider-test.js';
+import { checkProviderKey } from './provider-keys.js';
+import { UNUSABLE_KEY_MESSAGE, describeFailure, scrubUpstreamText } from './provider-test.js';
 
 /**
  * provider-models: `POST /admin/model-discovery` (admin-api.ts) — "从供应商获取模型". One
@@ -65,21 +66,19 @@ export async function listUpstreamModels(
     options.api === 'anthropic-messages' ? `${base}/v1/models?limit=1000` : `${base}/v1/models`;
   const headers = new Headers({ accept: 'application/json' });
   if (options.api === 'anthropic-messages') headers.set('anthropic-version', '2023-06-01');
-  try {
-    headers.set(
-      options.authHeader,
-      options.authHeader === 'authorization' ? `Bearer ${options.realKey}` : options.realKey,
-    );
-  } catch {
-    // A stored or environment key with a character an HTTP header cannot carry (a pasted
-    // full-width character, say). `Headers` throws a TypeError naming the value — never echo it.
+  const keyCheck = checkProviderKey(options.realKey);
+  if (keyCheck.kind !== 'ok') {
     return {
       ok: false,
       reason: 'unreachable',
       status: null,
-      message: 'the key contains a character that cannot be sent in an HTTP header — re-enter it',
+      message: keyCheck.kind === 'invalid' ? UNUSABLE_KEY_MESSAGE : 'no key to list models with',
     };
   }
+  headers.set(
+    options.authHeader,
+    options.authHeader === 'authorization' ? `Bearer ${keyCheck.key}` : keyCheck.key,
+  );
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -112,7 +111,7 @@ export async function listUpstreamModels(
         ok: false,
         reason: 'upstream_status',
         status,
-        message: describeFailure(status, body, options.realKey),
+        message: describeFailure(status, body, keyCheck.key),
       };
     }
   } catch (err) {
@@ -120,7 +119,7 @@ export async function listUpstreamModels(
       ok: false,
       reason: 'unreachable',
       status: null,
-      message: scrubUpstreamText(String(err), options.realKey),
+      message: scrubUpstreamText(String(err), keyCheck.key),
     };
   } finally {
     clearTimeout(timeout);

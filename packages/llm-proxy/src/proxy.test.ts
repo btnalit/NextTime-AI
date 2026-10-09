@@ -1137,6 +1137,98 @@ describe('createProxyServer — S7-A console-key resolution order', () => {
     expect(body.error.code).toBe('upstream_not_configured');
     expect(logLines.some((line) => line.includes('no provider key resolved'))).toBe(true);
   });
+
+  // Review of #521: a key an HTTP header cannot carry (stored before the console checked it, or
+  // an env / file key) used to throw inside `new Headers` — a 500 whose unhandled-error log line
+  // quoted the header value, i.e. the key.
+  it.each([
+    ['console', { resolveConsoleKey: () => 'sk-console\u3000key-0123456789' }],
+    ['env', { resolveApiKey: () => 'sk-env\nkey-0123456789' }],
+  ] as const)(
+    '502s upstream_key_invalid for an unusable %s key, without logging it',
+    async (source, keyOptions) => {
+      const { privateKey, publicKey } = await ephemeralKeyPair();
+      const provider: ProviderConfig = {
+        api: 'openai-completions',
+        upstream_base_url: 'http://127.0.0.1:1',
+        api_key_env: 'OPENAI_KEY',
+        auth: { header: 'authorization', scheme: 'Bearer' },
+        models: [{ id: 'gpt-example' }],
+      };
+      const logLines: string[] = [];
+      const proxy = createProxyServer({
+        providers: { openai: provider },
+        publicKey,
+        isRevoked: () => false,
+        reporter: { record: () => {} },
+        maxRequestBodyBytes: 1_000_000,
+        upstreamConnectTimeoutMs: 2000,
+        upstreamIdleTimeoutMs: 2000,
+        ...keyOptions,
+        log: (line) => logLines.push(line),
+      });
+      const proxyPort = await listen(proxy);
+      cleanup.push(() => closeServer(proxy));
+
+      const token = await signHandle(privateKey);
+      const res = await rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: '/openai/v1/chat/completions',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-example', stream: true }),
+      });
+      expect(res.status).toBe(502);
+      expect(JSON.parse(res.body.toString('utf8')).error.code).toBe('upstream_key_invalid');
+      const keyLine = logLines.find((line) => line.includes('cannot carry'));
+      expect(keyLine && JSON.parse(keyLine)).toMatchObject({ provider: 'openai', source });
+      expect(logLines.join('\n')).not.toMatch(/0123456789/);
+      expect(logLines.some((line) => line.includes('unhandled request error'))).toBe(false);
+    },
+  );
+
+  it('sends an env key with a trailing line break trimmed, as the console trims a typed one', async () => {
+    const upstream = startFakeUpstream({
+      sseBody: OPENAI_SSE_BODY,
+      expectedHeader: 'authorization',
+      expectedValue: `Bearer ${CONSOLE_KEY}`,
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: {
+        openai: {
+          api: 'openai-completions',
+          upstream_base_url: `http://127.0.0.1:${upstreamPort}`,
+          api_key_env: 'OPENAI_KEY',
+          auth: { header: 'authorization', scheme: 'Bearer' },
+          models: [{ id: 'gpt-example' }],
+        },
+      },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey: () => `${CONSOLE_KEY}\r\n`,
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const token = await signHandle(privateKey);
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(res.status).toBe(200);
+  });
 });
 
 // -------------------------------------------------------------------------------------------

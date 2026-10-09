@@ -2,13 +2,19 @@ import type { LlmProviderWire } from '@nexttime/shared';
 import { type Translate, useT } from '../../../lib/i18n.js';
 
 export interface CredentialStateProps {
-  readonly provider: Pick<LlmProviderWire, 'credentialPresent' | 'credentialSource' | 'apiKeyEnv'>;
+  readonly provider: Pick<
+    LlmProviderWire,
+    'credentialPresent' | 'credentialSource' | 'apiKeyEnv' | 'credentialInvalid'
+  >;
   /** Long form: the chip plus an explanation of where the key comes from (drawer); short form:
    *  the chip only. */
   readonly withInstruction?: boolean;
 }
 
 function chipLabel(provider: CredentialStateProps['provider'], t: Translate): string {
+  if (provider.credentialInvalid) {
+    return t('密钥含非法字符，请重新填写', 'Key has invalid characters — re-enter it');
+  }
   switch (provider.credentialSource) {
     case 'console':
       return t('凭证：控制台', 'Credential: console');
@@ -33,17 +39,33 @@ export function CredentialState({ provider, withInstruction = false }: Credentia
   const t = useT();
   const { credentialSource } = provider;
   const present = provider.credentialPresent;
+  // The proxy found a key but it cannot go in a header, so every call with it fails
+  // (llm-proxy `upstream_key_invalid`): shown as a problem, not as a working credential.
+  const invalid = provider.credentialInvalid === true;
   return (
     <div className="stack-s">
       <span
-        className={`chip chip-s ${present ? 'chip-ok' : 'chip-warn'}`}
+        className={`chip chip-s ${present && !invalid ? 'chip-ok' : 'chip-warn'}`}
         data-testid="provider-credential"
-        data-status={present ? 'present' : 'missing'}
+        data-status={invalid ? 'invalid' : present ? 'present' : 'missing'}
         data-source={credentialSource}
         title={provider.apiKeyEnv ?? undefined}
       >
         {chipLabel(provider, t)}
       </span>
+      {withInstruction && invalid ? (
+        <p className="text-small text-danger" data-testid="provider-credential-invalid">
+          {credentialSource === 'console'
+            ? t(
+                '已存的控制台密钥里有空格、全角字符或换行，无法发给供应商，所有调用都会失败。请在下方重新填写。',
+                'The stored console key contains a space, a full-width character or a line break, so it cannot be sent and every call fails. Re-enter it below.',
+              )
+            : t(
+                `环境变量 / 密钥文件 ${provider.apiKeyEnv} 里的密钥有空格、全角字符或换行，所有调用都会失败。可在下方设置控制台密钥（优先），或由操作员修正该文件后重建 llm-proxy。`,
+                `The key in env var / key file ${provider.apiKeyEnv} contains a space, a full-width character or a line break, so every call fails. Set a console key below (it takes priority), or have the operator fix that file and recreate llm-proxy.`,
+              )}
+        </p>
+      ) : null}
       {withInstruction ? (
         <p className="text-small text-2" data-testid="provider-credential-instruction">
           {credentialSource === 'console'

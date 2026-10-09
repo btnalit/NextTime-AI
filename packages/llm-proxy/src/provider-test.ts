@@ -1,5 +1,6 @@
 import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { readUpstreamJson } from './http-util.js';
+import { checkProviderKey } from './provider-keys.js';
 import type { StoreTestResult } from './provider-store.js';
 
 /**
@@ -58,6 +59,10 @@ export interface ProviderTestOptions {
 /** The most of one upstream answer the test reads (STATUS leftover 138). A completion capped at a
  *  few tokens, a single tool call or an error body is a few KB; anything far larger is not an
  *  answer this test can use, and reading it unbounded would let the upstream exhaust the proxy. */
+/** The result text for a key an HTTP header cannot carry (provider-keys.ts `checkProviderKey`). */
+export const UNUSABLE_KEY_MESSAGE =
+  'the key contains a character that cannot be sent in an HTTP header — re-enter it';
+
 export const PROVIDER_TEST_MAX_RESPONSE_BYTES = 256 * 1024;
 
 const TOOL_NAME = 'ping';
@@ -276,9 +281,21 @@ async function callUpstream(
 /** Runs the two round trips and returns the structured outcome (store shape; admin-api.ts maps
  *  it to the wire). Never throws for an upstream failure — that is a result, not an exception;
  *  only a programming error escapes. */
-export async function runProviderTest(options: ProviderTestOptions): Promise<StoreTestResult> {
-  const now = options.now ?? (() => new Date());
+export async function runProviderTest(input: ProviderTestOptions): Promise<StoreTestResult> {
+  const now = input.now ?? (() => new Date());
   const startedAt = now();
+  const keyCheck = checkProviderKey(input.realKey);
+  if (keyCheck.kind !== 'ok') {
+    return {
+      model: input.model,
+      completion: 'error',
+      tool_call: 'skipped',
+      latency_ms: 0,
+      error: keyCheck.kind === 'invalid' ? UNUSABLE_KEY_MESSAGE : 'no key to test with',
+      tested_at: startedAt.toISOString(),
+    };
+  }
+  const options: ProviderTestOptions = { ...input, realKey: keyCheck.key };
   const { api } = options.provider;
   let completion: StoreTestResult['completion'] = 'error';
   let tool: StoreTestResult['tool_call'] = 'skipped';

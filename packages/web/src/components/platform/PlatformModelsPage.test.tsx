@@ -962,3 +962,30 @@ describe('PlatformModelsPage workspace × model matrix (PMo1)', () => {
     expect(betaCells[3]?.querySelector('svg')).toBeTruthy();
   });
 });
+
+describe('PlatformModelsPage — a key no header can carry (review of #521)', () => {
+  it('shows the stored key as needing re-entry, in the table and the drawer, and blocks the test', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({
+        status: 200,
+        body: listWire([provider({ credentialSource: 'console', credentialInvalid: true })]),
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    const table = await screen.findByTestId('providers-table');
+    const row = within(table).getByTestId('provider-row-openai');
+    const chip = within(row).getByTestId('provider-credential');
+    expect(chip.dataset.status).toBe('invalid');
+    expect(chip.textContent).toContain('密钥含非法字符，请重新填写');
+
+    fireEvent.click(within(row).getByTestId('provider-open'));
+    const drawer = await screen.findByTestId('provider-detail-drawer');
+    expect(within(drawer).getByTestId('provider-credential-invalid').textContent).toContain(
+      '请在下方重新填写',
+    );
+    expect(within(drawer).getByTestId('provider-test-panel').textContent).toContain(
+      '密钥含非法字符',
+    );
+  });
+});

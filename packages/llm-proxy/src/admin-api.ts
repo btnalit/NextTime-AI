@@ -33,6 +33,7 @@ import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
+import { checkProviderKey } from './provider-keys.js';
 import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { ProviderStoreError } from './provider-store.js';
@@ -209,6 +210,7 @@ export function toWireProvider(
   provider: ResolvedProvider,
   credentialPresent: boolean,
   credentialSource: LlmProviderCredentialSourceWire,
+  credentialInvalid = false,
 ): LlmProviderWire {
   const { config } = provider;
   return {
@@ -221,6 +223,7 @@ export function toWireProvider(
     apiKeyEnv: config.api_key_env ?? null,
     credentialPresent,
     credentialSource,
+    ...(credentialInvalid ? { credentialInvalid: true } : {}),
     enabled: provider.enabled,
     source: provider.source,
     overridesFile: provider.overridesFile,
@@ -351,6 +354,15 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
 
   function credentialPresent(provider: ResolvedProvider): boolean {
     return credentialSource(provider) !== 'none';
+  }
+
+  /** The resolved credential cannot go in a header (provider-keys.ts `checkProviderKey`): every
+   *  call with it fails, so the provider card says to re-enter it. Same order as `credentialSource`. */
+  function credentialInvalid(provider: ResolvedProvider): boolean {
+    const key =
+      options.keyStore.get(provider.id) ??
+      (provider.config.api_key_env ? resolveApiKey(provider.config.api_key_env) : undefined);
+    return checkProviderKey(key).kind === 'invalid';
   }
 
   async function rewriteModelsJson(): Promise<void> {
@@ -697,7 +709,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
 
   function toWire(provider: ResolvedProvider): LlmProviderWire {
-    return toWireProvider(provider, credentialPresent(provider), credentialSource(provider));
+    return toWireProvider(
+      provider,
+      credentialPresent(provider),
+      credentialSource(provider),
+      credentialInvalid(provider),
+    );
   }
 
   function listResult(storeWritable: boolean): LlmProviderListWire {

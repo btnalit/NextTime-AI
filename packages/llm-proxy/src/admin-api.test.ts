@@ -785,6 +785,28 @@ describe('admin API — provider secrets (S7-A)', () => {
     expect(res.body).toMatchObject({ id: 'openai', credentialSource: 'env' });
   });
 
+  it('flags a resolved key no header can carry as credentialInvalid, without its value', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file\u3000pasted-0123456789' } });
+    const res = await request(h.port, 'GET', '/admin/providers', {
+      headers: await h.adminHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const [openai] = (res.body as { items: Array<Record<string, unknown>> }).items;
+    expect(openai).toMatchObject({
+      id: 'openai',
+      credentialSource: 'env',
+      credentialInvalid: true,
+    });
+    expect(JSON.stringify(res.body)).not.toContain('0123456789');
+
+    const fine = await harness();
+    const ok = await request(fine.port, 'GET', '/admin/providers', {
+      headers: await fine.adminHeaders(),
+    });
+    const [plain] = (ok.body as { items: Array<Record<string, unknown>> }).items;
+    expect(plain?.credentialInvalid).toBeUndefined();
+  });
+
   it('GET/list never returns the key value, whatever the source', async () => {
     const h = await harness();
     const admin = await h.adminHeaders();

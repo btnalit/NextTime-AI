@@ -111,6 +111,20 @@ describe('runProviderTest', () => {
     expect(JSON.stringify(result)).not.toContain(REAL_KEY);
   });
 
+  it('a key no header can carry is a failed test, not a thrown header error, and is never sent', async () => {
+    const { port, captured } = await start(() => ({ status: 200, body: {} }));
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: 'sk-pasted\u3000key-0123456789',
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'error', tool_call: 'skipped' });
+    expect(result.error).toContain('cannot be sent in an HTTP header');
+    expect(JSON.stringify(result)).not.toContain('0123456789');
+    expect(captured).toEqual([]);
+  });
+
   it('openai-responses: expects an output function_call item', async () => {
     const { port, captured } = await start((c) =>
       c.body.tools

@@ -15,6 +15,12 @@
  *     budget is refused as `budget` with the seconds until enough of it frees up.
  * A refused request never reaches the upstream. Nothing is shared across actors, and the state is
  * in memory only — a restart clears it, which is the same as the window passing.
+ *
+ * Memory: one entry per administrator who has made such a call, and it stays resident — its
+ * last charge keeps it non-empty, and stale charges are pruned only on that actor's next call.
+ * Bounded by the number of administrators (the token's `sub` is a verified platform admin) times
+ * at most `budget` charges each (every charge costs ≥ 1); `forgetIfIdle` drops only an entry
+ * that holds nothing at all.
  */
 
 export interface UpstreamCallLimits {

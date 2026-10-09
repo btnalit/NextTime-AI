@@ -669,7 +669,12 @@ function ProviderTestPanel({
     ? t('供应商已停用，启用后才能测试。', 'The provider is disabled — enable it to test.')
     : !provider.credentialPresent
       ? t('还没有可用的密钥：先在下方设置。', 'No key yet — set one below first.')
-      : null;
+      : provider.credentialInvalid
+        ? t(
+            '密钥含非法字符，测试一定失败：先在下方重新填写。',
+            'The key has invalid characters, so the test would fail — re-enter it below first.',
+          )
+        : null;
   return (
     <div className="stack-s" data-testid="provider-test-panel">
       <div className="row-wrap">
