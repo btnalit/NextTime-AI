@@ -474,5 +474,91 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await turnCompletedStatuses(turnId)).toEqual(['completed']);
       expect(runtime.ownsTurnEnd(turnId)).toBe(false);
     });
+
+    /** Text Postgres cannot store: `jsonb` has no representation for U+0000, so the insert fails
+     *  with SQLSTATE 22P05 — one real way an agent's output (a tool reading a binary file, say)
+     *  fails to persist after its frame was acknowledged. */
+    const UNSTORABLE = 'before \u0000 after';
+
+    function messageEvent(chatId: string, turnId: string, text: string) {
+      return {
+        type: 'message' as const,
+        role: 'assistant' as const,
+        content: { text },
+        workspaceId,
+        chatId,
+        turnId,
+        principalId: ownerId,
+      };
+    }
+
+    it('legacy 128: an answer the kernel could not store ends the Turn failed, with the failure on the Turn, not completed', async () => {
+      const { chatId, turnId, answer, end } = await acceptedRuntimeTurn(sink);
+      const pushes: ChatPushEvent[] = [];
+      const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event));
+      try {
+        answer(UNSTORABLE);
+        answer('a later answer that does store');
+        end();
+
+        await vi.waitFor(async () => expect((await turnRow(turnId))?.status).not.toBe('running'), {
+          timeout: 5000,
+        });
+        const row = await turnRow(turnId);
+        expect(row?.status).toBe('failed');
+        expect(row?.metadata.messagePersistFailure).toEqual({
+          firstAt: expect.any(String),
+          count: 1,
+          errorCode: '22P05',
+        });
+        expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+        expect(await assistantTexts(chatId)).toEqual(['a later answer that does store']);
+        // A connected client is told the Turn failed — not that it completed.
+        await vi.waitFor(() =>
+          expect(pushes.map((event) => event.type)).toContain('chat.metadata'),
+        );
+        expect(pushes.filter((event) => event.type === 'chat.metadata')).toEqual([
+          { type: 'chat.metadata', chatId, metadata: { turnId, turnStatus: 'failed' } },
+        ]);
+      } finally {
+        unsubscribe();
+      }
+      // The Turn is over: the chat takes the next message.
+      await expect(
+        dispatchCapability({ pool }, human(), 'send_chat_message', { chatId, text: 'next' }),
+      ).resolves.toMatchObject({ turnId: expect.any(String) });
+    });
+
+    it('legacy 128: report_turn cannot complete a Turn whose answer was not stored either', async () => {
+      // A runtime that does not carry Turn ends (no `ownsTurnEnd`): report_turn ends the Turn.
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+
+      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      expect((await turnRow(turnId))?.status).toBe('running');
+      const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: 'answered',
+      })) as { status: string };
+
+      expect(reported.status).toBe('failed');
+      expect((await turnRow(turnId))?.metadata.messagePersistFailure).toMatchObject({ count: 1 });
+      expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+    });
+
+    it('legacy 128: a Stop still ends the Turn interrupted when a message was lost; the loss stays on the Turn', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+
+      await dispatchCapability({ pool }, human(), 'stop_agent', { chatId });
+      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('interrupted');
+      expect(row?.metadata.messagePersistFailure).toMatchObject({ count: 2, errorCode: '22P05' });
+      expect(await turnCompletedStatuses(turnId)).toEqual(['interrupted']);
+    });
   },
 );
