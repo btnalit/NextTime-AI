@@ -91,7 +91,8 @@ from / to / 提交 sha / runs / 配额——审批人批的就是这一行；之
 
 成本上限：真实模型阶段开始前，脚本把内核自己的每工作区每日 token 配额 `LLM_DAILY_TOKEN_BUDGET` 设为
 `token_budget`（默认 3000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，
-见 `operations.md` 遗留 19 一节），而不是靠场景自己收敛。每个验收脚本用自己的一次性工作区，所以单次
+见 `operations.md` 遗留 19 一节），而不是靠场景自己收敛。`token_budget` 必须是 1 到 10000000 的整数——内核把 0 当成不限额，`plan` 直接拒绝；同一时间只允许一个真实模型
+run（`plan` 查本 workflow 未结束的 `+ real model` dispatch，有就失败），避免并发叠加花费。每个验收脚本用自己的一次性工作区，所以单次
 回归的上界约为"验收脚本数 × 配额"。
 
 真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。runner 跑完即销毁，这一行是唯一留下的用量记录。
