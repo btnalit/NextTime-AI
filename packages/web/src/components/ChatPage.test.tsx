@@ -822,7 +822,7 @@ describe('ChatPage persisted tool calls', () => {
     ]);
     // JSON previews are indented; a cut one says so; hidden values are counted.
     expect(rows[0]?.querySelector('pre')?.textContent).toBe('{\n  "linkType": "depends_on"\n}');
-    expect(rows[1]?.textContent).toContain('已截断，共 30000 字符');
+    expect(rows[1]?.textContent).toContain('已截断，原文至少 30000 字符');
     expect(within(rows[1] as HTMLElement).getByTestId('tool-call-redacted').textContent).toContain(
       '2',
     );

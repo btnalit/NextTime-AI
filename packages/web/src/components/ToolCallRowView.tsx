@@ -102,8 +102,8 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
             {record.args.truncated ? (
               <span className="text-3 text-small">
                 {t(
-                  `已截断，共 ${record.args.totalChars} 字符`,
-                  `Cut short — ${record.args.totalChars} characters in all`,
+                  `已截断，原文至少 ${record.args.totalChars} 字符`,
+                  `Cut short — at least ${record.args.totalChars} characters`,
                 )}
               </span>
             ) : null}
@@ -116,8 +116,8 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
             {record.result.truncated ? (
               <span className="text-3 text-small">
                 {t(
-                  `已截断，共 ${record.result.totalChars} 字符`,
-                  `Cut short — ${record.result.totalChars} characters in all`,
+                  `已截断，原文至少 ${record.result.totalChars} 字符`,
+                  `Cut short — at least ${record.result.totalChars} characters`,
                 )}
               </span>
             ) : null}
