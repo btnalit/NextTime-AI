@@ -14,6 +14,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { providerStatus } from '../../lib/provider-status.js';
 import { hrefs, readNewProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -145,15 +146,26 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       id: 'status',
       header: t('状态', 'Status'),
       priority: 'high',
-      width: 110,
-      cell: (provider) => (
-        <StatusChip
-          machine="workspaceStatus"
-          status={provider.enabled ? 'active' : 'disabled'}
-          size="s"
-          testId="provider-enabled-chip"
-        />
-      ),
+      width: 130,
+      cell: (provider) => {
+        const lastTest = testResults[provider.id] ?? provider.lastTest;
+        const status = providerStatus(provider, lastTest);
+        return (
+          <span
+            className={`chip chip-s chip-${status.tone}`}
+            data-testid="provider-enabled-chip"
+            data-status={status.kind}
+            data-tone={status.tone}
+            title={
+              (status.kind === 'key_rejected' || status.kind === 'test_failed') && lastTest?.error
+                ? lastTest.error
+                : undefined
+            }
+          >
+            {t(status.zh, status.en)}
+          </span>
+        );
+      },
     },
     {
       id: 'actions',

@@ -1009,6 +1009,9 @@ describe('PlatformModelsPage — a key no header can carry (review of #521)', ()
     const chip = within(row).getByTestId('provider-credential');
     expect(chip.dataset.status).toBe('invalid');
     expect(chip.textContent).toContain('密钥含非法字符，请重新填写');
+    const status = within(row).getByTestId('provider-enabled-chip');
+    expect(status.dataset.status).toBe('key_invalid');
+    expect(status.textContent).toBe('密钥无效');
 
     fireEvent.click(within(row).getByTestId('provider-open'));
     const drawer = await screen.findByTestId('provider-detail-drawer');
