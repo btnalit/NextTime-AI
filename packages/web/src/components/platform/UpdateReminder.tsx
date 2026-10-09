@@ -168,10 +168,24 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
         <summary>{t('升级步骤', 'Upgrade steps')}</summary>
         <div className="disclosure-body">
           <ol className="stack-s">
+            {notice.prefetchCommands.length > 0 ? (
+              <li data-testid="update-notice-platform-prefetch">
+                {t(
+                  '维护窗口之前，在主机的项目目录执行（取出目标版本自己的升级脚本，预拉并验签它的镜像；不动在跑的服务，可重跑）。终端只打印日志路径（drills/prefetch-<版本>-<时间>.log），结果看日志的最后一行，须是 RESULT ok：',
+                  'Before the maintenance window, run these in the project directory on the host (they take the target release’s own upgrade script out of its tag and pre-pull and verify its images; the running services are not touched, and it can be re-run). The terminal only prints the log path (drills/prefetch-<version>-<time>.log); the result is the last line of that log, which must be RESULT ok:',
+                )}
+                <pre
+                  className="code-block mono"
+                  data-testid="update-notice-platform-prefetch-commands"
+                >
+                  {notice.prefetchCommands.join('\n')}
+                </pre>
+              </li>
+            ) : null}
             <li>
               {t(
-                '在主机的项目目录执行下面这条命令（脚本会先备份，再验证并拉取已签名的镜像、迁移、启动并跑验收）：',
-                'Run this in the project directory on the host (the script backs up first, then verifies and pulls the signed images, migrates, starts and runs acceptance):',
+                '窗口内在同一目录执行下面这条命令（脚本会先确认镜像已预拉，再备份、验证已签名的镜像、迁移、启动并跑验收；/tmp 下的脚本若已不在，先重跑上一步的 git show 那行）。耗时较长，终端同样只打印日志路径（drills/apply-<版本>-<时间>.log），最后一行 RESULT ok 才算成功；经 SSH 时建议放后台运行（nohup 或 tmux），再用 tail -f 跟日志：',
+                'In the window, run this in the same directory (the script first checks the images were pre-pulled, then backs up, verifies the signed images, migrates, starts and runs acceptance; if the script under /tmp is gone, re-run the git show line above first). It takes a while; the terminal again only prints the log path (drills/apply-<version>-<time>.log), and only a last line of RESULT ok means success. Over SSH, run it in the background (nohup or tmux) and follow the log with tail -f:',
               )}
               {notice.applyCommand !== null ? (
                 <div>

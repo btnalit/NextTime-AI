@@ -184,6 +184,65 @@ describe('decideEgress', () => {
     expect(decision).toEqual({ allowed: false, reason: 'deny-host' });
   });
 
+  // Leading-`.` / `*.` deny entries (fix/egress-suffix-match): `worker-definition.ts` documented
+  // `egressDeny` entries as "a hostname or a `.suffix` entry", but the matcher compared
+  // `host.endsWith('..internal.example')`, so every such entry was a silent no-op (fail-open).
+  it('a source deny entry written as `.suffix` or `*.suffix` denies the domain and every subdomain', async () => {
+    for (const pattern of ['.internal.example', '*.internal.example', '.Internal.Example.']) {
+      const source: SourcePolicy = { sourceId: 'src-1', deny: [pattern] };
+      for (const hostname of ['internal.example', 'api.internal.example', 'a.b.internal.example']) {
+        const decision = await decideEgress({
+          hostname,
+          source,
+          config: baseConfig(),
+          resolve: unreachableResolver(),
+        });
+        expect(decision, `${pattern} vs ${hostname}`).toEqual({
+          allowed: false,
+          reason: 'source-deny',
+        });
+      }
+      const unrelated = await decideEgress({
+        hostname: 'notinternal.example',
+        source,
+        config: baseConfig(),
+        resolve: resolverReturning('192.0.2.10'),
+      });
+      expect(unrelated, pattern).toEqual({ allowed: true, address: '192.0.2.10' });
+    }
+  });
+
+  it('a global deny entry (DENY_HOSTS / EGRESS_DENY_HOST_SUFFIXES) written as `.suffix` or `*.suffix` denies before DNS', async () => {
+    for (const pattern of ['.corp.example', '*.corp.example']) {
+      const config = baseConfig({ denyHosts: [...DEFAULT_DENY_HOSTS, pattern] });
+      for (const hostname of ['corp.example', 'git.corp.example']) {
+        const decision = await decideEgress({
+          hostname,
+          source: { sourceId: 'src-1' },
+          config,
+          resolve: unreachableResolver(),
+        });
+        expect(decision, `${pattern} vs ${hostname}`).toEqual({
+          allowed: false,
+          reason: 'deny-host',
+        });
+      }
+    }
+  });
+
+  it('a source allow entry written as `.suffix` / `*.suffix` is not widened into a match (allow side stays strict, fail-closed)', async () => {
+    for (const pattern of ['.example.com', '*.example.com']) {
+      const source: SourcePolicy = { sourceId: 'src-1', allow: [pattern] };
+      const decision = await decideEgress({
+        hostname: 'api.example.com',
+        source,
+        config: baseConfig(),
+        resolve: unreachableResolver(),
+      });
+      expect(decision, pattern).toEqual({ allowed: false, reason: 'not-in-allow-list' });
+    }
+  });
+
   it('denies a bare hostname (no dot) before resolving DNS', async () => {
     const decision = await decideEgress({
       hostname: 'printer',

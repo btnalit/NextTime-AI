@@ -12,7 +12,7 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 | `KERNEL_URL` | — | Base URL for `POST ${KERNEL_URL}/internal/egress`; unset disables reporting. |
 | `DENY_HOSTS` | `kernel,postgres,llm-proxy,egress-proxy,worker-supervisor,agent-host,caddy` | Comma-separated internal service names, always denied. Overriding it replaces only this list. |
 | (built-in) | `localhost,local,lan,home.arpa,internal` | Private-network name suffixes (RFC 6761/6762/8375, ICANN `.internal`, de-facto `.lan`), always denied by name — needed because on a fake-IP host (below) a LAN name resolves into the trusted range too. |
-| `EGRESS_DENY_HOST_SUFFIXES` | — | Comma-separated extra suffixes appended to the deny list (your site's own LAN domain, e.g. `corp.example`). |
+| `EGRESS_DENY_HOST_SUFFIXES` | — | Comma-separated extra suffixes appended to the deny list (your site's own LAN domain, e.g. `corp.example`). A bare name denies the name and every subdomain; a leading `.` / `*.` is accepted as the same. An entry that can never match a host (a URL, a port, a CIDR, a wildcard elsewhere) is logged at startup as an `error` line. |
 | `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` | — | Platform subnets (CIDR), always denied. |
 | `EGRESS_TRUSTED_RESOLVED_CIDRS` | — | Comma-separated CIDRs owned by a transparent ("fake-IP") proxy on the host network: a **hostname** resolving into one of them is treated as public (the range is the transparent proxy, not a real internal host). Literal-IP targets in the range and the platform subnets are still denied. Unset on a normal network. |
 | `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?}}`, hot-reloaded. Written by `packages/worker-supervisor` on every container spawn/reuse (`egress-map.ts`'s `EgressMapStore`) — as of feat/egress-definition-lists, a source's own `deny` entry is the spawned/invoked WorkerDefinition's own `egressDeny` (`packages/shared/src/worker-definition.ts`), narrowing that one source's egress on top of this proxy's own fixed `DENY_HOSTS`/private-range denial. An entry with no `deny` (definition declared none, or a container predating this field) behaves exactly as before. |
@@ -33,6 +33,15 @@ only a public address (not RFC1918, loopback, link-local, CGNAT, IPv6 unique-loc
 subnet) is connected to — always the address just checked, never a re-resolved hostname, which
 defeats rebinding. A *registered* source with no `allow`/`deny` of its own still gets public-allow
 — only a genuinely unregistered client IP is denied by the first check.
+
+Pattern syntax (fix/egress-suffix-match): every list holds host names matched as a suffix — `x`
+matches `x` and every subdomain of it; there is no wildcard syntax. On the **deny** side (a
+source's `deny`, `DENY_HOSTS`, `EGRESS_DENY_HOST_SUFFIXES`) a leading `.` or `*.` is accepted and
+means the bare name, since that can only deny more. On the **allow** side matching stays strict: an
+`allow` entry written `.x` / `*.x` never matches (it only narrows, fail-closed) and the source-map
+loader logs it as an `error` line together with any other entry that can never match; it is not
+rewritten into a match, which would widen egress. Before this rule, a `.x` deny entry — the form
+`worker-definition.ts` documented for `egressDeny` — silently denied nothing.
 
 ## Agent containers / logging
 

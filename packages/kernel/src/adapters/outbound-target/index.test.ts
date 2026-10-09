@@ -61,6 +61,43 @@ describe('adapters/outbound-target (R-27)', () => {
     expect(() => outboundTargetPolicyFromEnv({ NEXTTIME_SUBNET_CONTROL: 'not-a-cidr' })).toThrow();
   });
 
+  // fix/egress-suffix-match: the allow-side rule is strict, so `.x` / `*.x` used to be silently
+  // inert here; it is logged and dropped now (never widened into "x and its subdomains", never
+  // fatal — it only ever failed closed).
+  it('logs and drops an allow-host entry that could never match, naming the variable and the entry', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const entries = ['.lab.example', '*.lab.example', 'http://lab.example', 'lab.example:8443'];
+      const policy = outboundTargetPolicyFromEnv({
+        NEXTTIME_CONNECTION_ALLOW_HOSTS: ['ok.example', ...entries].join(','),
+        NEXTTIME_CONNECTION_FIXTURE_HOSTS: 'accept-s2-mcp,.bad',
+      });
+      expect(policy.allowHosts).toEqual(['ok.example', 'accept-s2-mcp']);
+      const logged = errorSpy.mock.calls.map(
+        (call) => JSON.parse(String(call[0])) as { level: string; msg: string },
+      );
+      expect(logged).toHaveLength(entries.length + 1);
+      for (const [i, entry] of entries.entries()) {
+        expect(logged[i]?.level).toBe('error');
+        expect(logged[i]?.msg).toContain(`NEXTTIME_CONNECTION_ALLOW_HOSTS entry "${entry}"`);
+      }
+      expect(logged[entries.length]?.msg).toContain(
+        'NEXTTIME_CONNECTION_FIXTURE_HOSTS entry ".bad"',
+      );
+      expect(logged[0]?.msg).toContain('write the bare name "lab.example"');
+
+      errorSpy.mockClear();
+      expect(
+        outboundTargetPolicyFromEnv({
+          NEXTTIME_CONNECTION_ALLOW_HOSTS: 'lab.example,203.0.113.9,::1',
+        }).allowHosts,
+      ).toEqual(['lab.example', '203.0.113.9', '::1']);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('throws OutboundTargetRefusedError naming the field and the host, never resolving a compose name', async () => {
     const resolve = vi.fn(async () => [quad(10, 77, 0, 9)]);
     const guard = createOutboundTargetGuard({

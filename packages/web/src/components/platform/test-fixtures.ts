@@ -17,6 +17,7 @@ export function platformUpdate(overrides: Partial<PlatformUpdateWire> = {}): Pla
     migrationsIncomplete: false,
     breaking: false,
     notesUrl: null,
+    prefetchCommands: [],
     applyCommand: null,
     rollbackVersion: null,
     ...overrides,
@@ -44,7 +45,12 @@ export function availablePlatformUpdate(
     migrations: ['core 0041'],
     migrationsIncomplete: false,
     notesUrl: 'https://github.com/example/repo/releases/tag/v0.43.0',
-    applyCommand: 'sh scripts/apply-release.sh --pull v0.43.0',
+    prefetchCommands: [
+      'git fetch -q origin --tags',
+      'git show v0.43.0:scripts/apply-release.sh > /tmp/apply-release-v0.43.0.sh',
+      'sh /tmp/apply-release-v0.43.0.sh --prefetch v0.43.0',
+    ],
+    applyCommand: 'sh /tmp/apply-release-v0.43.0.sh --pull v0.43.0',
     rollbackVersion: 'v0.42.0',
     ...overrides,
   });
