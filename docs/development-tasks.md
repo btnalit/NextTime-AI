@@ -3742,8 +3742,9 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
     预演第 11 段（控制台管理员 + file probe）改为每次都跑：往 `config/llm-providers.yaml` 写一个上游为 `.invalid` 的假供应商和假 key 文件，
     重建 llm-proxy，要求 `GET /api/llm-admin/providers` 列出它为 `source: file` 且找到 key、`gen-models` 输出它，然后还原
     （`STEP file-probe providers HTTP … listed-with-key=… gen-models=…`）。临时管理员结束时登出；scrub 覆盖 yaml 里所有 `id:`。
-  - 结果：main e68ef76 上控制台路径 runs=1 通过：测试 completion / tool_call 均 ok，5 个核心场景全过，S2 51 / S3 32 零失败，19 次调用约 $0.45
-    （按牌价估算；平台未配单价，`cost_usd` 记 0）。STATUS 遗留 133 / 134 由 #502 关闭。
+  - 结果（main e68ef76）：完整预演 push run 37894663047（v0.42.0 基线 S1–S4 → apply → S1–S4，`RESULT ok`）；控制台路径真实模型冒烟
+    run 37894674445（seed=0、无基线，runs=1）：测试 completion / tool_call 均 ok，5 个核心场景全过，S2 51 / S3 32 零失败，19 次调用约 $0.45
+    （按牌价估算；平台未配单价，`cost_usd` 记 0）。这是冒烟，不替代主机验收的 S5.7（runs=10，每场景 ≥ 8/10）；extended runs=3（run 37896150189）在跑。STATUS 遗留 133 / 134 由 #502 关闭。
 
 **Turn 结束顺序（#493，2026-10-08 合入）**
 
