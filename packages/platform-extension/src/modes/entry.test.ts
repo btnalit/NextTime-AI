@@ -98,13 +98,14 @@ describe('registerEntryMode', () => {
     await kernel.close();
   });
 
-  it('registers the five S1 observe tools first, then the S2 entry capabilities, all from the shared registry', () => {
+  it('registers the five S1 observe tools first, then list_facts and the S2 entry capabilities, all from the shared registry', () => {
     expect([...fake.tools.keys()]).toEqual([
       'get_object',
       'traverse',
       'search',
       'explain',
       'get_task',
+      'list_facts',
       'state_at',
       'find_operations',
       'find_workers',
@@ -540,6 +541,49 @@ Hi`,
     expect(message.content).toContain('Running tasks');
   });
 
+  // Real-model round 4 (dependency_chat 0/10): the recent Facts are a recency sample, and the
+  // context must say so — and carry the complete link-type counts — so a relationship question is
+  // answered with list_facts, not from whichever Facts happened to be recent.
+  it('the context handler labels recent facts as a sample and injects the link-type overview', async () => {
+    kernel.setHandler('get_entry_context', () => ({
+      ok: true,
+      result: {
+        pendingApprovals: [],
+        tasks: [],
+        facts: [{ id: 'fact-1', linkType: 'runs_on' }],
+        factCountsByLinkType: [
+          { linkType: 'depends_on', count: 1 },
+          { linkType: 'runs_on', count: 102 },
+        ],
+        precedents: [],
+      },
+    }));
+    const result = await handlerFor('context')({ messages: [] }, fakeCtx());
+
+    const content = result.messages[0].content as string;
+    expect(content).not.toContain('Relevant facts');
+    expect(content).toContain('- "depends_on": 1');
+    expect(content).toContain('- "runs_on": 102');
+    expect(content).toContain('`list_facts`');
+    expect(content).toContain('Most recently recorded facts (1 of 103; a recency sample');
+    expect(content.indexOf('"depends_on": 1')).toBeLessThan(content.indexOf('Most recently'));
+  });
+
+  it('the list_facts tool calls the kernel capability with the model’s params', async () => {
+    kernel.setHandler('list_facts', () => ({
+      ok: true,
+      result: { items: [], nodeDetails: [] },
+    }));
+    const tool = fake.tools.get('list_facts');
+    if (!tool) throw new Error('list_facts tool not registered');
+    expect(tool.parameters).toMatchObject({ type: 'object', required: ['linkType'] });
+
+    await tool.execute('call-1', { linkType: 'depends_on' }, undefined, undefined, fakeCtx());
+
+    const call = kernel.requests.find((request) => request.capability === 'list_facts');
+    expect(call?.params).toEqual({ linkType: 'depends_on' });
+  });
+
   it('the context handler degrades to unchanged messages when the kernel call fails', async () => {
     // No handler registered for get_entry_context -> fake kernel returns a 404 capability_error.
     const contextHandler = fake.handlers.get('context');
@@ -866,8 +910,8 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     expect(listReads()).toBe(4);
     expect(kernel.requests.filter((r) => r.capability !== 'list_allowed_operations')).toEqual([]);
     expect(fake.api.setActiveTools).not.toHaveBeenCalled();
-    // 19 static tools + 1 gate tool, each registered once.
-    expect(fake.api.registerTool).toHaveBeenCalledTimes(20);
+    // 20 static tools + 1 gate tool, each registered once.
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(21);
     // Only the first projection is a change worth logging.
     expect(logLines(logSpy).filter((line) => line.includes('check=tool_projection'))).toHaveLength(
       1,

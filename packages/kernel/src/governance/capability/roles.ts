@@ -54,6 +54,7 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set([
   'list_conflicts',
   // graph and ontology
   'search',
+  'list_facts',
   'traverse',
   'get_object',
   'state_at',

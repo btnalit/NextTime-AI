@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSourceMap } from './source-map.js';
+import { createSourceMap, findSourcePatternProblems } from './source-map.js';
 
 let dir: string;
 let file: string;
@@ -147,5 +147,48 @@ describe('createSourceMap', () => {
       { timeout: 5000, interval: 50 },
     );
     map.close();
+  });
+
+  // fix/egress-suffix-match: entries that can never match are reported, not rewritten or fatal.
+  it('reports unmatchable allow/deny entries once per distinct set, keeping every entry as written', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        '198.51.100.20': {
+          sourceId: 'worker-3',
+          allow: ['.example.com', 'ok.example'],
+          deny: ['.internal.example', 'https://bad.example'],
+        },
+      }),
+    );
+    const onPatternProblems = vi.fn();
+    const map = createSourceMap(file, { onPatternProblems });
+    // Kept verbatim: the allow entry stays inert in policy.ts (strict), the `.x` deny entry denies.
+    expect(map.resolveSource('198.51.100.20')).toEqual({
+      sourceId: 'worker-3',
+      allow: ['.example.com', 'ok.example'],
+      deny: ['.internal.example', 'https://bad.example'],
+    });
+    expect(onPatternProblems).toHaveBeenCalledTimes(1);
+    expect(
+      (onPatternProblems.mock.calls[0]?.[0] as { list: string; entry: string }[]).map(
+        (p) => `${p.list}:${p.entry}`,
+      ),
+    ).toEqual(['allow:.example.com', 'deny:https://bad.example']);
+    map.close();
+  });
+
+  it('findSourcePatternProblems: deny entries are checked after `.` / `*.` canonicalization, allow entries as written', () => {
+    expect(
+      findSourcePatternProblems({
+        a: { sourceId: 's', deny: ['*.x.example', '.y.example', 'z.example'] },
+        b: { sourceId: 't', allow: ['x.example', 'printer'] },
+      }),
+    ).toEqual([]);
+    expect(
+      findSourcePatternProblems({
+        a: { sourceId: 's', allow: ['*.x.example'], deny: ['a.*.example'] },
+      }).map((p) => `${p.clientIp}:${p.sourceId}:${p.list}:${p.entry}`),
+    ).toEqual(['a:s:allow:*.x.example', 'a:s:deny:a.*.example']);
   });
 });

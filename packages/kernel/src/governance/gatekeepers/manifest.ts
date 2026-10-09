@@ -540,7 +540,7 @@ export async function listPublishedOperationsForGatekeepers(
        and object_type = 'Operation'
        and identity_key ->> 'gatekeeperId' = any($2::text[])
        and properties ->> 'status' = 'published'
-     order by updated_at asc`,
+     order by updated_at asc, id asc`,
     [workspaceId, gatekeeperIds],
   );
   const records: OperationRecord[] = [];
@@ -572,7 +572,7 @@ export async function listDraftOperationsForGatekeeper(
        and object_type = 'Operation'
        and identity_key ->> 'gatekeeperId' = $2
        and properties ->> 'status' = 'draft'
-     order by updated_at asc`,
+     order by updated_at asc, id asc`,
     [workspaceId, gatekeeperId],
   );
   const records: OperationRecord[] = [];
@@ -616,7 +616,7 @@ export async function listOperations(
          where workspace_id = $1
            and object_type = 'Operation'
            and identity_key ->> 'gatekeeperId' = $2
-         order by updated_at asc`,
+         order by updated_at asc, id asc`,
         [workspaceId, filter.gatekeeperId],
       )
     : await client.query<OperationObjectRow>(
@@ -624,7 +624,7 @@ export async function listOperations(
          from objects
          where workspace_id = $1
            and object_type = 'Operation'
-         order by updated_at asc`,
+         order by updated_at asc, id asc`,
         [workspaceId],
       );
   const records: OperationRecord[] = [];

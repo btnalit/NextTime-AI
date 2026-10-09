@@ -52,7 +52,7 @@ describe('buildFindMeansQuery', () => {
   it('blank need (no tokens): where degrades to true, rank term omitted from ORDER BY (a bare 0 is a Postgres positional column reference, not a literal)', () => {
     const q = buildFindMeansQuery('WorkerDefinition', 'ws1', [], 20);
     expect(q.text).toContain('and true');
-    expect(q.text).toContain('order by updated_at desc');
+    expect(q.text).toContain('order by updated_at desc, id desc');
     expect(q.text).not.toContain('case when');
     expect(q.values).toEqual(['ws1', 'WorkerDefinition', false, 20]);
   });
@@ -71,6 +71,8 @@ describe('buildFindMeansQuery', () => {
     expect(rankLine).toBeDefined();
     // Two tokens -> two summed case-when terms in the rank expression.
     expect((rankLine?.match(/case when/g) ?? []).length).toBe(2);
+    // Equal rank and equal updated_at fall back to id, so which rows fit under `limit` is stable.
+    expect(rankLine).toMatch(/desc, updated_at desc, id desc$/);
     expect(q.values).toEqual(['ws1', 'Procedure', '%restart%', '%container%', false, 10]);
   });
 

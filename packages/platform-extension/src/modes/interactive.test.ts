@@ -67,13 +67,14 @@ describe('registerInteractiveMode', () => {
     await kernel.close();
   });
 
-  it('registers the same 17 capability tools as entry mode, from the shared registry', () => {
+  it('registers the same 18 capability tools as entry mode, from the shared registry', () => {
     expect([...fake.tools.keys()]).toEqual([
       'get_object',
       'traverse',
       'search',
       'explain',
       'get_task',
+      'list_facts',
       'state_at',
       'find_operations',
       'find_workers',

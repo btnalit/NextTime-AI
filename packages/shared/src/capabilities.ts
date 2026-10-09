@@ -485,6 +485,14 @@ const ontologyCapabilities: readonly Capability[] = [
 // graph
 // -------------------------------------------------------------------------------------------
 
+/** One reached Object's own type and display name — `traverse` and `list_facts` return one per
+ *  Object id they reference (`nodeDetails`), so a caller can name an endpoint without a
+ *  `get_object` per id. `name` is the kernel's `objectDisplayName` heuristic, absent when nothing
+ *  usable exists. */
+const nodeDetailSchema = z
+  .object({ id: z.string(), typeName: z.string(), name: z.string().optional() })
+  .strict();
+
 const graphCapabilities: readonly Capability[] = [
   {
     name: 'get_object',
@@ -534,13 +542,7 @@ const graphCapabilities: readonly Capability[] = [
         // heuristic the console's own `objectDisplayName` (packages/web/src/lib/graph-view.ts)
         // uses — `undefined` when nothing usable exists (the graph console already renders that as
         // the bare-id fallback).
-        nodeDetails: z
-          .array(
-            z
-              .object({ id: z.string(), typeName: z.string(), name: z.string().optional() })
-              .strict(),
-          )
-          .optional(),
+        nodeDetails: z.array(nodeDetailSchema).optional(),
       })
       .strict(),
     description:
@@ -576,6 +578,38 @@ const graphCapabilities: readonly Capability[] = [
     description:
       'Search Objects by substring over properties/identity, optionally filtered by objectType; ' +
       'keyset-paginated (limit, cursor → nextCursor).',
+  },
+  {
+    // Real-model round 4 (dependency_chat 0/10): "哪个服务依赖哪个" asks about one relationship
+    // type across the whole graph. `traverse` needs a starting Object and `search` returns
+    // Objects, so without this an agent could only answer from whatever Facts happened to be in
+    // its injected context. Same graph-read rules as `traverse`: active Facts only, the caller's
+    // viewer narrowing, keyset pagination per docs/wire-contract-conventions.md §3.
+    name: 'list_facts',
+    group: 'graph',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        linkType: z.string().min(1),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.FactWireSchema).extend({
+      nodeDetails: z.array(nodeDetailSchema),
+    }),
+    description:
+      'List every currently-active Fact of one relationship type (`linkType`, e.g. `depends_on`, ' +
+      '`runs_on`) across the whole workspace, newest first, with each endpoint Object’s ' +
+      'objectType and display name in `nodeDetails`. Use it for questions about a relationship ' +
+      'across the graph ("which service depends on which", "what runs where"); use `traverse` ' +
+      'from one known Object instead. Keyset-paginated (limit up to 200, cursor → nextCursor): ' +
+      'an answer that claims to be complete must follow `nextCursor` until it is absent. Empty ' +
+      '`items` means the graph holds no such Fact — say so rather than guessing from Object ' +
+      'properties. The link types that exist, with counts, are in `get_entry_context`’s ' +
+      '`factCountsByLinkType`.',
   },
   {
     name: 'state_at',
@@ -2039,13 +2073,23 @@ const taskCapabilities: readonly Capability[] = [
         // fixed shape (`EntryContextItems`, application/linkage/store.ts).
         pendingApprovals: z.array(jsonRecord),
         tasks: z.array(jsonRecord),
+        // The most recently recorded active Facts (`DEFAULT_RECENT_FACTS_LIMIT`, newest first, `id`
+        // breaking ties) — a recency sample, never chosen for the question at hand.
         facts: z.array(wire.FactWireSchema),
+        // Every active Fact counted per `linkType` (ordered by `linkType`): the whole graph's
+        // relationship shape, so an agent knows what `list_facts` can enumerate. Additive; an
+        // entry runtime that predates it ignores it.
+        factCountsByLinkType: z.array(
+          z.object({ linkType: z.string(), count: z.number().int().nonnegative() }).strict(),
+        ),
         precedents: z.array(z.unknown()),
       })
       .strict(),
     description:
       'The calling principal’s current situation: pending approvals, running and recently ' +
-      'finished Tasks with their results, relevant Facts (with epistemic_status), and precedents. ' +
+      'finished Tasks with their results, the most recently recorded Facts (a recency sample ' +
+      'with epistemic_status, not chosen for any question), active Fact counts per link type ' +
+      '(the graph’s whole relationship shape — enumerate one with `list_facts`), and precedents. ' +
       'Entry agents receive this automatically before every model call; call it yourself only ' +
       'from an interactive session, which has no such injection. Reading never consumes ' +
       'anything: without `turnId` it covers every chat; with `turnId` only that Turn’s chat, ' +
