@@ -264,7 +264,7 @@ async function replayExistingTask(
       async (client) => {
         const runResult = await client.query<{ id: string }>(
           `select id from worker_runs where workspace_id = $1 and task_id = $2
-           order by attempt desc, started_at desc
+           order by attempt desc, started_at desc, id desc
            limit 1`,
           [workspaceId, taskId],
         );

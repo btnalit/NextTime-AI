@@ -6006,6 +6006,26 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "factCountsByLinkType": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "linkType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "linkType",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "facts": {
           "items": {
             "additionalProperties": false,
@@ -6159,6 +6179,7 @@
         "pendingApprovals",
         "tasks",
         "facts",
+        "factCountsByLinkType",
         "precedents"
       ],
       "type": "object"
@@ -9908,6 +9929,205 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "handle",
+    "group": "graph",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_facts",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "linkType": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "linkType"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activityId": {
+                "type": "string"
+              },
+              "assertedBy": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "epistemicStatus": {
+                "enum": [
+                  "observed",
+                  "extracted",
+                  "inferred",
+                  "asserted",
+                  "verified",
+                  "contradicted"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "invalidatedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "invalidationReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linkType": {
+                "type": "string"
+              },
+              "observationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "properties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "recordedAt": {
+                "type": "string"
+              },
+              "sourceObjectId": {
+                "type": "string"
+              },
+              "supersededAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "supersedesId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "targetObjectId": {
+                "type": "string"
+              },
+              "validFrom": {
+                "type": "string"
+              },
+              "validUntil": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verifiedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "linkType",
+              "sourceObjectId",
+              "targetObjectId",
+              "properties",
+              "validFrom",
+              "validUntil",
+              "recordedAt",
+              "supersededAt",
+              "invalidatedAt",
+              "invalidationReason",
+              "supersedesId",
+              "epistemicStatus",
+              "confidence",
+              "activityId",
+              "assertedBy",
+              "verifiedBy",
+              "observationId",
+              "lastObservationId",
+              "lastObservedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "nodeDetails": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "typeName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "typeName"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "nodeDetails"
       ],
       "type": "object"
     },

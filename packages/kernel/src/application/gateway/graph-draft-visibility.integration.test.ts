@@ -22,8 +22,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * DATABASE_URL) dispatch-level coverage of STATUS leftover 123 — the generic graph reads apply
  * D-26's Operation-draft rule. A draft Operation Object (someone else's `propose_operation`, or a
  * gate's imported manifest the owner proposed) is invisible to a member who did not propose it,
- * through `search`, `get_object`, `traverse` (nodes, nodeDetails, edges), `state_at`, `explain`,
- * `resolve_refs` and `get_entry_context`'s recent Facts — exactly like an id that does not exist.
+ * through `search`, `get_object`, `traverse` (nodes, nodeDetails, edges), `state_at`, `list_facts`
+ * (items, nodeDetails), `explain`, `resolve_refs` and `get_entry_context`'s recent Facts and
+ * per-link-type counts — exactly like an id that does not exist.
  * Its proposer, builders and the owner see it. On the Handle channel the viewer is the Handle's
  * `obo` with that principal's role. Published Operations stay visible to everyone.
  */
@@ -37,6 +38,7 @@ const GRAPH_READS = [
   'get_object',
   'traverse',
   'state_at',
+  'list_facts',
   'explain',
   'get_entry_context',
 ] as const;
@@ -274,6 +276,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         facts: readonly WireFact[];
       };
 
+      const listed = (await call('list_facts', { linkType: 'exposes' })) as {
+        items: readonly WireFact[];
+        nodeDetails: readonly { id: string }[];
+      };
+
       return {
         search: searched.items.map((item) => item.id).sort(),
         getObject: got.sort(),
@@ -293,6 +300,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           .filter((id) => ids.includes(id))
           .filter((id, index, all) => all.indexOf(id) === index)
           .sort(),
+        listFactsTargets: listed.items
+          .map((fact) => fact.targetObjectId)
+          .filter((id) => ids.includes(id))
+          .filter((id, index, all) => all.indexOf(id) === index)
+          .sort(),
+        listFactsDetails: listed.nodeDetails
+          .map((node) => node.id)
+          .filter((id) => ids.includes(id))
+          .sort(),
       };
     }
 
@@ -308,6 +324,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(seen.traverseEdgeTargets).toEqual(sorted);
       expect(seen.stateAt).toEqual(sorted);
       expect(seen.gateFactTargets).toEqual(sorted);
+      expect(seen.listFactsTargets).toEqual(sorted);
+      expect(seen.listFactsDetails).toEqual(sorted);
     }
 
     it('another member sees only the published Operation, through every graph read', async () => {
@@ -415,6 +433,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await recentTargets(otherMemberId)).not.toContain(memberDraftId);
       expect(await recentTargets(otherMemberId)).not.toContain(importDraftId);
       expect(await recentTargets(proposerId)).toContain(memberDraftId);
+    });
+
+    it("get_entry_context's per-link-type counts do not count a hidden draft's Facts", async () => {
+      const exposesCount = async (obo: string) =>
+        (
+          (await dispatchCapability({ pool }, handleCaller(obo), 'get_entry_context', {})) as {
+            factCountsByLinkType: readonly { linkType: string; count: number }[];
+          }
+        ).factCountsByLinkType.find((entry) => entry.linkType === 'exposes')?.count;
+      // The gate exposes three Operations: one published, one import draft, one member draft.
+      expect(await exposesCount(otherMemberId)).toBe(1);
+      expect(await exposesCount(proposerId)).toBe(2);
+      expect(await exposesCount(ownerId)).toBe(3);
     });
   },
 );

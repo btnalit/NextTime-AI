@@ -540,7 +540,7 @@ async function listEnablingWorkspaces(
        from workspace_gate_links l
        join workspaces w on w.id = l.workspace_id
       where l.gate_id = any($1::text[])
-      order by l.gate_id, l.enabled_at desc`,
+      order by l.gate_id, l.enabled_at desc, l.workspace_id`,
     [gateIds],
   );
   const map = new Map<string, { readonly id: string; readonly name: string }[]>();

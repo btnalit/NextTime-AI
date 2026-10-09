@@ -103,7 +103,7 @@ describe('platformExtension() activation', () => {
 
     expect(() => platformExtension(pi)).not.toThrow();
 
-    expect(pi.registerTool).toHaveBeenCalledTimes(19);
+    expect(pi.registerTool).toHaveBeenCalledTimes(20);
     const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
     expect(registeredNames.slice(0, 5)).toEqual([
       'get_object',
@@ -113,7 +113,7 @@ describe('platformExtension() activation', () => {
       'get_task',
     ]);
     expect(registeredNames).toEqual(
-      expect.arrayContaining(['find_workers', 'invoke_worker', 'request_connection']),
+      expect.arrayContaining(['list_facts', 'find_workers', 'invoke_worker', 'request_connection']),
     );
 
     const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);
@@ -219,13 +219,13 @@ describe('platformExtension() activation', () => {
     expect(() => platformExtension(fakePi())).not.toThrow();
   });
 
-  it('registers the 17 capability tools (entry mode minus the two Turn-attribution tools), no turn-id/report_turn wiring, with all env vars set', () => {
+  it('registers the 18 capability tools (entry mode minus the two Turn-attribution tools), no turn-id/report_turn wiring, with all env vars set', () => {
     for (const [key, value] of Object.entries(REQUIRED_INTERACTIVE_ENV)) process.env[key] = value;
     const pi = fakePi();
 
     expect(() => platformExtension(pi)).not.toThrow();
 
-    expect(pi.registerTool).toHaveBeenCalledTimes(17);
+    expect(pi.registerTool).toHaveBeenCalledTimes(18);
     const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
     expect(registeredNames.slice(0, 5)).toEqual([
       'get_object',
@@ -235,7 +235,7 @@ describe('platformExtension() activation', () => {
       'get_task',
     ]);
     expect(registeredNames).toEqual(
-      expect.arrayContaining(['find_workers', 'invoke_worker', 'request_connection']),
+      expect.arrayContaining(['list_facts', 'find_workers', 'invoke_worker', 'request_connection']),
     );
 
     const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);

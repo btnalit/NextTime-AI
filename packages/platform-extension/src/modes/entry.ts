@@ -10,6 +10,7 @@ import {
 } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
+import { type EntryContextResult, renderEntryContext } from './entry-context.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
 import {
   type AllowedOperationWire,
@@ -65,6 +66,9 @@ const ENTRY_TOOL_CAPABILITY_NAMES = [
   'search',
   'explain',
   'get_task',
+  // Real-model round 4 (dependency_chat 0/10): every Fact of one link type, workspace-wide — the
+  // read a relationship question needs when no starting Object is known.
+  'list_facts',
   // S2 (S2.12 fix): the rest of ontology/entry-agent.yaml's `capabilities`, minus the two the
   // extension calls itself (`get_entry_context` on `context`, `report_turn` on `agent_settled`)
   // and `observe_operation`, which is reached through the projected `<gate>.<op>` tools (projected
@@ -212,32 +216,6 @@ function resolveInvokeWorkerCallPlan(
   };
 }
 
-/** Loose shape of a `get_entry_context` result (§7.4 `context` column, S1 scope). The kernel side
- * (S1.3) is not built yet, so this is read defensively — an unexpected/missing field renders as an
- * empty section rather than throwing. */
-interface EntryContextResult {
-  pendingApprovals?: unknown[];
-  tasks?: unknown[];
-  facts?: unknown[];
-  precedents?: unknown[];
-}
-
-function renderSection(title: string, items: unknown[] | undefined): string | undefined {
-  if (!items || items.length === 0) return undefined;
-  return [`### ${title}`, ...items.map((item) => `- ${JSON.stringify(item)}`)].join('\n');
-}
-
-function renderEntryContext(context: EntryContextResult): string {
-  const sections = [
-    renderSection('Pending approvals', context.pendingApprovals),
-    renderSection('Running tasks', context.tasks),
-    renderSection('Relevant facts', context.facts),
-    renderSection('Precedents', context.precedents),
-  ].filter((section): section is string => section !== undefined);
-  if (sections.length === 0) return '';
-  return ['## NextTime entry context', ...sections].join('\n\n');
-}
-
 function isInvalidParams(error: unknown): boolean {
   return (
     error instanceof KernelError &&
@@ -364,7 +342,7 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
       return undefined;
     }
 
-    const text = renderEntryContext(entryContext);
+    const text = renderEntryContext(entryContext, 'NextTime entry context');
     if (!text) return undefined;
 
     // Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from

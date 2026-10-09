@@ -368,7 +368,7 @@ export async function listExecutableQueue(
     `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
      where workspace_id = $1 and gatekeeper_id = $2
        and status in ('auto_approved', 'approved', 'pending_approval', 'executing')
-     order by requested_at asc`,
+     order by requested_at asc, id asc`,
     [workspaceId, gatekeeperId],
   );
   return result.rows.map(mapActionRequestRow);
