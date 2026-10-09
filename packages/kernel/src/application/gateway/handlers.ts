@@ -337,10 +337,10 @@ export type {
 const graphStore = new SqlGraphStore();
 
 // STATUS leftover 123 (D-26): the generic graph reads below (`get_object`, `traverse`, `search`,
-// `list_facts`, `state_at`, `explain`) and `get_entry_context`'s Facts and counts are narrowed for the
-// caller (`graphReadViewerOf`: the human, or a Handle's `obo` with that principal's role) — an
-// Operation draft they may not see reads exactly like an unknown id, and no Fact touching it is
-// returned.
+// `list_facts`, `graph_overview`, `state_at`, `explain`) and `get_entry_context`'s Facts and counts
+// are narrowed for the caller (`graphReadViewerOf`: the human, or a Handle's `obo` with that
+// principal's role) — an Operation draft they may not see reads exactly like an unknown id, and no
+// Fact touching it is returned.
 const getObjectHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { objectId } = params as { objectId: string };
   const viewer = await graphReadViewerOf(client, workspaceId, ctx);
@@ -350,6 +350,13 @@ const getObjectHandler: CapabilityHandler = async (client, workspaceId, params, 
     resourceType: 'object',
     resourceId: objectId,
   };
+};
+
+/** `graph_overview`: the counts `get_entry_context` carries, on their own — for the console. */
+const graphOverviewHandler: CapabilityHandler = async (client, workspaceId, _params, ctx) => {
+  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
+  const factCountsByLinkType = await graphStore.countFactsByLinkType(client, workspaceId, viewer);
+  return { result: { factCountsByLinkType } };
 };
 
 /** `nodeDetails` for `traverse` / `list_facts`: one entry per id, same order. */
@@ -1870,6 +1877,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['resolve_refs', resolveRefsHandler],
   ['search', searchHandler],
   ['list_facts', listFactsHandler],
+  ['graph_overview', graphOverviewHandler],
   ['state_at', stateAtHandler],
   ['explain', explainHandler],
   ['audit_query', auditQueryHandler],

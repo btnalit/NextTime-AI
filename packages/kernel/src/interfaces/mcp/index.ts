@@ -96,11 +96,16 @@ type AuthResult =
   | { readonly ok: false; readonly status: 401 | 500 };
 
 /** Bearer-token parsing, independently re-implemented from `resolve-caller.ts`'s private
- *  `parseBearerToken` for the same module-ownership reason as the public-key cache above. */
+ *  `parseBearerToken` for the same module-ownership reason as the public-key cache above — and,
+ *  like it, a scheme check and a slice rather than `/^Bearer\s+(.+)$/i`, which is polynomial on
+ *  `Bearer` + many spaces + a line break (CodeQL js/polynomial-redos). `/mcp` reads this header
+ *  before it authenticates anyone. */
 function parseBearerToken(authorizationHeader: string | undefined): string | undefined {
   if (!authorizationHeader) return undefined;
-  const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader.trim());
-  return match?.[1]?.trim();
+  const trimmed = authorizationHeader.trim();
+  const separator = trimmed.charAt(6);
+  if (trimmed.slice(0, 6).toLowerCase() !== 'bearer' || !/\s/.test(separator)) return undefined;
+  return trimmed.slice(7).trim() || undefined;
 }
 
 async function resolveHandleClaims(

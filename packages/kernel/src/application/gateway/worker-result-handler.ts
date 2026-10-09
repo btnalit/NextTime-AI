@@ -12,6 +12,7 @@ import {
   listPublishedOperationsForGatekeepers,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
+import { redactSecrets } from '../../governance/redaction/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
   narrowScopeToExecutableGates,
@@ -154,6 +155,33 @@ async function validateContract(
   return { facts, proposals, evidenceDropped };
 }
 
+/**
+ * The report half of a result contract — what the Worker says it did and found, written where
+ * people read it (the Task's stored result and its chat card, Facts, evidence, artifacts) — with
+ * secret-looking values scrubbed (governance/redaction: a Worker can print its own Handle as
+ * easily as an entry agent). The proposal half is passed on as sent: a proposed Operation or
+ * Skill is what runs once a person approves it, so a replaced value would change what runs, and
+ * both stay private drafts of the Task's on_behalf_of human until then. `sessionJsonlPath` is the
+ * extension's own pointer, not model text.
+ */
+function scrubReport(contract: WorkerResultCapabilityParams): {
+  readonly contract: WorkerResultCapabilityParams;
+  readonly redactedValues: number;
+} {
+  const { proposedSkill, proposedOperations, sessionJsonlPath, ...report } = contract;
+  // Unbounded walk: the contract already passed its schema, and the scrubbed copy is written.
+  const scrubbed = redactSecrets(report, { maxNodes: Number.POSITIVE_INFINITY });
+  return {
+    contract: {
+      ...(scrubbed.value as typeof report),
+      ...(proposedSkill !== undefined ? { proposedSkill } : {}),
+      ...(proposedOperations !== undefined ? { proposedOperations } : {}),
+      ...(sessionJsonlPath !== undefined ? { sessionJsonlPath } : {}),
+    },
+    redactedValues: scrubbed.redactedValues,
+  };
+}
+
 export const reportTaskResultHandler: CapabilityHandler = async (
   client,
   workspaceId,
@@ -174,7 +202,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     );
   }
 
-  const contract = params as WorkerResultCapabilityParams;
+  const { contract, redactedValues } = scrubReport(params as WorkerResultCapabilityParams);
   const preRejected = await validateContract(client, workspaceId, contract);
 
   const onBehalfOf = ctx?.principalId;
@@ -199,6 +227,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     workerRunId: workerRun.id,
     contract,
     preRejected,
+    redactedValues,
   });
 
   return {

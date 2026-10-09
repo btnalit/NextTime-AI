@@ -152,7 +152,8 @@ export function derivedLogin(displayName: string | null | undefined, principalId
   const slug = (displayName ?? '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    // One dash at each end is all the line above leaves; `-+$` would be quadratic on a dash run.
+    .replace(/^-|-$/g, '')
     .slice(0, 50);
   return `${slug || 'user'}-${principalId.slice(0, 8)}`;
 }

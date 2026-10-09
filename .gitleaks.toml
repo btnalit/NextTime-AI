@@ -16,9 +16,21 @@ title = "NextTime-AI gitleaks config"
 [extend]
 useDefault = true
 
+#
+# The kernel's secret redaction (packages/kernel/src/governance/redaction, the chat event sink, the
+# Worker result handler) is tested the same way, with two synthetic values matched by content
+# rather than by path, so a real secret pasted into one of those test files is still caught: a
+# Handle-shaped JWT whose signature segment is base64 of "signature-bytes-here", and fake tokens
+# spelled out from the alphabet. A global allowlist's paths and regexes are alternatives (a
+# finding matching either is allowed); regexes are matched against the finding's secret.
+
 [allowlist]
-description = "Synthetic secret-shaped fixtures in the host-inventory collector's redaction tests"
+description = "Synthetic secret-shaped fixtures in redaction tests"
 paths = [
   '''collectors/host-inventory/src/redact\.test\.ts''',
   '''collectors/host-inventory/src/run\.test\.ts''',
+]
+regexes = [
+  '''c2lnbmF0dXJlLWJ5dGVzLWhlcmU''',
+  '''abcdefghijklmnopqrstuvwxyz''',
 ]

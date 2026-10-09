@@ -50,6 +50,20 @@ describe('POST /mcp — no database access when unauthenticated (unit)', () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it.each(['Bearer', 'Bearer ', 'Bearertoken', `Bearer${' '.repeat(15_000)}`])(
+    'an Authorization header with no token after the scheme → 401: %j',
+    async (authorization) => {
+      const app = createServer({ pool: neverConnectPool });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: { authorization },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(401);
+    },
+  );
+
   it('no Handle-signing key configured at all → 500, never misreported as 401', async () => {
     // This file's own module doc comment: "any other error is a 500, not a 401 — conflating the
     // two would misreport a real outage as 'your credential is bad'". No loadHandlePublicKey
