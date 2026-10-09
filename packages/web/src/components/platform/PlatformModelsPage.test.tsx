@@ -565,6 +565,114 @@ describe('PlatformModelsPage', () => {
     );
   });
 
+  it('a key the provider refused (401) is not spent on probing the suggestions', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+      'POST /model-discovery': () => ({
+        status: 502,
+        body: {
+          error: {
+            code: 'upstream_error',
+            message: 'HTTP 401: invalid api key',
+            details: { status: 401 },
+          },
+        },
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+    const keyInput = within(form).getByTestId('provider-key');
+    fireEvent.change(keyInput, { target: { value: 'sk-wrong-key-0123456789' } });
+    fireEvent.blur(keyInput);
+    const suggestions = await within(form).findByTestId('provider-model-suggestions');
+    expect(suggestions.textContent).toContain('供应商拒绝了这把密钥');
+    const [first] = within(suggestions).getAllByTestId('provider-model-suggestion');
+    fireEvent.click(first as HTMLElement);
+    expect((first as HTMLInputElement).checked).toBe(true);
+    expect(within(form).queryByTestId('provider-model-probe')).toBeNull();
+    expect(proxy.calls.filter((c) => c.path === '/model-probe')).toEqual([]);
+  });
+
+  it('a malformed key is flagged on the field and never sent', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+    const keyInput = within(form).getByTestId('provider-key');
+    fireEvent.change(keyInput, { target: { value: 'sk-abc　def' } });
+    fireEvent.blur(keyInput);
+    expect(within(form).getByText(/非 ASCII/)).toBeDefined();
+    expect(proxy.calls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+
+  it('a check refused by the proxy’s rate limit says to wait, in words', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+      'POST /model-discovery': () => ({
+        status: 429,
+        body: {
+          error: {
+            code: 'rate_limited',
+            message: 'too many provider checks',
+            details: { reason: 'budget', retryAfterSeconds: 25 },
+          },
+        },
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    await screen.findByTestId('providers-table');
+    fireEvent.click(screen.getByTestId('provider-create'));
+    const form = await screen.findByTestId('provider-form');
+    fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+    fireEvent.change(within(form).getByTestId('provider-key'), {
+      target: { value: 'sk-right-key-0123456789' },
+    });
+    fireEvent.click(within(form).getByTestId('provider-discover'));
+    const error = await within(form).findByTestId('provider-discover-error');
+    expect(error.textContent).toContain('暂停了 25 秒');
+    expect(within(form).queryByTestId('provider-discover-manual-hint')).toBeNull();
+  });
+
+  it('suggests typing model ids only when the relay seems to have no model list', async () => {
+    for (const [status, hinted] of [
+      [404, true],
+      [401, false],
+    ] as const) {
+      const http = scriptedHttp();
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([provider()]) }),
+        'POST /model-discovery': () => ({
+          status: 502,
+          body: {
+            error: { code: 'upstream_error', message: `HTTP ${status}`, details: { status } },
+          },
+        }),
+      });
+      renderPage(http, proxy.fetchImpl);
+      await screen.findByTestId('providers-table');
+      fireEvent.click(screen.getByTestId('provider-create'));
+      const form = await screen.findByTestId('provider-form');
+      fireEvent.click(within(form).getByTestId('provider-preset-deepseek'));
+      fireEvent.change(within(form).getByTestId('provider-key'), {
+        target: { value: 'sk-right-key-0123456789' },
+      });
+      fireEvent.click(within(form).getByTestId('provider-discover'));
+      await within(form).findByTestId('provider-discover-error');
+      expect(within(form).queryByTestId('provider-discover-manual-hint') !== null).toBe(hinted);
+      cleanup();
+    }
+  });
+
   it('runs 测试调用', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({
@@ -883,5 +991,35 @@ describe('PlatformModelsPage workspace × model matrix (PMo1)', () => {
     const betaCells = betaRow.querySelectorAll('td');
     expect(betaCells[2]?.querySelector('svg')).toBeTruthy();
     expect(betaCells[3]?.querySelector('svg')).toBeTruthy();
+  });
+});
+
+describe('PlatformModelsPage — a key no header can carry (review of #521)', () => {
+  it('shows the stored key as needing re-entry, in the table and the drawer, and blocks the test', async () => {
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({
+        status: 200,
+        body: listWire([provider({ credentialSource: 'console', credentialInvalid: true })]),
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    const table = await screen.findByTestId('providers-table');
+    const row = within(table).getByTestId('provider-row-openai');
+    const chip = within(row).getByTestId('provider-credential');
+    expect(chip.dataset.status).toBe('invalid');
+    expect(chip.textContent).toContain('密钥含非法字符，请重新填写');
+    const status = within(row).getByTestId('provider-enabled-chip');
+    expect(status.dataset.status).toBe('key_invalid');
+    expect(status.textContent).toBe('密钥无效');
+
+    fireEvent.click(within(row).getByTestId('provider-open'));
+    const drawer = await screen.findByTestId('provider-detail-drawer');
+    expect(within(drawer).getByTestId('provider-credential-invalid').textContent).toContain(
+      '请在下方重新填写',
+    );
+    expect(within(drawer).getByTestId('provider-test-panel').textContent).toContain(
+      '密钥含非法字符',
+    );
   });
 });

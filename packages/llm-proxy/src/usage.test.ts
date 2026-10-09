@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_USAGE_SCAN_CHARS,
   createStreamUsageAccumulator,
   parseAnthropicUsage,
   parseOpenAiResponsesUsage,
@@ -188,6 +189,18 @@ describe('createStreamUsageAccumulator — openai-completions', () => {
     expect(acc.result()).toBeUndefined();
     acc.push(full.slice(splitAt));
     expect(acc.result()).toEqual({ inputTokens: 8, outputTokens: 1 });
+  });
+
+  it('drops a frame larger than the scan cap and still reads the usage frame after it (STATUS leftover 138)', () => {
+    const acc = createStreamUsageAccumulator('openai-completions');
+    const chunk = 'x'.repeat(1024 * 1024);
+    acc.push('data: ');
+    for (let sent = 0; sent <= MAX_USAGE_SCAN_CHARS; sent += chunk.length) acc.push(chunk);
+    acc.push('\n\n');
+    acc.push(
+      sseFrame(undefined, JSON.stringify({ usage: { prompt_tokens: 5, completion_tokens: 2 } })),
+    );
+    expect(acc.result()).toEqual({ inputTokens: 5, outputTokens: 2 });
   });
 
   it('returns undefined when no usage was ever observed', () => {

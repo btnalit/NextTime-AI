@@ -294,6 +294,30 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
             : t('供应商拒绝了请求', 'The provider refused the request');
       return `${prefix}：${error.message}`;
     }
+    case 'rate_limited': {
+      const details = error.details;
+      const seconds =
+        typeof details === 'object' &&
+        details !== null &&
+        'retryAfterSeconds' in details &&
+        typeof (details as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number'
+          ? (details as { retryAfterSeconds: number }).retryAfterSeconds
+          : null;
+      const busy =
+        typeof details === 'object' &&
+        details !== null &&
+        (details as { reason?: unknown }).reason === 'busy';
+      if (busy) {
+        return t(
+          '还有几项验证正在进行，等它们结束后再试。',
+          'Several checks are still running — try again once they finish.',
+        );
+      }
+      return t(
+        `短时间内验证次数太多，为保护密钥额度暂停了${seconds ? ` ${seconds} 秒` : '一会儿'}，之后再试。`,
+        `Too many checks in a short time — paused${seconds ? ` for ${seconds} s` : ' briefly'} to protect the key's quota; try again after that.`,
+      );
+    }
     case 'invalid_body':
       return t(
         '代理认为提交的内容不合法，请检查各字段。',

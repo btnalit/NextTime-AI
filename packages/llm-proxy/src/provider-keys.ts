@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isHeaderSafeProviderKey } from '@nexttime/shared';
 
 /**
  * provider-keys (R-24, review 2026-10-02): where `api_key_env` is looked up. A provider key that
@@ -20,6 +21,53 @@ import { join } from 'node:path';
  * indirection: `api_key_env` is set from the console, and an indirection would let it name any
  * file this process can read (its own key store, for one) as a "provider key".
  */
+
+/** A resolved provider key as it may be sent: `ok` with the key trimmed (the console form trims
+ *  too), `missing` when nothing is left, `invalid` when a character remains that an HTTP header
+ *  cannot carry — a pasted full-width space, an inner line break. An invalid key is never put in
+ *  a header: `Headers` throws a TypeError that quotes the value, and that message reaches logs. */
+export type ProviderKeyCheck =
+  | { readonly kind: 'ok'; readonly key: string }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'invalid' };
+
+/** Every place a provider key goes into a request header checks it here first (proxy.ts's
+ *  forward path, provider-test.ts, provider-models.ts), and the admin API reports `invalid` on
+ *  the provider card. */
+export function checkProviderKey(raw: string | undefined): ProviderKeyCheck {
+  const key = raw?.trim() ?? '';
+  if (key.length === 0) return { kind: 'missing' };
+  return isHeaderSafeProviderKey(key) ? { kind: 'ok', key } : { kind: 'invalid' };
+}
+
+/** Startup check (review of #521): every provider whose resolved key — console key first, then
+ *  `api_key_env` — cannot go in a header gets one warning naming the provider and where the key
+ *  came from, never the value. Startup goes on: such a key already fails every call (502
+ *  `upstream_key_invalid`) and the console card says to re-enter it. Returns the ids reported. */
+export function reportUnusableProviderKeys(
+  providers: readonly { readonly id: string; readonly apiKeyEnv: string | undefined }[],
+  resolveConsoleKey: (providerId: string) => string | undefined,
+  resolveApiKey: (envVarName: string) => string | undefined,
+  log: (line: string) => void,
+): string[] {
+  const reported: string[] = [];
+  for (const { id, apiKeyEnv } of providers) {
+    const consoleKey = resolveConsoleKey(id);
+    const key = consoleKey ?? (apiKeyEnv ? resolveApiKey(apiKeyEnv) : undefined);
+    if (checkProviderKey(key).kind !== 'invalid') continue;
+    reported.push(id);
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: `llm-proxy: provider "${id}"'s key contains a character an HTTP header cannot carry — every call with it fails; re-enter it in the console, or fix the key file / env var`,
+        providerId: id,
+        source: consoleKey !== undefined ? 'console' : 'env',
+        envVar: consoleKey !== undefined ? null : (apiKeyEnv ?? null),
+      }),
+    );
+  }
+  return reported;
+}
 
 export const DEFAULT_PROVIDER_KEYS_DIR = '/run/secrets/llm-provider-keys';
 

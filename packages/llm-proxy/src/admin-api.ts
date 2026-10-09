@@ -23,11 +23,17 @@ import {
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import { AdminAuthError, authenticateAdminRequest } from './admin-auth.js';
+import {
+  UpstreamCallLimitError,
+  type UpstreamCallLimiter,
+  createUpstreamCallLimiter,
+} from './admin-limits.js';
 import type { ProviderCatalog, ResolvedProvider } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
+import { checkProviderKey } from './provider-keys.js';
 import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { ProviderStoreError } from './provider-store.js';
@@ -69,6 +75,14 @@ import { ProviderStoreError } from './provider-store.js';
  *                                the provider exists. Changes nothing; audit-logged like a test.
  *                                Its own top-level segment, not `/providers/<x>`, so it can never
  *                                collide with a provider id.
+ *   POST   /model-probe          the provider test against up to six picked models, with the
+ *                                form's own upstream and credential (same rules as discovery).
+ *
+ * The three routes that call an upstream (`/test`, `/model-discovery`, `/model-probe`) run under a
+ * per-administrator limit (admin-limits.ts): two at a time plus a short queue, and a budget of
+ * upstream calls per minute. Over it → 429 `rate_limited` with `details.retryAfterSeconds`; the
+ * upstream is not called. Every upstream answer is read with a byte cap (http-util.ts
+ * `readUpstreamJson`).
  *
  * S7-A (docs/STATUS.md 维护者决定 2026-09-22 ①: no approval flow, usability first): the console
  * may now set a provider's key directly — resolution order (proxy.ts, this module's own
@@ -149,6 +163,9 @@ export interface AdminApiOptions {
   readonly listModels?: (
     options: Omit<ListUpstreamModelsOptions, 'timeoutMs' | 'fetchImpl'>,
   ) => Promise<ListUpstreamModelsResult>;
+  /** Per-administrator bound on the routes that call an upstream (admin-limits.ts). Defaults to
+   *  {@link createUpstreamCallLimiter}'s defaults. */
+  readonly upstreamCallLimiter?: UpstreamCallLimiter;
   readonly maxRequestBodyBytes: number;
   readonly log?: (line: string) => void;
   readonly now?: () => Date;
@@ -193,6 +210,7 @@ export function toWireProvider(
   provider: ResolvedProvider,
   credentialPresent: boolean,
   credentialSource: LlmProviderCredentialSourceWire,
+  credentialInvalid = false,
 ): LlmProviderWire {
   const { config } = provider;
   return {
@@ -205,6 +223,7 @@ export function toWireProvider(
     apiKeyEnv: config.api_key_env ?? null,
     credentialPresent,
     credentialSource,
+    ...(credentialInvalid ? { credentialInvalid: true } : {}),
     enabled: provider.enabled,
     source: provider.source,
     overridesFile: provider.overridesFile,
@@ -284,6 +303,37 @@ function changedFields(
 
 export function createAdminApi(options: AdminApiOptions): AdminHandler {
   const log = options.log ?? ((line: string) => console.log(line));
+  const upstreamCallLimiter = options.upstreamCallLimiter ?? createUpstreamCallLimiter();
+
+  /** Runs `fn` — the part of a route that calls the upstream — under the caller's limits
+   *  (admin-limits.ts), charging `cost` upstream calls (worst case). Over a limit → 429
+   *  `rate_limited`, and the upstream is not called. */
+  async function withinUpstreamLimits<T>(
+    claims: LlmAdminTokenClaims,
+    route: string,
+    cost: number,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await upstreamCallLimiter.run(claims.sub, cost, fn);
+    } catch (err) {
+      if (!(err instanceof UpstreamCallLimitError)) throw err;
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: admin upstream call refused by the per-administrator limit',
+          route,
+          reason: err.reason,
+          actorUserId: claims.sub,
+          retryAfterSeconds: err.retryAfterSeconds,
+        }),
+      );
+      throw new AdminApiError(429, 'rate_limited', err.message, {
+        reason: err.reason,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    }
+  }
   const now = options.now ?? (() => new Date());
   const resolveApiKey = options.resolveApiKey ?? ((name: string) => process.env[name]);
   let modelsJsonWrittenAt: string | null = null;
@@ -304,6 +354,15 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
 
   function credentialPresent(provider: ResolvedProvider): boolean {
     return credentialSource(provider) !== 'none';
+  }
+
+  /** The resolved credential cannot go in a header (provider-keys.ts `checkProviderKey`): every
+   *  call with it fails, so the provider card says to re-enter it. Same order as `credentialSource`. */
+  function credentialInvalid(provider: ResolvedProvider): boolean {
+    const key =
+      options.keyStore.get(provider.id) ??
+      (provider.config.api_key_env ? resolveApiKey(provider.config.api_key_env) : undefined);
+    return checkProviderKey(key).kind === 'invalid';
   }
 
   async function rewriteModelsJson(): Promise<void> {
@@ -555,13 +614,16 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     const input = parsed.data;
     const { realKey, credentialSource, existing } = resolveFormCredential(claims, input);
 
+    const listModels = options.listModels;
     const startedAt = now().getTime();
-    const result = await options.listModels({
-      api: input.api,
-      upstreamBaseUrl: input.upstreamBaseUrl.replace(/\/+$/, ''),
-      authHeader: input.authHeader,
-      realKey,
-    });
+    const result = await withinUpstreamLimits(claims, 'model-discovery', 1, () =>
+      listModels({
+        api: input.api,
+        upstreamBaseUrl: input.upstreamBaseUrl.replace(/\/+$/, ''),
+        authHeader: input.authHeader,
+        realKey,
+      }),
+    );
     const latencyMs = Math.max(0, now().getTime() - startedAt);
     audit(claims, 'provider_models_listed', input.id, {
       upstreamBaseUrl: input.upstreamBaseUrl,
@@ -620,7 +682,10 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         outcomes[index] = await options.runTest(config, models[index] as string, realKey);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(3, models.length) }, worker));
+    // Worst case three calls a model: the completion, the forced tool call and its one retry.
+    await withinUpstreamLimits(claims, 'model-probe', 3 * models.length, () =>
+      Promise.all(Array.from({ length: Math.min(3, models.length) }, worker)),
+    );
     audit(claims, 'provider_models_probed', input.id, {
       upstreamBaseUrl: input.upstreamBaseUrl,
       credentialSource,
@@ -644,7 +709,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
 
   function toWire(provider: ResolvedProvider): LlmProviderWire {
-    return toWireProvider(provider, credentialPresent(provider), credentialSource(provider));
+    return toWireProvider(
+      provider,
+      credentialPresent(provider),
+      credentialSource(provider),
+      credentialInvalid(provider),
+    );
   }
 
   function listResult(storeWritable: boolean): LlmProviderListWire {
@@ -861,7 +931,9 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
               : 'no key is configured for this provider — set one in the console',
           );
         }
-        const result = await options.runTest(provider.config, model, realKey);
+        const result = await withinUpstreamLimits(claims, 'test', 3, () =>
+          options.runTest(provider.config, model, realKey),
+        );
         await options.catalog.recordTest(id, result).catch((err: unknown) => {
           log(
             JSON.stringify({
