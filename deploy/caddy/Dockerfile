@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # caddy image with the web SPA baked in (design doc §7.6, §10.2; E8 + S1.8).
 #
@@ -31,7 +31,8 @@
 ARG EXPLORER_BUILD=0
 ARG SEMANTICA_REF=v0.6.7
 
-FROM node:24-bookworm-slim AS web-build
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS web-build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -80,7 +81,8 @@ RUN corepack pnpm --filter @nexttime/web... build
 # never drift apart. `git`/`ca-certificates` are the only extra packages `node:24-bookworm-slim`
 # needs beyond its bundled node/npm (build.sh's own "Requires: node + npm ... git only when
 # SEMANTICA_SRC is unset" — this stage always clones, never sets SEMANTICA_SRC).
-FROM node:24-bookworm-slim AS explorer-build
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS explorer-build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -107,6 +109,7 @@ FROM explorer-build AS explorer-src-1
 
 FROM explorer-src-${EXPLORER_BUILD} AS explorer-src
 
-FROM caddy:2.10
+# caddy:2.10 by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-caddy@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
 COPY --from=web-build /workspace/packages/web/dist /srv/web
 COPY --from=explorer-src /out /srv/explorer

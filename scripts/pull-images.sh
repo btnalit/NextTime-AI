@@ -239,10 +239,14 @@ done
 # (apply-release.sh step 7; a missing base image is all their builds would fetch — an existing one
 # is never refreshed, which would void the fixtures' cached package layers).
 if [ "$prefetch" -eq 1 ]; then
+  # Each fixture Dockerfile's `# syntax=` frontend and FROM images (the GHCR copies by digest since
+  # #531, deploy/image-mirrors.json).
   fixture_bases=$(git ls-tree -r --name-only "$TAG" deploy/accept-s2 deploy/fake-llm | grep '/Dockerfile$' |
-    while read -r f; do git show "${TAG}:${f}" | sed -n 's/^FROM[[:space:]][[:space:]]*\([^[:space:]]*\).*/\1/p'; done | sort -u)
+    while read -r f; do
+      git show "${TAG}:${f}" | sed -n -e '1s/^# syntax=\([^[:space:]]*\).*/\1/p' -e 's/^FROM[[:space:]][[:space:]]*\([^[:space:]]*\).*/\1/p'
+    done | sort -u)
   for ref in $(git show "${TAG}:docker-compose.yml" |
-    sed -n 's/^[[:space:]]*image:[[:space:]]*\([^[:space:]#]*@sha256:[0-9a-f]*\).*/\1/p' | sort -u) docker/dockerfile:1.7 $fixture_bases; do
+    sed -n 's/^[[:space:]]*image:[[:space:]]*\([^[:space:]#]*@sha256:[0-9a-f]*\).*/\1/p' | sort -u) $fixture_bases; do
     if docker image inspect "$ref" >/dev/null 2>&1; then
       echo "pull-images: ${ref} present"
     elif retry timeout "$PULL_ATTEMPT_TIMEOUT" docker pull -q "$ref" >/dev/null; then

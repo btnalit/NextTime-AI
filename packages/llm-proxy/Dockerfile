@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # Multi-stage build for @nexttime/llm-proxy (design doc §7.7, §10.1, §10.2).
 # NOTE (R1): image build is unverified on this machine — Docker is not installed here. It must
@@ -6,7 +6,8 @@
 #
 # Build context is the repo root: docker build -f packages/llm-proxy/Dockerfile .
 
-FROM node:24-bookworm-slim AS build
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -42,7 +43,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 RUN corepack pnpm --filter @nexttime/llm-proxy... build
 RUN corepack pnpm --filter @nexttime/llm-proxy deploy --prod --legacy /out/llm-proxy
 
-FROM node:24-bookworm-slim AS runtime
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 RUN groupadd --system --gid 10001 nexttime \
  && useradd --system --uid 10001 --gid nexttime --home-dir /app --shell /usr/sbin/nologin nexttime
 

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # fake-llm: deterministic OpenAI-compatible upstream test double for llm-proxy (design doc S1.10;
 # docs/development-tasks.md S1.5, second half, deliverable 4). No build step — server.mjs is
@@ -8,7 +8,8 @@
 #
 # Build context is the repo root: docker build -f deploy/fake-llm/Dockerfile .
 
-FROM node:24-bookworm-slim
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 RUN groupadd --system --gid 10001 nexttime \
  && useradd --system --uid 10001 --gid nexttime --home-dir /app --shell /usr/sbin/nologin nexttime
 

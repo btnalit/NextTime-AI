@@ -11,13 +11,8 @@
 # that should end the job, and `docker compose up --wait`/the workflow's own `/api/health` curl
 # loop would see a container repeatedly flapping between "starting" and "restarting" instead of a
 # single clean failure to report.
-#
-# Also: `postgres` comes from the GHCR copy of the same digest (ci-image-mirror.yml) instead of
-# Docker Hub, whose anonymous pull limit fails CI runners. Pulled anonymously: the package is
-# public, and the mirror workflow fails if it stops being so.
 services:
   postgres:
-    image: ghcr.io/btnalit/nexttime-ai-ci-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
     restart: 'no'
   kernel:
     restart: 'no'

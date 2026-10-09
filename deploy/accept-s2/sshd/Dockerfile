@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # accept-s2 sshd: a minimal, container-simulated "test SSH host" for scripts/accept_s2.sh (S2.12
 # deliverable 1a "a test SSH host (container-simulated)"). Test fixture only — never part of a
@@ -14,7 +14,8 @@
 #
 # Build context is the repo root: docker build -f deploy/accept-s2/sshd/Dockerfile .
 
-FROM alpine:3.20
+# alpine:3.20 by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN apk add --no-cache openssh-server \
  && ssh-keygen -A \
  && adduser -D -s /bin/sh testuser \

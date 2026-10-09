@@ -76,6 +76,9 @@ LIVE_SERVICES_STOPPED=0
 PRE_DB=""
 TARGET_CREATED=0
 CONTAINER_DUMP_PATH=""
+# postgres:17-alpine by digest, from its GHCR copy (deploy/image-mirrors.json): the backup service's
+# own image (docker-compose.yml), already on the host, so the dry run pulls nothing.
+PG_TOOLS_IMAGE=ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
 
 psql_admin() {
 	docker compose exec -T postgres psql -U nexttime -d postgres -v ON_ERROR_STOP=1 -t -A "$@" </dev/null
@@ -215,7 +218,7 @@ echo ""
 # --- dry-run: validate only, never touches the live postgres service ---------------------------
 if [ "$DRY_RUN" -eq 1 ]; then
 	echo "restore: [dry-run] validating dump TOC with pg_restore -l (postgres:17-alpine, throwaway container)"
-	if ! docker run --rm -v "$DB_DUMP_ABS:/restore.dump:ro" postgres:17-alpine pg_restore -l /restore.dump >/tmp/restore-toc.$$; then
+	if ! docker run --rm -v "$DB_DUMP_ABS:/restore.dump:ro" "$PG_TOOLS_IMAGE" pg_restore -l /restore.dump >/tmp/restore-toc.$$; then
 		echo "restore: [dry-run] FAILED — dump does not look like a valid pg_dump -Fc archive" >&2
 		rm -f /tmp/restore-toc.$$
 		exit 1

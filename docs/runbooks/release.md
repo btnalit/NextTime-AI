@@ -740,6 +740,19 @@ Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不�
 
 结果记 `docs/private/`。
 
+### 3.19 第三方镜像改从 GHCR 副本拉取（#531，v0.44.0 之后的下一版起）
+
+无迁移。`docker-compose.yml` 的第三方服务（pgvector、postgres、docker-socket-proxy、alpine、curl）和各 Dockerfile 的
+基础镜像与 `# syntax=` 前端，改为按 digest 引用 `ghcr.io/btnalit/nexttime-mirror-*`（清单 `deploy/image-mirrors.json`）。
+digest 与上一版完全相同，镜像内容不变，只换来源。
+
+- **预取**：§3.13 的 `--prefetch` 改从 GHCR 拉这些副本；digest 与本机已有的相同时层直接复用，只取 manifest；主机本来就从 GHCR 拉应用镜像，不需要新出口。
+  fixture 的前端引用从该 tag 自己的 Dockerfile 第 1 行读出，不再写死。
+- **应用**：镜像引用字符串变了，`up -d` 会按新配置重建 postgres 与四个 socket-proxy 容器（同一镜像，数据卷不动，
+  postgres 停几秒，`apply-release.sh` 在 `up` 之前已做 dump）。属预期，不是故障。
+- **回滚到 v0.44.0 及更早**：旧 tag 的 compose 仍引用 Docker Hub。本机已有的镜像按 digest 直接复用，缺的才从 Docker Hub
+  拉（主机自己的匿名配额，429 只发生在共享出口的 CI runner 上）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
