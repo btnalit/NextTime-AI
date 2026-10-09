@@ -688,6 +688,7 @@ SQL
 1. **排空 Worker**：确认没有运行中的 WorkerRun——控制台任务列表没有进行中的任务，且
    `docker ps --filter label=nexttime.role=worker` 为空。进行中的 WorkerRun 会失败：governance 0018 吊销它的 Handle，新的
    supervisor 也不会为旧容器建绑定。入口容器不用管，下一个 Turn 会自动重签并重建。`apply-release.sh` 目前不替你检查这一步（遗留 170）。
+   排空之后到窗口结束之前不要新发起 Worker；`queued` 的 Task 在应用后由新代码起容器，不受影响。
 2. 照常 `--prefetch` 目标 tag 并确认 `RESULT ok`（§3）。
 
 **应用时会发生什么**：
@@ -696,15 +697,28 @@ SQL
   llm-proxy 经吊销同步跟上。只改数据，可逆（§6）。
 - compose 新建卷 `handle-bindings`（目录 `0700 10001:10001`）；kernel、llm-proxy、worker-supervisor 随版本重建（`up` 本来就会）。
   滚动重建的几秒里旧 llm-proxy 遇到带 `hld` 的新 token 会 401，属窗口内。
-- 入口镜像的自检多一行 `check=handle_binding`：在启动 pi 之前反复问内核 `GET /api/source-binding`，绑定指向本容器才继续，
-  20 秒内等不到就退出（`address_not_bound` / `address_bound_to_another_container`）。**这是 fail closed**：绑定没建好时
-  入口 agent 起不来，而不是带着别的凭证跑。
+- worker-runtime 镜像的自检多一行 `check=handle_binding`，入口容器与 WorkerRun 容器都跑（`NEXTTIME_MODE` 为 `entry` 或
+  `worker`）：在启动 pi 之前反复问内核 `GET /api/source-binding`，绑定指向本容器才继续，20 秒内等不到就退出
+  （`address_not_bound` / `address_bound_to_another_container` / `hostname_not_a_container_id`）。**这是 fail closed**：
+  绑定没建好时 agent 起不来，而不是带着别的凭证跑。
 
 **应用后核对**：
 - S1 多三步：`env-no-handle`（容器里读不到任何 JWT，扫全部进程环境）、`env-workers-plane`、`env-source-binding`（逐容器核对
   地址不同、绑定指向该容器、从容器里问内核得到该容器 id、入口自检 `check=handle_binding result=ok`）；`env-capability-handle`
-  的文字变了。三步都须通过，再跑 S2–S4。
-- 审计里能看到 0018 的 `principal.container_handles_revoked` 行（只读 SQL 或控制台审计页）。
+  的文字变了。`apply-release.sh` 在一次运行里按 S3 → S1 → S2 → S4 跑完全部验收，失败只计数、不会停下，所以要在 apply 日志里
+  确认这三步都是 PASS：任何一步 FAIL 都视为来源绑定没有生效，按 §5 判断是否回滚，不能只看 `RESULT` 的失败计数。
+- 0018 只在执行那一刻存在未过期、未吊销的容器 Handle 时才写审计行 `principal.container_handles_revoked`（例如 24 h 内没有
+  Turn、也没有 Worker，就是 0 行，不代表失败）。所以用下面的只读 SQL 核对：应用前签发、至今仍有效的容器 Handle 应为 0
+  （`<apply 日志的开始时间>` 换成日志第一行的时间）：
+
+  ```sql
+  begin transaction read only;
+  select count(*) from capability_handles h
+    join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+   where s.kind in ('entry','worker_run') and h.revoked_at is null
+     and h.expires_at > now() and h.created_at < '<apply 日志的开始时间>';
+  rollback;
+  ```
 - 用 §3.15 A 的只读 SQL 再数一次历史 Handle 命中：容器 Handle 副本此时应已全部吊销，剩下的 `live_unrevoked` 是用户粘贴进去的
   bearer Handle（遗留 157），结果记 `docs/private/`。
 
@@ -718,8 +732,9 @@ Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不�
 否则内核返回 400 `credentials_review_required`；含疑似凭据的参数不再被自动批准或「总是允许」放行。控制台的对话审批卡遇到
 这种请求只给「去审批页核对」与拒绝。用脚本或 CLI 批准 / 发布含凭据内容的调用方要显式带这个字段。
 
-**应用后核对**（只用合成值，例如 `password=abcdefghijklmnopqrstuvwxyz0123`；不要用真实凭据或真实 Handle）：
-- (a) 一个参数里带上面合成值的审批请求，在审批页显示「含 1 处疑似凭据」和字段 `password`，勾选前「批准」不可用；对话审批卡
+**应用后核对**（只用合成值，不要用真实凭据或真实 Handle）：
+- (a) 一个参数为 `{"password": "abcdefghijklmnopqrstuvwxyz0123"}` 的审批请求（合成值放在 `password` 字段里，按字段名计数；
+  若把 `password=abc…` 整串放进别的字段，比如 `cmd`，路径显示的是 `cmd`），在审批页显示「含 1 处疑似凭据」和字段 `password`，勾选前「批准」不可用；对话审批卡
   只链接到审批页，不能直接批准。
 - (b) 批准后，该审批的审计行带 `credentialReview`（`suspectedSecretValues: 1`、`confirmed: true`）。
 
