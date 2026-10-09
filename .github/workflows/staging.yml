@@ -240,9 +240,15 @@ jobs:
           sudo install -m 755 "$dir/runsc" "$dir/containerd-shim-runsc-v1" /usr/local/bin/
           sudo cp -r "$dir/gvisor-bin" /usr/local/bin/
           sudo /usr/local/bin/runsc install -- --network=host
+          # The --from release's baseline still names Docker Hub images (a published tag cannot change;
+          # releases after #531 reference their GHCR copies, deploy/image-mirrors.json). Docker Hub limits
+          # anonymous pulls per runner address, so this runner's daemon asks mirror.gcr.io first and
+          # falls back to Docker Hub on a miss; digest-pinned references are verified either way. This
+          # runner only: a host's daemon is never configured from here.
+          sudo sh -c 'jq ". + {\"registry-mirrors\": [\"https://mirror.gcr.io\"]}" /etc/docker/daemon.json >/etc/docker/daemon.json.new && mv /etc/docker/daemon.json.new /etc/docker/daemon.json'
           cat /etc/docker/daemon.json
           sudo systemctl restart docker
-          sudo docker run --rm --runtime=runsc alpine:3.20 true
+          sudo docker run --rm --runtime=runsc ghcr.io/btnalit/nexttime-mirror-alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc true
           runsc --version | head -n 1
 
       - name: Pin the planned commit

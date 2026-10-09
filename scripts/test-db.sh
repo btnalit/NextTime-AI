@@ -5,7 +5,9 @@
 set -euo pipefail
 
 CONTAINER_NAME="${TEST_DB_CONTAINER_NAME:-nexttime-test-db}"
-IMAGE="pgvector/pgvector:pg17"
+# pgvector/pgvector:pg17 by digest, from its GHCR copy (deploy/image-mirrors.json) — the image
+# docker-compose.yml and CI run.
+IMAGE="ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
 PORT="${TEST_DB_PORT:-55432}"
 DB_NAME="${TEST_DB_NAME:-nexttime_test}"
 DB_USER="${TEST_DB_USER:-nexttime}"

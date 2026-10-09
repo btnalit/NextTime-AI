@@ -412,7 +412,9 @@ label 的 issue（"pi X 可升级、兼容测试通过"——它只是提醒，�
 2026-09-25 起仓库不再用 Renovate，也没有 Dependabot 版本更新配置（见 `docs/runbooks/automation.md`
 "依赖更新怎么做"）；万一 Dependabot 安全更新碰到这两个包，`.github/workflows/auto-merge.yml` 会打
 `needs-review` 标签、不自动合并——仍然要走上面第 4 节的升级步骤和第 5 节的测试清单。`deploy/worker-runtime`
-的 Docker 基础镜像（`node:24-bookworm-slim`）锁定在 24.x，升级时手动改。
+的 Docker 基础镜像（`node:24-bookworm-slim`）锁定在 24.x，按 digest 引用它在 GHCR 的副本（`deploy/image-mirrors.json`），
+升级时手动改：改清单里的 digest，并在同一个 PR 里改全部引用（`node scripts/guards/image-mirrors.mjs` 会列出来），
+推送顺序见 `.github/workflows/image-mirror.yml` 头部注释。
 
 ## 7. 回滚
 

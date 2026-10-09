@@ -12,6 +12,9 @@
 #   - repositories named `nexttime-ai-*` (the compose names) or `ghcr.io/<owner>/nexttime-ai-*`
 #     (the published images, scripts/pull-images.sh);
 #   - dangling images carrying this project's `ai.nexttime.built-from` label.
+#   The GHCR copies of third-party images (`ghcr.io/<owner>/nexttime-mirror-*`, pulled by digest
+#   for docker-compose.yml's services and the fixture builds — deploy/image-mirrors.json) are
+#   deliberately outside this scope.
 #   Anything else on the host (other projects' images, unlabelled dangling images, the build
 #   cache) is never touched — those are reported, and removing them is the operator's decision.
 #

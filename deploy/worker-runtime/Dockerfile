@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # Agent runtime image (design doc §7.2, §7.3, §10.1; docs/development-tasks.md S1.5): the SAME
 # image runs both the per-user resident entry container (NEXTTIME_MODE=entry, spawned by
@@ -67,7 +67,8 @@
 # `nexttime-ai-worker-runtime` image @nexttime/worker-supervisor references by name; that
 # service is never itself `up`).
 
-FROM node:24-bookworm-slim AS build
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -103,7 +104,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 RUN corepack pnpm --filter @nexttime/platform-extension... build
 RUN corepack pnpm --filter @nexttime/platform-extension deploy --prod --legacy /out/platform-extension
 
-FROM node:24-bookworm-slim AS runtime
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.
