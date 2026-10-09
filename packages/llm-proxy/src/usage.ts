@@ -165,6 +165,13 @@ export function parseUsageFromJsonBody(
 // SSE line parsing (usage extraction only — never touches what's forwarded to the client)
 // -------------------------------------------------------------------------------------------
 
+/** The most response text kept in memory to find the usage figures in (STATUS leftover 138): one
+ *  SSE frame still waiting for its end, or a whole non-streaming JSON body (proxy.ts). The response
+ *  itself is forwarded to the client chunk by chunk regardless; only this copy is bounded. The
+ *  largest real frame — the Responses API's terminal event, which repeats the whole output — is
+ *  well under a megabyte even at the longest output limits. */
+export const MAX_USAGE_SCAN_CHARS = 16 * 1024 * 1024;
+
 interface SseEvent {
   readonly event: string | undefined;
   readonly data: string;
@@ -178,6 +185,12 @@ class SseEventParser {
 
   push(chunk: string): SseEvent[] {
     this.buffer += chunk.replace(/\r\n/g, '\n');
+    if (this.buffer.length > MAX_USAGE_SCAN_CHARS) {
+      // A frame far larger than any usage-bearing event (STATUS leftover 138): stop holding it.
+      // The rest of that frame ends at the next blank line and parses as no usable event; later
+      // frames — the usage one included — are read as usual.
+      this.buffer = '';
+    }
     const events: SseEvent[] = [];
     let idx = this.buffer.indexOf('\n\n');
     while (idx !== -1) {

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderConfig } from './config.js';
-import { runProviderTest } from './provider-test.js';
+import { PROVIDER_TEST_MAX_RESPONSE_BYTES, runProviderTest } from './provider-test.js';
 
 /**
  * provider-test.test: fake upstreams for each api kind exercise the two round trips — the shape
@@ -109,6 +109,20 @@ describe('runProviderTest', () => {
     expect(captured[0]?.authorization).toBe(`Bearer ${REAL_KEY}`);
     expect(captured[1]?.body.tool_choice).toEqual({ type: 'function', function: { name: 'ping' } });
     expect(JSON.stringify(result)).not.toContain(REAL_KEY);
+  });
+
+  it('a key no header can carry is a failed test, not a thrown header error, and is never sent', async () => {
+    const { port, captured } = await start(() => ({ status: 200, body: {} }));
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: 'sk-pasted\u3000key-0123456789',
+      timeoutMs: 2000,
+    });
+    expect(result).toMatchObject({ completion: 'error', tool_call: 'skipped' });
+    expect(result.error).toContain('cannot be sent in an HTTP header');
+    expect(JSON.stringify(result)).not.toContain('0123456789');
+    expect(captured).toEqual([]);
   });
 
   it('openai-responses: expects an output function_call item', async () => {
@@ -421,6 +435,22 @@ describe('runProviderTest', () => {
     });
     expect(result.error).not.toContain(longRun);
     expect(result.error).toContain('***');
+  });
+
+  it('does not read an upstream answer past the byte cap (STATUS leftover 138)', async () => {
+    const { port } = await start(() => ({
+      status: 200,
+      body: { padding: 'x'.repeat(PROVIDER_TEST_MAX_RESPONSE_BYTES + 1) },
+    }));
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 5000,
+    });
+    expect(result.completion).toBe('error');
+    expect(result.tool_call).toBe('skipped');
+    expect(result.error).toBe('HTTP 200: the response was larger than 256 KiB and was not read');
   });
 
   it('reports an unreachable upstream as an error, not an exception', async () => {

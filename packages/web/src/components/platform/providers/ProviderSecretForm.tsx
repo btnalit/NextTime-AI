@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react';
 import { useT } from '../../../lib/i18n.js';
 import type { LlmAdminClient } from '../../../lib/llm-admin.js';
 import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
+import { providerKeyProblem } from '../../../lib/provider-form.js';
 import { Confirm } from '../../kit/confirm.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
@@ -43,7 +44,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = key.trim();
-    if (trimmed.length === 0 || submitting) return;
+    if (trimmed.length === 0 || submitting || providerKeyProblem(trimmed, t)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -66,6 +67,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
   }
 
   const mapped = llmAdminErrorMessage(error, t);
+  const keyProblem = providerKeyProblem(key, t);
 
   return (
     <div className="stack-s" data-testid="provider-secret-form">
@@ -89,7 +91,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           type="submit"
           variant="secondary"
           size="s"
-          disabled={key.trim().length === 0 || submitting}
+          disabled={key.trim().length === 0 || keyProblem !== null || submitting}
           loading={submitting}
           data-testid="provider-secret-submit"
         >
@@ -124,6 +126,11 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           />
         ) : null}
       </form>
+      {keyProblem ? (
+        <div className="field-error" role="alert" data-testid="provider-secret-key-problem">
+          {keyProblem}
+        </div>
+      ) : null}
       {error !== null ? (
         mapped !== null ? (
           <div

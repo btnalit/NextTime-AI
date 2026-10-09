@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_DISCOVERED_MODELS, listUpstreamModels } from './provider-models.js';
+import {
+  MAX_DISCOVERED_MODELS,
+  MAX_MODEL_LIST_BYTES,
+  listUpstreamModels,
+} from './provider-models.js';
 
 /** provider-models.test: the fixed `GET /v1/models` request per api kind, the parsed list, and
  *  every failure shape — with the key scrubbed out of anything that comes back. */
@@ -128,5 +132,56 @@ describe('listUpstreamModels', () => {
     });
     expect(result).toMatchObject({ ok: true, truncated: true });
     if (result.ok) expect(result.models).toHaveLength(MAX_DISCOVERED_MODELS);
+  });
+
+  it('stops reading a model list larger than the cap (STATUS leftover 138)', async () => {
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20));
+      },
+    });
+    const result = await listUpstreamModels({
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.example.invalid',
+      authHeader: 'authorization',
+      realKey: 'sk-k',
+      timeoutMs: 5000,
+      fetchImpl: fakeFetch(() => new Response(endless, { status: 200 })).fetchImpl,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'invalid_response', status: 200 });
+    expect(pulled).toBeLessThanOrEqual(MAX_MODEL_LIST_BYTES / (1024 * 1024) + 2);
+
+    const declared = await listUpstreamModels({
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.example.invalid',
+      authHeader: 'authorization',
+      realKey: 'sk-k',
+      timeoutMs: 1000,
+      fetchImpl: fakeFetch(
+        () =>
+          new Response('{}', {
+            status: 500,
+            headers: { 'content-length': String(MAX_MODEL_LIST_BYTES + 1) },
+          }),
+      ).fetchImpl,
+    });
+    expect(declared).toMatchObject({ ok: false, reason: 'upstream_status', status: 500 });
+  });
+
+  it('a key an HTTP header cannot carry is a result, not a 500, and is never echoed', async () => {
+    const { fetchImpl, calls } = fakeFetch(() => json(200, { data: [] }));
+    const result = await listUpstreamModels({
+      api: 'openai-completions',
+      upstreamBaseUrl: 'https://api.example.invalid',
+      authHeader: 'authorization',
+      realKey: 'sk-全角-key',
+      timeoutMs: 1000,
+      fetchImpl,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'unreachable', status: null });
+    expect(JSON.stringify(result)).not.toContain('全角');
+    expect(calls).toEqual([]);
   });
 });

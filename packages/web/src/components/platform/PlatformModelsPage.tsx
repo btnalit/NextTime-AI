@@ -14,6 +14,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { providerStatus } from '../../lib/provider-status.js';
 import { hrefs, readNewProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -145,15 +146,28 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       id: 'status',
       header: t('状态', 'Status'),
       priority: 'high',
-      width: 110,
-      cell: (provider) => (
-        <StatusChip
-          machine="workspaceStatus"
-          status={provider.enabled ? 'active' : 'disabled'}
-          size="s"
-          testId="provider-enabled-chip"
-        />
-      ),
+      width: 140,
+      cell: (provider) => {
+        const lastTest = testResults[provider.id] ?? provider.lastTest;
+        const status = providerStatus(provider, lastTest);
+        return (
+          <span
+            className={`chip chip-s chip-${status.tone}`}
+            data-testid="provider-enabled-chip"
+            data-status={status.kind}
+            data-tone={status.tone}
+            title={
+              status.detailZh
+                ? [t(status.detailZh, status.detailEn ?? status.detailZh), lastTest?.error]
+                    .filter(Boolean)
+                    .join(' — ')
+                : t(status.zh, status.en)
+            }
+          >
+            {t(status.zh, status.en)}
+          </span>
+        );
+      },
     },
     {
       id: 'actions',
@@ -669,7 +683,12 @@ function ProviderTestPanel({
     ? t('供应商已停用，启用后才能测试。', 'The provider is disabled — enable it to test.')
     : !provider.credentialPresent
       ? t('还没有可用的密钥：先在下方设置。', 'No key yet — set one below first.')
-      : null;
+      : provider.credentialInvalid
+        ? t(
+            '密钥含非法字符，测试一定失败：先在下方重新填写。',
+            'The key has invalid characters, so the test would fail — re-enter it below first.',
+          )
+        : null;
   return (
     <div className="stack-s" data-testid="provider-test-panel">
       <div className="row-wrap">

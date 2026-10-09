@@ -10,6 +10,7 @@ import type { CryptoKey } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { KernelAuditEvent } from './admin-api.js';
 import { createAdminApi, upstreamKey } from './admin-api.js';
+import { type UpstreamCallLimits, createUpstreamCallLimiter } from './admin-limits.js';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
@@ -125,6 +126,7 @@ async function harness(
     /** Put models.json under a directory that does not exist (the rewrite must fail). */
     modelsJsonUnwritable?: boolean;
     listResult?: ListUpstreamModelsResult;
+    limits?: UpstreamCallLimits;
   } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-admin-'));
@@ -192,6 +194,7 @@ async function harness(
         }
       );
     },
+    ...(options.limits ? { upstreamCallLimiter: createUpstreamCallLimiter(options.limits) } : {}),
     maxRequestBodyBytes: 1_000_000,
     log: (line) => logLines.push(line),
   });
@@ -782,6 +785,28 @@ describe('admin API — provider secrets (S7-A)', () => {
     expect(res.body).toMatchObject({ id: 'openai', credentialSource: 'env' });
   });
 
+  it('flags a resolved key no header can carry as credentialInvalid, without its value', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file\u3000pasted-0123456789' } });
+    const res = await request(h.port, 'GET', '/admin/providers', {
+      headers: await h.adminHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const [openai] = (res.body as { items: Array<Record<string, unknown>> }).items;
+    expect(openai).toMatchObject({
+      id: 'openai',
+      credentialSource: 'env',
+      credentialInvalid: true,
+    });
+    expect(JSON.stringify(res.body)).not.toContain('0123456789');
+
+    const fine = await harness();
+    const ok = await request(fine.port, 'GET', '/admin/providers', {
+      headers: await fine.adminHeaders(),
+    });
+    const [plain] = (ok.body as { items: Array<Record<string, unknown>> }).items;
+    expect(plain?.credentialInvalid).toBeUndefined();
+  });
+
   it('GET/list never returns the key value, whatever the source', async () => {
     const h = await harness();
     const admin = await h.adminHeaders();
@@ -1337,5 +1362,85 @@ describe('admin API — POST /model-probe', () => {
     });
     expect(tooMany.status).toBe(400);
     expect(h.testRuns).toEqual([]);
+  });
+});
+
+describe('admin API — per-administrator limit on upstream calls', () => {
+  const PROBE = {
+    id: 'acme',
+    api: 'openai-completions',
+    upstreamBaseUrl: 'https://acme.example.invalid',
+    authHeader: 'authorization',
+  } as const;
+  const LIMITS = { maxConcurrent: 2, maxQueued: 4, budget: 7, windowMs: 60_000 };
+
+  it('charges worst-case upstream calls and answers 429 without calling the upstream once spent', async () => {
+    const h = await harness({ limits: LIMITS });
+    const admin = await h.adminHeaders();
+    // Two models: 3 × 2 = 6 of the 7.
+    const first = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: admin,
+      body: { ...PROBE, key: 'sk-typed', models: ['a', 'b'] },
+    });
+    expect(first.status).toBe(200);
+    // Discovery costs 1: 7 of 7.
+    const listed = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: { ...PROBE, key: 'sk-typed' },
+    });
+    expect(listed.status).toBe(200);
+
+    const refused = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: admin,
+      body: { ...PROBE, key: 'sk-typed', models: ['c'] },
+    });
+    expect(refused.status).toBe(429);
+    expect(refused.body).toMatchObject({
+      error: { code: 'rate_limited', details: { reason: 'budget' } },
+    });
+    const retry = (refused.body as { error: { details: { retryAfterSeconds: number } } }).error
+      .details.retryAfterSeconds;
+    expect(retry).toBeGreaterThan(0);
+    expect(retry).toBeLessThanOrEqual(60);
+
+    await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: NEW_PROVIDER,
+    });
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-typed' },
+    });
+    const tested = await request(h.port, 'POST', '/admin/providers/acme/test', {
+      headers: admin,
+      body: {},
+    });
+    expect(tested.status).toBe(429);
+
+    // Only the first probe reached the upstream; no audit row for a refused call.
+    expect(h.testRuns.map((r) => r.model).sort()).toEqual(['a', 'b']);
+    expect(h.listRuns).toHaveLength(1);
+    expect(h.kernelEvents.filter((e) => e.action === 'provider_tested')).toEqual([]);
+    expect(h.logLines.some((line) => line.includes('per-administrator limit'))).toBe(true);
+    expect(h.logLines.join('\n')).not.toContain('sk-typed');
+  });
+
+  it('keeps a separate budget per administrator', async () => {
+    const h = await harness({ limits: { ...LIMITS, budget: 3 } });
+    const first = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: await h.adminHeaders(),
+      body: { ...PROBE, key: 'k', models: ['a'] },
+    });
+    expect(first.status).toBe(200);
+    const { token } = await mintLlmAdminToken({
+      privateKey: h.privateKey,
+      subject: 'another-admin',
+      jti: randomUUID(),
+    });
+    const other = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: { authorization: `Bearer ${token}`, 'x-requested-with': 'nexttime' },
+      body: { ...PROBE, key: 'k', models: ['b'] },
+    });
+    expect(other.status).toBe(200);
   });
 });

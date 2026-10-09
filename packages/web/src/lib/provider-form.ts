@@ -3,6 +3,7 @@ import type {
   LlmProviderAuthHeaderWire,
   LlmProviderTestResultWire,
 } from '@nexttime/shared';
+import { isHeaderSafeProviderKey } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 
 /**
@@ -312,6 +313,17 @@ export function envNameProblem(value: string, t: Translate): string | null {
     );
   }
   return null;
+}
+
+/** A typed key the proxy would refuse (`isHeaderSafeProviderKey`, shared): an inner space, a line
+ *  break or a full-width character — almost always picked up while copying. Never echoes the key. */
+export function providerKeyProblem(value: string, t: Translate): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || isHeaderSafeProviderKey(trimmed)) return null;
+  return t(
+    '密钥里有空格、换行或全角等非 ASCII 字符，通常是复制时带进来的——重新复制粘贴一次',
+    'The key contains a space, line break or non-ASCII character, usually picked up while copying — paste it again',
+  );
 }
 
 export type TestVerdict = 'ok' | 'chat-only' | 'failed';
