@@ -241,3 +241,50 @@ if (!feed) {
   }
   if (problems.length === 0) console.log('update-feed (S10 U1): isolated, credential-less fetch');
 }
+
+// I19 (design doc §11 "来源绑定"): an agent container's Handle lives only in the `handle-bindings`
+// volume — a tmpfs (never on disk), written by worker-supervisor alone, read-only in the kernel and
+// llm-proxy, mounted nowhere else. Both verifiers know the workers subnet, and that network stays
+// IPv4-only: the peer check matches an IPv4 subnet, so a container with an IPv6 address would not
+// count as a workers-network peer.
+{
+  const problems = [];
+  const volume = doc.volumes?.['handle-bindings'];
+  if (volume?.driver_opts?.type !== 'tmpfs') problems.push('volume handle-bindings is not a tmpfs');
+  const expectedMounts = {
+    'worker-supervisor': 'rw',
+    kernel: 'ro',
+    'llm-proxy': 'ro',
+  };
+  for (const [name, service] of Object.entries(doc.services ?? {})) {
+    const mounts = (service.volumes ?? [])
+      .map(String)
+      .filter((entry) => entry.split(':')[0] === 'handle-bindings');
+    const expected = expectedMounts[name];
+    if (expected === undefined) {
+      if (mounts.length > 0) problems.push(`service ${name} mounts handle-bindings`);
+      continue;
+    }
+    const wanted =
+      expected === 'ro'
+        ? 'handle-bindings:/run/handle-bindings:ro'
+        : 'handle-bindings:/run/handle-bindings';
+    if (JSON.stringify(mounts) !== JSON.stringify([wanted])) {
+      problems.push(`service ${name} mounts handle-bindings as ${JSON.stringify(mounts)}`);
+    }
+    if (service.environment?.HANDLE_BINDINGS_FILE !== '/run/handle-bindings/bindings.json') {
+      problems.push(`service ${name} has no HANDLE_BINDINGS_FILE`);
+    }
+    if (name !== 'worker-supervisor' && !service.environment?.NEXTTIME_SUBNET_WORKERS) {
+      problems.push(`service ${name} has no NEXTTIME_SUBNET_WORKERS`);
+    }
+  }
+  if (doc.networks?.workers?.enable_ipv6) problems.push('the workers network enables IPv6');
+  for (const problem of problems) {
+    console.error(`source binding (I19): ${problem}`);
+    process.exitCode = 1;
+  }
+  if (problems.length === 0) {
+    console.log('source binding (I19): tmpfs bindings, one writer, two read-only verifiers');
+  }
+}
