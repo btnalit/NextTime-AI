@@ -133,7 +133,8 @@ export function redactedForAudit(fields: Record<string, unknown>): Record<string
 
 /** Only the values that are almost certainly a credential themselves, whatever field holds them
  *  (`HIGH_CONFIDENCE_SECRET_PATTERNS`: a PEM private key, a JWT, a vendor key, an issued-looking
- *  `Bearer` value, a URL's literal password), with no field-name rule. For refusing content
+ *  `Bearer` / `Authorization: token` value, a `Basic` user:password, a URL's literal password),
+ *  with no field-name rule. For refusing content
  *  outright: a field's name alone (`pageToken`, `accessKeyId`) is too often an ordinary cursor or
  *  id, and the other value patterns hit ordinary query text (`|= "Authorization: failed"`,
  *  `token=expired`, `--password=$VAR`). Whatever this finds, `findSuspectedSecrets` finds too. */
@@ -226,10 +227,13 @@ export function assertDraftCredentialsReviewed(
 /**
  * An observe-class Operation's params carrying a value that is almost certainly a credential,
  * whatever field holds it (`findCredentialValues`: a PEM private key, a JWT, a vendor key, an
- * issued-looking `Bearer` value, a URL's literal password). Refused before anything reaches the
- * gate: an observation runs with no approval (design doc §11 "观察免审"), so nobody would see a
- * credential an agent was talked into sending. A gate authenticates with the credentials
- * configured on it, never with one in a call's params. Maps to HTTP 400 / WS invalid-params with
+ * issued-looking `Bearer` or `Authorization: token` value, a `Basic` user:password, a URL's
+ * literal password). Refused before anything reaches the gate: an observation runs with no
+ * approval (design doc §11 "观察免审"), so nobody would see a credential an agent was talked into
+ * sending. A gate authenticates with the credentials configured on it, never with one in a call's
+ * params — and the `http` gate itself refuses a param mapped to an authentication header, whatever
+ * its value (`@nexttime/gatekeeper-base`'s `GateOwnedParamRefusedError`). Maps to HTTP 400 / WS
+ * invalid-params with
  * `code = 'credentials_in_observe_params'` and `details: { suspectedSecretValues,
  * suspectedSecretPaths }` — paths within the Operation's params, never a fragment of a value.
  */
@@ -242,7 +246,7 @@ export class ObserveParamsCarryCredentialsError extends Error {
   constructor(gateName: string, operation: string, found: SuspectedSecrets) {
     const where = found.paths.length > 0 ? ` (at ${found.paths.join(', ')})` : '';
     super(
-      `${gateName}.${operation}: the params carry ${found.count} credential value(s)${where} (a JWT, a vendor API key, a private key, a literal Bearer token or a URL's password) — refused, nothing was sent to the gate. Do not pass credentials as Operation params: the gate authenticates with the credentials configured on it. Text that only mentions one is fine (an Authorization header name, token=expired, a $VAR placeholder).`,
+      `${gateName}.${operation}: the params carry ${found.count} credential value(s)${where} (a JWT, a vendor API key, a private key, a literal Bearer or Authorization token, a Basic user:password or a URL's password) — refused, nothing was sent to the gate. Do not pass credentials as Operation params: the gate authenticates with the credentials configured on it. Text that only mentions one is fine (an Authorization header name, token=expired, a $VAR placeholder).`,
     );
     this.name = 'ObserveParamsCarryCredentialsError';
     this.details = { suspectedSecretValues: found.count, suspectedSecretPaths: found.paths };

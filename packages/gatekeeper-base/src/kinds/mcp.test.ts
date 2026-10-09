@@ -67,6 +67,19 @@ describe('McpTransport', () => {
     expect(result.data).toEqual({ items: [] });
   });
 
+  it('never follows a redirect with the credential header (as http.ts, review lane 5 P2-2)', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe('error');
+      const body = JSON.parse((init?.body ?? '{}') as string);
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }), {
+        status: 200,
+      });
+    });
+    const transport = new McpTransport({ endpoint: 'https://example.test/mcp', fetchImpl });
+    await transport.invoke(operation, {}, { credential: { token: 'configured-on-the-gate' } });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a JSON-RPC error as TransportInvokeError', async () => {
     const fetchImpl = vi.fn(
       async () =>

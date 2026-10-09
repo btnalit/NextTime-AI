@@ -1,5 +1,9 @@
 import type { Operation } from '@nexttime/shared';
-import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
+import {
+  BindingKindMismatchError,
+  GateOwnedParamRefusedError,
+  TransportInvokeError,
+} from '../errors.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
 /**
@@ -131,9 +135,9 @@ function staticPrefix(template: string): string {
  * `z.record` passthrough in `OperationSchema` — so `importOpenApi` (below) stamps it onto each
  * property it derives from an OpenAPI `parameter.in`, and `HttpTransport.request` reads it back
  * here to route that one param, independent of everything else about the operation's shape. `path`
- * params are already handled by `renderPath` above before this is ever consulted; `cookie` has no
- * dedicated handling (no fixture uses it) and falls through to the pre-existing verb-based
- * default, same as an undeclared location.
+ * params are already handled by `renderPath` above before this is ever consulted; a `cookie` param
+ * is refused (`GateOwnedParamRefusedError`) — it carries session state, and this transport sets no
+ * cookie from a param.
  */
 function paramLocation(paramsSchema: Operation['params_schema'], name: string): string | undefined {
   const properties = (paramsSchema as { properties?: Record<string, unknown> }).properties;
@@ -144,6 +148,99 @@ function paramLocation(paramsSchema: Operation['params_schema'], name: string): 
   }
   return undefined;
 }
+
+/**
+ * Request headers the gate owns: they say who is calling, on whose account, or where and how the
+ * call goes — so only the gate's own configuration sets them, never a caller's param. By exact
+ * name:
+ */
+const GATE_OWNED_HEADERS = new Set([
+  // Who is calling.
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'cookie2',
+  'set-cookie',
+  'sudo', // GitLab's admin impersonation
+  'remote-user',
+  'x-remote-user',
+  // On whose account, under the same credential (an org, a project, a tenant, a namespace).
+  'x-scope-orgid',
+  'openai-organization',
+  'openai-project',
+  'x-goog-user-project',
+  'x-grafana-org-id',
+  'x-vault-namespace',
+  'x-tenant-id',
+  'x-on-behalf-of',
+  // Where and how the call goes, past the binding's own host, path and method.
+  'host',
+  'forwarded',
+  'x-original-url',
+  'x-original-uri',
+  'x-rewrite-url',
+  'x-method-override',
+]);
+/** …by prefix: `X-Auth-Token` / `X-Auth-Key` / `X-Auth-Email` and oauth2-proxy's
+ *  `X-Auth-Request-*`, Grafana's `X-WEBAUTH-*`, Kubernetes' `Impersonate-User` / `-Group`, a
+ *  proxy's `X-Forwarded-User` / `-Email` / `-Host` / `-For`, Azure's `X-MS-CLIENT-PRINCIPAL*`,
+ *  `X-HTTP-Method-Override`… */
+const GATE_OWNED_HEADER_PREFIX =
+  /^(?:x-auth[-_]|x-webauth[-_]|(?:x-)?impersonate[-_]|x-forwarded-|x-ms-client-principal|x-http-method)/;
+/** …or a name whose last word names a credential: `X-API-Key`, `Api-Key`, `apikey`,
+ *  `PRIVATE-TOKEN`, `X-Amz-Security-Token`, `Ocp-Apim-Subscription-Key`, `DD-APPLICATION-KEY`,
+ *  `X-Client-Secret`. */
+const CREDENTIAL_NAME =
+  /(?:token|apikey|(?:^|[-_])(?:api|access|secret|private|subscription|auth|session|security|master|client|license|app|application|consumer|developer|service)[-_]?key|secret|password|passwd|passphrase|credentials?|(?:^|[-_])auth)$/;
+/** A name ending in `token` that is a pagination cursor or a retry key, not who is calling:
+ *  `X-Page-Token`, `X-Next-Page-Token`, `X-Continuation-Token`, `next_token`, `Idempotency-Token`. */
+const NOT_A_CREDENTIAL_TOKEN =
+  /(?:^|[-_])(?:page|next|next[-_]?page|pagination|continuation|cursor|scroll|sync|marker|idempotency)[-_]?token$/;
+
+function namesACredential(lower: string): boolean {
+  return CREDENTIAL_NAME.test(lower) && !NOT_A_CREDENTIAL_TOKEN.test(lower);
+}
+
+/**
+ * Whether the request header `name` is one the gate owns (`GATE_OWNED_HEADERS` and the patterns
+ * after it), or one its own credential injection sets (`injected`, lower-case). Case-insensitive,
+ * as header names are. A denylist: a header it does not name (`X-Page-Token`, `Idempotency-Key`,
+ * `X-Request-Id`) is sent as declared.
+ */
+export function isGateOwnedHeader(
+  name: string,
+  injected: ReadonlySet<string> = new Set(),
+): boolean {
+  const lower = name.trim().toLowerCase();
+  return (
+    GATE_OWNED_HEADERS.has(lower) ||
+    injected.has(lower) ||
+    GATE_OWNED_HEADER_PREFIX.test(lower) ||
+    namesACredential(lower)
+  );
+}
+
+/** Query parameters that carry who is calling, by exact name: GitLab's `sudo`, a pre-signed URL's
+ *  `sig` / `signature` (Azure SAS and others). */
+const GATE_OWNED_QUERY_PARAMS = new Set(['sudo', 'sig', 'signature']);
+
+/**
+ * Whether the query parameter `name` carries who is calling: one whose last word names a
+ * credential, as for a header (`access_token`, `api_key`, `apikey`, `auth_token`,
+ * `client_secret`, `password` — `page_token`, `next_token` stay), a pre-signed URL's
+ * (`X-Amz-*`, `X-Goog-*`, `sig`, `signature`), or `sudo`. A bare `key` stays: it is as often a
+ * lookup key (a KV store's, an object's) as Google's API key.
+ */
+export function isGateOwnedQueryParam(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  return (
+    GATE_OWNED_QUERY_PARAMS.has(lower) || /^x-(?:amz|goog)-/.test(lower) || namesACredential(lower)
+  );
+}
+
+/** The header names `credentialHeaders` can set, whatever the gate's credential is: a caller's
+ *  param never takes one of them, even on a gate configured with no credential at all. */
+const INJECTED_HEADER_NAMES = ['authorization', 'x-api-key'] as const;
 
 function credentialHeaders(credential: unknown): Record<string, string> {
   if (!credential || typeof credential !== 'object') return {};
@@ -197,15 +294,38 @@ export class HttpTransport implements Transport {
 
     const remaining: Record<string, unknown> = {};
     const headerParams: Record<string, string> = {};
+    // Legacy 175 follow-up (review of #532): a caller's param never sets what the gate owns — a
+    // header that says who is calling, on whose account or where the call goes, a credential in
+    // the query string, a cookie, or a query parameter the binding fixes. The gate authenticates
+    // with the credential configured on it (design doc §11), and an observe-class call runs with
+    // no approval, so `Authorization: Basic …` in a header param would pick the identity the gate
+    // acts as. Refused by name, whatever the value, before anything is sent.
+    const injected = new Set<string>([
+      ...INJECTED_HEADER_NAMES,
+      ...Object.keys(credentialHeaders(ctx.credential)).map((name) => name.toLowerCase()),
+    ]);
+    const fixedQuery = new Set(url.searchParams.keys());
+    const toQuery = (key: string, value: unknown): void => {
+      if (fixedQuery.has(key)) throw new GateOwnedParamRefusedError(operation.name, key, 'binding');
+      if (isGateOwnedQueryParam(key)) {
+        throw new GateOwnedParamRefusedError(operation.name, key, 'query');
+      }
+      url.searchParams.set(key, String(value));
+    };
     for (const [key, value] of Object.entries(bag)) {
       if (used.has(key)) continue;
       const location = paramLocation(operation.params_schema, key);
       if (location === 'header') {
+        if (isGateOwnedHeader(key, injected)) {
+          throw new GateOwnedParamRefusedError(operation.name, key, 'header');
+        }
         headerParams[key] = String(value);
         continue;
       }
+      if (location === 'cookie')
+        throw new GateOwnedParamRefusedError(operation.name, key, 'cookie');
       if (location === 'query') {
-        url.searchParams.set(key, String(value));
+        toQuery(key, value);
         continue;
       }
       remaining[key] = value;
@@ -213,14 +333,13 @@ export class HttpTransport implements Transport {
 
     let body: string | undefined;
     if (method === 'GET' || method === 'HEAD') {
-      for (const [key, value] of Object.entries(remaining)) {
-        url.searchParams.set(key, String(value));
-      }
+      // Every other param of a GET goes to the query string too — undeclared ones included when
+      // the Operation's `params_schema` is empty (a not-yet-refined import accepts anything).
+      for (const [key, value] of Object.entries(remaining)) toQuery(key, value);
     } else if (Object.keys(remaining).length > 0) {
       body = JSON.stringify(remaining);
     }
 
-    void ctx;
     return { url, method, body, headerParams };
   }
 
@@ -341,6 +460,19 @@ function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
   for (const param of op.parameters ?? []) {
+    // Legacy 175 follow-up (review of #532): what the gate owns is never a param — a cookie, a
+    // header that says who is calling, on whose account or where the call goes, a credential in
+    // the query string. OpenAPI 3 itself says an `Authorization` header parameter SHALL be ignored
+    // (a security scheme carries it); the gate sets these from its own configuration, so they are
+    // left out of `params_schema` (and of `required`) rather than offered to a caller that
+    // `HttpTransport.request` would refuse.
+    if (
+      param.in === 'cookie' ||
+      (param.in === 'header' && isGateOwnedHeader(param.name)) ||
+      (param.in === 'query' && isGateOwnedQueryParam(param.name))
+    ) {
+      continue;
+    }
     // `x-in` (review lane 5, P2-4) — see `paramLocation`'s own doc comment above for why this
     // survives both ajv (strict:false) and OperationSchema's params_schema passthrough.
     properties[param.name] = { ...(param.schema ?? {}), 'x-in': param.in };

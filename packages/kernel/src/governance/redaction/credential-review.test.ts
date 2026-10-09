@@ -19,6 +19,8 @@ import {
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 /** A Handle-shaped compact JWT; `.gitleaks.toml` allows its signature segment. */
 const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+/** A `Basic` credential's value, built at run time from the synthetic `FAKE`. */
+const BASIC = Buffer.from(`ops:${FAKE}`).toString('base64');
 
 describe('countSuspectedSecrets — the same detector as the scrubs', () => {
   it('counts secret-looking values inside strings, at any depth', () => {
@@ -341,6 +343,17 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
       ['pem'],
     ],
     ['a JWT as an env assignment’s value', { cmd: `TOKEN=${HANDLE} ./probe` }, ['cmd']],
+    ['a Basic credential (user:password)', { header: `Basic ${BASIC}` }, ['header']],
+    [
+      'a Basic credential in an Authorization header',
+      { raw: `Authorization: Basic ${BASIC}` },
+      ['raw'],
+    ],
+    [
+      'an Authorization header with the token scheme',
+      { raw: `Authorization: token ${FAKE}` },
+      ['raw'],
+    ],
     [
       'a literal Bearer token under a secret-named field',
       { password: `Bearer ${FAKE}` },
@@ -394,13 +407,9 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
       { q: 'Bearer authentication_failed_for_user' },
       ['q'],
     ],
+    ['a masked token in a log search', { q: '|= "Authorization: token ****"' }, ['q']],
     // Text patterns that can carry a literal secret too — recorded, and hidden in the audit copy.
-    [
-      'an Authorization header with another scheme',
-      { raw: `Authorization: token ${FAKE}` },
-      ['raw'],
-    ],
-    ['a Basic credential', { header: `Basic ${FAKE}` }, ['header']],
+    ['a Basic value that is not user:password', { header: `Basic ${FAKE}` }, ['header']],
     ['an env assignment', { cmd: `PGPASSWORD=${FAKE} psql -h db` }, ['cmd']],
     ['a secret pair inside JSON text', { body: `{"apiKey": "${FAKE}"}` }, ['body']],
     ['a --password flag', { args: `--password ${FAKE}` }, ['args']],
@@ -438,6 +447,10 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
     { url: 'https://example.test/path?page=2&sort=name' },
     { passwordRequired: true, secretName: '', token: null },
     { header: 'Bearer $TOKEN', alt: 'Bearer ${TOKEN}' },
+    { q: 'WWW-Authenticate: Basic realm="api"' },
+    { q: 'msg="Basic auth failed for user=bob"' },
+    // `token` is an ordinary word outside an `Authorization:` header (`invalid token <id>`).
+    { q: `invalid token ${FAKE}` },
     { q: "select id from builds where sha = '0123456789abcdef0123456789abcdef01234567'" },
     {},
   ])('records nothing for ordinary params: %j', (params) => {

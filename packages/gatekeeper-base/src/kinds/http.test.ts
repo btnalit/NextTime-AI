@@ -1,7 +1,18 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { TransportInvokeError } from '../errors.js';
-import { HttpTransport, encodePathSegment, importOpenApi, resolveBindingUrl } from './http.js';
+import {
+  GateOwnedParamRefusedError,
+  OperationRefusedError,
+  TransportInvokeError,
+} from '../errors.js';
+import { mapGatekeeperError } from '../server.js';
+import {
+  HttpTransport,
+  encodePathSegment,
+  importOpenApi,
+  isGateOwnedHeader,
+  resolveBindingUrl,
+} from './http.js';
 
 describe('importOpenApi', () => {
   const document = {
@@ -58,6 +69,35 @@ describe('importOpenApi', () => {
     expect(get?.description).toBe('List stock items');
     expect(post?.description).toBe('POST /stock');
     expect(del?.description).toBe('DELETE /stock/{id}');
+  });
+});
+
+describe('importOpenApi — what the gate owns is never a param (review of #532)', () => {
+  it('leaves out cookies, gate-owned headers and credential query params, and their required', () => {
+    const [operation] = importOpenApi({
+      paths: {
+        '/logs': {
+          get: {
+            operationId: 'logs_query',
+            parameters: [
+              { name: 'q', in: 'query', required: true },
+              { name: 'page_token', in: 'query' },
+              { name: 'api_key', in: 'query', required: true },
+              { name: 'Authorization', in: 'header', required: true },
+              { name: 'X-Scope-OrgID', in: 'header' },
+              { name: 'X-Page-Token', in: 'header' },
+              { name: 'session', in: 'cookie' },
+            ],
+          },
+        },
+      },
+    });
+    const schema = operation?.params_schema as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(Object.keys(schema.properties ?? {})).toEqual(['q', 'page_token', 'X-Page-Token']);
+    expect(schema.required).toEqual(['q']);
   });
 });
 
@@ -294,6 +334,200 @@ describe('HttpTransport', () => {
       );
       expect(result?.detail).toMatchObject({ headerParams: { 'x-trace-id': 't1' } });
       expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Legacy 175 follow-up (review of #532): an OpenAPI import marks a header parameter `x-in:
+   * "header"`, and the transport sends it as a real request header. A caller-supplied param must
+   * never become a header that says who is calling: refused before anything is sent, whatever
+   * the value, on observe (no approval) and apply alike, and in simulate.
+   */
+  describe('auth headers are never caller params', () => {
+    /** Synthetic — spelled out from the alphabet. */
+    const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+    function withHeaderParam(header: string): Operation {
+      return {
+        name: 'logs.query',
+        binding: { kind: 'http', method: 'GET', path: '/logs' },
+        params_schema: {
+          type: 'object',
+          properties: {
+            q: { type: 'string', 'x-in': 'query' },
+            [header]: { type: 'string', 'x-in': 'header' },
+          },
+        },
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+    }
+
+    it.each([
+      'Authorization',
+      'authorization',
+      'AUTHORIZATION',
+      'Proxy-Authorization',
+      'Cookie',
+      'X-API-Key',
+      'x-api-key',
+      'Api-Key',
+      'apikey',
+      'X-Auth-Token',
+      'X-Auth-Email',
+      'X-Access-Token',
+      'PRIVATE-TOKEN',
+      'X-Amz-Security-Token',
+      'Ocp-Apim-Subscription-Key',
+      'X-Client-Secret',
+      'X-Forwarded-User',
+      'X-Remote-User',
+      'X-WEBAUTH-USER',
+      'Impersonate-User',
+      'Impersonate-Group',
+      'Sudo',
+      'DD-APPLICATION-KEY',
+      // On whose account, under the gate's credential.
+      'X-Scope-OrgID',
+      'OpenAI-Organization',
+      'X-Goog-User-Project',
+      'X-Tenant-Id',
+      'X-MS-CLIENT-PRINCIPAL-ID',
+      // Where and how the call goes.
+      'Host',
+      'Forwarded',
+      'X-Forwarded-Host',
+      'X-Forwarded-For',
+      'X-Original-URL',
+      'X-HTTP-Method-Override',
+    ])('refuses a %s header param before any request, on invoke and simulate', async (header) => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const operation = withHeaderParam(header);
+      const params = { q: 'level=error', [header]: `Basic ${FAKE}` };
+      for (const call of [
+        () => transport.invoke(operation, params, {}),
+        () => transport.simulate(operation, params, {}),
+      ]) {
+        const thrown = await call().catch((err: unknown) => err);
+        expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+        expect(thrown).toBeInstanceOf(OperationRefusedError);
+        expect((thrown as Error).message).toContain(`"${header}"`);
+        expect((thrown as Error).message).not.toContain(FAKE);
+        expect(mapGatekeeperError(thrown)).toMatchObject({
+          status: 403,
+          code: 'operation_refused',
+        });
+      }
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("refuses the header the gate's own credential injection sets, whatever its name", async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const credential = { headers: { 'X-Tenant-Signature': 'configured-on-the-gate' } };
+      const thrown = await transport
+        .invoke(
+          withHeaderParam('x-tenant-signature'),
+          { 'x-tenant-signature': 'v' },
+          { credential },
+        )
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'X-Page-Token',
+      'X-Next-Page-Token',
+      'X-Continuation-Token',
+      'Idempotency-Key',
+      'X-Request-Id',
+      'x-trace-id',
+      'Accept-Language',
+    ])('sends a %s header param as before', async (header) => {
+      const fetchImpl = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response('{}', { status: 200 }),
+      );
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      await transport.invoke(withHeaderParam(header), { q: 'x', [header]: 'cursor-2' }, {});
+      const init = fetchImpl.mock.calls[0]?.[1];
+      expect((init?.headers as Record<string, string>)[header]).toBe('cursor-2');
+    });
+
+    function withQueryParams(declared: Record<string, unknown>): Operation {
+      return { ...withHeaderParam('x-trace-id'), params_schema: declared };
+    }
+
+    it.each([
+      ['access_token', { type: 'object', properties: { access_token: { 'x-in': 'query' } } }],
+      ['api_key', { type: 'object', properties: { api_key: { 'x-in': 'query' } } }],
+      ['apikey', { type: 'object', properties: { apikey: { type: 'string' } } }],
+      ['client_secret', { type: 'object', properties: { client_secret: { type: 'string' } } }],
+      ['sudo', { type: 'object', properties: { sudo: { type: 'string' } } }],
+      // An empty params_schema accepts any param, and a GET puts it on the query string.
+      ['access_token', {}],
+      ['X-Amz-Security-Token', {}],
+    ])('refuses a %s query param before any request', async (name, schema) => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const thrown = await transport
+        .invoke(withQueryParams(schema), { [name]: FAKE }, {})
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+      expect((thrown as GateOwnedParamRefusedError).location).toBe('query');
+      expect((thrown as Error).message).not.toContain(FAKE);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it.each(['page_token', 'pageToken', 'next_token', 'cursor', 'key', 'q', 'limit'])(
+      'sends a %s query param as before',
+      async (name) => {
+        const fetchImpl = vi.fn(
+          async (_input: string | URL | Request, _init?: RequestInit) =>
+            new Response('{}', { status: 200 }),
+        );
+        const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+        await transport.invoke(withQueryParams({}), { [name]: 'cursor-2' }, {});
+        const url = fetchImpl.mock.calls[0]?.[0] as URL;
+        expect(url.searchParams.get(name)).toBe('cursor-2');
+      },
+    );
+
+    it('refuses a cookie param and a param that would replace the binding’s own query', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const cookie: Operation = {
+        ...withHeaderParam('x-trace-id'),
+        params_schema: { type: 'object', properties: { session_id: { 'x-in': 'cookie' } } },
+      };
+      const fixed: Operation = {
+        ...withHeaderParam('x-trace-id'),
+        binding: { kind: 'http', method: 'GET', path: '/search?index=public' },
+        params_schema: {},
+      };
+      for (const [operation, params, location] of [
+        [cookie, { session_id: 's1' }, 'cookie'],
+        [fixed, { index: 'private' }, 'binding'],
+      ] as const) {
+        const thrown = await transport.invoke(operation, params, {}).catch((err: unknown) => err);
+        expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+        expect((thrown as GateOwnedParamRefusedError).location).toBe(location);
+      }
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('is case-insensitive and needs no credential to refuse the injection names', () => {
+      expect(isGateOwnedHeader(' Authorization ')).toBe(true);
+      expect(isGateOwnedHeader('X-Custom', new Set(['x-custom']))).toBe(true);
+      expect(isGateOwnedHeader('x-page-token')).toBe(false);
+      expect(isGateOwnedHeader('x-csrf-token')).toBe(true);
     });
   });
 });

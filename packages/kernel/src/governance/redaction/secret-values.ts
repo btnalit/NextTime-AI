@@ -93,6 +93,21 @@ function looksIssued(value: string): boolean {
   return /\d/.test(value) || value.length >= 20;
 }
 
+/** A `Basic` value that decodes to `user:password` — canonical base64 of printable text with a
+ *  colon — rather than the next word (`Basic realm="api"`, `Basic auth failed`). */
+function decodesToUserPass(value: string): boolean {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.toString('base64') !== value) return false;
+  const text = bytes.toString('utf8');
+  if (!text.includes(':') || text.includes('\uFFFD')) return false;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
+}
+
 /** `value` replaced, its quotes kept. */
 function redactedValue(value: string): string {
   const quote = value.charAt(0);
@@ -171,7 +186,10 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   {
     pattern: /\b(Bearer|Basic)([ \t]{1,16})([A-Za-z0-9._~+/=-]{8,})/gi,
     redact: (_match, [scheme, space, value]) =>
-      value !== undefined && looksIssued(value) ? `${scheme}${space}${REDACTED}` : undefined,
+      value !== undefined &&
+      (looksIssued(value) || (scheme?.toLowerCase() === 'basic' && decodesToUserPass(value)))
+        ? `${scheme}${space}${REDACTED}`
+        : undefined,
   },
   VENDOR_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
@@ -214,16 +232,18 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 ];
 
 /**
- * A stricter subset of `SECRET_VALUE_PATTERNS` (each match is also one of theirs) that matches only
- * what is almost certainly a credential itself, never text that merely talks about one: a PEM
- * private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix, an
- * issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer $TOKEN`
- * / `${TOKEN}` never match, `$` and `{` are not token characters) and a URL's password that is not
- * an env reference (`$PGPASS`, `${PGPASS}`).
+ * The patterns that match only what is almost certainly a credential itself, never text that
+ * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
+ * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
+ * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
+ * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
+ * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
+ * `Authorization:` header (`Authorization: token ****` does not match), and a URL's password that
+ * is not an env reference (`$PGPASS`, `${PGPASS}`).
  * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
- * (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
- * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair, `Basic` and a
- * short `Bearer` value. For refusing content outright (an observe-class Operation's params, legacy
+ * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
+ * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
+ * `Bearer` value. For refusing content outright (an observe-class Operation's params, legacy
  * 175), where every other pattern is only recorded.
  */
 export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
@@ -231,6 +251,19 @@ export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
   COMPACT_JWT,
   {
     pattern: /\b(Bearer)([ \t]{1,16})([A-Za-z0-9._~+/=-]{20,})/gi,
+    redact: (_match, [scheme, space, value]) =>
+      value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
+  },
+  {
+    pattern: /\b(Basic)([ \t]{1,16})([A-Za-z0-9._~+/=-]{8,})/gi,
+    redact: (_match, [scheme, space, value]) =>
+      value !== undefined && decodesToUserPass(value) ? `${scheme}${space}${REDACTED}` : undefined,
+  },
+  // `Authorization: token …` (GitHub's scheme). Only right after the header's name: `token` alone
+  // is an ordinary word in text.
+  {
+    pattern:
+      /(?<=(?<![A-Za-z0-9-])(?:proxy-)?authorization[ \t]{0,8}:[ \t]{0,8})(token)([ \t]{1,16})([A-Za-z0-9._~+/=-]{20,})/gi,
     redact: (_match, [scheme, space, value]) =>
       value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
