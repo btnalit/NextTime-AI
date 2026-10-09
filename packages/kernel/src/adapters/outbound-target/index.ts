@@ -5,6 +5,7 @@ import {
   type OutboundTargetResolver,
   decideOutboundTarget,
   describeOutboundTargetRefusal,
+  hostPatternProblem,
   parseCidr,
 } from '@nexttime/shared';
 
@@ -19,7 +20,15 @@ import {
  *     test, which then simply has no subnet rule; a malformed value throws at construction, never
  *     a rule that quietly turned itself off.
  *   - `NEXTTIME_CONNECTION_ALLOW_HOSTS` — optional, comma-separated: hosts an operator allows as a
- *     self-connected gate even though they live on the platform's networks.
+ *     self-connected gate even though they live on the platform's networks. A name matches itself
+ *     and its subdomains; an IP literal only itself. An entry that could never match — notably a
+ *     leading `.` / `*.` (fix/egress-suffix-match: the allow-side rule is strict, so such an entry
+ *     used to be silently inert) — is logged as an `error` line naming the variable and the fix,
+ *     and dropped. Dropped, not read as the bare name: widening an allow-list entry that has never
+ *     matched would open the escape hatch for names nobody has seen it open for. Not fatal either,
+ *     unlike a malformed subnet: a bad subnet silently loses a deny rule (fail-open), a bad allow
+ *     entry only ever failed closed, and refusing to start would stop the whole stack — after an
+ *     apply's migrations have already committed — over an entry that never allowed anything.
  *   - `NEXTTIME_CONNECTION_FIXTURE_HOSTS` — a constant the compose file sets: the acceptance
  *     fixtures (`accept-s2-*`) `scripts/accept_s2.sh` / `drill-add-gatekeeper.sh` connect through
  *     `create_connection`. Allowing them permanently grants nothing — they resolve only while their
@@ -68,12 +77,25 @@ export function outboundTargetPolicyFromEnv(
   const subnets = [env.NEXTTIME_SUBNET_CONTROL, env.NEXTTIME_SUBNET_WORKERS]
     .map((value) => value?.trim())
     .filter((value): value is string => value !== undefined && value.length > 0);
+  const allowHosts: string[] = [];
+  for (const name of ['NEXTTIME_CONNECTION_ALLOW_HOSTS', 'NEXTTIME_CONNECTION_FIXTURE_HOSTS']) {
+    for (const entry of splitList(env[name])) {
+      const problem = hostPatternProblem(entry);
+      if (problem) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            msg: `outbound-target: ${name} entry "${entry}" ${problem} — ignored (it never matched a host)`,
+          }),
+        );
+        continue;
+      }
+      allowHosts.push(entry);
+    }
+  }
   return {
     platformSubnets: subnets.map((cidr) => parseCidr(cidr)),
-    allowHosts: [
-      ...splitList(env.NEXTTIME_CONNECTION_ALLOW_HOSTS),
-      ...splitList(env.NEXTTIME_CONNECTION_FIXTURE_HOSTS),
-    ],
+    allowHosts,
   };
 }
 

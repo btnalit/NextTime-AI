@@ -5,6 +5,7 @@ import {
   isInCidr,
   isIpLiteral,
   isUnspecifiedAddress,
+  matchesDenySuffix,
   matchesSuffix,
   normalizeHostname,
 } from '@nexttime/shared';
@@ -12,8 +13,10 @@ import {
 // The hostname rules (`matchesSuffix`, `isBareHostname`) and the address classification above
 // live in `@nexttime/shared`'s `net-address.ts` since R-27 (2026-10-02 review): the kernel's
 // owner-supplied-URL predicate (`outbound-target.ts`) applies the same rules, from the same code.
-// Re-exported so this module's own surface (and its tests) is unchanged.
-export { isBareHostname, matchesSuffix };
+// Re-exported so this module's own surface (and its tests) is unchanged. Deny lists match through
+// `matchesDenySuffix` (a leading `.` / `*.` is the bare name), allow lists through the strict
+// `matchesSuffix` (such an entry never matches, so it fails closed) — fix/egress-suffix-match.
+export { isBareHostname, matchesDenySuffix, matchesSuffix };
 
 /**
  * Egress decision policy (design doc §7.9, §5.4 I10). Pure aside from the injected `resolve`
@@ -26,14 +29,18 @@ export { isBareHostname, matchesSuffix };
 /** Per-source allow/deny lists, as read from `SOURCE_MAP_FILE` (or a future supervisor registry). */
 export interface SourcePolicy {
   sourceId: string;
+  /** Suffix patterns, strict (`matchesSuffix`): `.x` / `*.x` never match (fail closed); the
+   *  source-map loader logs such entries. */
   allow?: string[];
+  /** Suffix patterns (`matchesDenySuffix`): `x`, `.x` and `*.x` all deny `x` and its subdomains. */
   deny?: string[];
   /** Leftover 87: logged with every observation from this source; never part of any decision. */
   correlationId?: string;
 }
 
 export interface PolicyConfig {
-  /** Internal service hostnames to always deny (`DENY_HOSTS`), matched as suffix patterns. */
+  /** Internal service hostnames to always deny (`DENY_HOSTS`), matched as suffix patterns
+   *  (`matchesDenySuffix`: a leading `.` / `*.` means the bare name). */
   denyHosts: readonly string[];
   /** `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS`, parsed. */
   platformSubnets: readonly CidrRange[];
@@ -133,10 +140,10 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
   if (source === undefined && config.denyUnknownSource) {
     return { allowed: false, reason: 'unknown-source' };
   }
-  if (matchesSuffix(hostname, source?.deny)) {
+  if (matchesDenySuffix(hostname, source?.deny)) {
     return { allowed: false, reason: 'source-deny' };
   }
-  if (matchesSuffix(hostname, config.denyHosts)) {
+  if (matchesDenySuffix(hostname, config.denyHosts)) {
     return { allowed: false, reason: 'deny-host' };
   }
   if (isBareHostname(hostname) && !matchesSuffix(hostname, source?.allow)) {
