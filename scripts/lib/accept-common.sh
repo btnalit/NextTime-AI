@@ -325,3 +325,14 @@ reply_says_unavailable() {
     *) echo 0 ;;
   esac
 }
+
+# reply_says_running <lower-cased reply>: 1 when the reply states the container is running, else 0.
+# A bare 运行 is not enough — the question itself asks for the "运行状态", so a reply echoing
+# "运行状态：已停止" would match it. Negated or stopped states are checked first and win.
+reply_says_running() {
+  case "$1" in
+    *"not running"* | *"isn't running"* | *未运行* | *没有运行* | *没在运行* | *不在运行* | *已停止* | *已退出* | *exited* | *stopped*) echo 0 ;;
+    *running* | *运行中* | *正在运行*) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}

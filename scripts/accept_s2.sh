@@ -1496,12 +1496,13 @@ real_docker_observe_run() {
   [ -n "$chat_id" ] && reply=$(chat_assistant_text "$ALICE_KEY" "$chat_id")
   # Asks only for what the docker gate's observe operations return (id/name/image/state/status/
   # labels — gatekeepers/docker/src/docker-client.ts; the container command is not among them, so
-  # it is not asked for). The image tag and "running" are guessable, so the reply alone proves
+  # it is not asked for). The image tag and "running" are guessable (reply_says_running in
+  # lib/accept-common.sh refuses a negated or stopped state), so the reply alone proves
   # nothing: the docker gate must have audited an observe_operation for this run, and no Task was
   # created. The digest (from the fixture's pinned image reference) is reported, not required.
   image=0 state=0 digest=0
   case "$reply" in *3.20*) image=1 ;; esac
-  case "$reply" in *running* | *运行*) state=1 ;; esac
+  state=$(reply_says_running "$reply")
   case "$reply" in *d9e853e87e55*) digest=1 ;; esac
   observed=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation' and payload->'params'->>'gatekeeperId'='$GATEKEEPER_ID_DOCKER' and created_at > '$run_ts'")
   ars=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_DOCKER' and requested_at > '$run_ts'")
