@@ -162,8 +162,17 @@ describe('one rule: what the console hides = what the kernel counts = what the r
     'credentials',
     'Cookie',
     'handle',
+    'tokens',
+    'apiTokens',
+    'access_tokens',
     'maxTokens',
     'max_tokens',
+    'inputTokens',
+    'outputTokens',
+    'totalTokens',
+    'promptTokens',
+    'completion_tokens',
+    'cachedTokens',
     'tokenizer',
     'tokenCount',
     'note',
@@ -198,6 +207,15 @@ describe('one rule: what the console hides = what the kernel counts = what the r
     expect([...counted.paths].sort()).toEqual([...hidden].sort());
     expect(redacted.redactedValues).toBe(counted.count);
     expect(redacted.value).toEqual(maskSecretFields(params));
+  });
+
+  it('plural token names stay secret (as under #520), usage counts do not', () => {
+    for (const key of ['tokens', 'apiTokens', 'access_tokens']) {
+      expect(countSuspectedSecrets({ [key]: 'v' }, { secretFields: true })).toBe(1);
+    }
+    for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'completion_tokens']) {
+      expect(countSuspectedSecrets({ [key]: 523 }, { secretFields: true })).toBe(0);
+    }
   });
 
   it('the table covers both sides of the rule', () => {

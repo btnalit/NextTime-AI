@@ -16,9 +16,9 @@
  *   - anywhere in it, case-insensitive: `password`, `passwd`, `passphrase`, `secret`,
  *     `credential`, `authorization` / `authorisation`, `api key`, `private key`, `access key`
  *     (with or without `_` / `-`) — words no ordinary field name contains;
- *   - a word ending in `token` (`token`, `accessToken`, `GITHUB_TOKEN`, `refreshtoken`,
- *     `tokenValue`), but not a count of them: `tokens`, `tokenizer`, `maxTokens`, `max_token`,
- *     `tokenCount`, `token_limit`, `inputTokens` stay;
+ *   - a word ending in `token` or `tokens` (`token`, `accessToken`, `GITHUB_TOKEN`,
+ *     `refreshtoken`, `tokenValue`, `apiTokens`), but not a count of them: `tokenizer`,
+ *     `maxTokens`, `max_token`, `tokenCount`, `token_limit`, `inputTokens`, `total_tokens` stay;
  *   - `cookie` or `bearer` as the last word (`Cookie`, `set-cookie` — `cookieConsent` stays);
  *   - `handle` alone, or `capability handle` (a field named after a Handle carries one).
  * Over-matching is the accepted failure mode: a field that only sounds secret is hidden and asks
@@ -109,7 +109,7 @@ export function namesASecretField(name: string): boolean {
   const last = split.length - 1;
   for (let i = 0; i <= last; i += 1) {
     const word = split[i] as string;
-    if (word.endsWith('token')) {
+    if (word.endsWith('token') || word.endsWith('tokens')) {
       const before = i > 0 ? (split[i - 1] as string) : '';
       const after = i < last ? (split[i + 1] as string) : '';
       if (!TOKEN_COUNT_BEFORE.has(before) && !TOKEN_COUNT_AFTER.has(after)) return true;
