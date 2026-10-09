@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-09（**v0.43.0 应用到主机，S3 待重跑**：`apply-release.sh --pull v0.43.0`（08:21–09:32Z），当天只读预检 §3.7 / §3.8 重跑均 0 行，迁移 core 0041 / 0042、task 0006、worker 0004 通过，11 个镜像验签通过，服务全部起来（含新增 `update-feed`）；S1 22 / S2 71 / S4 22 零失败；S3 只跑到第 5 项就停在 `preflight-collector-build`（现场构建 collector 镜像时 `pnpm fetch --frozen-lockfile` 在一次 443 连接被断后退出，推断是主机出网不稳——与遗留 93 和这次约 53 分钟的拉镜像同源，报错被截断，未证实），其后约 30 项未跑，重跑等维护者决定；`RESULT acceptance-failures=1`；新增遗留 137）。
+
 上一版 2026-10-09（**v0.43.0 发布（主机未应用）**：release-please #483 合入，tag `v0.43.0` 在 d8c545e，同一 run 发布签名镜像与 channel 预发布；发版前 main e68ef76 上的 extended 真实模型 run 37896150189（runs=3，控制台路径）整体 `RESULT ok`：S2 53 / S3 32 零失败、123 次调用，十个 S2 场景里八个 3/3、ssh_auto 1/1，docker_observe 2/3、dependency_chat 1/3——前者是场景本身问了 docker 门不返回的字段（主进程命令），后者是没有按关系类型列 Fact 的能力、入口上下文只注入最近 20 条 Fact，都不是 v0.43.0 的回归，治理不变量三次都成立；新增遗留 135 / 136（136 由 #506 关闭：场景只问门返回的字段）；#504 让失败的 `RUN` 行进 job 日志。下一步按 `runbooks/release.md` §3 上主机）。
 
 上一版 2026-10-09（**main 上真实模型冒烟（runs=1，控制台路径）通过，v0.43.0 等维护者批准**：云端预发的真实模型阶段补齐——#496 / #497 / #499 修 secret 解析、加 6 个扩展场景、`token_budget` 1–10M 且同时只跑一个真实模型 run，#498 记下 `staging-real-model` 不设人工审批（维护者 2026-10-09 取消）；两次 main 运行零调用的原因是 staging secret 的模型名与 providers yaml 对不上（配置问题，非产品缺陷），#500 加 fail-fast 冒烟 Turn、models.json 校验与 DIAG 采集；#501 把预发供应商改走控制台 admin API（与"添加 LLM 供应商"同一条路），第一轮就抓到产品缺陷：控制台「测试」对当前 Claude 模型一律误报 tool_call 失败（强制 `tool_choice` 被拒，400），#502 修复并让每次预演经控制台跑零 token 的 yaml + key 文件 file probe；同一 main 头上的完整预演（push run 37894663047，v0.42.0 基线 S1–S4 → apply → S1–S4，`RESULT ok`）与控制台路径真实模型冒烟（run 37894674445，seed=0、无基线）都通过：冒烟 runs=1 五个场景全过、S2 51 / S3 32 零失败、约 $0.45（估算）；S5.7（runs=10，每场景 ≥ 8/10）仍是主机验收项，extended runs=3（run 37896150189）在跑；新增遗留 133 / 134，均由 #502 关闭）。

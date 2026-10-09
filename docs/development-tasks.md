@@ -3799,6 +3799,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   `upstream_base_url_invalid`）、不写进 models.json，llm-proxy 启动时 warn。所有拼 `<base><path>` 的地方（discovery、`/test`、路由、models.json）都经这条规则。
 - 遗留 138：上游响应体无字节上限、`provider-models.ts` 的 `headers.set` 在 try 之外。
 
+**大流量拉镜像移出维护窗口、验收不在主机源码构建平台镜像（#513，2026-10-09 合入，遗留 137）**
+
+- 约束：维护者 2026-10-09 定主机出网为长期约束（慢、会断，不再调优）。设计因此是：发版关键路径上不在主机源码构建；镜像在窗口前预拉并验签；必须联网的步骤单次限时、有界重试、明确失败。
+- 验收：`scripts/lib/accept-common.sh` 新增 `compose_image_of`（与 `pull-images.sh` 的 `local_name_of` 同一推导）与 `release_image_check`——发布镜像的 `org.opencontainers.image.revision` 必须等于检出 commit；没有发布标签的报 `source build`，`ACCEPT_REQUIRE_RELEASE_IMAGES=1`（`apply-release.sh --pull` 设置）时判 FAIL。`accept_s3.sh` / `demo.sh` 的 `preflight-collector-build` 改为 `preflight-collector-image`（只核对不构建）；`accept_s2.sh` 只构建三个裸 fixture，两个门由 `preflight-accept-s2-gate-image` 把 gate-host 发布镜像重打成 compose 名字（同 Dockerfile、同 context、无 build args，`--dry-run` 确认重打后 `up` 不构建）。
+- `pull-images.sh`：本机已有带 repo digest 的 `<registry>/nexttime-ai-<svc>:<tag>` 不重拉，照样按 digest 验签，并新增 revision = tag commit 的核对；pull 与验签各重试两次（15 s / 30 s），单次限时 `PULL_ATTEMPT_TIMEOUT`（默认 7200 s）/ `VERIFY_ATTEMPT_TIMEOUT`（默认 600 s）。`--prefetch`：只拉取 + 验签，另补拉目标 compose 里钉 digest 的第三方镜像、BuildKit frontend 与 fixture 基础镜像（只补缺失），单项失败不中断、最后列出；`--present`：不联网，全在 exit 0，缺失 exit 3。
+- `apply-release.sh`：`--prefetch vX.Y.Z` 用 `git show` 取目标 tag 的 `pull-images.sh` 跑 `--prefetch`，检出、在跑的栈、数据库一概不碰；`--pull` 在备份新鲜度、dump、检出之前问目标 tag 的 `--present`，没预拉完 `FAIL not-prefetched`（`--allow-long-pull` 例外，留 WARNING）；`--pull` 拉取或验签失败 `fail_before_up images`，不再回退源码构建（源码构建只在不带 `--pull` 时显式选择，staging 未发布 commit 走这条）；第 3 步 `git fetch` 限时 300 s、tag 已在本地时失败不致命；`docker/dockerfile:1.7` 已在就不拉。
+- `staging-rehearsal.sh`：每次预演对刚装好的 from 镜像跑目标版本的 `pull-images.sh --prefetch <from>`，要求全部"已在、不重拉"、验签通过、revision 正确（`STEP prefetch-probe ok`）；tag 目标先 `--prefetch` 再 `--pull`。预演 S4 只有 docker 门（无 RagFlow 上游），计数 17，比主机 22 少的是 RagFlow 门部分，属预期。
+- 窗口内仍要联网的：每个镜像按 digest 重新验签（刻意保留，不缓存验签结果）、S1 / S2 出网探针（被测功能）、sshd fixture 缓存缺失时的 `apk add`；验签离线化是待评估的想法（遗留 141）。
+- 残留与后续：S2 三个裸 fixture 与 fake-llm 仍在主机构建，sshd 的 `apk add` 层依赖构建缓存，fake-llm 不随发版重建（遗留 139）；控制台 update-feed 的 `applyCommand` 跑检出里的旧脚本、不提示 `--prefetch`（遗留 140，`packages/kernel/src/application/platform/updates.ts`）。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
