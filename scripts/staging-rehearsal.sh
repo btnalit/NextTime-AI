@@ -97,6 +97,13 @@ case "$BUDGET" in ''|*[!0-9]*|0*) die "--real-token-budget must be a positive in
 if [ -n "$REAL_MODEL$REAL_PROVIDERS$REAL_ENV" ]; then
   [ -n "$REAL_MODEL" ] && [ -f "$REAL_PROVIDERS" ] && [ -f "$REAL_ENV" ] ||
     die "--real needs all of --real <provider/model>, --real-providers <file> and --real-env <file>"
+  # pi resolves `--model <provider>/<id>`; a stray CR or space (a secret pasted with one) would
+  # reach pi verbatim. The value itself is never printed.
+  case "$REAL_MODEL" in
+    *[[:space:][:cntrl:]]*) die "--real contains whitespace or a control character (value not shown)" ;;
+    ?*/?*) ;;
+    *) die "--real must be <provider>/<model id> (value not shown)" ;;
+  esac
 fi
 REPO=$(pwd -P)
 git rev-parse -q --verify "refs/tags/$FROM" >/dev/null || die "tag $FROM not found in this clone (fetch tags first)"
@@ -304,6 +311,8 @@ accept() {
   nfail=$(grep -c '^FAIL' "$log")
   step "$(basename "$log" .log) exit=$rc pass=$(grep -c '^PASS' "$log") fail=$nfail"
   grep -E '^FAIL|^REAL |^S[1-4] (OK|NOTE)' "$log" | sort -u | head -n 12 | sed 's/^/STEP   /'
+  # accept_s2's real-smoke diagnostics (the dead entry container's state and output, redacted).
+  grep '^DIAG ' "$log" | head -n 90 | sed 's/^/STEP   /'
   [ "$rc" -eq 0 ] && [ "$nfail" -eq 0 ]
 }
 
@@ -370,11 +379,33 @@ if [ -n "$REAL_MODEL" ]; then
   docker compose up -d --no-build --force-recreate llm-proxy </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "llm-proxy recreate"
   docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null >"$D/models/models.json.tmp" 2>>"$LOGS/stack.log" &&
     mv "$D/models/models.json.tmp" "$D/models/models.json" || { rm -f "$D/models/models.json.tmp"; fail real-setup "gen-models"; }
+  # The kernel's bootstrap CLI takes --entry-model as given, and pi exits at startup on a provider
+  # it does not know (one named like a pi built-in would bypass llm-proxy and fail for want of a
+  # key) — so check here that the model every entry agent and Worker is pinned to is in the file
+  # they will mount. Booleans and counts only.
+  shape=$(docker compose run --rm --no-deps -T -e REAL_MODEL="$REAL_MODEL" llm-proxy node -e '
+    const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const want = process.env.REAL_MODEL, p = want.slice(0, want.indexOf("/")), id = want.slice(want.indexOf("/") + 1);
+    const prov = (m.providers || {})[p];
+    const has = !!prov && (prov.models || []).some((x) => x.id === id);
+    console.log(`providers=${Object.keys(m.providers || {}).length} provider_present=${!!prov} model_present=${has}`);
+    process.exit(has ? 0 : 1);
+  ' <"$D/models/models.json" 2>>"$LOGS/stack.log")
+  real_model_rc=$?
+  [ -n "$shape" ] || fail real-setup "could not read the generated models.json"
+  step "real-setup models.json $shape"
+  [ "$real_model_rc" -eq 0 ] || fail real-setup "the --real model is not in the generated models.json — pi would exit at startup (provider and model names not shown)"
   step "real-setup ok token-budget-per-workspace=$BUDGET"
   real_fail=0
   real_since=$(psql_q "select now()")
   accept "real-s2" scripts/accept_s2.sh --real "$REAL_MODEL" --runs "$RUNS" $REAL_EXTENDED || real_fail=$((real_fail + 1))
-  accept "real-s3" scripts/accept_s3.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
+  if grep -q '^FAIL real-smoke' "$LOGS/real-s2.log"; then
+    # The entry agent could not finish one Turn; accept_s3's chats would only time out the same way.
+    step "real-s3 skipped — real-s2's smoke Turn failed"
+    real_fail=$((real_fail + 1))
+  else
+    accept "real-s3" scripts/accept_s3.sh --real "$REAL_MODEL" --runs "$RUNS" || real_fail=$((real_fail + 1))
+  fi
   # What the real-model phase spent, from the kernel's own llm_usage ledger (one row per proxied
   # call; the runner and its database are gone after the job), real provider only — the scripts'
   # provider-independent steps that follow on the fake provider are left out. Counts only.

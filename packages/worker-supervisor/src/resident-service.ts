@@ -775,6 +775,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           principalId,
           containerId,
           action,
+          // The only trace of *why* an entry agent died that outlives the container: agent-host
+          // sees just its stdio close (pi exits non-zero on a startup error such as an
+          // unresolvable --model). `undefined` (dropped from the JSON) once the container is gone.
+          exitCode: state?.exitCode,
         }),
       );
       return true;
