@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/btnalit/nexttime-mirror-dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # Multi-stage build for @nexttime/gatekeeper-base (design doc §5.1.4, §7.5, §10.1, §10.2).
 # This package is a library first — S2.5's `gatekeepers/docker` and `gatekeepers/ragflow` (and any
@@ -11,7 +11,8 @@
 #
 # Build context is the repo root: docker build -f packages/gatekeeper-base/Dockerfile .
 
-FROM node:24-bookworm-slim AS build
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -47,7 +48,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 RUN corepack pnpm --filter @nexttime/gatekeeper-base... build
 RUN corepack pnpm --filter @nexttime/gatekeeper-base deploy --prod --legacy /out/gatekeeper-base
 
-FROM node:24-bookworm-slim AS runtime
+# node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 # The ssh transport shells out to the system `ssh` client (src/kinds/ssh.ts) — installed here so a
 # gate built directly from this base image (rather than a system-specific image with its own
 # apt-get layer) can still use it.

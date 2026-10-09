@@ -313,10 +313,13 @@ sleep 30
 echo "STEP up"
 docker compose ps --format '{{.Service}} {{.Status}}'
 
-# 7. acceptance — the S2 fixtures build FROM docker/dockerfile:1.7; pre-pull it with retries unless
-#    it is already here (a prefetch, an earlier apply)
-docker image inspect docker/dockerfile:1.7 >/dev/null 2>&1 ||
-  for i in 1 2 3; do timeout 600 docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
+# 7. acceptance — the S2 fixtures build with the BuildKit frontend their `# syntax=` line names (this
+#    tag's own, read from the checkout); pre-pull it with retries unless it is already here (a
+#    prefetch, an earlier apply)
+for fe in $(sed -n '1s/^# syntax=//p' deploy/accept-s2/*/Dockerfile deploy/fake-llm/Dockerfile | sort -u); do
+  docker image inspect "$fe" >/dev/null 2>&1 ||
+    for i in 1 2 3; do timeout 600 docker pull -q "$fe" >/dev/null 2>&1 && break; sleep 10; done
+done
 # A --pull apply accepts only the published images it just verified: the acceptance image checks
 # (lib/accept-common.sh release_image_check) then refuse an unlabelled image as well.
 if [ "$images_from" = pull ]; then export ACCEPT_REQUIRE_RELEASE_IMAGES=1; fi

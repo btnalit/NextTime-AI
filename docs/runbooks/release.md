@@ -740,6 +740,27 @@ Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不�
 
 结果记 `docs/private/`。
 
+### 3.19 第三方镜像改从 GHCR 副本拉取（#531，v0.44.0 之后的下一版起）
+
+无迁移。`docker-compose.yml` 的第三方服务（pgvector、postgres、docker-socket-proxy、alpine、curl）和各 Dockerfile 的
+基础镜像与 `# syntax=` 前端，改为按 digest 引用 `ghcr.io/btnalit/nexttime-mirror-*`（清单 `deploy/image-mirrors.json`）。
+digest 与上一版完全相同，镜像内容不变，只换来源。
+
+- **预取**：§3.13 的 `--prefetch` 改从 GHCR 拉这些副本；digest 与本机已有的相同时层直接复用，只取 manifest；主机本来就从 GHCR 拉应用镜像，不需要新出口。
+  fixture 的前端引用从该 tag 自己的 Dockerfile 第 1 行读出，不再写死。
+- **应用**：镜像引用字符串变了，`up -d` 会按新配置重建 postgres 与四个 socket-proxy 容器（同一镜像，数据卷不动，
+  postgres 停几秒，`apply-release.sh` 在 `up` 之前已做 dump）。属预期，不是故障。
+- **回滚到 v0.44.0 及更早**：旧 tag 的 compose 仍引用 Docker Hub。本机已有的镜像按 digest 直接复用，缺的才从 Docker Hub
+  拉（主机自己的匿名配额，429 只发生在共享出口的 CI runner 上）。
+  - 引用字符串又变回去，`up -d` 会**再次**重建 postgres 与四个 socket-proxy 容器（同一镜像，数据卷不动），同上属预期。
+  - 旧版 `restore.sh` 的 dry-run 用的是不带 digest 的 `postgres:17-alpine`，本机没有这个 tag 时会去 Docker Hub 拉浮动 tag。
+    回滚后要跑旧版恢复演练的，先用 GHCR 副本把这个 tag 补上（`docker run` 遇到本地已有的 tag 不会再拉）：
+    `docker pull ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`，
+    再 `docker tag ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 postgres:17-alpine`。
+- **不要删 `nexttime-mirror-*` 包的旧版本**（包括升级钉值后变成无 tag 的版本）：已发布版本的 Dockerfile / compose 按 digest
+  引用它们，删了就无法重建或回滚到那一版。仓库里没有任何删除包版本的工作流，`prune-images.sh` 只清主机本地的
+  `nexttime-ai-*`；GHCR 不会自动清理容器包版本。在 GitHub 包设置里手动清理时跳过这些包。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

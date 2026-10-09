@@ -1,0 +1,76 @@
+{
+  "registry": "ghcr.io/btnalit",
+  "prefix": "nexttime-mirror-",
+  "images": [
+    {
+      "name": "pgvector",
+      "upstream": "pgvector/pgvector:pg17",
+      "source": "mirror.gcr.io/pgvector/pgvector",
+      "tag": "pg17",
+      "digest": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+    },
+    {
+      "name": "node",
+      "upstream": "node:24-bookworm-slim",
+      "source": "mirror.gcr.io/library/node",
+      "tag": "24-bookworm-slim",
+      "digest": "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+    },
+    {
+      "name": "caddy",
+      "upstream": "caddy:2.10",
+      "source": "mirror.gcr.io/library/caddy",
+      "tag": "2.10",
+      "digest": "sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb"
+    },
+    {
+      "name": "alpine",
+      "upstream": "alpine:3.20",
+      "source": "mirror.gcr.io/library/alpine",
+      "tag": "3.20",
+      "digest": "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+    },
+    {
+      "name": "postgres",
+      "upstream": "postgres:17-alpine",
+      "source": "mirror.gcr.io/library/postgres",
+      "tag": "17-alpine",
+      "digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+    },
+    {
+      "name": "docker-socket-proxy",
+      "upstream": "tecnativa/docker-socket-proxy:v0.5.0",
+      "source": "mirror.gcr.io/tecnativa/docker-socket-proxy",
+      "tag": "v0.5.0",
+      "digest": "sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459"
+    },
+    {
+      "name": "curl",
+      "upstream": "curlimages/curl:8.22.0",
+      "source": "mirror.gcr.io/curlimages/curl",
+      "tag": "8.22.0",
+      "digest": "sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
+    },
+    {
+      "name": "dockerfile",
+      "upstream": "docker/dockerfile:1.7",
+      "source": "mirror.gcr.io/docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    {
+      "name": "buildkit",
+      "upstream": "moby/buildkit:v0.33.1",
+      "source": "mirror.gcr.io/moby/buildkit",
+      "tag": "v0.33.1",
+      "digest": "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+    },
+    {
+      "name": "buildkit-syft-scanner",
+      "upstream": "docker/buildkit-syft-scanner:stable-1",
+      "source": "mirror.gcr.io/docker/buildkit-syft-scanner",
+      "tag": "stable-1",
+      "digest": "sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9"
+    }
+  ]
+}

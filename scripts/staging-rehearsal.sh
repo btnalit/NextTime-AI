@@ -349,7 +349,11 @@ accept() {
 # 9. baseline: the --from release's own acceptance, in apply-release.sh's order. Fills the tables
 #    the migrations under test then run over, and proves this host can pass what production passed.
 if [ "$seed" -eq 1 ]; then
-  for i in 1 2 3; do docker pull -q docker/dockerfile:1.7 >/dev/null 2>&1 && break; sleep 10; done
+  # The frontend the --from release's fixtures name in their `# syntax=` line (Docker Hub's
+  # docker/dockerfile:1.7 before #531, its GHCR copy after).
+  for fe in $(sed -n '1s/^# syntax=//p' deploy/accept-s2/*/Dockerfile deploy/fake-llm/Dockerfile | sort -u); do
+    for i in 1 2 3; do docker pull -q "$fe" >/dev/null 2>&1 && break; sleep 10; done
+  done
   base_fail=0
   for s in 3 1 2 4; do
     [ -f "scripts/accept_s$s.sh" ] || continue

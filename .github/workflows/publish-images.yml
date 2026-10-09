@@ -133,8 +133,12 @@ jobs:
             echo "ext_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' packages/platform-extension/package.json | head -n 1)"
           } >>"$GITHUB_OUTPUT"
 
+      # The builder's own image is the GHCR copy of moby/buildkit by digest (deploy/image-mirrors.json),
+      # not Docker Hub's buildx-stable-1: Docker Hub limits anonymous pulls per runner address.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          driver-opts: image=ghcr.io/btnalit/nexttime-mirror-buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -151,7 +155,9 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           provenance: mode=max
-          sbom: true
+          # SBOM generator: the GHCR copy of docker/buildkit-syft-scanner:stable-1 by digest (the one
+          # v0.44.0's attestations name), not the Docker Hub default.
+          sbom: generator=ghcr.io/btnalit/nexttime-mirror-buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           tags: ${{ steps.meta.outputs.tags }}
           # Same derivation as scripts/build-images.sh. Each Dockerfile consumes only the args it
           # declares (kernel: KERNEL_VERSION; worker-runtime: the three pi labels); the rest are

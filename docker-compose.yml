@@ -5,7 +5,7 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
     # user: postgres (uid/gid 999) — 遗留20/S5.5 加固. pgvector/pgvector:pg17 is `FROM
     # postgres:17-bookworm` plus only the pgvector extension build — its own Dockerfile does no
     # useradd/groupadd/chown (verified by reading it at its current tag), so this 'postgres' system
@@ -259,7 +259,7 @@ services:
     # failed with "manifest unknown"). Digest pinned from the target host after `docker pull`
     # (`docker inspect --format '{{index .RepoDigests 0}}'`, 2026-09-08); re-pin the same way when
     # bumping the tag. Image runs haproxy as root by default but needs no capability for :2375.
-    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    image: ghcr.io/btnalit/nexttime-mirror-docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:
       {
         CONTAINERS: "1",
@@ -537,7 +537,7 @@ services:
   # v0.5.0 haproxy.cfg — see `docker-socket-proxy`'s own comment). Every other section explicitly
   # 0, mirroring the same explicit list the other three instances use.
   docker-socket-proxy-images:
-    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    image: ghcr.io/btnalit/nexttime-mirror-docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:
       {
         IMAGES: "1",
@@ -642,7 +642,7 @@ services:
     # Same tag/digest as `docker-socket-proxy` above — see that service's own comment for how it
     # was verified (`gh api repos/Tecnativa/docker-socket-proxy/releases`; digest pinned from a
     # `docker pull` on the target host). Re-pin the same way when bumping the tag.
-    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    image: ghcr.io/btnalit/nexttime-mirror-docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:
       {
         CONTAINERS: "1",
@@ -883,7 +883,7 @@ services:
   #   Everything else (AUTH, BUILD, COMMIT, CONFIGS, DISTRIBUTION, EVENTS, EXEC, GRPC, NODES,
   #   PLUGINS, SECRETS, SERVICES, SESSION, SWARM, SYSTEM, TASKS, ALLOW_*): 0, unused.
   docker-socket-proxy-collector:
-    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    image: ghcr.io/btnalit/nexttime-mirror-docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:
       {
         CONTAINERS: "1",
@@ -1299,7 +1299,7 @@ services:
   # restarts this container via `container.restart`, never a real business container (host-
   # gatekeepers.md's own "不做": "不对现有业务容器 execute").
   accept-s2-restart-target:
-    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    image: ghcr.io/btnalit/nexttime-mirror-alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
     profiles: ["accept-s2"]
     networks: [control]
@@ -1311,14 +1311,14 @@ services:
   # Fact must be retired `not_reobserved` (migrations/core/0026, STATUS leftover 28) while its
   # Container Object stays. `rm`, not `stop`: the collector lists stopped containers too.
   accept-s3-ephemeral:
-    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    image: ghcr.io/btnalit/nexttime-mirror-alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
     profiles: ["accept-s3"]
     networks: [control]
     restart: "no"
 
   backup:
-    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 # 与 postgres 同大版本
+    image: ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 # 与 postgres 同大版本
     entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy/llm-proxy/models tar.gz，保留 N 份（S1.12；leftover 58 补 llm-proxy/models）
     # Mounts narrowed (lane-7 P2 fix) from one blanket rw `${NEXTTIME_DATA}:/data` (which handed
     # this container write access to pgdata/, secrets/, and every other host-data subtree it never
@@ -1406,7 +1406,7 @@ services:
   # own network, not through egress-proxy (that proxy only serves registered worker sources and
   # answers 403 to anything else). scripts/validate-compose.mjs pins all of this.
   update-feed:
-    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    image: ghcr.io/btnalit/nexttime-mirror-curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     entrypoint: ["/bin/sh", "/update-feed.sh"]
     user: "10002:10002"
     volumes:
