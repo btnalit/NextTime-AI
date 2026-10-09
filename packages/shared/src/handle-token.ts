@@ -51,8 +51,10 @@ const uuidClaim = z.string().uuid();
  *   - `bearer`: whoever holds the token presents it in a header — a member's own client
  *     (`issue_handle`, session kind `mcp_session`) or an external runtime (`service`).
  *
- * Derived from the session kind at issuance, never chosen by the caller (kernel `issueHandle`;
- * a database trigger refuses a mismatch).
+ * Derived from the session kind at issuance, never chosen by the caller (kernel `issueHandle`).
+ * The kernel derives it again from the issuing session's kind when it verifies a Handle, and
+ * treats the Handle as container-held when either the claim or the session says so (kernel
+ * `handle-auth.ts`).
  */
 export const HANDLE_HOLDERS = ['container', 'bearer'] as const;
 export type HandleHolder = (typeof HANDLE_HOLDERS)[number];

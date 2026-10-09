@@ -33,7 +33,8 @@ Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.jso
   （`AddressHeldError`：两个运行中的容器共用地址，按地址认不出谁是谁），死容器留下的绑定才覆盖。
 - **解绑**：本服务主动停止或删除容器时（停止、空闲回收、轮换、回收、Task terminate）**先解绑再停**，
   容器还占着地址时绑定就已不在；与 egress 来源反注册同一处再删一次（崩溃、docker 退出事件、Task
-  回收）。
+  回收）。解绑都带容器 id，比较后再删（`unbind(ip, containerId)`）：容器退出后的那次解绑可能晚于
+  Docker 把地址分给下一个容器，那时该地址上的绑定已经属于下一个容器，必须留着。
 - **对账**：启动时（开始监听、受理 spawn 之前）与每次 docker events 重连后 `retainLive`——只留下
   容器仍在跑、且地址没变的绑定。文件在 tmpfs 卷上，本服务单独重启时它还在（kernel / llm-proxy
   仍挂着卷），主机重启后为空。

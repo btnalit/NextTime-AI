@@ -130,9 +130,12 @@ export interface HandleBindingReaderOptions {
    *  gap between Docker starting a container and worker-supervisor writing its binding. */
   readonly registrationWaitMs?: number;
   readonly pollMs?: number;
+  /** How soon a version of the file that could not be read or parsed is read again although it
+   *  has not changed — a read can fail for a moment (`EMFILE` under load) on a file that is fine. */
+  readonly failedReadRetryMs?: number;
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
-  /** Called once per unreadable / malformed version of the file. */
+  /** Called once per unreadable / malformed version of the file (not again on its retries). */
   readonly onError?: (err: HandleBindingFileError) => void;
 }
 
@@ -146,12 +149,15 @@ export interface HandleBindingReader {
 }
 
 export const DEFAULT_HANDLE_BINDING_REGISTRATION_WAIT_MS = 3000;
+export const DEFAULT_HANDLE_BINDING_FAILED_READ_RETRY_MS = 1000;
 const DEFAULT_POLL_MS = 100;
 
 /**
  * A malformed or unreadable file binds nothing (fail closed): a verifier then refuses every
- * container until worker-supervisor writes a valid file again — never keeps serving a previous
- * version, which could still bind a container that has since been stopped.
+ * container until a read succeeds — never keeps serving a previous version, which could still bind
+ * a container that has since been stopped. A failed version is read again at most once per
+ * `failedReadRetryMs`, so a transient read error heals by itself without a read on every request;
+ * a new version is read at once.
  */
 export function createHandleBindingReader(
   options: HandleBindingReaderOptions,
@@ -160,13 +166,37 @@ export function createHandleBindingReader(
   const registrationWaitMs =
     options.registrationWaitMs ?? DEFAULT_HANDLE_BINDING_REGISTRATION_WAIT_MS;
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+  const failedReadRetryMs =
+    options.failedReadRetryMs ?? DEFAULT_HANDLE_BINDING_FAILED_READ_RETRY_MS;
   const now = options.now ?? (() => Date.now());
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const onError = options.onError ?? (() => {});
 
   let loadedVersion: string | undefined | null = null;
+  /** When reading `loadedVersion` last failed; `undefined` once it was read (or is missing). */
+  let failedAt: number | undefined;
   let bindings = new Map<string, HandleBinding>();
+
+  /** Parses the current file into `bindings`, or returns why it could not. */
+  function load(): HandleBindingFileError | undefined {
+    let raw: string;
+    try {
+      raw = source.read();
+    } catch (err) {
+      return new HandleBindingFileError('unreadable', errnoCode(err));
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      return new HandleBindingFileError('malformed');
+    }
+    const parsed = HandleBindingFileSchema.safeParse(json);
+    if (!parsed.success) return new HandleBindingFileError('invalid');
+    bindings = new Map(Object.entries(parsed.data));
+    return undefined;
+  }
 
   function refresh(): void {
     let version: string | undefined;
@@ -177,30 +207,21 @@ export function createHandleBindingReader(
       if (loadedVersion !== undefined)
         onError(new HandleBindingFileError('unreadable', errnoCode(err)));
     }
-    if (version === loadedVersion) return;
+    const retry = version === loadedVersion;
+    if (retry) {
+      if (failedAt === undefined) return;
+      const sinceFailure = now() - failedAt;
+      // A clock stepped backwards retries at once rather than waiting for it to catch up.
+      if (sinceFailure >= 0 && sinceFailure < failedReadRetryMs) return;
+    }
     loadedVersion = version;
+    failedAt = undefined;
     bindings = new Map();
     if (version === undefined) return;
-    let raw: string;
-    try {
-      raw = source.read();
-    } catch (err) {
-      onError(new HandleBindingFileError('unreadable', errnoCode(err)));
-      return;
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(raw);
-    } catch {
-      onError(new HandleBindingFileError('malformed'));
-      return;
-    }
-    const parsed = HandleBindingFileSchema.safeParse(json);
-    if (!parsed.success) {
-      onError(new HandleBindingFileError('invalid'));
-      return;
-    }
-    bindings = new Map(Object.entries(parsed.data));
+    const error = load();
+    if (!error) return;
+    failedAt = now();
+    if (!retry) onError(error);
   }
 
   return {

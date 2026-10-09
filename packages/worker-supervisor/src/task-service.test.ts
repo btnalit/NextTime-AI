@@ -620,6 +620,14 @@ describe('task-service Handle binding (the Handle never enters the container)', 
       handle: 'h2',
       containerId: second.containerId,
     });
+
+    // reap() finds the first Worker exited only now; its unbind must leave the second's binding.
+    await service.reap();
+    expect((await service.status('run-1'))?.status).toBe('exited');
+    expect(handleBindings.snapshot().get(second.ip as string)).toMatchObject({
+      handle: 'h2',
+      containerId: second.containerId,
+    });
   });
 
   it('shared address: refuses a Worker at an address another running container holds, and removes it', async () => {

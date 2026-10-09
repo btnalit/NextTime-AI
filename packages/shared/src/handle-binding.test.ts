@@ -136,6 +136,69 @@ describe('createHandleBindingReader', () => {
     }
   });
 
+  it('re-reads a version that failed to read once the retry interval passes, and no sooner (fail closed until then)', async () => {
+    let clock = 0;
+    const errors: HandleBindingFileError[] = [];
+    const file = memoryFile(JSON.stringify({ '192.0.2.7': binding }));
+    let failNextReads = 1;
+    const reader = createHandleBindingReader({
+      source: {
+        version: file.source.version,
+        read: () => {
+          if (failNextReads > 0) {
+            failNextReads -= 1;
+            file.source.read();
+            throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+          }
+          return file.source.read();
+        },
+      },
+      failedReadRetryMs: 1000,
+      now: () => clock,
+      onError: (err) => errors.push(err),
+    });
+
+    // A transient read error on an unchanged file: refused, and not read again on every request.
+    await expect(reader.lookup('192.0.2.7')).resolves.toBeUndefined();
+    clock = 999;
+    await expect(reader.lookup('192.0.2.7')).resolves.toBeUndefined();
+    expect(file.reads).toBe(1);
+
+    clock = 1000;
+    await expect(reader.lookup('192.0.2.7')).resolves.toEqual(binding);
+    expect(file.reads).toBe(2);
+    await reader.lookup('192.0.2.7');
+    expect(file.reads).toBe(2);
+    expect(errors.map((err) => [err.reason, err.code])).toEqual([['unreadable', 'EMFILE']]);
+  });
+
+  it('keeps retrying a version that stays unreadable, reporting it once', async () => {
+    let clock = 0;
+    const errors: HandleBindingFileError[] = [];
+    let reads = 0;
+    const reader = createHandleBindingReader({
+      source: {
+        version: () => '1',
+        read: () => {
+          reads += 1;
+          throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        },
+      },
+      failedReadRetryMs: 1000,
+      now: () => clock,
+      onError: (err) => errors.push(err),
+    });
+    for (clock = 0; clock <= 3000; clock += 500) {
+      await expect(reader.lookup('192.0.2.7')).resolves.toBeUndefined();
+    }
+    expect(reads).toBe(4);
+    expect(errors).toHaveLength(1);
+
+    clock = 0; // a wall clock stepped backwards does not hold the next retry back
+    await reader.lookup('192.0.2.7');
+    expect(reads).toBe(5);
+  });
+
   it('binds nothing while the file is missing', async () => {
     const file = memoryFile(undefined);
     const reader = createHandleBindingReader({ source: file.source });

@@ -18,7 +18,9 @@ import type { DockerClient } from './docker-client.js';
  *   - `unbind` before this process stops or removes a container (stop, idle sweep, rotation,
  *     reclaim, Task terminate) — while the container still holds the address, so Docker cannot
  *     hand it to another container with the binding still in place — and again wherever its egress
- *     registration is removed (crash, exit event, Task reap).
+ *     registration is removed (crash, exit event, Task reap). Always for one container id: the
+ *     second unbind runs after the container has exited, when the address may already be bound
+ *     to the next container, and must leave that binding alone.
  *   - `retainLive` at startup and after every docker-events reconnect: drops every binding whose
  *     container is gone or no longer at that address. This process may restart while the file
  *     (on the shared tmpfs volume) outlives it.
@@ -33,8 +35,11 @@ export interface HandleBindingStore {
   /** Binds `handle` to `ip`, replacing whatever was bound there. Throws when the file cannot be
    *  written — the container would be unusable, so the caller must not report success. */
   bind(ip: string, binding: Omit<HandleBinding, 'boundAt'>): void;
-  /** Removes the binding for `ip` (a no-op when there is none). Throws on a write failure. */
-  unbind(ip: string): void;
+  /** Removes the binding for `ip` only if it is `containerId`'s (or names no container) —
+   *  compare-and-delete: a caller unbinding a container that has already exited may run after
+   *  Docker handed the address to another container, bound there since. Returns whether it removed
+   *  one; throws on a write failure. */
+  unbind(ip: string, containerId: string): boolean;
   /** Keeps only the bindings `isLive(ip, binding)` confirms. Returns the addresses it dropped. */
   retainLive(
     isLive: (ip: string, binding: HandleBinding) => Promise<boolean>,
@@ -157,11 +162,14 @@ export function createHandleBindingStore(
       next.set(ip, { ...binding, boundAt: now().toISOString() });
       commit(next);
     },
-    unbind(ip) {
-      if (!bindings.has(ip)) return;
+    unbind(ip, containerId) {
+      const current = bindings.get(ip);
+      if (!current) return false;
+      if (current.containerId !== undefined && current.containerId !== containerId) return false;
       const next = new Map(bindings);
       next.delete(ip);
       commit(next);
+      return true;
     },
     async retainLive(isLive) {
       const dead: [string, HandleBinding][] = [];

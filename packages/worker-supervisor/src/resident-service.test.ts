@@ -1229,6 +1229,42 @@ describe('resident-service Handle binding (the Handle never enters the container
     });
   });
 
+  it('address reuse: a late unbind for the exited container leaves the new container’s binding alone', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    docker.simulateExternalKill('nexttime-entry-alice');
+    docker.assignNextIp(alice.ip as string);
+    const bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+    expect(bob.ip).toBe(alice.ip);
+    // The exit event for Alice's container arrives only now.
+    expect(await service.notifyContainerExited(alice.containerId, 'die')).toBe(true);
+    expect(handleBindings.snapshot().get(bob.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob.containerId,
+    });
+  });
+
+  it('address reuse: a stop whose container exits and loses its address mid-stop leaves the next binding alone', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    const stop = docker.stop.bind(docker);
+    let bob: Awaited<ReturnType<typeof service.spawn>> | undefined;
+    docker.stop = async (name, timeout) => {
+      await stop(name, timeout);
+      // While the stop is still awaited, Docker hands Alice's released address to Bob's spawn.
+      if (name === 'nexttime-entry-alice') {
+        docker.assignNextIp(alice.ip as string);
+        bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+      }
+    };
+    await service.stop('alice');
+    expect(bob?.ip).toBe(alice.ip);
+    expect(handleBindings.snapshot().get(alice.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob?.containerId,
+    });
+  });
+
   it('shared address: refuses to bind over a container still running at that address, and removes the new one', async () => {
     const { service, docker, handleBindings, egressMap } = setup();
     const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });

@@ -259,7 +259,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     }
   }
 
-  function unregisterEgress(workerRunId: string, ip: string | undefined): void {
+  function unregisterEgress(workerRunId: string, entry: RegistryEntry): void {
+    const { ip } = entry;
     if (!ip) return;
     try {
       egressMap.unregister(ip);
@@ -276,15 +277,18 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     }
     // The Handle binding goes with the egress registration (handle-bindings.ts): once this
     // container is gone, nothing may be authenticated as it from that address.
-    unbindHandle(workerRunId, ip);
+    unbindHandle(workerRunId, entry);
   }
 
-  /** Removes the Handle bound to `ip` (handle-bindings.ts) — before a terminate stops the
-   *  container, while it still holds the address, and again with its egress unregistration. */
-  function unbindHandle(workerRunId: string, ip: string | undefined): void {
+  /** Removes the Handle bound to the entry's address if it is still this container's
+   *  (handle-bindings.ts) — before a terminate stops the container, while it still holds the
+   *  address, and again with its egress unregistration, when Docker may already have given the
+   *  address to another container, whose binding stays. */
+  function unbindHandle(workerRunId: string, entry: RegistryEntry): void {
+    const { ip, containerId } = entry;
     if (!ip) return;
     try {
-      handleBindings.unbind(ip);
+      handleBindings.unbind(ip, containerId);
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -316,7 +320,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         ? 'exited'
         : 'failed';
     entry.state = finalState;
-    unregisterEgress(workerRunId, entry.ip);
+    unregisterEgress(workerRunId, entry);
     // Leftover 87: one line per finished Worker run, carrying the delegation's correlation id.
     const finished: TaskFinishedEvent = {
       workerRunId,
@@ -353,7 +357,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   ): Promise<void> {
     entry.terminating = true;
     entry.reason = reason;
-    unbindHandle(workerRunId, entry.ip);
+    unbindHandle(workerRunId, entry);
     await docker.stop(taskContainerName(workerRunId), TERMINATE_STOP_TIMEOUT_SECONDS);
     await reconcileOne(workerRunId, entry);
   }

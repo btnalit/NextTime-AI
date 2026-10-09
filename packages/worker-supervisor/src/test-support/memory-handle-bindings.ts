@@ -11,8 +11,12 @@ export function memoryHandleBindings(options: { failBind?: boolean } = {}): Hand
       if (options.failBind) throw new Error('EACCES: permission denied');
       bindings.set(ip, { ...binding, boundAt: new Date(0).toISOString() });
     },
-    unbind(ip) {
-      bindings.delete(ip);
+    // Same compare-and-delete as the file store (handle-bindings.ts `unbind`).
+    unbind(ip, containerId) {
+      const current = bindings.get(ip);
+      if (!current) return false;
+      if (current.containerId !== undefined && current.containerId !== containerId) return false;
+      return bindings.delete(ip);
     },
     async retainLive(isLive) {
       const dropped: string[] = [];

@@ -41,8 +41,28 @@ describe('createHandleBindingStore', () => {
     const inode = statSync(file).ino;
     store.bind('192.0.2.8', { handle: 'h.b.2', sourceId: 'worker:ws:run', containerId: 'c2' });
     expect(statSync(file).ino).not.toBe(inode);
-    store.unbind('192.0.2.7');
+    expect(store.unbind('192.0.2.7', 'c1')).toBe(true);
     expect(Object.keys(readBindings())).toEqual(['192.0.2.8']);
+  });
+
+  it('unbinds an address only for the container bound there (compare-and-delete)', () => {
+    const store = createHandleBindingStore(file, { now });
+    store.bind('192.0.2.7', { handle: 'h', sourceId: 'entry:ws:bob', containerId: 'c-bob' });
+    const inode = statSync(file).ino;
+    // Alice's container held this address before; her late unbind must not touch Bob's binding.
+    expect(store.unbind('192.0.2.7', 'c-alice')).toBe(false);
+    expect(readBindings()['192.0.2.7']).toMatchObject({ containerId: 'c-bob' });
+    expect(statSync(file).ino).toBe(inode);
+    expect(store.unbind('192.0.2.9', 'c-bob')).toBe(false);
+    expect(store.unbind('192.0.2.7', 'c-bob')).toBe(true);
+    expect(readBindings()).toEqual({});
+  });
+
+  it('unbinds a binding that names no container for any caller (nothing can confirm whose it is)', () => {
+    const store = createHandleBindingStore(file, { now });
+    store.bind('192.0.2.7', { handle: 'h', sourceId: 'entry:ws:alice' });
+    expect(store.unbind('192.0.2.7', 'c-any')).toBe(true);
+    expect(store.snapshot().size).toBe(0);
   });
 
   it('replaces whatever was bound to an address', () => {
