@@ -93,7 +93,7 @@ on:
         type: string
         default: '3'
       token_budget:
-        description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs'
+        description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs (1-10000000)'
         type: string
         default: '3000000'
       extended:
@@ -118,6 +118,10 @@ jobs:
     name: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # actions: read — the real-model guard below lists this workflow's other runs.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       from: ${{ steps.refs.outputs.from }}
       to: ${{ steps.refs.outputs.to }}
@@ -138,6 +142,7 @@ jobs:
           RUNS: ${{ inputs.runs || '3' }}
           EXTENDED: ${{ inputs.extended || false }}
           BUDGET: ${{ inputs.token_budget || '3000000' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           to=${IN_TO:-$(git rev-parse HEAD)}
@@ -154,9 +159,23 @@ jobs:
           what="source build"
           if [ "$REAL" = true ]; then
             case "$RUNS" in [1-9]|10) ;; *) echo "::error::runs must be 1-10, got '$RUNS'"; exit 1 ;; esac
-            case "$BUDGET" in ''|*[!0-9]*) echo "::error::token_budget must be a positive integer, got '$BUDGET'"; exit 1 ;; esac
+            # The kernel reads LLM_DAILY_TOKEN_BUDGET=0 (or anything not > 0) as "no budget at all"
+            # (governance/llm-usage/service.ts readDailyTokenBudgetFromEnv), so 0 must never get
+            # through; and with no reviewer on the environment any more, this ceiling is the cost
+            # control: per acceptance workspace per UTC day — two workspaces (S2, S3) per run.
+            max_budget=10000000
+            printf '%s\n' "$BUDGET" | grep -qE '^[1-9][0-9]{0,8}$' && [ "$BUDGET" -le "$max_budget" ] ||
+              { echo "::error::token_budget must be an integer from 1 to $max_budget, got '$BUDGET'"; exit 1; }
             [ "$GITHUB_REF" = refs/heads/main ] ||
               { echo "::error::a real-model run must be dispatched from main (got $GITHUB_REF)"; exit 1; }
+            # One real-model run at a time: each has its own budget, so two at once double the spend.
+            # Every unfinished dispatch of this workflow whose run name says "+ real model" (the
+            # run-name above) counts; two dispatched together both refuse, the safe side.
+            others=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/staging.yml/runs?event=workflow_dispatch&per_page=50" \
+              --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and .status != \"completed\" and (.display_title | endswith(\" + real model\")))] | map(.id | tostring) | join(\" \")") ||
+              { echo "::error::could not list this workflow's runs to check for another real-model run"; exit 1; }
+            [ -z "$others" ] ||
+              { echo "::error::another real-model run is still going ($others) — wait for it to finish"; exit 1; }
             if printf '%s\n' "$to" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && git rev-parse -q --verify "refs/tags/$to" >/dev/null; then
               what="release tag"
             elif git merge-base --is-ancestor "$to_sha" refs/remotes/origin/main; then
