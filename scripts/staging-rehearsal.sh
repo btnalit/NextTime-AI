@@ -92,6 +92,8 @@ case "$RUNTIME" in ''|runc|runsc) ;; *) die "--worker-runtime must be runc or ru
 case "$RUNS" in ''|*[!0-9]*) die "--runs must be a positive integer" ;; esac
 # 0 would switch the kernel's budget off entirely (LLM_DAILY_TOKEN_BUDGET <= 0 means none).
 case "$BUDGET" in ''|*[!0-9]*|0*) die "--real-token-budget must be a positive integer (0 means no budget to the kernel)" ;; esac
+# Same ceiling as staging.yml's plan job: per acceptance workspace per UTC day.
+[ "${#BUDGET}" -le 7 ] || [ "$BUDGET" = 10000000 ] || die "--real-token-budget must be at most 10000000"
 if [ -n "$REAL_MODEL$REAL_PROVIDERS$REAL_ENV" ]; then
   [ -n "$REAL_MODEL" ] && [ -f "$REAL_PROVIDERS" ] && [ -f "$REAL_ENV" ] ||
     die "--real needs all of --real <provider/model>, --real-providers <file> and --real-env <file>"
