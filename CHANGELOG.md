@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.43.0](https://github.com/btnalit/NextTime-AI/compare/v0.42.0...v0.43.0) (2026-10-09)
+
+
+### Features
+
+* **accept:** accept_s2 --extended real-model scenarios, wired through the staging workflow ([#497](https://github.com/btnalit/NextTime-AI/issues/497)) ([1bef153](https://github.com/btnalit/NextTime-AI/commit/1bef15313c7422b38a4754f728aedf793325cbf3))
+* **kernel:** bind definer functions to the caller's workspace, one gate link per Gatekeeper (S10 K4) ([#478](https://github.com/btnalit/NextTime-AI/issues/478)) ([66aa6f8](https://github.com/btnalit/NextTime-AI/commit/66aa6f8dc9ec1fa917c93c9e30204bf36182a166))
+* **kernel:** ontology type names unique across published families (S10 P0, I-P1) ([#477](https://github.com/btnalit/NextTime-AI/issues/477)) ([6b7139d](https://github.com/btnalit/NextTime-AI/commit/6b7139d43b9b6a5366e3989942f3fb130d161795))
+* **platform:** version awareness — channel.json feed, update-feed service, console reminder ([#479](https://github.com/btnalit/NextTime-AI/issues/479)) ([9b2a592](https://github.com/btnalit/NextTime-AI/commit/9b2a59231eb8d4690b193c266d35dc53a41eb919))
+* **runtime:** upgrade pi 0.99.2 → 1.1.0 (S10 U0) ([#481](https://github.com/btnalit/NextTime-AI/issues/481)) ([2c7124d](https://github.com/btnalit/NextTime-AI/commit/2c7124d28517690246f53b6a585ca225e1ea4ff1))
+* **staging:** add the real-model provider through the console's admin API ([#501](https://github.com/btnalit/NextTime-AI/issues/501)) ([e632c24](https://github.com/btnalit/NextTime-AI/commit/e632c245b3b4e481ed703277a306273dad16e6e8))
+* **task:** outcome attribution — Skill versions, Turn Procedure claim, objective outcomes (S10 E1) ([#480](https://github.com/btnalit/NextTime-AI/issues/480)) ([09cb496](https://github.com/btnalit/NextTime-AI/commit/09cb496261bd9db71a9181908585917c8cee8f5d))
+
+
+### Bug Fixes
+
+* **deps:** clear open security advisories before v0.43.0 ([#486](https://github.com/btnalit/NextTime-AI/issues/486)) ([b0e04ca](https://github.com/btnalit/NextTime-AI/commit/b0e04cacc1cfe791f2c6b8c66859d05beb5badc0))
+* **host:** config/egress-sources.json owned by worker-supervisor on every init and apply ([#491](https://github.com/btnalit/NextTime-AI/issues/491)) ([012e72e](https://github.com/btnalit/NextTime-AI/commit/012e72e799afb1f8bd0ebc99308147f4f4e3e2d7))
+* **kernel:** end a Turn only after its received messages are stored ([#493](https://github.com/btnalit/NextTime-AI/issues/493)) ([5076dbc](https://github.com/btnalit/NextTime-AI/commit/5076dbc04d6185d21e2148587d8ae4ff6aa04e15))
+* **llm-proxy:** stop forcing tool_choice in the Anthropic provider test; staging probes the file provider path ([#502](https://github.com/btnalit/NextTime-AI/issues/502)) ([e68ef76](https://github.com/btnalit/NextTime-AI/commit/e68ef765e914e08d969f25e3e842db48e0eafc76))
+* **platform:** kernel-owned stale cause, exact migration window, GitHub-only feed URL ([#489](https://github.com/btnalit/NextTime-AI/issues/489)) ([0fb01b8](https://github.com/btnalit/NextTime-AI/commit/0fb01b8f6223fa34fe215e126ee3bd1df534216d))
+* **staging:** bound the real-model token budget and allow one real-model run at a time ([#499](https://github.com/btnalit/NextTime-AI/issues/499)) ([129176c](https://github.com/btnalit/NextTime-AI/commit/129176c3a0cb77690e2fd5185de77f97d864f50f))
+* **staging:** fail fast when the real-model entry agent cannot finish one Turn, with its own output ([#500](https://github.com/btnalit/NextTime-AI/issues/500)) ([f4884ae](https://github.com/btnalit/NextTime-AI/commit/f4884aec900382239f360838d39dc9cfe19b50fe))
+* **staging:** real-model keys as provider key files, checked before the install; print the spend ([#496](https://github.com/btnalit/NextTime-AI/issues/496)) ([90d49a8](https://github.com/btnalit/NextTime-AI/commit/90d49a8f8aabbc3d75ddac9d147cbd86cbe37664))
+
 ## [0.42.0](https://github.com/btnalit/NextTime-AI/compare/v0.41.0...v0.42.0) (2026-10-04)
 
 
