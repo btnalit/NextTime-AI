@@ -26,7 +26,7 @@
 | 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
 | apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
-| 真实模型（可选） | 写入 providers yaml + key env → 重建 llm-proxy → `gen-models` → `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
+| 真实模型（可选） | 走控制台路径加供应商（管理员登录 → `issue_llm_admin_token` → `/api/llm-admin` 建供应商、设 key → llm-proxy 重写 models.json → 控制台"测试"）→ `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
 
 staging overlay（写在数据目录 `staging/docker-compose.staging.yml`，不在检出里，所以对 from / to
 两个版本都生效）只做一件事：把 `gatekeeper-ragflow` 移到一个不启用的 profile——预演环境没有
@@ -85,8 +85,7 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
    - `STAGING_LLM_PROVIDERS_YAML`：一份完整的 `llm-providers.yaml`（格式见
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
    - `STAGING_LLM_PROXY_ENV`：每个 `api_key_env` 一行 `NAME=value`（允许 `export ` 前缀、引号和行尾 ` # 注释`）；yaml 只有一个
-     `api_key_env` 时也可以只放 key 本身。脚本把它们写成 `secrets/llm-provider-keys/<NAME>`（R-24，与生产主机
-     同一布局，key 不进容器 env），并在安装之前校验——缺哪个名字就以计数报错退出，不打印名字和值；
+     `api_key_env` 时也可以只放 key 本身。开跑前先校验——缺哪个名字就以计数报错退出，不打印名字和值；
    - `STAGING_REAL_MODEL`：`<provider/model>`，必须是上面 yaml 生成的 `models.json` 里的 id。
 3. 从 **main** Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
    再勾 `extended` 会加跑 `accept_s2.sh --extended` 的六个场景（`host-accept-real-model.md` §4），
@@ -102,8 +101,16 @@ from / to / 提交 sha / runs / 配额——要跑的就是这一行；之后 `r
 run（`plan` 查本 workflow 未结束的 `+ real model` dispatch，有就失败），避免并发叠加花费。每个验收脚本用自己的一次性工作区，所以单次
 回归的上界约为"验收脚本数 × 配额"。
 
-真实模型阶段开始前，`--real` 的值必须是不含空白和控制字符的 `<provider>/<model id>`（入参检查，秒级失败）；生成 models.json 后，
-脚本确认这个 provider 和模型都在其中（`STEP real-setup models.json providers=… provider_present=… model_present=…`，
+真实模型的供应商走的是控制台那条路，与管理员在"添加 LLM 供应商"页面上做的完全一样，不写 `config/llm-providers.yaml`，
+不放 key 文件，也不跑 `gen-models`：脚本用 bootstrap CLI 建一个一次性平台管理员 `staging-llm-admin`（随机密码，经 stdin），
+经 caddy 登录（`/api/auth/login`），调 `issue_llm_admin_token` 拿 5 分钟 token，再对 `/api/llm-admin/providers` 逐个建供应商
+（`STAGING_LLM_PROVIDERS_YAML` 只是输入格式，先过 llm-proxy 自己的 schema），用 `PUT …/secret` 设控制台 key，确认 llm-proxy
+自己重写了 models.json（`modelsJsonError` 为空），最后对被测模型跑一次控制台的"测试"（一次真实补全加一次工具调用往返，
+`STEP real-setup console providers=… test HTTP … completion=… tool_call=…`），两项都 `ok` 才继续。密码、token、key
+只经 stdin 或 0700 目录里的 0600 文件，不上命令行。
+
+真实模型阶段开始前，`--real` 的值必须是不含空白和控制字符的 `<provider>/<model id>`（入参检查，秒级失败）；
+llm-proxy 写出 models.json 后，脚本确认这个 provider 和模型都在其中（`STEP real-setup models.json providers=… provider_present=… model_present=…`，
 不打印名字），否则直接失败——内核的 bootstrap CLI 不校验 `--entry-model`，而 pi 遇到它不认识的 provider 会在启动时退出（与 pi 内置 provider 同名但 models.json 里没有的，则绕过 llm-proxy、因无 key 失败）。
 `accept_s2.sh --real` 的冒烟 Turn（`real-smoke`）失败时，它的 `DIAG` 行（入口容器状态与输出末尾，已脱敏）会转印到 job 日志，
 `accept_s3.sh --real` 不再运行。
