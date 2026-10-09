@@ -3716,11 +3716,35 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   docker 门实例 enabled）+ 上一个发布版自己的验收作基线（失败重跑一次，显式 `STEP … RETRY`；apply 阶段从不重跑）+ 目标版本自己的
   `apply-release.sh` 副本。非 tag 目标打本地不推送的 `vA.(B+1).0-staging.<sha>` tag，退出时删除；RagFlow 门经 staging overlay 移出默认 `up`。
   `--disposable-host` 必填，拒绝在已有容器或非空工作目录的主机上跑。
-- 真实模型回归：`plan` job 在进入 environment 前把 from / to / sha / runs / 配额写进 run 名称和摘要，`real_model` 要求从 main 触发、`to` 只能是已发布 tag
+- 真实模型回归：`plan` job 在进入 environment 前把 from / to / sha / runs / 配额写进 run 名称和摘要，`real_model` 要求从 main 触发、`to` 只能是存在的 `vX.Y.Z` tag
   或 main 上的提交；模型 id、供应商名、上游 URL、key 值全部 `::add-mask::`，上传的 artifact 先逐一 scrub。
   2026-10-09 维护者取消 `staging-real-model` 的 required reviewer（长期自动化回归不依赖人工批准）；剩下的控制是
   main-only、被测版本限制、`runs` ≤ 10 与 `token_budget` 配额，都只管单次运行（`staging-rehearsal.md` §4）。
 - 预演抓到的两个产品缺陷：`config/egress-sources.json` 属主（#491）、Turn 结束顺序竞态（#493）。预演脚本里的 chown 在 #491 后变成无害的重复。
+- **真实模型阶段补齐（2026-10-09，#496–#502）**：
+  - #496：真实模型的 key 写成 provider key 文件（与主机 R-24 的布局一致），装栈前先校验；结束时打印用量与花费（`STEP real-usage`）。
+  - #497：`accept_s2 --real --extended` 加 6 个场景：跨入口容器重启的会话记忆、Turn 中途停止、审批被拒、入口 agent 的 docker 观察、
+    Worker 自己的出网、两个主体同时对话；判定规则同核心场景（只看结果、每个跑 `--runs` 次、零成功即失败）。workflow 的 `extended` 输入接到它。
+  - #498 / #499：`staging-real-model` 不设 required reviewer（见上一条）；`token_budget` 限 1–10000000，同一时间只允许一个未结束的真实模型 run，
+    这些都只管单次运行，累计花费靠供应商侧限额（`staging-rehearsal.md` §4）。
+  - #500：`--real` 必须是不含空白的 `<provider>/<model id>`；gen-models 之后核对 models.json 里有这个 provider 和 id（只打布尔值与计数）；
+    `accept_s2 --real` 在场景前先跑一个冒烟 Turn，失败时打印入口容器的状态与输出尾部（`DIAG` 行，长 token 形字符串先脱敏再截断）并停下，
+    staging 跳过 real-s3；worker-supervisor 的 "resident container exited" 日志带上 `exitCode`。起因：main 上两次运行零调用，入口容器首个 Turn
+    约 1.3s 退出；定位为 staging secret 的模型名与 providers yaml 对不上（配置问题）。没被提前拦下，是因为验收脚本经 bootstrap CLI 建工作区，
+    `--entry-model` 不做目录校验（`packages/kernel/src/cli/bootstrap.ts`），而控制台建工作区会报 `unknown_model`；models.json 校验补的就是这一处。
+  - #501：真实模型阶段改走控制台路径：临时平台管理员（随机密码走 stdin）经 caddy 登录、取 5 分钟 llm-admin token，逐个
+    `POST /api/llm-admin/providers` + `PUT …/secret`，要求 `GET` 回 `modelsJsonError: null`，再跑控制台自己的供应商测试（一次补全 + 一次工具调用），
+    两项都 ok 才进场景。`STAGING_LLM_PROVIDERS_YAML` 只作输入，在 llm-proxy 镜像里用 `LlmProvidersFileSchema` 解析后转成 `LlmProviderInputWire`；
+    密码、cookie、token、key 只走 stdin 或 0700 目录下的 0600 文件，退出时删除。
+  - #502：修 #501 首轮抓到的产品缺陷：控制台测试（`packages/llm-proxy/src/provider-test.ts`）在 Anthropic Messages 上强制
+    `tool_choice: {type:'tool'}`，当前 Claude 模型返回 400，一律报 `tool_call: error`；改为 `{type:'auto'}` 加提示词里明确要求调用 `ping`，
+    纯文本或只有 thinking 的回复仍判失败（负例单测），`max_tokens` 64 → 1024 给默认的自适应 thinking 留余量；OpenAI 类保持强制调用。
+    预演第 11 段（控制台管理员 + file probe）改为每次都跑：往 `config/llm-providers.yaml` 写一个上游为 `.invalid` 的假供应商和假 key 文件，
+    重建 llm-proxy，要求 `GET /api/llm-admin/providers` 列出它为 `source: file` 且找到 key、`gen-models` 输出它，然后还原
+    （`STEP file-probe providers HTTP … listed-with-key=… gen-models=…`）。临时管理员结束时登出；scrub 覆盖 yaml 里所有 `id:`。
+  - 结果（main e68ef76）：完整预演 push run 37894663047（v0.42.0 基线 S1–S4 → apply → S1–S4，`RESULT ok`）；控制台路径真实模型冒烟
+    run 37894674445（seed=0、无基线，runs=1）：测试 completion / tool_call 均 ok，5 个核心场景全过，S2 51 / S3 32 零失败，19 次调用约 $0.45
+    （按牌价估算；平台未配单价，`cost_usd` 记 0）。这是冒烟，不替代主机验收的 S5.7（runs=10，每场景 ≥ 8/10）；extended runs=3（run 37896150189）在跑。STATUS 遗留 133 / 134 由 #502 关闭。
 
 **Turn 结束顺序（#493，2026-10-08 合入）**
 
