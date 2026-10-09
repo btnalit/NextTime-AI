@@ -314,3 +314,14 @@ chat_assistant_text() {
   done
   printf '%s' "$prev"
 }
+
+# reply_says_unavailable <lower-cased reply>: 1 when the reply says it could not get the answer
+# ("无法…" / "not available" / …), else 0. A bounded flag for a real-model RUN line, so a miss reads
+# as "the model said it could not see it" vs "it answered something else" without printing reply
+# text (the repo and its run artifacts are public).
+reply_says_unavailable() {
+  case "$1" in
+    *无法* | *不能* | *拿不到* | *看不到* | *没有权限* | *unavailable* | *"not available"* | *cannot* | *"can't"* | *"unable to"*) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
