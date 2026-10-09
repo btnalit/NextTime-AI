@@ -50,6 +50,11 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh --real <provider/mod
 ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh --real <provider/model> --runs 3' </dev/null
 ```
 
+`accept_s2.sh --real` 在任何场景之前先跑一个冒烟 Turn（`real-smoke`，让入口智能体"只回复 OK"）：这个 Turn
+没有以 `completed` 加非空回复结束，脚本打印入口容器的状态（退出码、OOM）和输出末尾（selfcheck 行与 pi 自己的
+stdout/stderr，长 token 已脱敏）为 `DIAG` 行后直接失败，一个场景都不跑。fake provider 的 S1–S4 只能证明 pi
+在 fake provider 的 models.json 下能活过一个 Turn，真实 provider 的配置只有这一步最早能证明。
+
 `accept_s2.sh --real … --extended` 再加六个场景（`deny` / `memory` / `stop` / `docker_observe` /
 `worker_egress` / `concurrent`，见 §4），每个同样跑 `--runs` 次，花费约为不加时的三倍。另外每次
 `--real` 都会在所有场景之后检查没有 `pi.dev` 及其子域的出网（`real-no-pi-egress`）：本工作区所有 Activity 的

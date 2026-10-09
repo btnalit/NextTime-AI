@@ -1379,8 +1379,8 @@ real_memory_run() {
   chat_id=$(parse_kv "$out1" CHAT_ID)
   t1=$(parse_kv "$out1" TURN_STATUS)
   # The restart is the point of this scenario, so it is proven, not assumed: worker-supervisor
-  # answered the stop with 200, the container was down afterwards, and the second Turn ran in a
-  # container started after that (StartedAt changed).
+  # accepted the stop (2xx — its /resident/stop answers 204 No Content), the container was down
+  # afterwards, and the second Turn ran in a container started after that (StartedAt changed).
   entry="nexttime-entry-${ALICE_PRINCIPAL_ID}"
   started_before=$(docker inspect -f '{{.State.StartedAt}}' "$entry" 2>/dev/null)
   stop_status=$(parse_kv "$(resident_stop "$ALICE_PRINCIPAL_ID")" STATUS)
@@ -1394,7 +1394,9 @@ real_memory_run() {
     case "$(chat_last_assistant_text "$ALICE_KEY" "$chat_id")" in *"$code"*) recalled=1 ;; esac
   fi
   started_after=$(docker inspect -f '{{.State.StartedAt}}' "$entry" 2>/dev/null)
-  [ "$stop_status" = 200 ] && [ "$down" -eq 1 ] && [ -n "$started_after" ] && [ "$started_after" != "$started_before" ] && restarted=1
+  stop_ok=0
+  case "$stop_status" in 2[0-9][0-9]) stop_ok=1 ;; esac
+  [ "$stop_ok" -eq 1 ] && [ "$down" -eq 1 ] && [ -n "$started_after" ] && [ "$started_after" != "$started_before" ] && restarted=1
   out3=$(run_driver send-and-wait "$BOB_KEY" "" "alice 之前让助手记住的暗号是什么？不知道就回答 UNKNOWN。" 180000)
   bob_chat=$(parse_kv "$out3" CHAT_ID)
   t3=$(parse_kv "$out3" TURN_STATUS)
@@ -1581,6 +1583,37 @@ real_no_pi_egress_step() {
   pass "real-no-pi-egress" "no pi.dev host in this workspace's Activity egress or in egress-proxy's log$([ "$EXTENDED" -eq 1 ] && echo " (positive control: worker_egress recorded example.com ${REAL_OK_worker_egress} time(s))")"
 }
 
+# What the entry container left behind when a Turn ended without completing: its Docker state
+# (exit code, OOM) and the tail of its output — the entrypoint's selfcheck lines, then pi's own
+# stdout/stderr (a startup error such as an unresolvable --model lands here and nowhere else:
+# agent-host only sees the stdio close, worker-supervisor only the `die` event). The container
+# stays on the host until its next touch or cleanup_step's reclaim, so this runs before either.
+# Long token-shaped strings (Handles, keys) are redacted; RPC streaming deltas are dropped.
+real_entry_diagnostics() {
+  c="nexttime-entry-$1"
+  echo "DIAG entry-container $(docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$c" 2>/dev/null || echo 'status=absent')"
+  docker logs --tail 80 "$c" </dev/null 2>&1 | grep -v '"type":"message_update"' | cut -c1-400 |
+    sed -E 's/[A-Za-z0-9_=+-]{32,}/<redacted>/g; s/^/DIAG entry-log /'
+}
+
+# Real-model mode: one trivial Turn before any scenario. Every scenario needs the entry agent to
+# survive a Turn against the real provider, and the fake-provider suites cannot prove that for the
+# real provider's models.json — so a run whose entry agent cannot even answer "OK" stops here, with
+# the container's own output, instead of failing every scenario's every run on a timeout.
+real_smoke_step() {
+  out=$(run_driver send-and-wait "$ALICE_KEY" "" "只回复 OK。" 120000)
+  t=$(parse_kv "$out" TURN_STATUS)
+  chat_id=$(parse_kv "$out" CHAT_ID)
+  reply=""
+  [ -n "$chat_id" ] && reply=$(chat_last_assistant_text "$ALICE_KEY" "$chat_id")
+  if [ "$t" = completed ] && [ -n "$reply" ]; then
+    pass "real-smoke" "a one-line Turn completed with a reply under model=$REAL_MODEL — the entry agent survives a Turn against the real provider"
+    return 0
+  fi
+  real_entry_diagnostics "$ALICE_PRINCIPAL_ID"
+  fail "real-smoke" "the first Turn ended ${t:-without a status}$([ "$t" = completed ] && echo ' with an empty reply') under model=$REAL_MODEL — no scenario was run (DIAG lines above)"
+}
+
 real_scenarios_step() {
   DOCKER_TASK_ID=""
   i=1
@@ -1659,6 +1692,7 @@ connections_step
 ontology_step
 ops_runner_step
 if [ "$REAL" -eq 1 ]; then
+  real_smoke_step
   real_scenarios_step
   step6_env_and_egress
   real_evidence_step

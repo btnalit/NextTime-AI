@@ -102,6 +102,12 @@ from / to / 提交 sha / runs / 配额——要跑的就是这一行；之后 `r
 run（`plan` 查本 workflow 未结束的 `+ real model` dispatch，有就失败），避免并发叠加花费。每个验收脚本用自己的一次性工作区，所以单次
 回归的上界约为"验收脚本数 × 配额"。
 
+真实模型阶段开始前，`--real` 的值必须是不含空白和控制字符的 `<provider>/<model id>`（入参检查，秒级失败）；生成 models.json 后，
+脚本确认这个 provider 和模型都在其中（`STEP real-setup models.json providers=… provider_present=… model_present=…`，
+不打印名字），否则直接失败——内核的 bootstrap CLI 不校验 `--entry-model`，而 pi 遇到它不认识的 provider 会在启动时退出（与 pi 内置 provider 同名但 models.json 里没有的，则绕过 llm-proxy、因无 key 失败）。
+`accept_s2.sh --real` 的冒烟 Turn（`real-smoke`）失败时，它的 `DIAG` 行（入口容器状态与输出末尾，已脱敏）会转印到 job 日志，
+`accept_s3.sh --real` 不再运行。
+
 真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。runner 跑完即销毁，这一行是唯一留下的用量记录。
 
 secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** 并打 warning，不会显示为通过；预演本身
