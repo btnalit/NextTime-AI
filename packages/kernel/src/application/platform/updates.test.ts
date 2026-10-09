@@ -163,7 +163,12 @@ describe('derivePlatformUpdates', () => {
       migrationsIncomplete: false,
       breaking: true,
       notesUrl: `${REPO}/releases/tag/v0.44.0`,
-      applyCommand: 'sh scripts/apply-release.sh --pull v0.44.0',
+      prefetchCommands: [
+        'git fetch -q origin --tags',
+        'git show v0.44.0:scripts/apply-release.sh > /tmp/apply-release-v0.44.0.sh',
+        'sh /tmp/apply-release-v0.44.0.sh --prefetch v0.44.0',
+      ],
+      applyCommand: 'sh /tmp/apply-release-v0.44.0.sh --pull v0.44.0',
       rollbackVersion: 'v0.42.0',
     });
     expect(result.platformUpdate?.newerReleases.map((r) => r.version)).toEqual([
@@ -224,6 +229,7 @@ describe('derivePlatformUpdates', () => {
       newerReleases: [],
       migrations: [],
       breaking: false,
+      prefetchCommands: [],
       applyCommand: null,
       rollbackVersion: 'v0.44.0',
     });

@@ -991,9 +991,11 @@ export type PlatformUpdateFeedWire = z.infer<typeof PlatformUpdateFeedWireSchema
  * `platformUpdate`: the releases newer than the one this kernel reports. `currentVersion` is null
  * for a build whose `KERNEL_VERSION` is not a release tag (`dev`, a hand build) — then `available`
  * is false and `newerReleases` empty, because "newer" cannot be decided. `migrations` / `breaking`
- * span every newer release (what applying `latestVersion` crosses), `applyCommand` is the one
- * command a maintainer runs on the host (decisions 2 and 3: no in-console upgrade), and
- * `rollbackVersion` is the release to go back to — the one running now.
+ * span every newer release (what applying `latestVersion` crosses), `prefetchCommands` are what a
+ * maintainer runs on the host before the maintenance window (take the target tag's own
+ * `apply-release.sh` out of the tag, pre-pull and verify its images; empty when nothing is newer),
+ * `applyCommand` is the one command run in the window (decisions 2 and 3: no in-console upgrade;
+ * release.md §3), and `rollbackVersion` is the release to go back to — the one running now.
  */
 export const PlatformUpdateWireSchema = z
   .object({
@@ -1013,6 +1015,7 @@ export const PlatformUpdateWireSchema = z
     migrationsIncomplete: z.boolean(),
     breaking: z.boolean(),
     notesUrl: ReleaseChannelUrlSchema.nullable(),
+    prefetchCommands: z.array(z.string()),
     applyCommand: z.string().nullable(),
     rollbackVersion: PlatformReleaseVersionSchema.nullable(),
   })

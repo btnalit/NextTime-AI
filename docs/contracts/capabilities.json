@@ -15063,6 +15063,12 @@
                     }
                   ]
                 },
+                "prefetchCommands": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "rollbackVersion": {
                   "anyOf": [
                     {
@@ -15084,6 +15090,7 @@
                 "migrationsIncomplete",
                 "breaking",
                 "notesUrl",
+                "prefetchCommands",
                 "applyCommand",
                 "rollbackVersion"
               ],

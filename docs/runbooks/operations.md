@@ -750,7 +750,7 @@ git fetch -q origin --tags && git show vX.Y.Z:scripts/host-env-init.sh | sudo NE
 
 应用后核对：`docker compose logs --tail 20 update-feed` 有 `downloaded channel.json`；控制台运行状态页「版本信息」为"正常"。
 它停了或 GitHub 不通，48 小时后「版本信息」变"陈旧"，提醒指向主机上的 update-feed 日志；下载正常但 CI 超过 72 小时没再写记录（pi drift / release channel 工作流停了）也是"陈旧"，提醒指向 GitHub Actions；记录格式不对或超过 64 KiB 是"异常"。它只影响升级提醒，不影响任何其它功能。
-控制台只提醒、给出准确命令（`sh scripts/apply-release.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 只在用 fork
+控制台只提醒、给出准确命令（release.md §3：维护窗口前取出目标 tag 自己的 `apply-release.sh` 到 `/tmp` 并 `--prefetch vX.Y.Z`，窗口内 `sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z`），从不自己升级。`UPDATE_FEED_URL` 只在用 fork
 时才在 `.env` 覆盖，且必须是该 fork 的 GitHub release 下载地址（`https://github.com/<owner>/<repo>/releases/download/…`）；
 compose 把同一个值也交给内核，内核只认链接指向这个仓库（`owner/repo`，不分大小写）的记录，指向别处的整份记录判"异常"；
 地址不是 GitHub release 下载地址（包括任何镜像源）时，每份记录都判"异常"。记录只带最近 20 个发版：主机版本早于其中最旧

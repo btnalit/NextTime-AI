@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import type { WorkerDefinitionKind } from './enums.js';
+import {
+  hostPatternProblem,
+  isIpLiteral,
+  normalizeDenyHostPattern,
+  normalizeHostname,
+} from './net-address.js';
 
 /**
  * worker-definition: the Zod shape of `worker_definitions.definition` (design doc §5.1.4
@@ -57,6 +63,41 @@ const WorkerDefinitionContentBaseSchema = z.object({
   description: z.string().min(1).optional(),
 });
 
+/**
+ * `egressDeny` (both kinds): host names, each matched case-insensitively as a suffix — the name
+ * itself and every subdomain (`internal.example` denies `internal.example` and
+ * `git.internal.example`). A leading `.` or `*.` is accepted and parses to the bare name
+ * (`normalizeDenyHostPattern`; it can only deny more). Refused, with the reason: anything the
+ * egress proxy could never match — a wildcard elsewhere, a scheme / port / path / CIDR, spaces,
+ * a non-ASCII name — and IP literals. IPs are not part of this list: the egress proxy already
+ * denies every private range by address (`packages/egress-proxy/src/policy.ts`), and a name entry
+ * cannot express "this public address" (a request can spell an IP several ways, and a name that
+ * resolves to it is not covered). Checked on the list, not per element, so a refusal's issue path
+ * is the field itself (`egressDeny`) — what a form maps its errors by.
+ *
+ * fix/egress-suffix-match: this comment used to promise "a hostname or a `.suffix` entry" while
+ * the matcher (`matchesSuffix`) never matched a leading `.`, so every such entry was a silent
+ * no-op. The egress proxy now canonicalizes deny entries the same way (`matchesDenySuffix`), so
+ * entries already published in either spelling take effect without being re-published.
+ */
+export const EgressDenyListSchema = z.array(z.string().min(1)).transform((entries, ctx) =>
+  entries.map((raw) => {
+    const entry = normalizeDenyHostPattern(raw);
+    const problem = isIpLiteral(entry)
+      ? 'is an IP address — egressDeny holds host names only (the egress proxy already denies private ranges by address)'
+      : hostPatternProblem(entry);
+    if (problem) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `egressDeny entry "${raw}" ${problem}`,
+      });
+    }
+    // `hostPatternProblem` judges the name with one more trailing root dot dropped, so return that
+    // form: `x..` is stored as `x`, never as the non-canonical `x.`.
+    return normalizeHostname(entry);
+  }),
+);
+
 /** `kind='entry'` content (design doc §5.1.4 "entry 类的能力上限"). `capabilities` must be a subset
  *  of `governance/capability/handles.ts`'s `entryScope()` ceiling — checked by the kernel service
  *  (`application/worker/definitions.ts`), not by this pure schema, since the ceiling is runtime
@@ -64,12 +105,11 @@ const WorkerDefinitionContentBaseSchema = z.object({
 export const EntryWorkerDefinitionContentSchema = WorkerDefinitionContentBaseSchema.extend({
   capabilities: z.array(z.string().min(1)),
   /** Egress deny-list seeded empty in the checked-in template (§7.9 "按 WorkerDefinition 的允许/
-   *  拒绝清单过滤"); platform-specific, so never pre-populated with real hostnames here. Semantics:
-   *  a hostname or a `.suffix` entry (matches the host and every subdomain), case-insensitive;
-   *  literal IPs/CIDRs are not part of this list — the egress proxy's own built-in private-range
-   *  denial already covers those (`packages/egress-proxy/src/policy.ts`). Same field, same
-   *  semantics, on `WorkerWorkerDefinitionContentSchema` below (feat/egress-definition-lists). */
-  egressDeny: z.array(z.string().min(1)).optional(),
+   *  拒绝清单过滤"); platform-specific, so never pre-populated with real hostnames here. Entry
+   *  semantics: `EgressDenyListSchema` above (a host name matching itself and every subdomain;
+   *  no IPs/CIDRs). Same field, same semantics, on `WorkerWorkerDefinitionContentSchema` below
+   *  (feat/egress-definition-lists). */
+  egressDeny: EgressDenyListSchema.optional(),
 }).strict();
 export type EntryWorkerDefinitionContent = z.infer<typeof EntryWorkerDefinitionContentSchema>;
 
@@ -102,7 +142,7 @@ export const WorkerWorkerDefinitionContentSchema = WorkerDefinitionContentBaseSc
   skills: z.array(z.string().min(1)).optional(),
   capabilities: z.array(z.string().min(1)).optional(),
   gates: z.array(z.string().min(1)).optional(),
-  egressDeny: z.array(z.string().min(1)).optional(),
+  egressDeny: EgressDenyListSchema.optional(),
 }).strict();
 export type WorkerWorkerDefinitionContent = z.infer<typeof WorkerWorkerDefinitionContentSchema>;
 

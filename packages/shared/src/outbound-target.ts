@@ -31,8 +31,9 @@ import {
  * networks: the operator's `NEXTTIME_CONNECTION_ALLOW_HOSTS` (a gate deliberately run as a compose
  * service without making it a packaged gate) plus the kernel's fixed acceptance-fixture list
  * `NEXTTIME_CONNECTION_FIXTURE_HOSTS` (`scripts/accept_s2.sh`). A listed name matches as a suffix (`matchesSuffix`, the egress proxy's
- * allow-list rule); a listed IP literal matches only exactly. An allowed host skips every other
- * check.
+ * allow-list rule — strict: a `.x` / `*.x` entry never matches, and the kernel logs and drops
+ * one, `adapters/outbound-target`); a listed IP literal matches only exactly. An allowed host
+ * skips every other check.
  *
  * Pure apart from the injected `resolve` (no DNS, no `process.env`), like the egress proxy's
  * `decideEgress`, so every class is unit-testable — the kernel wires the real resolver and its env.

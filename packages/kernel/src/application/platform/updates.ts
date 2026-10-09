@@ -250,6 +250,23 @@ export interface PlatformUpdatesInput {
   readonly now: Date;
 }
 
+/** release.md §3: a release is applied with the target tag's own `apply-release.sh`, never the
+ *  copy in the checkout (that one belongs to the release running now and does not know the
+ *  target's steps). `version` matched PlatformReleaseVersionSchema, so it is safe in a command. */
+function applyScriptCopy(version: string): string {
+  return `/tmp/apply-release-${version}.sh`;
+}
+
+/** Run before the maintenance window: take the target's script out of the tag and pre-pull and
+ *  verify its images, so the in-window `--pull` does not wait on the host's slow egress. */
+function prefetchCommands(version: string): string[] {
+  return [
+    'git fetch -q origin --tags',
+    `git show ${version}:scripts/apply-release.sh > ${applyScriptCopy(version)}`,
+    `sh ${applyScriptCopy(version)} --prefetch ${version}`,
+  ];
+}
+
 function derivePlatformUpdate(
   channel: ReleaseChannel,
   currentVersion: string | null,
@@ -293,7 +310,8 @@ function derivePlatformUpdate(
       (comparePlatformVersions(currentVersion, windowBase) ?? 0) < 0,
     breaking: newer.some((release) => release.breaking),
     notesUrl: newest?.notesUrl ?? null,
-    applyCommand: newest ? `sh scripts/apply-release.sh --pull ${newest.version}` : null,
+    prefetchCommands: newest ? prefetchCommands(newest.version) : [],
+    applyCommand: newest ? `sh ${applyScriptCopy(newest.version)} --pull ${newest.version}` : null,
     rollbackVersion: currentVersion,
   };
 }
