@@ -77,7 +77,9 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 2. 在该 environment 下加三个 secret：
    - `STAGING_LLM_PROVIDERS_YAML`：一份完整的 `llm-providers.yaml`（格式见
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
-   - `STAGING_LLM_PROXY_ENV`：`KEY=VALUE` 行，键名即 yaml 里各 provider 的 `api_key_env`；
+   - `STAGING_LLM_PROXY_ENV`：每个 `api_key_env` 一行 `NAME=value`（允许 `export ` 前缀和引号）；yaml 只有一个
+     `api_key_env` 时也可以只放 key 本身。脚本把它们写成 `secrets/llm-provider-keys/<NAME>`（R-24，与生产主机
+     同一布局，key 不进容器 env），并在安装之前校验——缺哪个名字就以计数报错退出，不打印名字和值；
    - `STAGING_REAL_MODEL`：`<provider/model>`，必须是上面 yaml 生成的 `models.json` 里的 id。
 3. 从 **main** Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
 

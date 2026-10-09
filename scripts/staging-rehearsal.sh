@@ -38,8 +38,8 @@
 #                       the rehearsal unless --allow-baseline-failures).
 #   --no-verify         pass --no-verify to the --from release's pull-images.sh (skip the cosign
 #                       check — only where the sigstore endpoints are unreachable; say so).
-#   --real ...          after a clean apply, install a real provider (an llm-providers.yaml and an
-#                       env file holding the key variables it names), regenerate models.json, and
+#   --real ...          after a clean apply, install a real provider (an llm-providers.yaml and its
+#                       keys from --real-env, format below), regenerate models.json, and
 #                       run accept_s2.sh/accept_s3.sh --real <provider/model> --runs N (default 3).
 #                       Costs real tokens; the kernel's own per-workspace daily cap
 #                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 3000000) first,
@@ -106,6 +106,42 @@ CODE="$WORK/NextTime-AI"
 D="$WORK/data"
 LOGS="$WORK/logs"
 mkdir -p "$LOGS" || die "cannot create $LOGS"
+
+# --real: one file per provider key, named by its api_key_env (R-24: secrets/llm-provider-keys/<NAME>,
+# the production host's layout — a key never sits in container env). Checked here, before anything
+# is installed, so a malformed --real-env fails in seconds rather than after the apply. The env file
+# holds NAME=value lines (`export ` and quotes allowed), or — when the yaml names exactly one
+# api_key_env — just the key itself. Only counts are ever printed, never names or values.
+REAL_KEYS="$WORK/real-keys"
+if [ -n "$REAL_MODEL" ]; then
+  mkdir -m 700 "$REAL_KEYS" || die "cannot create $REAL_KEYS"
+  key_names=$(sed -n "s/^[[:space:]]*api_key_env:[[:space:]]*[\"']\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p" "$REAL_PROVIDERS" | sort -u | tr '\n' ' ')
+  env_shape=$(umask 077; awk -v dir="$REAL_KEYS" -v names="$key_names" -v q="'" -v qq='"' '
+    function unquote(v) {
+      if (length(v) >= 2 && (substr(v, 1, 1) == q || substr(v, 1, 1) == qq) && substr(v, length(v), 1) == substr(v, 1, 1))
+        v = substr(v, 2, length(v) - 2)
+      return v
+    }
+    function put(name, v,  f) { v = unquote(v); if (v == "") return; f = dir "/" name; printf "%s", v > f; close(f) }
+    BEGIN { n = split(names, list, " ") }
+    { sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+    $0 == "" || $0 ~ /^#/ { next }
+    { lines++; last = $0 }
+    match($0, /^(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) {
+      kv++; name = substr($0, 1, RLENGTH - 1); sub(/^export[ \t]+/, "", name)
+      put(name, substr($0, RLENGTH + 1))
+    }
+    END { if (kv == 0 && lines == 1 && n == 1 && last !~ /[ \t]/) put(list[1], last); printf "lines=%d name=value=%d", lines, kv }
+  ' "$REAL_ENV") || die "--real-env: cannot read it"
+  n_names=0 missing=0
+  for k in $key_names; do
+    n_names=$((n_names + 1))
+    [ -s "$REAL_KEYS/$k" ] || missing=$((missing + 1))
+  done
+  [ "$n_names" -gt 0 ] || die "--real-providers names no api_key_env"
+  [ "$missing" -eq 0 ] ||
+    die "--real-env ($env_shape) lacks $missing of the $n_names api_key_env name(s) in --real-providers — give NAME=value per name (or just the key when there is exactly one)"
+fi
 
 STEP_T0=$(date +%s)
 step() { echo "STEP $* ($(( $(date +%s) - STEP_T0 ))s)"; }
@@ -316,7 +352,12 @@ if [ -n "$REAL_MODEL" ]; then
   printf "\nLLM_DAILY_TOKEN_BUDGET=%s\n" "$BUDGET" >>"$D/secrets/kernel.env" || fail real-setup "token budget"
   docker compose up -d --no-build --force-recreate --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "kernel recreate"
   install -m 644 "$REAL_PROVIDERS" "$D/config/llm-providers.yaml" || fail real-setup "providers file"
-  { echo; grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$REAL_ENV"; } >>"$D/secrets/llm-proxy.env" || fail real-setup "env file"
+  # host-env-init.sh's convention for this directory: root-owned, group 10001, 0750; files 0640.
+  install -d -m 750 -g 10001 "$D/secrets/llm-provider-keys" || fail real-setup "provider keys directory"
+  for k in "$REAL_KEYS"/*; do
+    install -m 640 -g 10001 "$k" "$D/secrets/llm-provider-keys/" || fail real-setup "provider key files"
+  done
+  rm -rf "$REAL_KEYS"
   docker compose up -d --no-build --force-recreate llm-proxy </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "llm-proxy recreate"
   docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null >"$D/models/models.json.tmp" 2>>"$LOGS/stack.log" &&
     mv "$D/models/models.json.tmp" "$D/models/models.json" || { rm -f "$D/models/models.json.tmp"; fail real-setup "gen-models"; }

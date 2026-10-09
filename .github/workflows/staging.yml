@@ -17,8 +17,8 @@ name: staging
 # Real-model regression (docs/runbooks/host-accept-real-model.md) runs only on a dispatch with
 # `real_model: true`, in the `staging-real-model` environment — give that environment a required
 # reviewer, since every run spends real tokens. Its secrets: STAGING_LLM_PROVIDERS_YAML (a whole
-# llm-providers.yaml), STAGING_LLM_PROXY_ENV (KEY=VALUE lines for the api_key_env names it uses),
-# STAGING_REAL_MODEL (<provider/model>). This repository is public and so are its run logs and
+# llm-providers.yaml), STAGING_LLM_PROXY_ENV (NAME=value per api_key_env it names, or just the
+# key when it names one), STAGING_REAL_MODEL (<provider/model>). This repository is public and so are its run logs and
 # artifacts: the model id and provider names are masked in the log and scrubbed from the uploaded
 # files, never echoed by this workflow. Missing secrets report the real-model part as SKIPPED (job
 # summary + warning), never as passed; cost is capped by the kernel's own per-workspace
@@ -265,7 +265,9 @@ jobs:
             printf '%s\n' "$REAL_MODEL" "${REAL_MODEL%%/*}" "${REAL_MODEL#*/}"
             sed -n 's/^  \([A-Za-z0-9_.-]*\):[[:space:]]*$/\1/p' "$dir/llm-providers.yaml"
             sed -n 's/^[[:space:]]*upstream_base_url:[[:space:]]*\(.*\)$/\1/p' "$dir/llm-providers.yaml" | tr -d "\"'"
-            sed -n 's/^[A-Za-z_][A-Za-z0-9_]*=//p' "$dir/llm-proxy.env" | tr -d "\"'\r" | grep -E '^.{8,}$' || true
+            # every line's value (a bare line is the key itself — staging-rehearsal.sh --real-env)
+            sed -E 's/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$dir/llm-proxy.env" |
+              tr -d "\"'\r" | grep -E '^.{8,}$' || true
           } | grep -v '^$' | sort -u >"$dir/scrub"
           while IFS= read -r s; do echo "::add-mask::$s"; done <"$dir/scrub"
           echo "enabled=true" >>"$GITHUB_OUTPUT"
