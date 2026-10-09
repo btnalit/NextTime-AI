@@ -3834,6 +3834,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 控制台：新增 kit `combobox`（可搜索下拉）；供应商表单自动拉模型、自动 / 手动探测、预设 `suggestedModels`；其余页面按字段清单把可推导或可选择的值改为选择（20 处，表在 PR 描述），被拒（403）的列表降级为手填并说明。网络失败的错误条改为中文主句，原文降为第二行；`withDefaultScheme` 不再给已含 `://`、含空白或以 `:` 开头的值补前缀。
 - 审查后修复：审计资源选择器按自有 key 查表（`Object.hasOwn`），`#/audit?resourceType=__proto__` 不再让页面崩溃（CodeQL）；审计 P0-1 / P0-3 / P0-4（默认模型、首跑清单、系统页空目录）。
 - CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
+- e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
 
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
