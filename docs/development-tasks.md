@@ -3864,6 +3864,29 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 渲染成本：流式期间每个 `textDelta` 都重渲染 ChatPage；`ToolCallGroupView`、`MessageBody`（react-markdown，历史里每条 assistant 消息）与 `MessageReferences` 改为 `React.memo`，它们的 props 在流式期间保持同一引用（`records` 来自 `useMemo(threadItems, [messages])`）。
 - 范围：只改 `packages/web`，无 wire、内核或契约变化。e2e 的 fake 运行时不做工具调用，主机验收经 `release.md` §3.15 B 核对。
 
+**Handle 移出 agent 容器：来源绑定（#524，2026-10-09 合入，governance 0018；遗留 156 关闭，R-24 后续与 code-review L6-18 关闭）**
+
+- 领域：Handle 的 **Holder**（`container`：`entry`、`worker_run` 会话；`bearer`：`mcp_session`、`service`、`web`）只由会话种类决定，调用方不能选；新 token 带 `hld` claim，内核验证时再从签发会话推一次（旧 token、回滚期间签的 token 也覆盖），不加列、不加触发器。**Presentation**：`source`（取对端地址上的绑定）或 `bearer`（请求头），由对端是否在 `NEXTTIME_SUBNET_WORKERS` 决定；对不上即 401 `HandlePresentationRefused`。不变量 I19 写进设计文档 §5.4 / §11。
+- 绑定：shared `handle-binding.ts` 定义绑定文件（地址 → {handle, sourceId, containerId, boundAt}）与读取器（同一版本读失败后每秒至多重读一次、错误只报一次、不引用内容）；只有 worker-supervisor 写，kernel 与 llm-proxy 只读，内容不进日志。tmpfs 卷 `handle-bindings`，0700 / 0600，uid 10001。
+- 生命周期（worker-supervisor `handle-bindings.ts`）：容器启动后、spawn 返回前独占 bind（地址被另一个运行中的容器占着抛 `AddressHeldError`，写失败则 spawn 失败并删除新容器）→ 常驻复用 rebind → 主动停止、空闲回收、轮换、回收、Task 终止**先 unbind 再停** → 崩溃、退出事件、Task 回收再 unbind 一次，`unbind(ip, containerId)` 比较后再删 → 启动时（受理 spawn 之前）与 events 重连时 `retainLive` 对账。spawn spec 输入里没有 Handle 字段。
+- 内核：`interfaces/source-binding`、`handle-auth.ts`、`resolve-caller.ts` 的 `resolveSourceBoundCaller`；`capability-route.ts` 对绑定来源只走来源鉴权；`workers` 平面只放行 `POST /api/cap/:name`、`GET /api/health`、`GET /api/source-binding`（返回绑在对端地址上的容器 id，不含 Handle），其余 403。设了 `NEXTTIME_SUBNET_WORKERS` 却没有绑定文件时 `workers` 请求一律 401，不回退到请求头。旧运行时镜像的 extension 发 `Authorization: Bearer source-bound`，内核当作无凭证。
+- llm-proxy：同一套来源鉴权，`workers` 平面只放行模型路由与 `/healthz`，provider 头里除标记外一律拒。platform-extension 在 entry / worker 模式不读、不持、不发凭证。
+- 入口镜像自检：`check=handle_env`（拒绝 JWT 形态的 env 值）与 `check=handle_binding`（启动 pi 之前确认本地址绑定指向本容器，20 s 超时退出）。compose 守卫 `validate-compose.mjs` 钉住卷权限与 `workers` 网络不开 IPv6。
+- 迁移 governance 0018：吊销存量 `entry` / `worker_run` Handle，按 (工作区, 主体) 写审计 `principal.container_handles_revoked`；内核本来就按会话种类拒绝它们以 bearer 出示，0018 补的是只看 token 的 llm-proxy。可逆性见 `release.md` §6，窗口步骤见 §3.17。
+- 取舍：不用"由 extension 持有"（与 `bash` 同 uid）、per-container unix socket、mTLS 或 supervisor 侧代理（都要往模型可读的容器里放东西）；方案 C（Turn 级短期 Handle）不做；被轮换的入口 Handle 解绑即不可用，不额外吊销。按地址认 Handle 的前提（runsc `--network=host` 下每容器仍有自己的 netns 与地址、`CapDrop ALL` 无法伪造源地址、地址复用、supervisor 重启、绑定文件丢失）逐条证明与测试见 PR §3。
+- 验收：S1 新增 `env-no-handle`、`env-workers-plane`、`env-source-binding`；测试只用临时密钥对现签的合成 Handle。
+- 遗留：157（bearer 副本仍在库内容里）、165–171。
+
+**含疑似凭据的内容生效前二次确认（#526，2026-10-09 合入，无迁移；2026-10-09 维护者决定「二次确认」）**
+
+- 检测器：`kernel/src/governance/redaction/credential-review.ts` 的 `findSuspectedSecrets` 就是 #520 的 `redactSecrets` 本身（新选项 `schemaLiterals`、`onRedacted`、`pathKey`），计数 == 脱敏器替换的值，返回 N 与至多 20 个点路径（`[i]` 表示数组项，段内形似密钥的键名打码、过长截断，从不含值片段）。调用参数（ActionRequest params、WorkerDefinition 与 Procedure 步骤参数）另按字段名计：名字是密钥名的字段下每个字符串与有限数字都算；文档内容（Skill 正文、Operation 定义）只按值计，JSON Schema 的 `properties.password` 是声明不算，但密钥名属性下的 `default` / `const` / `enum` / `examples` / `example` 字面量算。
+- 字段名规则：`packages/shared/src/secret-field-name.ts` 的 `namesASecretField` / `isSecretFieldValue` / `maskSecretFields`，内核计数、内核脱敏（工具调用记录与实时流、JSON 文本里的键值对、流式扣留）与控制台 `redactSensitive` 共用，没有第二份；排除用量计数（`maxTokens`、`inputTokens`、`tokenCount`、`tokenizer` 等），线性时间。`credential-review.test.ts` 的 609 行表格断言控制台遮住的 == 计数的 == 脱敏的。
+- 执行点：`decide.ts`（理由门之后、迁移之前）；四个发布服务在自身校验之后、只对人的调用（内部发布没有 actor，无需确认）；`publishOperation` 先 `select … for update` 锁草稿再计数（审查发现的 TOCTOU，有双连接集成测试）；策略引擎新原因 `params_carry_suspected_credentials` 返回 `require_approval`。N > 0 且未带 `credentialsReviewed: true` 时 400 `credentials_review_required`（`details: { subject, suspectedSecretValues, suspectedSecretPaths }`，typed error `CredentialReviewRequiredError`）；审计与 Decision 记 `credentialReview: { suspectedSecretValues, confirmed }`。
+- wire：`ActionRequestWire.suspectedSecretValues` / `suspectedSecretPaths`、`SystemActionPendingContent.suspectedSecretValues`（可选）；五个能力加 `credentialsReviewed?: boolean`，契约快照已更新。
+- 控制台：`components/kit/credential-review.tsx` 与 `lib/credential-review.ts`；审批页抽屉列字段路径、勾选前「批准」禁用并有提示；对话审批卡 N > 0 时只给「去审批页核对」与拒绝（旧卡片从 400 得知）；审批列表「含凭据」标记；发布面（目录详情、三个编辑器的成功页、接入向导重分类）在首次被拒后提问，换草稿或版本即关闭问题，回到同一 `id@version` 保留勾选。
+- 范围外：verify / attest 事实、`resolve_conflict`（写入时已脱敏）、本体发布（遗留 176）、`publish_manifest` / `confirm_gate_manifest`（人写的）、`observe_operation`（按设计免审批，遗留 175）。
+- 遗留：172–178。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
