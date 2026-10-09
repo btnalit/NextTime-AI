@@ -10,6 +10,7 @@ import {
 import type { Permissions } from '../../hooks/usePermissions.js';
 import { type Resource, useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
+import { credentialReviewParams } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { humanizeKind } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
@@ -259,6 +260,7 @@ export function useApprovalQueue({
       const result = await http.call<ActionRequestRow>('approve', {
         actionRequestId: id,
         ...(input.reason !== undefined ? { reason: input.reason } : {}),
+        ...credentialReviewParams(input.credentialsReviewed === true),
       });
       setDecided((prev) => ({ ...prev, [id]: { ...row, ...result } }));
       settle(id, null);

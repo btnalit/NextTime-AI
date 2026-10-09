@@ -109,6 +109,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
         actionRequestId: 'ar-1',
         reason: 'why',
         alwaysAllow: true,
+        credentialsReviewed: false,
       }),
     );
     await waitFor(() => expect(screen.queryByTestId('approval-confirm')).toBeNull());
@@ -129,6 +130,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
         actionRequestId: 'ar-1',
         reason: undefined,
         alwaysAllow: false,
+        credentialsReviewed: false,
       }),
     );
     expect(screen.queryByTestId('approval-confirm')).toBeNull();
@@ -191,5 +193,37 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-decision-error').getAttribute('data-error-code')).toBe(
       'illegal_transition',
     );
+  });
+
+  it('a row with suspected credentials keeps Approve disabled until 「已核对凭据」, then sends it (decision 2026-10-09)', async () => {
+    const { onApprove } = renderDetail({ suspectedSecretValues: 2 });
+    expect(screen.getByTestId('credential-review-warning').textContent).toContain(
+      '含 2 处疑似凭据',
+    );
+    const approve = screen.getByTestId('approval-approve') as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('credential-review-confirm'));
+    fireEvent.click(approve);
+    await waitFor(() =>
+      expect(onApprove).toHaveBeenCalledWith({
+        actionRequestId: 'ar-1',
+        reason: undefined,
+        alwaysAllow: false,
+        credentialsReviewed: true,
+      }),
+    );
+  });
+
+  it('the kernel’s 400 credentials_review_required opens the confirmation instead of an error banner', () => {
+    renderDetail(
+      {},
+      {
+        error: new HttpError('capability_error', 'carries 1', 'credentials_review_required', {
+          suspectedSecretValues: 1,
+        }),
+      },
+    );
+    expect(screen.getByTestId('credential-review').getAttribute('data-count')).toBe('1');
+    expect(screen.queryByTestId('approval-decision-error')).toBeNull();
   });
 });

@@ -1185,10 +1185,16 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder',
-    paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        name: z.string().min(1),
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: wire.OperationPublishResultWireSchema,
     description:
-      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise).',
+      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'deprecate_operation',
@@ -1254,10 +1260,10 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder',
-    paramsSchema: z.object({ skillId: id }).strict(),
+    paramsSchema: z.object({ skillId: id, credentialsReviewed: z.boolean().optional() }).strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer.',
+      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'publish_procedure',
@@ -1265,10 +1271,12 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder', // D-24 — see publish_skill.
-    paramsSchema: z.object({ procedureId: id }).strict(),
+    paramsSchema: z
+      .object({ procedureId: id, credentialsReviewed: z.boolean().optional() })
+      .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'deprecate_skill',
@@ -1731,10 +1739,16 @@ const governanceCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
+    paramsSchema: z
+      .object({
+        actionRequestId: id,
+        reason: z.string().optional(),
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: wire.ActionRequestWireSchema,
     description:
-      'Approve a pending ActionRequest (I14: the approver must hold the requested scope). `reason` is optional for low/medium blast radius and required (non-blank) for high — 400 reason_required otherwise; it is written to the decision rationale and the audit row and exposed as decisionReason.',
+      'Approve a pending ActionRequest (I14: the approver must hold the requested scope). `reason` is optional for low/medium blast radius and required (non-blank) for high — 400 reason_required otherwise; it is written to the decision rationale and the audit row and exposed as decisionReason. When params carry suspected credentials (the row’s suspectedSecretValues), credentialsReviewed: true is required — 400 credentials_review_required otherwise; the count is recorded with the decision and in the audit row.',
   },
   {
     name: 'reject',
@@ -2360,10 +2374,16 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder',
-    paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
+    paramsSchema: z
+      .object({
+        definitionId: id,
+        version: z.number().int().positive(),
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
     description:
-      'Publish your draft WorkerDefinition version (I12: immutable once published). Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found.',
+      'Publish your draft WorkerDefinition version (I12: immutable once published). Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'deprecate_worker_definition',

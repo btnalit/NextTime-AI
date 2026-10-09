@@ -15,6 +15,7 @@ import {
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
+import { assertDraftCredentialsReviewed } from '../redaction/index.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -787,6 +788,14 @@ export async function publishOperation(
     `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
   transition(PUBLISHABLE_TRANSITIONS, existing.status, 'publish');
+  // Decision 2026-10-09 "二次确认": the Operation definition an agent may have proposed. Values
+  // only — its params schema's property names (`password`) are declarations, not values.
+  assertDraftCredentialsReviewed(
+    'operation',
+    `${input.gatekeeperId}/${input.name}@${existing.version}`,
+    existing.operation,
+    input.actor,
+  );
   // D-24: publishing a revision also deprecates the live row below, so the caller needs deprecate
   // authority over that row too — a builder may revise their own Operation, but replacing (and
   // reclassifying) a row someone else proposed, such as a gate's imported Operation, is the owner's.

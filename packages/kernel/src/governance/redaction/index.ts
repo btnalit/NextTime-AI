@@ -4,3 +4,4 @@
  */
 export * from './secret-stream.js';
 export * from './secret-values.js';
+export * from './credential-review.js';

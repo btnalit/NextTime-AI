@@ -185,7 +185,8 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         onPublish={
           permissions.isDenied('publish_skill')
             ? undefined
-            : () => http.call<{ status: string }>('publish_skill', { skillId: proposed.id })
+            : (review) =>
+                http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })
         }
         onDone={onDone}
         reviewersSeeDraft

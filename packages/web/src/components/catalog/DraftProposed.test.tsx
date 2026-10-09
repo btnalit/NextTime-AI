@@ -1,0 +1,73 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HttpError } from '../../lib/http-client.js';
+import { DraftProposed } from './DraftProposed.js';
+
+afterEach(cleanup);
+
+const refused = (count: number) =>
+  new HttpError(
+    'capability_error',
+    'skill sk-1@1 carries suspected credentials',
+    'credentials_review_required',
+    {
+      subject: 'skill',
+      suspectedSecretValues: count,
+    },
+  );
+
+describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次确认")', () => {
+  it('a refused publish opens the question in place of an error; Publish waits for the tick, then carries it', async () => {
+    const onPublish = vi
+      .fn()
+      .mockRejectedValueOnce(refused(2))
+      .mockResolvedValueOnce({ status: 'published' });
+    render(
+      <DraftProposed
+        kindLabel="Skill"
+        draft={{ id: 'sk-1', version: 1, status: 'draft', name: 'rotate' }}
+        onPublish={onPublish}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('credential-review')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    const review = await screen.findByTestId('credential-review');
+    expect(onPublish).toHaveBeenNthCalledWith(1, {});
+    expect(review.getAttribute('data-count')).toBe('2');
+    expect(screen.getByTestId('credential-review-warning').textContent).toContain(
+      '含 2 处疑似凭据',
+    );
+    expect(screen.queryByTestId('draft-publish-error')).toBeNull();
+    const publish = screen.getByTestId('draft-publish') as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+
+    fireEvent.click(screen.getByTestId('credential-review-confirm'));
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    await waitFor(() =>
+      expect(onPublish).toHaveBeenNthCalledWith(2, { credentialsReviewed: true }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('draft-publish')).toBeNull());
+    expect(screen.queryByTestId('credential-review')).toBeNull();
+  });
+
+  it('any other failure still shows the kernel’s error, with no question', async () => {
+    const onPublish = vi
+      .fn()
+      .mockRejectedValueOnce(new HttpError('capability_error', 'not a draft', 'conflict'));
+    render(
+      <DraftProposed
+        kindLabel="Skill"
+        draft={{ id: 'sk-1', version: 1, status: 'draft' }}
+        onPublish={onPublish}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    await screen.findByTestId('draft-publish-error');
+    expect(screen.queryByTestId('credential-review')).toBeNull();
+  });
+});

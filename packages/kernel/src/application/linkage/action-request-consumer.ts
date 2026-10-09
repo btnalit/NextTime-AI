@@ -2,6 +2,7 @@ import type { ActionRequestStatus, SystemMessageContent } from '@nexttime/shared
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { computeActionRequestHolders, getActionRequest } from '../../governance/approval/index.js';
+import { countSuspectedSecrets } from '../../governance/redaction/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import type { ChatRow } from '../chat/index.js';
 import {
@@ -203,6 +204,7 @@ export function registerActionRequestConsumers(
         blastRadius: actionRequest.blastRadius,
         awaitDecision: actionRequest.awaitDecision,
         isHolder,
+        suspectedSecretValues: countSuspectedSecrets(actionRequest.params, { secretFields: true }),
       });
       await writeActionMessage(
         deps,

@@ -8,6 +8,11 @@ import {
 import type { PoolClient } from 'pg';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { getPublishedOperation } from '../gatekeepers/index.js';
+import {
+  assertCredentialsReviewed,
+  countSuspectedSecrets,
+  credentialReviewAudit,
+} from '../redaction/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
@@ -30,7 +35,8 @@ import {
  *      until this transaction commits or rolls back, then re-reads the *already-updated* status.
  *   2. I14 precheck (`assertApproverScope`), then the R-17 "a person decides" check
  *      (`assertPersonDecidesWhenRequired`), then — `approve` only — the S6-A C25 high-blast-radius
- *      `reason` requirement (`ApprovalReasonRequiredError`), then the `transition()` table lookup
+ *      `reason` requirement (`ApprovalReasonRequiredError`) and the suspected-credential
+ *      confirmation (`CredentialReviewRequiredError`), then the `transition()` table lookup
  *      — the common case
  *      where a second concurrent caller loses the race fails *here*, with a plain
  *      `IllegalTransition` (its locked read already saw the new status), before ever writing a
@@ -53,6 +59,10 @@ export interface DecideActionRequestInput {
    *  `blastRadius` is `high` (`ApprovalReasonRequiredError` otherwise) and optional below that;
    *  for `reject` always optional. Trimmed before storage; a blank string counts as absent. */
   readonly reason?: string;
+  /** `approve` only: the approver confirms the suspected credentials in the row's `params`
+   *  (governance/redaction/credential-review.ts). Required when the server counts any
+   *  (`CredentialReviewRequiredError` otherwise); ignored when it counts none. */
+  readonly credentialsReviewed?: boolean;
 }
 
 /** `undefined` for a missing or whitespace-only reason, else the trimmed text — so the stored
@@ -77,6 +87,8 @@ async function writeApprovalDecision(
     readonly decidedBy: string;
     readonly event: 'approve' | 'reject';
     readonly reason?: string;
+    /** Suspected credential values the approver confirmed (0: none to confirm). */
+    readonly suspectedSecretValues?: number;
   },
 ): Promise<string> {
   const activity = await startActivity(client, workspaceId, {
@@ -106,6 +118,7 @@ async function writeApprovalDecision(
         actionKind: params.actionRequest.actionKind,
         resourceScope: params.actionRequest.resourceScope,
         reason: params.reason ?? null,
+        ...credentialReviewAudit(params.suspectedSecretValues ?? 0),
       }),
       params.decidedBy,
     ],
@@ -247,6 +260,16 @@ export async function approveActionRequest(
   if (existing.blastRadius === 'high' && reason === undefined) {
     throw new ApprovalReasonRequiredError(existing.id);
   }
+  // Decision 2026-10-09 "二次确认": suspected credentials in the params this approval releases
+  // need the approver's explicit confirmation — counted here, on the locked row, never taken from
+  // the client. Same place in the order as the reason gate, for the same reasons.
+  const suspectedSecretValues = countSuspectedSecrets(existing.params, { secretFields: true });
+  assertCredentialsReviewed(
+    'action_request',
+    existing.id,
+    suspectedSecretValues,
+    input.credentialsReviewed,
+  );
 
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'approve');
   const approvalDecisionId = await writeApprovalDecision(client, workspaceId, {
@@ -254,6 +277,7 @@ export async function approveActionRequest(
     decidedBy: input.approverPrincipalId,
     event: 'approve',
     reason,
+    suspectedSecretValues,
   });
   const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
@@ -266,7 +290,10 @@ export async function approveActionRequest(
     action: 'action_request.approve',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
-    extraAuditPayload: reason ? { reason } : undefined,
+    extraAuditPayload: {
+      ...(reason ? { reason } : {}),
+      ...credentialReviewAudit(suspectedSecretValues),
+    },
   });
 
   return updated;

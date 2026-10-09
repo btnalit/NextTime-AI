@@ -64,7 +64,7 @@ describe('ApprovalCard', () => {
 
     fireEvent.change(reason, { target: { value: '  ticket 123  ' } });
     fireEvent.click(screen.getByTestId('approval-approve'));
-    await waitFor(() => expect(onApprove).toHaveBeenCalledWith('ticket 123'));
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith('ticket 123', false));
   });
 
   it('approves without a reason for low impact and rejects with an optional reason', async () => {
@@ -82,7 +82,7 @@ describe('ApprovalCard', () => {
     );
     expect(screen.getByTestId('approval-reason').getAttribute('aria-required')).toBeNull();
     fireEvent.click(screen.getByTestId('approval-approve'));
-    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(undefined));
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(undefined, false));
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: 'nope' } });
     fireEvent.click(screen.getByTestId('approval-reject'));
     await waitFor(() => expect(onReject).toHaveBeenCalledWith('nope'));
@@ -104,5 +104,52 @@ describe('ApprovalCard', () => {
     expect(screen.queryByTestId('approval-approve')).toBeNull();
     expect(screen.queryByTestId('approval-reason')).toBeNull();
     expect(screen.getByTestId('approval-open-page')).toBeTruthy();
+  });
+
+  it('with suspected credentials, Approve and Always allow wait for 「已核对凭据」, then pass it on (decision 2026-10-09)', async () => {
+    const onApprove = vi.fn(async () => undefined);
+    const onAlwaysAllow = vi.fn(async () => undefined);
+    render(
+      <ApprovalCard
+        actionRequestId="ar-3"
+        actionKind="db.rotate_password"
+        blastRadius="medium"
+        target="db-1"
+        suspectedSecretValues={2}
+        onApprove={onApprove}
+        onReject={vi.fn()}
+        onAlwaysAllow={onAlwaysAllow}
+      />,
+    );
+    expect(screen.getByTestId('credential-review-warning').textContent).toContain(
+      '含 2 处疑似凭据',
+    );
+    const approve = screen.getByTestId('approval-approve') as HTMLButtonElement;
+    const always = screen.getByTestId('approval-always-allow') as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(always.disabled).toBe(true);
+    // Reject never needs the confirmation.
+    expect((screen.getByTestId('approval-reject') as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByTestId('credential-review-confirm'));
+    expect(approve.disabled).toBe(false);
+    fireEvent.click(approve);
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(undefined, true));
+  });
+
+  it('with nothing suspect, shows no confirmation and passes false', async () => {
+    const onApprove = vi.fn(async () => undefined);
+    render(
+      <ApprovalCard
+        actionRequestId="ar-4"
+        actionKind="db.read"
+        blastRadius="low"
+        target="db-1"
+        onApprove={onApprove}
+      />,
+    );
+    expect(screen.queryByTestId('credential-review')).toBeNull();
+    fireEvent.click(screen.getByTestId('approval-approve'));
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(undefined, false));
   });
 });

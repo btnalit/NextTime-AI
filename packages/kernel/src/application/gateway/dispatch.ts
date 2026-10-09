@@ -329,6 +329,7 @@ export async function dispatchCapability(
           ...(resourceRef.resourceRef !== undefined
             ? { resourceRef: resourceRef.resourceRef }
             : {}),
+          ...result.auditPayload,
         },
       });
       return result;

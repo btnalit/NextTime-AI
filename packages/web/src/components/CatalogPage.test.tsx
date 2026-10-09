@@ -1212,3 +1212,122 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await waitFor(() => expect(screen.queryByTestId('procedures-new-draft')).toBeNull());
   });
 });
+
+// Decision 2026-10-09 "二次确认": a draft carrying suspected credentials publishes only with the
+// person's confirmation. The catalog learns the count from the kernel's refusal, so the first
+// Publish opens the question next to the button, and the second carries `credentialsReviewed`.
+describe('CatalogPage — credential confirmation on Publish', () => {
+  const refusal = (subject: string, count: number) =>
+    new HttpError(
+      'capability_error',
+      `${subject} carries suspected credentials`,
+      'credentials_review_required',
+      {
+        subject,
+        suspectedSecretValues: count,
+      },
+    );
+
+  it('Operations: the refusal opens the question, Publish waits for the tick, the retry carries it', async () => {
+    const seen: unknown[] = [];
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: (params) => {
+        seen.push(params);
+        if (seen.length === 1) return Promise.reject(refusal('operation', 1));
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const review = await within(detail).findByTestId('credential-review');
+    expect(review.getAttribute('data-count')).toBe('1');
+    expect(screen.queryByTestId('toast')).toBeNull();
+    const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+
+    fireEvent.click(within(detail).getByTestId('credential-review-confirm'));
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen).toEqual([
+      { gatekeeperId: 'gk-1', name: 'docker.restart' },
+      { gatekeeperId: 'gk-1', name: 'docker.restart', credentialsReviewed: true },
+    ]);
+  });
+
+  it('Skills: the same flow on publish_skill', async () => {
+    const seen: unknown[] = [];
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 1,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+      }),
+      list_skills: () => ({
+        items: [{ id: 'sk-9', version: 2, status: 'draft', name: 'rotate', description: 'd' }],
+      }),
+      get_skill: () => null,
+      publish_skill: (params) => {
+        seen.push(params);
+        if (seen.length === 1) return Promise.reject(refusal('skill', 2));
+        return { id: 'sk-9', version: 2, status: 'published' };
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const review = await within(detail).findByTestId('credential-review');
+    expect(review.getAttribute('data-count')).toBe('2');
+    fireEvent.click(within(detail).getByTestId('credential-review-confirm'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(seen).toEqual([{ skillId: 'sk-9' }, { skillId: 'sk-9', credentialsReviewed: true }]),
+    );
+  });
+
+  it('Workers: the same flow on publish_worker_definition', async () => {
+    const seen: unknown[] = [];
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+        const row = {
+          id: 'wd-2',
+          version: 1,
+          kind: 'worker',
+          status: 'draft',
+          definition: { name: 'Patcher' },
+        };
+        return { items: includeOwnDrafts ? [row] : [] };
+      },
+      publish_worker_definition: (params) => {
+        seen.push(params);
+        if (seen.length === 1) return Promise.reject(refusal('worker_definition', 1));
+        return { id: 'wd-2', version: 1, status: 'published' };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
+    await within(detail).findByTestId('credential-review');
+    expect((within(detail).getByTestId('worker-draft-publish') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(within(detail).getByTestId('credential-review-confirm'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
+    await waitFor(() =>
+      expect(seen).toEqual([
+        { definitionId: 'wd-2', version: 1 },
+        { definitionId: 'wd-2', version: 1, credentialsReviewed: true },
+      ]),
+    );
+  });
+});

@@ -50,12 +50,21 @@ export type HttpErrorKind = 'network' | 'invalid_response' | 'capability_error';
 export class HttpError extends Error {
   readonly kind: HttpErrorKind;
   readonly code: string | undefined;
+  /** The wire `error.details`, when the kernel sent one (a 400 that says exactly what to fix or
+   *  confirm — `credentials_review_required`'s count, `module_confirm_required`'s modules). */
+  readonly details: Readonly<Record<string, unknown>> | undefined;
 
-  constructor(kind: HttpErrorKind, message: string, code?: string) {
+  constructor(
+    kind: HttpErrorKind,
+    message: string,
+    code?: string,
+    details?: Readonly<Record<string, unknown>>,
+  ) {
     super(message);
     this.name = 'HttpError';
     this.kind = kind;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -66,14 +75,21 @@ interface CapabilitySuccessEnvelope {
 
 interface CapabilityErrorEnvelope {
   readonly ok: false;
-  readonly error: { readonly code: string; readonly message: string };
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly details?: Readonly<Record<string, unknown>>;
+  };
 }
 
 function asErrorEnvelope(error: unknown): CapabilityErrorEnvelope['error'] | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const record = error as Record<string, unknown>;
   if (typeof record.code === 'string' && typeof record.message === 'string') {
-    return { code: record.code, message: record.message };
+    const details = record.details;
+    return typeof details === 'object' && details !== null && !Array.isArray(details)
+      ? { code: record.code, message: record.message, details: details as Record<string, unknown> }
+      : { code: record.code, message: record.message };
   }
   return undefined;
 }
@@ -182,7 +198,12 @@ export class HttpClient {
     }
     if (!envelope.ok) {
       if (envelope.error.code === 'unauthorized') this.onUnauthorized?.();
-      throw new HttpError('capability_error', envelope.error.message, envelope.error.code);
+      throw new HttpError(
+        'capability_error',
+        envelope.error.message,
+        envelope.error.code,
+        envelope.error.details,
+      );
     }
     return envelope.result as T;
   }

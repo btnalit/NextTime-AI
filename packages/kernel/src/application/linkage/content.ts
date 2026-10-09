@@ -52,6 +52,8 @@ export interface ActionPendingContentInput {
   readonly blastRadius?: BlastRadius;
   readonly awaitDecision?: boolean;
   readonly isHolder: boolean;
+  /** Suspected credential values in the request's params (0 or absent: none). */
+  readonly suspectedSecretValues?: number;
 }
 
 function humanizeActionKind(actionKind: string): string {
@@ -76,6 +78,9 @@ export function buildActionPendingContent(
     blastRadius: input.blastRadius,
     awaitDecision: input.awaitDecision,
     isHolder: input.isHolder,
+    ...(input.suspectedSecretValues !== undefined && input.suspectedSecretValues > 0
+      ? { suspectedSecretValues: input.suspectedSecretValues }
+      : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import type { ActionRequestRow } from '../../governance/approval/index.js';
+import { countSuspectedSecrets } from '../../governance/redaction/index.js';
 
 /**
  * application/gateway/action-request-wire: the one wire-projection function for ActionRequest
@@ -19,6 +20,10 @@ import type { ActionRequestRow } from '../../governance/approval/index.js';
  *     back about an ActionRequest.
  */
 export function toWireActionRequest(row: ActionRequestRow) {
+  // Decision 2026-10-09 "二次确认": the count `approve` will require a confirmation for — the same
+  // count, computed the same way (governance/redaction/credential-review.ts). Present only when
+  // non-zero, so an ordinary row's shape is unchanged.
+  const suspectedSecretValues = countSuspectedSecrets(row.params, { secretFields: true });
   return {
     id: row.id,
     status: row.status,
@@ -38,6 +43,7 @@ export function toWireActionRequest(row: ActionRequestRow) {
     executedAt: row.executedAt ? row.executedAt.toISOString() : null,
     failedAt: row.failedAt ? row.failedAt.toISOString() : null,
     requesterCanApprove: row.requesterCanApprove,
+    ...(suspectedSecretValues > 0 ? { suspectedSecretValues } : {}),
   };
 }
 

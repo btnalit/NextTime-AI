@@ -13,6 +13,7 @@ import {
   reclassifiedOperationPayload,
   searchItems,
 } from '../lib/connections.js';
+import { usePublishCredentialReview } from '../lib/credential-review.js';
 import { prettyJson } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import {
@@ -22,6 +23,7 @@ import {
   isLoosening,
 } from './connect/GovernanceChange.js';
 import { Confirm } from './kit/confirm.js';
+import { CredentialReview } from './kit/credential-review.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -207,9 +209,27 @@ function OperationReviewRow({
   const [pendingChange, setPendingChange] = useState<OperationGovernanceChangeWire | null>(null);
   const [draftKept, setDraftKept] = useState(false);
   const publishedRef = useRef(false);
+  // Decision 2026-10-09 "二次确认": a definition carrying suspected credentials publishes only with
+  // the person's confirmation. Every Submit re-proposes the same reclassification of this one
+  // Operation, so the question stays open across those drafts.
+  const credentialReview = usePublishCredentialReview(`${row.gatekeeperId}:${row.name}`);
 
   async function publish(): Promise<void> {
-    await http.call('publish_operation', { gatekeeperId: row.gatekeeperId, name: row.name });
+    try {
+      await http.call('publish_operation', {
+        gatekeeperId: row.gatekeeperId,
+        name: row.name,
+        ...credentialReview.params(),
+      });
+    } catch (err) {
+      // The kernel's credential question: the draft stays; the row asks, then Submit again.
+      if (credentialReview.capture(err)) {
+        setPendingChange(null);
+        setDraftKept(true);
+        return;
+      }
+      throw err;
+    }
     publishedRef.current = true;
     setPendingChange(null);
     setEditing(false);
@@ -336,6 +356,13 @@ function OperationReviewRow({
                   )}
                 />
               ) : null}
+              <CredentialReview
+                count={credentialReview.count}
+                subject="publish"
+                checked={credentialReview.checked}
+                onChange={credentialReview.setChecked}
+                disabled={busy}
+              />
               {draftKept ? (
                 <Notice testId="wizard-review-draft-kept">
                   {t(
@@ -350,7 +377,13 @@ function OperationReviewRow({
                   open={changeItem !== null}
                   onOpenChange={onConfirmOpenChange}
                   anchor={
-                    <Button variant="primary" size="s" loading={busy} onClick={() => void submit()}>
+                    <Button
+                      variant="primary"
+                      size="s"
+                      loading={busy}
+                      disabled={credentialReview.blocked}
+                      onClick={() => void submit()}
+                    >
                       {t('提交', 'Submit')}
                     </Button>
                   }

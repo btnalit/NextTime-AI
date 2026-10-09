@@ -340,7 +340,11 @@ export function ProcedureEditor({
         onPublish={
           permissions.isDenied('publish_procedure')
             ? undefined
-            : () => http.call<{ status: string }>('publish_procedure', { procedureId: proposed.id })
+            : (review) =>
+                http.call<{ status: string }>('publish_procedure', {
+                  procedureId: proposed.id,
+                  ...review,
+                })
         }
         onDone={onDone}
         reviewersSeeDraft

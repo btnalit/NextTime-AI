@@ -83,6 +83,11 @@ export interface PolicyEvaluationInput {
    *  so the audit trail distinguishes "not vetted" from "the Operation never declared itself
    *  auto-approvable". */
   readonly mcpTrustBlocked?: boolean | undefined;
+  /** Decision 2026-10-09 "二次确认": the call's params carry suspected credentials
+   *  (governance/redaction/credential-review.ts) — a person confirms them on `approve`, so such a
+   *  request never resolves to `allow`, whatever the Operation or a rule says ("always allow"
+   *  included). */
+  readonly paramsCarrySuspectedSecrets?: boolean | undefined;
   /** The workspace's policy row for this `action_kind`, or `undefined` if none exists. */
   readonly workspacePolicy?: WorkspacePolicyInput | undefined;
   /** The requesting Handle's scope (design doc §5.1.4 CapabilityHandle; `@nexttime/shared`
@@ -136,6 +141,7 @@ export type PolicyEvaluationReason =
   | 'blast_radius_high_requires_approval'
   | 'operation_not_auto_approvable'
   | 'mcp_gate_not_vetted'
+  | 'params_carry_suspected_credentials'
   | 'workspace_policy_disables_auto_approve'
   | 'no_workspace_policy_and_not_low_blast_radius'
   // S3.13 / D-16: the requester's resolved autoApproveLow is false — the workspace AgentPolicy's
@@ -196,6 +202,14 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
     return {
       decision: 'require_approval',
       reason: 'blast_radius_high_requires_approval',
+      requesterCanApprove,
+    };
+  }
+
+  if (input.paramsCarrySuspectedSecrets) {
+    return {
+      decision: 'require_approval',
+      reason: 'params_carry_suspected_credentials',
       requesterCanApprove,
     };
   }

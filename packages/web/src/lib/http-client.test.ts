@@ -63,6 +63,25 @@ describe('HttpClient (apiKey auth)', () => {
     expect((err as HttpError).message).toBe('nope');
   });
 
+  it('carries the wire error.details when the kernel sends one', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(400, {
+        ok: false,
+        error: {
+          code: 'credentials_review_required',
+          message: 'confirm',
+          details: { subject: 'action_request', suspectedSecretValues: 2 },
+        },
+      }),
+    );
+    const client = apiKeyClient(fetchImpl as typeof fetch);
+    const err = await client.call('approve', { actionRequestId: 'ar-1' }).catch((e: unknown) => e);
+    expect((err as HttpError).details).toEqual({
+      subject: 'action_request',
+      suspectedSecretValues: 2,
+    });
+  });
+
   it('throws an invalid_response HttpError on a non-JSON body', async () => {
     const fetchImpl = vi.fn(async () => new Response('not json', { status: 200 }));
     const client = apiKeyClient(fetchImpl as typeof fetch);

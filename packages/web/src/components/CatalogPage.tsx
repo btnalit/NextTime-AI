@@ -5,6 +5,10 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
+import {
+  type PublishCredentialReview,
+  usePublishCredentialReview,
+} from '../lib/credential-review.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
@@ -41,6 +45,7 @@ import {
 } from './connect/GovernanceChange.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
+import { CredentialReview } from './kit/credential-review.js';
 import {
   Dialog,
   DialogClose,
@@ -306,12 +311,15 @@ function PublishGovernanceConfirm({
   row,
   change,
   busy,
+  blocked,
   onConfirm,
   testId,
 }: {
   readonly row: OperationCatalogRow;
   readonly change: NonNullable<OperationCatalogRow['governanceChange']>;
   readonly busy: boolean;
+  /** An open credential question (`CredentialReview`) is unanswered. */
+  readonly blocked: boolean;
   readonly onConfirm: () => Promise<void>;
   readonly testId: string;
 }) {
@@ -328,7 +336,7 @@ function PublishGovernanceConfirm({
         <Button
           variant="primary"
           size="s"
-          disabled={busy}
+          disabled={busy || blocked}
           aria-busy={busy || undefined}
           onClick={() => setOpen(true)}
           data-testid={`${testId}-trigger`}
@@ -359,6 +367,26 @@ function PublishGovernanceConfirm({
       ) : null}
       <GovernanceChangeList items={[item]} />
     </Confirm>
+  );
+}
+
+/** The credential question in front of a draft's Publish (decision 2026-10-09 "二次确认") — open
+ *  only after the kernel refused a publish of this draft (lib/credential-review.ts). */
+function PublishCredentialSlot({
+  review,
+  busy,
+}: {
+  readonly review: PublishCredentialReview;
+  readonly busy: boolean;
+}) {
+  return (
+    <CredentialReview
+      count={review.count}
+      subject="publish"
+      checked={review.checked}
+      onChange={review.setChecked}
+      disabled={busy}
+    />
   );
 }
 
@@ -510,6 +538,7 @@ function OperationDetailView({
   canDeprecate,
   canEditDescription,
   busy,
+  credentialReview,
   onPublish,
   onDeprecate,
   onEditDescription,
@@ -521,6 +550,7 @@ function OperationDetailView({
   readonly canDeprecate: boolean;
   readonly canEditDescription: boolean;
   readonly busy: boolean;
+  readonly credentialReview: PublishCredentialReview;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onEditDescription: () => void;
@@ -601,6 +631,9 @@ function OperationDetailView({
         </div>
       </header>
       <KeyValue items={items} />
+      {canPublish && row.status === 'draft' ? (
+        <PublishCredentialSlot review={credentialReview} busy={busy} />
+      ) : null}
       <div className="row-wrap">
         {canPublish &&
         row.status === 'draft' &&
@@ -610,6 +643,7 @@ function OperationDetailView({
             row={row}
             change={row.governanceChange}
             busy={busy}
+            blocked={credentialReview.blocked}
             onConfirm={onPublish}
             testId={`operation-publish-confirm-${key}`}
           />
@@ -617,7 +651,7 @@ function OperationDetailView({
           <Button
             variant="primary"
             size="s"
-            disabled={busy}
+            disabled={busy || credentialReview.blocked}
             aria-busy={busy || undefined}
             onClick={() => void onPublish()}
           >
@@ -709,6 +743,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
+  const credentialReview = usePublishCredentialReview(itemId ?? null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
@@ -728,13 +763,19 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     const key = catalogOperationKey(row);
     setBusy(key);
     try {
-      await http.call(action, { gatekeeperId: row.gatekeeperId, name: row.name });
+      await http.call(action, {
+        gatekeeperId: row.gatekeeperId,
+        name: row.name,
+        ...(action === 'publish_operation' ? credentialReview.params() : {}),
+      });
       toast.push({
         tone: 'ok',
         title: `${row.name} ${action === 'publish_operation' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
+      // The kernel's credential question — answered next to Publish, not as a failure toast.
+      if (action === 'publish_operation' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
@@ -843,6 +884,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         mayEditOperationDescription(selected, role, principalId)
       }
       busy={busy === catalogOperationKey(selected)}
+      credentialReview={credentialReview}
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
       onEditDescription={() => openDescriptionEditor(selected)}
@@ -969,6 +1011,7 @@ function SkillDetailView({
   canDeprecate,
   canDiscard,
   busy,
+  credentialReview,
   onEditAsDraft,
   onPublish,
   onDeprecate,
@@ -981,6 +1024,7 @@ function SkillDetailView({
   readonly canDeprecate: boolean;
   readonly canDiscard: boolean;
   readonly busy: boolean;
+  readonly credentialReview: PublishCredentialReview;
   readonly onEditAsDraft: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -1041,6 +1085,9 @@ function SkillDetailView({
         )}
       </div>
 
+      {canPublish && row.status === 'draft' ? (
+        <PublishCredentialSlot review={credentialReview} busy={busy} />
+      ) : null}
       <div className="row-wrap">
         {canPropose ? (
           <Button
@@ -1056,7 +1103,7 @@ function SkillDetailView({
           <Button
             variant="primary"
             size="s"
-            disabled={busy}
+            disabled={busy || credentialReview.blocked}
             aria-busy={busy || undefined}
             onClick={() => void onPublish()}
           >
@@ -1094,6 +1141,9 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const rows = skills.state.status === 'ready' ? skills.state.data.items : [];
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  const credentialReview = usePublishCredentialReview(
+    selected ? `${selected.id}@${selected.version}` : null,
+  );
   // The editor only ever shows while `itemId` is the `NEW_ITEM_ID` sentinel — a stale `editor`
   // left over from a previous open (e.g. the reader picked a different, real row instead of
   // finishing it) never flashes back in; see `CatalogPage`'s own doc comment.
@@ -1122,13 +1172,18 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   async function act(row: SkillRow, action: 'publish_skill' | 'deprecate_skill') {
     setBusy(row.id);
     try {
-      await http.call(action, { skillId: row.id });
+      await http.call(action, {
+        skillId: row.id,
+        ...(action === 'publish_skill' ? credentialReview.params() : {}),
+      });
       toast.push({
         tone: 'ok',
         title: `${row.name} ${action === 'publish_skill' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
+      // The kernel's credential question — answered next to Publish, not as a failure toast.
+      if (action === 'publish_skill' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
@@ -1283,6 +1338,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={canDeprecate}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
+      credentialReview={credentialReview}
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_skill')}
       onDeprecate={() => act(selected, 'deprecate_skill')}
@@ -1327,6 +1383,7 @@ function ProcedureDetailView({
   canDeprecate,
   canDiscard,
   busy,
+  credentialReview,
   onEditAsDraft,
   onPublish,
   onDeprecate,
@@ -1339,6 +1396,7 @@ function ProcedureDetailView({
   readonly canDeprecate: boolean;
   readonly canDiscard: boolean;
   readonly busy: boolean;
+  readonly credentialReview: PublishCredentialReview;
   readonly onEditAsDraft: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -1377,6 +1435,9 @@ function ProcedureDetailView({
         </pre>
       </div>
 
+      {canPublish && row.status === 'draft' ? (
+        <PublishCredentialSlot review={credentialReview} busy={busy} />
+      ) : null}
       <div className="row-wrap">
         {canPropose ? (
           <Button
@@ -1392,7 +1453,7 @@ function ProcedureDetailView({
           <Button
             variant="primary"
             size="s"
-            disabled={busy}
+            disabled={busy || credentialReview.blocked}
             aria-busy={busy || undefined}
             onClick={() => void onPublish()}
           >
@@ -1430,6 +1491,9 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  const credentialReview = usePublishCredentialReview(
+    selected ? `${selected.id}@${selected.version}` : null,
+  );
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
 
   function refresh(): void {
@@ -1455,13 +1519,18 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   async function act(row: ProcedureRow, action: 'publish_procedure' | 'deprecate_procedure') {
     setBusy(row.id);
     try {
-      await http.call(action, { procedureId: row.id });
+      await http.call(action, {
+        procedureId: row.id,
+        ...(action === 'publish_procedure' ? credentialReview.params() : {}),
+      });
       toast.push({
         tone: 'ok',
         title: `${row.name} ${action === 'publish_procedure' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
+      // The kernel's credential question — answered next to Publish, not as a failure toast.
+      if (action === 'publish_procedure' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
@@ -1623,6 +1692,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={canDeprecate}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
+      credentialReview={credentialReview}
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}
       onDeprecate={() => act(selected, 'deprecate_procedure')}
@@ -1692,6 +1762,7 @@ function WorkerDetailView({
   canDeprecate,
   canDiscard,
   busy,
+  credentialReview,
   onEditAsNewVersion,
   onPublish,
   onDeprecate,
@@ -1704,6 +1775,7 @@ function WorkerDetailView({
   readonly canDeprecate: boolean;
   readonly canDiscard: boolean;
   readonly busy: boolean;
+  readonly credentialReview: PublishCredentialReview;
   readonly onEditAsNewVersion: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -1742,6 +1814,9 @@ function WorkerDetailView({
         </pre>
       </div>
 
+      {isMyDraft && canPublish ? (
+        <PublishCredentialSlot review={credentialReview} busy={busy} />
+      ) : null}
       <div className="row-wrap">
         {isMyDraft ? (
           <>
@@ -1749,7 +1824,7 @@ function WorkerDetailView({
               <Button
                 variant="primary"
                 size="s"
-                disabled={busy}
+                disabled={busy || credentialReview.blocked}
                 aria-busy={busy || undefined}
                 onClick={() => void onPublish()}
                 data-testid="worker-draft-publish"
@@ -1797,6 +1872,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
+  // `itemId` is the row's `id@version` (`workerKey`), so a new version asks afresh.
+  const credentialReview = usePublishCredentialReview(itemId ?? null);
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
   // S8 W2-U2b (audit R6): a dedicated own-drafts read — `includeOwnDrafts` is additive (published
   // rows come back too, S8 W2-U2b) — only the caller's own draft rows are this section's concern.
@@ -1838,13 +1915,19 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   async function publishDraft(row: WorkerDefinitionSummary): Promise<void> {
     setBusy(workerKey(row));
     try {
-      await http.call('publish_worker_definition', { definitionId: row.id, version: row.version });
+      await http.call('publish_worker_definition', {
+        definitionId: row.id,
+        version: row.version,
+        ...credentialReview.params(),
+      });
       toast.push({
         tone: 'ok',
         title: `${workerLabel(row, t)} ${t('已发布', 'published')}`,
       });
       refresh();
     } catch (err) {
+      // The kernel's credential question — answered next to Publish, not as a failure toast.
+      if (credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied('publish_worker_definition');
       toast.push({
         tone: 'danger',
@@ -2156,6 +2239,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={canDeprecate}
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
+      credentialReview={credentialReview}
       onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => publishDraft(selected)}
       onDeprecate={() => deprecate(selected)}

@@ -420,10 +420,11 @@ export function WorkerDefinitionEditor({
         onPublish={
           permissions.isDenied('publish_worker_definition')
             ? undefined
-            : () =>
+            : (review) =>
                 http.call<{ status: string }>('publish_worker_definition', {
                   definitionId: proposed.id,
                   version: proposed.version,
+                  ...review,
                 })
         }
         onDone={onDone}

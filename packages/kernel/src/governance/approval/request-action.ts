@@ -9,6 +9,7 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { evaluate, readEffectivePolicy, toPolicyEvaluationInput } from '../policy/index.js';
+import { countSuspectedSecrets } from '../redaction/index.js';
 import { findActionRequestByIdempotencyKey } from './reads.js';
 import { recordTransition } from './transition-log.js';
 import {
@@ -232,6 +233,8 @@ export async function requestAction(
     blastRadius: input.blastRadius,
     operationAutoApprovable: input.operationAutoApprovable,
     mcpTrustBlocked: input.mcpTrustBlocked,
+    paramsCarrySuspectedSecrets:
+      countSuspectedSecrets(input.params ?? {}, { secretFields: true }) > 0,
     workspacePolicy: policyRow ? toPolicyEvaluationInput(policyRow) : undefined,
     requesterScope: input.requesterScope,
     principalAutoApproveLowEnabled: input.principalAutoApproveLowEnabled,

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Permissions } from '../../hooks/usePermissions.js';
 import { actionCardFromPendingContent } from '../../lib/action-card.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { credentialReviewParams } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { humanizeKind } from '../../lib/format.js';
 import type { Translate } from '../../lib/i18n.js';
@@ -26,7 +27,11 @@ export interface ActionCardsState {
   readonly cardErrors: Readonly<Record<string, unknown>>;
   readonly handleApprove: (
     id: string,
-    options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
+    options: {
+      readonly reason: string | undefined;
+      readonly alwaysAllow: boolean;
+      readonly credentialsReviewed: boolean;
+    },
   ) => Promise<void>;
   readonly handleReject: (id: string, reason: string | undefined) => Promise<void>;
 }
@@ -82,7 +87,11 @@ export function useActionCards(
 
   async function handleApprove(
     id: string,
-    options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
+    options: {
+      readonly reason: string | undefined;
+      readonly alwaysAllow: boolean;
+      readonly credentialsReviewed: boolean;
+    },
   ): Promise<void> {
     setCardError(id, null);
     try {
@@ -91,6 +100,7 @@ export function useActionCards(
       const result = await http.call<{ status: string }>('approve', {
         actionRequestId: id,
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        ...credentialReviewParams(options.credentialsReviewed),
       });
       setActionStatusOverrides((prev) => ({ ...prev, [id]: result.status }));
     } catch (err) {

@@ -50,6 +50,10 @@ export const ActionRequestWireSchema = z
     decisionReason: z.string().nullable().optional(),
     decidedBy: z.string().nullable().optional(),
     decidedAt: z.string().nullable().optional(),
+    // Decision 2026-10-09 "二次确认": how many suspected credential values `params` carries —
+    // the count `approve` requires `credentialsReviewed: true` for (kernel governance/redaction/
+    // credential-review.ts, the same detector that scrubs agent output). Absent when zero.
+    suspectedSecretValues: z.number().int().positive().optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;

@@ -96,6 +96,7 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
+import { CredentialReviewRequiredError } from '../../governance/redaction/index.js';
 import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
 
 /**
@@ -290,6 +291,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // S6-A / C25: high-blast `approve` without a reason (see capability-route.ts's own mapping).
   if (err instanceof ApprovalReasonRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Suspected credentials not confirmed (see capability-route.ts's own mapping).
+  if (err instanceof CredentialReviewRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
