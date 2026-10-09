@@ -75,8 +75,11 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 1. 新建 environment `staging-real-model`，Deployment branches 限制为 `main`，**不设 required reviewer**。
    这是有意的取舍（2026-10-09 维护者决定）：真实模型回归要能长期自动跑，不依赖人工点批准。花钱的边界由系统
    控制兜住，而不是靠审批：①只能从 main 触发（environment 的 deployment branch，`plan` 再核对 `GITHUB_REF`）；
-   ②被测版本只能是已发布 tag 或 main 上的提交（见下）；③`runs` ≤ 10；④每个验收工作区的每日 token 硬配额
-   `token_budget`（见"成本上限"）。
+   ②被测版本只能是存在的 `vX.Y.Z` tag 或 main 上的提交（见下）；③`runs` ≤ 10；④触发者填写的每个验收工作区
+   每日 token 配额 `token_budget`（见"成本上限"）。注意④目前只校验"全是数字"：`0` 会被内核当作**不限额**，
+   也没有上限，在校验收紧之前不要填 `0`。
+   这四道都只管单次运行：每次 dispatch 自成一组、可以并发，每次又是全新的 runner 和数据库，"每日"配额每次
+   都从零算。多次运行的累计花费没有平台侧上限，靠供应商账户侧的额度或消费限制兜底。
 2. 在该 environment 下加三个 secret：
    - `STAGING_LLM_PROVIDERS_YAML`：一份完整的 `llm-providers.yaml`（格式见
      `config/llm-providers.example.yaml`；`upstream_base_url` 必须是公网可达的——runner 到不了内网）；
@@ -88,7 +91,7 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
    再勾 `extended` 会加跑 `accept_s2.sh --extended` 的六个场景（`host-accept-real-model.md` §4），
    花费约三倍，job 超时相应从 180 放宽到 330 分钟。
 
-被测版本受限：`to` 只能是已发布的 `vX.Y.Z` tag 或已经在 main 上的提交（留空 = main 头），否则 `plan`
+被测版本受限：`to` 只能是存在的 `vX.Y.Z` tag（只核对格式与 tag 存在，不核对是否为 GitHub Release、是否在 main 上）或已经在 main 上的提交（留空 = main 头），否则 `plan`
 job 直接失败，不进入 environment。`plan` 不在 environment 里，先于真实模型 job 跑完：run 名称与它的 job 摘要里写着
 from / to / 提交 sha / runs / 配额——要跑的就是这一行；之后 `rehearsal` 开头再核对 sha，不一致就失败。
 

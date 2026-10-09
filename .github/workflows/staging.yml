@@ -25,7 +25,7 @@ name: staging
 # LLM_DAILY_TOKEN_BUDGET (`token_budget` input) and `runs` ≤ 10. A real-model run must be dispatched
 # from main and may only rehearse a release tag or a commit already on main; the `plan` job checks
 # that and writes from / to / commit into the run name and its summary, both visible before the
-# environment's reviewer approves.
+# real-model job starts.
 
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
@@ -105,7 +105,7 @@ permissions:
   contents: read
 
 # Only pull-request runs supersede each other. A push to main queues behind the previous main run
-# instead of cancelling it, and every dispatch (an approved real-model run included) has a group of
+# instead of cancelling it, and every dispatch (a real-model run included) has a group of
 # its own, so nothing cancels it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
