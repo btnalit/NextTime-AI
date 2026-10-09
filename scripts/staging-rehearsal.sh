@@ -38,8 +38,11 @@
 #                       the rehearsal unless --allow-baseline-failures).
 #   --no-verify         pass --no-verify to the --from release's pull-images.sh (skip the cosign
 #                       check — only where the sigstore endpoints are unreachable; say so).
-#   --real ...          after a clean apply, install a real provider (an llm-providers.yaml and its
-#                       keys from --real-env, format below), regenerate models.json, and
+#   --real ...          after a clean apply, add a real provider the way an administrator does in
+#                       the console (admin login, llm-admin token, create provider + set key at
+#                       /api/llm-admin/*, llm-proxy rewrites models.json; --real-providers is a
+#                       llm-providers.yaml used only as the input format, keys from --real-env), run
+#                       the console's provider test on the model, and
 #                       run accept_s2.sh/accept_s3.sh --real <provider/model> --runs N (default 3).
 #                       Costs real tokens; the kernel's own per-workspace daily cap
 #                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 3000000) first,
@@ -164,7 +167,7 @@ CREATED_TAG=
 # So are the real-model key files, if the run stops before real-setup moved them into the data root.
 cleanup() {
   [ -n "$CREATED_TAG" ] && git -C "$REPO" tag -d "$CREATED_TAG" >/dev/null 2>&1
-  rm -rf "$WORK/real-keys"
+  rm -rf "$WORK/real-keys" "$WORK/real-admin"
 }
 trap cleanup EXIT
 
@@ -369,16 +372,82 @@ esac
 if [ -n "$REAL_MODEL" ]; then
   printf "\nLLM_DAILY_TOKEN_BUDGET=%s\n" "$BUDGET" >>"$D/secrets/kernel.env" || fail real-setup "token budget"
   docker compose up -d --no-build --force-recreate --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "kernel recreate"
-  install -m 644 "$REAL_PROVIDERS" "$D/config/llm-providers.yaml" || fail real-setup "providers file"
-  # host-env-init.sh's convention for this directory: root-owned, group 10001, 0750; files 0640.
-  install -d -m 750 -g 10001 "$D/secrets/llm-provider-keys" || fail real-setup "provider keys directory"
-  for k in "$REAL_KEYS"/*; do
-    install -m 640 -g 10001 "$k" "$D/secrets/llm-provider-keys/" || fail real-setup "provider key files"
-  done
+  # The real provider goes in the way an administrator adds one in the console (victor
+  # 2026-10-09): a platform admin logs in through caddy, mints the 5-minute llm-admin token
+  # (`issue_llm_admin_token`), creates each provider and sets its key at `/api/llm-admin/*`, and
+  # llm-proxy itself rewrites models.json. No llm-providers.yaml, no key file, no gen-models — the
+  # yaml secret is only the input format, validated by llm-proxy's own schema. Nothing secret is
+  # ever on a command line: the password and keys go through stdin or 0600 files in a 0700 dir.
+  docker compose up -d --no-build --force-recreate --wait llm-proxy </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "llm-proxy recreate"
+  ADMIN_DIR="$WORK/real-admin"
+  (umask 077 && mkdir "$ADMIN_DIR") || fail real-setup "admin working directory"
+  provider_lines=$(docker compose run --rm --no-deps -T llm-proxy node --input-type=module -e '
+    const { readFileSync } = await import("node:fs");
+    const { createRequire } = await import("node:module");
+    const YAML = createRequire("/app/package.json")("yaml");
+    const { LlmProvidersFileSchema } = await import("/app/dist/config.js");
+    const file = LlmProvidersFileSchema.parse(YAML.parse(readFileSync(0, "utf8")));
+    for (const [id, c] of Object.entries(file.providers)) {
+      const wire = {
+        id, api: c.api, upstreamBaseUrl: c.upstream_base_url, authHeader: c.auth.header,
+        authScheme: c.auth.scheme ?? null, enabled: true,
+        ...(c.display_name ? { displayName: c.display_name } : {}),
+        models: c.models.map((m) => ({ id: m.id, displayName: m.display_name ?? null, cost: m.cost ?? null })),
+      };
+      console.log([id, c.api_key_env ?? "-", JSON.stringify(wire)].join("\t"));
+    }
+  ' <"$REAL_PROVIDERS" 2>>"$LOGS/stack.log") && [ -n "$provider_lines" ] ||
+    fail real-setup "--real-providers does not match llm-proxy's provider schema (details in stack.log)"
+  admin_pw=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%s' "$admin_pw" | docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-platform-admin --login staging-llm-admin >>"$LOGS/stack.log" 2>&1 ||
+    fail real-setup "create-platform-admin"
+  console_url="https://$(sed -n 's/^KERNEL_BIND_ADDR=//p' .env):8443"
+  # curl through caddy, as the browser does; -k: caddy's internal CA, same as accept_s1.sh.
+  # $1 method, $2 path, $3 body file or "-" (stdin), none for GET; prints the HTTP status. The
+  # response (it carries the session cookie and the admin token) stays in the 0700 dir, 0600.
+  console_call() {
+    cc_body=${3:-}
+    (umask 077 && curl -sk -o "$ADMIN_DIR/out" -w '%{http_code}' -X "$1" -b "$ADMIN_DIR/jar" -c "$ADMIN_DIR/jar" \
+      -H 'X-Requested-With: nexttime' -H 'content-type: application/json' ${ADMIN_AUTH:+-H "@$ADMIN_DIR/auth"} \
+      ${cc_body:+--data-binary "@$cc_body"} "$console_url$2")
+  }
+  code=$(printf '{"login":"staging-llm-admin","password":"%s"}' "$admin_pw" | console_call POST /api/auth/login -)
+  [ "$code" = 200 ] || fail real-setup "console login HTTP $code"
+  code=$(printf '{}' | console_call POST /api/cap/issue_llm_admin_token -)
+  token=$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$ADMIN_DIR/out")
+  [ "$code" = 200 ] && [ -n "$token" ] || fail real-setup "issue_llm_admin_token HTTP $code"
+  (umask 077 && printf 'authorization: Bearer %s\n' "$token" >"$ADMIN_DIR/auth") || fail real-setup "admin token file"
+  ADMIN_AUTH=1
+  n_providers=0
+  while IFS="$(printf '\t')" read -r pid key_env wire; do
+    [ -n "$pid" ] || continue
+    code=$(printf '%s' "$wire" | console_call POST /api/llm-admin/providers -)
+    [ "$code" = 201 ] || fail real-setup "create provider #$((n_providers + 1)): HTTP $code $(sed -n 's/.*"code":"\([^"]*\)".*/\1/p' "$ADMIN_DIR/out")"
+    if [ "$key_env" != - ] && [ -s "$REAL_KEYS/$key_env" ]; then
+      (umask 077 && printf '{"key":"%s"}' "$(sed 's/[\\"]/\\&/g' "$REAL_KEYS/$key_env")" >"$ADMIN_DIR/key") || fail real-setup "key body"
+      code=$(console_call PUT "/api/llm-admin/providers/$pid/secret" "$ADMIN_DIR/key")
+      rm -f "$ADMIN_DIR/key"
+      [ "$code" = 200 ] || fail real-setup "set key of provider #$((n_providers + 1)): HTTP $code"
+    fi
+    n_providers=$((n_providers + 1))
+  done <<EOF
+$provider_lines
+EOF
   rm -rf "$REAL_KEYS"
-  docker compose up -d --no-build --force-recreate llm-proxy </dev/null >>"$LOGS/stack.log" 2>&1 || fail real-setup "llm-proxy recreate"
-  docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null >"$D/models/models.json.tmp" 2>>"$LOGS/stack.log" &&
-    mv "$D/models/models.json.tmp" "$D/models/models.json" || { rm -f "$D/models/models.json.tmp"; fail real-setup "gen-models"; }
+  code=$(console_call GET /api/llm-admin/providers)
+  grep -q '"modelsJsonError":null' "$ADMIN_DIR/out" && [ "$code" = 200 ] ||
+    fail real-setup "llm-proxy did not rewrite models.json after the console mutations (HTTP $code)"
+  # The console's own "测试" button for the model under test: one real completion and one tool-call
+  # round trip through llm-proxy to the upstream (a few tokens).
+  real_provider=${REAL_MODEL%%/*}
+  code=$(printf '{"model":"%s"}' "${REAL_MODEL#*/}" | console_call POST "/api/llm-admin/providers/$real_provider/test" -)
+  test_result=$(sed -n 's/.*"completion":"\([a-z]*\)","toolCall":"\([a-z]*\)".*/completion=\1 tool_call=\2/p' "$ADMIN_DIR/out")
+  step "real-setup console providers=$n_providers test HTTP $code ${test_result:-unparsed}"
+  case "$test_result" in
+    "completion=ok tool_call=ok") ;;
+    *) fail real-setup "the console's provider test did not pass for the model under test: $(sed -n 's/.*"error":\("[^"]*"\|null\).*/\1/p' "$ADMIN_DIR/out" | cut -c1-200)" ;;
+  esac
+  rm -rf "$ADMIN_DIR"
   # The kernel's bootstrap CLI takes --entry-model as given, and pi exits at startup on a provider
   # it does not know (one named like a pi built-in would bypass llm-proxy and fail for want of a
   # key) — so check here that the model every entry agent and Worker is pinned to is in the file
