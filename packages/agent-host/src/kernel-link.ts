@@ -23,8 +23,9 @@ import { WebSocket as NodeWebSocket } from 'ws';
  * sent while the link was down was dropped (with a log line) and one written into a half-open
  * socket vanished silently — a Turn's final message and `turnEnded` with it, so the kernel kept
  * the Turn active and the chat refused every new message until a kernel restart. What is kept is
- * bounded per Turn (`maxBufferedFramesPerTurn`): over the bound, the Turn's oldest stream delta
- * (`textDelta`/`toolCall*`) goes first, then its oldest `message`; `turnAccepted`/`turnRejected`/
+ * bounded per Turn (`maxBufferedFramesPerTurn`): over the bound, the Turn's oldest `textDelta`
+ * goes first, then its oldest `message` or `toolCall*` (the kernel stores a record of each tool
+ * call); `turnAccepted`/`turnRejected`/
  * `turnUnknown` and `turnEnded` are never dropped for the per-Turn bound. No new Turn can start
  * while the link is down (`startTurn` only arrives over it), so the number of Turns with frames
  * waiting is bounded by the Turns active when it dropped. A process-wide cap
@@ -76,15 +77,16 @@ interface BufferedFrame {
   readonly frame: SequencedFrame;
 }
 
-/** Which of a Turn's kept frames goes first when it is over its bound: 0 (stream deltas) before 1
- *  (`message`); 2 is never dropped for the per-Turn bound. */
+/** Which of a Turn's kept frames goes first when it is over its bound: 0 (text deltas) before 1
+ *  (`message`, and the tool events the kernel stores a tool-call record from); 2 is never dropped
+ *  for the per-Turn bound. */
 function evictionRank(frame: SequencedFrame): number {
   if (frame.type !== 'runtimeEvent') return 2;
   switch (frame.event.type) {
     case 'textDelta':
+      return 0;
     case 'toolCallStarted':
     case 'toolCallEnded':
-      return 0;
     case 'message':
       return 1;
     case 'turnEnded':
@@ -184,7 +186,7 @@ export function createKernelLink(options: KernelLinkOptions): KernelLink {
         log(
           JSON.stringify({
             level: 'warn',
-            msg: 'kernel-link: unacknowledged frames over the per-Turn bound — dropping the oldest stream deltas (then messages) for this Turn',
+            msg: 'kernel-link: unacknowledged frames over the per-Turn bound — dropping the oldest text deltas (then messages and tool events) for this Turn',
             turnId,
             maxBufferedFramesPerTurn: maxPerTurn,
           }),

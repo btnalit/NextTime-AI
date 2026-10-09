@@ -72,6 +72,9 @@ const AgentRuntimeEventToolCallEndedSchema = z
   .object({
     type: z.literal('toolCallEnded'),
     toolCallId: z.string(),
+    // pi's `tool_execution_end.toolName`. Optional and additive like `isError`: the kernel names a
+    // persisted tool-call record from it when it never saw the call's `toolCallStarted`.
+    name: z.string().optional(),
     result: z.unknown().optional(),
     // W7: pi's own `tool_execution_end.isError` — whether the tool threw / returned an error
     // result to the model. Optional and additive: a runtime that does not know (older agent-host,

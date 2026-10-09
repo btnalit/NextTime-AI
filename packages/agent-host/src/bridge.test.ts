@@ -83,6 +83,7 @@ describe('translatePiEvent — tool_execution_start / tool_execution_end', () =>
       fields: {
         type: 'toolCallEnded',
         toolCallId: 'call_abc123',
+        name: 'bash',
         result: { content: [{ type: 'text', text: 'total 48' }] },
         isError: false,
       },
@@ -102,6 +103,7 @@ describe('translatePiEvent — tool_execution_start / tool_execution_end', () =>
       fields: {
         type: 'toolCallEnded',
         toolCallId: 'call_abc123',
+        name: 'bash',
         result: { content: [{ type: 'text', text: 'boom' }] },
         isError: true,
       },
@@ -115,7 +117,12 @@ describe('translatePiEvent — tool_execution_start / tool_execution_end', () =>
     });
     expect(missing).toEqual({
       kind: 'event',
-      fields: { type: 'toolCallEnded', toolCallId: 'call_abc123', result: { content: [] } },
+      fields: {
+        type: 'toolCallEnded',
+        toolCallId: 'call_abc123',
+        name: 'bash',
+        result: { content: [] },
+      },
     });
 
     const nonBoolean = translatePiEvent({
@@ -127,7 +134,36 @@ describe('translatePiEvent — tool_execution_start / tool_execution_end', () =>
     });
     expect(nonBoolean).toEqual({
       kind: 'event',
-      fields: { type: 'toolCallEnded', toolCallId: 'call_abc123', result: { content: [] } },
+      fields: {
+        type: 'toolCallEnded',
+        toolCallId: 'call_abc123',
+        name: 'bash',
+        result: { content: [] },
+      },
+    });
+  });
+
+  it('forwards toolName as name — omitted when missing or not a string', () => {
+    expect(
+      translatePiEvent({
+        type: 'tool_execution_end',
+        toolCallId: 'call_1',
+        result: { content: [] },
+      }),
+    ).toEqual({
+      kind: 'event',
+      fields: { type: 'toolCallEnded', toolCallId: 'call_1', result: { content: [] } },
+    });
+    expect(
+      translatePiEvent({
+        type: 'tool_execution_end',
+        toolCallId: 'call_1',
+        toolName: 7,
+        result: { content: [] },
+      }),
+    ).toEqual({
+      kind: 'event',
+      fields: { type: 'toolCallEnded', toolCallId: 'call_1', result: { content: [] } },
     });
   });
 
@@ -251,6 +287,7 @@ describe('translatePiEvent — agent_settled and everything else', () => {
       fields: {
         type: 'toolCallEnded',
         toolCallId: 'call_1',
+        name: 'accept_s2_api_stock_get',
         result: { content: [{ type: 'text', text: '{"stock":42}' }] },
         isError: false,
       },

@@ -55,6 +55,8 @@ export type AgentRuntimeEventFields =
   | {
       readonly type: 'toolCallEnded';
       readonly toolCallId: string;
+      /** pi's `tool_execution_end.toolName`, when the runtime reports it. */
+      readonly name?: string;
       readonly result?: unknown;
       /** W7: pi's `tool_execution_end.isError`, when the runtime reports it. */
       readonly isError?: boolean;
@@ -73,9 +75,11 @@ export type AgentRuntimeEventFields =
 /**
  * The platform event vocabulary (design doc §7.4 "接口注入的机制" event names, §9.4 chat.stream sub-
  * kinds): what an `AgentRuntime` implementation feeds to its `AgentRuntimeEventSink`. `textDelta`/
- * `toolCallStarted`/`toolCallEnded` are ephemeral (never persisted — §9.4 "chat.stream 永不持久
- * 化"); `message` is a persisted chat_message (role `assistant` or `tool`); `turnEnded` is exactly
- * one per Turn, however it ends (natural completion, `stopTurn`, or a runtime failure).
+ * `toolCallStarted`/`toolCallEnded` go out as `chat.stream` deltas, which are never persisted
+ * (§9.4 "chat.stream 永不持久化"); from the two tool events the sink also stores one redacted,
+ * size-capped `role='tool'` record per call (application/chat/tool-call-record.ts). `message` is a
+ * persisted chat_message (role `assistant` or `tool`); `turnEnded` is exactly one per Turn,
+ * however it ends (natural completion, `stopTurn`, or a runtime failure).
  */
 export type AgentRuntimeEvent = AgentRuntimeEventBase & AgentRuntimeEventFields;
 

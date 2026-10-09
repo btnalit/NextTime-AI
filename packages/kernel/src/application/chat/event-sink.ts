@@ -7,7 +7,13 @@ import {
   chatMessageKind,
   chatMessageText,
   insertChatMessage,
+  insertToolCallMessage,
 } from './service.js';
+import {
+  buildToolCallRecord,
+  redactMessageContent,
+  redactToolPayload,
+} from './tool-call-record.js';
 import {
   type EndedTurn,
   type MessagePersistFailure,
@@ -42,7 +48,41 @@ import {
  * throw: the Turn stays running until the runtime reports its end, and later messages are still
  * stored. When the record cannot be written either (the database is unreachable), the loss is kept
  * here and written in the transaction that ends the Turn, ahead of `endTurn`.
+ *
+ * A runtime `message` is stored with secret-looking values scrubbed (tool-call-record.ts's
+ * `redactMessageContent` — the agent can repeat its own Handle in a reply).
+ *
+ * Tool calls: `toolCallStarted`/`toolCallEnded` still go out only as `chat.stream` deltas — with
+ * their arguments and result redacted first (tool-call-record.ts: an agent's `bash` can print its
+ * own Handle) — and, when a call ends, one `role='tool'` record of it is stored and pushed as a
+ * `chat.message`, so the Turn's tool calls survive a reload. A call still open when its Turn ends
+ * is recorded `not_finished` before the Turn's end is written. A record that cannot be stored is
+ * logged and skipped: it is evidence about the Turn, not its answer, so — unlike a lost `message`
+ * — it does not fail the Turn. What the sink holds per Turn for this is bounded
+ * (`MAX_TOOL_CALL_RECORDS_PER_TURN`) and dropped when the Turn ends.
  */
+
+/** Tool-call records stored per Turn; calls past it go out live but are not stored (one log line).
+ *  A runtime is not trusted to stop on its own — a looping agent, or a container writing forged
+ *  events — and every record is a row in the Chat's history. */
+export const MAX_TOOL_CALL_RECORDS_PER_TURN = 200;
+/** Turns with tool-call state held at once — only reached if Turns stop ending (each `turnEnded`
+ *  drops its own); past it the oldest Turn's open calls are forgotten. */
+const MAX_TRACKED_TURNS = 1_000;
+
+interface OpenToolCall {
+  readonly name: string;
+  readonly args: unknown;
+  readonly hasArgs: boolean;
+  readonly startedAt: Date;
+}
+
+interface TurnToolCalls {
+  readonly open: Map<string, OpenToolCall>;
+  /** Records written or attempted for the Turn, against `MAX_TOOL_CALL_RECORDS_PER_TURN`. */
+  records: number;
+  overLimitLogged: boolean;
+}
 
 export interface ChatEventSinkDeps {
   readonly pool: PoolLike;
@@ -56,8 +96,11 @@ function sqlStateOf(err: unknown): string | null {
   return typeof code === 'string' ? code : null;
 }
 
+/** `toolName` names the capability whose declared secret params are redacted too — the call's
+ *  start names it; an end carries it only from a newer runtime. */
 function toChatStreamPayload(
   event: Extract<AgentRuntimeEvent, { type: 'textDelta' | 'toolCallStarted' | 'toolCallEnded' }>,
+  toolName?: string,
 ) {
   switch (event.type) {
     case 'textDelta':
@@ -67,22 +110,128 @@ function toChatStreamPayload(
         streamKind: 'toolCallStarted' as const,
         toolCallId: event.toolCallId,
         name: event.name,
-        args: event.args,
+        ...('args' in event ? { args: redactToolPayload(event.args, event.name).value } : {}),
       };
     case 'toolCallEnded':
       return {
         streamKind: 'toolCallEnded' as const,
         toolCallId: event.toolCallId,
-        result: event.result,
+        ...('result' in event ? { result: redactToolPayload(event.result, toolName).value } : {}),
         ...(event.isError !== undefined ? { isError: event.isError } : {}),
       };
   }
+}
+
+/** Pushes a stored `chat_messages` row (a runtime `message` or a tool-call record) as
+ *  `chat.message` — only once its transaction has committed. */
+function publishStoredMessage(chatId: string, message: ChatMessageRow): void {
+  publishChatPushEvent({
+    type: 'chat.message',
+    chatId,
+    message: {
+      id: message.id,
+      // `message.role` is 'assistant' | 'tool' here (a runtime `message` allows only those two; a
+      // tool-call record is 'tool') — a strict subset of both chat_messages.role's and the wire
+      // ChatMessageEvent's four-way role enum, so this assigns without narrowing.
+      role: message.role,
+      text: chatMessageText(message.content),
+      createdAt: message.createdAt.toISOString(),
+      sequence: message.sequence,
+      // Review fix (code-review finding "chat.message payload drift"): previously omitted for
+      // this producer — only application/linkage's system-message push call sites set
+      // `kind`/`content`, so a client checking `message.kind` worked for a system card but not
+      // for an assistant/tool message, even though both are the same wire shape
+      // (packages/shared/src/events.ts's `ChatMessageEvent`). `chatMessageKind` derives `kind`
+      // the same way those call sites do — `undefined` for an assistant reply, `tool_call` for a
+      // tool-call record.
+      kind: chatMessageKind(message.content),
+      content: message.content,
+      // S10 E1: the reply's Turn, so the console can hang the outcome control under it.
+      turnId: message.turnId,
+    },
+  });
 }
 
 export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventSink {
   const log = deps.log ?? ((line: string) => console.error(line));
   /** Lost messages not yet recorded on their Turn, by turnId — written when the Turn ends. */
   const unrecordedFailures = new Map<string, MessagePersistFailure>();
+  /** Tool-call state per running Turn, by turnId — dropped when the Turn ends. */
+  const toolCallsByTurn = new Map<string, TurnToolCalls>();
+
+  function toolCallsOf(turnId: string): TurnToolCalls {
+    let calls = toolCallsByTurn.get(turnId);
+    if (calls === undefined) {
+      if (toolCallsByTurn.size >= MAX_TRACKED_TURNS) {
+        const oldest = toolCallsByTurn.keys().next().value;
+        if (oldest !== undefined) toolCallsByTurn.delete(oldest);
+      }
+      calls = { open: new Map(), records: 0, overLimitLogged: false };
+      toolCallsByTurn.set(turnId, calls);
+    }
+    return calls;
+  }
+
+  /** Whether one more record fits the Turn's bound (counting it if so). */
+  function admitRecord(turnId: string, calls: TurnToolCalls): boolean {
+    if (calls.records < MAX_TOOL_CALL_RECORDS_PER_TURN) {
+      calls.records += 1;
+      return true;
+    }
+    if (!calls.overLimitLogged) {
+      calls.overLimitLogged = true;
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'chat event sink: tool-call records over the per-Turn bound — later calls go out live but are not stored',
+          turnId,
+          maxToolCallRecordsPerTurn: MAX_TOOL_CALL_RECORDS_PER_TURN,
+        }),
+      );
+    }
+    return false;
+  }
+
+  /** Stores `records` (one transaction) and pushes each stored one as a `chat.message`. Never
+   *  throws: a record that cannot be stored is logged and skipped (module doc comment). */
+  async function storeToolCallRecords(
+    event: AgentRuntimeEvent,
+    records: readonly ReturnType<typeof buildToolCallRecord>[],
+  ): Promise<void> {
+    if (records.length === 0) return;
+    let stored: ChatMessageRow[];
+    try {
+      stored = await withWorkspace(
+        deps.pool,
+        { workspaceId: event.workspaceId, principalId: event.principalId },
+        async (client) => {
+          const rows: ChatMessageRow[] = [];
+          for (const content of records) {
+            const row = await insertToolCallMessage(client, event.workspaceId, {
+              chatId: event.chatId,
+              turnId: event.turnId,
+              content,
+            });
+            if (row !== null) rows.push(row);
+          }
+          return rows;
+        },
+      );
+    } catch (err) {
+      log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'chat event sink: could not store a tool-call record — the Turn goes on without it',
+          turnId: event.turnId,
+          toolCallIds: records.map((record) => record.toolCallId),
+          errorCode: sqlStateOf(err),
+          error: String(err),
+        }),
+      );
+      return;
+    }
+    for (const message of stored) publishStoredMessage(event.chatId, message);
+  }
 
   async function recordLostMessage(
     event: Extract<AgentRuntimeEvent, { type: 'message' }>,
@@ -131,8 +280,6 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
     async handle(event: AgentRuntimeEvent): Promise<void> {
       switch (event.type) {
         case 'textDelta':
-        case 'toolCallStarted':
-        case 'toolCallEnded':
           // Ephemeral (§9.4 "chat.stream 永不持久化") — no DB write, straight to the push bus.
           publishChatPushEvent({
             type: 'chat.stream',
@@ -142,7 +289,65 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           });
           return;
 
+        case 'toolCallStarted': {
+          publishChatPushEvent({
+            type: 'chat.stream',
+            chatId: event.chatId,
+            turnId: event.turnId,
+            payload: toChatStreamPayload(event),
+          });
+          const calls = toolCallsOf(event.turnId);
+          if (calls.open.size < MAX_TOOL_CALL_RECORDS_PER_TURN) {
+            calls.open.set(event.toolCallId, {
+              name: event.name,
+              args: event.args,
+              hasArgs: 'args' in event && event.args !== undefined,
+              startedAt: new Date(),
+            });
+          }
+          return;
+        }
+
+        case 'toolCallEnded': {
+          const calls = toolCallsOf(event.turnId);
+          const opened = calls.open.get(event.toolCallId);
+          calls.open.delete(event.toolCallId);
+          const name = opened?.name ?? event.name ?? null;
+          publishChatPushEvent({
+            type: 'chat.stream',
+            chatId: event.chatId,
+            turnId: event.turnId,
+            payload: toChatStreamPayload(event, name ?? undefined),
+          });
+          if (!admitRecord(event.turnId, calls)) return;
+          await storeToolCallRecords(event, [
+            buildToolCallRecord({
+              toolCallId: event.toolCallId,
+              name,
+              outcome: event.isError === true ? 'failed' : 'done',
+              args: opened?.args,
+              hasArgs: opened?.hasArgs ?? false,
+              result: event.result,
+              hasResult: 'result' in event && event.result !== undefined,
+              startedAt: opened?.startedAt ?? null,
+              endedAt: new Date(),
+            }),
+          ]);
+          return;
+        }
+
         case 'message': {
+          const scrubbed = redactMessageContent(event.content);
+          if (scrubbed.redactedValues > 0) {
+            log(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'chat event sink: replaced secret-looking values in a runtime message before storing it',
+                turnId: event.turnId,
+                redactedValues: scrubbed.redactedValues,
+              }),
+            );
+          }
           let message: ChatMessageRow;
           try {
             message = await withWorkspace(
@@ -153,7 +358,7 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                   chatId: event.chatId,
                   turnId: event.turnId,
                   role: event.role,
-                  content: event.content,
+                  content: scrubbed.content,
                 }),
             );
           } catch (err) {
@@ -161,31 +366,7 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
             await recordLostMessage(event, err);
             return;
           }
-          publishChatPushEvent({
-            type: 'chat.message',
-            chatId: event.chatId,
-            message: {
-              id: message.id,
-              // `message.role` is 'assistant' | 'tool' here (agent-runtime.ts's `message` variant
-              // only allows those two) — a strict subset of both chat_messages.role's and the wire
-              // ChatMessageEvent's four-way role enum, so this assigns without narrowing.
-              role: message.role,
-              text: chatMessageText(message.content),
-              createdAt: message.createdAt.toISOString(),
-              sequence: message.sequence,
-              // Review fix (code-review finding "chat.message payload drift"): previously omitted
-              // for this producer — only application/linkage's system-message push call sites set
-              // `kind`/`content`, so a client checking `message.kind` worked for a system card but
-              // not for an assistant/tool message, even though both are the same wire shape
-              // (packages/shared/src/events.ts's `ChatMessageEvent`). `chatMessageKind` derives
-              // `kind` the same way those call sites do — `undefined` here, since an
-              // assistant/tool row's `content` never has its own `kind` field.
-              kind: chatMessageKind(message.content),
-              content: message.content,
-              // S10 E1: the reply's Turn, so the console can hang the outcome control under it.
-              turnId: message.turnId,
-            },
-          });
+          publishStoredMessage(event.chatId, message);
           return;
         }
 
@@ -199,6 +380,30 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
           // told the Turn ended must find it ended, with its messages, when it reads history. A
           // lost message not yet recorded on the Turn is recorded first, so a `completed` here
           // ends it `failed` (legacy 128 — module doc comment).
+          // Calls still open are recorded `not_finished` first, so a client told the Turn ended
+          // finds every one of its tool calls in the history.
+          const calls = toolCallsByTurn.get(event.turnId);
+          toolCallsByTurn.delete(event.turnId);
+          if (calls !== undefined && calls.open.size > 0) {
+            const endedAt = new Date();
+            const records = [];
+            for (const [toolCallId, opened] of calls.open) {
+              if (!admitRecord(event.turnId, calls)) break;
+              records.push(
+                buildToolCallRecord({
+                  toolCallId,
+                  name: opened.name,
+                  outcome: 'not_finished',
+                  args: opened.args,
+                  hasArgs: opened.hasArgs,
+                  hasResult: false,
+                  startedAt: opened.startedAt,
+                  endedAt,
+                }),
+              );
+            }
+            await storeToolCallRecords(event, records);
+          }
           const unrecorded = unrecordedFailures.get(event.turnId);
           let ended: EndedTurn | undefined;
           try {
