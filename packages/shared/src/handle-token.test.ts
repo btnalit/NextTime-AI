@@ -8,6 +8,7 @@ import {
   HandleClaimsSchema,
   HandleTokenExpired,
   HandleTokenInvalid,
+  handleHolderOf,
   importHandlePublicKey,
   verifyHandleToken,
 } from './handle-token.js';
@@ -57,6 +58,14 @@ describe('CapabilityScopeSchema / HandleClaimsSchema', () => {
       CapabilityScopeSchema.parse({ capabilities: [], resources: {}, extra: 1 }),
     ).toThrow();
     expect(() => HandleClaimsSchema.parse({ ...validClaims(), extra: 1 })).toThrow();
+  });
+
+  it('accepts hld:"container" only, and reads a missing hld as a bearer Handle', () => {
+    const container = HandleClaimsSchema.parse(validClaims({ hld: 'container' }));
+    expect(handleHolderOf(container)).toBe('container');
+    expect(handleHolderOf(HandleClaimsSchema.parse(validClaims()))).toBe('bearer');
+    expect(() => HandleClaimsSchema.parse(validClaims({ hld: 'bearer' }))).toThrow();
+    expect(() => HandleClaimsSchema.parse(validClaims({ hld: 'anything' }))).toThrow();
   });
 });
 

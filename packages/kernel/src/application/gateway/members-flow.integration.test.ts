@@ -602,7 +602,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Sanity: the Handle verifies before the disable.
       await expect(
-        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: targetId });
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
@@ -629,7 +629,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(revokedRow.rows[0]?.revoked_at).not.toBeNull();
       await expect(
-        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).rejects.toThrow(HandleRevoked);
     });
 
@@ -722,7 +722,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
       expect(revokedAt.get(otherWorkerRun.jti)).toBeNull();
       await expect(
-        authenticateHandle(pool, otherWorkerRun.token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, otherWorkerRun.token, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: otherId });
     });
 
@@ -743,13 +743,13 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Sanity: all three Handles verify before the role change.
       await expect(
-        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: targetId });
       await expect(
         authenticateHandle(pool, mcpToken, { publicKey: keyPair.publicKey }),
       ).resolves.toMatchObject({ obo: targetId });
       await expect(
-        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: otherId });
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
@@ -772,7 +772,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(row.revoked_at, `expected jti ${row.jti} to be revoked`).not.toBeNull();
       }
       await expect(
-        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).rejects.toThrow(HandleRevoked);
       await expect(
         authenticateHandle(pool, mcpToken, { publicKey: keyPair.publicKey }),
@@ -780,7 +780,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // A different principal's Handle is untouched.
       await expect(
-        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: otherId });
     });
 
@@ -801,7 +801,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Same role in, same role out — the Handle issued under that (unchanged) role stays valid.
       await expect(
-        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }, 'source'),
       ).resolves.toMatchObject({ obo: targetId });
     });
 

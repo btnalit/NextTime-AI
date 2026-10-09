@@ -745,9 +745,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         pool,
         { workspaceId, principalId: memberId },
         async (client) => {
+          // A bearer Handle (`mcp_session`, issue_handle's kind): an entry / worker_run Handle is
+          // container-held and refused in a header (source-binding.integration.test.ts).
           const sessionResult = await client.query<{ id: string }>(
             `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, 'entry', $2, 'active') returning id`,
+             values ($1, $2, 'mcp_session', $2, 'active') returning id`,
             [workspaceId, memberId],
           );
           const sessionRow = sessionResult.rows[0];

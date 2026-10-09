@@ -7,6 +7,7 @@ import { createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 /** A JWT-*shaped* (but unsigned/fake) Handle carrying only the `jti` claim `decodeHandleJtiUnsafe`
  *  reads — resident-service.ts never verifies the Handle's signature, only decodes `jti` for
@@ -36,12 +37,20 @@ function setup(overrides: Record<string, string> = {}) {
   });
   const docker = createFakeDockerClient();
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
+  const handleBindings = memoryHandleBindings();
   let clock = 0;
-  const service = createResidentService({ config, docker, egressMap, now: () => clock });
+  const service = createResidentService({
+    config,
+    docker,
+    handleBindings,
+    egressMap,
+    now: () => clock,
+  });
   return {
     config,
     docker,
     egressMap,
+    handleBindings,
     service,
     advanceClock(ms: number) {
       clock += ms;
@@ -325,7 +334,12 @@ describe('resident-service spawn', () => {
       },
       read: () => ({}),
     };
-    const service = createResidentService({ config, docker, egressMap: throwingEgressMap });
+    const service = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: throwingEgressMap,
+    });
     const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     expect(outcome.created).toBe(true);
     expect(outcome.status).toBe('running');
@@ -516,7 +530,13 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
       labels: { 'ai.nexttime.pi-version': '0.84.4' },
     });
     const egressMap = createEgressMapStore(config.egressSourceMapFile);
-    const service = createResidentService({ config, docker, imagesDocker, egressMap });
+    const service = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      imagesDocker,
+      egressMap,
+    });
 
     const result = await service.listImages();
 
@@ -579,6 +599,7 @@ describe('resident-service spawn — S3.13 skillsInline', () => {
   it('stamps hashSkillsInline(skillsInline) onto the skills-hash label', async () => {
     const { docker } = setup();
     const service = createResidentService({
+      handleBindings: memoryHandleBindings(),
       config: loadConfig({
         NEXTTIME_DATA: '/host/data',
         LOCAL_DATA_DIR: dir,
@@ -698,7 +719,12 @@ describe('resident-service stop', () => {
       },
       read: () => ({}),
     };
-    const service = createResidentService({ config, docker, egressMap: throwingEgressMap });
+    const service = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: throwingEgressMap,
+    });
     await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     await expect(service.stop('alice')).resolves.toBeUndefined();
     expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
@@ -800,13 +826,23 @@ describe('resident-service touch / idle sweep', () => {
 describe('resident-service reconcile', () => {
   it('re-registers running containers found by label after a simulated supervisor restart', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createResidentService({ config, docker, egressMap });
+    const first = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const outcome = await first.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
 
     // Simulate this supervisor process restarting: a brand new service instance, same docker +
     // egress-map backends, empty in-memory registry.
     egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
-    const second = createResidentService({ config, docker, egressMap });
+    const second = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await second.reconcile();
 
     expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'entry:ws-1:alice' });
@@ -817,27 +853,52 @@ describe('resident-service reconcile', () => {
 
   it('touch recovers a principal via inspectByName even without calling reconcile first', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createResidentService({ config, docker, egressMap });
+    const first = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await first.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
 
-    const second = createResidentService({ config, docker, egressMap });
+    const second = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     expect(await second.touch('alice')).toBe(true);
   });
 
   it('does not register anything for a stopped container', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createResidentService({ config, docker, egressMap });
+    const first = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await first.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     await first.stop('alice');
 
-    const second = createResidentService({ config, docker, egressMap });
+    const second = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await expect(second.reconcile()).resolves.toBeUndefined();
     expect(await second.touch('alice')).toBe(false);
   });
 
   it('restores egressDeny from the container label after a simulated supervisor restart (feat/egress-definition-lists)', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createResidentService({ config, docker, egressMap });
+    const first = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const outcome = await first.spawn({
       workspaceId: 'ws-1',
       principalId: 'alice',
@@ -849,7 +910,12 @@ describe('resident-service reconcile', () => {
     // itself was also lost — reconcile() must restore the deny list from the container's own
     // label, not merely re-register a bare sourceId (which would silently widen egress).
     egressMap.unregister(outcome.ip as string);
-    const second = createResidentService({ config, docker, egressMap });
+    const second = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await second.reconcile();
 
     expect(egressMap.read()[outcome.ip as string]).toEqual({
@@ -1059,5 +1125,192 @@ describe('resident-service notifyContainerExited (feat/egress-docker-events)', (
     expect(handled).toBe(false);
     expect(egressMap.read()[outcome.ip as string]).toBeDefined();
     expect(await service.touch('alice')).toBe(true);
+  });
+});
+
+describe('resident-service Handle binding (the Handle never enters the container)', () => {
+  const tokenA = fakeHandle('jti-a');
+  const tokenB = fakeHandle('jti-b');
+
+  it('binds the Handle to the new container address and keeps it out of the container spec', async () => {
+    const { service, docker, handleBindings } = setup();
+    const outcome = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: tokenA,
+    });
+    expect(handleBindings.snapshot().get(outcome.ip as string)).toMatchObject({
+      handle: tokenA,
+      sourceId: 'entry:ws-1:alice',
+      containerId: outcome.containerId,
+    });
+    const spec = docker.createCalls[0];
+    expect(spec?.env).toContain('CAPABILITY_HANDLE=source-bound');
+    expect(JSON.stringify(spec)).not.toContain(tokenA);
+  });
+
+  it('rebinds a reused container to the incoming Handle', async () => {
+    const { service, handleBindings } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' });
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h2' });
+    expect(second.created).toBe(false);
+    expect(handleBindings.snapshot().get(first.ip as string)?.handle).toBe('h2');
+  });
+
+  it('moves the binding to the new address when a rotated Handle recreates the container', async () => {
+    const { service, handleBindings } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: tokenA,
+    });
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: tokenB,
+    });
+    expect(second.created).toBe(true);
+    const bindings = handleBindings.snapshot();
+    expect(bindings.has(first.ip as string)).toBe(false);
+    expect(bindings.get(second.ip as string)?.handle).toBe(tokenB);
+  });
+
+  it('unbinds on stop and on a confirmed container exit', async () => {
+    const { service, docker, handleBindings } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await service.stop('alice');
+    expect(handleBindings.snapshot().size).toBe(0);
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(handleBindings.snapshot().has(second.ip as string)).toBe(true);
+    docker.simulateExternalKill('nexttime-entry-alice');
+    await service.notifyContainerExited(second.containerId, 'die');
+    expect(handleBindings.snapshot().size).toBe(0);
+    expect(first.ip).not.toBe(second.ip);
+  });
+
+  it('unbinds on the idle sweep', async () => {
+    const { service, handleBindings, advanceClock } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    advanceClock(2000);
+    await service.sweepIdle();
+    expect(handleBindings.snapshot().size).toBe(0);
+  });
+
+  it('fails the spawn when the Handle cannot be bound — a container without its binding is unusable, and is removed', async () => {
+    const config = loadConfig({ NEXTTIME_DATA: '/host/data', LOCAL_DATA_DIR: dir });
+    const docker = createFakeDockerClient();
+    const service = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings({ failBind: true }),
+      egressMap: createEgressMapStore(join(dir, 'egress-sources.json')),
+    });
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' }),
+    ).rejects.toThrow(/EACCES/);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(await docker.inspectByName('nexttime-entry-alice')).toBeUndefined();
+  });
+
+  it('address reuse: a new container at a crashed container’s address replaces its stale binding', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    // Alice's container crashes; Docker releases the address before this process hears of it,
+    // so her binding is still there when Docker hands the address to Bob's new container.
+    docker.simulateExternalKill('nexttime-entry-alice');
+    docker.assignNextIp(alice.ip as string);
+    const bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+    expect(bob.ip).toBe(alice.ip);
+    expect(handleBindings.snapshot().get(bob.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob.containerId,
+      sourceId: 'entry:ws-1:bob',
+    });
+  });
+
+  it('address reuse: a late unbind for the exited container leaves the new container’s binding alone', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    docker.simulateExternalKill('nexttime-entry-alice');
+    docker.assignNextIp(alice.ip as string);
+    const bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+    expect(bob.ip).toBe(alice.ip);
+    // The exit event for Alice's container arrives only now.
+    expect(await service.notifyContainerExited(alice.containerId, 'die')).toBe(true);
+    expect(handleBindings.snapshot().get(bob.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob.containerId,
+    });
+  });
+
+  it('address reuse: a stop whose container exits and loses its address mid-stop leaves the next binding alone', async () => {
+    const { service, docker, handleBindings } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    const stop = docker.stop.bind(docker);
+    let bob: Awaited<ReturnType<typeof service.spawn>> | undefined;
+    docker.stop = async (name, timeout) => {
+      await stop(name, timeout);
+      // While the stop is still awaited, Docker hands Alice's released address to Bob's spawn.
+      if (name === 'nexttime-entry-alice') {
+        docker.assignNextIp(alice.ip as string);
+        bob = await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' });
+      }
+    };
+    await service.stop('alice');
+    expect(bob?.ip).toBe(alice.ip);
+    expect(handleBindings.snapshot().get(alice.ip as string)).toMatchObject({
+      handle: 'hB',
+      containerId: bob?.containerId,
+    });
+  });
+
+  it('shared address: refuses to bind over a container still running at that address, and removes the new one', async () => {
+    const { service, docker, handleBindings, egressMap } = setup();
+    const alice = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'hA' });
+    // A topology where two running containers share one address (a host-network runtime,
+    // containers sharing a network namespace) — source binding cannot tell them apart.
+    docker.assignNextIp(alice.ip as string);
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'hB' }),
+    ).rejects.toThrow(/still running there/);
+    expect(docker.removeCalls).toContain('nexttime-entry-bob');
+    expect(handleBindings.snapshot().get(alice.ip as string)).toMatchObject({
+      handle: 'hA',
+      containerId: alice.containerId,
+    });
+    expect(egressMap.read()[alice.ip as string]?.sourceId).toBe('entry:ws-1:alice');
+  });
+
+  it('unbinds before stopping or removing a container — while it still holds its address', async () => {
+    const { service, docker, handleBindings, advanceClock } = setup();
+    const boundAtStop: boolean[] = [];
+    const stop = docker.stop.bind(docker);
+    const remove = docker.remove.bind(docker);
+    let ip: string | undefined;
+    docker.stop = async (name, timeout) => {
+      boundAtStop.push(handleBindings.snapshot().has(ip as string));
+      return stop(name, timeout);
+    };
+    docker.remove = async (name) => {
+      boundAtStop.push(handleBindings.snapshot().has(ip as string));
+      return remove(name);
+    };
+
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    await service.stop('alice'); // stop
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    advanceClock(2000);
+    await service.sweepIdle(); // idle sweep
+    ip = (await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h1' })).ip;
+    await service.reclaim('alice'); // reclaim
+    ip = (
+      await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: fakeHandle('j1') })
+    ).ip;
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: fakeHandle('j2') }); // rotation
+    // stop, idle sweep, reclaim's remove, rotation's stop and remove (and the removes of stopped
+    // containers a later spawn recreates)
+    expect(boundAtStop.length).toBeGreaterThanOrEqual(5);
+    expect(boundAtStop).not.toContain(true);
   });
 });

@@ -15,6 +15,7 @@ import { createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 let dir: string;
 
@@ -36,12 +37,20 @@ function setup(overrides: Record<string, string> = {}) {
   });
   const docker = createFakeDockerClient();
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
+  const handleBindings = memoryHandleBindings();
   let clock = 0;
-  const service = createTaskService({ config, docker, egressMap, now: () => clock });
+  const service = createTaskService({
+    config,
+    docker,
+    handleBindings,
+    egressMap,
+    now: () => clock,
+  });
   return {
     config,
     docker,
     egressMap,
+    handleBindings,
     service,
     advanceClock(ms: number) {
       clock += ms;
@@ -171,7 +180,12 @@ describe('task-service spawn', () => {
       },
       read: () => ({}),
     };
-    const service = createTaskService({ config, docker, egressMap: throwingEgressMap });
+    const service = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: throwingEgressMap,
+    });
     await expect(service.spawn(spawnInput)).resolves.toBeDefined();
   });
 
@@ -355,11 +369,21 @@ describe('task-service reap', () => {
 describe('task-service reconcile', () => {
   it('re-registers a still-running container found by label after a simulated supervisor restart', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createTaskService({ config, docker, egressMap });
+    const first = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const outcome = await first.spawn(spawnInput);
 
     egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
-    const second = createTaskService({ config, docker, egressMap });
+    const second = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await second.reconcile();
 
     expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-1' });
@@ -369,11 +393,21 @@ describe('task-service reconcile', () => {
 
   it('restores egressDeny from the container label after a simulated supervisor restart (feat/egress-definition-lists)', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createTaskService({ config, docker, egressMap });
+    const first = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const outcome = await first.spawn({ ...spawnInput, egressDeny: ['blocked.example.com'] });
 
     egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
-    const second = createTaskService({ config, docker, egressMap });
+    const second = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await second.reconcile();
 
     expect(egressMap.read()[outcome.ip as string]).toEqual({
@@ -384,11 +418,21 @@ describe('task-service reconcile', () => {
 
   it('reconciles an already-exited container into exited/failed by its recorded exit code', async () => {
     const { config, docker, egressMap } = setup();
-    const first = createTaskService({ config, docker, egressMap });
+    const first = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await first.spawn(spawnInput);
     docker.simulateExit('nexttime-task-run-1', 1);
 
-    const second = createTaskService({ config, docker, egressMap });
+    const second = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     await second.reconcile();
     const status = await second.status('run-1');
     expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
@@ -466,7 +510,12 @@ describe('task-service sweepRetention', () => {
     });
     const docker = createFakeDockerClient();
     const egressMap = createEgressMapStore(config.egressSourceMapFile);
-    const service = createTaskService({ config, docker, egressMap });
+    const service = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     return { config, docker, egressMap, service };
   }
 
@@ -508,5 +557,105 @@ describe('task-service sweepRetention', () => {
 
     await service.sweepRetention();
     expect(existsSync(dirPath)).toBe(true);
+  });
+});
+
+describe('task-service Handle binding (the Handle never enters the container)', () => {
+  const token = 'header.payload.signature-of-the-worker-handle';
+
+  it('binds the Worker Handle to its container address and keeps it out of the container spec', async () => {
+    const { service, docker, handleBindings } = setup();
+    const outcome = await service.spawn({ ...spawnInput, capabilityHandle: token });
+    expect(handleBindings.snapshot().get(outcome.ip as string)).toMatchObject({
+      handle: token,
+      sourceId: 'worker:ws-1:run-1',
+      containerId: outcome.containerId,
+    });
+    const spec = docker.createCalls[0];
+    expect(spec?.env).toContain('CAPABILITY_HANDLE=source-bound');
+    expect(JSON.stringify(spec)).not.toContain(token);
+  });
+
+  it('unbinds when the Worker is terminated or exits on its own', async () => {
+    const { service, docker, handleBindings } = setup();
+    await service.spawn(spawnInput);
+    await service.terminate('run-1');
+    expect(handleBindings.snapshot().size).toBe(0);
+
+    await service.spawn({ ...spawnInput, taskId: 'task-2', workerRunId: 'run-2' });
+    expect(handleBindings.snapshot().size).toBe(1);
+    docker.simulateExit('nexttime-task-run-2', 0);
+    await service.reap();
+    expect(handleBindings.snapshot().size).toBe(0);
+  });
+
+  it('removes the container and fails the spawn when the Handle cannot be bound', async () => {
+    const config = loadConfig({ NEXTTIME_DATA: '/host/data', LOCAL_DATA_DIR: dir });
+    const docker = createFakeDockerClient();
+    const service = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings({ failBind: true }),
+      egressMap: createEgressMapStore(join(dir, 'egress-sources.json')),
+    });
+    await expect(service.spawn(spawnInput)).rejects.toThrow(/binding the Worker's Handle failed/);
+    expect(docker.removeCalls).toContain('nexttime-task-run-1');
+    expect(await service.status('run-1')).toBeUndefined();
+  });
+
+  it('address reuse: a Worker at the address of one that exited unseen replaces its stale binding', async () => {
+    const { service, docker, handleBindings } = setup();
+    const first = await service.spawn({ ...spawnInput, capabilityHandle: 'h1' });
+    // Exits on its own; Docker releases the address before reap() runs.
+    docker.simulateExit('nexttime-task-run-1', 0);
+    docker.assignNextIp(first.ip as string);
+    const second = await service.spawn({
+      ...spawnInput,
+      taskId: 'task-2',
+      workerRunId: 'run-2',
+      capabilityHandle: 'h2',
+    });
+    expect(second.ip).toBe(first.ip);
+    expect(handleBindings.snapshot().get(second.ip as string)).toMatchObject({
+      handle: 'h2',
+      containerId: second.containerId,
+    });
+
+    // reap() finds the first Worker exited only now; its unbind must leave the second's binding.
+    await service.reap();
+    expect((await service.status('run-1'))?.status).toBe('exited');
+    expect(handleBindings.snapshot().get(second.ip as string)).toMatchObject({
+      handle: 'h2',
+      containerId: second.containerId,
+    });
+  });
+
+  it('shared address: refuses a Worker at an address another running container holds, and removes it', async () => {
+    const { service, docker, handleBindings } = setup();
+    const first = await service.spawn({ ...spawnInput, capabilityHandle: 'h1' });
+    docker.assignNextIp(first.ip as string);
+    await expect(
+      service.spawn({
+        ...spawnInput,
+        taskId: 'task-2',
+        workerRunId: 'run-2',
+        capabilityHandle: 'h2',
+      }),
+    ).rejects.toThrow(/still running there/);
+    expect(docker.removeCalls).toContain('nexttime-task-run-2');
+    expect(handleBindings.snapshot().get(first.ip as string)?.handle).toBe('h1');
+  });
+
+  it('a terminate unbinds before it stops the Worker — while it still holds its address', async () => {
+    const { service, docker, handleBindings } = setup();
+    const outcome = await service.spawn(spawnInput);
+    const stop = docker.stop.bind(docker);
+    let boundAtStop: boolean | undefined;
+    docker.stop = async (name, timeout) => {
+      boundAtStop = handleBindings.snapshot().has(outcome.ip as string);
+      return stop(name, timeout);
+    };
+    await service.terminate('run-1');
+    expect(boundAtStop).toBe(false);
   });
 });

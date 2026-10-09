@@ -26,7 +26,6 @@ describe('buildSpawnSpec', () => {
     config,
     workspaceId: 'ws-1',
     principalId: 'alice',
-    handle: 'the-handle-jwt',
     networkName: 'nexttime-ai_workers',
     restarts: 0,
     image: config.workerImage,
@@ -65,7 +64,7 @@ describe('buildSpawnSpec', () => {
   it('carries the correct values for each env var', () => {
     expect(spec.env).toContain('KERNEL_URL=http://kernel:8080');
     expect(spec.env).toContain('KERNEL_LLM_URL=http://llm-proxy:8082');
-    expect(spec.env).toContain('CAPABILITY_HANDLE=the-handle-jwt');
+    expect(spec.env).toContain('CAPABILITY_HANDLE=source-bound');
     expect(spec.env).toContain('WORKSPACE_ID=ws-1');
     expect(spec.env).toContain('NEXTTIME_MODE=entry');
     expect(spec.env).toContain('HTTP_PROXY=http://egress-proxy:3128');
@@ -83,7 +82,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       kernelUrl: 'http://kernel-override:9',
       llmUrl: 'http://llm-override:9',
       networkName: 'workers',
@@ -106,7 +104,6 @@ describe('buildSpawnSpec', () => {
       config: loadConfig({ ...configEnv, MODELS_JSON_HOST_PATH: '/host/data/accept/models.json' }),
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,
@@ -129,7 +126,6 @@ describe('buildSpawnSpec', () => {
       config: loadConfig({ ...configEnv, WORKER_CPUS: '1.5' }),
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,
@@ -146,7 +142,6 @@ describe('buildSpawnSpec', () => {
       config: loadConfig({ ...configEnv, WORKER_DNS_SINKHOLE: '198.51.100.53, 198.51.100.54 ' }),
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,
@@ -176,7 +171,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,
@@ -190,7 +184,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,
@@ -204,7 +197,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 3,
       image: config.workerImage,
@@ -221,7 +213,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'the-handle-jwt',
       networkName: 'nexttime-ai_workers',
       restarts: 0,
       image: config.workerImage,
@@ -235,7 +226,6 @@ describe('buildSpawnSpec', () => {
       config,
       workspaceId: 'ws-1',
       principalId: 'alice',
-      handle: 'h',
       networkName: 'workers',
       restarts: 0,
       image: config.workerImage,

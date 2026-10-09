@@ -15,10 +15,12 @@
  * actually needs.
  */
 
-import { normalizeImageRef } from '@nexttime/shared';
+import { HANDLE_BINDINGS_FILE_ENV, normalizeImageRef } from '@nexttime/shared';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
+/** The bindings file on the `handle-bindings` tmpfs volume (docker-compose.yml). */
+export const DEFAULT_SUPERVISOR_HANDLE_BINDINGS_FILE = '/run/handle-bindings/bindings.json';
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -164,6 +166,10 @@ export interface SupervisorConfig {
    *  mechanism" docs/development-tasks.md points at in lieu of an admin HTTP endpoint egress-proxy
    *  doesn't expose (verified: `packages/egress-proxy/src/admin.ts` only serves `GET /healthz`). */
   readonly egressSourceMapFile: string;
+  /** `HANDLE_BINDINGS_FILE` (@nexttime/shared handle-binding.ts): where each agent container's
+   *  Handle is bound to its address (handle-bindings.ts) — on the tmpfs volume `handle-bindings`
+   *  this process mounts read-write and the kernel and llm-proxy mount read-only. */
+  readonly handleBindingsFile: string;
   /** Kept for backward compatibility / the fallback branch of `dockerConnection` below — no
    *  longer read directly by `index.ts` (fix/socket-proxy-and-backup-user). */
   readonly dockerSocketPath: string;
@@ -242,6 +248,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     workerDnsSinkhole: parseDnsSinkholeEnv(env.WORKER_DNS_SINKHOLE),
     entryIdleTimeoutMs: parseIntEnv(env.ENTRY_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     egressSourceMapFile: env.EGRESS_SOURCE_MAP_FILE ?? `${localDataDir}/config/egress-sources.json`,
+    handleBindingsFile:
+      env[HANDLE_BINDINGS_FILE_ENV]?.trim() || DEFAULT_SUPERVISOR_HANDLE_BINDINGS_FILE,
     dockerSocketPath,
     dockerConnection: parseDockerConnection(env.DOCKER_HOST, dockerSocketPath),
     dockerImagesConnection: parseDockerConnection(

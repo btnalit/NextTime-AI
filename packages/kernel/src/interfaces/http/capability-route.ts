@@ -62,6 +62,7 @@ import {
   dispatchCapability,
   resolvePlatformCaller,
   resolveRequestCaller,
+  resolveSourceBoundCaller,
 } from '../../application/gateway/index.js';
 import {
   AlreadyMemberError,
@@ -125,6 +126,7 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
+import type { SourceBinding } from '../source-binding/index.js';
 
 /**
  * interfaces/http/capability-route: `POST /api/cap/<name>` (design doc §9.3; docs/development-
@@ -140,7 +142,13 @@ import {
  * which parses the body and never branches on `response.status`.
  */
 
-export interface CapabilityRouteDeps extends ResolveCallerDeps, DispatchDeps {}
+export interface CapabilityRouteDeps extends ResolveCallerDeps, DispatchDeps {
+  /** The `workers`-network source binding (interfaces/source-binding). When set, a request from
+   *  an agent container is authenticated with the Handle bound to its address and nothing else;
+   *  omitted (tests, a deployment without `NEXTTIME_SUBNET_WORKERS`), every request is
+   *  authenticated by its own credential, as before. */
+  readonly sourceBinding?: SourceBinding;
+}
 
 /** `pg` surfaces server errors as `Error & { code: string }` (SQLSTATE). 22P02 is
  *  invalid_text_representation — the one class a caller can cause with a malformed id. */
@@ -603,30 +611,38 @@ export async function handleCapabilityRoute(
     // P-A1: a `scope:'platform'` capability is resolved without a workspace (an administrator's
     // console session; resolve-caller.ts `resolvePlatformCaller`) — an unknown capability name
     // still goes through the ordinary path so it answers 404 the way it always has.
+    // Source binding (interfaces/source-binding): an agent container on the `workers` network
+    // carries no credential — it is the Handle bound to its address, presented as `source`.
     const registered = getCapability(capability);
+    const boundHandle = await deps.sourceBinding?.boundHandleFor(request);
     const caller =
-      registered?.scope === 'platform'
-        ? await resolvePlatformCaller(
-            {
-              authorization: request.headers.authorization,
-              cookie: request.headers.cookie,
-              requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
-              requireCsrfHeader: true,
-            },
-            { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
-          )
-        : await resolveRequestCaller(
-            {
-              authorization: request.headers.authorization,
-              cookie: request.headers.cookie,
-              workspaceId:
-                firstHeaderValue(request.headers[WORKSPACE_HEADER]) ??
-                parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
-              requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
-              requireCsrfHeader: true,
-            },
-            { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
-          );
+      boundHandle !== undefined
+        ? await resolveSourceBoundCaller(boundHandle, {
+            pool: deps.pool,
+            loadHandlePublicKey: deps.loadHandlePublicKey,
+          })
+        : registered?.scope === 'platform'
+          ? await resolvePlatformCaller(
+              {
+                authorization: request.headers.authorization,
+                cookie: request.headers.cookie,
+                requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
+                requireCsrfHeader: true,
+              },
+              { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+            )
+          : await resolveRequestCaller(
+              {
+                authorization: request.headers.authorization,
+                cookie: request.headers.cookie,
+                workspaceId:
+                  firstHeaderValue(request.headers[WORKSPACE_HEADER]) ??
+                  parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
+                requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
+                requireCsrfHeader: true,
+              },
+              { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+            );
 
     if (caller.channel === 'platform') {
       userId = caller.user.id;
@@ -666,6 +682,12 @@ export async function handleCapabilityRoute(
     request.log.error({
       capability,
       errorName: err instanceof Error ? err.name : typeof err,
+      // The specific reason a credential was refused (`HandlePresentationRefused` — a
+      // container-held Handle presented as a bearer token —, `HandleExpired`, `SourceBindingRefused`
+      // …): a class name, never the token or the message.
+      ...(err instanceof UnauthorizedError && err.cause instanceof Error
+        ? { causeName: err.cause.name }
+        : {}),
       code: mapped.code,
       status: mapped.status,
     });

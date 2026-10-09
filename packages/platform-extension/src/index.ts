@@ -66,10 +66,13 @@ export default function platformExtension(pi: ExtensionAPI): void {
   const mode = parsedMode.data;
 
   const kernelUrl = readRequiredEnv('KERNEL_URL');
-  const capabilityHandle = readRequiredEnv('CAPABILITY_HANDLE');
-  const kernelClient = new KernelClient({ kernelUrl, capabilityHandle });
 
   if (mode === 'interactive') {
+    // Outside the platform: the member's own `issue_handle` token, presented as a bearer.
+    const kernelClient = new KernelClient({
+      kernelUrl,
+      capabilityHandle: readRequiredEnv('CAPABILITY_HANDLE'),
+    });
     // No WORKSPACE_ID: interactive mode never correlates a Turn (modes/interactive.ts's own
     // module doc comment — "默认不回传"), the one thing entry mode needs it for
     // (`pi.appendEntry('nexttime_turn', {workspaceId, ...})`). Every kernel call resolves its
@@ -78,12 +81,17 @@ export default function platformExtension(pi: ExtensionAPI): void {
     return;
   }
 
+  // Entry / worker mode run in an agent container, which holds no Handle (@nexttime/shared
+  // handle-binding.ts): its `CAPABILITY_HANDLE` is only the `source-bound` marker pi's models.json
+  // resolves, and the kernel takes the Handle bound to the container's address. So no credential
+  // is read here, and none is sent — whatever the variable holds.
+  const kernelClient = new KernelClient({ kernelUrl });
   const workspaceId = readRequiredEnv('WORKSPACE_ID');
 
   if (mode === 'worker') {
     // S2.8's task-mode spawn spec (packages/worker-supervisor) injects TASK_ID/WORKER_RUN_ID
-    // alongside KERNEL_URL/CAPABILITY_HANDLE/WORKSPACE_ID — see that package's own env-var
-    // contract; this mode never runs without them.
+    // alongside KERNEL_URL/WORKSPACE_ID — see that package's own env-var contract; this mode never
+    // runs without them.
     const taskId = readRequiredEnv('TASK_ID');
     // Leftover 87: a Worker run inherits its delegating call's correlation id (worker-supervisor
     // sets NEXTTIME_CORRELATION_ID); optional — an older supervisor sets none and the kernel mints.
