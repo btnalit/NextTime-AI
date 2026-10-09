@@ -1,4 +1,5 @@
 import type { ProviderApiKind, ProviderConfig } from './config.js';
+import { readUpstreamJson } from './http-util.js';
 import type { StoreTestResult } from './provider-store.js';
 
 /**
@@ -53,6 +54,11 @@ export interface ProviderTestOptions {
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => Date;
 }
+
+/** The most of one upstream answer the test reads (STATUS leftover 138). A completion capped at a
+ *  few tokens, a single tool call or an error body is a few KB; anything far larger is not an
+ *  answer this test can use, and reading it unbounded would let the upstream exhaust the proxy. */
+export const PROVIDER_TEST_MAX_RESPONSE_BYTES = 256 * 1024;
 
 const TOOL_NAME = 'ping';
 const TOOL_PARAMETERS = {
@@ -224,10 +230,14 @@ export function describeFailure(status: number, body: unknown, realKey: string):
   return detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}`;
 }
 
+function tooLargeFailure(status: number): string {
+  return `HTTP ${status}: the response was larger than ${PROVIDER_TEST_MAX_RESPONSE_BYTES / 1024} KiB and was not read`;
+}
+
 async function callUpstream(
   options: ProviderTestOptions,
   call: UpstreamCall,
-): Promise<{ ok: boolean; status: number; body: unknown }> {
+): Promise<{ ok: boolean; status: number; body: unknown; tooLarge: boolean }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const { provider } = options;
   const headers = new Headers({
@@ -256,13 +266,8 @@ async function callUpstream(
       // for the key (gatekeeper-base kinds/http.ts applies the same rule to gate credentials).
       redirect: 'error',
     });
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = undefined;
-    }
-    return { ok: res.ok, status: res.status, body };
+    const { body, tooLarge } = await readUpstreamJson(res, PROVIDER_TEST_MAX_RESPONSE_BYTES);
+    return { ok: res.ok, status: res.status, body, tooLarge };
   } finally {
     clearTimeout(timeout);
   }
@@ -284,9 +289,11 @@ export async function runProviderTest(options: ProviderTestOptions): Promise<Sto
     if (first.ok && completionSucceeded(api, first.body)) {
       completion = 'ok';
     } else {
-      error = first.ok
-        ? 'completion response did not have the expected shape'
-        : describeFailure(first.status, first.body, options.realKey);
+      error = first.tooLarge
+        ? tooLargeFailure(first.status)
+        : first.ok
+          ? 'completion response did not have the expected shape'
+          : describeFailure(first.status, first.body, options.realKey);
     }
   } catch (err) {
     error = `completion request failed: ${scrubUpstreamText(String(err), options.realKey)}`;
@@ -308,9 +315,11 @@ export async function runProviderTest(options: ProviderTestOptions): Promise<Sto
         tool = 'ok';
       } else {
         tool = 'error';
-        const failure = second.ok
-          ? `tool-call response carried no call of "${TOOL_NAME}"`
-          : describeFailure(second.status, second.body, options.realKey);
+        const failure = second.tooLarge
+          ? tooLargeFailure(second.status)
+          : second.ok
+            ? `tool-call response carried no call of "${TOOL_NAME}"`
+            : describeFailure(second.status, second.body, options.realKey);
         error = forcedRejected
           ? `${failure} (retried with tool_choice auto after the forced tool_choice was rejected: ${forcedRejected})`
           : failure;

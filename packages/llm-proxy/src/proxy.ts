@@ -14,7 +14,12 @@ import {
   stripProviderServerTools,
 } from './outbound-policy.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
-import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
+import {
+  MAX_USAGE_SCAN_CHARS,
+  computeCostUsd,
+  createStreamUsageAccumulator,
+  parseUsageFromJsonBody,
+} from './usage.js';
 
 /**
  * proxy: the per-provider passthrough HTTP server (design doc §7.7; docs/development-tasks.md
@@ -496,6 +501,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     const usageAccumulator = isSse ? createStreamUsageAccumulator(provider.api) : undefined;
     const decoder = new TextDecoder();
     let nonSseText = '';
+    let nonSseTooLarge = false;
     let streamError: unknown;
 
     if (upstreamRes.body) {
@@ -508,8 +514,12 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
           res.write(value);
           if (isSse) {
             usageAccumulator?.push(decoder.decode(value, { stream: true }));
-          } else {
+          } else if (!nonSseTooLarge) {
             nonSseText += decoder.decode(value, { stream: true });
+            if (nonSseText.length > MAX_USAGE_SCAN_CHARS) {
+              nonSseTooLarge = true;
+              nonSseText = '';
+            }
           }
         }
       } catch (err) {
@@ -520,6 +530,17 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     res.end();
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
+    if (nonSseTooLarge) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: response too large to read usage from; recorded without tokens',
+          provider: providerName,
+          model: modelId ?? 'unknown',
+          limitChars: MAX_USAGE_SCAN_CHARS,
+        }),
+      );
+    }
     if (!isSse && !streamError && nonSseText.length > 0) {
       try {
         parsedUsage = parseUsageFromJsonBody(provider.api, JSON.parse(nonSseText));

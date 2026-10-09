@@ -27,6 +27,7 @@ import {
   presetForBaseUrl,
   providerIdFromUrl,
   providerIdProblem,
+  providerKeyProblem,
   slugifyProviderId,
 } from '../../../lib/provider-form.js';
 import { Button } from '../../ui/Button.js';
@@ -130,6 +131,17 @@ function credentialMarker(key: string, envName: string): string {
  *     run automatically once a key is entered), and every typed id is checked against that list;
  *   - the submit button says what is still missing instead of being silently disabled.
  */
+/** True when the proxy relayed the provider's own 401 / 403 — the key itself was refused. */
+function rejectedCredential(error: unknown): boolean {
+  if (!(error instanceof LlmAdminError) || error.code !== 'upstream_error') return false;
+  const details = error.details;
+  const status =
+    typeof details === 'object' && details !== null && 'status' in details
+      ? (details as { status: unknown }).status
+      : null;
+  return status === 401 || status === 403;
+}
+
 export function ProviderForm({
   initial,
   client,
@@ -197,7 +209,8 @@ export function ProviderForm({
   const storedCredential = editing && initial.credentialPresent;
   const upstreamChanged =
     editing && normalizedBase.toLowerCase() !== initial.upstreamBaseUrl.toLowerCase();
-  const hasTypedKey = key.trim().length > 0;
+  const keyProblem = providerKeyProblem(key, t);
+  const hasTypedKey = key.trim().length > 0 && keyProblem === null;
   const canDiscover =
     urlValid &&
     !submitting &&
@@ -208,6 +221,10 @@ export function ProviderForm({
   const discovered = discovery.status === 'ready' ? discovery.result.models : null;
   const discoveredIds = useMemo(() => new Set((discovered ?? []).map((m) => m.id)), [discovered]);
   const discoveryStale = discovery.status === 'ready' && discovery.fingerprint !== fingerprint;
+  // The provider refused this credential while listing models (401 / 403): probing models with it
+  // would only spend calls on the same refusal, so ticking or typing a model does not probe until
+  // the key changes (the next listing replaces this state). 「验证所选模型」 still runs on request.
+  const keyRejected = discovery.status === 'error' && rejectedCredential(discovery.error);
   // A credential will resolve after saving: a typed key, an env var name (the proxy reports
   // whether it is actually set), or the provider's existing credential on the same upstream.
   const credentialAfterSave =
@@ -217,6 +234,7 @@ export function ProviderForm({
   if (!editing && idProblem) missing.push(t('有效的 id', 'a valid id'));
   if (!urlValid) missing.push('Base URL');
   if (envProblem) missing.push(t('合法的环境变量名', 'a valid env var name'));
+  if (keyProblem) missing.push(t('格式正确的密钥', 'a well-formed key'));
   if (modelIds.length === 0) missing.push(t('至少一个模型', 'at least one model'));
   if (duplicateIds.length > 0) missing.push(t('去掉重复的模型', 'no duplicate models'));
   const ready = missing.length === 0 && !submitting;
@@ -283,7 +301,7 @@ export function ProviderForm({
 
   function toggleDiscovered(modelId: string, name: string | null): void {
     const ticking = !models.some((row) => row.id.trim() === modelId);
-    if (ticking && !probeFor(modelId)) void probe([modelId]);
+    if (ticking && !probeFor(modelId) && !keyRejected) void probe([modelId]);
     setModels((rows) => {
       if (rows.some((row) => row.id.trim() === modelId)) {
         return rows.filter((row) => row.id.trim() !== modelId);
@@ -611,6 +629,7 @@ export function ProviderForm({
       <Field
         id="provider-key"
         label={t('API 密钥', 'API key')}
+        error={keyProblem ?? undefined}
         hint={
           editing && initial.credentialSource === 'console' && !upstreamChanged
             ? t(
@@ -767,10 +786,15 @@ export function ProviderForm({
         preset.suggestedModels.length > 0 ? (
           <div className="provider-model-picker" data-testid="provider-model-suggestions">
             <span className="text-small text-2">
-              {t(
-                `${preset.displayName} 的常用模型（预设建议，未用你的密钥核验——勾选后会自动验证）：`,
-                `Common ${preset.displayName} models (suggestions, not checked with your key — ticking one checks it):`,
-              )}
+              {keyRejected
+                ? t(
+                    `${preset.displayName} 的常用模型（预设建议）。供应商拒绝了这把密钥，勾选不会自动验证——先修正密钥：`,
+                    `Common ${preset.displayName} models (suggestions). The provider refused this key, so ticking one does not check it — fix the key first:`,
+                  )
+                : t(
+                    `${preset.displayName} 的常用模型（预设建议，未用你的密钥核验——勾选后会自动验证）：`,
+                    `Common ${preset.displayName} models (suggestions, not checked with your key — ticking one checks it):`,
+                  )}
             </span>
             <ul className="provider-model-options">
               {preset.suggestedModels.map((modelId) => (
@@ -873,7 +897,8 @@ export function ProviderForm({
                     onChange={(event) => updateModel(row.key, { id: event.target.value })}
                     onBlur={() => {
                       updateModel(row.key, { id: row.id.trim() });
-                      if (trimmed.length > 0 && !probeFor(trimmed)) void probe([trimmed]);
+                      if (trimmed.length > 0 && !probeFor(trimmed) && !keyRejected)
+                        void probe([trimmed]);
                     }}
                     disabled={submitting}
                     mono

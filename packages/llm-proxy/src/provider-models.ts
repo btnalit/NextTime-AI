@@ -1,5 +1,6 @@
 import type { LlmProviderDiscoveredModelWire } from '@nexttime/shared';
 import type { ProviderApiKind } from './config.js';
+import { readUpstreamJson } from './http-util.js';
 import { describeFailure, scrubUpstreamText } from './provider-test.js';
 
 /**
@@ -46,6 +47,11 @@ export type ListUpstreamModelsResult =
  *  misbehaving upstream cannot bloat the response. */
 export const MAX_DISCOVERED_MODELS = 500;
 
+/** The most of a model list the proxy reads (STATUS leftover 138). Large aggregators list a few
+ *  hundred models with descriptions and pricing — around a megabyte or two; the cap leaves room
+ *  for that and stops an upstream that streams without end. */
+export const MAX_MODEL_LIST_BYTES = 8 * 1024 * 1024;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -59,10 +65,21 @@ export async function listUpstreamModels(
     options.api === 'anthropic-messages' ? `${base}/v1/models?limit=1000` : `${base}/v1/models`;
   const headers = new Headers({ accept: 'application/json' });
   if (options.api === 'anthropic-messages') headers.set('anthropic-version', '2023-06-01');
-  headers.set(
-    options.authHeader,
-    options.authHeader === 'authorization' ? `Bearer ${options.realKey}` : options.realKey,
-  );
+  try {
+    headers.set(
+      options.authHeader,
+      options.authHeader === 'authorization' ? `Bearer ${options.realKey}` : options.realKey,
+    );
+  } catch {
+    // A stored or environment key with a character an HTTP header cannot carry (a pasted
+    // full-width character, say). `Headers` throws a TypeError naming the value — never echo it.
+    return {
+      ok: false,
+      reason: 'unreachable',
+      status: null,
+      message: 'the key contains a character that cannot be sent in an HTTP header — re-enter it',
+    };
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -80,11 +97,16 @@ export async function listUpstreamModels(
       redirect: 'error',
     });
     status = res.status;
-    try {
-      body = await res.json();
-    } catch {
-      body = undefined;
+    const read = await readUpstreamJson(res, MAX_MODEL_LIST_BYTES);
+    if (read.tooLarge) {
+      return {
+        ok: false,
+        reason: res.ok ? 'invalid_response' : 'upstream_status',
+        status,
+        message: `the upstream answered with more than ${MAX_MODEL_LIST_BYTES / (1024 * 1024)} MiB, which was not read`,
+      };
     }
+    body = read.body;
     if (!res.ok) {
       return {
         ok: false,
