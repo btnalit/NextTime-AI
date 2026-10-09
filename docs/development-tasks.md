@@ -3752,6 +3752,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
     三次运行的治理不变量都成立。据此发 v0.43.0（#483，tag 在 d8c545e）。
   - #504：失败的真实模型 run 把自己的 `RUN scenario=… outcome=fail …` 行（至多 30 行，只有结果、计数与工具名）打进 staging job 日志，
     部分通过不用下载 artifact 就能区分模型没答对还是产品缺陷。
+- **触发收紧（#509，2026-10-09）**：去掉 `push: main`（分支保护 strict，PR 最后一轮即落到 main 的树；带基线的完整预演证据此后来自 PR 最后一轮或 dispatch）；PR 路径过滤按依赖闭包补齐（`check-backup-freshness` / `prune-images` / `delete-workspaces-matching` 与 `deploy/{accept-s2,backup,caddy,fake-llm,update-feed,worker-runtime}/**`），`scripts/guards/staging-paths.mjs` 进 `ci:guards` 与 `quality`；`ci.yml` / `e2e.yml` 加 `changes` job（`scripts/ci-docs-only.sh`，fail-open），纯文档 PR 跳过 `quality` / `test` / `web-e2e`，"纯文档"只认 `docs/`（除 `docs/contracts/`）、根目录 `*.md`、`README.md` 与 `.github/*.md`，`packages/` 等处的 `.md` 仍按代码处理。
 
 **Turn 结束顺序（#493，2026-10-08 合入）**
 
