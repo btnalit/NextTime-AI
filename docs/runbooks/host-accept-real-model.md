@@ -52,7 +52,9 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh --real <provider/mod
 
 `accept_s2.sh --real … --extended` 再加六个场景（`deny` / `memory` / `stop` / `docker_observe` /
 `worker_egress` / `concurrent`，见 §4），每个同样跑 `--runs` 次，花费约为不加时的三倍。另外每次
-`--real` 都会检查本工作区所有 Activity 的 `metadata.egress` 里没有 `pi.dev` 及其子域（`real-no-pi-egress`）。
+`--real` 都会在所有场景之后检查没有 `pi.dev` 及其子域的出网（`real-no-pi-egress`）：本工作区所有 Activity 的
+`metadata.egress`，以及 egress-proxy 自己的日志（归属不到 Turn 的观测会被丢弃，日志里仍在）。带 `--extended` 时
+`worker_egress` 至少成功一次是正向对照——证明出网记录链路本身在工作，否则这一步直接失败。
 
 `--runs N` 省略时默认 3；两个脚本跑完各自 `--real` 场景后都会继续跑该脚本里与 provider 无关的
 其余步骤（S2 的 step6 env/egress 探测、S8 mcp connect；S3 的 explorer/mcp 步骤），跟不带
@@ -83,12 +85,12 @@ dependency` 判定脚本本身失败的条件（§5）；`1 ≤ k < 8` 不会让
 | `api_observe`（accept_s2.sh，`real_api_observe_run`） | "测试 API 的 GET 返回什么" → 入口 agent 走观察类 gate 工具（`observe_operation`，不建 Task/ActionRequest）→ 回复文本里带真实返回的 payload | Turn `completed` 且回复文本含真实 payload 的可识别片段（`NXT`）且 `audit_records.action='observe_operation'` 新增一行且 `tasks` 表行数前后不变 |
 | `ssh_run_approve`（accept_s2.sh，`real_ssh_run i approve`） | Worker 在连接的 SSH 主机上跑一条未分类命令 → 产生一张卡片 → **脚本自己**（不是驱动）轮询 `list_pending`/`approve` 批准 → 执行 → Task completed | ActionRequest 走到 `executed`、期间确实观察到过 `pending_approval`、Task 终态 `completed` |
 | `ssh_run_auto`（accept_s2.sh，`real_ssh_run 1 auto`） | 在 `set_auto_approved_action_kind('ssh.run_command')` 之后再触发同一条命令，验证"总是允许"生效——**这一次必须全程不出现任何卡片，直接自动批准** | ActionRequest 走到 `executed`、期间**从未**观察到 `pending_approval`、`policy_decision='allow'`、Task 终态 `completed` |
-| `deny`（accept_s2.sh `--extended`，`real_deny_run`，在"总是允许"之前跑） | Worker 申请一条 ssh 命令 → 脚本以 alice 身份 `reject`（带 reason）→ Worker 收到拒绝后自行收尾 | ActionRequest 终态 `rejected`、本次没有任何 `executing`/`executed`、Task 到达终态（completed 或 failed 都算——拒绝后 Worker 怎么报告由它决定） |
-| `memory`（accept_s2.sh `--extended`，`real_memory_run`） | 第一轮告诉入口 agent 一个随机暗号 → 停掉 alice 的入口容器 → 同一 Chat 第二轮问暗号；随后 bob 新开 Chat 问同一个暗号 | 两轮都 `completed`，第二轮（只看最后一条助手消息）含暗号，bob 的回复不含暗号。bob 命中记 `leaked_to_bob=1`，本次判 fail 待查，但不单独让脚本失败——agent 自己写进工作区记忆的内容按设计对成员共享 |
+| `deny`（accept_s2.sh `--extended`，`real_deny_run`，在"总是允许"之前跑） | Worker 申请一条 ssh 命令 → 脚本以 alice 身份 `reject`（带 reason）→ Worker 收到拒绝后自行收尾 | ActionRequest 终态 `rejected`、本次没有任何 `executing`/`executed`、Task 到达终态（completed 或 failed 都算——拒绝后 Worker 怎么报告由它决定）。只数本 Task 自己的 WorkerRun 发出的请求。**被拒的请求仍被执行或离开 `rejected`，出现一次脚本就失败**（`real-deny-boundary`：审批边界被突破是平台缺陷，不是模型没做好） |
+| `memory`（accept_s2.sh `--extended`，`real_memory_run`） | 第一轮告诉入口 agent 一个随机暗号 → 停掉 alice 的入口容器 → 同一 Chat 第二轮问暗号；随后 bob 新开 Chat 问同一个暗号 | worker-supervisor 对停止返回 200、停止后容器确实不在运行、第二轮跑在新启动的容器里（`StartedAt` 变了），两轮都 `completed`，第二轮（只看最后一条助手消息）含暗号，bob 的回复不含暗号。bob 命中记 `leaked_to_bob=1`，本次判 fail 待查，但不单独让脚本失败——agent 自己写进工作区记忆的内容按设计对成员共享 |
 | `stop`（accept_s2.sh `--extended`，`real_stop_run`） | 长文请求发出 5 秒后 `stop_agent` → 该 Turn 结束 → 同一 Chat 再发一句 | `stop_agent` 返回 `stopped=true`、被停的 Turn（`activities` 行）终态 `interrupted`、下一轮 `completed` 且回复含本次随机标记 |
-| `docker_observe`（accept_s2.sh `--extended`，`real_docker_observe_run`） | 问 fixture 容器的镜像和主进程命令，只观察 | Turn `completed`、回复含 `alpine` 和 `sleep`、本次 docker 门上没有任何 ActionRequest |
+| `docker_observe`（accept_s2.sh `--extended`，`real_docker_observe_run`） | 问 fixture 容器的完整镜像引用和主进程命令，要求入口 agent 自己观察、不派 Worker | Turn `completed`、回复含 `3.20` 和 `sleep`、本次 docker 门上**有** `observe_operation` 审计（`payload.params.gatekeeperId`）、没有任何 ActionRequest、`tasks` 行数不变——fixture 是常见默认值，只看回复可以靠猜 |
 | `worker_egress`（accept_s2.sh `--extended`，`real_worker_egress_run`） | Worker 不经任何门，在自己的 shell 里经 egress-proxy curl `https://example.com`，把页面标题写进结果 | Task `completed`、`tasks.result` 含 `Example Domain`、该 WorkerRun 的 Activity `metadata.egress` 有 `example.com` |
-| `concurrent`（accept_s2.sh `--extended`，`real_concurrent_run`） | alice 和 bob 同时各开一个 Chat，各要求只回复自己的随机标记 | 两个 Turn 都 `completed`、各自回复含自己的标记；**任何一方回复里出现对方的标记，脚本直接失败**（`real-isolation`：两边都没见过对方的标记，只能是路由串线） |
+| `concurrent`（accept_s2.sh `--extended`，`real_concurrent_run`） | alice 和 bob 同时各开一个 Chat，各要求只回复自己的随机标记 | 两个 Turn 都 `completed` 且时间区间相交（两个 `agent_turn` Activity 的 `[created_at, ended_at]` 重叠、`started_by` 各是 alice / bob——否则只是先后执行）、各自回复含自己的标记；**任何一方回复里出现对方的标记，脚本直接失败**（`real-isolation`：两边都没见过对方的标记，只能是路由串线） |
 | `dependency_chat`（accept_s3.sh，`real_chat_dependency_step`） | "哪个服务依赖哪个" → 入口 agent 自己决定调 `search`/`traverse`（或等价工具）→ 回复读起来像一句依赖关系陈述，并且点名真实存在的那条边（kernel depends_on postgres） | Turn `completed` 且回复文本命中 `depends_on`/"依赖" 且命中 `postgres` |
 
 ## 5. 怎么读输出
