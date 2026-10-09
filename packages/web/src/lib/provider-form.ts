@@ -23,7 +23,11 @@ export const API_KEY_ENV_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 export interface ProviderPreset {
   readonly key: string;
-  /** Becomes the provider id unless the administrator types their own. */
+  /** Becomes the provider id unless the administrator types their own. Where pi has a built-in
+   *  provider for the vendor this is pi's own provider name: the agent's models.json names the
+   *  provider by this id and points `baseUrl` at llm-proxy, so the id is all pi's OpenAI-compat
+   *  vendor detection (`max_tokens` field, thinking-parameter format, `store`) has to go on.
+   *  platform-extension `pi-provider-ids.test.ts` checks them against the pinned pi. */
   readonly id: string;
   readonly displayName: string;
   readonly api: LlmProviderApiKindWire;
@@ -80,7 +84,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
   {
     key: 'moonshot',
-    id: 'moonshot',
+    id: 'moonshotai-cn',
     displayName: 'Moonshot (Kimi)',
     api: 'openai-completions',
     upstreamBaseUrl: 'https://api.moonshot.cn',
@@ -130,6 +134,9 @@ export function slugifyProviderId(value: string): string {
 export function providerIdFromUrl(url: string): string {
   try {
     const host = new URL(url).hostname.toLowerCase();
+    // A preset vendor's host gets the preset id (pi's provider name — see `ProviderPreset.id`).
+    const preset = PROVIDER_PRESETS.find((p) => new URL(p.upstreamBaseUrl).hostname === host);
+    if (preset) return preset.id;
     const labels = host.split('.').filter((label) => !['api', 'www', 'openai'].includes(label));
     const core = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
     return slugifyProviderId(core ?? '');

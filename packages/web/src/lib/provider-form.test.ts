@@ -68,6 +68,8 @@ describe('lib/provider-form', () => {
     expect(slugifyProviderId('通义千问')).toBe('');
     expect(providerIdFromUrl('https://api.deepseek.com')).toBe('deepseek');
     expect(providerIdFromUrl('https://openrouter.ai/api')).toBe('openrouter');
+    expect(providerIdFromUrl('https://api.moonshot.cn/v1')).toBe('moonshotai-cn');
+    expect(providerIdFromUrl('https://relay.example.com')).toBe('example');
   });
 
   it('explains upstream failures in words', () => {
