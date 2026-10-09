@@ -153,7 +153,8 @@ describe('runProviderTest', () => {
     expect(captured[0]?.apiKey).toBe(REAL_KEY);
     expect(captured[0]?.authorization).toBeUndefined();
     expect(seenVersions).toEqual(['2023-06-01', '2023-06-01']);
-    expect(captured[1]?.body.tool_choice).toEqual({ type: 'tool', name: 'ping' });
+    // Current Claude models reject a forced tool_choice (`tool` / `any`) with HTTP 400.
+    expect(captured[1]?.body.tool_choice).toEqual({ type: 'auto' });
   });
 
   it('reports a tool-call failure when the model answers in prose instead of calling the tool', async () => {
