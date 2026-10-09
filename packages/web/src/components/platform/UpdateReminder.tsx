@@ -184,8 +184,8 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
             ) : null}
             <li>
               {t(
-                '窗口内在同一目录执行下面这条命令（脚本会先确认镜像已预拉，再备份、验证已签名的镜像、迁移、启动并跑验收；/tmp 下的脚本若已不在，先重跑上一步的 git show 那行）。通常要 20–40 分钟，终端同样只打印日志路径（drills/apply-<版本>-<时间>.log），最后一行 RESULT ok 才算成功；经 SSH 时建议放后台运行（nohup 或 tmux），再用 tail -f 跟日志：',
-                'In the window, run this in the same directory (the script first checks the images were pre-pulled, then backs up, verifies the signed images, migrates, starts and runs acceptance; if the script under /tmp is gone, re-run the git show line above first). It usually takes 20–40 minutes; the terminal again only prints the log path (drills/apply-<version>-<time>.log), and only a last line of RESULT ok means success. Over SSH, run it in the background (nohup or tmux) and follow the log with tail -f:',
+                '窗口内在同一目录执行下面这条命令（脚本会先确认镜像已预拉，再备份、验证已签名的镜像、迁移、启动并跑验收；/tmp 下的脚本若已不在，先重跑上一步的 git show 那行）。耗时较长，终端同样只打印日志路径（drills/apply-<版本>-<时间>.log），最后一行 RESULT ok 才算成功；经 SSH 时建议放后台运行（nohup 或 tmux），再用 tail -f 跟日志：',
+                'In the window, run this in the same directory (the script first checks the images were pre-pulled, then backs up, verifies the signed images, migrates, starts and runs acceptance; if the script under /tmp is gone, re-run the git show line above first). It takes a while; the terminal again only prints the log path (drills/apply-<version>-<time>.log), and only a last line of RESULT ok means success. Over SSH, run it in the background (nohup or tmux) and follow the log with tail -f:',
               )}
               {notice.applyCommand !== null ? (
                 <div>
