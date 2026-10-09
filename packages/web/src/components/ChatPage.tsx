@@ -3,6 +3,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { useT } from '../lib/i18n.js';
+import { liveOutputPaused } from '../lib/live-stream.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
 import { ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
@@ -207,6 +208,14 @@ export function ChatPage({
                     text={turn.streamingText}
                     trailing={<span className="streaming-caret" aria-hidden />}
                   />
+                  {liveOutputPaused(turn.streamingText) ? (
+                    <p className="text-3 text-small" data-testid="chat-stream-paused">
+                      {t(
+                        '实时输出已暂停：这段内容可能含凭据，回复完成后会显示完整内容（凭据已替换）。',
+                        'Live output paused: this part may contain a credential. The full reply, with credentials replaced, shows when it finishes.',
+                      )}
+                    </p>
+                  ) : null}
                   {liveToolCalls.length > 0 ? (
                     <div className="tool-calls">
                       {liveToolCalls.map((row) => (

@@ -878,3 +878,15 @@ describe('ChatPage persisted tool calls', () => {
     expect(document.querySelector('.message-tool')?.textContent).toContain('list_facts');
   });
 });
+
+describe('live output paused by the stream scrubber (#520)', () => {
+  it('says so while the live text ends at a redaction, and stops saying it when text resumes', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await startRunningTurn(fake);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'running env: [redacted]' }));
+    expect(screen.getByTestId('chat-stream-paused').textContent).toContain('实时输出已暂停');
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: ' and done.' }));
+    expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
+  });
+});
