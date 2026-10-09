@@ -20,7 +20,7 @@
 // lists in the same PR (image-mirror.yml's header says how to order the pushes).
 //
 // Run: `node scripts/guards/image-mirrors.mjs` (also part of `pnpm ci:guards`).
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -31,12 +31,15 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 /** The list, validated: { registry, prefix, images: Map<name, entry> }. */
 export function loadMirrors(json) {
   const data = JSON.parse(json);
-  if (!/^ghcr\.io\/[a-z0-9-]+$/.test(data.registry ?? '')) throw new Error('image-mirrors.json: bad registry');
+  if (!/^ghcr\.io\/[a-z0-9-]+$/.test(data.registry ?? ''))
+    throw new Error('image-mirrors.json: bad registry');
   if (!/^[a-z0-9-]+-$/.test(data.prefix ?? '')) throw new Error('image-mirrors.json: bad prefix');
   const images = new Map();
   for (const e of data.images ?? []) {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(e.name ?? '')) throw new Error(`image-mirrors.json: bad name ${e.name}`);
-    if (!/^sha256:[0-9a-f]{64}$/.test(e.digest ?? '')) throw new Error(`image-mirrors.json: ${e.name}: bad digest`);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(e.name ?? ''))
+      throw new Error(`image-mirrors.json: bad name ${e.name}`);
+    if (!/^sha256:[0-9a-f]{64}$/.test(e.digest ?? ''))
+      throw new Error(`image-mirrors.json: ${e.name}: bad digest`);
     if (images.has(e.name)) throw new Error(`image-mirrors.json: ${e.name} listed twice`);
     images.set(e.name, e);
   }
@@ -47,13 +50,19 @@ export function loadMirrors(json) {
 export function isDockerHub(ref) {
   const first = ref.split('/')[0];
   if (ref.split('/').length === 1) return true; // `alpine`, `node:24`
-  if (first === 'docker.io' || first === 'index.docker.io' || first === 'registry-1.docker.io') return true;
+  if (first === 'docker.io' || first === 'index.docker.io' || first === 'registry-1.docker.io')
+    return true;
   return !(first.includes('.') || first.includes(':') || first === 'localhost');
 }
 
 /** A reference that is not a pull: a variable, a local name, `scratch`. */
 function notAPull(ref) {
-  return ref === '' || ref.includes('$') || ref === 'scratch' || /^nexttime-ai-[\w.-]+(:[\w.-]+)?$/.test(ref);
+  return (
+    ref === '' ||
+    ref.includes('$') ||
+    ref === 'scratch' ||
+    /^nexttime-ai-[\w.-]+(:[\w.-]+)?$/.test(ref)
+  );
 }
 
 /** Image references a Dockerfile pulls: the `# syntax=` frontend and every `FROM` not naming a stage. */
@@ -73,11 +82,48 @@ export function dockerfileRefs(text) {
 }
 
 const VALUE_OPTIONS = new Set([
-  '--name', '--network', '--net', '-e', '--env', '--env-file', '-v', '--volume', '-p', '--publish',
-  '--entrypoint', '--runtime', '-u', '--user', '-w', '--workdir', '--platform', '--mount', '-l',
-  '--label', '--add-host', '--cap-add', '--cap-drop', '--security-opt', '--tmpfs', '--cpus', '-m',
-  '--memory', '-h', '--hostname', '--ulimit', '--log-driver', '--log-opt', '--restart', '--pid',
-  '--ipc', '--dns', '--group-add', '--pull', '--stop-timeout', '--health-cmd', '--device',
+  '--name',
+  '--network',
+  '--net',
+  '-e',
+  '--env',
+  '--env-file',
+  '-v',
+  '--volume',
+  '-p',
+  '--publish',
+  '--entrypoint',
+  '--runtime',
+  '-u',
+  '--user',
+  '-w',
+  '--workdir',
+  '--platform',
+  '--mount',
+  '-l',
+  '--label',
+  '--add-host',
+  '--cap-add',
+  '--cap-drop',
+  '--security-opt',
+  '--tmpfs',
+  '--cpus',
+  '-m',
+  '--memory',
+  '-h',
+  '--hostname',
+  '--ulimit',
+  '--log-driver',
+  '--log-opt',
+  '--restart',
+  '--pid',
+  '--ipc',
+  '--dns',
+  '--group-add',
+  '--pull',
+  '--stop-timeout',
+  '--health-cmd',
+  '--device',
 ]);
 
 /** Image arguments of `docker run|create|pull` in shell text (continuations joined, comments skipped). */
@@ -87,13 +133,20 @@ export function shellRefs(text) {
   for (let i = 0; i < lines.length; i++) {
     const start = i;
     let cmd = lines[i];
-    while (/\\\s*$/.test(cmd) && i + 1 < lines.length) cmd = cmd.replace(/\\\s*$/, ' ') + lines[++i];
+    while (/\\\s*$/.test(cmd) && i + 1 < lines.length)
+      cmd = cmd.replace(/\\\s*$/, ' ') + lines[++i];
     if (/^\s*#/.test(cmd)) continue;
     // An image kept in a variable (`IMAGE=…`, `COSIGN_IMAGE=${COSIGN_IMAGE:-…}`): its literal value.
-    const v = /^\s*(?:export\s+)?[A-Z0-9_]*IMAGE[A-Z0-9_]*=["']?(?:\$\{[A-Z0-9_]+:-)?([^"'\s}]+)/.exec(cmd);
+    const v =
+      /^\s*(?:export\s+)?[A-Z0-9_]*IMAGE[A-Z0-9_]*=["']?(?:\$\{[A-Z0-9_]+:-)?([^"'\s}]+)/.exec(cmd);
     if (v) out.push({ line: start + 1, ref: v[1], where: 'image variable' });
-    for (const m of cmd.matchAll(/(?:^|[\s;&|(`$])docker\s+(?:container\s+|image\s+)?(run|create|pull)\s+([^;&|)`<>]*)/g)) {
-      const tokens = m[2].trim().split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ''));
+    for (const m of cmd.matchAll(
+      /(?:^|[\s;&|(`$])docker\s+(?:container\s+|image\s+)?(run|create|pull)\s+([^;&|)`<>]*)/g,
+    )) {
+      const tokens = m[2]
+        .trim()
+        .split(/\s+/)
+        .map((t) => t.replace(/^["']|["']$/g, ''));
       for (let t = 0; t < tokens.length; t++) {
         const tok = tokens[t];
         if (tok.startsWith('-')) {
@@ -122,33 +175,51 @@ export function workflowRefs(text) {
   const out = [];
   for (const [jobName, job] of Object.entries(doc.jobs ?? {})) {
     for (const [svc, s] of Object.entries(job?.services ?? {})) {
-      if (typeof s?.image === 'string') out.push({ ref: s.image, where: `jobs.${jobName}.services.${svc}.image` });
+      if (typeof s?.image === 'string')
+        out.push({ ref: s.image, where: `jobs.${jobName}.services.${svc}.image` });
     }
     const container = typeof job?.container === 'string' ? job.container : job?.container?.image;
-    if (typeof container === 'string') out.push({ ref: container, where: `jobs.${jobName}.container` });
+    if (typeof container === 'string')
+      out.push({ ref: container, where: `jobs.${jobName}.container` });
     for (const step of job?.steps ?? []) {
       const w = step?.with ?? {};
       const uses = String(step?.uses ?? '');
       // Implicit pulls: setup-buildx's docker-container builder starts moby/buildkit unless
       // `driver-opts: image=…` names one; build-push's SBOM runs docker/buildkit-syft-scanner
       // unless a `generator=` is given.
-      if (uses.startsWith('docker/setup-buildx-action') && w.driver !== 'docker' && !/(?:^|[\s,])image=/.test(String(w['driver-opts'] ?? ''))) {
-        out.push({ ref: 'moby/buildkit', where: `jobs.${jobName} setup-buildx (no driver-opts image=)` });
+      if (
+        uses.startsWith('docker/setup-buildx-action') &&
+        w.driver !== 'docker' &&
+        !/(?:^|[\s,])image=/.test(String(w['driver-opts'] ?? ''))
+      ) {
+        out.push({
+          ref: 'moby/buildkit',
+          where: `jobs.${jobName} setup-buildx (no driver-opts image=)`,
+        });
       }
       if (uses.startsWith('docker/build-push-action')) {
         const sbom = String(w.sbom ?? '');
         const attests = String(w.attests ?? '');
-        if ((sbom !== '' && sbom !== 'false' && !sbom.includes('generator=')) || (/type=sbom/.test(attests) && !/generator=/.test(attests))) {
-          out.push({ ref: 'docker/buildkit-syft-scanner', where: `jobs.${jobName} build-push sbom (no generator=)` });
+        if (
+          (sbom !== '' && sbom !== 'false' && !sbom.includes('generator=')) ||
+          (/type=sbom/.test(attests) && !/generator=/.test(attests))
+        ) {
+          out.push({
+            ref: 'docker/buildkit-syft-scanner',
+            where: `jobs.${jobName} build-push sbom (no generator=)`,
+          });
         }
       }
       for (const key of ['driver-opts', 'sbom', 'attests']) {
-        for (const m of String(w[key] ?? '').matchAll(/(?:^|[\s,])(?:image|generator)=([^\s,"]+)/g)) {
+        for (const m of String(w[key] ?? '').matchAll(
+          /(?:^|[\s,])(?:image|generator)=([^\s,"]+)/g,
+        )) {
           out.push({ ref: m[1], where: `jobs.${jobName} ${step.name ?? step.uses} with.${key}` });
         }
       }
       if (typeof step?.run === 'string') {
-        for (const r of shellRefs(step.run)) out.push({ ...r, where: `jobs.${jobName} "${step.name ?? 'run'}" ${r.where}` });
+        for (const r of shellRefs(step.run))
+          out.push({ ...r, where: `jobs.${jobName} "${step.name ?? 'run'}" ${r.where}` });
       }
     }
   }
@@ -157,7 +228,7 @@ export function workflowRefs(text) {
 
 /** Copy references (`<registry>/<prefix><name>…`) on non-comment lines, with or without a digest. */
 export function mirrorRefs(text, mirrors) {
-  const base = `${mirrors.registry}/${mirrors.prefix}`.replace(/[.]/g, '\\.');
+  const base = `${mirrors.registry}/${mirrors.prefix}`.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
   const re = new RegExp(`${base}([a-z0-9-]+)(@sha256:[0-9a-f]{64}|:[\\w.-]+)?`, 'g');
   const out = [];
   text.split('\n').forEach((l, i) => {
@@ -172,25 +243,48 @@ export function checkFile(file, kind, text, mirrors) {
   const problems = [];
   for (const r of mirrorRefs(text, mirrors)) {
     const entry = mirrors.images.get(r.name);
-    if (!entry) problems.push({ file, line: r.line, msg: `${mirrors.prefix}${r.name} is not in deploy/image-mirrors.json` });
+    if (!entry)
+      problems.push({
+        file,
+        line: r.line,
+        msg: `${mirrors.prefix}${r.name} is not in deploy/image-mirrors.json`,
+      });
     else if (r.pin !== `@${entry.digest}`) {
       const what = r.pin.startsWith('@') ? r.pin : `${r.pin} (no digest)`;
-      problems.push({ file, line: r.line, msg: `${mirrors.prefix}${r.name}${what} — the list pins ${entry.digest}` });
+      problems.push({
+        file,
+        line: r.line,
+        msg: `${mirrors.prefix}${r.name}${what} — the list pins ${entry.digest}`,
+      });
     }
   }
   const refs =
-    kind === 'dockerfile' ? dockerfileRefs(text)
-    : kind === 'compose' ? composeRefs(text)
-    : kind === 'workflow' ? workflowRefs(text)
-    : shellRefs(text);
+    kind === 'dockerfile'
+      ? dockerfileRefs(text)
+      : kind === 'compose'
+        ? composeRefs(text)
+        : kind === 'workflow'
+          ? workflowRefs(text)
+          : shellRefs(text);
   for (const r of refs) {
     if (notAPull(r.ref) || !isDockerHub(r.ref)) continue;
-    problems.push({ file, line: r.line, msg: `${r.where} pulls ${r.ref} from Docker Hub — add it to deploy/image-mirrors.json and use the GHCR copy by digest` });
+    problems.push({
+      file,
+      line: r.line,
+      msg: `${r.where} pulls ${r.ref} from Docker Hub — add it to deploy/image-mirrors.json and use the GHCR copy by digest`,
+    });
   }
   return problems;
 }
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'coverage', 'test-results', 'playwright-report']);
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'coverage',
+  'test-results',
+  'playwright-report',
+]);
 
 function walk(dir, pick) {
   return readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
@@ -203,11 +297,16 @@ function walk(dir, pick) {
 /** Every file in scope with its kind. */
 export function scope() {
   const files = [];
-  for (const f of walk('.', (_, n) => n === 'Dockerfile' || n.endsWith('.Dockerfile'))) files.push([f, 'dockerfile']);
+  for (const f of walk('.', (_, n) => n === 'Dockerfile' || n.endsWith('.Dockerfile')))
+    files.push([f, 'dockerfile']);
   files.push(['docker-compose.yml', 'compose']);
   for (const f of walk('deploy', (_, n) => /\.ya?ml$/.test(n))) files.push([f, 'compose']);
-  for (const f of walk('.github/workflows', (_, n) => /\.ya?ml$/.test(n))) files.push([f, 'workflow']);
-  for (const f of [...walk('scripts', (_, n) => n.endsWith('.sh')), ...walk('deploy', (_, n) => n.endsWith('.sh'))]) {
+  for (const f of walk('.github/workflows', (_, n) => /\.ya?ml$/.test(n)))
+    files.push([f, 'workflow']);
+  for (const f of [
+    ...walk('scripts', (_, n) => n.endsWith('.sh')),
+    ...walk('deploy', (_, n) => n.endsWith('.sh')),
+  ]) {
     files.push([f, 'shell']);
   }
   return files;
@@ -221,5 +320,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`image-mirrors: ${problems.length} problem(s)`);
     process.exit(1);
   }
-  console.log(`image-mirrors: ok (${mirrors.images.size} mirrored images, ${scope().length} files)`);
+  console.log(
+    `image-mirrors: ok (${mirrors.images.size} mirrored images, ${scope().length} files)`,
+  );
 }
