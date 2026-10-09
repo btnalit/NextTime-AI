@@ -6,6 +6,12 @@ name: ci-image-mirror
 # limit, counted per runner address) before any test ran; the same pull also backs the
 # reversibility probe and the web-e2e stack.
 #
+# Source: mirror.gcr.io, Google's read-through cache of Docker Hub, fetched by the same digest.
+# Content addressing makes it the same image as docker.io/pgvector/pgvector@<digest> (a registry
+# cannot serve other bytes under a digest; the copy step checks them), and it is not subject to
+# Docker Hub's anonymous limit, which also failed this workflow's own first run. If a future pin
+# is not in that cache the copy fails visibly; then use docker.io as the source for that run.
+#
 # Copy by digest: `docker buildx imagetools create` with a single source and no annotations pushes
 # the source's manifest list and every platform manifest unchanged, so the GHCR copy has the same
 # digest as the pinned Docker Hub image. The job then reads the digest back and fails on any
@@ -62,7 +68,7 @@ jobs:
       matrix:
         include:
           - name: pgvector
-            source: docker.io/pgvector/pgvector:pg17
+            source: mirror.gcr.io/pgvector/pgvector
             digest: sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
             tag: pg17
             # The line in docker-compose.yml that must carry the same pin.
