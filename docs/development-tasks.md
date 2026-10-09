@@ -3809,6 +3809,33 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 窗口内仍要联网的：每个镜像按 digest 重新验签（刻意保留，不缓存验签结果）、S1 / S2 出网探针（被测功能）、sshd fixture 缓存缺失时的 `apk add`；验签离线化是待评估的想法（遗留 141）。
 - 残留与后续：S2 三个裸 fixture 与 fake-llm 仍在主机构建，sshd 的 `apk add` 层依赖构建缓存，fake-llm 不随发版重建（遗留 139）；控制台 update-feed 的 `applyCommand` 跑检出里的旧脚本、不提示 `--prefetch`（遗留 140，`packages/kernel/src/application/platform/updates.ts`）。
 
+**入口上下文确定性与 `list_facts`（#514，2026-10-09 合入，遗留 135 关闭）**
+
+- 根因：`links.recorded_at default now()`，一次 capability 调用一个事务，几十条 Fact 共享同一时间戳；`buildRecentFactsQuery` 的 `order by recorded_at desc limit 20` 在并列组里不确定（去掉 `id desc` 的变异测试让新集成测试失败）。只加 tiebreak 不够：每轮验收是新库新 UUID，选出的仍是任意 20 条，所以同时给"查全"的能力和"样本不是全部"的提示。
+- kernel：`GraphStore.listFactsPage` / `countFactsByLinkType`（`queries.ts` 的 `buildListFactsQuery` / `buildFactCountsByLinkTypeQuery`，复用 `LINK_VISIBLE_PREDICATE` 与 `linkViewerFilter`，即遗留 123 的草稿可见性）；`list_facts` 为 graph 组 / observe / handle / member，auditor 可读，`limit` 默认 50、上限 200（超出截断并 `truncated: true`），游标是不透明的 `(recorded_at 毫秒, id)`，坏游标按无游标处理。按组派生的入口与 Worker 能力上限自动包含它。
+- 注入上下文：`platform-extension/src/modes/entry-context.ts` 由 entry 与 interactive 共用；图概览在最近 Fact 样本之前，链接类型 `JSON.stringify` 输出（换行与 `###` 伪造不出小节），按计数取前 30 种、超长名截断，列表截断时引导语改为"没列出的仍可能有数据"。`ontology/entry-agent.yaml` 新增"回答图相关问题"一节，`prompt-contract` 守卫的 `checkGraphQuestionGuidance` 锁住关键措辞。
+- 同类缺陷（取首行 / LIMIT 无 tiebreaker）：graph 查询、`find-means`、审批队列与幂等键回读、epistemic explain / decisions、不变式样本、门工具清单、identity / auth / default-workspace / task / worker definitions / gates / chat / host-bridge 各处补主键次序；需要迁移或游标改形的列入遗留 143 / 144。
+- 验证：`entry-context-graph.integration.test.ts`（真实 Postgres，经平台 `entryScope` 签出的 member Handle）覆盖并列前提、样本确定性、`list_facts` 一次取到 `depends_on`、并列组内翻页不跳不重、截断与失效；`graph-draft-visibility.integration.test.ts` 覆盖草稿隐藏；`modes/entry-context.test.ts` 覆盖转义与截断。真实模型效果待 staging `real_model` 与主机 S5.7 确认。
+
+**出网禁止名单的 `.x` / `*.x` 归一化（#515，2026-10-09 合入，遗留 142）**
+
+- 模式语法（所有出网主机列表）：按后缀匹配，裸名 `x` 包含 `x` 本身及其子域。deny 侧（`egressDeny`、`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES`、源映射 `deny`）额外接受 `.x` / `*.x`，等同于 `x`（`normalizeDenyHostPattern` 只去一层前缀，`matchesDenySuffix`）；allow 侧（`NEXTTIME_CONNECTION_ALLOW_HOSTS` / `NEXTTIME_CONNECTION_FIXTURE_HOSTS`、源映射 `allow`）严格用 `matchesSuffix`，不放宽。
+- `hostPatternProblem` 说明一条模式为什么永远匹配不上；egress-proxy 的 `config.ts` / `source-map.ts` 加载时报告（不致命、不丢其余条目，源映射同一组问题只报一次），内核 `adapters/outbound-target` 对 allow-hosts 的坏条目逐条 error 日志并丢弃（审查后由"启动失败"改为不致命：这类条目修复前就从未放行，启动失败会让整栈停服）。
+- `EgressDenyListSchema`（`shared/src/worker-definition.ts`，两种 kind 共用）在列表层 transform 与校验：输出规范形式，拒绝通配符、`..`、URL、端口、路径、CIDR、空白、非 ASCII、IP 与空串，issue path 是 `egressDeny` 字段本身。内核刻意不在下发时归一化，`EGRESS_DENY_LABEL` 与下发列表保持一致，不触发容器重建。
+- 相邻发现列入遗留 148（ssh 非锚定正则）、149（子网与 IPv6 规则不一致）。
+
+**控制台升级提醒（#518，2026-10-09 合入，遗留 140）**
+
+- `PlatformUpdateWire` 新增 `prefetchCommands: string[]`（无更新时为空数组），`applyCommand` 改为跑 `/tmp` 下目标 tag 的副本；命令只插入经 `PlatformReleaseVersionSchema`（`^v\d+\.\d+\.\d+$`）校验的版本号。web 端「升级步骤」渲染两步代码块，说明终端只打印日志路径、结果看日志最后一行，经 SSH 建议后台运行并跟日志。仍然只有「知道了」，控制台不执行升级（S10 决定 2/3）。
+
+**控制台供应商逐模型探测与"能选不打"（#517，2026-10-09 合入）**
+
+- llm-proxy `POST /admin/model-probe`：入参 schema 扩展自 discovery（`LlmProviderModelProbeInputWireSchema`，同一个 `LlmProviderUpstreamBaseUrlWireSchema`），对至多 `LLM_PROVIDER_PROBE_MAX_MODELS = 6` 个模型各跑 provider-test 的两轮（含 #510 的 `tool_choice` 重试），并发 3，单次请求至多 18 次上游调用；model id 只进 JSON body，`redirect: 'error'`；错误文本经 `describeFailure` / `scrubUpstreamText` 按实际用的密钥擦除；审计 details 只有上游、密钥来源与每个模型的两项结果。`resolveFormCredential` 是 #510 的 R-23 密钥选择原样抽出，discovery 与 probe 共用。内核审计枚举加 `platform.llm_provider_models_probed`。
+- 控制台：新增 kit `combobox`（可搜索下拉）；供应商表单自动拉模型、自动 / 手动探测、预设 `suggestedModels`；其余页面按字段清单把可推导或可选择的值改为选择（20 处，表在 PR 描述），被拒（403）的列表降级为手填并说明。网络失败的错误条改为中文主句，原文降为第二行；`withDefaultScheme` 不再给已含 `://`、含空白或以 `:` 开头的值补前缀。
+- 审查后修复：审计资源选择器按自有 key 查表（`Object.hasOwn`），`#/audit?resourceType=__proto__` 不再让页面崩溃（CodeQL）；审计 P0-1 / P0-3 / P0-4（默认模型、首跑清单、系统页空目录）。
+- CI：`quality` job 新增 i18n-pairs 守卫及其单测（之前只在本地 `ci:guards` 里跑）。旅程测试 ⑦（`e2e/journeys/07-add-provider.spec.ts`）用 `page.route` 替身 `/api/llm-admin/**`，验证控制台一侧的操作链与请求。
+- e2e（合入前补）：公共登录、登出、改密码、建用户 / 工作区、临时密码确认、owner 搜索按 `data-testid` 定位，不再依赖可见文案；`playwright.config.ts` 在 CI 里 `actionTimeout` 20 s、`maxFailures` 6（重生成基线除外）、`globalTimeout` 12 分钟，`e2e.yml` 测试步骤 13 / 14 分钟、job 20 分钟；种子步骤后台每 60 s 重新 announce `ci-fixture-mcp`，与真实门的心跳行为一致（`GATE_ANNOUNCE_INTERVAL_SEC` 默认 60 s，内核 `GATE_LOST_AFTER_SEC` 默认 180 s）。截图基线 56 张重生成，增量审查逐张归因（本 PR 改动、main 上早已变化但在容差内、运行期数据、抗锯齿噪声），见遗留 154。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在

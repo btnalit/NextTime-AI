@@ -63,8 +63,8 @@ git push
 ```
 git fetch -q origin --tags
 git show vX.Y.Z:scripts/apply-release.sh > /tmp/apply-release-vX.Y.Z.sh
-sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z  # 维护窗口之前：预拉并验签，必须 RESULT ok（见下）
-sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z      # 窗口内：用已预拉、已验签的发布镜像应用（没预拉完就拒绝；失败即停，不回退构建）
+sh /tmp/apply-release-vX.Y.Z.sh --prefetch vX.Y.Z  # 维护窗口之前：预拉并验签；终端只打印日志路径，日志 drills/prefetch-vX.Y.Z-<ts>.log 最后一行必须是 RESULT ok（见下）
+sh /tmp/apply-release-vX.Y.Z.sh --pull vX.Y.Z      # 窗口内：用已预拉、已验签的发布镜像应用（没预拉完就拒绝；失败即停，不回退构建）；经 SSH 时后台运行（nohup / tmux）并 tail -f 日志，见下
 sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码构建（主机出网不可靠，不作为常规路径）
 ```
 
@@ -101,6 +101,8 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 用 `git show` 取出目标 tag 的副本，流程永远属于被应用的那个版本。
 
 上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
+
+跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
@@ -510,6 +512,105 @@ v0.43.0 起的 `apply-release.sh` 在切 tag 之前把这个文件设成 `10001:
 ### 3.11 控制台「测试」对当前 Claude 模型不再误报 tool_call 失败（#502，v0.43.0 起）
 
 已知问题（v0.42.0 及之前）："添加 LLM 供应商"页的「测试」在 Anthropic Messages 供应商上强制 `tool_choice: {type:'tool'}`，当前 Claude 模型拒绝强制工具选择（HTTP 400），所以测试结果总是 `completion: ok`、`tool_call: error`。只影响测试按钮的显示：路由与 agent 调用不经过这个测试，照常工作。v0.43.0 起改为 `tool_choice: {type:'auto'}` 加提示词里的明确指令，无 schema 变化、无主机步骤。应用后可在控制台对已配置的 Anthropic 供应商点一次「测试」核对，两项都应是 ok（一次很短的真实调用）。STATUS 遗留 133。
+
+### 3.12 供应商 Base URL 规则与 `tool_call` 探测重试（#510，v0.44.0 起）
+
+上游 Base URL 只允许 http/https，不得带 userinfo、查询串或片段（`?` / `#` 能改写代理拼出的请求路径，userinfo 会在 URL 里夹带凭据）。控制台新建、修改供应商和拉取模型列表时，违规的地址返回 400。v0.43.0 及之前已经存进库里的违规行照常加载，但不路由、不测试（`/test` 返回 409 `upstream_base_url_invalid`）、不写进 models.json。llm-proxy 启动时为每一行打一条 warn：`provider "<id>" is not routed — its upstream base URL …; edit it in the console`。应用后看一次日志：`docker compose logs llm-proxy | grep 'is not routed'`。有输出就在控制台把对应供应商的 Base URL 改成源站（例如 `https://api.example.com`）。改之前，这个供应商的模型对 agent 不可用。`tool_call` 探测在 OpenAI 两种 API 上，遇到上游 400 / 422 会去掉 `tool_choice` 再试一次。这样 DeepSeek 思考模式下的「测试」不再误报（主机验收 4.7b），发版后在控制台对该供应商点一次「测试」核对。无 schema 变化。
+
+### 3.13 出网禁止名单的 `.x` / `*.x` 条目开始生效（#515，v0.44.0 起）
+
+行为变化：WorkerDefinition `egressDeny`、`DENY_HOSTS`、`EGRESS_DENY_HOST_SUFFIXES` 以及出网源映射的 `deny` 里，写成 `.x` 或 `*.x` 的条目以前什么都不拒绝（fail-open），现在等同于 `x`，拒绝 `x` 本身及其全部子域（`*.x` 也连 `x` 一起拒绝）。已发布的定义不需要重新发布就生效，某个 Worker 若曾依赖访问这类域名，应用后会收到 `403 source-deny`。allow 侧（`NEXTTIME_CONNECTION_ALLOW_HOSTS`、源映射 `allow`）保持严格：永远匹配不上的条目在启动或加载时打一条 error 日志并被忽略，不会导致启动失败，行为与修复前一样（从未放行过）。发布含 IP、URL、端口、CIDR 或通配符条目的新定义版本会被拒绝。
+
+**维护窗口前**（与 `--prefetch` 同时，在当前版本上跑）做下面三项只读核对。目的是在新行为生效之前看清哪些条目会开始拒绝，需要时先和主人确认，而不是应用后才发现。三项都不依赖新版本代码：A 只读库，B 只读 `.env` 原文，C 在当前运行的 egress-proxy 容器里跑一段自带逻辑的脚本，只读环境变量和挂载的映射文件。都在主机检出目录下执行，经 SSH 时把 heredoc 通过管道交给 ssh。结果记 `docs/private/`。
+
+**A. 数据库：已保存的 WorkerDefinition 里受影响的 `egressDeny` 条目**
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+select d.workspace_id, d.id as definition_id, d.version, d.kind, d.status, e.entry,
+       case
+         when lower(btrim(e.entry)) ~ '^(\*\.|\.)[a-z0-9_-]+(\.[a-z0-9_-]+)*\.?$'
+           then 'leading-dot-or-wildcard: denied nothing until now; denies the bare name + subdomains after this release'
+         when lower(btrim(e.entry)) ~ '^[0-9]+(\.[0-9]+){0,3}$'
+           then 'ipv4-literal: matches only that exact literal; a new version with it is now refused'
+         when lower(btrim(e.entry)) ~ '^[0-9a-f:.]+$' and e.entry like '%:%'
+           then 'ipv6-literal: matches only that exact spelling; a new version with it is now refused'
+         else 'unmatchable: still denies nothing; a new version with it is now refused - fix by hand'
+       end as finding
+from worker_definitions d
+cross join lateral jsonb_array_elements_text(
+  case when jsonb_typeof(d.definition -> 'egressDeny') = 'array'
+       then d.definition -> 'egressDeny' else '[]'::jsonb end
+) as e(entry)
+where lower(btrim(e.entry)) !~ '^[a-z0-9_-]+(\.[a-z0-9_-]+)*\.?$'
+   or lower(btrim(e.entry)) ~ '^[0-9]+(\.[0-9]+){0,3}$'
+order by d.status, d.workspace_id, d.id, d.version;
+rollback;
+SQL
+```
+
+0 行即干净。`status = 'published'` 且归为 `leading-dot-or-wildcard` 的行，应用后开始拒绝，要和定义的主人确认这是预期的；不是预期的，先在控制台发布去掉该条目的新版本再进窗口。
+
+**B. 内核 allow-hosts（信息性）**
+
+```sh
+sed -n 's/^NEXTTIME_CONNECTION_ALLOW_HOSTS=//p' .env | tr ',' '\n' \
+  | sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//' \
+  | grep -vE '^$|^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$|^[0-9a-fA-F:.]+$' \
+  || echo "NEXTTIME_CONNECTION_ALLOW_HOSTS: ok"
+```
+
+读 `.env` 原文，不读运行中容器创建时的环境变量。列出的条目修复前就不生效，应用后内核在日志里点名并忽略，行为不变。改成裸名才会生效，那是放行，需要主人确认，不在本次升级里顺手改。
+
+**C. egress-proxy：环境变量里的 deny 列表和 `SOURCE_MAP_FILE`**
+
+```sh
+docker compose exec -T egress-proxy node - <<'JS'
+const ok = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
+const ip = (s) => /^[0-9.]+$/.test(s) || (s.includes(':') && /^[0-9a-f:.]+$/.test(s));
+const norm = (s) => s.trim().toLowerCase().replace(/\.$/, '');
+const lead = (s) => /^(\*\.|\.)/.test(norm(s));
+const bare = (s) => norm(s).replace(/^(\*\.|\.)/, ''); // one prefix, like normalizeDenyHostPattern
+const split = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
+const out = [];
+const deny = (where, e) => {
+  if (lead(e) && ok.test(bare(e))) out.push(`${where} deny "${e}": leading . / *. - denied nothing until now; after this release it denies "${bare(e)}" and its subdomains`);
+  else if (!ok.test(bare(e)) && !ip(bare(e))) out.push(`${where} deny "${e}": can never match - fix by hand`);
+};
+for (const k of ['DENY_HOSTS', 'EGRESS_DENY_HOST_SUFFIXES']) for (const e of split(process.env[k])) deny(k, e);
+const file = process.env.SOURCE_MAP_FILE;
+const map = file ? JSON.parse(require('fs').readFileSync(file, 'utf8')) : {};
+for (const s of Object.values(map)) {
+  for (const e of s.allow || []) if (!ok.test(norm(e)) && !ip(norm(e))) out.push(`source ${s.sourceId} allow "${e}": never matches (stays fail-closed) - fix by hand`);
+  for (const e of s.deny || []) deny(`source ${s.sourceId}`, e);
+}
+console.log(out.length ? out.join('\n') : 'egress-proxy: no affected entries');
+JS
+```
+
+输出只有 sourceId（`entry:` / `worker:` 加工作区、主体或 run id），不打印客户端 IP。`leading . / *.` 行就是应用后开始拒绝的条目，处理方式同 A。
+
+C 读到的环境变量是容器创建时的值；应用会按 `.env` 重建容器，所以再看一眼 `.env` 原文（compose 只把 `EGRESS_DENY_HOST_SUFFIXES` 传给 egress-proxy），判断方式同 C 的 deny 规则：
+
+```sh
+sed -n 's/^EGRESS_DENY_HOST_SUFFIXES=//p' .env
+```
+
+源映射是 C 运行那一刻的快照，随 Worker 起停变化；已发布定义里哪些条目会开始拒绝，以 A 为准。
+
+**应用后**（窗口内，S1–S4 之后）只看日志确认与窗口前的结论一致，不需要再跑 A–C：
+
+```sh
+docker compose logs kernel | grep 'outbound-target: NEXTTIME_CONNECTION_'
+docker compose logs egress-proxy | grep 'can never match a host'
+```
+
+两条都没有输出最常见；有输出时，条目应与 B、C 列出的一致。
+
+### 3.14 新能力 `list_facts`；已签发的 Handle 不会自动获得（#514，v0.44.0 起）
+
+graph 组新增只读能力 `list_facts`（按链接类型列出工作区的活跃 Fact），`get_entry_context` 多返回 `factCountsByLinkType`。入口 agent 的注入上下文改为先给图概览、再给最近 Fact 样本。入口 Handle 在应用后重启时按新的能力上限重新签发，不需要操作。用户在控制台自助签发的 MCP / Claude Code / pi interactive Handle 的 scope 是签发那一刻的能力清单，调 `list_facts` 会返回 `forbidden`，需要重新签发（`howto-connect-pi.md` 排障表）。已有工作区的入口 systemPrompt 不会随模板更新，关键指引放在了注入上下文与工具描述里。无迁移。主机验收 S5.7 dependency_chat 按至少 8/10 判定。
 
 ## 4. Hotfix 流程
 
