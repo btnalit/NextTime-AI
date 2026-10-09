@@ -14,9 +14,11 @@ import { type Page, expect } from '@playwright/test';
  * password for an already-existing user.
  */
 export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
-  const forgetKey = page.getByRole('button', { name: '清除密钥' });
-  const apiKeySummary = page.getByText('用 API key 登录');
-  const passwordLoginButton = page.getByRole('button', { name: '登录' });
+  // By test id, not visible copy: these are the doors every spec walks through, and the console's
+  // wording keeps being tuned — a renamed button once timed out every test in the suite.
+  const forgetKey = page.getByTestId('forget-key');
+  const apiKeySummary = page.getByTestId('api-key-login-toggle');
+  const passwordLoginButton = page.getByTestId('login-submit');
 
   await expect
     .poll(
@@ -34,10 +36,10 @@ export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
 }
 
 /** Expands `LoginPage`'s collapsed `<details>` and fills/submits the API-key form — the
- *  equivalent of the old, always-visible "Sign in" form every existing spec used to click
+ *  equivalent of the old, always-visible API-key form every existing spec used to click
  *  directly. Assumes `reachLoginForm` has already resolved to `'login'`. */
 export async function loginWithApiKey(page: Page, apiKey: string): Promise<void> {
-  const apiKeySummary = page.getByText('用 API key 登录');
+  const apiKeySummary = page.getByTestId('api-key-login-toggle');
   if (
     !(await page
       .getByPlaceholder('sk-...')
@@ -47,7 +49,7 @@ export async function loginWithApiKey(page: Page, apiKey: string): Promise<void>
     await apiKeySummary.click();
   }
   await page.getByPlaceholder('sk-...').fill(apiKey);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByTestId('api-key-login-submit').click();
   await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected', {
     timeout: 15_000,
   });
@@ -66,5 +68,5 @@ export async function loginWithPassword(
 ): Promise<void> {
   await page.locator('#login-name').fill(login);
   await page.locator('#login-password').fill(password);
-  await page.getByRole('button', { name: '登录' }).click();
+  await page.getByTestId('login-submit').click();
 }

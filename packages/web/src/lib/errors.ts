@@ -1,4 +1,6 @@
 import { HttpError } from './http-client.js';
+import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 /** Renders any thrown value as a user-facing string. `WsClient`'s `RpcError`/`TurnAlreadyRunningError`
@@ -41,7 +43,7 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32000]: 'timeout',
 };
 
-const CODE_TITLES: Readonly<Record<string, string>> = {
+export const CODE_TITLES: Readonly<Record<string, string>> = {
   unauthorized: 'Not signed in',
   forbidden: 'Not permitted',
   not_found: 'Not found',
@@ -70,10 +72,72 @@ const CODE_TITLES: Readonly<Record<string, string>> = {
   unknown: 'Error',
 };
 
+/** zh half of `CODE_TITLES`, keyed the same way (add a code to both). */
+export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
+  unauthorized: '未登录或登录已失效',
+  forbidden: '没有权限',
+  not_found: '找不到',
+  invalid_params: '请求参数不正确',
+  invalid_request: '请求不正确',
+  parse_error: '消息格式错误',
+  not_implemented: '当前内核尚未支持',
+  illegal_transition: '状态已变化',
+  turn_already_running: '已有一轮对话在运行',
+  gatekeeper_timeout: '门响应超时',
+  gatekeeper_error: '门返回了错误',
+  manifest_fetch_failed: '拉取清单失败',
+  meta_ontology_write_forbidden: '没有权限',
+  attenuation_denied: '没有权限',
+  not_proposer: '不是提议人',
+  not_published: '尚未发布',
+  invalid_step_reference: '引用无效',
+  unknown_quota_key: '未知的配额项',
+  quota_exceeded: '超出配额',
+  internal_error: '内核出错',
+  network: '网络错误',
+  invalid_response: '返回内容无法识别',
+  connection_closed: '连接已断开',
+  timeout: '内核没有响应',
+  unknown: '出错了',
+};
+
+/** The error's short title in the viewer's language. Known codes use the curated tables; an
+ *  unknown code reads `出错了` in Chinese (the raw code is shown next to it either way) and the
+ *  derived English label in English. */
+export function localizedErrorTitle(described: ErrorDescription, t: Translate): string {
+  const zh = ownEntry(CODE_TITLES_ZH, described.code);
+  return t(zh ?? '出错了', described.title);
+}
+
+/** The bilingual sentence for a transport failure the browser itself reported (`fetch` threw, so
+ *  the text is the browser's own English such as "Failed to fetch"), or for a body that was not
+ *  the kernel's JSON (usually a proxy or gateway error page). `null` for anything else — kernel
+ *  codes are `lib/platform-errors.ts`'s job. The raw text stays visible as the banner's muted line. */
+export function transportErrorMessage(err: unknown, t: Translate): string | null {
+  if (!(err instanceof HttpError)) return null;
+  if (err.kind === 'network') {
+    return t(
+      '浏览器没有收到控制台服务的响应。检查网络连接，或确认服务正在运行，然后重试',
+      'The browser got no response from the console service. Check the network connection or that the service is running, then retry',
+    );
+  }
+  if (err.kind === 'invalid_response') {
+    return t(
+      '控制台服务返回的内容无法识别，可能是中间的代理或网关返回了错误页。稍后重试，仍然出现请查看服务日志',
+      'The console service returned something unrecognizable, probably an error page from a proxy or gateway in between. Retry shortly; if it persists, check the service logs',
+    );
+  }
+  return null;
+}
+
 export function describeError(err: unknown): ErrorDescription {
   if (err instanceof HttpError) {
     const code = err.kind === 'capability_error' ? (err.code ?? 'unknown') : err.kind;
-    return { code, title: CODE_TITLES[code] ?? titleFromCode(code), message: err.message };
+    return {
+      code,
+      title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),
+      message: err.message,
+    };
   }
   if (err instanceof TurnAlreadyRunningError) {
     return {
@@ -83,8 +147,12 @@ export function describeError(err: unknown): ErrorDescription {
     };
   }
   if (err instanceof RpcError) {
-    const code = RPC_CODE_NAMES[err.code] ?? `rpc_${err.code}`;
-    return { code, title: CODE_TITLES[code] ?? titleFromCode(code), message: err.message };
+    const code = ownEntry(RPC_CODE_NAMES, err.code) ?? `rpc_${err.code}`;
+    return {
+      code,
+      title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),
+      message: err.message,
+    };
   }
   const message = errorMessage(err);
   if (/^WsClient: /.test(message)) {

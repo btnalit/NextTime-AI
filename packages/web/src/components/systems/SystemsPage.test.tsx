@@ -131,6 +131,46 @@ describe('SystemsPage', () => {
     expect(within(drawer).getByTestId('connect-system-launcher')).toBeTruthy();
   });
 
+  it('P0-4: an admin with a discovered but not enabled instance is told so and linked to enable it', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-mcp-1',
+            connector: 'fixture-mcp',
+            displayName: 'Fixture MCP',
+            transportKind: 'mcp',
+            target: 'http://mcp.example.invalid',
+            endpoint: 'http://gate.example.invalid',
+            status: 'discovered',
+            trust: 'byo',
+            health: 'ok',
+            lastSeenAt: null,
+            lastCheckedAt: null,
+            operationCount: 2,
+            enabledWorkspaces: [],
+          },
+        ],
+      }),
+    });
+    render(
+      <PermissionsProvider>
+        <SystemsPage http={http} platformAdmin />
+      </PermissionsProvider>,
+    );
+    const empty = await screen.findByTestId('available-gates-empty');
+    await waitFor(() => expect(empty.textContent).toContain('1 个门实例还没启用'));
+    expect(screen.getByTestId('available-gates-enable-link').getAttribute('href')).toBe(
+      '#/platform/integrations/gate-mcp-1',
+    );
+  });
+
+  it('P0-4: a non-admin is told who has to enable an instance', async () => {
+    renderPage(scriptedHttp({}));
+    const empty = await screen.findByTestId('available-gates-empty');
+    expect(empty.textContent).toContain('请联系平台管理员');
+  });
+
   it('bugfix (PR #324 review): the selected 连接申请 filter tab renders its visible label (kit/tabs, not an invisible primary-button pill)', async () => {
     const http = scriptedHttp({});
     renderPage(http);

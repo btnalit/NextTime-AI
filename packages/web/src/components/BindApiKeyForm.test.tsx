@@ -56,7 +56,7 @@ describe('BindApiKeyForm', () => {
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-bad' } });
     fireEvent.click(screen.getByRole('button', { name: '绑定' }));
 
-    await waitFor(() => expect(screen.getByText('这把 API key 不属于任何成员')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/这把 API key 不属于任何成员/)).toBeTruthy());
   });
 
   it('maps already_member to a friendly inline message', async () => {
@@ -72,5 +72,13 @@ describe('BindApiKeyForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '绑定' }));
 
     await waitFor(() => expect(screen.getByText('你已经是该工作区的成员了')).toBeTruthy());
+  });
+});
+
+describe('BindApiKeyForm copy', () => {
+  it('renders the card title and field hint in one language each (zh default)', () => {
+    render(<BindApiKeyForm onBound={vi.fn()} />);
+    expect(screen.getByText('绑定已有 API key')).toBeTruthy();
+    expect(screen.getByText(/把这把 key 所属的工作区成员资格/)).toBeTruthy();
   });
 });

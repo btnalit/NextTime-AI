@@ -1,5 +1,7 @@
+import { normalizeGateIdInput } from '../../lib/gate-input.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
+import { CopyButton } from '../kit/copy-button.js';
 import { Notice } from '../ui/Notice.js';
 
 export interface PackagedGateChecklistProps {
@@ -37,7 +39,9 @@ export function packagedServiceName(gateId: string): string {
  */
 export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGateChecklistProps) {
   const t = useT();
-  const trimmed = gateId.trim();
+  // Same live normalization the launcher's GATE_ID field applies (`lib/gate-input.ts`), so a
+  // caller passing raw text still gets a sample the kernel accepts.
+  const trimmed = normalizeGateIdInput(gateId.trim());
   const idValid = trimmed.length > 0 && GATE_ID_PATTERN.test(trimmed);
   const id = idValid ? trimmed : '<gate-id>';
   const system = idValid ? trimmed.replace(/^gatekeeper-/, '') : '<system>';
@@ -99,13 +103,15 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
         <li>
           {t(
             <>
-              选一个稳定的 <code>GATE_ID</code>（<code>{GATE_ID_PATTERN.source}</code>
+              选一个稳定的 <code>GATE_ID</code>（2–64
+              位小写字母、数字或连字符，以字母或数字开头，例如 <code>gatekeeper-ops-host</code>
               ）和一个<strong>系统专属</strong>的 <code>GATE_CONNECTOR</code>（不要用{' '}
               <code>{kind}</code>{' '}
               这个通用名：通用类接入包不能设为平台预置，工作区就无法从目录启用）。
             </>,
             <>
-              Pick a stable <code>GATE_ID</code> ( <code>{GATE_ID_PATTERN.source}</code> ) and a{' '}
+              Pick a stable <code>GATE_ID</code> (2–64 lowercase letters, digits or hyphens,
+              starting with a letter or digit, e.g. <code>gatekeeper-ops-host</code>) and a{' '}
               <em>system-specific</em> <code>GATE_CONNECTOR</code> — never the generic{' '}
               <code>{kind}</code>.
             </>,
@@ -151,6 +157,9 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
           )}
           {/* `.table-scroll` is the one existing horizontal-scroll box; a dedicated code-block
               rule (surface-2 + border + padding, tokens only) is reported for the styles lane. */}
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <CopyButton value={compose} label={t(' compose 片段', 'compose block')} />
+          </div>
           <div className="table-scroll">
             <pre className="mono" data-testid="packaged-gate-compose">
               {compose}

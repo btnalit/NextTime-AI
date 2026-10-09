@@ -1,17 +1,25 @@
+import type { AvailableGateInstanceWire } from '@nexttime/shared';
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { WorkerDefinitionEditor } from './WorkerDefinitionEditor.js';
 
 afterEach(cleanup);
 
+/** Scripted caller; `list_available_gate_instances` (the egress-host suggestions) answers empty
+ *  unless overridden and is left out of `calls`. */
 function http(handlers: Record<string, (params: unknown) => unknown>) {
   const calls: { name: string; params: unknown }[] = [];
+  const all: Record<string, (params: unknown) => unknown> = {
+    list_available_gate_instances: () => ({ items: [] }),
+    ...handlers,
+  };
   const caller: CapabilityCaller = {
     call: vi.fn(async (name: string, params?: unknown) => {
-      calls.push({ name, params });
-      const handler = handlers[name];
+      if (name !== 'list_available_gate_instances') calls.push({ name, params });
+      const handler = all[name];
       if (!handler) throw new Error(`unscripted ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
@@ -204,4 +212,230 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     expect((screen.getByLabelText(/系统提示词/) as HTMLTextAreaElement).value).toBe('From JSON');
     expect((screen.getByLabelText(/出网拒绝/) as HTMLTextAreaElement).value).toBe('.internal');
   });
+
+  it('reduces pasted URLs, ports and wildcard prefixes in the egress deny list to the bare host the proxy matches', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-x', version: 1, status: 'draft' }),
+    });
+    render(<WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'P' } });
+    const deny = screen.getByLabelText(/出网拒绝/) as HTMLTextAreaElement;
+    fireEvent.change(deny, {
+      target: {
+        value:
+          'https://Admin.Internal.Example:8443/login?x=1\n*.corp.example\n.lan.example\nnas.local',
+      },
+    });
+    fireEvent.blur(deny);
+    expect(deny.value).toBe('admin.internal.example\ncorp.example\nlan.example\nnas.local');
+    expect(screen.getByTestId('wd-egress-deny-normalized').textContent).toContain(
+      '*.corp.example → corp.example',
+    );
+    // Typing again hides the stale conversion note.
+    fireEvent.change(deny, { target: { value: `${deny.value}\nhttp://x.example/` } });
+    expect(screen.queryByTestId('wd-egress-deny-normalized')).toBeNull();
+    // Submit normalizes too, without a blur in between.
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toEqual({
+      kind: 'worker',
+      definition: {
+        systemPrompt: 'P',
+        egressDeny: [
+          'admin.internal.example',
+          'corp.example',
+          'lan.example',
+          'nas.local',
+          'x.example',
+        ],
+      },
+    });
+  });
+
+  it('the next-version notice is one language and the success screen names the kind in Chinese', async () => {
+    const { caller } = http({
+      propose_worker_definition: () => ({ id: 'wd-e', version: 2, status: 'draft' }),
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-e',
+          version: 1,
+          kind: 'worker',
+          status: 'published',
+          // No name: the success screen then titles the draft by its kind label.
+          definition: { systemPrompt: 'Fix.' },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const notice = screen.getByTestId('worker-new-version-notice').textContent ?? '';
+    expect(notice).toMatch(/^为 wd-e 提议下一个版本/);
+    expect(notice).not.toContain('Proposing');
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    const done = await screen.findByTestId('draft-proposed');
+    expect(done.textContent).toContain('Worker 定义');
+    expect(done.textContent).not.toContain('Worker definition');
+  });
+
+  it('capabilities are grouped by mode, filterable, and a group can be selected at once', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-g', version: 1, status: 'draft' }),
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        capabilityNames={[
+          { name: 'search', mode: 'observe' },
+          { name: 'traverse', mode: 'observe' },
+          { name: 'get_object', mode: 'observe' },
+          { name: 'assert_fact', mode: 'write' },
+          { name: 'request_action', mode: 'execute' },
+        ]}
+        newVersionOf={{
+          id: 'wd-g',
+          version: 1,
+          kind: 'worker',
+          status: 'published',
+          definition: { systemPrompt: 'P', capabilities: ['legacy_cap'] },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const field = screen.getByTestId('wd-capabilities');
+    const groupOrder = Array.from(field.querySelectorAll('fieldset')).map((group) =>
+      group.getAttribute('aria-label'),
+    );
+    // Registry mode order, then the selected name the directory does not list.
+    expect(groupOrder).toEqual(['观察（只读）', '写入', '执行', '目录外（已选）']);
+    expect((within(field).getByLabelText('legacy_cap') as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByTestId('wd-capabilities-group-toggle-observe'));
+    for (const name of ['search', 'traverse', 'get_object']) {
+      expect((within(field).getByLabelText(name) as HTMLInputElement).checked).toBe(true);
+    }
+    expect(screen.getByTestId('wd-capabilities-group-toggle-observe').textContent).toBe('取消本组');
+    expect(screen.getByTestId('wd-capabilities-count').textContent).toContain('4');
+
+    // The filter narrows every group; "select" then acts on the visible rows only.
+    fireEvent.change(screen.getByTestId('wd-capabilities-filter'), { target: { value: 'act' } });
+    expect(within(field).queryByLabelText('search')).toBeNull();
+    expect(within(field).getByLabelText('request_action')).toBeTruthy();
+    expect(within(field).getByLabelText('assert_fact')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('wd-capabilities-group-toggle-execute'));
+    fireEvent.change(screen.getByTestId('wd-capabilities-filter'), { target: { value: 'zzz' } });
+    expect(screen.getByTestId('wd-capabilities-no-match')).toBeTruthy();
+    fireEvent.change(screen.getByTestId('wd-capabilities-filter'), { target: { value: '' } });
+
+    // A group can be folded away.
+    fireEvent.click(within(field).getByRole('button', { name: /写入/ }));
+    expect(within(field).queryByLabelText('assert_fact')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toEqual({
+      definitionId: 'wd-g',
+      kind: 'worker',
+      definition: {
+        systemPrompt: 'P',
+        capabilities: ['legacy_cap', 'get_object', 'search', 'traverse', 'request_action'],
+      },
+    });
+  });
+
+  it('offers the hosts of this workspace’s enabled systems as one-click egress-deny entries', async () => {
+    const { caller } = http({
+      list_available_gate_instances: () => ({
+        items: [
+          instance({
+            gateId: 'billing',
+            displayName: 'Billing',
+            target: 'https://billing.example.com:8443/api',
+            gatekeeperId: 'gk-1',
+          }),
+          instance({
+            gateId: 'erp',
+            displayName: 'ERP',
+            target: 'erp.example.com',
+            gatekeeperId: 'gk-2',
+          }),
+          // Not enabled in this workspace: not offered.
+          instance({
+            gateId: 'crm',
+            displayName: 'CRM',
+            target: 'https://crm.example.com',
+            gatekeeperId: null,
+          }),
+          // No host to deny.
+          instance({
+            gateId: 'docker',
+            displayName: 'Docker',
+            target: 'unix:///var/run/docker.sock',
+            gatekeeperId: 'gk-3',
+          }),
+        ],
+      }),
+    });
+    render(<WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    const deny = screen.getByLabelText(/出网拒绝/) as HTMLTextAreaElement;
+    fireEvent.change(deny, { target: { value: 'erp.example.com' } });
+    const suggestions = await screen.findAllByTestId('wd-egress-suggestion');
+    // erp is already on the list; crm is not enabled here; the docker socket has no host.
+    expect(suggestions.map((button) => button.textContent)).toEqual(['+ billing.example.com']);
+    expect(suggestions[0]?.getAttribute('title')).toBe('Billing');
+    fireEvent.click(suggestions[0] as HTMLElement);
+    expect(deny.value).toBe('erp.example.com\nbilling.example.com');
+    expect(screen.getByTestId('wd-egress-suggestions-empty').textContent).toContain('都已在列表中');
+  });
+
+  it('a refused system list degrades to typed hosts with a one-line note; a failed one offers a retry', async () => {
+    const refused = http({
+      list_available_gate_instances: () => {
+        throw new HttpError('capability_error', 'nope', 'forbidden');
+      },
+    });
+    render(<WorkerDefinitionEditor http={refused.caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    expect(await screen.findByTestId('wd-egress-suggestions-refused')).toBeTruthy();
+    expect(screen.queryByTestId('wd-egress-suggestions-error')).toBeNull();
+    cleanup();
+
+    let attempts = 0;
+    const failing = http({
+      list_available_gate_instances: () => {
+        attempts += 1;
+        if (attempts === 1) throw new HttpError('capability_error', 'boom', 'internal_error');
+        return {
+          items: [
+            instance({
+              gateId: 'billing',
+              displayName: 'Billing',
+              target: 'https://billing.example.com',
+              gatekeeperId: 'gk-1',
+            }),
+          ],
+        };
+      },
+    });
+    render(<WorkerDefinitionEditor http={failing.caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    const banner = await screen.findByTestId('wd-egress-suggestions-error');
+    fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
+    expect((await screen.findAllByTestId('wd-egress-suggestion')).length).toBe(1);
+  });
 });
+
+function instance(
+  overrides: Pick<AvailableGateInstanceWire, 'gateId' | 'displayName' | 'target' | 'gatekeeperId'>,
+): AvailableGateInstanceWire {
+  return {
+    connector: 'openapi',
+    transportKind: 'http',
+    status: 'enabled',
+    trust: 'vetted',
+    health: 'ok',
+    operationCount: 1,
+    ...overrides,
+  };
+}

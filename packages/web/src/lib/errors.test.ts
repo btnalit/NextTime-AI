@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { describeError, errorMessage, isForbiddenError } from './errors.js';
+import {
+  CODE_TITLES,
+  CODE_TITLES_ZH,
+  describeError,
+  errorMessage,
+  isForbiddenError,
+  localizedErrorTitle,
+} from './errors.js';
 import { HttpError } from './http-client.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 describe('describeError', () => {
+  it('a server code that names an Object.prototype member gets a plain string title', () => {
+    for (const code of ['__proto__', 'constructor', 'toString']) {
+      const described = describeError(new HttpError('capability_error', 'x', code));
+      expect(typeof described.title).toBe('string');
+      expect(localizedErrorTitle(described, (zh) => zh)).toBe('出错了');
+    }
+  });
+
   it('surfaces the HTTP wire code and the kernel message verbatim', () => {
     const described = describeError(
       new HttpError('capability_error', 'principal role "member" does not satisfy', 'forbidden'),
@@ -66,5 +81,26 @@ describe('describeError', () => {
       message: 'plain string',
     });
     expect(errorMessage(new Error('m'))).toBe('m');
+  });
+});
+
+describe('localizedErrorTitle', () => {
+  const zh = <T>(a: T, _b: T): T => a;
+  const en = <T>(_a: T, b: T): T => b;
+
+  it('keeps the zh and en title tables in step', () => {
+    expect(Object.keys(CODE_TITLES_ZH).sort()).toEqual(Object.keys(CODE_TITLES).sort());
+  });
+
+  it('picks the curated title per language', () => {
+    const described = describeError(new HttpError('capability_error', 'x', 'forbidden'));
+    expect(localizedErrorTitle(described, zh)).toBe('没有权限');
+    expect(localizedErrorTitle(described, en)).toBe('Not permitted');
+  });
+
+  it('falls back to a generic zh title for an unknown code, and the derived label in en', () => {
+    const described = describeError(new HttpError('capability_error', 'x', 'some_new_code'));
+    expect(localizedErrorTitle(described, zh)).toBe('出错了');
+    expect(localizedErrorTitle(described, en)).toBe('Some new code');
   });
 });

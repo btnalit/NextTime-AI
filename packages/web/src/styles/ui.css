@@ -347,6 +347,14 @@
   overflow-wrap: anywhere;
 }
 
+/* The kernel's raw (often English) text under a mapped friendly line: visibly secondary. Without
+ * this compound rule `.error-banner-message`'s own color (same specificity, later sheet) beat the
+ * `text-3` utility, so the muted line rendered exactly like the primary one. */
+.error-banner-message.text-3 {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
 .error-banner-actions {
   flex-shrink: 0;
 }
@@ -551,6 +559,159 @@
 .input-group .btn {
   position: absolute;
   right: 3px;
+}
+
+/* ---- Combobox (kit/combobox) ---------------------------------------------------------- */
+.combobox {
+  position: relative;
+  width: 100%;
+}
+
+.combobox .combobox-input {
+  padding-right: 60px;
+}
+
+.combobox-actions {
+  position: absolute;
+  top: 6px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.combobox-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.combobox-icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.combobox-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.combobox-popup {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-1);
+}
+
+.combobox-listbox {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.combobox-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  font-size: var(--fs-13);
+  cursor: pointer;
+}
+
+.combobox-option[data-active="true"] {
+  background: var(--surface-2);
+}
+
+.combobox-option[aria-selected="true"] {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.combobox-option[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.combobox-option-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.combobox-option-secondary {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  font-weight: 400;
+}
+
+.combobox-note {
+  display: block;
+  padding: 6px var(--space-2);
+  color: var(--text-3);
+  font-size: var(--fs-13);
+}
+
+.pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+
+.pick-chip-unknown {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.pick-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.pick-chip-remove:hover {
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .radio-group {

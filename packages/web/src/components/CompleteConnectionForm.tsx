@@ -1,5 +1,6 @@
 import type { MintConnectionSecretResultWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useState } from 'react';
+import { useCapabilityList } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
@@ -10,7 +11,10 @@ import {
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError } from '../lib/errors.js';
-import { useT } from '../lib/i18n.js';
+import { isAbsoluteUrl, withDefaultScheme } from '../lib/gate-input.js';
+import type { PrincipalRow } from '../lib/governance.js';
+import { type Translate, useT } from '../lib/i18n.js';
+import { roleLabel } from '../lib/labels.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -41,10 +45,10 @@ interface FieldErrors {
   readonly target?: string;
 }
 
-/** "Looks like a URL": a scheme followed by `://` — the same loose check the manifest-source
- *  field always had, now shared with the endpoint (C15). Deliberately not `new URL()`: a gate
- *  endpoint is routinely a bare compose service name with a port, which the WHATWG parser accepts
- *  anyway, and this form's job is to catch a pasted hostname with no scheme, not to validate. */
+/** "Looks like a URL": a scheme followed by `://` — the loose check the manifest-source field
+ *  always had. The endpoint no longer uses it (C15 follow-up): a missing scheme there is filled
+ *  with `http://` instead of refused, and what remains is checked with `new URL()` (a bare compose
+ *  service name with a port parses fine once it has a scheme). */
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 /** Parses the credential box: JSON when it is JSON, the raw string otherwise (the gate's
@@ -66,6 +70,43 @@ const FIELD_ERROR_CODES: ReadonlySet<string> = new Set([
   'connection_target_refused',
 ]);
 
+/** The Chinese-first explanation shown on a field a kernel 400 named, ahead of the kernel's own
+ *  (English) text — which stays visible as the secondary "server message" so nothing is lost. */
+export function fieldErrorExplanation(
+  field: keyof FieldErrors,
+  code: string,
+  t: Translate,
+): string {
+  if (code === 'connection_target_refused') {
+    return t(
+      '这个地址指向平台自身的服务，已被拒绝：请填写门在网络上可达的地址（带域名或 IP），不要用 localhost 或单段主机名。',
+      "This address points at one of the platform's own services and was refused — use the gate's network-reachable address (with a domain or IP), not localhost or a single-label host name.",
+    );
+  }
+  switch (field) {
+    case 'credentials':
+      return t(
+        '门没有接受这份凭证：请填一个 token，或一个 JSON 对象。',
+        'The gate did not accept this credential — enter a token or a JSON object.',
+      );
+    case 'manifestSource':
+      return t(
+        '清单来源不被接受：需要一个可访问的完整地址，例如 https://api.example.com/openapi.json。',
+        'The manifest source was not accepted — it needs a full, reachable address such as https://api.example.com/openapi.json.',
+      );
+    case 'endpoint':
+      return t(
+        '门端点不被接受：需要门自己的完整地址，例如 http://gate-host:8080。',
+        "The Gatekeeper endpoint was not accepted — it needs the gate's own full address, such as http://gate-host:8080.",
+      );
+    case 'target':
+      return t(
+        '目标系统不被接受：请填一个 base URL、host 或服务名。',
+        'The target system was not accepted — enter a base URL, host or service name.',
+      );
+  }
+}
+
 /** Maps a kernel `invalid_params` (400) to the field it is most likely about. */
 export function fieldForInvalidParams(message: string): keyof FieldErrors | undefined {
   const lower = message.toLowerCase();
@@ -81,10 +122,12 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  * request (or a blank) into a registered Gatekeeper via `create_connection`
  * (`packages/shared/src/capabilities.ts`). Credentials go straight to the gate and are cleared
  * from this form the moment the call returns; they are never echoed, logged or kept in state after
- * submit. 400 highlights the field it names; 502/504 show the gate's own message verbatim.
- * `aria-describedby` follows what `Field` actually renders (C16): the hint only while there is
- * no error (`ui/Field.tsx` swaps the hint out for the error), so no control ever points at an id
- * that is not in the DOM.
+ * submit. 400 highlights the field it names (a Chinese explanation first, the kernel's own text
+ * second); 502/504 show the gate's own message verbatim. `aria-describedby` follows what `Field`
+ * actually renders (C16): the hint always, plus the error while there is one.
+ *
+ * Fills instead of refusing (console UX pass): an endpoint typed as `gate-host:8080` gets
+ * `http://` on blur (with a note), and "代表谁" is a member picker rather than a raw id box.
  *
  * R-01 (maintainer decision D-01): the gate being registered is one the workspace runs itself, so
  * the kernel calls it with that gate's own connection secret, never the platform gate token. The
@@ -107,6 +150,8 @@ export function CompleteConnectionForm({
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
   const [credentials, setCredentials] = useState('');
   const [onBehalfOf, setOnBehalfOf] = useState('');
+  /** The endpoint had no scheme and `http://` was prepended on blur — said under the field. */
+  const [endpointSchemeAdded, setEndpointSchemeAdded] = useState(false);
   const [manifestSource, setManifestSource] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<unknown | null>(null);
@@ -129,17 +174,31 @@ export function CompleteConnectionForm({
     };
   }, [http]);
 
+  /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
+   *  deployment network — the field's own placeholder). */
+  const endpointValue = withDefaultScheme(endpoint, 'http');
+
+  function completeEndpoint(): void {
+    const next = withDefaultScheme(endpoint, 'http');
+    if (next !== endpoint.trim()) setEndpointSchemeAdded(true);
+    setEndpoint(next);
+  }
+
   function validate(): FieldErrors {
     const errors: { -readonly [K in keyof FieldErrors]?: string } = {};
     if (!target.trim()) errors.target = t('目标是必填项。', 'Target is required.');
     if (!endpoint.trim()) {
-      errors.endpoint = t('门端点是必填项。', 'The Gatekeeper endpoint is required.');
-    } else if (!URL_LIKE_PATTERN.test(endpoint.trim())) {
-      // C15: the kernel only checks non-empty, then fails the gate round trip with a far less
-      // helpful `gatekeeper_error` / `gatekeeper_timeout` — say it here, on the field.
       errors.endpoint = t(
-        '门端点必须是一个 URL（http://gate-host:port）。',
-        'The Gatekeeper endpoint must be a URL (http://gate-host:port).',
+        '门端点是必填项：填门自己的地址，例如 http://gate-host:8080。',
+        "The Gatekeeper endpoint is required — the gate's own address, e.g. http://gate-host:8080.",
+      );
+    } else if (!isAbsoluteUrl(endpointValue)) {
+      // C15: the kernel only checks non-empty, then fails the gate round trip with a far less
+      // helpful `gatekeeper_error` / `gatekeeper_timeout` — say it here, on the field. A missing
+      // scheme is no longer an error (`http://` is prepended); what is left is a malformed host.
+      errors.endpoint = t(
+        '门端点需要一个完整的地址，例如 http://gate-host:8080（不能有空格）。',
+        'The Gatekeeper endpoint needs a full address, e.g. http://gate-host:8080 (no spaces).',
       );
     }
     if (credentialKind === 'connected_account' && !credentials.trim()) {
@@ -149,7 +208,10 @@ export function CompleteConnectionForm({
       );
     }
     if (manifestSource.trim() && !URL_LIKE_PATTERN.test(manifestSource.trim())) {
-      errors.manifestSource = t('清单来源必须是一个 URL。', 'Manifest source must be a URL.');
+      errors.manifestSource = t(
+        '清单来源需要一个完整的地址，例如 https://api.example.com/openapi.json。',
+        'The manifest source needs a full address, e.g. https://api.example.com/openapi.json.',
+      );
     }
     return errors;
   }
@@ -166,7 +228,7 @@ export function CompleteConnectionForm({
       ...(request ? { connectionRequestId: request.id } : {}),
       kind,
       target: target.trim(),
-      endpoint: endpoint.trim(),
+      endpoint: endpointValue,
       connectionSecret,
       credentialKind,
       ...(credentialKind === 'connected_account'
@@ -180,6 +242,7 @@ export function CompleteConnectionForm({
         : {}),
     };
 
+    setEndpoint(endpointValue);
     setSubmitting(true);
     try {
       const result = await http.call<CreateConnectionResult>('create_connection', params);
@@ -192,7 +255,11 @@ export function CompleteConnectionForm({
         ? fieldForInvalidParams(described.message)
         : undefined;
       if (field) {
-        setFieldErrors({ [field]: described.message });
+        // A Chinese-first explanation of the field, with the kernel's own (English) text kept as
+        // the secondary detail rather than shown alone.
+        setFieldErrors({
+          [field]: `${fieldErrorExplanation(field, described.code, t)} ${t('服务端原文：', 'Server message: ')}${described.message}`,
+        });
       } else {
         setSubmitError(err);
       }
@@ -202,6 +269,14 @@ export function CompleteConnectionForm({
   }
 
   const showManifest = supportsManifestSource(kind);
+  // console-ux-3: for an http gate the OpenAPI document usually sits at `<target>/openapi.json` —
+  // offered as a one-click fill (never set silently), the same pattern as the platform's
+  // `CreateGateInstanceForm`. A target that is not a URL or host yields no suggestion.
+  const targetUrl = withDefaultScheme(target, 'https');
+  const suggestedManifest =
+    kind === 'http' && targetUrl !== '' && isAbsoluteUrl(targetUrl)
+      ? `${targetUrl.replace(/\/+$/, '')}/openapi.json`
+      : '';
 
   return (
     <form
@@ -257,7 +332,7 @@ export function CompleteConnectionForm({
           value={target}
           onChange={(event) => setTarget(event.target.value)}
           invalid={!!fieldErrors.target}
-          aria-describedby={describedBy('cc-target', !fieldErrors.target, !!fieldErrors.target)}
+          aria-describedby={describedBy('cc-target', true, !!fieldErrors.target)}
           disabled={submitting}
           mono
         />
@@ -268,22 +343,35 @@ export function CompleteConnectionForm({
         label={t('门端点', 'Gatekeeper endpoint')}
         required
         error={fieldErrors.endpoint}
-        hint={t(
-          '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）。',
-          "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one).",
-        )}
+        hint={
+          <>
+            {t(
+              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写 http:// 会自动补上。',
+              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); http:// is added if you leave it out.",
+            )}
+            {endpointSchemeAdded ? (
+              <span data-testid="cc-endpoint-scheme-note">
+                {' '}
+                {t(
+                  '已自动补上 http://；如果门走 https，请改成 https://。',
+                  'Added http:// for you — change it to https:// if the gate serves https.',
+                )}
+              </span>
+            ) : null}
+          </>
+        }
       >
         <Input
           id="cc-endpoint"
           value={endpoint}
-          onChange={(event) => setEndpoint(event.target.value)}
+          onChange={(event) => {
+            setEndpoint(event.target.value);
+            setEndpointSchemeAdded(false);
+          }}
+          onBlur={completeEndpoint}
           placeholder="http://gate-host:port"
           invalid={!!fieldErrors.endpoint}
-          aria-describedby={describedBy(
-            'cc-endpoint',
-            !fieldErrors.endpoint,
-            !!fieldErrors.endpoint,
-          )}
+          aria-describedby={describedBy('cc-endpoint', true, !!fieldErrors.endpoint)}
           disabled={submitting}
           mono
         />
@@ -359,33 +447,20 @@ export function CompleteConnectionForm({
               onChange={(event) => setCredentials(event.target.value)}
               rows={3}
               invalid={!!fieldErrors.credentials}
-              aria-describedby={describedBy(
-                'cc-credentials',
-                !fieldErrors.credentials,
-                !!fieldErrors.credentials,
-              )}
+              aria-describedby={describedBy('cc-credentials', true, !!fieldErrors.credentials)}
               autoComplete="off"
               spellCheck={false}
               disabled={submitting}
               mono
             />
           </Field>
-          <Field
-            id="cc-obo"
-            label={t('代表谁（principal id）', 'On behalf of (principal id)')}
-            hint={t(
-              '这份凭证归属于谁的账户。默认是申请人，或你自己。',
-              'Whose account this credential belongs to. Defaults to the requester, or to you.',
-            )}
-          >
-            <Input
-              id="cc-obo"
-              value={onBehalfOf}
-              onChange={(event) => setOnBehalfOf(event.target.value)}
-              disabled={submitting}
-              mono
-            />
-          </Field>
+          <OnBehalfOfField
+            http={http}
+            request={request ?? null}
+            value={onBehalfOf}
+            onChange={setOnBehalfOf}
+            disabled={submitting}
+          />
         </>
       ) : null}
 
@@ -412,18 +487,27 @@ export function CompleteConnectionForm({
             onChange={(event) => setManifestSource(event.target.value)}
             placeholder={
               kind === 'http'
-                ? 'https://api.example.internal/openapi.json'
+                ? suggestedManifest || 'https://api.example.internal/openapi.json'
                 : 'http://mcp-host:port/mcp'
             }
             invalid={!!fieldErrors.manifestSource}
-            aria-describedby={describedBy(
-              'cc-manifest',
-              !fieldErrors.manifestSource,
-              !!fieldErrors.manifestSource,
-            )}
+            aria-describedby={describedBy('cc-manifest', true, !!fieldErrors.manifestSource)}
             disabled={submitting}
             mono
           />
+          {suggestedManifest && manifestSource.trim() !== suggestedManifest ? (
+            <div className="row">
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => setManifestSource(suggestedManifest)}
+                disabled={submitting}
+                data-testid="cc-manifest-suggest"
+              >
+                {t(`使用 ${suggestedManifest}`, `Use ${suggestedManifest}`)}
+              </Button>
+            </div>
+          ) : null}
         </Field>
       ) : null}
 
@@ -448,5 +532,100 @@ export function CompleteConnectionForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * "代表谁": a member picker over `list_principals` (the same source and filter
+ * `access/GrantGateForm` uses — active human members, internal service principals left out),
+ * mounted only once a per-member credential is chosen so the shared case never reads the
+ * directory. Empty = the kernel's own default (the requester, else the caller). A failed read falls
+ * back to a manual principal-id box, said so in the hint.
+ */
+function OnBehalfOfField({
+  http,
+  request,
+  value,
+  onChange,
+  disabled,
+}: {
+  readonly http: CapabilityCaller;
+  readonly request: ConnectionRequestRow | null;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly disabled: boolean;
+}) {
+  const t = useT();
+  const principals = useCapabilityList<PrincipalRow>(
+    http,
+    'list_principals',
+    {},
+    {
+      autoLoadAll: true,
+    },
+  );
+  const options =
+    principals.state.status === 'ready'
+      ? (principals.state.data.items ?? []).filter(
+          (row) => row.kind === 'human' && !row.disabledAt && !row.internal,
+        )
+      : [];
+  const failed = principals.state.status === 'error';
+  const requester = request ? options.find((row) => row.id === request.requestedBy) : undefined;
+
+  return (
+    <Field
+      id="cc-obo"
+      label={t('代表谁', 'On behalf of')}
+      hint={
+        failed
+          ? t(
+              '读不到成员列表，可以直接填对方的 principal id；留空则默认是申请人，或你自己。',
+              'Could not read the member list — enter their principal id directly, or leave it empty for the requester (or you).',
+            )
+          : t(
+              '这份凭证归属于谁的账户。默认是申请人，或你自己。',
+              'Whose account this credential belongs to. Defaults to the requester, or to you.',
+            )
+      }
+    >
+      {failed ? (
+        <Input
+          id="cc-obo"
+          value={value}
+          onChange={(event) => onChange(event.target.value.trim())}
+          disabled={disabled}
+          placeholder={t('principal id（可选）', 'principal id (optional)')}
+          data-testid="cc-obo-manual"
+          mono
+        />
+      ) : (
+        <Select
+          id="cc-obo"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={disabled || principals.state.status === 'loading'}
+          data-testid="cc-obo-select"
+        >
+          <option value="">
+            {principals.state.status === 'loading'
+              ? t('正在加载成员…', 'Loading members…')
+              : requester
+                ? t(
+                    `默认：申请人 ${requester.displayName}`,
+                    `Default: the requester, ${requester.displayName}`,
+                  )
+                : request
+                  ? t('默认：申请人', 'Default: the requester')
+                  : t('默认：你自己', 'Default: you')}
+          </option>
+          {options.map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.displayName} ({roleLabel(row.role, t)})
+            </option>
+          ))}
+        </Select>
+      )}
+    </Field>
   );
 }

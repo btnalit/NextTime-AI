@@ -5,6 +5,8 @@ import type {
   LlmProviderListWire,
   LlmProviderModelDiscoveryInputWire,
   LlmProviderModelDiscoveryResultWire,
+  LlmProviderModelProbeInputWire,
+  LlmProviderModelProbeResultWire,
   LlmProviderTestInputWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
@@ -222,6 +224,12 @@ export class LlmAdminClient {
     return this.request<LlmProviderModelDiscoveryResultWire>('POST', '/model-discovery', input);
   }
 
+  /** 「验证所选模型」: the provider test (completion + tool call) against each picked model, with
+   *  the form's upstream and credential (llm-proxy `POST /admin/model-probe`). Nothing is stored. */
+  probeModels(input: LlmProviderModelProbeInputWire): Promise<LlmProviderModelProbeResultWire> {
+    return this.request<LlmProviderModelProbeResultWire>('POST', '/model-probe', input);
+  }
+
   /** Clears the console key for `id` — falls back to `apiKeyEnv` (if set) or no credential. */
   clearProviderSecret(id: string): Promise<LlmProviderWire> {
     return this.request<LlmProviderWire>('DELETE', `/providers/${encodeURIComponent(id)}/secret`);
@@ -240,7 +248,10 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
     // `Error.message` (English-only fallback for a caller that skips this function).
     case 'network': {
       const detail = typeof error.details === 'string' ? error.details : error.message;
-      return t(`无法连接模型代理：${detail}`, `Could not reach the model proxy: ${detail}`);
+      return t(
+        `无法连接模型代理，检查网络或确认模型代理正在运行（${detail}）`,
+        `Could not reach the model proxy. Check the network or that the model proxy is running (${detail})`,
+      );
     }
     case 'invalid_response':
       return t(

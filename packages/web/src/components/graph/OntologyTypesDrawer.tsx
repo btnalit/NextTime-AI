@@ -9,12 +9,17 @@ import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
-import { type OntologyProposalDiffEntry, ontologyProposalDiff } from '../../lib/graph-view.js';
+import {
+  type OntologyProposalDiffEntry,
+  objectTypeOptions,
+  ontologyProposalDiff,
+} from '../../lib/graph-view.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
 import { Button } from '../kit/button.js';
+import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
 import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -353,7 +358,13 @@ function TypeDetailBody({
               ) : null}
             </div>
           ))}
-          <LinkValidateTool http={http} linkType={type.name} t={t} />
+          <LinkValidateTool
+            key={type.name}
+            http={http}
+            linkType={type.name}
+            signatures={type.signatures}
+            t={t}
+          />
         </div>
       ) : null}
 
@@ -418,6 +429,8 @@ interface LinkValidateToolProps {
    *  "does {linkType, sourceType, targetType} match a declared signature" (I2), so only the two
    *  ObjectType ends need a field; there is nothing else for the reader to pick. */
   readonly linkType: string;
+  /** The LinkType's declared domain → range pairs — the first one preselects both ends. */
+  readonly signatures: readonly { readonly domain: string; readonly range: string }[];
   readonly t: Translate;
 }
 
@@ -425,10 +438,28 @@ interface LinkValidateToolProps {
  *  file's module doc comment): try one candidate `sourceType -> targetType` pair against every
  *  signature this LinkType currently declares. Calls `http.call` directly (an on-demand check, not
  *  a page-load read) — the same pattern `FactRow`'s write confirms use for `verify_fact`/etc. */
-function LinkValidateTool({ http, linkType, t }: LinkValidateToolProps) {
-  const [sourceType, setSourceType] = useState('');
-  const [targetType, setTargetType] = useState('');
+function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolProps) {
+  const [sourceType, setSourceType] = useState(signatures[0]?.domain ?? '');
+  const [targetType, setTargetType] = useState(signatures[0]?.range ?? '');
   const [result, setResult] = useState<ValidateResult>({ status: 'idle' });
+  // console-ux-3: both ends are ObjectTypes, so they are picked from the published ontology (the
+  // same `list_types{}` read the list view makes — served from its cache) instead of typed. Free
+  // entry stays: checking a type the ontology does not declare is a legitimate question.
+  const types = useCapabilityList<OntologyTypeWire>(http, 'list_types', {}, { autoLoadAll: true });
+  const objectTypes =
+    types.state.status === 'ready' ? objectTypeOptions(types.state.data.items) : [];
+  const typeOptions = objectTypes.map((type) => ({
+    value: type.name,
+    label: type.name,
+    secondary: type.description || undefined,
+  }));
+  const typesRefused = types.state.status === 'error' && isForbiddenError(types.state.error);
+
+  function fillFromSignature(domain: string, range: string): void {
+    setSourceType(domain);
+    setTargetType(range);
+    setResult({ status: 'idle' });
+  }
 
   async function run(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -456,26 +487,32 @@ function LinkValidateTool({ http, linkType, t }: LinkValidateToolProps) {
           <label className="field-label" htmlFor="graph-type-validate-source">
             {t('来源类型', 'Source type')}
           </label>
-          <input
+          <Combobox
             id="graph-type-validate-source"
-            className="input"
+            options={typeOptions}
             value={sourceType}
-            onChange={(event) => setSourceType(event.target.value)}
+            onChange={setSourceType}
+            allowFreeEntry
+            loading={types.state.status === 'loading'}
+            mono
             placeholder="ObjectType"
-            data-testid="graph-type-validate-source"
+            testId="graph-type-validate-source"
           />
         </div>
         <div className="field">
           <label className="field-label" htmlFor="graph-type-validate-target">
             {t('目标类型', 'Target type')}
           </label>
-          <input
+          <Combobox
             id="graph-type-validate-target"
-            className="input"
+            options={typeOptions}
             value={targetType}
-            onChange={(event) => setTargetType(event.target.value)}
+            onChange={setTargetType}
+            allowFreeEntry
+            loading={types.state.status === 'loading'}
+            mono
             placeholder="ObjectType"
-            data-testid="graph-type-validate-target"
+            testId="graph-type-validate-target"
           />
         </div>
         <Button
@@ -488,6 +525,45 @@ function LinkValidateTool({ http, linkType, t }: LinkValidateToolProps) {
           {t('校验', 'Validate')}
         </Button>
       </form>
+      {signatures.length > 1 ? (
+        <div className="row-wrap" data-testid="graph-type-validate-signatures">
+          <span className="text-3">
+            {t('按声明的签名填入：', 'Fill from a declared signature:')}
+          </span>
+          {signatures.map((signature) => (
+            <Button
+              key={`${signature.domain}->${signature.range}`}
+              variant="ghost"
+              size="s"
+              onClick={() => fillFromSignature(signature.domain, signature.range)}
+            >
+              {signature.domain} → {signature.range}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {typesRefused ? (
+        <p className="text-3" data-testid="graph-type-validate-types-refused">
+          {t(
+            '无权读取对象类型列表，请手动输入类型名。',
+            'Not allowed to read the object types — type the names instead.',
+          )}
+        </p>
+      ) : types.state.status === 'error' ? (
+        <ErrorBanner
+          error={types.state.error}
+          title={t('无法加载对象类型列表', 'Could not load the object types')}
+          onRetry={() => void types.reload()}
+          testId="graph-type-validate-types-error"
+        />
+      ) : types.state.status === 'ready' && objectTypes.length === 0 ? (
+        <p className="text-3" data-testid="graph-type-validate-types-empty">
+          {t(
+            '已发布的本体里还没有对象类型，请手动输入类型名。',
+            'The published ontology has no object type yet — type the names instead.',
+          )}
+        </p>
+      ) : null}
       {result.status === 'done' ? (
         <div data-testid="graph-type-validate-result">
           {result.valid ? (

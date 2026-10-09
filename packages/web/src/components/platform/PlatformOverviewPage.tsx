@@ -1,4 +1,5 @@
 import type {
+  GateInstanceWire,
   PlatformOverviewWire,
   PlatformStatusWire,
   PlatformWorkspaceWire,
@@ -78,8 +79,8 @@ function checklistDetail(
       return item.done
         ? t(`${counts.modelsAvailable} 个可用模型`, `${counts.modelsAvailable} model(s) available`)
         : t(
-            '还没有可用模型——请在主机上配置模型供应商',
-            'No model available yet — configure a provider on the host',
+            '还没有模型供应商——在控制台添加一个（DeepSeek、Anthropic、OpenAI 等），填上密钥即可',
+            'No model provider yet — add one in the console (DeepSeek, Anthropic, OpenAI, …); a key is all it needs',
           );
     case 'integrations':
       return item.done
@@ -181,6 +182,16 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   const overview = useCapability<PlatformOverviewWire>(http, 'platform_overview');
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
   const status = useCapability<PlatformStatusWire>(http, 'platform_status');
+  // Audit P0-4: gate instances discovered but never enabled are a decision only an administrator
+  // can make, so they belong in 需要人处理. A separate read like `list_workspaces` above: a failure
+  // just leaves them out of the list.
+  const gateInstances = useCapabilityList<GateInstanceWire>(
+    http,
+    'list_gate_instances',
+    DISCOVERED_GATE_INSTANCES,
+  );
+  const discoveredGates =
+    gateInstances.state.status === 'ready' ? gateInstances.state.data.items : [];
   const residue =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
@@ -237,6 +248,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           status={status}
           defaultWorkspaceRow={defaultWorkspaceRow}
           defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
+          discoveredGates={discoveredGates}
           nonResidueWorkspaceCount={nonResidueWorkspaceCount}
           onKeyBound={(result) => {
             onKeyBound?.(result);
@@ -249,12 +261,14 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
 }
 
 const RECENT_AUDIT_LIMIT = 5;
+const DISCOVERED_GATE_INSTANCES: Readonly<Record<string, unknown>> = { status: 'discovered' };
 
 function PlatformOverviewBody({
   data,
   status,
   defaultWorkspaceRow,
   defaultWorkspaceRowsReady,
+  discoveredGates,
   nonResidueWorkspaceCount,
   onKeyBound,
 }: {
@@ -262,6 +276,8 @@ function PlatformOverviewBody({
   readonly status: Resource<PlatformStatusWire>;
   readonly defaultWorkspaceRow: PlatformWorkspaceWire | undefined;
   readonly defaultWorkspaceRowsReady: boolean;
+  /** Gate instances that announced themselves but were never enabled (audit P0-4). */
+  readonly discoveredGates: readonly GateInstanceWire[];
   /** ui-audit O3 — `undefined` while `list_workspaces` is still loading; falls back to the
    *  kernel's raw `counts.workspaces` for that one frame (see this file's own module doc
    *  comment). */
@@ -269,7 +285,7 @@ function PlatformOverviewBody({
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
-  const attentionItems = buildAttentionItems(data, t);
+  const attentionItems = buildAttentionItems(data, discoveredGates, t);
   const recentAudit = data.recentAudit.slice(0, RECENT_AUDIT_LIMIT);
   return (
     <>
@@ -503,8 +519,22 @@ interface AttentionItem {
  *  or down service and a pending-activation user count are both already surfaced elsewhere on
  *  this page (the health chips, the checklist's `users` row) — this list exists to pull the ones
  *  that need a *decision*, not just a status, into one place. */
-function buildAttentionItems(data: PlatformOverviewWire, t: Translate): readonly AttentionItem[] {
+function buildAttentionItems(
+  data: PlatformOverviewWire,
+  discoveredGates: readonly GateInstanceWire[],
+  t: Translate,
+): readonly AttentionItem[] {
   const items: AttentionItem[] = [];
+  for (const gate of discoveredGates) {
+    items.push({
+      key: `gate-discovered-${gate.gateId}`,
+      title: t(
+        `门实例「${gate.displayName}」已发现，等待启用`,
+        `Gate instance "${gate.displayName}" was discovered and awaits enabling`,
+      ),
+      href: hrefs.platformGateInstance(gate.gateId),
+    });
+  }
   for (const entry of data.health) {
     if (entry.status !== 'degraded' && entry.status !== 'down') continue;
     items.push({
@@ -592,6 +622,18 @@ function CostCard({ status }: { readonly status: Resource<PlatformStatusWire> })
 }
 
 function checklistTrailing(item: ChecklistItem, t: Translate) {
+  // Audit P0-3: an undone 模型供应商 step opens 新增供应商 directly, named as what it does.
+  if (item.key === 'providers' && !item.done) {
+    return (
+      <a
+        href={hrefs.platformModelsNewProvider()}
+        className="inline-flex min-h-9 items-center"
+        data-testid="checklist-add-provider"
+      >
+        {t('添加供应商', 'Add a provider')}
+      </a>
+    );
+  }
   const href = CHECKLIST_LINKS[item.key];
   // S8 W1-A8 (audit S6): a bare `<a>` here rendered a 45×21 hit area, under the §5.9 principle-6
   // 36px floor. `inline-flex min-h-9 items-center` is the same already-generated Tailwind

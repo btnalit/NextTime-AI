@@ -259,7 +259,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
-    fireEvent.change(within(form).getByLabelText(/Manifest source/), {
+    fireEvent.change(within(form).getByLabelText(/清单来源/), {
       target: { value: 'https://billing.internal/openapi.json' },
     });
     expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(true);
@@ -312,9 +312,16 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     // Step 4: handshake.
     next();
     expect(launcher().getAttribute('data-step')).toBe('3');
-    fireEvent.click(screen.getByTestId('launcher-test-connection'));
+    // Entering the step runs the test once on its own; the button re-runs it.
     const result = await screen.findByTestId('launcher-test-result');
     expect(result.textContent).toContain('2');
+    expect(http.calls.filter((call) => call.name === 'test_gate_instance')).toHaveLength(1);
+    const retest = screen.getByTestId('launcher-test-connection');
+    expect(retest.textContent).toContain('重新测试');
+    fireEvent.click(retest);
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'test_gate_instance')).toHaveLength(2),
+    );
     expect(screen.getByTestId('launcher-handshake-health').textContent).toContain('健康');
     expect(screen.getByTestId('launcher-handshake-ok')).toBeTruthy();
     expect(screen.getByTestId('launcher-next').textContent).toBe('完成');
@@ -581,6 +588,38 @@ describe('ConnectSystemLauncher — packaged path (ssh / cli)', () => {
       ).toBe(true),
     );
     expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('normalizes the typed GATE_ID live, states the rule in plain words, and offers a copy button for the compose block', async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderLauncher({ http: scriptedHttp({}), origin: 'platform' });
+    fireEvent.click(screen.getByTestId('launcher-kind-cli'));
+    next();
+    const checklist = await screen.findByTestId('launcher-packaged-checklist');
+    const steps = within(checklist).getByTestId('packaged-gate-steps').textContent ?? '';
+    expect(steps).toContain('2–64 位小写字母、数字或连字符');
+    expect(steps).not.toContain('^[a-z0-9]');
+
+    const input = screen.getByLabelText(/它的/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Gatekeeper_Ops Host' } });
+    expect(input.value).toBe('gatekeeper-ops-host');
+    expect(screen.getByTestId('launcher-intended-gate-id-adjusted').textContent).toContain(
+      'gatekeeper-ops-host',
+    );
+    expect(within(checklist).getByTestId('packaged-gate-compose').textContent).toContain(
+      'GATE_ID: gatekeeper-ops-host',
+    );
+
+    // Still too short after normalization: the error says what a valid id looks like.
+    fireEvent.change(input, { target: { value: 'G' } });
+    expect(input.value).toBe('g');
+    expect(screen.getByText(/至少需要 2 个字符/)).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: 'gatekeeper-ops-host' } });
+    fireEvent.click(within(checklist).getByRole('button', { name: /compose 片段/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0]?.[0]).toContain('GATE_ID: gatekeeper-ops-host');
   });
 
   it('a non-admin on the workspace page is told the gate only appears after an administrator enables + presets it', async () => {

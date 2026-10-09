@@ -219,7 +219,7 @@ describe('OntologyTypesDrawer — list view', () => {
     render(<Harness http={http} />);
     const banner = await screen.findByTestId('graph-types-error');
     expect(banner.getAttribute('data-error-code')).toBe('internal_error');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await screen.findAllByTestId('graph-type-row');
   });
 });
@@ -268,14 +268,12 @@ describe('OntologyTypesDrawer — detail view', () => {
     fireEvent.click(linkRow as HTMLElement);
     await screen.findByTestId('graph-type-detail-signatures');
 
+    // Both ends start on the first declared signature, so the check runs with no typing.
+    const source = screen.getByTestId('graph-type-validate-source') as HTMLInputElement;
+    const target = screen.getByTestId('graph-type-validate-target') as HTMLInputElement;
+    expect(source.value).toBe('Container');
+    expect(target.value).toBe('Host');
     const submit = screen.getByTestId('graph-type-validate-submit') as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    fireEvent.change(screen.getByTestId('graph-type-validate-source'), {
-      target: { value: 'Container' },
-    });
-    fireEvent.change(screen.getByTestId('graph-type-validate-target'), {
-      target: { value: 'Host' },
-    });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
 
@@ -285,9 +283,22 @@ describe('OntologyTypesDrawer — detail view', () => {
       { link: { linkType: 'runs_on', sourceType: 'Container', targetType: 'Host' } },
     ]);
 
-    fireEvent.change(screen.getByTestId('graph-type-validate-target'), {
-      target: { value: 'Wat' },
-    });
+    // The ends are picked from the published ObjectTypes (list_types, served from the list
+    // view's read) ...
+    fireEvent.change(source, { target: { value: '' } });
+    expect(submit.disabled).toBe(true);
+    expect(source.getAttribute('aria-expanded')).toBe('true');
+    const options = within(screen.getByRole('listbox')).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual(['HostA machine']);
+    fireEvent.click(options[0] as HTMLElement);
+    expect(source.value).toBe('Host');
+    // ... or filled from another declared signature in one click.
+    fireEvent.click(screen.getByRole('button', { name: 'WorkerRun → Host' }));
+    expect(source.value).toBe('WorkerRun');
+    expect(target.value).toBe('Host');
+
+    // Free entry stays: an undeclared type is a fair question to ask.
+    fireEvent.change(target, { target: { value: 'Wat' } });
     fireEvent.click(submit);
     const failed = await waitFor(() => {
       const el = screen.getByTestId('graph-type-validate-result');
@@ -295,6 +306,53 @@ describe('OntologyTypesDrawer — detail view', () => {
       return el;
     });
     expect(failed.textContent).toContain('unexpected pair');
+  });
+
+  it('a refused type list leaves the validator on typed names with a one-line note; a failed one offers a retry', async () => {
+    function renderDetail(http: ScriptedHttp) {
+      render(
+        <OntologyTypesDrawer
+          http={http}
+          open
+          activeTab="types"
+          onTabChange={() => undefined}
+          selectedTypeName="runs_on"
+          selectedProposal={undefined}
+          onOpenChange={() => undefined}
+          onSelectType={() => undefined}
+          onSelectProposal={() => undefined}
+        />,
+      );
+    }
+    renderDetail(
+      typesHttp({
+        list_types: () => {
+          throw new HttpError('capability_error', 'nope', 'forbidden');
+        },
+      }),
+    );
+    expect(await screen.findByTestId('graph-type-validate-types-refused')).toBeTruthy();
+    expect(screen.queryByTestId('graph-type-validate-types-error')).toBeNull();
+    const source = screen.getByTestId('graph-type-validate-source') as HTMLInputElement;
+    fireEvent.change(source, { target: { value: 'Typed' } });
+    expect(source.value).toBe('Typed');
+    cleanup();
+
+    let attempts = 0;
+    renderDetail(
+      typesHttp({
+        list_types: () => {
+          attempts += 1;
+          if (attempts === 1) throw new HttpError('capability_error', 'boom', 'internal_error');
+          return { items: TYPES };
+        },
+      }),
+    );
+    const banner = await screen.findByTestId('graph-type-validate-types-error');
+    fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(screen.queryByTestId('graph-type-validate-types-error')).toBeNull());
+    fireEvent.click(screen.getByTestId('graph-type-validate-target'));
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(1);
   });
 
   it('opens an ActionType row and shows mode / blast radius / flags', async () => {
@@ -335,7 +393,7 @@ describe('OntologyTypesDrawer — detail view', () => {
     fireEvent.click(rows[0] as HTMLElement);
     const banner = await screen.findByTestId('graph-type-detail-error');
     expect(banner.getAttribute('data-error-code')).toBe('forbidden');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await waitFor(() => expect(screen.queryByTestId('graph-type-detail-error')).toBeNull());
     await screen.findByTestId('graph-type-detail-body');
   });
@@ -381,7 +439,7 @@ describe('OntologyTypesDrawer — Proposals list view', () => {
     render(<Harness http={http} startTab="proposals" />);
     const banner = await screen.findByTestId('graph-proposals-error');
     expect(banner.getAttribute('data-error-code')).toBe('internal_error');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await screen.findAllByTestId('graph-proposal-row');
   });
 });

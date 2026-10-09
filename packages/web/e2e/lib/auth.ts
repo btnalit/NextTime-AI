@@ -41,7 +41,7 @@ export async function loginAsAdmin(
   initialPassword: string = ADMIN_INITIAL_PASSWORD as string,
 ): Promise<void> {
   const changedPassword = `${initialPassword}-changed`;
-  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
+  const changePasswordHeading = page.getByTestId('change-password-title');
   const shell = page.getByTestId('nav-platformWorkspaces');
   const badCredentials = page.getByText('登录名或密码不正确');
 
@@ -54,7 +54,7 @@ export async function loginAsAdmin(
 
   if (await badCredentials.isVisible().catch(() => false)) {
     await page.locator('#login-password').fill(changedPassword);
-    await page.getByRole('button', { name: '登录' }).click();
+    await page.getByTestId('login-submit').click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
@@ -64,7 +64,7 @@ export async function loginAsAdmin(
     await page.locator('#cp-current-password').fill(initialPassword);
     await page.locator('#cp-new-password').fill(changedPassword);
     await page.locator('#cp-confirm-password').fill(changedPassword);
-    await page.getByRole('button', { name: /更改密码/ }).click();
+    await page.getByTestId('change-password-submit').click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });

@@ -56,8 +56,8 @@ export function TemporaryPasswordDialog({
       <div className="stack">
         <Notice tone="warn">
           {t(
-            '只显示这一次，关闭后无法再看到；对方首次登录时必须修改。 Shown once —',
-            'copy it now and hand it over; the console never displays it again and the user must change it on first login.',
+            '只显示这一次，关闭后无法再看到；请现在复制并交给对方，对方首次登录时必须修改。',
+            'Shown once — copy it now and hand it over; the console never displays it again, and the user must change it on first login.',
           )}
         </Notice>
         <div className="code-block row" style={{ justifyContent: 'space-between' }}>
@@ -74,7 +74,7 @@ export function TemporaryPasswordDialog({
           </Button>
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="primary" onClick={onClose}>
+          <Button variant="primary" onClick={onClose} data-testid="temporary-password-ack">
             {t('我已保存', 'I have saved it')}
           </Button>
         </div>

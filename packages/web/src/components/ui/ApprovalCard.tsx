@@ -188,8 +188,8 @@ export function ApprovalCard({
             hint={
               required
                 ? t(
-                    '高影响：批准必须说明理由，进审计。 High impact —',
-                    'approval needs a reason; it is audited.',
+                    '高影响操作：批准时必须说明理由，理由会记入审计。',
+                    'High-impact action: approving requires a reason, and it is recorded in the audit log.',
                   )
                 : t('可选；拒绝或批准时一并记入审计。', 'Optional; recorded with the decision.')
             }

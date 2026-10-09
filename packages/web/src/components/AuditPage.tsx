@@ -1,4 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { AuditIdPicker } from '../lib/audit-id-picker.js';
+import { objectSource } from '../lib/audit-pickers.js';
 import {
   type AuditEntry,
   type AuditFilter,
@@ -21,7 +23,6 @@ import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input } from './ui/Field.js';
 
 export interface AuditPageProps {
   readonly http: CapabilityCaller;
@@ -136,6 +137,9 @@ const IDLE: LookupState = { busy: false, error: null, result: null };
 function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const [entityId, setEntityId] = useState('');
+  // Graph Objects to pick from (`search`, member + auditor): the most recently updated ones, or
+  // the ones matching what the reader types.
+  const source = useMemo(() => objectSource(), []);
   const [state, setState] = useState<LookupState>(IDLE);
   const forbidden = state.error !== null && isForbiddenError(state.error);
 
@@ -162,22 +166,21 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
         onSubmit={(event) => void handleSubmit(event)}
         data-testid="reconstruct-form"
       >
-        <Field
+        <AuditIdPicker
+          http={http}
           id="reconstruct-entity-id"
           label={t('实体 id', 'Entity id')}
           hint={t(
-            '图对象 id：从审计记录重建其历史。',
-            'A graph Object id — its history rebuilt from the audit records.',
+            '图对象 id：从审计记录重建其历史。输入名称可搜索对象。',
+            'A graph Object id — its history rebuilt from the audit records. Type a name to search Objects.',
           )}
-        >
-          <Input
-            id="reconstruct-entity-id"
-            value={entityId}
-            onChange={(event) => setEntityId(event.target.value)}
-            disabled={state.busy}
-            mono
-          />
-        </Field>
+          value={entityId}
+          onChange={setEntityId}
+          source={source}
+          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          disabled={state.busy}
+          testId="reconstruct-entity-id"
+        />
         <Button type="submit" variant="secondary" loading={state.busy} disabled={!entityId.trim()}>
           {t('重建', 'Reconstruct')}
         </Button>

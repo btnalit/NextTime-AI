@@ -223,6 +223,8 @@ export const hrefs = {
   platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
+  /** 模型与供应商 with the 新增供应商 drawer already open (the overview's first-run step). */
+  platformModelsNewProvider: () => '#/platform/models?new=provider',
   platformSettings: () => '#/platform/settings',
   platformRuntime: () => '#/platform/runtime',
   platformStatus: () => '#/platform/status',
@@ -232,4 +234,11 @@ export const hrefs = {
 
 export function navigate(href: string): void {
   window.location.hash = href;
+}
+
+/** True when the hash asks 模型与供应商 to open 新增供应商 (`hrefs.platformModelsNewProvider`). */
+export function readNewProviderPreset(hash: string): boolean {
+  const query = hash.indexOf('?');
+  if (query === -1) return false;
+  return new URLSearchParams(hash.slice(query + 1)).get('new') === 'provider';
 }

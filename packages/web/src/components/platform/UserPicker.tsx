@@ -111,6 +111,7 @@ export function UserPicker({
           onClick={applyQuery}
           disabled={disabled}
           loading={loading}
+          data-testid={`${id}-search`}
         >
           {t('搜索', 'Search')}
         </Button>

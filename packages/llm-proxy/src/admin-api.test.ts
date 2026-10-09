@@ -1286,3 +1286,56 @@ describe('admin API — upstream base URL must be a bare http(s) base', () => {
     expect(JSON.stringify(list.body)).toContain('"legacy"');
   });
 });
+
+describe('admin API — POST /model-probe', () => {
+  const PROBE = {
+    id: 'acme',
+    api: 'openai-completions',
+    upstreamBaseUrl: 'https://acme.example.invalid',
+    authHeader: 'authorization',
+  } as const;
+
+  it('tests each picked model with the typed key before the provider exists; nothing is stored', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: await h.adminHeaders(),
+      body: { ...PROBE, key: 'sk-typed', models: ['acme-large', 'acme-small', 'acme-large'] },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      credentialSource: 'inline',
+      results: [
+        { model: 'acme-large', completion: 'ok', toolCall: 'ok', error: null },
+        { model: 'acme-small', completion: 'ok', toolCall: 'ok', error: null },
+      ],
+    });
+    expect(h.testRuns.map((r) => [r.model, r.realKey]).sort()).toEqual([
+      ['acme-large', 'sk-typed'],
+      ['acme-small', 'sk-typed'],
+    ]);
+    expect(h.store.entries()).toEqual([]);
+    expect(h.kernelEvents.map((e) => e.action)).toEqual(['provider_models_probed']);
+    expect(JSON.stringify(h.kernelEvents)).not.toContain('sk-typed');
+  });
+
+  it('follows the same credential and base-URL rules as model discovery', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    const noKey = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: admin,
+      body: { ...PROBE, models: ['m'] },
+    });
+    expect(noKey.status).toBe(409);
+    const ssrf = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: admin,
+      body: { ...PROBE, upstreamBaseUrl: 'http://h.example.invalid/x#', key: 'k', models: ['m'] },
+    });
+    expect(ssrf.status).toBe(400);
+    const tooMany = await request(h.port, 'POST', '/admin/model-probe', {
+      headers: admin,
+      body: { ...PROBE, key: 'k', models: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+    });
+    expect(tooMany.status).toBe(400);
+    expect(h.testRuns).toEqual([]);
+  });
+});

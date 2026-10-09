@@ -1,5 +1,6 @@
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 
 /**
  * lib/platform-errors: the platform plane's stable wire codes → the bilingual one-liner the
@@ -55,8 +56,8 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     en: 'Password is shorter than the platform minimum',
   },
   invalid_login: {
-    zh: '登录名格式不合法',
-    en: 'Invalid login — 3–64 chars of a-z 0-9 . _ -',
+    zh: '登录名不合法：3–64 个字符，只能用小写字母、数字和 . _ -',
+    en: 'Invalid login — 3–64 characters of a-z 0-9 . _ -, e.g. alice',
   },
   workspace_disabled: { zh: '该工作区已停用', en: 'That workspace is disabled' },
   // P-A2 (workspace configuration): the four codes the workspace capabilities add.
@@ -181,7 +182,7 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
 export function platformErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   if (err.code === undefined) return null;
-  const entry = err.code !== undefined ? PLATFORM_ERROR_MESSAGES[err.code] : undefined;
+  const entry = err.code !== undefined ? ownEntry(PLATFORM_ERROR_MESSAGES, err.code) : undefined;
   return entry ? t(entry.zh, entry.en) : null;
 }
 

@@ -68,7 +68,6 @@ function renderPanel(
     <UserDetailPanel
       http={http}
       user={row}
-      users={[row, user({ id: 'u-2', login: 'bob', displayName: 'Bob' })]}
       envAdmins={[]}
       onChanged={onChanged}
       onMerged={onMerged}
@@ -125,13 +124,47 @@ describe('UserDetailPanel', () => {
     const { onChanged } = renderPanel(http, row);
     const save = screen.getByRole('button', { name: '保存预算' });
     fireEvent.change(screen.getByLabelText(/每日调用上限/), { target: { value: '-1' } });
-    expect(screen.getByText(/必须是非负整数/)).toBeTruthy();
+    expect(screen.getByText(/不是有效的预算：请填不小于 0 的整数/)).toBeTruthy();
     expect(save.hasAttribute('disabled')).toBe(true);
     fireEvent.change(screen.getByLabelText(/每日调用上限/), { target: { value: '20' } });
     fireEvent.change(screen.getByLabelText(/每月 token 预算/), { target: { value: '' } });
     expect(save.hasAttribute('disabled')).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    // Success feedback, cleared by the next edit.
+    expect(await screen.findByTestId('user-budget-saved')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/每日调用上限/), { target: { value: '21' } });
+    expect(screen.queryByTestId('user-budget-saved')).toBeNull();
+  });
+
+  it('budget: accepts thousands separators and saves the plain number', async () => {
+    const row = user();
+    const http = scriptedHttp({
+      set_user_budget: (params) => {
+        expect(params).toEqual({ userId: 'u-1', dailyCallLimit: 20, monthlyTokenBudget: 1000000 });
+        return { ...row, dailyCallLimit: 20, monthlyTokenBudget: 1000000 };
+      },
+    });
+    renderPanel(http, row);
+    fireEvent.change(screen.getByLabelText(/每日调用上限/), { target: { value: '20' } });
+    fireEvent.change(screen.getByLabelText(/每月 token 预算/), {
+      target: { value: '1,000,000' },
+    });
+    expect(screen.queryByText(/不是有效的预算/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '保存预算' }));
+    await screen.findByTestId('user-budget-saved');
+    expect((screen.getByLabelText(/每月 token 预算/) as HTMLInputElement).value).toBe('1000000');
+  });
+
+  it('profile: shows 已保存 after update_user lands', async () => {
+    const row = user();
+    const http = scriptedHttp({
+      update_user: () => ({ ...row, displayName: 'Alice B' }),
+    });
+    renderPanel(http, row);
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Alice B' } });
+    fireEvent.click(screen.getAllByRole('button', { name: '保存' })[0] as HTMLElement);
+    expect(await screen.findByTestId('user-profile-saved')).toBeTruthy();
   });
 
   it('reset password: posts reset_user_password (custom password only when typed) and hands the secret up', async () => {
@@ -206,12 +239,6 @@ describe('UserDetailPanel', () => {
   });
 
   it('R-45: merging a pending user is an irreversible confirm — retype the target login; the impact lists every membership that moves', async () => {
-    const http = scriptedHttp({
-      merge_user: (params) => {
-        expect(params).toEqual({ sourceUserId: 'u-1', targetUserId: 'u-2' });
-        return user({ id: 'u-2' });
-      },
-    });
     const source = user({
       hasPassword: false,
       memberships: [
@@ -233,19 +260,30 @@ describe('UserDetailPanel', () => {
         },
       ],
     });
-    const { onMerged } = renderPanel(http, source, {
-      users: [
-        source,
-        user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
-        user({ id: 'u-3', login: 'carol', displayName: 'Carol', status: 'disabled' }),
-      ],
+    const http = scriptedHttp({
+      // The merge picker reads the whole directory (`UserPicker` → `list_users`), not just the
+      // users page's loaded rows.
+      list_users: () => ({
+        items: [
+          source,
+          user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
+          user({ id: 'u-3', login: 'carol', displayName: 'Carol', status: 'disabled' }),
+        ],
+      }),
+      merge_user: (params) => {
+        expect(params).toEqual({ sourceUserId: 'u-1', targetUserId: 'u-2' });
+        return user({ id: 'u-2' });
+      },
     });
+    const { onMerged } = renderPanel(http, source);
     expect(screen.getByTestId('user-detail-status').textContent).toBe('待激活');
     const merge = screen.getByRole('button', { name: '合并' });
     expect(merge.hasAttribute('disabled')).toBe(true);
     const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
     // Neither the source itself nor a disabled account is offered as a target.
-    expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-2']);
+    await waitFor(() =>
+      expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-2']),
+    );
     fireEvent.change(target, { target: { value: 'u-2' } });
     fireEvent.click(merge);
 
@@ -255,7 +293,7 @@ describe('UserDetailPanel', () => {
     expect(impact).toContain('Acme');
     expect(impact).toContain('Beta');
     expect(impact).toContain('→ bob');
-    expect(http.calls).toHaveLength(0);
+    expect(http.calls.filter((call) => call.name === 'merge_user')).toHaveLength(0);
 
     const button = within(confirm).getByTestId('confirm-button');
     fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
@@ -270,5 +308,54 @@ describe('UserDetailPanel', () => {
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
     await waitFor(() => expect(onMerged).toHaveBeenCalledTimes(1));
+  });
+
+  it('merge picker: searches the whole directory and ranks accounts with the same display name first', async () => {
+    const source = user({
+      id: 'u-9',
+      login: 'alice.pending',
+      displayName: 'Alice',
+      hasPassword: false,
+    });
+    const http = scriptedHttp({
+      list_users: (params) => {
+        const query = (params as { query?: string }).query;
+        if (query === 'zed')
+          return { items: [user({ id: 'u-7', login: 'zed', displayName: 'Zed' })] };
+        return {
+          items: [
+            user({ id: 'u-2', login: 'bob', displayName: 'Bob' }),
+            user({ id: 'u-3', login: 'carol', displayName: 'Carol' }),
+            user({ id: 'u-1', login: 'alice', displayName: ' alice ' }),
+            // Not yet activated: never a merge target.
+            user({ id: 'u-4', login: 'alice2', displayName: 'Alice', hasPassword: false }),
+          ],
+        };
+      },
+    });
+    renderPanel(http, source);
+    const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(target.options).map((option) => option.value)).toEqual([
+        '',
+        'u-1',
+        'u-2',
+        'u-3',
+      ]),
+    );
+    expect(screen.getByTestId('user-merge-same-name').textContent).toContain('alice');
+    expect(screen.getByTestId('user-merge-same-name').textContent).not.toContain('alice2');
+
+    // A user outside the first page is one search away.
+    fireEvent.change(screen.getByLabelText(/按登录名搜索/), { target: { value: 'zed' } });
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }));
+    await waitFor(() =>
+      expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-7']),
+    );
+    fireEvent.change(target, { target: { value: 'u-7' } });
+    expect(screen.getByRole('button', { name: '合并' }).hasAttribute('disabled')).toBe(false);
+    expect(http.calls.some((call) => (call.params as { query?: string })?.query === 'zed')).toBe(
+      true,
+    );
   });
 });

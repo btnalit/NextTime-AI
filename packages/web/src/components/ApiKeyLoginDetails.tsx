@@ -43,13 +43,22 @@ export function ApiKeyLoginDetails({
 
   return (
     <details className="api-key-login">
-      <summary>{t('用 API key 登录', 'Use an API key instead')}</summary>
+      <summary data-testid="api-key-login-toggle">
+        {t('用 API key 登录', 'Use an API key instead')}
+      </summary>
       <form className="stack" onSubmit={handleSubmit} noValidate>
         <Field
           id="api-key"
           label="API key"
           required
-          error={unauthorized ? 'This key was not accepted by the kernel.' : null}
+          error={
+            unauthorized
+              ? t(
+                  '这把 key 没有被接受：请确认复制完整、没有多余空格，并且这把 key 还没有被吊销。',
+                  'This key was not accepted — check it was copied completely, without extra spaces, and has not been revoked.',
+                )
+              : null
+          }
         >
           <div className="input-group">
             <Input
@@ -88,8 +97,9 @@ export function ApiKeyLoginDetails({
           variant="primary"
           loading={pending}
           disabled={apiKey.trim().length === 0}
+          data-testid="api-key-login-submit"
         >
-          Sign in
+          {t('用这把 key 登录', 'Sign in with this key')}
         </Button>
 
         <p className="login-footer">

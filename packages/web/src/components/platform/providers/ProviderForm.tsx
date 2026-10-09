@@ -3,8 +3,10 @@ import type {
   LlmProviderAuthHeaderWire,
   LlmProviderInputWire,
   LlmProviderModelDiscoveryResultWire,
+  LlmProviderModelProbeOutcomeWire,
   LlmProviderWire,
 } from '@nexttime/shared';
+import { LLM_PROVIDER_PROBE_MAX_MODELS } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useT } from '../../../lib/i18n.js';
 import {
@@ -22,6 +24,7 @@ import {
   isHttpUrl,
   normalizeBaseUrl,
   normalizeEnvName,
+  presetForBaseUrl,
   providerIdFromUrl,
   providerIdProblem,
   slugifyProviderId,
@@ -44,7 +47,7 @@ export interface ProviderFormProps {
   /** Editing an existing row (id locked) or creating a new one. */
   readonly initial?: LlmProviderWire;
   /** For 「从供应商获取模型」. */
-  readonly client: Pick<LlmAdminClient, 'discoverModels'>;
+  readonly client: Pick<LlmAdminClient, 'discoverModels' | 'probeModels'>;
   /** Ids already taken — a create form flags a clash before the round trip. */
   readonly existingIds?: readonly string[];
   readonly onSubmit: (input: LlmProviderInputWire, extras: ProviderFormExtras) => Promise<void>;
@@ -92,6 +95,13 @@ type Discovery =
       /** The (api, base URL, header, credential) the list was fetched for. */
       readonly fingerprint: string;
     }
+  | { readonly status: 'error'; readonly error: unknown };
+
+/** One model's 「验证」 state, keyed by `${fingerprint}|${modelId}` so a changed address or key
+ *  hides results that no longer apply. */
+type Probe =
+  | { readonly status: 'loading' }
+  | { readonly status: 'done'; readonly outcome: LlmProviderModelProbeOutcomeWire }
   | { readonly status: 'error'; readonly error: unknown };
 
 /** A short marker for "which credential" without keeping a second copy of the key around. */
@@ -160,13 +170,15 @@ export function ProviderForm({
   );
   const nextKey = useRef(models.length);
   const [discovery, setDiscovery] = useState<Discovery>({ status: 'idle' });
+  const [probes, setProbes] = useState<Readonly<Record<string, Probe>>>({});
   const [filter, setFilter] = useState('');
   const [testAfterSave, setTestAfterSave] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  const preset: ProviderPreset | undefined = PROVIDER_PRESETS.find((p) => p.key === presetKey);
   const normalizedBase = normalizeBaseUrl(baseUrl).value;
+  const preset: ProviderPreset | undefined =
+    PROVIDER_PRESETS.find((p) => p.key === presetKey) ?? presetForBaseUrl(normalizedBase);
   const urlValid = isHttpUrl(normalizedBase);
   const apiPath = API_KINDS.find((kind) => kind.value === api)?.path ?? '/v1';
 
@@ -270,6 +282,8 @@ export function ProviderForm({
   }
 
   function toggleDiscovered(modelId: string, name: string | null): void {
+    const ticking = !models.some((row) => row.id.trim() === modelId);
+    if (ticking && !probeFor(modelId)) void probe([modelId]);
     setModels((rows) => {
       if (rows.some((row) => row.id.trim() === modelId)) {
         return rows.filter((row) => row.id.trim() !== modelId);
@@ -288,6 +302,56 @@ export function ProviderForm({
     setModels((rows) => rows.map((row) => (row.key === rowKey ? { ...row, ...patch } : row)));
   }
 
+  /** The upstream + credential fields `/model-discovery` and `/model-probe` share. */
+  function upstreamRequest() {
+    return {
+      id: idTrimmed.length > 0 && !providerIdProblem(idTrimmed, t) ? idTrimmed : 'new-provider',
+      api,
+      upstreamBaseUrl: normalizedBase,
+      authHeader,
+      ...(hasTypedKey ? { key: key.trim() } : {}),
+      ...(!hasTypedKey && apiKeyEnv.length > 0 && !envProblem ? { apiKeyEnv } : {}),
+    };
+  }
+
+  /** Runs the provider test (completion + tool call) against `ids` with the form's own upstream
+   *  and credential — automatically when a model is ticked or typed, or for every picked model
+   *  from 「验证所选模型」. */
+  async function probe(ids: readonly string[]): Promise<void> {
+    const wanted = [...new Set(ids.map((v) => v.trim()).filter((v) => v.length > 0))].slice(
+      0,
+      LLM_PROVIDER_PROBE_MAX_MODELS,
+    );
+    if (!canDiscover || wanted.length === 0) return;
+    const requestFingerprint = fingerprint;
+    setProbes((prev) => {
+      const next = { ...prev };
+      for (const model of wanted) next[`${requestFingerprint}|${model}`] = { status: 'loading' };
+      return next;
+    });
+    try {
+      const result = await client.probeModels({ ...upstreamRequest(), models: wanted });
+      setProbes((prev) => {
+        const next = { ...prev };
+        for (const outcome of result.results) {
+          next[`${requestFingerprint}|${outcome.model}`] = { status: 'done', outcome };
+        }
+        return next;
+      });
+    } catch (err) {
+      setProbes((prev) => {
+        const next = { ...prev };
+        for (const model of wanted)
+          next[`${requestFingerprint}|${model}`] = { status: 'error', error: err };
+        return next;
+      });
+    }
+  }
+
+  function probeFor(modelId: string): Probe | undefined {
+    return probes[`${fingerprint}|${modelId.trim()}`];
+  }
+
   async function discover(): Promise<void> {
     if (!canDiscover) return;
     const base = normalizeBaseUrl(baseUrl).value;
@@ -295,14 +359,7 @@ export function ProviderForm({
     const requestFingerprint = fingerprint;
     setDiscovery({ status: 'loading' });
     try {
-      const result = await client.discoverModels({
-        id: idTrimmed.length > 0 && !providerIdProblem(idTrimmed, t) ? idTrimmed : 'new-provider',
-        api,
-        upstreamBaseUrl: base,
-        authHeader,
-        ...(hasTypedKey ? { key: key.trim() } : {}),
-        ...(!hasTypedKey && apiKeyEnv.length > 0 && !envProblem ? { apiKeyEnv } : {}),
-      });
+      const result = await client.discoverModels({ ...upstreamRequest(), upstreamBaseUrl: base });
       setDiscovery({ status: 'ready', result, fingerprint: requestFingerprint });
       setFilter('');
       if (result.models.length > 0 && result.models.length <= 3 && modelIds.length === 0) {
@@ -315,6 +372,7 @@ export function ProviderForm({
             return { key: rowKey, id: model.id, displayName: model.displayName ?? '' };
           }),
         );
+        void probe(result.models.map((model) => model.id));
       }
     } catch (err) {
       setDiscovery({ status: 'error', error: err });
@@ -704,6 +762,35 @@ export function ProviderForm({
           </div>
         ) : null}
 
+        {(discoveryError !== null || (discovered && discovered.length === 0)) &&
+        preset &&
+        preset.suggestedModels.length > 0 ? (
+          <div className="provider-model-picker" data-testid="provider-model-suggestions">
+            <span className="text-small text-2">
+              {t(
+                `${preset.displayName} 的常用模型（预设建议，未用你的密钥核验——勾选后会自动验证）：`,
+                `Common ${preset.displayName} models (suggestions, not checked with your key — ticking one checks it):`,
+              )}
+            </span>
+            <ul className="provider-model-options">
+              {preset.suggestedModels.map((modelId) => (
+                <li key={modelId}>
+                  <label className="provider-model-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedSet.has(modelId)}
+                      onChange={() => toggleDiscovered(modelId, null)}
+                      disabled={submitting}
+                      data-testid="provider-model-suggestion"
+                    />
+                    <span className="mono">{modelId}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {discovered && discovered.length > 0 ? (
           <div className="provider-model-picker" data-testid="provider-model-picker">
             {discovered.length > 8 ? (
@@ -749,9 +836,28 @@ export function ProviderForm({
 
         <div className="stack-s">
           {modelIds.length > 0 ? (
-            <span className="text-small text-2">
-              {t(`已选 ${modelIds.length} 个模型`, `${modelIds.length} selected`)}
-            </span>
+            <div className="row-wrap">
+              <span className="text-small text-2">
+                {t(`已选 ${modelIds.length} 个模型`, `${modelIds.length} selected`)}
+              </span>
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => void probe(modelIds)}
+                disabled={!canDiscover || modelIds.some((m) => probeFor(m)?.status === 'loading')}
+                data-testid="provider-probe-selected"
+              >
+                {t('验证所选模型', 'Check the picked models')}
+              </Button>
+              <span className="text-small text-3">
+                {canDiscover
+                  ? t(
+                      `每个模型测一次对话和一次工具调用（一次至多 ${LLM_PROVIDER_PROBE_MAX_MODELS} 个），不保存任何东西。`,
+                      `One chat and one tool call per model (up to ${LLM_PROVIDER_PROBE_MAX_MODELS} at a time); nothing is saved.`,
+                    )
+                  : t('填写 API 密钥后可验证。', 'Enter the API key to check them.')}
+              </span>
+            </div>
           ) : null}
           {models.map((row, index) => {
             const trimmed = row.id.trim();
@@ -765,7 +871,10 @@ export function ProviderForm({
                     aria-label={t(`模型 ${index + 1} 的 id`, `Model ${index + 1} id`)}
                     value={row.id}
                     onChange={(event) => updateModel(row.key, { id: event.target.value })}
-                    onBlur={() => updateModel(row.key, { id: row.id.trim() })}
+                    onBlur={() => {
+                      updateModel(row.key, { id: row.id.trim() });
+                      if (trimmed.length > 0 && !probeFor(trimmed)) void probe([trimmed]);
+                    }}
                     disabled={submitting}
                     mono
                     placeholder={t('模型 id，如 deepseek-chat', 'model id, e.g. deepseek-chat')}
@@ -792,17 +901,18 @@ export function ProviderForm({
                 </div>
                 {duplicate ? (
                   <p className="field-error">{t('这个 id 重复了', 'Duplicate id')}</p>
-                ) : unlisted ? (
+                ) : unlisted && probeFor(trimmed)?.status !== 'done' ? (
                   <p
                     className="field-hint provider-model-unlisted"
                     data-testid="provider-model-unlisted"
                   >
                     {t(
-                      '供应商的模型列表里没有这个 id——检查拼写；中转的别名可以保留，保存后用「测试」确认。',
-                      'Not in the provider’s list — check the spelling; a relay alias may still work, confirm with Test after saving.',
+                      '供应商的模型列表里没有这个 id——检查拼写；中转的别名可以保留，验证一下就知道能不能用。',
+                      'Not in the provider’s list — check the spelling; a relay alias may still work, check it to find out.',
                     )}
                   </p>
                 ) : null}
+                {trimmed.length > 0 ? <ModelProbeStatus probe={probeFor(trimmed)} /> : null}
               </div>
             );
           })}
@@ -926,5 +1036,69 @@ export function ProviderForm({
         ) : null}
       </div>
     </form>
+  );
+}
+
+/** One model's 「验证」 result under its row: checking, usable, chat only, or failed with the
+ *  likely cause (lib/provider-form.ts `explainUpstreamError`) and the raw error folded away. */
+function ModelProbeStatus({ probe }: { readonly probe: Probe | undefined }) {
+  const t = useT();
+  if (!probe) return null;
+  if (probe.status === 'loading') {
+    return (
+      <p className="field-hint" data-testid="provider-model-probe" data-state="loading">
+        {t('验证中：测一次对话和一次工具调用…', 'Checking: one chat and one tool call…')}
+      </p>
+    );
+  }
+  if (probe.status === 'error') {
+    const message =
+      llmAdminErrorMessage(probe.error, t) ??
+      (probe.error instanceof Error ? probe.error.message : String(probe.error));
+    return (
+      <p className="field-error" data-testid="provider-model-probe" data-state="error">
+        {t(`没能验证：${message}`, `Could not check: ${message}`)}
+      </p>
+    );
+  }
+  const { outcome } = probe;
+  const verdict =
+    outcome.completion === 'ok' && outcome.toolCall === 'ok'
+      ? 'ok'
+      : outcome.completion === 'ok'
+        ? 'chat-only'
+        : 'failed';
+  const explanation = explainUpstreamError(
+    outcome.error,
+    t,
+    outcome.completion === 'ok' ? 'tool_call' : 'completion',
+  );
+  return (
+    <div
+      className={`provider-model-probe provider-model-probe-${verdict}`}
+      data-testid="provider-model-probe"
+      data-state={verdict}
+    >
+      <span>
+        {verdict === 'ok'
+          ? t(
+              `✓ 可用：对话和工具调用都通过（${outcome.latencyMs} ms）`,
+              `✓ Usable: chat and tool calling both work (${outcome.latencyMs} ms)`,
+            )
+          : verdict === 'chat-only'
+            ? t(
+                '! 只能对话：工具调用失败，Worker 和门工具用不了它',
+                '! Chat only: tool calling failed, so Workers and gate tools cannot use it',
+              )
+            : t('✗ 调用失败', '✗ The call failed')}
+      </span>
+      {explanation ? <span className="text-2">{explanation}</span> : null}
+      {outcome.error ? (
+        <details className="text-3">
+          <summary>{t('原始错误', 'Raw error')}</summary>
+          <span className="mono">{outcome.error}</span>
+        </details>
+      ) : null}
+    </div>
   );
 }

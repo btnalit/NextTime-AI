@@ -171,8 +171,8 @@ test.describe('Journey ④: 追溯"agent 为什么这么说"', () => {
     // `page.request.post`, which shares the browser's cookies, never the app's own client-side
     // API-key storage (see this file's own header comment).
     const { ownerLogin, ownerTemporaryPassword } = await createFreshWorkspace(page);
-    await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
+    await page.getByTestId('sign-out').click();
+    await expect(page.getByTestId('login-submit')).toBeVisible();
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     await selectOwnedWorkspace(page);
     await expect(page.getByTestId('nav-chats')).toBeVisible();

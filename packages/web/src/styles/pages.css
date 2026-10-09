@@ -1351,6 +1351,27 @@
   background: var(--danger-soft);
 }
 
+.provider-model-probe {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--border);
+  font-size: var(--fs-12);
+}
+
+.provider-model-probe-ok {
+  border-left-color: var(--ok);
+}
+
+.provider-model-probe-chat-only {
+  border-left-color: var(--warn);
+}
+
+.provider-model-probe-failed {
+  border-left-color: var(--danger);
+}
+
 .provider-test-verdict strong {
   display: block;
 }

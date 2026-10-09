@@ -1,8 +1,11 @@
 import type { PlatformAuditRecordWire, UserWire } from '@nexttime/shared';
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useDebounced } from '../../lib/audit-id-picker.js';
+import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
 import { isReadAuditAction } from '../../lib/audit.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { isForbiddenError } from '../../lib/errors.js';
 import {
   formatAuditActor,
   formatDateTime,
@@ -29,6 +32,7 @@ interface AppliedFilters {
 }
 
 const PAGE_SIZE = 50;
+const USER_SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * components/platform/PlatformAuditPage: 平台审计 Platform audit (`/platform/audit`, design doc
@@ -65,14 +69,32 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   // S8 W4-A (ui-audit AU1 "平台审计页停止要求裸 UUID 输入"): a `<select>` over `list_users` when
   // readable — same degrade-to-text-input convention `AuditLogSection`'s own actor filter already
   // uses when `list_principals` is refused (`principalsUnavailable`).
-  const users = useCapabilityList<UserWire>(http, 'list_users', {});
+  // Field-inventory §11: the actor `<select>` used to hold only `list_users`'s first page (50).
+  // Typing in the search box re-asks `list_users{query}` (login or display name, kernel-side), so
+  // any user is reachable. An empty box is the plain directory read, exactly as before.
+  const [actorQuery, setActorQuery] = useState('');
+  const debouncedActorQuery = useDebounced(actorQuery.trim(), USER_SEARCH_DEBOUNCE_MS);
+  const searching = debouncedActorQuery !== '';
+  const userParams = useMemo(
+    () => (searching ? { query: debouncedActorQuery.slice(0, 100), limit: PAGE_SIZE } : {}),
+    [searching, debouncedActorQuery],
+  );
+  const users = useCapabilityList<UserWire>(http, 'list_users', userParams);
   const userRows = users.state.status === 'ready' ? users.state.data.items : undefined;
-  const usersUnavailable = users.state.status === 'error';
-  const userNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const user of userRows ?? []) map.set(user.id, `${user.displayName} (${user.login})`);
-    return map;
-  }, [userRows]);
+  // Only the plain directory read decides "unreadable" — a failed search keeps the picker and
+  // shows its own banner.
+  const usersUnavailable = users.state.status === 'error' && !searching;
+  const usersRefused = usersUnavailable && isForbiddenError(users.state.error);
+  // Every user seen so far (directory and searches): rows keep their actor names, and the picked
+  // actor keeps its option, after the search moves on.
+  const knownUsers = useRef(new Map<string, UserWire>());
+  for (const user of userRows ?? []) knownUsers.current.set(user.id, user);
+  const userName = (id: string): string | undefined => {
+    const user = knownUsers.current.get(id);
+    return user ? `${user.displayName} (${user.login})` : undefined;
+  };
+  const pickedUser = actorUserIdInput === '' ? undefined : knownUsers.current.get(actorUserIdInput);
+  const actionSuggestions = useMemo(() => platformAuditActionSuggestions(), []);
 
   function handleFilterSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -111,38 +133,112 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             id="platform-audit-action"
             value={actionInput}
             onChange={(event) => setActionInput(event.target.value)}
+            list="platform-audit-action-options"
             mono
           />
+          <datalist id="platform-audit-action-options" data-testid="platform-audit-action-options">
+            {actionSuggestions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
         </Field>
-        <Field id="platform-audit-actor" label={t('操作者', 'Actor')}>
-          {usersUnavailable ? (
+        {usersUnavailable ? (
+          <Field
+            id="platform-audit-actor"
+            label={t('操作者', 'Actor')}
+            hint={
+              usersRefused
+                ? t(
+                    '无权读取用户目录，请粘贴用户 id。',
+                    'The user directory is not readable — paste a user id.',
+                  )
+                : undefined
+            }
+          >
             <Input
               id="platform-audit-actor"
               value={actorUserIdInput}
               onChange={(event) => setActorUserIdInput(event.target.value)}
+              placeholder={t('粘贴用户 id', 'Paste a user id')}
               mono
               data-testid="platform-audit-actor-input"
             />
-          ) : (
-            <Select
+            {usersRefused || users.state.status !== 'error' ? null : (
+              <ErrorBanner
+                error={users.state.error}
+                title={t('无法读取用户目录', 'Could not load the user directory')}
+                onRetry={() => void users.reload()}
+                testId="platform-audit-users-error"
+              />
+            )}
+          </Field>
+        ) : (
+          <>
+            <Field id="platform-audit-actor-query" label={t('搜索操作者', 'Find an actor')}>
+              <Input
+                id="platform-audit-actor-query"
+                value={actorQuery}
+                onChange={(event) => setActorQuery(event.target.value)}
+                // Enter searches as you type already; never let it apply the filter half-typed.
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault();
+                }}
+                placeholder={t('登录名或名称', 'Login or name')}
+                autoComplete="off"
+                spellCheck={false}
+                data-testid="platform-audit-actor-query"
+              />
+            </Field>
+            <Field
               id="platform-audit-actor"
-              value={actorUserIdInput}
-              onChange={(event) => setActorUserIdInput(event.target.value)}
-              data-testid="platform-audit-actor-select"
+              label={t('操作者', 'Actor')}
+              hint={
+                searching && userRows !== undefined && userRows.length === 0 ? (
+                  <span data-testid="platform-audit-actor-empty">
+                    {t('没有匹配的用户', 'No matching users')}
+                  </span>
+                ) : undefined
+              }
             >
-              <option value="">{t('任意', 'Any')}</option>
-              {(userRows ?? []).map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.displayName} ({user.login})
+              <Select
+                id="platform-audit-actor"
+                value={actorUserIdInput}
+                onChange={(event) => setActorUserIdInput(event.target.value)}
+                disabled={users.state.status === 'loading'}
+                data-testid="platform-audit-actor-select"
+              >
+                <option value="">
+                  {users.state.status === 'loading'
+                    ? searching
+                      ? t('正在搜索…', 'Searching…')
+                      : t('正在加载用户…', 'Loading users…')
+                    : t('任意', 'Any')}
                 </option>
-              ))}
-              {actorUserIdInput !== '' &&
-              !(userRows ?? []).some((u) => u.id === actorUserIdInput) ? (
-                <option value={actorUserIdInput}>{actorUserIdInput}</option>
+                {pickedUser && !(userRows ?? []).some((u) => u.id === pickedUser.id) ? (
+                  <option value={pickedUser.id}>
+                    {pickedUser.displayName} ({pickedUser.login})
+                  </option>
+                ) : null}
+                {(userRows ?? []).map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.displayName} ({user.login})
+                  </option>
+                ))}
+                {actorUserIdInput !== '' && !pickedUser ? (
+                  <option value={actorUserIdInput}>{actorUserIdInput}</option>
+                ) : null}
+              </Select>
+              {users.state.status === 'error' && searching ? (
+                <ErrorBanner
+                  error={users.state.error}
+                  title={t('无法搜索用户', 'Could not search users')}
+                  onRetry={() => void users.reload()}
+                  testId="platform-audit-actor-search-error"
+                />
               ) : null}
-            </Select>
-          )}
-        </Field>
+            </Field>
+          </>
+        )}
         <Button type="submit" variant="secondary">
           {t('应用', 'Apply')}
         </Button>
@@ -217,7 +313,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                     {row.action}
                   </div>
                   <div className="data-row-meta">
-                    {(row.actorUserId ? userNameById.get(row.actorUserId) : undefined) ??
+                    {(row.actorUserId ? userName(row.actorUserId) : undefined) ??
                       formatAuditActor(row, t)}
                     {row.resourceType
                       ? ` · ${row.resourceType}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`

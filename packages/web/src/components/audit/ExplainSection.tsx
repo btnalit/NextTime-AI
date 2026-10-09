@@ -1,5 +1,7 @@
 import type { ExplainResultWire, ExportProvResult } from '@nexttime/shared';
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { AuditIdPicker } from '../../lib/audit-id-picker.js';
+import { type ProvenanceNodeKind, provenanceNodeSource } from '../../lib/audit-pickers.js';
 import {
   type ExplainView,
   auditHref,
@@ -12,9 +14,9 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
+import { Select } from '../kit/select.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { ProvenanceChain } from '../ui/ProvenanceChain.js';
 import { RefChip } from '../ui/RefChip.js';
@@ -52,6 +54,9 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
   const t = useT();
   const toast = useToast();
   const [nodeId, setNodeId] = useState(requestedNodeId ?? '');
+  // Which recent nodes the picker offers — `explain` itself takes any of the three untyped.
+  const [kind, setKind] = useState<ProvenanceNodeKind>('decision');
+  const source = useMemo(() => provenanceNodeSource(kind, t), [kind, t]);
   const [state, setState] = useState<ExplainState>(IDLE);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<unknown | null>(null);
@@ -95,7 +100,7 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
       toast.push({
         tone: saved ? 'ok' : 'warn',
         title: saved
-          ? t('已导出', 'PROV-JSON Exported PROV-JSON')
+          ? t('已导出 PROV-JSON', 'Exported PROV-JSON')
           : t('浏览器不支持下载', 'Download not supported in this browser'),
       });
     } catch (err) {
@@ -119,24 +124,38 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
             onClick={() => void handleExport()}
             data-testid="explain-export"
           >
-            {t('导出', 'Export PROV-JSON')}
+            {t('导出 PROV-JSON', 'Export PROV-JSON')}
           </Button>
         ) : null}
       </div>
       <form className="inline-form" onSubmit={handleSubmit} data-testid="explain-form">
-        <Field
+        <Select
+          id="explain-node-kind"
+          label={t('候选类型', 'Suggest from')}
+          value={kind}
+          onChange={(event) => setKind(event.target.value as ProvenanceNodeKind)}
+          disabled={state.busy}
+          data-testid="explain-node-kind"
+        >
+          <option value="decision">{t('最近的决定', 'Recent decisions')}</option>
+          <option value="fact">{t('审计中的事实', 'Facts in the audit log')}</option>
+          <option value="activity">{t('审计中的活动', 'Activities in the audit log')}</option>
+        </Select>
+        <AuditIdPicker
+          http={http}
           id="explain-node-id"
           label={t('节点 id', 'Node id')}
           hint={t('Fact、Decision 或 Activity 的 id。', 'A Fact, Decision, or Activity id.')}
-        >
-          <Input
-            id="explain-node-id"
-            value={nodeId}
-            onChange={(event) => setNodeId(event.target.value)}
-            disabled={state.busy}
-            mono
-          />
-        </Field>
+          value={nodeId}
+          onChange={setNodeId}
+          source={source}
+          refusedNote={t(
+            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改为从最近的决定中选择。',
+            'Fact and activity suggestions come from the audit log (auditor role) — paste an id, or suggest from recent decisions.',
+          )}
+          disabled={state.busy}
+          testId="explain-node-id"
+        />
         <Button type="submit" variant="primary" loading={state.busy} disabled={!nodeId.trim()}>
           {t('解释', 'Explain')}
         </Button>

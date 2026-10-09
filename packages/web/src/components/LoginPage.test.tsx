@@ -131,7 +131,7 @@ describe('LoginPage: API-key details', () => {
     expect(screen.getByPlaceholderText('sk-...')).toBeTruthy();
 
     fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: '  sk-abc  ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: '用这把 key 登录' }));
     expect(onApiKeyLogin).toHaveBeenCalledWith('sk-abc');
   });
 
@@ -145,7 +145,7 @@ describe('LoginPage: API-key details', () => {
       />,
     );
     fireEvent.click(screen.getByText('用 API key 登录'));
-    expect(screen.getByText('This key was not accepted by the kernel.')).toBeTruthy();
+    expect(screen.getByText(/这把 key 没有被接受/)).toBeTruthy();
 
     rerender(
       <LoginPage

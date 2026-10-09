@@ -4,8 +4,9 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
+import { Combobox } from '../kit/combobox.js';
 import { CopyButton } from '../kit/copy-button.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { PlatformError } from '../platform/PlatformError.js';
@@ -67,6 +68,13 @@ function parseNames(raw: string): readonly string[] {
   return Array.from(new Set(raw.split(/[\s,]+/).filter((name) => name.length > 0)));
 }
 
+/** Text typed / pasted into the name box is a list (taken in one go) rather than a search once it
+ *  holds a separator after a name: "a b", "a,b" or "a " (a finished name). */
+export function isNameList(raw: string): boolean {
+  const names = parseNames(raw);
+  return names.length > 1 || (names.length === 1 && /[\s,]$/.test(raw));
+}
+
 /**
  * components/members/IssueServiceHandleSection (console redesign P3-4 part B, on
  * `components/kit/*` only): "签发外部运行时凭证 Issue a service Handle" (`MembersPage`, P-B1,
@@ -82,7 +90,8 @@ function parseNames(raw: string): readonly string[] {
  *
  * B7 (§2 B7, §5.6): the TTL defaults to 30 days under the registry's one-year cap, and the scope is
  * picked from the registry's handle-channel names (`handleScopeCapabilities`) — a checklist plus
- * a paste box for names copied from a runbook, validated against the same set, so a human-only
+ * a searchable name box (console-ux-3: picks instead of free text) that also takes a pasted list
+ * copied from a runbook, validated against the same set, so a human-only
  * capability (or a typo) is refused here with the reason instead of by the kernel's 400.
  */
 export function IssueServiceHandleSection({
@@ -110,21 +119,45 @@ export function IssueServiceHandleSection({
     return [...byGroup.entries()];
   }, [catalog]);
 
-  const [principalId, setPrincipalId] = useState('');
+  const [chosenPrincipalId, setPrincipalId] = useState('');
+  // console-ux-3: with exactly one service principal there is nothing to choose — it is selected.
+  const onlyPrincipal = servicePrincipals.length === 1 ? servicePrincipals[0] : undefined;
+  const principalId = chosenPrincipalId || (onlyPrincipal?.id ?? '');
   const [ttlDays, setTtlDays] = useState(String(DEFAULT_TTL_DAYS));
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [pastedText, setPastedText] = useState('');
+  /** The name box's text: a search over the handle-channel names, or a pasted list. */
+  const [nameText, setNameText] = useState('');
+  /** Names from the last pasted list that are not issuable (kept in the box, block submit). */
+  const [unknownPasted, setUnknownPasted] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [issued, setIssued] = useState<IssueServiceHandleResult | null>(null);
 
-  const pasted = parseNames(pastedText);
-  const unknownPasted = pasted.filter((name) => !allowed.has(name));
-  const scope = Array.from(new Set([...picked, ...pasted.filter((name) => allowed.has(name))]));
+  const scope = Array.from(picked);
   const ttlValid =
     /^\d+$/.test(ttlDays.trim()) && Number(ttlDays) >= 1 && Number(ttlDays) <= maxTtlDays;
   const canSubmit =
     principalId !== '' && scope.length > 0 && unknownPasted.length === 0 && ttlValid && !submitting;
+
+  function add(names: readonly string[]): void {
+    if (names.length === 0) return;
+    setPicked((current) => new Set([...current, ...names]));
+  }
+
+  /** A typed search just filters; a pasted / finished list is taken at once — issuable names are
+   *  ticked, the rest stay in the box with the reason. */
+  function typeNames(text: string): void {
+    if (!isNameList(text)) {
+      setNameText(text);
+      setUnknownPasted([]);
+      return;
+    }
+    const names = parseNames(text);
+    add(names.filter((name) => allowed.has(name)));
+    const unknown = names.filter((name) => !allowed.has(name));
+    setUnknownPasted(unknown);
+    setNameText(unknown.join(' '));
+  }
 
   function toggle(name: string): void {
     setPicked((current) => {
@@ -205,7 +238,19 @@ export function IssueServiceHandleSection({
           void submit();
         }}
       >
-        <Field id="ish-principal" label={t('服务主体', 'Service principal')} required>
+        <Field
+          id="ish-principal"
+          label={t('服务主体', 'Service principal')}
+          required
+          hint={
+            onlyPrincipal
+              ? t(
+                  '工作区只有这一个服务主体，已自动选中。',
+                  'The only service principal in this workspace — selected for you.',
+                )
+              : undefined
+          }
+        >
           <Select
             id="ish-principal"
             aria-label={t('服务主体', 'Service principal')}
@@ -299,10 +344,10 @@ export function IssueServiceHandleSection({
 
         <Field
           id="ish-scope"
-          label={t('粘贴能力名', 'Paste names')}
+          label={t('查找或粘贴能力名', 'Find or paste capability names')}
           hint={t(
-            '从运行手册复制的能力名，逗号或空格分隔；与上面勾选的合并。',
-            'Names copied from a runbook, comma- or space-separated; merged with the ticks above.',
+            '输入以搜索，回车或点击加入；也可粘贴运行手册里的一串能力名（逗号或空格分隔），会一次勾选。',
+            'Type to search, then Enter or click to add — or paste names from a runbook (comma- or space-separated) to tick them all at once.',
           )}
           error={
             unknownPasted.length > 0
@@ -313,14 +358,32 @@ export function IssueServiceHandleSection({
               : null
           }
         >
-          <input
+          <Combobox
             id="ish-scope"
-            className="input input-mono"
-            value={pastedText}
-            onChange={(event) => setPastedText(event.target.value)}
+            options={catalog
+              .filter((capability) => !picked.has(capability.name))
+              .map((capability) => ({
+                value: capability.name,
+                label: capability.name,
+                secondary: `${capability.group} · ${capability.mode}`,
+              }))}
+            value=""
+            onChange={(name) => {
+              if (name !== '') add([name]);
+            }}
+            inputValue={nameText}
+            onInputValueChange={typeNames}
             disabled={submitting}
-            aria-invalid={unknownPasted.length > 0 || undefined}
+            invalid={unknownPasted.length > 0}
+            clearable={false}
+            mono
+            aria-describedby={describedBy('ish-scope', true, unknownPasted.length > 0)}
             placeholder="get_task report_task_result"
+            emptyText={t(
+              '没有匹配的可签发能力（或已全部勾选）。',
+              'No matching issuable capability (or all are ticked).',
+            )}
+            testId="ish-scope"
           />
         </Field>
 

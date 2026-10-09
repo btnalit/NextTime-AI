@@ -10,6 +10,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
+import { SavedNote } from '../../lib/saved-note.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -106,10 +107,13 @@ export function WorkspaceDetailPanel({
   );
   const [savingBasics, setSavingBasics] = useState(false);
   const [basicsError, setBasicsError] = useState<unknown | null>(null);
+  // Inline "已保存" — set when a save lands, cleared on the next edit of that section.
+  const [basicsSaved, setBasicsSaved] = useState(false);
 
   const [allowedModels, setAllowedModels] = useState<readonly string[]>(workspace.allowedModels);
   const [savingAllowed, setSavingAllowed] = useState(false);
   const [allowedError, setAllowedError] = useState<unknown | null>(null);
+  const [allowedSaved, setAllowedSaved] = useState(false);
 
   const [confirmingDisable, setConfirmingDisable] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
@@ -118,6 +122,7 @@ export function WorkspaceDetailPanel({
   const [ownerUserId, setOwnerUserId] = useState('');
   const [delegating, setDelegating] = useState(false);
   const [delegateError, setDelegateError] = useState<unknown | null>(null);
+  const [delegated, setDelegated] = useState(false);
 
   const nameDirty = name.trim() !== workspace.name && name.trim().length > 0;
   const entryModelDirty = entryModelDraft !== null && entryModelDraft !== workspace.entryModel;
@@ -138,6 +143,7 @@ export function WorkspaceDetailPanel({
     if (!basicsDirty || savingBasics) return;
     setSavingBasics(true);
     setBasicsError(null);
+    setBasicsSaved(false);
     try {
       onChanged(
         await http.call<PlatformWorkspaceWire>('update_workspace', {
@@ -147,6 +153,7 @@ export function WorkspaceDetailPanel({
           ...(ontologyEnforcementDirty ? { ontologyEnforcement: ontologyEnforcementDraft } : {}),
         }),
       );
+      setBasicsSaved(true);
     } catch (err) {
       setBasicsError(err);
     } finally {
@@ -158,6 +165,7 @@ export function WorkspaceDetailPanel({
     if (!allowedDirty || savingAllowed) return;
     setSavingAllowed(true);
     setAllowedError(null);
+    setAllowedSaved(false);
     try {
       onChanged(
         await http.call<PlatformWorkspaceWire>('set_allowed_models', {
@@ -165,6 +173,7 @@ export function WorkspaceDetailPanel({
           allowedModels: [...allowedModels],
         }),
       );
+      setAllowedSaved(true);
     } catch (err) {
       setAllowedError(err);
     } finally {
@@ -200,6 +209,7 @@ export function WorkspaceDetailPanel({
     const params = { userId: ownerUserId, workspaceId: workspace.id, role: 'owner' };
     setDelegating(true);
     setDelegateError(null);
+    setDelegated(false);
     try {
       try {
         await http.call<UserMembershipWire>('add_membership', params);
@@ -208,6 +218,7 @@ export function WorkspaceDetailPanel({
         await http.call<UserMembershipWire>('set_membership_role', params);
       }
       setOwnerUserId('');
+      setDelegated(true);
       onDelegated();
     } catch (err) {
       setDelegateError(err);
@@ -223,7 +234,7 @@ export function WorkspaceDetailPanel({
        *  `.divider`s. Every edit control here still saves independently (unchanged behaviour);
        *  only the grouping and heading style change. */}
       <DrawerSections>
-        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+        <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
             <dt>Id</dt>
             <dd>
@@ -267,7 +278,7 @@ export function WorkspaceDetailPanel({
           </dl>
 
           <div className="stack-s">
-            <span>Owners</span>
+            <span>{t('负责人（owner）', 'Owners')}</span>
             {workspace.owners.length === 0 ? (
               <span className="text-3">{t('还没有 owner', 'No owner yet')}</span>
             ) : (
@@ -287,7 +298,7 @@ export function WorkspaceDetailPanel({
           </div>
         </DrawerSection>
 
-        <DrawerSection title={t('相关链接 Related links', 'Related links')}>
+        <DrawerSection title={t('相关链接', 'Related links')}>
           {onOpenWorkspaceConfig ? (
             <Button
               variant="secondary"
@@ -308,12 +319,15 @@ export function WorkspaceDetailPanel({
           )}
         </DrawerSection>
 
-        <DrawerSection title={t('编辑 Edit', 'Edit')}>
+        <DrawerSection title={t('编辑', 'Edit')}>
           <Field id="wd-name" label={t('名称', 'Name')} required>
             <Input
               id="wd-name"
               value={name}
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => {
+                setName(event.target.value);
+                setBasicsSaved(false);
+              }}
               disabled={savingBasics}
             />
           </Field>
@@ -323,7 +337,10 @@ export function WorkspaceDetailPanel({
             options={entryModelOptions}
             value={entryModelDraft}
             allowPlatformDefault={false}
-            onChange={setEntryModelDraft}
+            onChange={(next) => {
+              setEntryModelDraft(next);
+              setBasicsSaved(false);
+            }}
             disabled={savingBasics || !modelsReady}
             testId="workspace-entry-model"
           />
@@ -339,14 +356,15 @@ export function WorkspaceDetailPanel({
             <Select
               id="wd-ontology-enforcement"
               value={ontologyEnforcementDraft}
-              onChange={(event) =>
-                setOntologyEnforcementDraft(event.target.value as OntologyEnforcementWire)
-              }
+              onChange={(event) => {
+                setOntologyEnforcementDraft(event.target.value as OntologyEnforcementWire);
+                setBasicsSaved(false);
+              }}
               disabled={savingBasics}
               data-testid="workspace-ontology-enforcement"
             >
-              <option value="reject">{t('拒绝', 'reject')}</option>
-              <option value="warn">{t('记录并放行', 'warn')}</option>
+              <option value="reject">{t('拒绝', 'Reject')}</option>
+              <option value="warn">{t('记录并放行', 'Log and allow')}</option>
             </Select>
           </Field>
 
@@ -356,6 +374,7 @@ export function WorkspaceDetailPanel({
             testId="workspace-basics-error"
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
+            {basicsSaved ? <SavedNote testId="workspace-basics-saved" /> : null}
             <Button
               variant="secondary"
               onClick={() => void saveBasics()}
@@ -372,7 +391,10 @@ export function WorkspaceDetailPanel({
           <AllowedModelsChecklist
             models={models}
             selected={allowedModels}
-            onChange={setAllowedModels}
+            onChange={(next) => {
+              setAllowedModels(next);
+              setAllowedSaved(false);
+            }}
             disabled={savingAllowed || !modelsReady}
             testId="workspace-allowed-models"
           />
@@ -382,6 +404,7 @@ export function WorkspaceDetailPanel({
             testId="workspace-allowed-models-error"
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
+            {allowedSaved ? <SavedNote testId="workspace-allowed-models-saved" /> : null}
             <Button
               variant="secondary"
               onClick={() => void saveAllowedModels()}
@@ -403,7 +426,10 @@ export function WorkspaceDetailPanel({
               'The user joins this workspace as an owner; an existing member is promoted in place.',
             )}
             value={ownerUserId}
-            onChange={setOwnerUserId}
+            onChange={(next) => {
+              setOwnerUserId(next);
+              setDelegated(false);
+            }}
             disabled={delegating}
             exclude={workspace.owners.map((owner) => owner.userId)}
             testId="delegate-owner"
@@ -413,6 +439,11 @@ export function WorkspaceDetailPanel({
             title={t('无法委托 owner', 'Could not delegate an owner')}
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
+            {delegated ? (
+              <output className="text-3" data-testid="delegate-owner-done">
+                {t('已委托为 owner', 'Delegated as owner')}
+              </output>
+            ) : null}
             <Button
               variant="primary"
               icon="plus"

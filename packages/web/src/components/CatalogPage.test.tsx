@@ -11,6 +11,11 @@ import { ToastProvider } from './ui/Toast.js';
 
 afterEach(cleanup);
 
+const EDITOR_SUGGESTION_READS: Record<string, unknown> = {
+  list_available_gate_instances: { items: [] },
+  list_types: { items: [] },
+};
+
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
@@ -18,6 +23,9 @@ function scriptedHttp(
   return {
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
+      // The editors' own suggestion reads (egress hosts, object types) answer empty unless a
+      // test scripts them, and stay out of `calls` so the assertions below are about the page.
+      if (!handlers[name] && name in EDITOR_SUGGESTION_READS) return EDITOR_SUGGESTION_READS[name];
       calls.push({ name, params });
       const handler = handlers[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
@@ -143,7 +151,8 @@ describe('CatalogPage', () => {
     const detail = await selectRow(row);
     fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
     const toast = await screen.findByTestId('toast');
-    expect(toast.textContent).toContain('Could not update docker.restart');
+    expect(toast.textContent).toContain('无法更新');
+    expect(toast.textContent).toContain('docker.restart');
     expect(toast.textContent).toContain('operation docker.restart is not a draft');
   });
 
@@ -1141,7 +1150,8 @@ describe('CatalogPage editors (S6-A A2)', () => {
     const drawer = await screen.findByTestId('skill-editor-drawer');
     expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
-    expect((within(drawer).getByLabelText(/适用的门类型/) as HTMLInputElement).value).toBe('http');
+    expect((within(drawer).getByLabelText('HTTP') as HTMLInputElement).checked).toBe(true);
+    expect((within(drawer).getByLabelText('MCP') as HTMLInputElement).checked).toBe(false);
     await waitFor(() =>
       expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
         '# Steps\n\n1. restart',

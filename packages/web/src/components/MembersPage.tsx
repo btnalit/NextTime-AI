@@ -36,6 +36,9 @@ import { useToast } from './ui/Toast.js';
 
 export interface MembersPageProps {
   readonly http: CapabilityCaller;
+  /** The signed-in user is a platform administrator: 添加成员 picks from the user directory
+   *  (`list_users`) instead of a typed login. */
+  readonly platformAdmin?: boolean;
 }
 
 type DrawerState =
@@ -101,7 +104,7 @@ function MoreIcon() {
  * ("签发外部运行时凭证", next to 添加成员/服务凭证) opening in its own sheet — the fourth and last
  * one this page owns, same `{drawer.kind === '…' ? <Child .../> : null}` shape as the other three.
  */
-export function MembersPage({ http }: MembersPageProps) {
+export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
@@ -317,6 +320,7 @@ export function MembersPage({ http }: MembersPageProps) {
           {drawer.kind === 'addMember' ? (
             <AddMemberForm
               http={http}
+              platformAdmin={platformAdmin}
               onCancel={() => setDrawer({ kind: 'closed' })}
               onDone={(principal) => {
                 setDrawer({ kind: 'closed' });

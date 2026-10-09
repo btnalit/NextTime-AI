@@ -161,7 +161,8 @@ describe('AuditPage entry points', () => {
     const queries: unknown[] = [];
     const http = scriptedHttp({
       audit_query: (params) => {
-        queries.push(params);
+        // The audit log's own page (limit 50) — the id pickers' audit scans ask for 200.
+        if ((params as { limit?: number }).limit === 50) queries.push(params);
         const cursor = (params as { cursor?: string }).cursor;
         return cursor === undefined
           ? { items: [auditRow()], nextCursor: 'c-1' }
@@ -182,7 +183,7 @@ describe('AuditPage entry points', () => {
     );
     expect(row.textContent).toContain('[redacted]');
     expect(row.textContent).not.toContain('sk-1');
-    expect((screen.getByLabelText(/资源 id/) as HTMLInputElement).value).toBe('ar-1');
+    expect((screen.getByLabelText('资源 id') as HTMLInputElement).value).toBe('ar-1');
     expect((screen.getByTestId('audit-actor-select') as HTMLSelectElement).value).toBe('');
 
     fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
@@ -202,6 +203,18 @@ describe('AuditPage entry points', () => {
         limit: 50,
       }),
     );
+  });
+
+  it('?resourceType=__proto__ in the URL renders the page instead of crashing it', async () => {
+    window.history.replaceState(null, '', '#/govern/audit?resourceType=__proto__');
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [auditRow()] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+    expect(await screen.findByTestId('audit-row')).toBeTruthy();
+    window.history.replaceState(null, '', '#/');
   });
 
   it('?actionRequestId= shows the approval context, explains its decision node and filters the audit log on the request', async () => {
@@ -269,7 +282,11 @@ describe('AuditPage entry points', () => {
     expect(
       within(result).getByTestId('explain-link-action-request').getAttribute('data-ref-id'),
     ).toBe('ar-1');
-    expect(http.calls.find((c) => c.name === 'audit_query')?.params).toEqual({
+    expect(
+      http.calls.find(
+        (c) => c.name === 'audit_query' && (c.params as { limit?: number }).limit === 50,
+      )?.params,
+    ).toEqual({
       filter: { resourceType: 'action_request', resourceId: 'ar-1' },
       limit: 50,
     });
@@ -325,7 +342,7 @@ describe('AuditPage degraded states', () => {
     await screen.findByTestId('audit-actor-input');
     expect(screen.queryByTestId('audit-actor-select')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText(/节点 id/), { target: { value: 'nope' } });
+    fireEvent.change(screen.getByLabelText('节点 id'), { target: { value: 'nope' } });
     fireEvent.submit(screen.getByTestId('explain-form'));
     const banner = await screen.findByTestId('explain-error');
     expect(banner.getAttribute('data-error-code')).toBe('not_found');
@@ -344,5 +361,259 @@ describe('AuditPage degraded states', () => {
     await screen.findByTestId('explain-result');
     fireEvent.click(screen.getByTestId('explain-export'));
     await screen.findByTestId('explain-export-forbidden');
+  });
+});
+
+const forbidden = () => Promise.reject(new HttpError('capability_error', 'role', 'forbidden'));
+
+function decision(id: string, summary: string | null) {
+  return {
+    id,
+    status: 'approved',
+    activityId: `act-${id}`,
+    sourceId: null,
+    summary,
+    rationale: null,
+    decidedBy: 'p-1',
+    createdAt: '2026-09-03T00:00:00.000Z',
+    decidedAt: '2026-09-03T00:00:00.000Z',
+  };
+}
+
+function objectRow(id: string, name: string) {
+  return {
+    id,
+    objectType: 'Host',
+    identityKey: null,
+    properties: { name },
+    createdAt: '2026-09-03T00:00:00.000Z',
+    updatedAt: '2026-09-03T00:00:00.000Z',
+    lastObservedAt: null,
+  };
+}
+
+function optionValues(select: HTMLElement): string[] {
+  return Array.from((select as HTMLSelectElement).options).map((option) => option.value);
+}
+
+/** Field-inventory §11 / issues 5, 6, 14: the audit page's id filters offer what exists. */
+describe('AuditPage pickers', () => {
+  it('resource id: no type → a note; a type → its list capability (list_gatekeepers) as choices; picking fills the id and the filter', async () => {
+    const queries: unknown[] = [];
+    const http = scriptedHttp({
+      audit_query: (params) => {
+        if ((params as { limit?: number }).limit === 50) queries.push(params);
+        return { items: [] };
+      },
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({
+        items: [
+          {
+            id: 'gk-1',
+            name: 'docker-prod',
+            kind: 'http',
+            status: 'active',
+            operationCount: 2,
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      query_decisions: () => ({ items: [] }),
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('audit-resource-id-no-source');
+    expect(screen.queryByTestId('audit-resource-id-pick')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('资源类型'), { target: { value: 'gatekeeper' } });
+    const pick = await screen.findByTestId('audit-resource-id-pick');
+    await waitFor(() => expect(optionValues(pick)).toContain('gk-1'));
+    expect(pick.textContent).toContain('docker-prod');
+
+    fireEvent.change(pick, { target: { value: 'gk-1' } });
+    expect((screen.getByLabelText('资源 id') as HTMLInputElement).value).toBe('gk-1');
+    expect(screen.getByTestId('audit-resource-id-picked').textContent).toContain('docker-prod');
+
+    fireEvent.click(screen.getByTestId('audit-apply'));
+    await waitFor(() =>
+      expect(queries.at(-1)).toEqual({
+        filter: { resourceType: 'gatekeeper', resourceId: 'gk-1' },
+        limit: 50,
+      }),
+    );
+  });
+
+  it('resource id: a refused list (list_action_requests, operator) falls back to ids seen in the audit log, named via resolve_refs, with a note', async () => {
+    const http = scriptedHttp({
+      audit_query: (params) => {
+        const filter = (params as { filter?: { resourceType?: string } }).filter;
+        return filter?.resourceType === 'action_request' &&
+          (params as { limit?: number }).limit === 200
+          ? { items: [auditRow({ id: 'a-9', resourceId: 'ar-9' })] }
+          : { items: [] };
+      },
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+      list_action_requests: forbidden,
+      resolve_refs: () => ({
+        items: [{ id: 'ar-9', kind: 'actionRequest', name: 'docker.restart' }],
+      }),
+      query_decisions: () => ({ items: [] }),
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    fireEvent.change(await screen.findByLabelText('资源类型'), {
+      target: { value: 'action_request' },
+    });
+    await screen.findByTestId('audit-resource-id-degraded');
+    const pick = screen.getByTestId('audit-resource-id-pick');
+    expect(optionValues(pick)).toContain('ar-9');
+    expect(pick.textContent).toContain('docker.restart');
+    expect(http.calls.find((c) => c.name === 'resolve_refs')?.params).toEqual({ ids: ['ar-9'] });
+  });
+
+  it('resource id: typing narrows a loaded list in the browser and says when nothing matches', async () => {
+    const http = scriptedHttp({
+      audit_query: (params) =>
+        (params as { limit?: number }).limit === 200
+          ? {
+              items: [
+                auditRow({
+                  id: 'a-1',
+                  action: 'attest_fact',
+                  resourceType: 'fact',
+                  resourceId: 'f-1',
+                }),
+                auditRow({
+                  id: 'a-2',
+                  action: 'verify_fact',
+                  resourceType: 'fact',
+                  resourceId: 'f-2',
+                }),
+              ],
+            }
+          : { items: [] },
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+      query_decisions: () => ({ items: [] }),
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    fireEvent.change(await screen.findByLabelText('资源类型'), { target: { value: 'fact' } });
+    const pick = await screen.findByTestId('audit-resource-id-pick');
+    await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-1', 'f-2']));
+
+    fireEvent.change(screen.getByLabelText('资源 id'), { target: { value: 'verify' } });
+    await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-2']));
+    fireEvent.change(screen.getByLabelText('资源 id'), { target: { value: 'zzz' } });
+    await screen.findByTestId('audit-resource-id-empty');
+  });
+
+  it('actor: when list_principals is refused (auditor) the id box stays, explains why, and offers the actors of recent audit rows by name', async () => {
+    const queries: unknown[] = [];
+    const http = scriptedHttp({
+      audit_query: (params) => {
+        if ((params as { limit?: number }).limit === 50) queries.push(params);
+        return { items: [auditRow({ actorPrincipalId: 'p-7' })] };
+      },
+      list_principals: forbidden,
+      list_gatekeepers: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [{ id: 'p-7', kind: 'principal', name: 'Grace' }] }),
+      query_decisions: () => ({ items: [] }),
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const input = await screen.findByTestId('audit-actor-input');
+    expect(screen.getByText(/list_principals/)).toBeTruthy();
+    const pick = await screen.findByTestId('audit-actor-input-pick');
+    await waitFor(() => expect(pick.textContent).toContain('Grace'));
+
+    fireEvent.change(pick, { target: { value: 'p-7' } });
+    expect((input as HTMLInputElement).value).toBe('p-7');
+    fireEvent.click(screen.getByTestId('audit-apply'));
+    await waitFor(() =>
+      expect(queries.at(-1)).toEqual({ filter: { actorPrincipalId: 'p-7' }, limit: 50 }),
+    );
+  });
+
+  it('explain: offers recent decisions (query_decisions) and runs explain on the picked one; a fact list it may not read says so', async () => {
+    const http = scriptedHttp({
+      audit_query: (params) =>
+        (params as { limit?: number }).limit === 200 ? forbidden() : { items: [] },
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+      query_decisions: () => ({ items: [decision('dec-7', 'approve restart')] }),
+      explain: () => factExplain(),
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const pick = await screen.findByTestId('explain-node-id-pick');
+    await waitFor(() => expect(pick.textContent).toContain('approve restart'));
+    expect(http.calls.find((c) => c.name === 'query_decisions')?.params).toEqual({ limit: 50 });
+
+    fireEvent.change(pick, { target: { value: 'dec-7' } });
+    expect((screen.getByLabelText('节点 id') as HTMLInputElement).value).toBe('dec-7');
+    fireEvent.submit(screen.getByTestId('explain-form'));
+    await screen.findByTestId('explain-result');
+    expect(http.calls.find((c) => c.name === 'explain')?.params).toEqual({ nodeId: 'dec-7' });
+
+    fireEvent.change(screen.getByTestId('explain-node-kind'), { target: { value: 'fact' } });
+    await screen.findByTestId('explain-node-id-refused');
+  });
+
+  it('reconstruct: offers recently updated Objects (search) and searches by the typed name', async () => {
+    const searches: unknown[] = [];
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+      query_decisions: () => ({ items: [] }),
+      search: (params) => {
+        searches.push(params);
+        const query = (params as { query: string }).query;
+        return query === 'web'
+          ? { items: [objectRow('o-web', 'web-01')] }
+          : { items: [objectRow('o-db', 'db-01')] };
+      },
+      reconstruct: () => ({ object: null, facts: [], auditRecords: [] }),
+    });
+    renderPage(http);
+    const pick = await screen.findByTestId('reconstruct-entity-id-pick');
+    await waitFor(() => expect(pick.textContent).toContain('db-01'));
+    expect(searches[0]).toEqual({ query: '', limit: 50 });
+
+    fireEvent.change(screen.getByLabelText('实体 id'), { target: { value: 'web' } });
+    await waitFor(() => expect(pick.textContent).toContain('web-01'));
+    expect(searches).toContainEqual({ query: 'web', limit: 50 });
+
+    fireEvent.change(pick, { target: { value: 'o-web' } });
+    expect(screen.getByTestId('reconstruct-entity-id-picked').textContent).toContain('web-01');
+    fireEvent.submit(screen.getByTestId('reconstruct-form'));
+    await screen.findByTestId('reconstruct-result');
+    expect(http.calls.find((c) => c.name === 'reconstruct')?.params).toEqual({
+      entityId: 'o-web',
+    });
+  });
+
+  it('a failed suggestion list shows an error banner whose Retry asks again', async () => {
+    let fail = true;
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+      query_decisions: () =>
+        fail
+          ? Promise.reject(new HttpError('network', 'boom'))
+          : { items: [decision('dec-2', 'second try')] },
+      search: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const banner = await screen.findByTestId('explain-node-id-error');
+    fail = false;
+    fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('explain-node-id-pick').textContent).toContain('second try'),
+    );
   });
 });

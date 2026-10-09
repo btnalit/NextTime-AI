@@ -559,6 +559,7 @@ export function SystemsPage({
           available={available}
           onEnabled={reloadRegistry}
           canEnable={canCreate}
+          platformAdmin={platformAdmin}
         />
       </section>
 

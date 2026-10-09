@@ -121,10 +121,9 @@ function toFormValues(settings: PlatformSettingsWire): FormValues {
   };
 }
 
-/** S8 W1-A6 (audit S10 "默认工作区是 UUID 文本框"): the picker's own sentinel for "type the id
- *  by hand" — `list_workspaces` lists every workspace regardless of status, but a value already
- *  set to a since-purged workspace's id would otherwise not be selectable at all. */
-const OTHER_WORKSPACE = '__other__';
+/** Every workspace, whatever its status — a currently-set (possibly disabled) default is still
+ *  shown by name. Module-level so the params object is stable across renders. */
+const ALL_WORKSPACES = {} as const;
 
 /** `''` → `null` (clear the setting), anything else → the trimmed string. */
 function nullableText(raw: string): string | null {
@@ -158,24 +157,21 @@ function PlatformSettingsForm({
 
   // S8 W1-A6 (audit S10): the default-workspace picker's own data source — every workspace,
   // regardless of status, so a currently-set (possibly disabled) id is still shown by name.
+  // `list_workspaces` lists every workspace, so there is no typed-id field: an id the list does
+  // not know (a purged workspace) is kept as its own option — shown, never silently replaced by
+  // "无 None" — until the reader picks something else.
   const workspacesList = useCapabilityList<PlatformWorkspaceWire>(
     http,
     'list_workspaces',
-    {},
+    ALL_WORKSPACES,
     { autoLoadAll: true },
   );
   const workspaceOptions =
     workspacesList.state.status === 'ready' ? workspacesList.state.data.items : [];
-  const workspacesReady = workspacesList.state.status === 'ready';
-  const currentWorkspaceKnown =
-    values.defaultWorkspaceId === '' ||
-    workspaceOptions.some((ws) => ws.id === values.defaultWorkspaceId);
-  const [manualWorkspaceEntry, setManualWorkspaceEntry] = useState(false);
-  // Once the directory has actually loaded, an id it does not know about (a purged workspace, or
-  // one this administrator has not seen yet) forces manual-entry mode too — never silently
-  // falls back to "无 None" and loses the reader's already-set value.
-  const useManualWorkspaceInput =
-    manualWorkspaceEntry || (workspacesReady && !currentWorkspaceKnown);
+  const workspacesLoading = workspacesList.state.status === 'loading';
+  const currentWorkspaceUnknown =
+    values.defaultWorkspaceId !== '' &&
+    !workspaceOptions.some((ws) => ws.id === values.defaultWorkspaceId);
 
   function set(key: EditableKey, value: string): void {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -313,40 +309,43 @@ function PlatformSettingsForm({
             >
               <Select
                 id="ps-default-workspace"
-                value={useManualWorkspaceInput ? OTHER_WORKSPACE : values.defaultWorkspaceId}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (next === OTHER_WORKSPACE) {
-                    setManualWorkspaceEntry(true);
-                    return;
-                  }
-                  setManualWorkspaceEntry(false);
-                  set('defaultWorkspaceId', next);
-                }}
-                disabled={submitting}
+                value={values.defaultWorkspaceId}
+                onChange={(event) => set('defaultWorkspaceId', event.target.value)}
+                disabled={submitting || workspacesLoading}
               >
                 <option value="">{t('无', 'None')}</option>
                 {workspaceOptions.map((ws) => (
                   <option key={ws.id} value={ws.id}>
-                    {ws.name}
+                    {ws.status === 'disabled'
+                      ? `${ws.name}${t('（已停用）', ' (disabled)')}`
+                      : ws.name}
                   </option>
                 ))}
-                <option value={OTHER_WORKSPACE}>
-                  {t('其他（输入 id）', 'Other — type an id')}
-                </option>
+                {currentWorkspaceUnknown ? (
+                  <option value={values.defaultWorkspaceId}>
+                    {workspacesLoading
+                      ? t('正在读取工作区…', 'Loading workspaces…')
+                      : workspacesList.state.status === 'error'
+                        ? t(
+                            `当前设置（${values.defaultWorkspaceId}）`,
+                            `Current setting (${values.defaultWorkspaceId})`,
+                          )
+                        : t(
+                            `已不存在的工作区（${values.defaultWorkspaceId}）`,
+                            `A workspace that no longer exists (${values.defaultWorkspaceId})`,
+                          )}
+                  </option>
+                ) : null}
               </Select>
             </Field>
 
-            {useManualWorkspaceInput ? (
-              <Field id="ps-default-workspace-other" label={t('工作区 id', 'Workspace id')}>
-                <Input
-                  id="ps-default-workspace-other"
-                  value={values.defaultWorkspaceId}
-                  onChange={(event) => set('defaultWorkspaceId', event.target.value)}
-                  disabled={submitting}
-                  mono
-                />
-              </Field>
+            {workspacesList.state.status === 'error' ? (
+              <ErrorBanner
+                error={workspacesList.state.error}
+                title={t('无法读取工作区列表', 'Could not load the workspace list')}
+                onRetry={() => void workspacesList.reload()}
+                testId="platform-settings-workspaces-error"
+              />
             ) : null}
 
             <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
@@ -422,8 +421,8 @@ function PlatformSettingsForm({
                 }
                 disabled={submitting}
               >
-                <option value="user">user</option>
-                <option value="admin">admin</option>
+                <option value="user">{t('用户', 'User')}</option>
+                <option value="admin">{t('管理员', 'Admin')}</option>
               </Select>
             </Field>
 

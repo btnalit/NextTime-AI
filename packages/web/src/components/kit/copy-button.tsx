@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { cn } from '../../lib/cn.js';
+import { useT } from '../../lib/i18n.js';
 
 export interface CopyButtonProps {
   /** The exact text copied to the clipboard — a secret shown once (an API key, a service Handle
@@ -7,7 +8,7 @@ export interface CopyButtonProps {
    *  case — an entity reference always pairs a name/kind label with its id; this primitive is for
    *  a bare value with nothing else to show alongside it). */
   readonly value: string;
-  /** Read out before "id" in the accessible name ("Copy API key id"). */
+  /** What is copied, in the current language — read out as "复制<label>" / "Copy <label>". */
   readonly label: string;
   readonly className?: string;
 }
@@ -20,7 +21,9 @@ export interface CopyButtonProps {
  * origins) — failure simply leaves the icon unchanged, same trade-off `kit/ref-chip` accepts.
  */
 export function CopyButton({ value, label, className }: CopyButtonProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
+  const name = copied ? t('已复制', 'Copied') : t(`复制${label}`, `Copy ${label}`);
 
   useEffect(() => {
     if (!copied) return;
@@ -48,8 +51,8 @@ export function CopyButton({ value, label, className }: CopyButtonProps) {
         event.stopPropagation();
         void copy();
       }}
-      aria-label={copied ? 'Copied' : `Copy ${label}`}
-      title={copied ? 'Copied' : `Copy ${label}`}
+      aria-label={name}
+      title={name}
     >
       {copied ? (
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">

@@ -6,6 +6,7 @@ import type {
 } from '@nexttime/shared';
 import type { AuditResourceType } from './audit.js';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 import { labelText, statusChipStyle } from './status-tone.js';
 
 /**
@@ -64,7 +65,10 @@ export const WORKER_DEFINITION_KIND_LABELS: Readonly<Record<WorkerDefinitionKind
  *  summary row type (`lib/tasks.ts` `WorkerDefinitionSummary.kind`) carries it looser over the
  *  wire — an unrecognized value still renders visibly (the raw value), never silently hidden. */
 export function workerDefinitionKindLabel(kind: string, t: Translate): string {
-  const entry = (WORKER_DEFINITION_KIND_LABELS as Readonly<Record<string, BilingualLabel>>)[kind];
+  const entry = ownEntry(
+    WORKER_DEFINITION_KIND_LABELS as Readonly<Record<string, BilingualLabel>>,
+    kind,
+  );
   return entry ? label(entry, t) : kind;
 }
 
@@ -133,9 +137,10 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
 };
 
 export function auditResourceTypeLabel(resourceType: string, t: Translate): string {
-  const entry = (AUDIT_RESOURCE_TYPE_LABELS as Readonly<Record<string, BilingualLabel>>)[
-    resourceType
-  ];
+  const entry = ownEntry(
+    AUDIT_RESOURCE_TYPE_LABELS as Readonly<Record<string, BilingualLabel>>,
+    resourceType,
+  );
   return entry ? label(entry, t) : resourceType;
 }
 
@@ -181,6 +186,9 @@ const GATE_TRANSPORT_KIND_LABELS: Readonly<Record<GateTransportKindWire, Bilingu
  *  `workerDefinitionKindLabel` does — an unrecognized value still renders visibly, never silently
  *  hidden. */
 export function transportKindLabel(kind: string, t: Translate): string {
-  const entry = (GATE_TRANSPORT_KIND_LABELS as Readonly<Record<string, BilingualLabel>>)[kind];
+  const entry = ownEntry(
+    GATE_TRANSPORT_KIND_LABELS as Readonly<Record<string, BilingualLabel>>,
+    kind,
+  );
   return entry ? label(entry, t) : kind;
 }

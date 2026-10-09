@@ -56,7 +56,7 @@ describe('ProvenanceDrawer', () => {
     );
     const banner = await screen.findByTestId('graph-provenance-error');
     expect(banner.getAttribute('data-error-code')).toBe('not_found');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await screen.findByTestId('graph-provenance-chain');
     // A Fact with no Observation and no Activity keeps the missing segments visible.
     expect(screen.getByTestId('prov-activity').getAttribute('data-present')).toBe('false');

@@ -49,7 +49,10 @@ export interface OnboardingWizardReviewProps {
  * `await_decision`/`reads`/`writes` — exactly the fields `propose_operation`'s `operation` param
  * (`@nexttime/shared`'s `OperationSchema`) requires in full, so only the raw graph Object read
  * carries enough to reclassify with (`lib/connections.ts`'s own doc comment on
- * `operationDetailFromObject`). Same 50-row `search` cap as the rest of this page.
+ * `operationDetailFromObject`). The `search` is scoped to this gate (`query` = the gate id, which is
+ * part of every Operation's identity key — `loadGateOperations` below) and followed through every
+ * `nextCursor` page, so a workspace with more than one page of Operations never falsely reads as
+ * "this gate imported none".
  *
  * "Propose reclassification" is deliberately the two-step `propose_operation` → `publish_operation`
  * pair, never a direct edit (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") —
@@ -74,6 +77,47 @@ export interface OnboardingWizardReviewProps {
  * capability and surfaces whatever the kernel says via `ErrorBanner` either way — this screen does
  * not swallow, pre-empt, or special-case either outcome.
  */
+/** One `search` page is capped by the kernel (`MAX_SEARCH_LIMIT` = 200); a workspace can hold more
+ *  Operation objects than that. */
+const SEARCH_PAGE_LIMIT = 200;
+/** Safety net against a kernel that keeps answering a cursor: 200 × 100 = 20 000 objects. */
+const SEARCH_MAX_PAGES = 100;
+
+/**
+ * Every Operation object of `gatekeeperId`: `search{objectType:'Operation'}` with the gate id as the
+ * query (an ILIKE over properties and the identity key, where `gatekeeperId` lives — so the kernel
+ * already narrows to this gate), paged through `nextCursor` until the kernel reports no more, then
+ * filtered to the exact gate on the client (the substring match is only a narrowing).
+ */
+export async function loadGateOperations(
+  http: CapabilityCaller,
+  gatekeeperId: string,
+): Promise<readonly OperationDetailView[]> {
+  const rows: OperationDetailView[] = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (let page = 0; page < SEARCH_MAX_PAGES; page += 1) {
+    const result = await http.call<unknown>('search', {
+      query: gatekeeperId,
+      objectType: 'Operation',
+      limit: SEARCH_PAGE_LIMIT,
+      ...(cursor !== undefined ? { cursor } : {}),
+    });
+    for (const object of searchItems<GraphObjectRow>(result)) {
+      const row = operationDetailFromObject(object);
+      if (row !== undefined && row.gatekeeperId === gatekeeperId) rows.push(row);
+    }
+    const next =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as { nextCursor?: unknown }).nextCursor
+        : undefined;
+    if (typeof next !== 'string' || next.length === 0 || seen.has(next)) break;
+    seen.add(next);
+    cursor = next;
+  }
+  return rows;
+}
+
 export function OnboardingWizardReview({
   http,
   gatekeeperId,
@@ -82,13 +126,7 @@ export function OnboardingWizardReview({
 }: OnboardingWizardReviewProps) {
   const t = useT();
   const loadOperations = useCallback(
-    () =>
-      http.call<unknown>('search', { query: '', objectType: 'Operation' }).then((result) =>
-        searchItems<GraphObjectRow>(result)
-          .map(operationDetailFromObject)
-          .filter((row): row is OperationDetailView => row !== undefined)
-          .filter((row) => row.gatekeeperId === gatekeeperId),
-      ),
+    () => loadGateOperations(http, gatekeeperId),
     [http, gatekeeperId],
   );
   const operations = useResource(loadOperations);
@@ -98,7 +136,7 @@ export function OnboardingWizardReview({
       {operations.state.status === 'loading' ? (
         <SkeletonRows
           count={3}
-          label={t('正在加载 Operation…', 'Loading operations')}
+          label={t('正在加载 Operation…', 'Loading operations…')}
           testId="wizard-review-loading"
         />
       ) : operations.state.status === 'error' ? (
@@ -117,11 +155,11 @@ export function OnboardingWizardReview({
         <table className="data-table" data-testid="wizard-review-table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Mode</th>
-              <th>Blast radius</th>
-              <th>Auto-approvable</th>
-              <th>Params schema</th>
+              <th>{t('名称', 'Name')}</th>
+              <th>{t('模式', 'Mode')}</th>
+              <th>{t('影响范围', 'Blast radius')}</th>
+              <th>{t('可自动批准', 'Auto-approvable')}</th>
+              <th>{t('参数 schema', 'Params schema')}</th>
               <th />
             </tr>
           </thead>
@@ -227,13 +265,13 @@ function OperationReviewRow({
         </td>
         <td>
           <details className="disclosure">
-            <summary>schema</summary>
+            <summary>{t('查看 schema', 'View schema')}</summary>
             <pre className="code-block">{prettyJson(row.paramsSchema)}</pre>
           </details>
         </td>
         <td>
           <Button variant="ghost" size="s" onClick={() => setEditing((v) => !v)}>
-            {editing ? 'Cancel' : t('提议重分类', 'Propose reclassification')}
+            {editing ? t('取消', 'Cancel') : t('提议重分类', 'Propose reclassification')}
           </Button>
         </td>
       </tr>
@@ -248,7 +286,7 @@ function OperationReviewRow({
                 )}
               </Notice>
               <div className="row">
-                <Field id={`wizard-reclassify-mode-${row.objectId}`} label="Mode">
+                <Field id={`wizard-reclassify-mode-${row.objectId}`} label={t('模式', 'Mode')}>
                   <Select
                     id={`wizard-reclassify-mode-${row.objectId}`}
                     value={mode}
@@ -262,7 +300,10 @@ function OperationReviewRow({
                     ))}
                   </Select>
                 </Field>
-                <Field id={`wizard-reclassify-blast-${row.objectId}`} label="Blast radius">
+                <Field
+                  id={`wizard-reclassify-blast-${row.objectId}`}
+                  label={t('影响范围', 'Blast radius')}
+                >
                   <Select
                     id={`wizard-reclassify-blast-${row.objectId}`}
                     value={blastRadius}
@@ -283,7 +324,7 @@ function OperationReviewRow({
                     onChange={(e) => setAutoApprovable(e.target.checked)}
                     disabled={busy}
                   />
-                  <span>Auto-approvable</span>
+                  <span>{t('可自动批准', 'Auto-approvable')}</span>
                 </label>
               </div>
               {error !== null ? (
