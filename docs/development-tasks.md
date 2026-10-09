@@ -3809,7 +3809,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 窗口内仍要联网的：每个镜像按 digest 重新验签（刻意保留，不缓存验签结果）、S1 / S2 出网探针（被测功能）、sshd fixture 缓存缺失时的 `apk add`；验签离线化是待评估的想法（遗留 141）。
 - 残留与后续：S2 三个裸 fixture 与 fake-llm 仍在主机构建，sshd 的 `apk add` 层依赖构建缓存，fake-llm 不随发版重建（遗留 139）；控制台 update-feed 的 `applyCommand` 跑检出里的旧脚本、不提示 `--prefetch`（遗留 140，`packages/kernel/src/application/platform/updates.ts`）。
 
-**入口上下文确定性与 `list_facts`（#514，2026-10-09 合入，遗留 135 待回归）**
+**入口上下文确定性与 `list_facts`（#514，2026-10-09 合入，遗留 135 关闭）**
 
 - 根因：`links.recorded_at default now()`，一次 capability 调用一个事务，几十条 Fact 共享同一时间戳；`buildRecentFactsQuery` 的 `order by recorded_at desc limit 20` 在并列组里不确定（去掉 `id desc` 的变异测试让新集成测试失败）。只加 tiebreak 不够：每轮验收是新库新 UUID，选出的仍是任意 20 条，所以同时给"查全"的能力和"样本不是全部"的提示。
 - kernel：`GraphStore.listFactsPage` / `countFactsByLinkType`（`queries.ts` 的 `buildListFactsQuery` / `buildFactCountsByLinkTypeQuery`，复用 `LINK_VISIBLE_PREDICATE` 与 `linkViewerFilter`，即遗留 123 的草稿可见性）；`list_facts` 为 graph 组 / observe / handle / member，auditor 可读，`limit` 默认 50、上限 200（超出截断并 `truncated: true`），游标是不透明的 `(recorded_at 毫秒, id)`，坏游标按无游标处理。按组派生的入口与 Worker 能力上限自动包含它。
