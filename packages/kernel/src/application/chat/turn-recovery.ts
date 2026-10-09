@@ -29,6 +29,13 @@ import { publishChatPushEvent } from './push.js';
  * 'interrupted' : 'completed'`), held here too because the entry extension's `report_turn` races
  * agent-host's `turnEnded` after an abort and the first writer now wins.
  *
+ * Lost messages (STATUS legacy 128): a `message` the runtime handed over — its frame already
+ * acknowledged, so agent-host will not send it again — that the kernel could not store is
+ * recorded on the Turn (`recordMessagePersistFailure`, `metadata.messagePersistFailure`), and
+ * `endTurn` reads a later `completed` on such a Turn as `failed`: `completed` would claim an answer
+ * the history does not have. Stop intent still comes first (a stopped Turn ends `interrupted`, as
+ * before); the record stays on the Turn whatever it ends as.
+ *
  * Push after commit: `endTurn` only writes; the caller pushes the returned `EndedTurn` with
  * `publishTurnEnded` once its transaction has committed (the event sink after `withWorkspace`, a
  * capability handler from `afterCommit`). A push from inside the transaction told a connected client
@@ -60,8 +67,9 @@ function sourceStatesFor(status: TurnEndStatus): string[] {
 /**
  * Moves `turnId` to `status` if `TURN_TRANSITIONS` allows it from the Turn's current state — today
  * only from `running` — and, when this call moved it, enqueues `TurnCompleted` in the same
- * transaction. A `completed` on a Turn whose stop was requested lands as `interrupted` (module
- * doc comment). Resolves with what moved, for the caller to `publishTurnEnded` after its commit,
+ * transaction. A `completed` on a Turn whose stop was requested lands as `interrupted`, and
+ * otherwise on a Turn that lost a message as `failed` (module doc comment). Resolves with what
+ * moved, for the caller to `publishTurnEnded` after its commit,
  * or `undefined` when it did not move (already ended — by any writer, for any reason — or not
  * visible): a duplicate or late report is a no-op, with no second `TurnCompleted` and nothing to
  * push.
@@ -75,7 +83,10 @@ export async function endTurn(
   const result = await client.query<{ chat_id: string | null; status: TurnEndStatus }>(
     `update activities
      set status = case when $3::text = 'completed' and metadata ? 'stopRequestedAt'
-                       then 'interrupted' else $3::text end,
+                       then 'interrupted'
+                       when $3::text = 'completed' and metadata ? 'messagePersistFailure'
+                       then 'failed'
+                       else $3::text end,
          ended_at = now()
      where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = any($4::text[])
      returning chat_id, status`,
@@ -125,6 +136,41 @@ export async function requestTurnStop(
      set metadata = metadata || jsonb_build_object('stopRequestedAt', now())
      where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = 'running'`,
     [workspaceId, turnId],
+  );
+}
+
+/** Messages the kernel received for a Turn and could not store (legacy 128) — see
+ *  `recordMessagePersistFailure`. */
+export interface MessagePersistFailure {
+  /** When the first of them failed. */
+  readonly firstAt: Date;
+  readonly count: number;
+  /** The first failure's SQLSTATE (`22P05` for text `jsonb` cannot hold), or `null` for an error
+   *  that carries none. The full error goes to the log only. */
+  readonly errorCode: string | null;
+}
+
+/**
+ * Records on `turnId` (`metadata.messagePersistFailure`) that `failure.count` more of its messages
+ * could not be stored — merged into what is already there (earliest `firstAt`, summed `count`,
+ * first `errorCode`), whatever the Turn's status. `endTurn` then reads a `completed` on the Turn
+ * as `failed` (module doc comment).
+ */
+export async function recordMessagePersistFailure(
+  client: PoolClient,
+  workspaceId: string,
+  turnId: string,
+  failure: MessagePersistFailure,
+): Promise<void> {
+  await client.query(
+    `update activities
+     set metadata = metadata || jsonb_build_object('messagePersistFailure', jsonb_build_object(
+           'firstAt', least((metadata->'messagePersistFailure'->>'firstAt')::timestamptz,
+                            $3::timestamptz),
+           'count', coalesce((metadata->'messagePersistFailure'->>'count')::int, 0) + $4::int,
+           'errorCode', coalesce(metadata->'messagePersistFailure'->'errorCode', to_jsonb($5::text))))
+     where workspace_id = $1 and id = $2 and kind = 'agent_turn'`,
+    [workspaceId, turnId, failure.firstAt.toISOString(), failure.count, failure.errorCode],
   );
 }
 

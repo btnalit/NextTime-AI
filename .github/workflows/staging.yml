@@ -9,10 +9,14 @@ name: staging
 # what production runs today and passes the acceptance suites there"; the production apply and its
 # own acceptance stay on the host (the runbook lists what this cannot reproduce).
 #
-# Triggers: a pull request or a push to main that touches the release path (migrations, compose,
-# the host / apply / acceptance scripts), and workflow_dispatch for any ref — including a published
-# tag, which is then applied with `--pull` (its signed images) instead of a source build. Not a
-# required check; the review gate still waits for it whenever it runs.
+# Triggers: a pull request that touches the release path (migrations, compose and the deploy/
+# directories it builds or mounts, the host / apply / acceptance scripts and every script they call
+# — scripts/guards/staging-paths.mjs fails CI when the list below misses one), and workflow_dispatch for any ref — including a published tag, which is then
+# applied with `--pull` (its signed images) instead of a source build. Not a required check; the
+# review gate still waits for it whenever it runs. No push-to-main trigger: main only moves through
+# merges of PRs that branch protection keeps up to date (strict), so the PR's last run already
+# rehearsed the tree that lands; the gate before production is the dispatch on the release tag
+# (docs/runbooks/release.md §1 step 5), not a main run.
 #
 # Real-model regression (docs/runbooks/host-accept-real-model.md) runs only on a dispatch with
 # `real_model: true`, in the `staging-real-model` environment (main-only deployment branch; no required
@@ -30,7 +34,7 @@ name: staging
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
       && format('staging {0} -> {1}{2}', inputs.from || 'previous release', inputs.to || github.ref_name, inputs.real_model && ' + real model' || '')
-      || github.event.pull_request.title || github.event.head_commit.message }}
+      || github.event.pull_request.title }}
 
 on:
   pull_request:
@@ -43,26 +47,18 @@ on:
       - scripts/host-*.sh
       - scripts/gen-handle-keys.sh
       - scripts/derive-internal-tokens.sh
+      - scripts/check-backup-freshness.sh
+      - scripts/prune-images.sh
+      - scripts/delete-workspaces-matching.sh
       - scripts/accept_s*.sh
       - scripts/lib/**
       - deploy/accept/**
-      - docker-compose.yml
-      - packages/kernel/migrations/**
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/staging.yml
-      - scripts/staging-rehearsal.sh
-      - scripts/apply-release.sh
-      - scripts/pull-images.sh
-      - scripts/build-images.sh
-      - scripts/host-*.sh
-      - scripts/gen-handle-keys.sh
-      - scripts/derive-internal-tokens.sh
-      - scripts/accept_s*.sh
-      - scripts/lib/**
-      - deploy/accept/**
+      - deploy/accept-s2/**
+      - deploy/backup/**
+      - deploy/caddy/**
+      - deploy/fake-llm/**
+      - deploy/update-feed/**
+      - deploy/worker-runtime/**
       - docker-compose.yml
       - packages/kernel/migrations/**
   workflow_dispatch:
@@ -104,9 +100,8 @@ on:
 permissions:
   contents: read
 
-# Only pull-request runs supersede each other. A push to main queues behind the previous main run
-# instead of cancelling it, and every dispatch (a real-model run included) has a group of
-# its own, so nothing cancels it.
+# A new push to a pull request supersedes its previous run; every dispatch (a real-model run
+# included) has a group of its own, so nothing cancels it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
