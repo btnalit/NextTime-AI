@@ -670,6 +670,14 @@ SQL
 
 **C. 输出里的 Handle 被替换**：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页里都应显示为 `[redacted]`。
 
+### 3.16 llm-proxy 管理接口限流与密钥检查（#521，v0.44.0 起）
+
+无迁移、无新步骤。行为变化：
+- 控制台的拉模型列表、逐模型探测、「测试」按管理员限流（同时 2 个、排队 4 个、每分钟 60 次上游调用），超出时控制台提示暂停几秒，属预期。
+- 含 HTTP header 不能承载的字符（全角空格、中间空格、换行）的供应商密钥，以前让该供应商的每次模型调用 500，现在返回 502 `upstream_key_invalid`，控制台卡片提示「密钥含非法字符，请重新填写」。密钥首尾空白会被去掉，CRLF 结尾的 env 或密钥文件照常可用。
+
+应用后看一次日志：`docker compose logs llm-proxy | grep 'cannot carry'`。有输出就在控制台重新填写对应供应商的密钥（或修好密钥文件 / 环境变量），改之前这个供应商的模型对 agent 不可用。日志只有供应商 id 与来源，不含密钥值。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
