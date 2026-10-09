@@ -224,7 +224,8 @@ for s in $SERVICES; do
       die "signature verification failed: ${REGISTRY}/nexttime-ai-${s}@${digest}: $(printf '%s\n' "$VERIFY_OUT" | tail -n 2 | tr '\n' ' ')"
   fi
   rev=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref")
-  [ "$rev" = "$TAG_REV" ] || die "${ref} revision label '${rev}' != ${TAG}'s commit ${TAG_REV}"
+  [ "$rev" = "$TAG_REV" ] ||
+    die "${ref} revision label '${rev}' != ${TAG}'s commit ${TAG_REV} — this is not ${TAG}'s image; remove it (docker rmi ${ref}) and run the prefetch again"
   if [ "$s" = "worker-runtime" ]; then
     label=$(docker image inspect --format '{{index .Config.Labels "ai.nexttime.pi-version"}}' "$ref")
     [ "$label" = "$PI_VERSION" ] || die "worker-runtime pi label '$label' != ${TAG}'s pi.version '$PI_VERSION'"
@@ -253,7 +254,7 @@ if [ "$prefetch" -eq 1 ]; then
   # Every one is tried before giving up, so a re-run (idempotent: present images are skipped)
   # has only the failures left to fetch.
   [ -z "${missing:-}" ] || die "prefetch incomplete — the platform images are verified, but these failed to pull (re-run to retry):${missing}"
-  echo "pull-images: prefetch done — ${TAG} is on the host and verified; apply it with apply-release.sh --pull ${TAG}"
+  echo "pull-images: prefetch done — ${TAG} is on the host and verified; apply it with the tag's own copy of apply-release.sh (release.md §3): sh /tmp/apply-release-${TAG}.sh --pull ${TAG}"
   exit 0
 fi
 

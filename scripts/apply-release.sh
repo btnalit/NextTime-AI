@@ -148,7 +148,7 @@ if [ "$pull" -eq 1 ]; then
     echo "STEP prefetch-check WARNING not prefetched ($(printf '%s' "$present_out" | tail -n 1)) — --allow-long-pull given, pulling inside the window"
   else
     echo "STEP prefetch-check not prefetched: $(printf '%s' "$present_out" | tail -n 1)"
-    echo "STEP prefetch-check run first, outside the window: apply-release.sh --prefetch $TAG (release.md §3), then this --pull apply"
+    echo "STEP prefetch-check run first, outside the window, the tag's own copy of apply-release.sh (release.md §3): git show $TAG:scripts/apply-release.sh > /tmp/apply-release-$TAG.sh && sh /tmp/apply-release-$TAG.sh --prefetch $TAG — then this --pull apply"
     echo "STEP prefetch-check or accept a pull of up to hours per image inside the window: --pull --allow-long-pull $TAG"
     fail not-prefetched
   fi
@@ -277,7 +277,7 @@ if [ "$pull" -eq 1 ]; then
     # host does not reliably have, and it would accept unsigned host-built code instead of the
     # release. Re-run the prefetch (idempotent) and the apply; a deliberate source build is the
     # no-flag mode.
-    echo "STEP pull failed (rc=$pull_rc) — not falling back to a source build; see $LOG_DIR/apply-$TAG-$TS-pull.log, re-run --prefetch $TAG, then this apply"
+    echo "STEP pull failed (rc=$pull_rc) — not falling back to a source build; see $LOG_DIR/apply-$TAG-$TS-pull.log, re-run the tag's own apply-release.sh --prefetch $TAG (release.md §3), then this apply"
     fail_before_up images
   fi
 fi
