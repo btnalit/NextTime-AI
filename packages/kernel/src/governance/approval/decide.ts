@@ -10,8 +10,8 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { getPublishedOperation } from '../gatekeepers/index.js';
 import {
   assertCredentialsReviewed,
-  countSuspectedSecrets,
   credentialReviewAudit,
+  findSuspectedSecrets,
 } from '../redaction/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
@@ -263,13 +263,14 @@ export async function approveActionRequest(
   // Decision 2026-10-09 "二次确认": suspected credentials in the params this approval releases
   // need the approver's explicit confirmation — counted here, on the locked row, never taken from
   // the client. Same place in the order as the reason gate, for the same reasons.
-  const suspectedSecretValues = countSuspectedSecrets(existing.params, { secretFields: true });
+  const suspectedSecrets = findSuspectedSecrets(existing.params, { secretFields: true });
   assertCredentialsReviewed(
     'action_request',
     existing.id,
-    suspectedSecretValues,
+    suspectedSecrets,
     input.credentialsReviewed,
   );
+  const suspectedSecretValues = suspectedSecrets.count;
 
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'approve');
   const approvalDecisionId = await writeApprovalDecision(client, workspaceId, {

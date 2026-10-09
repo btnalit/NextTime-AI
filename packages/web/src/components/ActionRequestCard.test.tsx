@@ -128,7 +128,6 @@ describe('ActionRequestCard', () => {
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: 'routine restart',
         alwaysAllow: false,
-        credentialsReviewed: false,
       }),
     );
   });
@@ -145,7 +144,6 @@ describe('ActionRequestCard', () => {
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: undefined,
         alwaysAllow: true,
-        credentialsReviewed: false,
       }),
     );
   });
@@ -169,7 +167,6 @@ describe('ActionRequestCard', () => {
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: 'incident 42, approved by on-call',
         alwaysAllow: false,
-        credentialsReviewed: false,
       }),
     );
   });
@@ -225,22 +222,14 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-policy').textContent).toBe('require_approval');
   });
 
-  it('asks for 「已核对凭据」 when the card carries a suspected-credential count (decision 2026-10-09)', async () => {
-    const { props } = renderCard({ card: baseCard({ suspectedSecretValues: 1 }) });
-    expect(screen.getByTestId('credential-review').getAttribute('data-count')).toBe('1');
-    expect((screen.getByTestId('approval-approve') as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByTestId('credential-review-confirm'));
-    fireEvent.click(screen.getByTestId('approval-approve'));
-    await waitFor(() =>
-      expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
-        reason: undefined,
-        alwaysAllow: false,
-        credentialsReviewed: true,
-      }),
-    );
+  it('a card carrying a suspected-credential count sends the approver to the approvals page (decision 2026-10-09)', () => {
+    renderCard({ card: baseCard({ suspectedSecretValues: 1 }) });
+    expect(screen.getByTestId('approval-credential-review').textContent).toContain('含 1 处');
+    expect(screen.queryByTestId('approval-approve')).toBeNull();
+    expect(screen.getByTestId('approval-review-on-page').getAttribute('href')).toContain('ar-1');
   });
 
-  it('a card that did not know the count learns it from the kernel’s 400 and shows the confirmation instead of the error', () => {
+  it('a card that did not know the count learns it from the kernel’s 400 and points to the page instead of showing an error', () => {
     renderCard({
       error: new HttpError(
         'capability_error',
@@ -252,7 +241,8 @@ describe('ActionRequestCard', () => {
         },
       ),
     });
-    expect(screen.getByTestId('credential-review').getAttribute('data-count')).toBe('3');
+    expect(screen.getByTestId('approval-credential-review').textContent).toContain('含 3 处');
+    expect(screen.queryByTestId('approval-approve')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

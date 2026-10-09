@@ -196,12 +196,18 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
   });
 
   it('a row with suspected credentials keeps Approve disabled until 「已核对凭据」, then sends it (decision 2026-10-09)', async () => {
-    const { onApprove } = renderDetail({ suspectedSecretValues: 2 });
+    const { onApprove } = renderDetail({
+      suspectedSecretValues: 2,
+      suspectedSecretPaths: ['token', 'apiKey'],
+    });
     expect(screen.getByTestId('credential-review-warning').textContent).toContain(
       '含 2 处疑似凭据',
     );
+    // Names the fields, so the question is answerable where a value shows as [redacted].
+    expect(screen.getByTestId('credential-review-paths').textContent).toBe('tokenapiKey');
     const approve = screen.getByTestId('approval-approve') as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
+    expect(approve.getAttribute('title')).toBe('先勾选「已核对凭据」');
     fireEvent.click(screen.getByTestId('credential-review-confirm'));
     fireEvent.click(approve);
     await waitFor(() =>

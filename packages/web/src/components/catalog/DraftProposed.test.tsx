@@ -14,6 +14,7 @@ const refused = (count: number) =>
     {
       subject: 'skill',
       suspectedSecretValues: count,
+      suspectedSecretPaths: ['markdown'],
     },
   );
 
@@ -29,6 +30,7 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
         draft={{ id: 'sk-1', version: 1, status: 'draft', name: 'rotate' }}
         onPublish={onPublish}
         onDone={vi.fn()}
+        detailHref="#/govern/catalog/skills/sk-1"
       />,
     );
     expect(screen.queryByTestId('credential-review')).toBeNull();
@@ -41,6 +43,11 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
       '含 2 处疑似凭据',
     );
     expect(screen.queryByTestId('draft-publish-error')).toBeNull();
+    // This screen does not show the content: the question names where and links to it.
+    expect(screen.getByTestId('credential-review-paths').textContent).toBe('markdown');
+    expect(screen.getByTestId('draft-credential-detail-link').getAttribute('href')).toBe(
+      '#/govern/catalog/skills/sk-1',
+    );
     const publish = screen.getByTestId('draft-publish') as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
 

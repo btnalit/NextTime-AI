@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { requestAction } from '../../governance/approval/index.js';
-import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import { proposeOperation, registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -33,6 +33,7 @@ interface ActionRequestWire {
   id: string;
   status: string;
   suspectedSecretValues?: number;
+  suspectedSecretPaths?: string[];
 }
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -173,6 +174,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const pending = await call<ActionRequestWire>('get_action', { actionRequestId: id });
       expect(pending.suspectedSecretValues).toBe(2);
+      expect([...(pending.suspectedSecretPaths ?? [])].sort()).toEqual(['cmd', 'password']);
 
       for (const credentialsReviewed of [undefined, false]) {
         await expect(
@@ -216,6 +218,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const id = await seedPending({ host: 'db.example.invalid', max_tokens: 1024 });
       const pending = await call<ActionRequestWire>('get_action', { actionRequestId: id });
       expect(pending).not.toHaveProperty('suspectedSecretValues');
+      expect(pending).not.toHaveProperty('suspectedSecretPaths');
       const approved = await call<ActionRequestWire>('approve', { actionRequestId: id });
       expect(approved.status).toBe('approved');
       const [transition] = await auditPayloads('action_request.approve', id);
@@ -257,7 +260,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       await expect(call('publish_skill', { skillId: proposed.id })).rejects.toMatchObject({
         code: 'credentials_review_required',
-        details: { subject: 'skill', suspectedSecretValues: 1 },
+        details: { subject: 'skill', suspectedSecretValues: 1, suspectedSecretPaths: ['markdown'] },
       });
       const published = await call<{ status: string }>('publish_skill', {
         skillId: proposed.id,
@@ -304,6 +307,75 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(audit).toMatchObject({
         credentialReview: { suspectedSecretValues: 1, confirmed: true },
       });
+    });
+
+    it('publish_operation: a proposer revising the draft in place while the publish runs cannot slip unchecked content through', async () => {
+      const name = `cr.op.${randomUUID().slice(0, 8)}`;
+      await call('propose_operation', { gatekeeperId, operation: testOperation(name, 'Clean.') });
+
+      // Revision transaction: rewrites the same draft (same version) with a credential and holds
+      // its row lock until released.
+      let revised!: () => void;
+      const revisedP = new Promise<void>((resolve) => {
+        revised = resolve;
+      });
+      let release!: () => void;
+      const releaseP = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const revision = withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revise_operation',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: testOperation(name, `Now with X-Api-Key: ${FAKE}`),
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          revised();
+          await releaseP;
+        },
+      );
+      await revisedP;
+
+      // The publish starts while the revision is uncommitted: it must wait for that row, then see
+      // (and count) the revised content — not publish it on the strength of the clean read.
+      const publish = call('publish_operation', { gatekeeperId, name }).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const waiting = await pool.query<{ n: number }>(
+          `select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock'`,
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0 || Date.now() > deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      release();
+      await revision;
+
+      const outcome = await publish;
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? null : outcome.error).toMatchObject({
+        code: 'credentials_review_required',
+        details: { subject: 'operation', suspectedSecretValues: 1 },
+      });
+      const status = await admin((client) =>
+        client.query<{ status: string }>(
+          `select properties ->> 'status' as status from objects
+           where workspace_id = $1 and object_type = 'Operation'
+             and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3`,
+          [workspaceId, gatekeeperId, name],
+        ),
+      );
+      expect(status.rows.map((row) => row.status)).toEqual(['draft']);
     });
   },
 );

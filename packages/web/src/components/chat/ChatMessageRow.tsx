@@ -19,11 +19,7 @@ export interface ChatMessageRowProps {
   readonly canAlwaysAllow: boolean;
   readonly onApprove: (
     id: string,
-    options: {
-      readonly reason: string | undefined;
-      readonly alwaysAllow: boolean;
-      readonly credentialsReviewed: boolean;
-    },
+    options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
   ) => Promise<void>;
   readonly onReject: (id: string, reason: string | undefined) => Promise<void>;
   readonly onOpenApproval: (actionRequestId: string) => void;

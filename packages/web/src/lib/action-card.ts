@@ -46,6 +46,8 @@ export interface ActionRequestRowLike {
   readonly executedAt?: string | null;
   readonly failedAt?: string | null;
   readonly suspectedSecretValues?: number;
+  /** Where in `params` (field paths only), alongside the count. */
+  readonly suspectedSecretPaths?: readonly string[];
 }
 
 export interface ActionCardData {

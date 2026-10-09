@@ -323,13 +323,14 @@ export async function dispatchCapability(
         resourceType: result.resourceType,
         resourceId: resourceRef.resourceId,
         payload: {
+          // First, so the fixed fields below always win over a handler's additions.
+          ...result.auditPayload,
           channel: caller.channel,
           onBehalfOf,
           ...auditParams(capability, parsed.data as Record<string, unknown>, caller.channel),
           ...(resourceRef.resourceRef !== undefined
             ? { resourceRef: resourceRef.resourceRef }
             : {}),
-          ...result.auditPayload,
         },
       });
       return result;

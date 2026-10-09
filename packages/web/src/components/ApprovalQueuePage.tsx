@@ -379,6 +379,18 @@ function PendingList({
                 {row.awaitDecision && row.status === 'pending_approval' ? (
                   <span className="chip chip-warn chip-s">{t('阻塞中', 'Blocking')}</span>
                 ) : null}
+                {row.suspectedSecretValues !== undefined && row.suspectedSecretValues > 0 ? (
+                  <span
+                    className="chip chip-warn chip-s"
+                    data-testid="approval-row-credentials"
+                    title={t(
+                      `参数里有 ${row.suspectedSecretValues} 处疑似凭据，批准前需要核对确认`,
+                      `${row.suspectedSecretValues} suspected credential value(s) in the parameters; approving needs a confirmation`,
+                    )}
+                  >
+                    {t('含凭据', 'Credentials')}
+                  </span>
+                ) : null}
               </span>
             </ListRow>
           );

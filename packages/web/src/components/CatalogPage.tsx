@@ -382,6 +382,7 @@ function PublishCredentialSlot({
   return (
     <CredentialReview
       count={review.count}
+      paths={review.paths}
       subject="publish"
       checked={review.checked}
       onChange={review.setChecked}

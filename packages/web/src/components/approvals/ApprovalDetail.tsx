@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import { isDecidable } from '../../lib/action-card.js';
 import { auditHref } from '../../lib/audit.js';
-import { credentialReviewCount } from '../../lib/credential-review.js';
+import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
 import {
   formatDateTime,
   formatRelative,
@@ -115,6 +115,7 @@ export function ApprovalDetail({
   const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId;
   // The kernel's count (the wire row's, else its 400 on a first attempt) — never the console's own.
   const suspectedSecretValues = row.suspectedSecretValues ?? credentialReviewCount(error) ?? 0;
+  const suspectedSecretPaths = row.suspectedSecretPaths ?? credentialReviewPaths(error);
   const reviewed = suspectedSecretValues > 0 && credentialsReviewed;
   const approveBlocked = suspectedSecretValues > 0 && !credentialsReviewed;
   const provenance = auditHref({
@@ -451,6 +452,7 @@ export function ApprovalDetail({
 
               <CredentialReview
                 count={suspectedSecretValues}
+                paths={suspectedSecretPaths}
                 subject="approve"
                 checked={credentialsReviewed}
                 onChange={setCredentialsReviewed}
@@ -462,6 +464,11 @@ export function ApprovalDetail({
                   variant="primary"
                   aria-busy={busy === 'approve'}
                   disabled={approveBlocked || busy !== null}
+                  title={
+                    approveBlocked
+                      ? t('先勾选「已核对凭据」', 'Tick “Credentials reviewed” first')
+                      : undefined
+                  }
                   onClick={() => void decide('approve')}
                   data-testid="approval-approve"
                 >

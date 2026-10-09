@@ -22,6 +22,7 @@ import type { SkillRow } from '../../lib/governance.js';
 import { objectTypeOptions } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import { Combobox, ComboboxChips } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -182,6 +183,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       <DraftProposed
         kindLabel="Skill"
         draft={proposed}
+        detailHref={hrefs.catalog('skills', proposed.id)}
         onPublish={
           permissions.isDenied('publish_skill')
             ? undefined

@@ -41,6 +41,9 @@ export interface DraftProposedProps {
   /** Skill / Procedure drafts are also visible to the workspace owner and builders, who review
    *  and publish them (D-26 rule); WorkerDefinition drafts stay the proposer's alone. */
   readonly reviewersSeeDraft?: boolean;
+  /** The draft's detail in the catalog, where its content is shown — the credential question
+   *  (decision 2026-10-09 "二次确认") points there, since this screen does not show the content. */
+  readonly detailHref?: string;
 }
 
 /**
@@ -57,6 +60,7 @@ export function DraftProposed({
   note,
   unpublishedConsequence,
   reviewersSeeDraft = false,
+  detailHref,
 }: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
@@ -138,7 +142,20 @@ export function DraftProposed({
       {status === 'draft' && onPublish ? (
         <CredentialReview
           count={credentialReview.count}
+          paths={credentialReview.paths}
           subject="publish"
+          where={
+            detailHref !== undefined ? (
+              <a href={detailHref} data-testid="draft-credential-detail-link">
+                {t('查看草稿内容后再确认', 'See the draft’s content before confirming')}
+              </a>
+            ) : (
+              t(
+                '这一页不显示内容：可在能力目录里打开这个草稿核对。',
+                'This screen does not show the content: open this draft in the catalog to check it.',
+              )
+            )
+          }
           checked={credentialReview.checked}
           onChange={credentialReview.setChecked}
           disabled={busy}

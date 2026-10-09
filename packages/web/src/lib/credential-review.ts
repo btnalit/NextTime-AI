@@ -18,6 +18,16 @@ export function credentialReviewCount(err: unknown): number | null {
   return typeof count === 'number' && Number.isInteger(count) && count > 0 ? count : 1;
 }
 
+/** The field paths a refused call named (`details.suspectedSecretPaths`) — empty when `err` is not
+ *  that refusal or the kernel named none. */
+export function credentialReviewPaths(err: unknown): readonly string[] {
+  if (credentialReviewCount(err) === null) return [];
+  const paths = (err as HttpError).details?.suspectedSecretPaths;
+  return Array.isArray(paths)
+    ? paths.filter((path): path is string => typeof path === 'string')
+    : [];
+}
+
 /** The params field a confirmed call adds — nothing when there was nothing to confirm, so an
  *  ordinary call's params are unchanged. */
 export function credentialReviewParams(confirmed: boolean): { credentialsReviewed?: true } {
@@ -27,6 +37,8 @@ export function credentialReviewParams(confirmed: boolean): { credentialsReviewe
 export interface PublishCredentialReview {
   /** The kernel's count for the current subject — 0 until a publish of it was refused. */
   readonly count: number;
+  /** Where the kernel found them (field paths), from the same refusal. */
+  readonly paths: readonly string[];
   readonly checked: boolean;
   /** The question is open and unanswered: keep Publish disabled. */
   readonly blocked: boolean;
@@ -49,13 +61,15 @@ export function usePublishCredentialReview(subjectKey: string | null): PublishCr
   const [state, setState] = useState<{
     readonly key: string | null;
     readonly count: number;
+    readonly paths: readonly string[];
     readonly checked: boolean;
-  }>({ key: null, count: 0, checked: false });
+  }>({ key: null, count: 0, paths: [], checked: false });
   const current = subjectKey !== null && state.key === subjectKey;
   const count = current ? state.count : 0;
   const checked = current && state.checked;
   return {
     count,
+    paths: current ? state.paths : [],
     checked,
     blocked: count > 0 && !checked,
     setChecked: (next) =>
@@ -64,7 +78,12 @@ export function usePublishCredentialReview(subjectKey: string | null): PublishCr
     capture: (err) => {
       const refused = credentialReviewCount(err);
       if (refused === null) return false;
-      setState({ key: subjectKey, count: refused, checked: false });
+      setState({
+        key: subjectKey,
+        count: refused,
+        paths: credentialReviewPaths(err),
+        checked: false,
+      });
       return true;
     },
   };

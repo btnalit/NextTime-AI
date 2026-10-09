@@ -1,7 +1,6 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
 import { useT } from '../../lib/i18n.js';
-import { CredentialReview } from '../kit/credential-review.js';
 import { Button } from './Button.js';
 import { Field, Textarea } from './Field.js';
 import { RefChip } from './RefChip.js';
@@ -34,24 +33,17 @@ export interface ApprovalCardProps {
   readonly reasonRequired?: boolean;
   /** "在审批页打开" — the queue page's deep link; omitted when already there. */
   readonly approvalsHref?: string;
-  /** The kernel's suspected credential count for the params (decision 2026-10-09 "二次确认"):
-   *  above 0, Approve / Always allow stay disabled until the reader ticks 「已核对凭据」, and the
-   *  callbacks receive `credentialsReviewed: true`. */
+  /** The kernel's suspected credential count for the params (decision 2026-10-09 "二次确认").
+   *  Above 0 the card offers no Approve / Always allow: approving needs the params in view and an
+   *  explicit confirmation, which the approvals page gives — the card says so and links there.
+   *  Reject stays. */
   readonly suspectedSecretValues?: number;
-  /** `credentialsReviewed`: the reader ticked the confirmation (always `false` when there was
-   *  nothing to confirm). */
-  readonly onApprove?: (
-    reason: string | undefined,
-    credentialsReviewed: boolean,
-  ) => void | Promise<void>;
+  readonly onApprove?: (reason: string | undefined) => void | Promise<void>;
   readonly onReject?: (reason: string | undefined) => void | Promise<void>;
   /** "总是允许 Always allow this kind" — operator+ only; omit to hide. */
   /** "总是允许": approve this request AND auto-approve its action kind from now on. Receives the
    *  typed reason (if any) so a reason given before choosing this button is not dropped. */
-  readonly onAlwaysAllow?: (
-    reason: string | undefined,
-    credentialsReviewed: boolean,
-  ) => void | Promise<void>;
+  readonly onAlwaysAllow?: (reason: string | undefined) => void | Promise<void>;
   /** Decided / not actionable: no buttons, status only. */
   readonly readOnly?: boolean;
   readonly testId?: string;
@@ -91,10 +83,6 @@ export function ApprovalCard({
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'approve' | 'reject' | 'always' | null>(null);
-  const [credentialsReviewed, setCredentialsReviewed] = useState(false);
-  const needsReview = suspectedSecretValues > 0;
-  const reviewed = needsReview && credentialsReviewed;
-  const approveBlocked = needsReview && !credentialsReviewed;
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const reasonId = useId();
   const titleId = useId();
@@ -111,14 +99,17 @@ export function ApprovalCard({
     setReasonError(null);
     setBusy(kind);
     try {
-      if (kind === 'approve') await onApprove?.(trimmed === '' ? undefined : trimmed, reviewed);
+      if (kind === 'approve') await onApprove?.(trimmed === '' ? undefined : trimmed);
       else if (kind === 'reject') await onReject?.(trimmed === '' ? undefined : trimmed);
-      else await onAlwaysAllow?.(trimmed === '' ? undefined : trimmed, reviewed);
+      else await onAlwaysAllow?.(trimmed === '' ? undefined : trimmed);
     } finally {
       setBusy(null);
     }
   }
 
+  const needsReview = suspectedSecretValues > 0;
+  const approveHere = needsReview ? undefined : onApprove;
+  const alwaysAllowHere = needsReview ? undefined : onAlwaysAllow;
   const showActions = !readOnly && (onApprove || onReject || onAlwaysAllow);
   return (
     <article
@@ -228,24 +219,31 @@ export function ApprovalCard({
               data-testid="approval-reason"
             />
           </Field>
-          <CredentialReview
-            count={suspectedSecretValues}
-            subject="approve"
-            checked={credentialsReviewed}
-            onChange={setCredentialsReviewed}
-            disabled={busy !== null}
-          />
+          {needsReview ? (
+            <p className="notice notice-warn m-0" data-testid="approval-credential-review">
+              <strong>
+                {t(
+                  `含 ${suspectedSecretValues} 处疑似凭据。`,
+                  `${suspectedSecretValues} suspected credential value(s).`,
+                )}
+              </strong>{' '}
+              {t(
+                '批准前要看清参数并确认，这一步只能在审批页做。',
+                'Approving needs the parameters in view and an explicit confirmation — only on the approvals page.',
+              )}{' '}
+              {approvalsHref !== undefined ? (
+                <a href={approvalsHref} data-testid="approval-review-on-page">
+                  {t('去审批页核对', 'Review on the approvals page')}
+                </a>
+              ) : null}
+            </p>
+          ) : null}
           <div className="approval-card-actions">
-            {onApprove ? (
+            {approveHere ? (
               <Button
                 variant="primary"
                 loading={busy === 'approve'}
-                disabled={approveBlocked || (busy !== null && busy !== 'approve')}
-                title={
-                  approveBlocked
-                    ? t('先勾选「已核对凭据」', 'Tick “Credentials reviewed” first')
-                    : undefined
-                }
+                disabled={busy !== null && busy !== 'approve'}
                 onClick={() => void decide('approve')}
                 data-testid="approval-approve"
               >
@@ -263,18 +261,18 @@ export function ApprovalCard({
                 {t('拒绝', 'Reject')}
               </Button>
             ) : null}
-            {onAlwaysAllow ? (
+            {alwaysAllowHere ? (
               <Button
                 variant="secondary"
                 loading={busy === 'always'}
-                disabled={approveBlocked || (busy !== null && busy !== 'always')}
+                disabled={busy !== null && busy !== 'always'}
                 onClick={() => void decide('always')}
                 data-testid="approval-always-allow"
               >
                 {t('总是允许', 'Always allow')}
               </Button>
             ) : null}
-            {approvalsHref !== undefined ? (
+            {approvalsHref !== undefined && !needsReview ? (
               <a
                 className="approval-card-link"
                 href={approvalsHref}

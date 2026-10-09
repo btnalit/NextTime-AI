@@ -366,6 +366,13 @@
           ],
           "type": "string"
         },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -5633,6 +5640,13 @@
           ],
           "type": "string"
         },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -9036,6 +9050,13 @@
                 ],
                 "type": "string"
               },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
               "suspectedSecretValues": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
@@ -11700,6 +11721,13 @@
                   "compensated"
                 ],
                 "type": "string"
+              },
+              "suspectedSecretPaths": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
               },
               "suspectedSecretValues": {
                 "exclusiveMinimum": 0,
@@ -17692,6 +17720,13 @@
           ],
           "type": "string"
         },
+        "suspectedSecretPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -18624,6 +18659,13 @@
                 "compensated"
               ],
               "type": "string"
+            },
+            "suspectedSecretPaths": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20,
+              "type": "array"
             },
             "suspectedSecretValues": {
               "exclusiveMinimum": 0,

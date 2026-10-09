@@ -28,12 +28,7 @@ export interface ActionRequestCardProps {
    *  through `error`. */
   readonly onApprove: (
     actionRequestId: string,
-    options: {
-      readonly reason: string | undefined;
-      readonly alwaysAllow: boolean;
-      /** The reader ticked 「已核对凭据」 (decision 2026-10-09 "二次确认"). */
-      readonly credentialsReviewed: boolean;
-    },
+    options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
   ) => void | Promise<void>;
   readonly onReject: (actionRequestId: string, reason: string | undefined) => void | Promise<void>;
   /** `false` hides "总是允许 Always allow" — `set_auto_approved_action_kind` is operator+, and
@@ -65,7 +60,6 @@ export function ActionRequestCard({
   // The reason typed when "总是允许" was clicked, while its confirm is open (null = closed).
   const [pendingAlwaysAllow, setPendingAlwaysAllow] = useState<{
     readonly reason: string | undefined;
-    readonly credentialsReviewed: boolean;
   } | null>(null);
   const status = card.status ?? DECIDABLE_STATUS;
   const outcome = (
@@ -97,8 +91,9 @@ export function ActionRequestCard({
   // the rule is keyed by (gate, action kind), so a card whose gate is not known offers none.
   const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high' && card.gatekeeperId !== '';
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
-  // The kernel's count: from the card's own content, else from its 400 on a first attempt (a live
-  // push carries none) — the console never counts on its own.
+  // Decision 2026-10-09 "二次确认": the kernel's count, from the card's own content, else from its
+  // 400 on an approve (a card written before the count existed carries none). Either way the card
+  // then sends the approver to the approvals page instead of approving here.
   const suspectedSecretValues = card.suspectedSecretValues ?? credentialReviewCount(error) ?? 0;
 
   const approvalCard = (
@@ -113,15 +108,9 @@ export function ActionRequestCard({
       approvalsHref={hrefs.approval(card.actionRequestId)}
       readOnly={!decidable}
       suspectedSecretValues={suspectedSecretValues}
-      onApprove={(reason, credentialsReviewed) =>
-        onApprove(card.actionRequestId, { reason, alwaysAllow: false, credentialsReviewed })
-      }
+      onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
       onReject={(reason) => onReject(card.actionRequestId, reason)}
-      onAlwaysAllow={
-        offerAlwaysAllow
-          ? (reason, credentialsReviewed) => setPendingAlwaysAllow({ reason, credentialsReviewed })
-          : undefined
-      }
+      onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
       testId="action-request-card"
     >
       {card.description && card.description !== card.title ? (
@@ -186,13 +175,11 @@ export function ActionRequestCard({
           await onApprove(card.actionRequestId, {
             reason: pendingAlwaysAllow?.reason,
             alwaysAllow: true,
-            credentialsReviewed: pendingAlwaysAllow?.credentialsReviewed ?? false,
           });
         }}
         testId="action-card-always-allow-confirm"
       />
-      {/* A 400 credentials_review_required is answered by the confirmation it opened above, not
-          shown as an error. */}
+      {/* The credential 400 is answered by the card's own pointer to the approvals page. */}
       {error !== null && error !== undefined && credentialReviewCount(error) === null ? (
         <ErrorBanner error={error} />
       ) : null}

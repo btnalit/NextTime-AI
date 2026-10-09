@@ -460,6 +460,7 @@ export async function getOperation(
   workspaceId: string,
   gatekeeperId: string,
   name: string,
+  options: { readonly forUpdate?: boolean } = {},
 ): Promise<OperationRecord | null> {
   const result = await client.query<OperationObjectRow>(
     `select id, identity_key, properties
@@ -475,7 +476,7 @@ export async function getOperation(
          else 2
        end,
        coalesce((properties ->> 'version')::int, 1) desc
-     limit 1`,
+     limit 1${options.forUpdate === true ? ' for update' : ''}`,
     [workspaceId, gatekeeperId, name],
   );
   const row = result.rows[0];
@@ -720,8 +721,9 @@ async function requireOperation(
   workspaceId: string,
   gatekeeperId: string,
   name: string,
+  options: { readonly forUpdate?: boolean } = {},
 ): Promise<OperationRecord> {
-  const record = await getOperation(client, workspaceId, gatekeeperId, name);
+  const record = await getOperation(client, workspaceId, gatekeeperId, name, options);
   if (!record) throw new OperationNotFoundError(gatekeeperId, name);
   return record;
 }
@@ -780,7 +782,14 @@ export async function publishOperation(
   workspaceId: string,
   input: PublishOperationInput,
 ): Promise<OperationRecord> {
-  const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
+  // Locked: what is counted and checked below is exactly what the status flip publishes. Without
+  // the lock, a proposer's in-place revision of this same draft (`proposeOperation`, same version)
+  // could commit between this read and `setOperationStatusObject`, which flips only `status` — the
+  // revised content would go live unchecked. Holding the row makes that revision wait, then fail
+  // its `status = 'draft'` condition (`OperationIdentityConflictError`).
+  const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name, {
+    forUpdate: true,
+  });
   assertPublishAuthority(
     'publish_operation',
     input.actor,

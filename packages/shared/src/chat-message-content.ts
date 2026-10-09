@@ -53,8 +53,8 @@ const SystemActionPendingContent = z.object({
   awaitDecision: z.boolean().optional(),
   isHolder: z.boolean(),
   // Decision 2026-10-09 "二次确认": the ActionRequest's suspected credential count (its wire row's
-  // `suspectedSecretValues`), so the chat card asks for the confirmation `approve` will require.
-  // Absent when zero.
+  // `suspectedSecretValues`), so the chat card can send the approver to the approvals page, where
+  // the params are shown and the confirmation `approve` requires is asked. Absent when zero.
   suspectedSecretValues: z.number().int().positive().optional(),
 });
 

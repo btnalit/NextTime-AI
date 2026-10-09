@@ -16,6 +16,7 @@ import {
 import { usePublishCredentialReview } from '../lib/credential-review.js';
 import { prettyJson } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { hrefs } from '../lib/router.js';
 import {
   GovernanceChangeList,
   governanceChangeSummary,
@@ -358,7 +359,19 @@ function OperationReviewRow({
               ) : null}
               <CredentialReview
                 count={credentialReview.count}
+                paths={credentialReview.paths}
                 subject="publish"
+                where={
+                  <a
+                    href={hrefs.catalog('operations')}
+                    data-testid="wizard-review-credential-where"
+                  >
+                    {t(
+                      '在能力目录中查看这个 Operation 的完整定义',
+                      'See this Operation’s full definition in the catalog',
+                    )}
+                  </a>
+                }
                 checked={credentialReview.checked}
                 onChange={credentialReview.setChecked}
                 disabled={busy}

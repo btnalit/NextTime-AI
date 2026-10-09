@@ -17,6 +17,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
@@ -337,6 +338,7 @@ export function ProcedureEditor({
       <DraftProposed
         kindLabel="Procedure"
         draft={proposed}
+        detailHref={hrefs.catalog('procedures', proposed.id)}
         onPublish={
           permissions.isDenied('publish_procedure')
             ? undefined
