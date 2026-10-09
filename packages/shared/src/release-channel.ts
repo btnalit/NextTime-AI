@@ -17,7 +17,7 @@ import { z } from 'zod';
  *   `RELEASE_CHANNEL_MAX_BYTES`.
  *
  * W1 does not sign the record: it only drives a reminder, never an action (the real upgrade,
- * `scripts/apply-release.sh --pull`, still verifies every image's signature). The defence is HTTPS
+ * the target tag's own `apply-release.sh --pull`, still verifies every image's signature). The defence is HTTPS
  * from GitHub plus this strict, bounded schema — every string has a pattern or a length cap, and
  * the only URLs it can carry are GitHub release or Actions run pages (of any repository: the
  * schema alone cannot know which one). The kernel then keeps only the links into the repository

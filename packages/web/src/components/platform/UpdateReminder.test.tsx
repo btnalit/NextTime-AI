@@ -59,8 +59,22 @@ describe('UpdateReminder', () => {
     expect(steps.textContent).toContain('升级步骤');
     const command = within(steps).getByTestId('update-notice-platform-command');
     expect(command.tagName).toBe('CODE');
-    expect(command.textContent).toBe('sh scripts/apply-release.sh --pull v0.43.0');
-    expect(steps.textContent).toContain('先备份');
+    expect(command.textContent).toBe('sh /tmp/apply-release-v0.43.0.sh --pull v0.43.0');
+    // Legacy 140: the prefetch comes first, before the window, with the tag's own script.
+    const prefetch = within(steps).getByTestId('update-notice-platform-prefetch-commands');
+    expect(prefetch.textContent).toBe(
+      [
+        'git fetch -q origin --tags',
+        'git show v0.43.0:scripts/apply-release.sh > /tmp/apply-release-v0.43.0.sh',
+        'sh /tmp/apply-release-v0.43.0.sh --prefetch v0.43.0',
+      ].join('\n'),
+    );
+    const prefetchStep = within(steps).getByTestId('update-notice-platform-prefetch').textContent;
+    expect(prefetchStep).toContain('维护窗口之前');
+    // The terminal only prints the log path; the verdict is the log's last line.
+    expect(prefetchStep).toContain('终端只打印日志路径');
+    expect(steps.textContent).toContain('tail -f');
+    expect(steps.textContent).toContain('先确认镜像已预拉，再备份');
     expect(within(steps).getByTestId('update-notice-platform-migrations').textContent).toContain(
       'core 0041',
     );

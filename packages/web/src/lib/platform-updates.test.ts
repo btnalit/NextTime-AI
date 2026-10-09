@@ -47,7 +47,12 @@ describe('buildUpdateNotices', () => {
       piVersion: '1.0.2',
       migrations: ['core 0041'],
       breaking: false,
-      applyCommand: 'sh scripts/apply-release.sh --pull v0.43.0',
+      prefetchCommands: [
+        'git fetch -q origin --tags',
+        'git show v0.43.0:scripts/apply-release.sh > /tmp/apply-release-v0.43.0.sh',
+        'sh /tmp/apply-release-v0.43.0.sh --prefetch v0.43.0',
+      ],
+      applyCommand: 'sh /tmp/apply-release-v0.43.0.sh --pull v0.43.0',
       rollbackVersion: 'v0.42.0',
     });
   });
