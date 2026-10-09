@@ -222,6 +222,54 @@ describe('runProviderTest', () => {
     expect(captured[2]?.body).not.toHaveProperty('tool_choice');
   });
 
+  // Every console preset (web lib/provider-form.ts PROVIDER_PRESETS) against both upstream
+  // behaviours the probe can meet: the forced tool_choice accepted, or refused with a 400. Only
+  // the DeepSeek text is verbatim (the 4.7b host check); the others stand for "a thinking / reasoning
+  // mode that allows only auto" and are not quotes. Anthropic never forces (see the header comment).
+  const PRESET_KINDS = [
+    ['openai', 'openai-completions', 'gpt-5'],
+    ['deepseek', 'openai-completions', 'deepseek-reasoner'],
+    ['openrouter', 'openai-completions', 'deepseek/deepseek-r1'],
+    ['moonshot', 'openai-completions', 'kimi-k2-thinking'],
+    ['dashscope', 'openai-completions', 'qwen3-max'],
+    ['siliconflow', 'openai-completions', 'Qwen/Qwen3-32B'],
+  ] as const;
+  const REFUSALS = {
+    deepseek: 'Thinking mode does not support this tool_choice',
+    other: 'tool_choice only supports "auto" or "none" when thinking is enabled',
+  } as const;
+  for (const [preset, api, model] of PRESET_KINDS) {
+    for (const refuses of [false, true]) {
+      it(`preset ${preset}: tool call ok when the forced tool_choice is ${refuses ? 'refused (retried without it)' : 'accepted'}`, async () => {
+        const { port, captured } = await start((c) => {
+          if (!c.body.tools) {
+            return { status: 200, body: { choices: [{ message: { content: 'OK' } }] } };
+          }
+          if (refuses && c.body.tool_choice) {
+            const message = preset === 'deepseek' ? REFUSALS.deepseek : REFUSALS.other;
+            return { status: 400, body: { error: { message } } };
+          }
+          return {
+            status: 200,
+            body: {
+              choices: [
+                { message: { tool_calls: [{ type: 'function', function: { name: 'ping' } }] } },
+              ],
+            },
+          };
+        });
+        const result = await runProviderTest({
+          provider: provider(api, port),
+          model,
+          realKey: REAL_KEY,
+          timeoutMs: 2000,
+        });
+        expect(result).toMatchObject({ completion: 'ok', tool_call: 'ok', error: null });
+        expect(captured).toHaveLength(refuses ? 3 : 2);
+      });
+    }
+  }
+
   it('when the retry without tool_choice fails too, the error names both rejections', async () => {
     const { port, captured } = await start((c) =>
       c.body.tools
