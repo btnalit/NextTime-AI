@@ -17,6 +17,10 @@ name: ci-image-mirror
 #
 # Triggers:
 #   - push to main that changes this file: a merged pin change is mirrored right away;
+#   - pull_request that changes this file, from a branch of this repository (a fork's token cannot
+#     write packages, so the job is skipped there): the copy exists before the PR that moves a
+#     consumer to it runs its own checks. A PR run can only re-push the pinned digest under the tag;
+#     consumers pull by digest, so even an edited workflow on a branch cannot change what they get;
 #   - workflow_dispatch: copy again by hand (e.g. after a Docker Hub limit failed a run);
 #   - weekly schedule: re-asserts the copy (a deleted package comes back).
 # No retry loop: when Docker Hub still limits this run, it fails and a later trigger copies.
@@ -28,6 +32,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - .github/workflows/ci-image-mirror.yml
+  pull_request:
     paths:
       - .github/workflows/ci-image-mirror.yml
   workflow_dispatch:
@@ -44,6 +51,7 @@ concurrency:
 jobs:
   mirror:
     name: mirror (${{ matrix.name }})
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
