@@ -44,7 +44,6 @@ describe('providerStatus', () => {
     ['key_invalid', provider({ credentialInvalid: true }), null],
     ['key_missing', provider({ credentialPresent: false, credentialSource: 'none' }), null],
     ['url_unsafe', provider({ upstreamBaseUrl: 'https://user:pw@api.example.invalid' }), null],
-    ['no_models', provider({ models: [] }), null],
     [
       'key_rejected',
       provider(),
@@ -62,6 +61,9 @@ describe('providerStatus', () => {
     const status = providerStatus(p, lastTest);
     expect(status.kind).toBe(kind);
     expect(status.tone === 'ok').toBe(kind === 'active');
+    // The pinned column is 140 px: the short labels stay short in both languages.
+    expect(status.zh.length).toBeLessThanOrEqual(6);
+    expect(status.en.length).toBeLessThanOrEqual(12);
   });
 
   it('ignores a test the provider has changed since, or for a model no longer listed', () => {

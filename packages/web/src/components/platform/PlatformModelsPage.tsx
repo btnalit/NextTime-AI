@@ -146,7 +146,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       id: 'status',
       header: t('状态', 'Status'),
       priority: 'high',
-      width: 130,
+      width: 140,
       cell: (provider) => {
         const lastTest = testResults[provider.id] ?? provider.lastTest;
         const status = providerStatus(provider, lastTest);
@@ -157,9 +157,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             data-status={status.kind}
             data-tone={status.tone}
             title={
-              (status.kind === 'key_rejected' || status.kind === 'test_failed') && lastTest?.error
-                ? lastTest.error
-                : undefined
+              status.detailZh
+                ? [t(status.detailZh, status.detailEn ?? status.detailZh), lastTest?.error]
+                    .filter(Boolean)
+                    .join(' — ')
+                : t(status.zh, status.en)
             }
           >
             {t(status.zh, status.en)}
