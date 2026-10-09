@@ -699,8 +699,8 @@ real_chat_dependency_step() {
     case "$last_reply" in *postgres*) names_edge=1 ;; esac
     ok=0
     [ "$turn_status" = "completed" ] && [ "$reads_dependency" -eq 1 ] && [ "$names_edge" -eq 1 ] && ok=1
-    printf 'RUN scenario=dependency_chat run=%s outcome=%s turn=%s reads_dependency=%s names_postgres=%s turn_tools=%s/%s[%s] reply_len=%s\n' \
-      "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$turn_status" "$reads_dependency" "$names_edge" "${tc:-0}" "${te:-0}" "$tn" "${#last_reply}"
+    printf 'RUN scenario=dependency_chat run=%s outcome=%s turn=%s reads_dependency=%s names_postgres=%s says_unavailable=%s turn_tools=%s/%s[%s] reply_len=%s\n' \
+      "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$turn_status" "$reads_dependency" "$names_edge" "$(reply_says_unavailable "$last_reply")" "${tc:-0}" "${te:-0}" "$tn" "${#last_reply}"
     n=$((n + 1)); ok_n=$((ok_n + ok)); tc_sum=$((tc_sum + ${tc:-0})); te_sum=$((te_sum + ${te:-0}))
     i=$((i + 1))
   done

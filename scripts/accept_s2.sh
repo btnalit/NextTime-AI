@@ -1488,23 +1488,28 @@ real_docker_observe_run() {
   i=$1
   run_ts=$(psql_ws "select now()")
   tasks_before=$(task_count)
-  out=$(run_driver send-and-wait "$ALICE_KEY" "" "accept-s2-restart-target 这个容器用的完整镜像引用（含 tag）是什么、主进程执行的命令是什么？用你自己的 docker 观察工具直接看，不要派 Worker，也不要做任何变更。" 180000)
+  out=$(run_driver send-and-wait "$ALICE_KEY" "" "accept-s2-restart-target 这个容器用的完整镜像引用（含 tag 和 digest）是什么、现在是什么运行状态？用你自己的 docker 观察工具直接看，不要派 Worker，也不要做任何变更。" 180000)
   chat_id=$(parse_kv "$out" CHAT_ID)
   t=$(parse_kv "$out" TURN_STATUS)
   tc=$(parse_kv "$out" TOOL_CALLS); te=$(parse_kv "$out" TOOL_ERRORS); tn=$(parse_kv "$out" TOOL_NAMES)
   reply=""
   [ -n "$chat_id" ] && reply=$(chat_assistant_text "$ALICE_KEY" "$chat_id")
-  # The fixture's image and command are guessable defaults, so the reply alone proves nothing: the
-  # docker gate must have audited an observe_operation for this run, and no Task was created.
-  image=0 cmd=0
+  # Asks only for what the docker gate's observe operations return (id/name/image/state/status/
+  # labels — gatekeepers/docker/src/docker-client.ts; the container command is not among them, so
+  # it is not asked for). The image tag and "running" are guessable (reply_says_running in
+  # lib/accept-common.sh refuses a negated or stopped state), so the reply alone proves
+  # nothing: the docker gate must have audited an observe_operation for this run, and no Task was
+  # created. The digest (from the fixture's pinned image reference) is reported, not required.
+  image=0 state=0 digest=0
   case "$reply" in *3.20*) image=1 ;; esac
-  case "$reply" in *sleep*) cmd=1 ;; esac
+  state=$(reply_says_running "$reply")
+  case "$reply" in *d9e853e87e55*) digest=1 ;; esac
   observed=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation' and payload->'params'->>'gatekeeperId'='$GATEKEEPER_ID_DOCKER' and created_at > '$run_ts'")
   ars=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_DOCKER' and requested_at > '$run_ts'")
   tasks_after=$(task_count)
   ok=0
-  [ "$t" = completed ] && [ "$image" -eq 1 ] && [ "$cmd" -eq 1 ] && [ "${observed:-0}" -ge 1 ] && [ "${ars:-1}" -eq 0 ] && [ "$tasks_before" = "$tasks_after" ] && ok=1
-  real_run_line docker_observe "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turn=${t:-none} image_tag_in_reply=$image command_in_reply=$cmd docker_observe_calls=${observed:-0} docker_action_requests=${ars:-?} tasks_unchanged=$([ "$tasks_before" = "$tasks_after" ] && echo 1 || echo 0) turn_tools=${tc:-0}/${te:-0}[${tn}]"
+  [ "$t" = completed ] && [ "$image" -eq 1 ] && [ "$state" -eq 1 ] && [ "${observed:-0}" -ge 1 ] && [ "${ars:-1}" -eq 0 ] && [ "$tasks_before" = "$tasks_after" ] && ok=1
+  real_run_line docker_observe "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turn=${t:-none} image_tag_in_reply=$image running_in_reply=$state digest_in_reply=$digest says_unavailable=$(reply_says_unavailable "$reply") docker_observe_calls=${observed:-0} docker_action_requests=${ars:-?} tasks_unchanged=$([ "$tasks_before" = "$tasks_after" ] && echo 1 || echo 0) turn_tools=${tc:-0}/${te:-0}[${tn}]"
   real_stat_add docker_observe "$ok" "${tc:-0}" "${te:-0}" 0 0
   return 0
 }
