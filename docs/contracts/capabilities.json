@@ -8095,6 +8095,50 @@
     "sideEffects": false
   },
   {
+    "channel": "handle",
+    "group": "graph",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "graph_overview",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "factCountsByLinkType": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "linkType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "linkType",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "factCountsByLinkType"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "human",
     "group": "modules",
     "minRole": "owner",

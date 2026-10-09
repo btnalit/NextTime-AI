@@ -174,6 +174,11 @@ export interface Capability {
 const id = z.string().min(1);
 const jsonRecord = z.record(z.string(), z.unknown());
 const noParams = z.object({}).strict();
+/** Every active Fact counted per `linkType`, ordered by `linkType` (`get_entry_context`,
+ *  `graph_overview`). */
+const factCountsByLinkTypeSchema = z.array(
+  z.object({ linkType: z.string(), count: z.number().int().nonnegative() }).strict(),
+);
 /** P-B1 `issue_service_handle`: one year, the CLI's own default and ceiling. */
 const SERVICE_HANDLE_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
 /** STATUS leftover 89 `attest_fact`: bounds on the attestation's note and optional link — exported
@@ -638,6 +643,22 @@ const graphCapabilities: readonly Capability[] = [
       'Principal (a collector, an external runtime), its newest observation, and whether that ' +
       'observation is older than the collector-silence threshold. Surfaces the same signal ' +
       '`ops.collector_silent` checks cross-workspace, scoped to the caller’s own workspace.',
+  },
+  {
+    // Console audit P2 (browse the graph by relationship type): the relationship types that exist
+    // and how many active Facts each has, without `get_entry_context`'s per-principal approvals
+    // and Tasks — the console's entry point to `list_facts`.
+    name: 'graph_overview',
+    group: 'graph',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: noParams,
+    resultSchema: z.object({ factCountsByLinkType: factCountsByLinkTypeSchema }).strict(),
+    description:
+      'Every currently-active Fact counted per relationship type (`linkType`), ordered by ' +
+      'linkType — the graph’s whole relationship shape, narrowed to what the caller may see. A ' +
+      'link type that is not listed has no active Fact. Enumerate one with `list_facts`.',
   },
   {
     name: 'find_operations',
@@ -2079,9 +2100,7 @@ const taskCapabilities: readonly Capability[] = [
         // Every active Fact counted per `linkType` (ordered by `linkType`): the whole graph's
         // relationship shape, so an agent knows what `list_facts` can enumerate. Additive; an
         // entry runtime that predates it ignores it.
-        factCountsByLinkType: z.array(
-          z.object({ linkType: z.string(), count: z.number().int().nonnegative() }).strict(),
-        ),
+        factCountsByLinkType: factCountsByLinkTypeSchema,
         precedents: z.array(z.unknown()),
       })
       .strict(),

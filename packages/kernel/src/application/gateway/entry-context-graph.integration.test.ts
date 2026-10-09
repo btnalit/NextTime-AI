@@ -221,6 +221,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
+    it('graph_overview returns the same counts on their own, through the same entry Handle', async () => {
+      const overview = await call<{ factCountsByLinkType: EntryContext['factCountsByLinkType'] }>(
+        'graph_overview',
+        {},
+      );
+      const context = await call<EntryContext>('get_entry_context', {});
+      expect(overview).toEqual({ factCountsByLinkType: context.factCountsByLinkType });
+    });
+
     it('list_facts answers "哪个服务依赖哪个" in one call, naming both endpoints', async () => {
       const result = await call<ListFactsResult>('list_facts', { linkType: 'depends_on' });
 

@@ -325,7 +325,7 @@ flowchart TB
 | gateway | 两类通道认证；解析 (principal, session, on_behalf_of, actor_runtime, capability, target)；限流；审计入口 | 无 |
 | chat | Chat / Turn 持久化；WS RPC（§9.4）；把宿主转发的 pi 事件变成流事件推给该用户；把待审批与任务状态作为卡片推送 | Chat / Message |
 | ontology | OntologyVersion 生命周期；类型校验；JSON Schema 投影；平台元本体 | 类型、WorkerDefinition、Gatekeeper、Capability 对象 |
-| graph | Object / Link / Fact 写入与查询；`traverse` / `search` / `list_facts` / `state_at`；`find_operations` / `find_workers` / `find_procedures` | Object / Link |
+| graph | Object / Link / Fact 写入与查询；`traverse` / `search` / `list_facts` / `graph_overview` / `state_at`；`find_operations` / `find_workers` / `find_procedures` | Object / Link |
 | epistemic | Activity / Observation / Evidence / Conflict / Decision；`explain`；可见性 | 同名对象 |
 | policy | 数据化规则；`evaluate`；双信号；`requester_can_approve` | Policy |
 | approval | ActionRequest 状态机；drain（每 Gatekeeper 单飞、升序、遇 pending 或 executing 停——串行是保证）；`approve` 同事务写 Approval Decision | ActionRequest |
@@ -712,7 +712,7 @@ create table worker_definitions (
 |----|-----------|------|------|
 | chat | `list_chats` / `new_chat` / `send_chat_message` / `stop_agent` / `get_chat_history` / `subscribe_chat` | human | 只走 human 通道 |
 | ontology | `publish_ontology_version` / `propose_ontology_change` / `get_type` / `list_types` / `validate` | execute（human）/ propose / observe | |
-| graph | `get_object` / `traverse` / `search` / `list_facts` / `state_at` / `find_operations` / `find_workers` / `find_procedures` | observe | 结果带 `epistemic_status`；`find_*` 与调用者 Grant 取交集 |
+| graph | `get_object` / `traverse` / `search` / `list_facts` / `graph_overview` / `state_at` / `find_operations` / `find_workers` / `find_procedures` | observe | 结果带 `epistemic_status`；`find_*` 与调用者 Grant 取交集 |
 | gate | `<gate>.<op>`（observe 类） | observe | 接口清单投影出的工具；入口与 Worker 均可 |
 | | `<gate>.<op>`（execute 类）经 `request_action` | execute | 只有 Worker 的 Handle 可含 |
 | connection | `request_connection` | propose（Handle 通道） | 产生连接请求卡片 |
