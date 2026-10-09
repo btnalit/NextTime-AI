@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -87,7 +88,27 @@ describe('readBackupStatus', () => {
   it('an oversized file is not taken for the marker', async () => {
     const file = path.join(dir, 'last-success');
     await writeFile(file, `${marker('2026-10-03T03:30:00Z')}${'x'.repeat(5000)}`);
-    expect((await readBackupStatus(file, NOW)).status).toBe('unknown');
+    const status = await readBackupStatus(file, NOW);
+    expect(status.status).toBe('unknown');
+    expect(status.detail).toContain('bytes — not a backup marker');
+  });
+
+  it('a symlink is refused, not followed (#530 review)', async () => {
+    const real = path.join(dir, 'elsewhere');
+    await writeFile(real, marker('2026-10-03T03:30:00Z'));
+    const file = path.join(dir, 'last-success');
+    await symlink(real, file);
+    const status = await readBackupStatus(file, NOW);
+    expect(status.status).toBe('unknown');
+    expect(status.detail).toContain('symlink');
+  });
+
+  it('a FIFO is refused without blocking the read (#530 review)', async () => {
+    const file = path.join(dir, 'last-success');
+    execFileSync('mkfifo', [file]);
+    const status = await readBackupStatus(file, NOW);
+    expect(status.status).toBe('unknown');
+    expect(status.detail).toContain('not a regular file');
   });
 });
 

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readSmallRegularFile } from '../safe-file-read.js';
 import {
   MODELS_JSON_MAX_BYTES,
   ModelsCatalogUnavailableError,
@@ -10,7 +11,6 @@ import {
   readModelCatalog,
   readModelCatalogWithHealth,
   readProviderHealth,
-  readSmallRegularFile,
 } from './models-catalog-handler.js';
 
 const VALID_HEALTH = {

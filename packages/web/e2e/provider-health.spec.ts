@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { type Page, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
 
@@ -57,8 +60,21 @@ async function signInAsAdmin(page: Page): Promise<void> {
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
-function sudo(args: readonly string[], input?: string): string {
-  return execFileSync('sudo', ['-n', ...args], { input, encoding: 'utf8' });
+function sudo(args: readonly string[]): string {
+  return execFileSync('sudo', ['-n', ...args], { encoding: 'utf8' });
+}
+
+/** Replaces the health file with `content`, owned and moded as llm-proxy writes it. Through a
+ *  temp file: a child's stdin here is a socket, which `install /dev/stdin` cannot open (ENXIO). */
+function installHealthFile(file: string, content: string): void {
+  const dir = mkdtempSync(join(tmpdir(), 'provider-health-'));
+  try {
+    const source = join(dir, 'provider-health.json');
+    writeFileSync(source, content);
+    sudo(['install', '-m', '0644', '-o', '10001', '-g', '10001', '--', source, file]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function openOverview(page: Page): Promise<void> {
@@ -80,10 +96,7 @@ test.describe('provider health reaches the overview and the model pickers (#530)
   let original = '';
   /** Back to the fixture, with the owner and mode llm-proxy gives the file on a host. */
   function restore(): void {
-    sudo(
-      ['install', '-m', '0644', '-o', '10001', '-g', '10001', '/dev/stdin', HEALTH_FILE as string],
-      original,
-    );
+    installHealthFile(HEALTH_FILE as string, original);
   }
   test.beforeAll(() => {
     original = sudo(['cat', HEALTH_FILE as string]);
@@ -111,8 +124,17 @@ test.describe('provider health reaches the overview and the model pickers (#530)
   });
 
   for (const [label, corrupt] of [
-    ['a corrupt file', (file: string) => sudo(['tee', file], '{ not json')],
-    ['a missing file', (file: string) => sudo(['rm', '-f', file])],
+    ['a corrupt file', (file: string) => installHealthFile(file, '{ not json')],
+    [
+      'a missing file',
+      (file: string) => {
+        // `sudo rm` on a path from the environment: only ever the health file itself.
+        if (basename(file) !== 'provider-health.json') {
+          throw new Error(`refusing to remove ${file}: not a provider-health.json`);
+        }
+        sudo(['rm', '-f', '--', file]);
+      },
+    ],
   ] as const) {
     test(`unknown state (${label}): nothing reads as available, and every place says so`, async ({
       page,

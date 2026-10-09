@@ -362,8 +362,10 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     );
   }
 
-  /** Rewrites the provider-health file (best effort: a failure is logged, never fatal — the
-   *  model pickers then show the previous health, and the next mutation or restart retries). */
+  /** Rewrites the provider-health file (best effort: a failure is logged, never fatal). A failed
+   *  rewrite removes or empties the previous file (provider-health-file.ts
+   *  `refreshProviderHealthFile`), so the pickers show 状态未知 — never the health from before
+   *  this change — until the next change or restart writes it again. */
   async function refreshProviderHealth(): Promise<void> {
     const write = options.writeProviderHealth;
     if (!write) return;
@@ -373,11 +375,16 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
       await healthWrites.runExclusive(write);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const invalidation = (err as { invalidation?: unknown } | undefined)?.invalidation;
+      const stale = invalidation === 'stale';
       log(
         JSON.stringify({
-          level: 'warn',
-          msg: 'llm-proxy: provider-health.json rewrite failed — model pickers show the previous provider health until the next change or restart',
+          level: stale ? 'error' : 'warn',
+          msg: stale
+            ? 'llm-proxy: provider-health.json rewrite failed and the previous file could not be removed or emptied — model pickers may show stale provider health until the next change or restart'
+            : 'llm-proxy: provider-health.json rewrite failed — model pickers show every provider as status unknown until the next change or restart',
           error: code ?? String(err).slice(0, 200),
+          previousFile: invalidation,
         }),
       );
     }

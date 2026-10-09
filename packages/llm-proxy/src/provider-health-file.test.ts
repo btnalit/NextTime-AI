@@ -1,4 +1,14 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProviderHealthFileSchema } from '@nexttime/shared';
@@ -6,8 +16,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import {
+  ProviderHealthWriteError,
   buildProviderHealthFile,
+  invalidateProviderHealthFile,
   providerHealthOutFile,
+  refreshProviderHealthFile,
   writeProviderHealthAtomic,
 } from './provider-health-file.js';
 import { ProviderStore } from './provider-store.js';
@@ -104,5 +117,66 @@ describe('writeProviderHealthAtomic', () => {
       }),
     ).rejects.toThrow();
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('refreshProviderHealthFile: a failed rewrite never leaves the previous health (#530 review)', () => {
+  const PREVIOUS =
+    '{"version":1,"writtenAt":"2026-10-09T00:00:00.000Z","providers":{"a":{"status":"ok","testedAt":"2026-10-09T00:00:00.000Z"}}}\n';
+  const NEXT = {
+    version: 1 as const,
+    writtenAt: '2026-10-09T01:00:00.000Z',
+    providers: { a: { status: 'key_missing' as const, testedAt: null } },
+  };
+
+  it('a successful rewrite replaces the file', async () => {
+    const dir = tempDir();
+    const out = join(dir, 'provider-health.json');
+    writeFileSync(out, PREVIOUS);
+    await refreshProviderHealthFile(out, () => NEXT);
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual(NEXT);
+  });
+
+  it('a snapshot that cannot be built removes the previous file, so the kernel reads missing', async () => {
+    const dir = tempDir();
+    const out = join(dir, 'provider-health.json');
+    writeFileSync(out, PREVIOUS);
+    const failed = await refreshProviderHealthFile(out, () => {
+      throw Object.assign(new Error('boom'), { code: 'EBOOM' });
+    }).catch((err: unknown) => err);
+    expect(failed).toBeInstanceOf(ProviderHealthWriteError);
+    expect(failed).toMatchObject({ code: 'EBOOM', invalidation: 'removed' });
+    expect(existsSync(out)).toBe(false);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a directory that refuses the rewrite (and the unlink) gets the previous file emptied in place',
+    async () => {
+      const dir = tempDir();
+      const out = join(dir, 'provider-health.json');
+      writeFileSync(out, PREVIOUS, { mode: 0o644 });
+      chmodSync(dir, 0o555);
+      try {
+        await expect(refreshProviderHealthFile(out, () => NEXT)).rejects.toMatchObject({
+          code: 'EACCES',
+          invalidation: 'emptied',
+        });
+        expect(statSync(out).size).toBe(0);
+        expect(readdirSync(dir)).toEqual(['provider-health.json']);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
+
+  it('no previous file is reported as absent; a symlink is removed, never written through', async () => {
+    const dir = tempDir();
+    expect(await invalidateProviderHealthFile(join(dir, 'provider-health.json'))).toBe('absent');
+    const target = join(dir, 'elsewhere.json');
+    writeFileSync(target, PREVIOUS);
+    symlinkSync(target, join(dir, 'provider-health.json'));
+    expect(await invalidateProviderHealthFile(join(dir, 'provider-health.json'))).toBe('removed');
+    expect(readFileSync(target, 'utf8')).toBe(PREVIOUS);
   });
 });

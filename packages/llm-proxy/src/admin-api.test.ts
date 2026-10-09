@@ -20,7 +20,7 @@ import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
 import { KeyStore, KeyStoreError } from './key-store.js';
-import { buildProviderHealthFile, writeProviderHealthAtomic } from './provider-health-file.js';
+import { buildProviderHealthFile, refreshProviderHealthFile } from './provider-health-file.js';
 import { providerCredentialFacts } from './provider-keys.js';
 import type { ListUpstreamModelsResult } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
@@ -174,8 +174,7 @@ async function harness(
         buildModelsJsonFromCatalog(catalog, { llmProxyPort: 8082 }),
       ),
     writeProviderHealth: () =>
-      writeProviderHealthAtomic(
-        healthFile,
+      refreshProviderHealthFile(healthFile, () =>
         buildProviderHealthFile(catalog, (provider) =>
           providerCredentialFacts(
             provider.id,

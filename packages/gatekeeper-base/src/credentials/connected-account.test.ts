@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,6 +17,20 @@ describe('ConnectedAccountStore', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('the first write sweeps temp files an interrupted earlier process left (#530 review)', async () => {
+    await writeFile(
+      join(dir, '.connected-accounts.json.0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp'),
+      'leftover',
+    );
+    await writeFile(
+      join(dir, 'connected-accounts.json.0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp'),
+      'leftover',
+    );
+    const store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
+    await store.set('user-a', { token: 'secret-a' });
+    expect((await readdir(dir)).sort()).toEqual(['connected-accounts.json', 'store.key']);
   });
 
   it('round-trips a credential per on_behalf_of, encrypted at rest', async () => {

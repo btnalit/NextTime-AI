@@ -2,6 +2,7 @@ import { constants, type FileHandle, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ProviderHealthFileSchema, type ProviderHealthWire } from '@nexttime/shared';
 import { z } from 'zod';
+import { UnsafeFileError, readSmallRegularFile } from '../safe-file-read.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
 /**
@@ -77,61 +78,6 @@ function resolveProviderHealthFile(env: NodeJS.ProcessEnv): string {
 export const MODELS_JSON_MAX_BYTES = 4 * 1024 * 1024;
 export const PROVIDER_HEALTH_MAX_BYTES = 1024 * 1024;
 
-/** Why `readSmallRegularFile` refused a file: not there, or there but not a file to trust. */
-export class UnsafeFileError extends Error {
-  readonly reason: 'missing' | 'symlink' | 'not_regular' | 'too_large' | 'unreadable';
-
-  constructor(reason: UnsafeFileError['reason'], message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'UnsafeFileError';
-    this.reason = reason;
-  }
-}
-
-/**
- * Reads a file another process writes into a directory the kernel only mounts (review S2): the
- * final path component must not be a symlink (`O_NOFOLLOW`), the opened file must be a regular
- * file (`fstat` — a FIFO or device is refused without blocking: `O_NONBLOCK`), and it may hold at
- * most `maxBytes` (checked on `fstat` and again while reading, so a file growing after the check
- * still cannot exceed it).
- */
-export async function readSmallRegularFile(file: string, maxBytes: number): Promise<string> {
-  let handle: FileHandle;
-  try {
-    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') throw new UnsafeFileError('missing', `"${file}" does not exist`);
-    if (code === 'ELOOP') throw new UnsafeFileError('symlink', `"${file}" is a symlink`);
-    throw new UnsafeFileError('unreadable', `"${file}" could not be opened`, { cause: err });
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new UnsafeFileError('not_regular', `"${file}" is not a regular file`);
-    }
-    if (stat.size > maxBytes) {
-      throw new UnsafeFileError('too_large', `"${file}" is larger than ${maxBytes} bytes`);
-    }
-    const buffer = Buffer.alloc(maxBytes + 1);
-    let length = 0;
-    while (length <= maxBytes) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
-      if (bytesRead === 0) break;
-      length += bytesRead;
-    }
-    if (length > maxBytes) {
-      throw new UnsafeFileError('too_large', `"${file}" is larger than ${maxBytes} bytes`);
-    }
-    return buffer.subarray(0, length).toString('utf8');
-  } catch (err) {
-    if (err instanceof UnsafeFileError) throw err;
-    throw new UnsafeFileError('unreadable', `"${file}" could not be read`, { cause: err });
-  } finally {
-    await handle.close();
-  }
-}
-
 /**
  * What the kernel knows about provider health: the providers llm-proxy wrote (`state: 'ok'`), or
  * nothing — the file is `missing` (llm-proxy never wrote it: an older llm-proxy, an unwritable
@@ -156,7 +102,8 @@ export async function readProviderHealth(
 ): Promise<ProviderHealthSnapshot> {
   let raw: string;
   try {
-    raw = await readSmallRegularFile(resolveProviderHealthFile(env), PROVIDER_HEALTH_MAX_BYTES);
+    raw = (await readSmallRegularFile(resolveProviderHealthFile(env), PROVIDER_HEALTH_MAX_BYTES))
+      .text;
   } catch (err) {
     const missing = err instanceof UnsafeFileError && err.reason === 'missing';
     return { state: missing ? 'missing' : 'invalid', providers: new Map() };
@@ -182,7 +129,7 @@ async function readModelsJson(env: NodeJS.ProcessEnv): Promise<z.infer<typeof Mo
 
   let raw: string;
   try {
-    raw = await readSmallRegularFile(file, MODELS_JSON_MAX_BYTES);
+    raw = (await readSmallRegularFile(file, MODELS_JSON_MAX_BYTES)).text;
   } catch (err) {
     throw new ModelsCatalogUnavailableError(
       `list_models: could not read models.json at "${file}"`,

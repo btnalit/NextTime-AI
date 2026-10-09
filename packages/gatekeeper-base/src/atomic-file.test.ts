@@ -1,8 +1,18 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeFileAtomic } from './atomic-file.js';
+import { removeStaleTempFiles, writeFileAtomic } from './atomic-file.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -45,5 +55,55 @@ describe('writeFileAtomic', () => {
     await expect(writeFileAtomic(dir, 'new', 0o644)).rejects.toThrow();
     expect(readFileSync(file, 'utf8')).toBe('old');
     expect(readdirSync(dir)).toEqual(['state.json']);
+  });
+});
+
+describe('removeStaleTempFiles (#530 review)', () => {
+  it('removes the temp files an interrupted write of this file left, and nothing else', async () => {
+    const dir = tempDir();
+    const file = join(dir, 'connected-accounts.json');
+    writeFileSync(file, '{}');
+    const ours = [
+      '.connected-accounts.json.0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp',
+      'connected-accounts.json.0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp',
+    ];
+    const theirs = [
+      '.other.json.0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp',
+      'connected-accounts.json.bak',
+      '.connected-accounts.json.not-a-uuid.tmp',
+    ];
+    for (const name of [...ours, ...theirs]) writeFileSync(join(dir, name), 'leftover');
+    mkdirSync(join(dir, '.connected-accounts.json.1b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp'));
+    const elsewhere = join(dir, 'elsewhere');
+    writeFileSync(elsewhere, 'kept');
+    const link = '.connected-accounts.json.2b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp';
+    symlinkSync(elsewhere, join(dir, link));
+
+    const removed = await removeStaleTempFiles(file);
+    expect(removed.sort()).toEqual([...ours, link].sort());
+    expect(readdirSync(dir).sort()).toEqual(
+      [
+        'connected-accounts.json',
+        ...theirs,
+        '.connected-accounts.json.1b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b.tmp',
+        'elsewhere',
+      ].sort(),
+    );
+    expect(readFileSync(elsewhere, 'utf8')).toBe('kept');
+  });
+
+  it('a missing directory is nothing to remove, not an error', async () => {
+    expect(
+      await removeStaleTempFiles(join(tempDir(), 'missing', 'connected-accounts.json')),
+    ).toEqual([]);
+  });
+
+  it('a replacement never gets a permission bit the existing file lacks', async () => {
+    const dir = tempDir();
+    const file = join(dir, 'connected-accounts.json');
+    await writeFileAtomic(file, '{}');
+    chmodSync(file, 0o600);
+    await writeFileAtomic(file, '{"a":1}');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });

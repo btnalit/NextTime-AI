@@ -1,3 +1,4 @@
+import { constants, open, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   PROVIDER_HEALTH_FILE_VERSION,
@@ -52,4 +53,66 @@ export async function writeProviderHealthAtomic(
   health: ProviderHealthFile,
 ): Promise<void> {
   await writeFileAtomic(outFile, `${JSON.stringify(health, null, 2)}\n`, 0o644);
+}
+
+/** What `refreshProviderHealthFile` did with the previous file after a failed rewrite:
+ *  `removed`/`emptied` — the kernel now reads unknown; `absent` — there was none; `stale` — it
+ *  could neither remove nor empty it, so the previous health may still be shown. */
+export type ProviderHealthInvalidation = 'removed' | 'emptied' | 'absent' | 'stale';
+
+export class ProviderHealthWriteError extends Error {
+  readonly code: string;
+  readonly invalidation: ProviderHealthInvalidation;
+
+  constructor(cause: unknown, invalidation: ProviderHealthInvalidation) {
+    const code = (cause as NodeJS.ErrnoException | undefined)?.code ?? 'error';
+    super(`provider-health.json rewrite failed (${code}); previous file ${invalidation}`, {
+      cause,
+    });
+    this.name = 'ProviderHealthWriteError';
+    this.code = code;
+    this.invalidation = invalidation;
+  }
+}
+
+/** Makes sure the kernel cannot read the previous health: unlink it, or — when the directory
+ *  is not writable but the file is (the common way a rewrite fails) — truncate it to zero
+ *  bytes, which the kernel reads as `invalid`. A symlink at the path is never written through. */
+export async function invalidateProviderHealthFile(
+  outFile: string,
+): Promise<ProviderHealthInvalidation> {
+  try {
+    await unlink(outFile);
+    return 'removed';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+  }
+  try {
+    const handle = await open(
+      outFile,
+      constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      if (!(await handle.stat()).isFile()) return 'stale';
+      await handle.truncate(0);
+      return 'emptied';
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return 'stale';
+  }
+}
+
+/** Builds the snapshot and writes it; on any failure (building or writing) invalidates the
+ *  previous file and throws a `ProviderHealthWriteError` saying which way it went. */
+export async function refreshProviderHealthFile(
+  outFile: string,
+  build: () => ProviderHealthFile,
+): Promise<void> {
+  try {
+    await writeProviderHealthAtomic(outFile, build());
+  } catch (err) {
+    throw new ProviderHealthWriteError(err, await invalidateProviderHealthFile(outFile));
+  }
 }

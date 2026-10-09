@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { open, rename, unlink } from 'node:fs/promises';
+import { lstat, open, readdir, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 /**
@@ -14,6 +14,10 @@ import { basename, dirname, join } from 'node:path';
  *   - it is created exclusively (`wx`), written, `fsync`ed and closed before the `rename`, so a
  *     crash cannot publish a file whose data never reached the disk;
  *   - `mode` is applied with `chmod` after creation, so the umask cannot loosen or tighten it;
+ *     the temp file is never looser than the file it becomes — created with `mode` (the umask
+ *     only narrows it), then set to exactly `mode`, the target's mode after the rename — so
+ *     `keys.json`'s temp file is 0600 from its first byte;
+ *   - a temp file a crash left behind is removed at the next startup (`removeStaleTempFiles`);
  *   - the directory is `fsync`ed after the rename (best effort) so the rename itself survives a
  *     crash.
  *
@@ -51,4 +55,48 @@ export async function writeFileAtomic(
   } catch {
     // Some filesystems refuse a directory fsync; the rename already happened.
   }
+}
+
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Removes the temp files a writer of `filePath` left behind when it crashed between creating one
+ * and renaming it — for `keys.json` that file holds provider keys, so it must not outlive the
+ * crash. Matches only this module's own names for `filePath` (and the `<file>.tmp-<pid>` names the
+ * writers used before this module); removes a regular file or a symlink with such a name, never a
+ * directory, and never follows a link.
+ *
+ * Call it only when no write of `filePath` can be in flight — at startup, before this process's
+ * first write (index.ts, before the stores load): it cannot tell a crashed writer's temp file from
+ * a live one's. Each of these files has one writer process. Never throws; returns the names it
+ * removed, for a log.
+ */
+export async function removeStaleTempFiles(filePath: string): Promise<string[]> {
+  const dir = dirname(filePath);
+  const base = escapeRegExp(basename(filePath));
+  const patterns = [new RegExp(`^\\.${base}\\.${UUID}\\.tmp$`), new RegExp(`^${base}\\.tmp-\\d+$`)];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!patterns.some((pattern) => pattern.test(name))) continue;
+    const entry = join(dir, name);
+    try {
+      const info = await lstat(entry);
+      if (!info.isFile() && !info.isSymbolicLink()) continue;
+      await unlink(entry);
+      removed.push(name);
+    } catch {
+      // Gone already, or not ours to remove: the next startup tries again.
+    }
+  }
+  return removed;
 }
