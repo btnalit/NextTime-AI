@@ -250,7 +250,8 @@ export function buildFindMeansQuery(
   values.push(limit);
   const limitParam = values.length;
 
-  const orderBy = rankExpr !== null ? `(${rankExpr}) desc, updated_at desc` : 'updated_at desc';
+  const orderBy =
+    rankExpr !== null ? `(${rankExpr}) desc, updated_at desc, id desc` : 'updated_at desc, id desc';
   const text = `select ${OBJECT_COLUMNS}
      from objects
      where workspace_id = $1

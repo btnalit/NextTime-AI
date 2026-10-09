@@ -276,7 +276,7 @@ async function fetchObservationRefs(
     `select id, source_id, created_at from observations
      where workspace_id = $1 and activity_id = $2
        and ($3::uuid is null or id = $3)
-     order by created_at asc`,
+     order by created_at asc, id asc`,
     [workspaceId, activityId, onlyObservationId],
   );
   const observations: ExplainObservationRef[] = [];

@@ -1267,7 +1267,7 @@ export class AgentHostRuntime implements AgentRuntime {
         `select id from sessions
          where workspace_id = $1 and principal_id = $2 and kind = 'entry' and on_behalf_of = $2
            and (expires_at is null or expires_at > now())
-         order by created_at desc
+         order by created_at desc, id desc
          limit 1`,
         [workspaceId, principalId],
       );

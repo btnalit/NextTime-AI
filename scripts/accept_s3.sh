@@ -255,12 +255,17 @@ preflight_step() {
     *) fail "preflight-migrations" "pending migrations reported: $(printf '%s' "$migrate_out" | tail -10)" ;;
   esac
 
-  build_out=$(docker compose build collector-host-inventory 2>&1)
-  build_rc=$?
-  if [ "$build_rc" -ne 0 ]; then
-    fail "preflight-collector-build" "docker compose build collector-host-inventory failed: $(printf '%s' "$build_out" | tail -20)"
-  fi
-  pass "preflight-collector-build" "collector-host-inventory image built"
+  # The collector image under test is the one the release put on the host (pull-images.sh's
+  # verified image, or build-images.sh's) — never rebuilt here: a source build needs npm / apt
+  # egress at release time and would replace the verified image (legacy 137, lib/accept-common.sh).
+  collector_image=$(compose_image_of collector-host-inventory) ||
+    fail "preflight-collector-image" "cannot resolve the local image name of collector-host-inventory (docker compose config --images)"
+  image_out=$(release_image_check "$collector_image")
+  case $? in
+    0) pass "preflight-collector-image" "$image_out" ;;
+    2) fail "preflight-collector-image" "$image_out — install this release's images first: sh scripts/pull-images.sh <tag> collector-host-inventory (or sh scripts/build-images.sh collector-host-inventory)" ;;
+    *) fail "preflight-collector-image" "$image_out" ;;
+  esac
 }
 
 bootstrap_step() {

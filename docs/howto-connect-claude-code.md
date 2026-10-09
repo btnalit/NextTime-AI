@@ -99,6 +99,9 @@ Claude Code 连上后，`tools/list` 应该正好是这个 Handle 自己 `scope.
 也不会包含 `issue_handle`/`grant_capability` 这类 `channel:'human'` 的治理能力（这类能力永远不会
 出现在任何 Handle 的 scope 里，也永远不会被投影成 MCP 工具）。
 
+Handle 的 scope 是签发那一刻的能力清单，平台之后新增的能力（比如按关系类型列 Fact 的 `list_facts`）
+不会自动加进已签发的 Handle。想用新能力，重新签发一个 Handle。
+
 在 Claude Code 里直接问图，比如：
 
 > 用 `traverse` 从某个 Object 出发，看看它依赖哪些服务

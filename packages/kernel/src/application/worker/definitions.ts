@@ -429,7 +429,7 @@ export async function getPublishedEntryDefinition(
   const result = await client.query<WorkerDefinitionDbRow>(
     `select ${SELECT_COLUMNS} from worker_definitions
      where workspace_id = $1 and kind = 'entry' and status = 'published'
-     order by published_at desc
+     order by published_at desc, id desc, version desc
      limit 1`,
     [workspaceId],
   );
@@ -451,13 +451,13 @@ export async function listWorkerDefinitions(
     ? await client.query<WorkerDefinitionDbRow>(
         `select ${SELECT_COLUMNS} from worker_definitions
          where workspace_id = $1 and status = 'published' and kind = $2
-         order by created_at desc`,
+         order by created_at desc, id desc, version desc`,
         [workspaceId, kind],
       )
     : await client.query<WorkerDefinitionDbRow>(
         `select ${SELECT_COLUMNS} from worker_definitions
          where workspace_id = $1 and status = 'published'
-         order by created_at desc`,
+         order by created_at desc, id desc, version desc`,
         [workspaceId],
       );
   return result.rows.map(mapRow);

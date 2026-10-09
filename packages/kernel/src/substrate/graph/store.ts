@@ -258,6 +258,33 @@ export const DEFAULT_SEARCH_LIMIT = 50;
  *  capability result marks `truncated: true` (docs/wire-contract-conventions.md §3). */
 export const MAX_SEARCH_LIMIT = 200;
 
+/** `listFactsPage` (`list_facts`): every currently-active Fact of one `linkType`, workspace-wide —
+ *  the relationship-type read `traverse` cannot give, since `traverse` needs a starting Object. */
+export interface ListFactsInput {
+  readonly linkType: string;
+  readonly limit?: number;
+  /** Opaque keyset cursor from a previous `FactsPage.nextCursor` (queries.ts
+   *  `encodeFactsCursor`); absent or malformed → first page. */
+  readonly cursor?: string;
+}
+
+/** One page of `listFactsPage`, `nextCursor` absent on the last page. */
+export interface FactsPage {
+  readonly items: readonly Fact[];
+  readonly nextCursor?: string;
+}
+
+export const DEFAULT_LIST_FACTS_LIMIT = 50;
+/** Same cap and clamping rule as `MAX_SEARCH_LIMIT`. */
+export const MAX_LIST_FACTS_LIMIT = 200;
+
+/** `countFactsByLinkType`: how many currently-active Facts the workspace holds per `linkType` —
+ *  the complete shape of the graph's relationships, which a recency sample cannot show. */
+export interface FactCountByLinkType {
+  readonly linkType: string;
+  readonly count: number;
+}
+
 /**
  * `listRecentFacts` (docs/development-tasks.md S1.4 `get_entry_context`: "up to N recent
  * non-superseded Facts for the workspace with epistemic_status"): a small additive `GraphStore`
@@ -447,8 +474,9 @@ export function normalizeTraverseDepth(depth: number | undefined): number {
 
 /**
  * **Reader narrowing (STATUS leftover 123, D-26)**: the reads a capability exposes — `getObject`,
- * `getObjectsByIds`, `search` / `searchPage`, `traverse`, `stateAt`, `listRecentFacts` — take an
- * optional trailing `viewer` (operation-draft-visibility.ts). Given one, an Operation draft that
+ * `getObjectsByIds`, `search` / `searchPage`, `traverse`, `stateAt`, `listRecentFacts`,
+ * `listFactsPage`, `countFactsByLinkType` — take an optional trailing `viewer`
+ * (operation-draft-visibility.ts). Given one, an Operation draft that
  * viewer may not see reads as absent: no row, and no Fact with it at either end. Omitted, the read
  * is unfiltered — for internal callers only (write-path guards that must see the real ObjectType,
  * the governance registries, the auditor's `reconstruct`); a handler serving a person or an agent
@@ -578,11 +606,30 @@ export interface GraphStore {
   ): Promise<SearchPage>;
 
   /** Up to `limit` (default `DEFAULT_RECENT_FACTS_LIMIT`) currently-active (non-superseded,
-   *  non-invalidated) Facts for the workspace, newest `recorded_at` first. */
+   *  non-invalidated) Facts for the workspace, newest `recorded_at` first, `id` breaking ties —
+   *  every Fact one call writes shares its transaction's `recorded_at`, so without the tiebreaker
+   *  which ones make the cut was up to Postgres. */
   listRecentFacts(
     client: PoolClient,
     workspaceId: string,
     limit?: number,
     viewer?: GraphReadViewer,
   ): Promise<readonly Fact[]>;
+
+  /** Every currently-active Fact of `input.linkType`, keyset-paginated newest first (same
+   *  `(recorded_at, id)` order and cursor rule as `searchPage`). */
+  listFactsPage(
+    client: PoolClient,
+    workspaceId: string,
+    input: ListFactsInput,
+    viewer?: GraphReadViewer,
+  ): Promise<FactsPage>;
+
+  /** Currently-active Fact counts per `linkType`, ordered by `linkType`. Same visibility rules as
+   *  the reads above. */
+  countFactsByLinkType(
+    client: PoolClient,
+    workspaceId: string,
+    viewer?: GraphReadViewer,
+  ): Promise<readonly FactCountByLinkType[]>;
 }

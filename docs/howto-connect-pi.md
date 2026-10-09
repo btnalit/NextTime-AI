@@ -73,7 +73,7 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
 ## 你会得到什么工具
 
 跟 `entry` 模式**同一份**能力清单（design doc §7.4"同 entry"）：图的 observe 组
-（`get_object`/`traverse`/`search`/`explain`/`get_task`/`state_at`）、`find_operations`/
+（`get_object`/`traverse`/`search`/`list_facts`/`explain`/`get_task`/`state_at`）、`find_operations`/
 `find_workers`/`find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、
 `propose_worker_definition`/`propose_operation`/`propose_skill`/`propose_procedure`/
 `propose_ontology_change`，外加 `session_start` 时经 `list_allowed_operations` 动态发现的
@@ -88,7 +88,8 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
   不会尝试也不会失败，直接不调用。
 - 没有 `agent_start`/`agent_end`/`agent_settled` 订阅，不写 `pi.appendEntry('nexttime_turn',
   ...)`——同样是因为没有 Turn 需要关联。
-- `context` 事件仍然会注入 `get_entry_context`（待审批 / 进行中任务 / 相关 Fact）——不带 `turnId`
+- `context` 事件仍然会注入 `get_entry_context`（待审批 / 进行中任务 / 图概览：每种链接类型的 Fact
+  数 / 最近记录的 Fact 样本——不是按问题挑的，问图里的关系用 `list_facts`）——不带 `turnId`
   调用，是只读的 peek：覆盖你所有对话里还没被确认的条目，不消费任何东西，所以 Task 结果和审批更新
   仍会出现在发起它们的那个对话里，由那里的入口 agent 在 `report_turn` 时确认。
 
@@ -99,5 +100,6 @@ pi -e <你 clone 的 NextTime-AI 目录>/packages/platform-extension/src/index.t
 | pi 启动就报 `NEXTTIME_MODE`/`KERNEL_URL`/`CAPABILITY_HANDLE` 未设置 | 三个环境变量都是必需的，检查拼写；`WORKSPACE_ID` 不需要设（见上）。 |
 | 工具调用返回 `unauthorized`/401 | Handle 过期或被间接撤销（disable_principal 撤销了你的账号，或它绑定的 workspace 出了问题）——回到第 1 步重新拿一个。 |
 | 某个工具报 `forbidden: ...` | 这个能力不在你 Handle 的 scope 里——回 `issue_handle` 那一步检查返回的 `scope` 字段，不是"发什么就给什么"（详见 `docs/howto-connect-claude-code.md`）。 |
+| `list_facts`（或其他新能力）报 `forbidden: ...`，工具却在列表里 | interactive 模式的工具表随扩展版本固定，但 Handle 的 scope 是签发那一刻的能力清单。这个 Handle 签发得比该能力上线早，重新签发一个即可。 |
 | 想要的 `<gate>.<op>` 工具没出现 | 你在这个 workspace 没有对应门的 `connect_gatekeeper` Grant，或 `list_allowed_operations` 内部调用失败（内核日志里找 `interactive` 相关的错误行——`[nexttime:interactive] kernel call "list_allowed_operations" failed: ...`）。 |
 | pi 报"扩展加载失败"/模块找不到 | 检查 `-e` 后面的路径是不是真的存在、是不是先跑过 `pnpm --filter @nexttime/shared build`（`platform-extension` 依赖 `@nexttime/shared` 的构建产物做类型解析，源码路径下 `development` export condition 会自动指回 `src/`，一般不需要单独 build shared，但排障时先确认一遍）。 |

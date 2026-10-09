@@ -73,7 +73,7 @@ export async function findAttributableTurn(
   const running = await client.query<{ id: string }>(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn' and status = 'running'
-     order by created_at desc
+     order by created_at desc, id desc
      limit 1`,
     [workspaceId, principalId],
   );
@@ -84,7 +84,7 @@ export async function findAttributableTurn(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn'
        and created_at > $3::timestamptz - ($4 || ' minutes')::interval
-     order by created_at desc
+     order by created_at desc, id desc
      limit 1`,
     [workspaceId, principalId, at.toISOString(), recentTurnWindowMinutes],
   );

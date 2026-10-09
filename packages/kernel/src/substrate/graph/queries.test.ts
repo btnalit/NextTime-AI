@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildFactCountsByLinkTypeQuery,
   buildGetFactForUpdateQuery,
   buildGetObjectQuery,
   buildGetObjectsByIdsQuery,
   buildInsertFactQuery,
+  buildListFactsQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
@@ -12,10 +14,13 @@ import {
   buildStateAtFactsQuery,
   buildTraverseQuery,
   buildUpsertObjectQuery,
+  decodeFactsCursor,
   decodeSearchCursor,
+  encodeFactsCursor,
   encodeSearchCursor,
 } from './queries.js';
 import {
+  DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   MAX_TRAVERSE_DEPTH,
@@ -321,6 +326,95 @@ describe('buildRecentFactsQuery', () => {
     expect(q.text).toContain('invalidated_at is null');
     expect(q.text).toContain('order by recorded_at desc');
     expect(q.text).not.toContain('source_object_id = $2');
+  });
+
+  // Real-model round 4: every Fact of one call shares its transaction's `recorded_at`, so without
+  // `id` breaking ties the LIMIT picked an arbitrary subset that could change per call.
+  it('breaks recorded_at ties by id, so the same rows come back every time', () => {
+    const q = buildRecentFactsQuery('ws1', 5);
+    expect(q.text).toMatch(/order by recorded_at desc, id desc\s+limit \$2/);
+  });
+});
+
+describe('buildListFactsQuery', () => {
+  it('reads active Facts of one link type workspace-wide, keyset-ordered with an id tiebreaker', () => {
+    const q = buildListFactsQuery('ws1', { linkType: 'depends_on' });
+    expect(q.values).toEqual(['ws1', 'depends_on', DEFAULT_LIST_FACTS_LIMIT, null, null]);
+    expect(q.text).toContain('link_type = $2');
+    expect(q.text).toContain('superseded_at is null');
+    expect(q.text).toContain('invalidated_at is null');
+    expect(q.text).toContain('link_visible_to_caller(l.workspace_id, l.activity_id)');
+    expect(q.text).toContain("order by date_trunc('milliseconds', recorded_at) desc, id desc");
+    expect(q.text).not.toContain('source_object_id = ');
+  });
+
+  it('binds a decoded cursor as the keyset boundary and a malformed one as the first page', () => {
+    const recordedAt = new Date('2026-10-09T10:00:00.123Z');
+    const id = '11111111-2222-4333-8444-555555555555';
+    const q = buildListFactsQuery('ws1', {
+      linkType: 'runs_on',
+      limit: 7,
+      cursor: encodeFactsCursor(recordedAt, id),
+    });
+    expect(q.values).toEqual(['ws1', 'runs_on', 7, recordedAt.toISOString(), id]);
+    expect(q.text).toContain(
+      "(date_trunc('milliseconds', recorded_at), id) < ($4::timestamptz, $5::uuid)",
+    );
+
+    const malformed = buildListFactsQuery('ws1', { linkType: 'runs_on', cursor: 'nope' });
+    expect(malformed.values.slice(3)).toEqual([null, null]);
+  });
+
+  it('applies the viewer filter after its own binds', () => {
+    const q = buildListFactsQuery(
+      'ws1',
+      { linkType: 'exposes' },
+      {
+        principalId: 'p1',
+        seesEveryDraft: false,
+      },
+    );
+    expect(q.values).toEqual(['ws1', 'exposes', DEFAULT_LIST_FACTS_LIMIT, null, null, false, 'p1']);
+    expect(q.text).toContain('not $6::boolean');
+  });
+});
+
+describe('encodeFactsCursor / decodeFactsCursor', () => {
+  it('round-trips and rejects anything that is not <iso>|<uuid>', () => {
+    const recordedAt = new Date('2026-10-09T10:00:00.123Z');
+    const id = '11111111-2222-4333-8444-555555555555';
+    expect(decodeFactsCursor(encodeFactsCursor(recordedAt, id))).toEqual({
+      recordedAt: recordedAt.toISOString(),
+      id,
+    });
+    expect(decodeFactsCursor(undefined)).toBeNull();
+    expect(decodeFactsCursor('%%%')).toBeNull();
+    expect(
+      decodeFactsCursor(Buffer.from(`not-a-date|${id}`, 'utf8').toString('base64url')),
+    ).toBeNull();
+    expect(
+      decodeFactsCursor(
+        Buffer.from('2026-01-01T00:00:00.000Z|not-a-uuid', 'utf8').toString('base64url'),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('buildFactCountsByLinkTypeQuery', () => {
+  it('counts active, visible Facts per link type in link-type order', () => {
+    const q = buildFactCountsByLinkTypeQuery('ws1');
+    expect(q.values).toEqual(['ws1']);
+    expect(q.text).toContain('superseded_at is null');
+    expect(q.text).toContain('invalidated_at is null');
+    expect(q.text).toContain('link_visible_to_caller(l.workspace_id, l.activity_id)');
+    expect(q.text).toMatch(/group by link_type\s+order by link_type/);
+
+    const narrowed = buildFactCountsByLinkTypeQuery('ws1', {
+      principalId: 'p1',
+      seesEveryDraft: true,
+    });
+    expect(narrowed.values).toEqual(['ws1', true, 'p1']);
+    expect(narrowed.text).toContain('not $2::boolean');
   });
 });
 

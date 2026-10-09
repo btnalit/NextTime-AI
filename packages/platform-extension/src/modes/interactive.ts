@@ -6,6 +6,7 @@ import {
 } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
+import { type EntryContextResult, renderEntryContext } from './entry-context.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
 
 /**
@@ -24,7 +25,7 @@ import { type AllowedOperationWire, gateToolDescription, gateToolName } from './
  * `entry.ts` itself. Re-implementing the small, stable list here — rather than widening `entry.ts`'s
  * own exports to accommodate a second consumer — keeps this task's diff to files it actually owns;
  * `gate-tools.ts` (naming/sanitization) is already a shared module both modes import, so that part
- * is reused, not duplicated.
+ * is reused, not duplicated, and so is `entry-context.ts` (how the injected context is worded).
  *
  * **What "no resident-container assumptions" means in practice:** `entry.ts`'s own code never
  * touches the supervisor or egress proxy either (those are compose/infra concerns, not pi-
@@ -68,6 +69,7 @@ const INTERACTIVE_TOOL_CAPABILITY_NAMES = [
   'search',
   'explain',
   'get_task',
+  'list_facts',
   'state_at',
   'find_operations',
   'find_workers',
@@ -199,31 +201,6 @@ function buildGateObserveTool(
   };
 }
 
-/** Loose shape of a `get_entry_context` result (same defensive-read posture as `entry.ts`'s own
- *  `EntryContextResult` — an unexpected/missing field renders as an empty section, never throws). */
-interface EntryContextResult {
-  pendingApprovals?: unknown[];
-  tasks?: unknown[];
-  facts?: unknown[];
-  precedents?: unknown[];
-}
-
-function renderSection(title: string, items: unknown[] | undefined): string | undefined {
-  if (!items || items.length === 0) return undefined;
-  return [`### ${title}`, ...items.map((item) => `- ${JSON.stringify(item)}`)].join('\n');
-}
-
-function renderEntryContext(context: EntryContextResult): string {
-  const sections = [
-    renderSection('Pending approvals', context.pendingApprovals),
-    renderSection('Running tasks', context.tasks),
-    renderSection('Relevant facts', context.facts),
-    renderSection('Precedents', context.precedents),
-  ].filter((section): section is string => section !== undefined);
-  if (sections.length === 0) return '';
-  return ['## NextTime interactive-session context', ...sections].join('\n\n');
-}
-
 export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveModeOptions): void {
   for (const name of INTERACTIVE_TOOL_CAPABILITY_NAMES) {
     pi.registerTool(buildCapabilityTool(name, options.kernelClient));
@@ -267,7 +244,7 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
       return undefined;
     }
 
-    const text = renderEntryContext(entryContext);
+    const text = renderEntryContext(entryContext, 'NextTime interactive-session context');
     if (!text) return undefined;
 
     // Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from
