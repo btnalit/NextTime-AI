@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { writeFileAtomic } from './atomic-file.js';
 
 /**
  * `apply`'s idempotency store (design doc §5.1.4 "apply 幂等"): a repeat `apply` call with the
@@ -309,9 +310,7 @@ export class JsonFileIdempotencyStore implements IdempotencyStore {
     }
     const shape: StoreFileShape = { entries };
     await mkdir(dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.${randomUUID()}.tmp`;
-    await writeFile(tmpPath, JSON.stringify(shape, null, 2), 'utf8');
-    await rename(tmpPath, this.filePath);
+    await writeFileAtomic(this.filePath, JSON.stringify(shape, null, 2));
   }
 }
 

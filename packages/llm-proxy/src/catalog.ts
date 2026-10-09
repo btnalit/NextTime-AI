@@ -126,6 +126,13 @@ export class ProviderCatalog {
     const recorded = await this.store.recordTest(id, result);
     if (!recorded) this.fileTestResults.set(id, result);
   }
+
+  /** Forgets the provider's last test, wherever it lives (review S1): called when its console key
+   *  is set or cleared, so the provider reads 未测试 until it is tested with the key now in use. */
+  async clearTest(id: string): Promise<void> {
+    this.fileTestResults.delete(id);
+    await this.store.clearTest(id);
+  }
 }
 
 function fromStore(id: string, entry: StoreProvider, overridesFile: boolean): ResolvedProvider {

@@ -124,6 +124,8 @@ export function AllowedModelsChecklist({
                 checked={selected.includes(model.id)}
                 onChange={() => toggle(model.id)}
                 disabled={disabled}
+                // The status tag stays out of the checkbox's name: the name is the model id.
+                aria-label={model.id}
               />
               <span className="mono">{model.id}</span>
               <ModelHealthTag model={model} />

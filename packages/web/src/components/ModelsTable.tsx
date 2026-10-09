@@ -44,11 +44,8 @@ export function ModelsTable({ models }: ModelsTableProps) {
             </td>
             <td className="mono text-3">{row.id}</td>
             <td>
-              {row.health ? (
-                <ModelHealthTag model={row} showOk testId={`model-health-${row.id}`} />
-              ) : (
-                <span className="text-3">—</span>
-              )}
+              {/* No health from the kernel reads 状态未知 (review M1), never a blank. */}
+              <ModelHealthTag model={row} showOk testId={`model-health-${row.id}`} />
             </td>
           </tr>
         ))}

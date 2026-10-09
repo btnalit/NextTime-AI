@@ -150,6 +150,23 @@ describe('PlatformModelsPage', () => {
     window.history.replaceState(null, '', '#/');
   });
 
+  // #530 必修 2: a model picker's 去测试供应商 lands on that provider's drawer (连通性测试, 密钥).
+  it('arriving with ?provider=<id> opens that provider’s drawer on its test panel and drops the query', async () => {
+    window.history.replaceState(null, '', '#/platform/models?provider=acme');
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({
+        status: 200,
+        body: listWire([provider(), provider({ id: 'acme', displayName: 'Acme' })]),
+      }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    expect(await screen.findByTestId('provider-test-panel')).toBeTruthy();
+    expect(window.location.hash).toBe('#/platform/models');
+    expect(screen.getAllByText('Acme').length).toBeGreaterThan(0);
+    window.history.replaceState(null, '', '#/');
+  });
+
   it('lists providers with enabled / credential / source facts and mints one token for the burst', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({

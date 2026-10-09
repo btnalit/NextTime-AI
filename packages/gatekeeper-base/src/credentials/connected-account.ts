@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { writeFileAtomic } from '../atomic-file.js';
 import { CredentialResolutionError } from '../errors.js';
 import type { CredentialResolver, ResolvedCredential } from './types.js';
 
@@ -100,10 +101,8 @@ async function writeRecordsMap(
   records: Map<string, EncryptedRecord>,
 ): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${randomUUID()}.tmp`;
   const shape: StoreFileShape = { records: Object.fromEntries(records) };
-  await writeFile(tmpPath, JSON.stringify(shape, null, 2), 'utf8');
-  await rename(tmpPath, filePath);
+  await writeFileAtomic(filePath, JSON.stringify(shape, null, 2));
 }
 
 export class ConnectedAccountStore {

@@ -1,4 +1,4 @@
-import { rename, unlink, writeFile } from 'node:fs/promises';
+import { writeFileAtomic } from './atomic-file.js';
 import type { ProviderCatalog } from './catalog.js';
 import { isRoutable } from './catalog.js';
 import { DEFAULT_LLM_PROXY_PORT, loadProvidersFile } from './config.js';
@@ -154,7 +154,7 @@ export function serializeModelsJson(modelsJson: PiModelsJson): string {
 }
 
 /**
- * S6-B: writes `models.json` atomically — `<outFile>.tmp-<pid>` then `rename`, the exact
+ * S6-B: writes `models.json` atomically (`atomic-file.ts`: random temp file, fsync, `rename`), the
  * guarantee the Makefile's `gen-models` target gives with its own `.tmp` + `mv` (its comment:
  * "readers only ever see the old complete file or the new complete file, never a partial one").
  * The kernel re-reads this file on every `list_models` / `list_platform_models` call and
@@ -166,14 +166,7 @@ export async function writeModelsJsonAtomic(
   outFile: string,
   modelsJson: PiModelsJson,
 ): Promise<void> {
-  const tmp = `${outFile}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, serializeModelsJson(modelsJson), { encoding: 'utf8', mode: 0o644 });
-    await rename(tmp, outFile);
-  } catch (err) {
-    await unlink(tmp).catch(() => undefined);
-    throw err;
-  }
+  await writeFileAtomic(outFile, serializeModelsJson(modelsJson), 0o644);
 }
 
 export interface GenerateModelsJsonOptions extends BuildModelsJsonOptions {
@@ -188,6 +181,6 @@ export async function generateModelsJson(
 ): Promise<PiModelsJson> {
   const providersFile = await loadProvidersFile(options.providersFile);
   const modelsJson = buildModelsJson(providersFile, options);
-  await writeFile(options.outFile, serializeModelsJson(modelsJson), 'utf8');
+  await writeModelsJsonAtomic(options.outFile, modelsJson);
   return modelsJson;
 }

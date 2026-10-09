@@ -1,7 +1,8 @@
 import { constants as fsConstants } from 'node:fs';
-import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { writeFileAtomic } from './atomic-file.js';
 import { ModelCostSchema, ProviderConfigSchema, RESERVED_PROVIDER_NAMES } from './config.js';
 import type { ProviderConfig } from './config.js';
 import { Mutex } from './mutex.js';
@@ -20,7 +21,7 @@ import { Mutex } from './mutex.js';
  * `catalog.ts` can hand either straight to `proxy.ts` as a `ProviderConfig`. The camelCase wire
  * shape the console sees (`@nexttime/shared` wire/llm-admin.ts) is produced in admin-api.ts.
  *
- * Writes are atomic: `<file>.tmp-<pid>` + `rename` (same guarantee the Makefile's `gen-models`
+ * Writes are atomic (`atomic-file.ts`: a random temp file, fsync, `rename`) (same guarantee the Makefile's `gen-models`
  * target gives `models.json`), so a crash mid-write never leaves a truncated store for the next
  * start to choke on. A missing file is an empty store; an unreadable-but-present file fails
  * loudly (`ProviderStoreError`) — silently ignoring a corrupt store would make every console
@@ -225,6 +226,25 @@ export class ProviderStore {
     });
   }
 
+  /** Drops an entry's last test outcome (review S1: a key set or cleared makes the old test say
+   *  nothing about the key now in use). `false` when there was no entry or no test. Serialized
+   *  like `upsert`/`recordTest`. */
+  async clearTest(id: string): Promise<boolean> {
+    return this.mutex.runExclusive(async () => {
+      if (!Object.hasOwn(this.state.providers, id)) return false;
+      const existing = this.state.providers[id];
+      if (!existing?.last_test) return false;
+      const { last_test: _dropped, ...rest } = existing;
+      const next: ProviderStoreFile = {
+        version: PROVIDER_STORE_VERSION,
+        providers: { ...this.state.providers, [id]: rest },
+      };
+      await this.persist(next);
+      this.state = next;
+      return true;
+    });
+  }
+
   /** Removes one entry and persists atomically. `false` when it was not there. Serialized like
    *  `upsert`/`recordTest`. */
   async remove(id: string): Promise<boolean> {
@@ -245,12 +265,9 @@ export class ProviderStore {
         `the provider store directory "${dirname(this.filePath)}" is not writable by this process`,
       );
     }
-    const tmp = `${this.filePath}.tmp-${process.pid}`;
     try {
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 });
-      await rename(tmp, this.filePath);
+      await writeFileAtomic(this.filePath, `${JSON.stringify(next, null, 2)}\n`, 0o644);
     } catch (err) {
-      await unlink(tmp).catch(() => undefined);
       throw new ProviderStoreError(
         'unwritable',
         `failed to write the provider store at "${this.filePath}": ${String(err)}`,

@@ -14698,6 +14698,14 @@
           },
           "type": "array"
         },
+        "providerHealthFile": {
+          "enum": [
+            "ok",
+            "missing",
+            "invalid"
+          ],
+          "type": "string"
+        },
         "recentAudit": {
           "items": {
             "additionalProperties": false,
@@ -14784,6 +14792,7 @@
         "counts",
         "graphFreshness",
         "health",
+        "providerHealthFile",
         "modelProviders",
         "checklist",
         "recentAudit"

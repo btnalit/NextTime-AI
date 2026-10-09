@@ -1,7 +1,8 @@
 import { constants as fsConstants } from 'node:fs';
-import { access, chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { writeFileAtomic } from './atomic-file.js';
 import { Mutex } from './mutex.js';
 
 /**
@@ -28,7 +29,7 @@ import { Mutex } from './mutex.js';
  * overrides env" holds even for a pure yaml/file provider, so an operator-configured provider can
  * still get a key set purely through the console without editing `secrets/llm-proxy.env`.
  *
- * Same on-disk discipline as `provider-store.ts`: atomic writes (`<file>.tmp-<pid>` + `rename`,
+ * Same on-disk discipline as `provider-store.ts`: atomic writes (`atomic-file.ts`: random temp file + fsync + `rename`,
  * never a partial file a concurrent reader could observe), a missing file is an empty store, an
  * unreadable-but-present file fails loudly (`KeyStoreError`) rather than silently discarding every
  * console key, `writable()` probes the directory once so the admin API can answer 503
@@ -187,19 +188,15 @@ export class KeyStore {
         `the key store directory "${dirname(this.filePath)}" is not writable by this process`,
       );
     }
-    const tmp = `${this.filePath}.tmp-${process.pid}`;
     try {
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-        encoding: 'utf8',
-        mode: KEY_STORE_FILE_MODE,
-      });
-      // writeFile's `mode` only applies when it *creates* the file — a pre-existing `.tmp-<pid>`
-      // debris file from a prior crash (same pid, unlikely but not impossible after a reboot's
-      // pid reuse) could otherwise keep its old mode; `chmod` makes the guarantee unconditional.
-      await chmod(tmp, KEY_STORE_FILE_MODE);
-      await rename(tmp, this.filePath);
+      // atomic-file.ts creates the temp file exclusively and `chmod`s it, so the mode holds
+      // whatever the umask.
+      await writeFileAtomic(
+        this.filePath,
+        `${JSON.stringify(next, null, 2)}\n`,
+        KEY_STORE_FILE_MODE,
+      );
     } catch (err) {
-      await unlink(tmp).catch(() => undefined);
       throw new KeyStoreError(
         'unwritable',
         `failed to write the key store at "${this.filePath}": ${String(err)}`,

@@ -16,7 +16,7 @@ import { Button } from '../ui/Button.js';
 import { ChatArchiveConfirm } from './ChatArchiveConfirm.js';
 import { useRestoreChat } from './ChatLifecycleActions.js';
 import { ChatRenameForm } from './ChatRenameForm.js';
-import { ModelSwitcher } from './ModelSwitcher.js';
+import { ModelSwitcher, type RunningModelHealth } from './ModelSwitcher.js';
 
 export interface ChatHeaderProps {
   /** The WS client — the `chat` group (rename / archive / unarchive). */
@@ -40,6 +40,8 @@ export interface ChatHeaderProps {
    *  "本轮 N 次工具调用" segment; console redesign P3-2 V3, "if available" (a fresh page load has
    *  none until a Turn actually streams one, `lib/streaming-reducer.ts`'s own scope note). */
   readonly toolCallCount?: number;
+  /** Forwarded to `ModelSwitcher` (the model the next Turn runs, for the composer's notice). */
+  readonly onRunningModel?: (running: RunningModelHealth | null) => void;
 }
 
 /**
@@ -66,6 +68,7 @@ export function ChatHeader({
   onStop,
   onChatChanged,
   toolCallCount,
+  onRunningModel,
 }: ChatHeaderProps) {
   const t = useT();
   const [renaming, setRenaming] = useState(false);
@@ -138,7 +141,11 @@ export function ChatHeader({
           </div>
         </div>
         <div className="chat-header-side">
-          <ModelSwitcher http={http} turnRunning={turnStatus === 'running'} />
+          <ModelSwitcher
+            http={http}
+            turnRunning={turnStatus === 'running'}
+            {...(onRunningModel ? { onRunningModel } : {})}
+          />
           {chat ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

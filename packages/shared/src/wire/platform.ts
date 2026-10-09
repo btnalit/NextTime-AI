@@ -191,8 +191,8 @@ export const PlatformOverviewWireSchema = z
         activeWorkspaces: z.number().int().nonnegative(),
         gatekeepers: z.number().int().nonnegative(),
         /** Models whose provider's last applicable test passed (`provider-health.ts` `ok`) — what
-         *  can be picked with confidence (console audit P0-2). Every model counts when llm-proxy
-         *  has written no health at all (one that predates it): unknown, not failed. */
+         *  can be picked with confidence (console audit P0-2). Only a successful test counts: with
+         *  no readable health file (`providerHealthFile` not `ok`) this is 0 (review M1). */
         modelsAvailable: z.number().int().nonnegative(),
         /** Every model in `models.json`, whatever its provider's health. */
         modelsConfigured: z.number().int().nonnegative(),
@@ -224,8 +224,13 @@ export const PlatformOverviewWireSchema = z
       })
       .strict(),
     health: z.array(ServiceHealthWireSchema),
-    /** Each model provider in `models.json` with its health (`null` = llm-proxy wrote none) and
-     *  how many models it serves — the overview's 「需要人处理」 lists every one that is not `ok`. */
+    /** Whether the kernel could read llm-proxy's `provider-health.json`: `missing` (never
+     *  written — an older llm-proxy or an unwritable models directory) and `invalid` (a symlink,
+     *  not a regular file, too large, malformed) both leave every provider's health unknown. */
+    providerHealthFile: z.enum(['ok', 'missing', 'invalid']),
+    /** Each model provider in `models.json` with its health (`null` = unknown: the file is not
+     *  readable or does not name it) and how many models it serves — the overview's 「需要人处理」
+     *  lists every one that is not `ok`. */
     modelProviders: z.array(
       z
         .object({

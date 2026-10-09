@@ -117,6 +117,8 @@ function AllowListField({
                 checked={selected.includes(option.id)}
                 onChange={() => onChange(toggle(selected, option.id))}
                 disabled={disabled}
+                // The note (a status tag) stays out of the checkbox's name: the name is the option.
+                aria-label={option.note ? option.label : undefined}
               />
               <span>{option.label}</span>
               {option.note ?? null}

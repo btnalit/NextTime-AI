@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { constants, type FileHandle, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ProviderHealthFileSchema, type ProviderHealthWire } from '@nexttime/shared';
 import { z } from 'zod';
@@ -72,42 +72,117 @@ function resolveProviderHealthFile(env: NodeJS.ProcessEnv): string {
     : join(dirname(resolveModelsJsonFile(env)), 'provider-health.json');
 }
 
-/**
- * Each provider's health (console audit P0-2; the rule is `@nexttime/shared`'s `providerHealth`)
- * as llm-proxy last wrote it: a status kind and a test time per provider id — no credential, no
- * upstream text. An observation, not authority: nothing here refuses a model, the console marks
- * and disables options with it. Missing, unreadable or malformed → an empty map, so every model
- * reads as "health unknown" and the catalog itself still answers (an llm-proxy that predates the
- * file, a dev machine).
- */
-export async function readProviderHealth(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<ReadonlyMap<string, ProviderHealthWire>> {
-  try {
-    const parsed = ProviderHealthFileSchema.safeParse(
-      JSON.parse(await readFile(resolveProviderHealthFile(env), 'utf8')),
-    );
-    return parsed.success ? new Map(Object.entries(parsed.data.providers)) : new Map();
-  } catch {
-    return new Map();
+/** Upper bounds for the two files this module reads (review S2): far above any real catalog, low
+ *  enough that a runaway or hostile file cannot make the kernel buffer it. */
+export const MODELS_JSON_MAX_BYTES = 4 * 1024 * 1024;
+export const PROVIDER_HEALTH_MAX_BYTES = 1024 * 1024;
+
+/** Why `readSmallRegularFile` refused a file: not there, or there but not a file to trust. */
+export class UnsafeFileError extends Error {
+  readonly reason: 'missing' | 'symlink' | 'not_regular' | 'too_large' | 'unreadable';
+
+  constructor(reason: UnsafeFileError['reason'], message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'UnsafeFileError';
+    this.reason = reason;
   }
 }
 
 /**
- * Reads and parses `models.json`, projecting every provider's model list to `{id, provider,
- * model}` — `id` is `<provider>/<model>`, the same `provider/id` shape a WorkerDefinition's own
- * `model` field and S3.13's future `AgentProfile.model` already use (docs/development-tasks.md
- * S3.13: "model（provider/id，必须 ∈ llm-proxy 白名单）"). Exported (not only the wired handler
- * below) so that future validation can reuse this same read without a second models.json parser.
+ * Reads a file another process writes into a directory the kernel only mounts (review S2): the
+ * final path component must not be a symlink (`O_NOFOLLOW`), the opened file must be a regular
+ * file (`fstat` — a FIFO or device is refused without blocking: `O_NONBLOCK`), and it may hold at
+ * most `maxBytes` (checked on `fstat` and again while reading, so a file growing after the check
+ * still cannot exceed it).
  */
-export async function readModelCatalog(
+export async function readSmallRegularFile(file: string, maxBytes: number): Promise<string> {
+  let handle: FileHandle;
+  try {
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new UnsafeFileError('missing', `"${file}" does not exist`);
+    if (code === 'ELOOP') throw new UnsafeFileError('symlink', `"${file}" is a symlink`);
+    throw new UnsafeFileError('unreadable', `"${file}" could not be opened`, { cause: err });
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new UnsafeFileError('not_regular', `"${file}" is not a regular file`);
+    }
+    if (stat.size > maxBytes) {
+      throw new UnsafeFileError('too_large', `"${file}" is larger than ${maxBytes} bytes`);
+    }
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length <= maxBytes) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > maxBytes) {
+      throw new UnsafeFileError('too_large', `"${file}" is larger than ${maxBytes} bytes`);
+    }
+    return buffer.subarray(0, length).toString('utf8');
+  } catch (err) {
+    if (err instanceof UnsafeFileError) throw err;
+    throw new UnsafeFileError('unreadable', `"${file}" could not be read`, { cause: err });
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * What the kernel knows about provider health: the providers llm-proxy wrote (`state: 'ok'`), or
+ * nothing — the file is `missing` (llm-proxy never wrote it: an older llm-proxy, an unwritable
+ * directory) or `invalid` (a symlink, not a regular file, too large, not JSON, an unknown version
+ * or shape). Either way nothing is known, and nothing may read as working (review M1).
+ */
+export interface ProviderHealthSnapshot {
+  readonly state: 'ok' | 'missing' | 'invalid';
+  /** Empty unless `state` is `ok`. */
+  readonly providers: ReadonlyMap<string, ProviderHealthWire>;
+}
+
+/**
+ * Each provider's health (console audit P0-2; the rule is `@nexttime/shared`'s `providerHealth`)
+ * as llm-proxy last wrote it: a status kind and a test time per provider id — no credential, no
+ * upstream text. An observation, not authority: nothing here refuses a model, the console marks
+ * and disables options with it. Fails closed to "unknown" — never throws, so the catalog itself
+ * still answers.
+ */
+export async function readProviderHealth(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<readonly ModelCatalogEntry[]> {
+): Promise<ProviderHealthSnapshot> {
+  let raw: string;
+  try {
+    raw = await readSmallRegularFile(resolveProviderHealthFile(env), PROVIDER_HEALTH_MAX_BYTES);
+  } catch (err) {
+    const missing = err instanceof UnsafeFileError && err.reason === 'missing';
+    return { state: missing ? 'missing' : 'invalid', providers: new Map() };
+  }
+  try {
+    const parsed = ProviderHealthFileSchema.safeParse(JSON.parse(raw));
+    return parsed.success
+      ? { state: 'ok', providers: new Map(Object.entries(parsed.data.providers)) }
+      : { state: 'invalid', providers: new Map() };
+  } catch {
+    return { state: 'invalid', providers: new Map() };
+  }
+}
+
+/** The catalog plus where its health came from (`ProviderHealthSnapshot['state']`). */
+export interface ModelCatalog {
+  readonly items: readonly ModelCatalogEntry[];
+  readonly healthFile: ProviderHealthSnapshot['state'];
+}
+
+async function readModelsJson(env: NodeJS.ProcessEnv): Promise<z.infer<typeof ModelsJsonSchema>> {
   const file = resolveModelsJsonFile(env);
 
   let raw: string;
   try {
-    raw = await readFile(file, 'utf8');
+    raw = await readSmallRegularFile(file, MODELS_JSON_MAX_BYTES);
   } catch (err) {
     throw new ModelsCatalogUnavailableError(
       `list_models: could not read models.json at "${file}"`,
@@ -131,11 +206,23 @@ export async function readModelCatalog(
       { cause: result.error },
     );
   }
+  return result.data;
+}
 
+/**
+ * Reads `models.json` and the provider health beside it, projecting every provider's model list
+ * to `{id, provider, model, health?}` — `id` is `<provider>/<model>`, the same `provider/id` shape
+ * a WorkerDefinition's own `model` field and `AgentProfile.model` use. A model without `health`
+ * is unknown: the file is missing or invalid (`healthFile`), or it does not name the provider.
+ */
+export async function readModelCatalogWithHealth(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ModelCatalog> {
+  const models = await readModelsJson(env);
   const health = await readProviderHealth(env);
   const items: ModelCatalogEntry[] = [];
-  for (const [provider, providerConfig] of Object.entries(result.data.providers)) {
-    const providerHealth = health.get(provider);
+  for (const [provider, providerConfig] of Object.entries(models.providers)) {
+    const providerHealth = health.providers.get(provider);
     for (const model of providerConfig.models) {
       items.push({
         id: `${provider}/${model.id}`,
@@ -145,7 +232,28 @@ export async function readModelCatalog(
       });
     }
   }
-  return items;
+  return { items, healthFile: health.state };
+}
+
+/**
+ * The catalog. `withHealth: false` skips the health file — for the membership checks
+ * (`set_agent_profile`, allowed models, a Worker's model), which health never decides.
+ */
+export async function readModelCatalog(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { readonly withHealth?: boolean } = {},
+): Promise<readonly ModelCatalogEntry[]> {
+  if (options.withHealth === false) {
+    const models = await readModelsJson(env);
+    return Object.entries(models.providers).flatMap(([provider, providerConfig]) =>
+      providerConfig.models.map((model) => ({
+        id: `${provider}/${model.id}`,
+        provider,
+        model: model.id,
+      })),
+    );
+  }
+  return (await readModelCatalogWithHealth(env)).items;
 }
 
 export const listModelsHandler: CapabilityHandler = async () => {

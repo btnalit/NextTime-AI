@@ -472,13 +472,34 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Console audit P0-2: llm-proxy's provider-health.json next to models.json reaches every
       // model of the provider, and the overview counts only models whose provider passed a test.
-      it('carries the provider health llm-proxy wrote, and platform_overview counts only tested models', async () => {
+      it('carries the provider health llm-proxy wrote; platform_overview counts only tested models and reports a missing or corrupt file as unknown', async () => {
         const healthFile = path.join(modelsJsonDir as string, 'provider-health.json');
         const before = await callAsAdmin<PlatformOverviewWire>('platform_overview');
-        // No health file: unknown is not failed — every model counts, as before.
-        expect(before.counts.modelsAvailable).toBe(2);
+        // Review M1: no health file means unknown, and unknown is never available — only an
+        // explicit successful test counts. The llm-proxy row and the checklist say why.
+        expect(before.providerHealthFile).toBe('missing');
+        expect(before.counts.modelsAvailable).toBe(0);
         expect(before.counts.modelsConfigured).toBe(2);
         expect(before.modelProviders).toEqual([{ id: 'anthropic', health: null, models: 2 }]);
+        const proxyRow = before.health.find((row) => row.service === 'llm-proxy');
+        expect(proxyRow?.status).toBe('degraded');
+        expect(proxyRow?.detail).toContain('2 model(s) in models.json');
+        expect(proxyRow?.detail).toContain('provider-health.json not written');
+        const unknownStep = before.checklist.find((item) => item.key === 'providers');
+        expect(unknownStep?.done).toBe(false);
+        expect(unknownStep?.detail).toContain('provider health unknown');
+
+        await writeFile(healthFile, '{ not json');
+        try {
+          const corrupt = await callAsAdmin<PlatformOverviewWire>('platform_overview');
+          expect(corrupt.providerHealthFile).toBe('invalid');
+          expect(corrupt.counts.modelsAvailable).toBe(0);
+          expect(corrupt.health.find((row) => row.service === 'llm-proxy')?.status).toBe(
+            'degraded',
+          );
+        } finally {
+          await rm(healthFile, { force: true });
+        }
 
         await writeFile(
           healthFile,
@@ -511,6 +532,20 @@ describe.runIf(DATABASE_URL !== undefined)(
           const providers = overview.checklist.find((item) => item.key === 'providers');
           expect(providers?.done).toBe(false);
           expect(providers?.detail).toContain('2 model(s) configured, none whose provider passed');
+          expect(overview.providerHealthFile).toBe('ok');
+          expect(overview.health.find((row) => row.service === 'llm-proxy')?.status).toBe('ok');
+
+          await writeFile(
+            healthFile,
+            JSON.stringify({
+              version: 1,
+              writtenAt: '2026-10-09T00:00:00.000Z',
+              providers: { anthropic: { status: 'ok', testedAt: '2026-10-09T00:00:00.000Z' } },
+            }),
+          );
+          const tested = await callAsAdmin<PlatformOverviewWire>('platform_overview');
+          expect(tested.counts.modelsAvailable).toBe(2);
+          expect(tested.checklist.find((item) => item.key === 'providers')?.done).toBe(true);
         } finally {
           await rm(healthFile, { force: true });
         }

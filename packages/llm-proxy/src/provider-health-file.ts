@@ -1,4 +1,3 @@
-import { rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   PROVIDER_HEALTH_FILE_VERSION,
@@ -6,6 +5,7 @@ import {
   providerHealth,
 } from '@nexttime/shared';
 import { toWireProvider } from './admin-api.js';
+import { writeFileAtomic } from './atomic-file.js';
 import type { ProviderCatalog, ResolvedProvider } from './catalog.js';
 import type { ProviderCredentialFacts } from './provider-keys.js';
 
@@ -51,12 +51,5 @@ export async function writeProviderHealthAtomic(
   outFile: string,
   health: ProviderHealthFile,
 ): Promise<void> {
-  const tmp = `${outFile}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, `${JSON.stringify(health, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 });
-    await rename(tmp, outFile);
-  } catch (err) {
-    await unlink(tmp).catch(() => undefined);
-    throw err;
-  }
+  await writeFileAtomic(outFile, `${JSON.stringify(health, null, 2)}\n`, 0o644);
 }

@@ -33,6 +33,7 @@ import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
+import { Mutex } from './mutex.js';
 import { type ProviderCredentialFacts, providerCredentialFacts } from './provider-keys.js';
 import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
@@ -339,6 +340,10 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
   const now = options.now ?? (() => new Date());
   const resolveApiKey = options.resolveApiKey ?? ((name: string) => process.env[name]);
+  /** One writer at a time per file (review M2): each write builds its snapshot from the live
+   *  catalog when it runs, inside its lock, so the last write to land is the newest state. */
+  const modelsJsonWrites = new Mutex();
+  const healthWrites = new Mutex();
   let modelsJsonWrittenAt: string | null = null;
   let modelsJsonError: string | null = null;
 
@@ -360,9 +365,12 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   /** Rewrites the provider-health file (best effort: a failure is logged, never fatal — the
    *  model pickers then show the previous health, and the next mutation or restart retries). */
   async function refreshProviderHealth(): Promise<void> {
-    if (!options.writeProviderHealth) return;
+    const write = options.writeProviderHealth;
+    if (!write) return;
     try {
-      await options.writeProviderHealth();
+      // Serialized: the snapshot is built inside the lock (index.ts builds it when `write` runs),
+      // so a later write never lands before an earlier one with an older snapshot.
+      await healthWrites.runExclusive(write);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
       log(
@@ -375,9 +383,25 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
     }
   }
 
+  /** A key set or cleared makes the last test say nothing about the key now in use (review S1):
+   *  drop it so the provider reads 未测试 until it is tested again. Best effort like the test
+   *  write itself — a failure is logged and the stale result stays until the next test. */
+  async function forgetTest(id: string): Promise<void> {
+    await options.catalog.clearTest(id).catch((err: unknown) => {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: could not clear the provider test result after a key change',
+          providerId: id,
+          error: String(err).slice(0, 200),
+        }),
+      );
+    });
+  }
+
   async function rewriteModelsJson(): Promise<void> {
     try {
-      await options.writeModelsJson();
+      await modelsJsonWrites.runExclusive(options.writeModelsJson);
       modelsJsonWrittenAt = now().toISOString();
       modelsJsonError = null;
     } catch (err) {
@@ -894,8 +918,11 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           modelsJsonError,
           secretCleared,
         });
+        // A yaml entry the deleted override restores starts untested: no test said anything
+        // about it under this id's current credential.
+        await forgetTest(id);
         // A key cleared after the catalog rewrite changes the health that rewrite wrote.
-        if (secretCleared) await refreshProviderHealth();
+        await refreshProviderHealth();
         if (secretCleared) {
           audit(claims, 'provider_secret_cleared', id, {});
         }
@@ -980,6 +1007,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
             throw new AdminApiError(400, 'invalid_body', 'invalid key', parsed.error.issues);
           }
           await options.keyStore.set(id, parsed.data.key);
+          await forgetTest(id);
           await refreshProviderHealth();
           const updated = requireProvider(id);
           audit(claims, 'provider_secret_set', id, {});
@@ -989,6 +1017,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           await requireWritableKeyStore();
           requireProvider(id);
           await options.keyStore.remove(id);
+          await forgetTest(id);
           await refreshProviderHealth();
           const updated = requireProvider(id);
           audit(claims, 'provider_secret_cleared', id, {});

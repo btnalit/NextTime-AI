@@ -812,7 +812,9 @@ export const setPlatformDefaultModelHandler: CapabilityHandler = async (
 ) => {
   const { model } = params as { model: string | null };
   if (model !== null) {
-    const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+    const known = new Set(
+      (await readModelCatalog(process.env, { withHealth: false })).map((entry) => entry.id),
+    );
     if (!known.has(model)) {
       throw new PlatformAdminError('unknown_model', `model not in the llm-proxy catalog: ${model}`);
     }

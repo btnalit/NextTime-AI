@@ -219,8 +219,8 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
   await writeProviderHealth().catch((err: unknown) => {
     log(
       JSON.stringify({
-        level: 'info',
-        msg: 'llm-proxy: provider-health.json not writable at startup (fine on a dev machine); model pickers show no provider health until it is',
+        level: 'warn',
+        msg: 'llm-proxy: provider-health.json not writable at startup — the console shows every model provider as status unknown until it is; the models directory must be writable by the llm-proxy user (uid 10001)',
         providerHealthFile,
         error: (err as NodeJS.ErrnoException | undefined)?.code ?? String(err).slice(0, 200),
       }),

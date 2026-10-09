@@ -31,7 +31,7 @@ function options(models: readonly HealthAwareModel[], value: string) {
 }
 
 describe('kit/model-health', () => {
-  it('a working or unknown model reads as before; untested / tools-failing ones carry the status; a blocked one is disabled', () => {
+  it('a working model reads as before; unknown / untested / tools-failing ones carry the status; a blocked one is disabled', () => {
     const [ok, unknown, untested, tools, rejected] = options(
       [
         model('a/ok', 'ok'),
@@ -44,7 +44,10 @@ describe('kit/model-health', () => {
     );
     expect(ok?.textContent).toBe('a/ok');
     expect(ok?.disabled).toBe(false);
-    expect(unknown?.textContent).toBe('b/unknown');
+    // Review M1: no health is 状态未知 — offered, never shown as working.
+    expect(unknown?.textContent).toBe('b/unknown · 状态未知');
+    expect(unknown?.disabled).toBe(false);
+    expect(unknown?.getAttribute('data-health')).toBe('unknown');
     expect(untested?.textContent).toBe('c/new · 未测试');
     expect(untested?.disabled).toBe(false);
     expect(tools?.textContent).toBe('d/tools · 工具调用失败');
@@ -72,7 +75,43 @@ describe('kit/model-health', () => {
       />,
     );
     expect(screen.getByTestId('n').textContent).toContain('「deepseek」：密钥被拒');
-    expect(screen.getByTestId('n-fix').getAttribute('href')).toBe('#/platform/models');
+    // The link opens that provider's drawer (连通性测试 + 密钥) on 模型与供应商.
+    expect(screen.getByTestId('n-fix').getAttribute('href')).toBe(
+      '#/platform/models?provider=deepseek',
+    );
+    expect(screen.getByTestId('n-fix').textContent).toBe('去模型与供应商修复');
+  });
+
+  // #530 必修 2: an untested choice gets a next step too — test it, or ask who can.
+  it('an untested or unknown choice gets a next step: 去测试供应商 on a platform page, who to ask elsewhere', () => {
+    const { unmount } = render(
+      <ModelHealthNote
+        models={[model('fake/echo', 'untested')]}
+        selectedId="fake/echo"
+        canFix
+        testId="n"
+      />,
+    );
+    expect(screen.getByTestId('n-fix').textContent).toBe('去测试供应商');
+    expect(screen.getByTestId('n-fix').getAttribute('href')).toBe(
+      '#/platform/models?provider=fake',
+    );
+    unmount();
+    const member = render(
+      <ModelHealthNote
+        models={[model('fake/echo', 'untested')]}
+        selectedId="fake/echo"
+        canFix={false}
+        testId="n"
+      />,
+    );
+    expect(screen.getByTestId('n').textContent).toContain('请平台管理员测试这个供应商');
+    member.unmount();
+    render(
+      <ModelHealthNote models={[model('fake/echo')]} selectedId="fake/echo" canFix testId="n" />,
+    );
+    expect(screen.getByTestId('n').textContent).toContain('状态未知');
+    expect(screen.getByTestId('n-fix').textContent).toBe('去模型与供应商检查');
   });
 
   it('on a member page the note says who fixes it, with no link', () => {
@@ -104,10 +143,22 @@ describe('kit/model-health', () => {
     expect(screen.getByTestId('n').textContent).toContain('2 个模型不能选');
     expect(screen.getByTestId('n').textContent).toContain('deepseek');
     unmount();
+    const unknown = render(
+      <ModelHealthNote
+        models={[model('a/ok', 'ok'), model('b/unknown'), model('b/other')]}
+        selectedId={null}
+        canFix={false}
+        testId="n"
+      />,
+    );
+    // Review M1: models without a status are counted, with who can check.
+    expect(screen.getByTestId('n').textContent).toContain('2 个模型状态未知');
+    expect(screen.getByTestId('n').textContent).toContain('请平台管理员检查供应商状态');
+    unknown.unmount();
     render(
       <ModelHealthNote
-        models={[model('a/ok', 'ok'), model('b/unknown')]}
-        selectedId={null}
+        models={[model('a/ok', 'ok'), model('c/new', 'untested')]}
+        selectedId="a/ok"
         canFix
         testId="n"
       />,
@@ -115,10 +166,12 @@ describe('kit/model-health', () => {
     expect(screen.queryByTestId('n')).toBeNull();
   });
 
-  it('the checklist tag shows only a status that is not ok, toned by usability', () => {
+  it('the checklist tag shows only a status that is not ok (状态未知 included), toned by usability', () => {
     const { container, rerender } = render(<ModelHealthTag model={model('a/ok', 'ok')} />);
     expect(container.textContent).toBe('');
     rerender(<ModelHealthTag model={model('a/x')} />);
+    expect(container.textContent).toBe('状态未知');
+    rerender(<ModelHealthTag model={undefined} />);
     expect(container.textContent).toBe('');
     rerender(<ModelHealthTag model={model('a/x', 'key_rejected')} testId="tag" />);
     expect(screen.getByTestId('tag').className).toContain('chip-danger');

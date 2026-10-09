@@ -17,7 +17,7 @@ import {
  * Not knowable anywhere: whether every listed model works (`/model-probe` results are not stored —
  * only the last test's one model is), and an upstream that broke since the last test.
  */
-export type ProviderStatusKind = ProviderHealthStatus;
+export type ProviderStatusKind = ProviderHealthStatus | 'unknown';
 
 export interface ProviderStatus {
   readonly kind: ProviderStatusKind;
@@ -88,6 +88,15 @@ const STATUS: Readonly<Record<ProviderStatusKind, Omit<ProviderStatus, 'kind' | 
     detailZh: '已配置，还没有测试通过过',
     detailEn: 'Configured, not tested yet',
   },
+  // Review M1: the kernel could not read llm-proxy's health file, or it does not name the provider.
+  // Never shown as working; offered like an untested model.
+  unknown: {
+    tone: 'warn',
+    zh: '状态未知',
+    en: 'Status unknown',
+    detailZh: '读不到这个供应商的测试状态，不确定能不能用',
+    detailEn: "The provider's test status cannot be read; it may not work",
+  },
   ok: {
     tone: 'ok',
     zh: '可用',
@@ -99,7 +108,8 @@ const STATUS: Readonly<Record<ProviderStatusKind, Omit<ProviderStatus, 'kind' | 
 
 /** How the console names `kind`. */
 export function describeProviderHealth(kind: ProviderStatusKind): ProviderStatus {
-  return { kind, usability: providerHealthUsability(kind), ...STATUS[kind] };
+  const usability = kind === 'unknown' ? 'unverified' : providerHealthUsability(kind);
+  return { kind, usability, ...STATUS[kind] };
 }
 
 /** The status column for `provider`, given its freshest test result (this session's run, else
