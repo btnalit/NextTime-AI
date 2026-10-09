@@ -315,6 +315,10 @@ accept() {
   nfail=$(grep -c '^FAIL' "$log")
   step "$(basename "$log" .log) exit=$rc pass=$(grep -c '^PASS' "$log") fail=$nfail"
   grep -E '^FAIL|^REAL |^S[1-4] (OK|NOTE)' "$log" | sort -u | head -n 12 | sed 's/^/STEP   /'
+  # Real-model runs that missed: their RUN line carries only outcomes, counts and tool names (the
+  # scripts' own contract: no secrets, no reply text), so a partial ok=x/N is diagnosable from the
+  # job log; the full per-run log is in the uploaded artifact.
+  grep '^RUN .* outcome=fail' "$log" | head -n 30 | sed 's/^/STEP   /'
   # accept_s2's real-smoke diagnostics (the dead entry container's state and output, redacted).
   grep '^DIAG ' "$log" | head -n 90 | sed 's/^/STEP   /'
   [ "$rc" -eq 0 ] && [ "$nfail" -eq 0 ]
