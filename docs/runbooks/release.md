@@ -591,6 +591,14 @@ JS
 
 输出只有 sourceId（`entry:` / `worker:` 加工作区、主体或 run id），不打印客户端 IP。`leading . / *.` 行就是应用后开始拒绝的条目，处理方式同 A。
 
+C 读到的环境变量是容器创建时的值；应用会按 `.env` 重建容器，所以再看一眼 `.env` 原文（compose 只把 `EGRESS_DENY_HOST_SUFFIXES` 传给 egress-proxy），判断方式同 C 的 deny 规则：
+
+```sh
+sed -n 's/^EGRESS_DENY_HOST_SUFFIXES=//p' .env
+```
+
+源映射是 C 运行那一刻的快照，随 Worker 起停变化；已发布定义里哪些条目会开始拒绝，以 A 为准。
+
 **应用后**（窗口内，S1–S4 之后）只看日志确认与窗口前的结论一致，不需要再跑 A–C：
 
 ```sh
