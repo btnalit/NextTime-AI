@@ -1,0 +1,149 @@
+name: image-mirror
+
+# Copies every third-party image this repository pulls (deploy/image-mirrors.json) to GHCR by
+# digest, so nothing it builds, tests, rehearses or runs pulls from Docker Hub. Docker Hub limits
+# anonymous pulls per address; on GitHub's shared runners that failed required checks before any
+# test ran (2026-10-09, #528), and the same limit would fail a release (publish-images pulls the
+# BuildKit image, the Dockerfile frontend, the base images and the SBOM scanner) or a staging
+# rehearsal. The repository references only the copies, by digest; scripts/guards/image-mirrors.mjs
+# (required `quality` check) keeps every reference on the digest listed here and refuses new
+# Docker Hub references.
+#
+# Source: mirror.gcr.io, Google's read-through cache of Docker Hub, fetched by digest. Content
+# addressing makes it the same image as the Docker Hub one under that digest (a registry cannot
+# serve other bytes under a digest; the copy is read back and checked), and that cache is not
+# subject to Docker Hub's anonymous limit. Only this workflow reads it; consumers never do (an
+# image can drop out of that cache). An entry whose digest is not in the cache fails visibly; set
+# its `source` to the docker.io repository for that change.
+#
+# Copy by digest: `docker buildx imagetools create` with a single source and no annotations pushes
+# the source's manifest list and every platform manifest unchanged, so the copy has the same digest.
+#
+# Moving a pin (a base image update, a new BuildKit): change the entry's `digest` (and `tag` /
+# `upstream` when the version moves) and every reference in one PR. That PR's own run of this
+# workflow (pull_request trigger below) copies the new digest; push the list change first and the
+# references once the copy exists, or the PR's checks race the copy. The guard names every reference
+# that still carries the old digest. Nothing updates these pins automatically (no Dependabot or
+# Renovate for images; maintainer decision 2026-09-25 — routine upgrades go by hand, in waves).
+#
+# Triggers:
+#   - push to main that changes the list or this file: a merged pin change is copied right away;
+#   - pull_request that changes them, from a branch of this repository (a fork's token cannot write
+#     packages, so the jobs are skipped there). A PR run can only push the listed digests under their
+#     tags; consumers pull by digest, so a branch cannot change what they get;
+#   - workflow_dispatch; weekly schedule: re-asserts the copies (a deleted package comes back).
+# No retry loop: a failed copy fails the run, and a later trigger copies.
+#
+# Consumers pull anonymously, so each package must stay public: the last step fails when an
+# anonymous manifest fetch does not return 200 (e.g. the weekly run after a package was made
+# private), before consumers start failing on it.
+#
+# No setup-buildx step: `imagetools` talks to the registries directly and works with the runner's
+# preinstalled buildx and default builder; setup-buildx would start a docker-container builder.
+#
+# Credentials: only GITHUB_TOKEN, with packages: write on the copy job alone. Every action is pinned
+# to a full commit SHA (same pins as publish-images.yml).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - deploy/image-mirrors.json
+      - .github/workflows/image-mirror.yml
+  pull_request:
+    paths:
+      - deploy/image-mirrors.json
+      - .github/workflows/image-mirror.yml
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-mirror
+  cancel-in-progress: false
+
+jobs:
+  list:
+    name: list
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.read.outputs.images }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Each entry's fields reach the copy job only through env, never into a script's text; this
+      # rejects anything that is not a plain name, repository, tag or digest before it gets there.
+      - name: Read deploy/image-mirrors.json
+        id: read
+        run: |
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          images=$(jq -ce --arg reg "ghcr.io/${owner}" '
+            if .registry != $reg then error("registry \(.registry) is not \($reg)") else . end
+            | .registry as $r | .prefix as $p
+            | [.images[]
+               | if (.name | test("^[a-z0-9][a-z0-9-]*$")) and (.source | test("^[a-z0-9.-]+(/[a-z0-9._-]+)+$"))
+                    and (.tag | test("^[A-Za-z0-9_][A-Za-z0-9_.-]*$")) and (.digest | test("^sha256:[0-9a-f]{64}$"))
+                 then {name, source, tag, digest, target: "\($r)/\($p)\(.name)"}
+                 else error("invalid entry \(.name)") end]' deploy/image-mirrors.json)
+          echo "images=${images}" >>"$GITHUB_OUTPUT"
+
+  mirror:
+    name: mirror (${{ matrix.name }})
+    needs: list
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.images) }}
+    env:
+      SOURCE: ${{ matrix.source }}
+      TAG: ${{ matrix.tag }}
+      DIGEST: ${{ matrix.digest }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy ${{ matrix.name }} by digest
+        run: docker buildx imagetools create --tag "${TARGET}:${TAG}" "${SOURCE}@${DIGEST}"
+
+      - name: Verify the copy's digest
+        run: |
+          got=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${TARGET}:${TAG}")
+          if [ "$got" != "$DIGEST" ]; then
+            echo "::error::${TARGET}:${TAG} has digest '${got}', expected ${DIGEST}"
+            exit 1
+          fi
+          echo "${SOURCE}@${DIGEST} -> ${TARGET}@${got}" >>"$GITHUB_STEP_SUMMARY"
+
+      # Consumers pull without credentials, so a copy that is not anonymously pullable is a failure.
+      - name: Anonymous pull access
+        run: |
+          repo=${TARGET#ghcr.io/}
+          token=$(curl -sS "https://ghcr.io/token?scope=repository:${repo}:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p') || true
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${repo}/manifests/${DIGEST}")
+          echo "anonymous manifest fetch: HTTP ${code}" >>"$GITHUB_STEP_SUMMARY"
+          if [ "$code" != 200 ]; then
+            echo "::error::${TARGET} is not anonymously pullable (HTTP ${code}); consumers pull it without credentials, so make the package public"
+            exit 1
+          fi
