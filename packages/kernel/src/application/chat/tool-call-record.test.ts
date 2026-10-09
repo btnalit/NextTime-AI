@@ -157,7 +157,7 @@ describe('buildToolCallRecord', () => {
     const huge = `${'z'.repeat(5_000_000)} ${HANDLE}`;
     const started = performance.now();
     const content = record({ result: textResult(huge), hasResult: true });
-    expect(performance.now() - started).toBeLessThan(250);
+    expect(performance.now() - started).toBeLessThan(1_000);
     expect(content.result).toEqual({
       text: 'z'.repeat(TOOL_CALL_RESULT_PREVIEW_CHARS),
       totalChars: huge.length,

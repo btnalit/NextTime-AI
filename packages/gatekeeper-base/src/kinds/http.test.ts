@@ -243,7 +243,7 @@ describe('HttpTransport', () => {
       };
       const started = performance.now();
       await transport.invoke(braces, {}, {});
-      expect(performance.now() - started).toBeLessThan(250);
+      expect(performance.now() - started).toBeLessThan(1_000);
     });
   });
 

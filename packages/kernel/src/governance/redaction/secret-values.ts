@@ -34,7 +34,9 @@
  * the run of characters it scans begins (a lookbehind, not `\b`, where its class holds non-word
  * characters), every scan before a required delimiter is bounded or stops at a character outside
  * its class, and a name is matched as a whole run and judged afterwards rather than by nested
- * quantifiers. The adversarial inputs in secret-values.test.ts hold this. Callers bound what they
+ * quantifiers — judged before its value is matched, so only a secret's name takes a value with it
+ * and the value is scanned once (`secretMatches`). The adversarial inputs in secret-values.test.ts
+ * hold this. Callers bound what they
  * pass on top of that (`redactSecrets`'s `maxChars`, the chat sink's own limits).
  *
  * Users: application/chat (a Turn's tool calls, the stored reply), application/gateway (the audit
@@ -69,11 +71,18 @@ function namesASecret(name: string): boolean {
   return LAST_WORD_SECRET_NAME.test(name) || CAMEL_CASE_SECRET_NAME.test(name);
 }
 
+/** The headers whose whole value the header pattern below replaces. */
+const SECRET_HEADER_NAME = /^(?:proxy-)?authorization$|^(?:set-)?cookie$/i;
+
 /** Whether `name` in `name=value` / `name: value` (or a `--name` flag, without its dashes) is one
- *  whose value the patterns below replace — for `secret-stream.ts`, which must hold such a value
- *  back until it ends. */
+ *  whose value some pattern below replaces — for `secret-stream.ts`, which must hold such a name
+ *  back, with whatever follows it, until its value has ended. */
 export function namesASecretValue(name: string): boolean {
-  return namesASecret(name) || (/^[A-Z][A-Z0-9_]*$/.test(name) && ENV_SECRET_NAME.test(name));
+  return (
+    namesASecret(name) ||
+    SECRET_HEADER_NAME.test(name) ||
+    (/^[A-Z][A-Z0-9_]*$/.test(name) && ENV_SECRET_NAME.test(name))
+  );
 }
 
 /** A `Bearer`/`Basic` value that looks issued rather than like the next English word ("Basic
@@ -93,8 +102,15 @@ function redactedValue(value: string): string {
 /** Returns the replacement for one match, or `undefined` to keep it as it is. */
 type Redact = (match: string, groups: readonly (string | undefined)[]) => string | undefined;
 
-interface ValuePattern {
+export interface ValuePattern {
+  /** Global. Finds a whole match — or, for a pattern with a `value`, a name and its separator. */
   readonly pattern: RegExp;
+  /** For a `name`-then-value pattern: whether the name (`pattern`'s groups) is one whose value is
+   *  replaced, and the value that follows it (sticky; its groups follow the name's). The name is
+   *  judged before its value is matched, and only a secret's name takes its value with it: a pair
+   *  whose name is not one would otherwise swallow a secret's pair in its value (`note:
+   *  password=…`, `--user --password …`, `X=PGPASSWORD=…`). */
+  readonly value?: { readonly names: (name: string) => boolean; readonly pattern: RegExp };
   readonly redact: Redact;
 }
 
@@ -104,8 +120,17 @@ const ENV_VALUE = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)`;
 const VALUE = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s'"&]+)`;
 const NOT_ALREADY_REDACTED = String.raw`(?!["']?\[redacted\])`;
 
-/** Applied in order to every string; each is global. Exported for `secret-stream.ts`, which must
- *  know where a match starts and ends. */
+/** `"api_key": "…"` inside a string that is itself JSON text (a capability tool's result text).
+ *  Exported for `secret-stream.ts`: the `"` that closes such a pair opens no JSON key. */
+export const JSON_SECRET_PAIR: ValuePattern = {
+  pattern: /"([^"\\\r\n]{1,128})"([ \t]{0,8}:[ \t]{0,8})/g,
+  value: { names: (key) => SECRET_FIELD_NAME.test(key), pattern: /"((?:[^"\\\r\n]|\\.)*)"/y },
+  redact: (_match, [key, separator, value]) =>
+    value === undefined || value === REDACTED ? undefined : `"${key}"${separator}"${REDACTED}"`,
+};
+
+/** Applied in order to every string. Exported for `secret-stream.ts`, which must know where a
+ *  match starts and ends (`secretMatches`). */
 export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   {
     pattern:
@@ -137,37 +162,36 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
   {
-    pattern: new RegExp(
-      String.raw`(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=${NOT_ALREADY_REDACTED}${ENV_VALUE}`,
-      'g',
-    ),
+    pattern: /(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{0,127})=/g,
+    value: {
+      names: (name) => ENV_SECRET_NAME.test(name),
+      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${ENV_VALUE}`, 'y'),
+    },
     redact: (_match, [name, value]) =>
-      name !== undefined && value !== undefined && ENV_SECRET_NAME.test(name)
-        ? `${name}=${redactedValue(value)}`
-        : undefined,
+      value === undefined ? undefined : `${name}=${redactedValue(value)}`,
   },
   // `password: …`, `POSTGRES_PASSWORD: …`, `aws_secret_access_key = …`, `X-Api-Key: …`,
   // `?token=…` — any case, the name's last word decides.
   {
-    pattern: new RegExp(
-      String.raw`(?<![A-Za-z0-9_.-])([A-Za-z][A-Za-z0-9_.-]{0,63})(["']?)([ \t]{0,8}[:=][ \t]{0,8})${NOT_ALREADY_REDACTED}${VALUE}`,
-      'g',
-    ),
+    pattern: /(?<![A-Za-z0-9_.-])([A-Za-z][A-Za-z0-9_.-]{0,63})(["']?)([ \t]{0,8}[:=][ \t]{0,8})/g,
+    value: {
+      names: namesASecret,
+      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
+    },
     redact: (_match, [name, quote, separator, value]) =>
-      name !== undefined && value !== undefined && namesASecret(name)
-        ? `${name}${quote ?? ''}${separator ?? ''}${redactedValue(value)}`
-        : undefined,
+      value === undefined
+        ? undefined
+        : `${name}${quote ?? ''}${separator ?? ''}${redactedValue(value)}`,
   },
   // `--password hunter2`, `--api-key=…`.
   {
-    pattern: new RegExp(
-      String.raw`(?<![A-Za-z0-9-])(--[A-Za-z][A-Za-z0-9-]{0,63})(=|[ \t]{1,8})${NOT_ALREADY_REDACTED}${VALUE}`,
-      'g',
-    ),
+    pattern: /(?<![A-Za-z0-9-])(--[A-Za-z][A-Za-z0-9-]{0,63})(=|[ \t]{1,8})/g,
+    value: {
+      names: (flag) => namesASecret(flag.slice(2)),
+      pattern: new RegExp(`${NOT_ALREADY_REDACTED}${VALUE}`, 'y'),
+    },
     redact: (_match, [flag, separator, value]) =>
-      flag !== undefined && value !== undefined && namesASecret(flag.slice(2))
-        ? `${flag}${separator ?? ''}${redactedValue(value)}`
-        : undefined,
+      value === undefined ? undefined : `${flag}${separator ?? ''}${redactedValue(value)}`,
   },
   // `scheme://user:password@host` — keeps the user, drops the password.
   {
@@ -175,15 +199,45 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
       /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}):(?!\[redacted\]@)[^\s/@]{1,256}@/g,
     redact: (_match, [prefix]) => `${prefix}:${REDACTED}@`,
   },
-  // `"api_key": "…"` inside a string that is itself JSON text (a capability tool's result text).
-  {
-    pattern: /"([^"\\\r\n]{1,128})"([ \t]{0,8}:[ \t]{0,8})"((?:[^"\\\r\n]|\\.)*)"/g,
-    redact: (_match, [key, separator, value]) =>
-      key !== undefined && value !== REDACTED && SECRET_FIELD_NAME.test(key)
-        ? `"${key}"${separator}"${REDACTED}"`
-        : undefined,
-  },
+  JSON_SECRET_PAIR,
 ];
+
+/** Where one match of a pattern starts and ends, and what replaces it (`undefined`: kept). */
+export interface SecretMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly replacement: string | undefined;
+}
+
+/** Every match of `valuePattern` in `text`, left to right, as a global `replace` would visit them —
+ *  except that a name-then-value pattern's name that is not a secret's takes nothing with it, so
+ *  the scan goes on right after its separator. Linear in `text`: a name and its separator are
+ *  bounded, and a value is scanned once, by the match that then takes it. */
+export function secretMatches(valuePattern: ValuePattern, text: string): SecretMatch[] {
+  const { pattern, value, redact } = valuePattern;
+  const matches: SecretMatch[] = [];
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    if (match[0] === '') {
+      pattern.lastIndex += 1;
+      continue;
+    }
+    const groups = match.slice(1);
+    let end = match.index + match[0].length;
+    if (value !== undefined) {
+      if (!value.names(groups[0] ?? '')) continue;
+      value.pattern.lastIndex = end;
+      const tail = value.pattern.exec(text);
+      if (tail === null) continue;
+      end += tail[0].length;
+      groups.push(...tail.slice(1));
+      pattern.lastIndex = end;
+    }
+    const whole = text.slice(match.index, end);
+    matches.push({ start: match.index, end, replacement: redact(whole, groups) });
+  }
+  return matches;
+}
 
 /** A scrubbed value and how many values in it were replaced. */
 export interface Scrubbed<T> {
@@ -198,24 +252,19 @@ interface WalkState {
   omitted: boolean;
 }
 
-/** How many capture groups each pattern has — so a replacement callback can take its groups
- *  without searching its arguments. */
-const GROUP_COUNTS: readonly number[] = SECRET_VALUE_PATTERNS.map(
-  ({ pattern }) => (new RegExp(`${pattern.source}|`).exec('')?.length ?? 1) - 1,
-);
-
 function scrubInto(text: string, state: WalkState): string {
   let out = text;
-  SECRET_VALUE_PATTERNS.forEach(({ pattern, redact }, index) => {
-    const groupCount = GROUP_COUNTS[index] ?? 0;
-    out = out.replace(pattern, (...args: unknown[]) => {
-      const match = args[0] as string;
-      const replacement = redact(match, args.slice(1, 1 + groupCount) as (string | undefined)[]);
-      if (replacement === undefined) return match;
+  for (const valuePattern of SECRET_VALUE_PATTERNS) {
+    let scrubbed = '';
+    let from = 0;
+    for (const { start, end, replacement } of secretMatches(valuePattern, out)) {
+      if (replacement === undefined) continue;
+      scrubbed += out.slice(from, start) + replacement;
+      from = end;
       state.count += 1;
-      return replacement;
-    });
-  });
+    }
+    if (from > 0) out = scrubbed + out.slice(from);
+  }
   return out;
 }
 

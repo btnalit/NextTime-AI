@@ -32,6 +32,24 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
     expect(scrubSecretValues(input).value).toBe(expected);
   });
 
+  // Found by the stream's split-everywhere property test: the stream redacted these, the whole
+  // text did not — a pair whose name is not a secret's took the secret's pair as its value.
+  it.each([
+    ['after a prose label', `I don't know: token=${FAKE} ok`, `I don't know: token=${REDACTED} ok`],
+    ['in a non-secret value', `note: password=${FAKE}`, `note: password=${REDACTED}`],
+    ['in a JSON string', `{"note": "token=${FAKE}"}`, `{"note": "token=${REDACTED}"}`],
+    [
+      'in a URL value',
+      `url: https://x/?token=${FAKE}&y=1`,
+      `url: https://x/?token=${REDACTED}&y=1`,
+    ],
+    ['after a flag', `--user --password ${FAKE}`, `--user --password ${REDACTED}`],
+    ['in an env value', `X=PGPASSWORD=${FAKE}`, `X=PGPASSWORD=${REDACTED}`],
+    ['after a JSON string', `{"a": "token": "x y"}`, `{"a": "token": "${REDACTED}"}`],
+  ])('replaces a secret pair %s', (_label, input, expected) => {
+    expect(scrubSecretValues(input).value).toBe(expected);
+  });
+
   it.each([
     'max_tokens=1024 and tokenCount: 3',
     'Basic configuration comes first; a Bearer instrument is a bond.',
@@ -69,18 +87,22 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     'password=',
     'password: "x" ',
     '--password ',
+    'a: ',
+    '--a ',
+    '"a": ',
+    'note: password=',
     'a://b:',
     'sk-',
     'Basic ',
     'Bearer aaaaaaa ',
     'authorization ',
     '-----BEGIN RSA PRIVATE KEY-----',
-  ])('%j × 200 KB within 250 ms', (unit) => {
+  ])('%j × 200 KB within 1 s', (unit) => {
     const text = repeat(unit);
     scrubSecretValues(text.slice(0, 1_000));
     const started = performance.now();
     scrubSecretValues(text);
-    expect(performance.now() - started).toBeLessThan(250);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
 

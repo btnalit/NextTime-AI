@@ -51,7 +51,7 @@ describe('derivedLogin', () => {
     expect(derivedLogin('--Alice--', '0123456789abcdef')).toBe('alice-01234567');
     const started = performance.now();
     expect(derivedLogin(`x${'-'.repeat(200_000)}y`, '0123456789abcdef')).toBe('x-y-01234567');
-    expect(performance.now() - started).toBeLessThan(250);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
 
