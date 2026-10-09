@@ -22,10 +22,11 @@
 | 主机初始化 | `--from` 版本自己的 `host-bootstrap` / `host-env-init` / `host-llm-proxy-init` / `gen-handle-keys` / `derive-internal-tokens` | `README.md` ① |
 | `.env` | `KERNEL_BIND_ADDR=127.0.0.1`、文档网段 `203.0.113.0/24` / `203.0.114.0/24`、`WORKER_RUNTIME`、`COMPOSE_FILE` 加 staging overlay | 主机自己的 `.env` |
 | 镜像 | `--from` 的 `pull-images.sh`（cosign 验签） | `apply-release.sh --pull` |
+| 预拉探针（遗留 137） | **目标版本**的 `pull-images.sh --prefetch <from>`，对象是刚装好的 `--from` 镜像：每个都必须"已在、不重拉"，照样验签，`org.opencontainers.image.revision` 必须等于 `--from` 的 commit（`STEP prefetch-probe ok …`）。PR / main 的源码构建目标也跑这一步，因为只有 `--from` 的镜像是发布过的 | 维护窗口前的预拉 + `apply-release.sh --pull` 里的拉取 |
 | 迁移 | `migrate.js` | 同 |
 | 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
-| apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag 拉取 / 否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
+| apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag：先 `sh <副本> --prefetch <to>` 预拉，apply 的拉取随后全部复用、只重新验签，`STEP apply images <n> of <m> reused from the prefetch`；否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
 | 控制台 file probe | 一次性平台管理员经 caddy 登录 → `issue_llm_admin_token`；假供应商写进 `config/llm-providers.yaml`、假 key 文件放进 `secrets/llm-provider-keys/`，llm-proxy 须列出它（`source: file`、读到 key）且 `gen-models` 输出它，随后恢复原样（零 token） | `README.md` ①、`host-env-init.sh` |
 | 真实模型（可选） | 走控制台路径加供应商（管理员登录 → `issue_llm_admin_token` → `/api/llm-admin` 建供应商、设 key → llm-proxy 重写 models.json → 控制台"测试"）→ `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
 
@@ -157,7 +158,7 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 `RESULT ok` / `RESULT failed-at=<step>` / `RESULT acceptance-failures=<n>` /
 `RESULT real-model-failures=<n>`，只有 `RESULT ok` 退出 0。`STEP apply | …` 是
 `apply-release.sh` 自己日志里的行。完整日志在 artifact `staging-logs`（保留 7 天）：
-`baseline-<from>-s{1..4}.log`、`apply-<tag>-<ts>[-sN].log`、`compose-logs.txt` 等。
+`baseline-<from>-s{1..4}.log`、`prefetch-probe-<from>.log`、`prefetch-<tag>-<ts>[-pull].log`（tag 目标）、`apply-<tag>-<ts>[-sN].log`、`compose-logs.txt` 等。
 
 ## 7. 常见问题
 
