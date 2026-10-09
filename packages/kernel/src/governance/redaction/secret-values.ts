@@ -1,3 +1,5 @@
+import { SECRET_FIELD_MASK, isSecretFieldValue, namesASecretField } from '@nexttime/shared';
+
 /**
  * governance/redaction/secret-values: the kernel's one definition of "a value that looks like a
  * secret", and the scrubs that keep one out of anything an agent produced before a person sees it.
@@ -44,18 +46,17 @@
  * `secret-stream.ts`.
  */
 
-export const REDACTED = '[redacted]';
+export const REDACTED = SECRET_FIELD_MASK;
 /** What replaces a part of a structured value left out because it was past a walk bound. */
 export const OMITTED = '[…]';
 
 /** Nodes of a structured value visited before the rest is left out. */
 export const MAX_WALK_NODES = 5_000;
 
-/** A field name that names a secret wherever the word appears — for a structured key or a JSON
- *  key, which are field names, not prose. Same family as the console's `SENSITIVE_KEY`
- *  (packages/web/src/lib/format.ts), plus `handle`: a field named after a Handle carries one. */
-export const SECRET_FIELD_NAME =
-  /credential|secret|token|password|passwd|api[_-]?key|authorization|private[_-]?key|^handle$|capability[_-]?handle/i;
+/** A field name that names a secret (`apiKey0`, `x-api-key`, `PGPASSWORD`, `accessToken` —
+ *  `maxTokens` stays): `@nexttime/shared`'s `namesASecretField`, the one rule the kernel's scrubs,
+ *  its suspected-credential count and the console's display mask share. */
+export { namesASecretField } from '@nexttime/shared';
 
 /** An upper-case env name with a secret word anywhere in it (`PGPASSWORD`, `CAPABILITY_HANDLE`). */
 const ENV_SECRET_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIALS?|HANDLE/;
@@ -124,7 +125,7 @@ const NOT_ALREADY_REDACTED = String.raw`(?!["']?\[redacted\])`;
  *  Exported for `secret-stream.ts`: the `"` that closes such a pair opens no JSON key. */
 export const JSON_SECRET_PAIR: ValuePattern = {
   pattern: /"([^"\\\r\n]{1,128})"([ \t]{0,8}:[ \t]{0,8})/g,
-  value: { names: (key) => SECRET_FIELD_NAME.test(key), pattern: /"((?:[^"\\\r\n]|\\.)*)"/y },
+  value: { names: (key) => namesASecretField(key), pattern: /"((?:[^"\\\r\n]|\\.)*)"/y },
   redact: (_match, [key, separator, value]) =>
     value === undefined || value === REDACTED ? undefined : `"${key}"${separator}"${REDACTED}"`,
 };
@@ -250,6 +251,8 @@ interface WalkState {
   nodes: number;
   chars: number;
   omitted: boolean;
+  /** Where values were replaced — only for a caller that asked (`onRedacted`). */
+  readonly onRedacted: ((path: string, count: number) => void) | undefined;
 }
 
 function scrubInto(text: string, state: WalkState): string {
@@ -274,6 +277,7 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     nodes: options.maxNodes ?? MAX_WALK_NODES,
     chars: options.maxChars ?? Number.POSITIVE_INFINITY,
     omitted: false,
+    onRedacted: options.onRedacted,
   };
 }
 
@@ -293,9 +297,15 @@ export function safeStringify(value: unknown): string {
 }
 
 export interface RedactSecretsOptions {
-  /** A key whose value is replaced whole, whatever it is (a tool's `password` argument, say).
-   *  Absent: only values are scrubbed, every key and the shape are kept. */
+  /** A key whose secret values are replaced whatever they look like (a tool's `password`
+   *  argument, say): every string and number under it, at any depth (`isSecretFieldValue`) — the
+   *  shape is kept. Absent: only values are scrubbed. Pass `namesASecretField` (plus anything a
+   *  capability declares) — the rule the console masks by. */
   readonly isSecretKey?: (key: string) => boolean;
+  /** For a document that declares fields rather than filling them (a JSON Schema, an OpenAPI
+   *  operation): the literals a schema carries for a secret-named property (`default`, `const`,
+   *  `enum`, `examples`, `example` under `properties.apiKey`) are secret values, at any depth. */
+  readonly schemaLiterals?: boolean;
   /** Objects and arrays visited before the rest is left out (`OMITTED`). Defaults to
    *  `MAX_WALK_NODES`, for a value nothing has bounded yet (a runtime's tool result); a caller that
    *  writes the result back as structured data passes `Infinity` for a value already validated and
@@ -304,6 +314,10 @@ export interface RedactSecretsOptions {
   /** Characters of string content read in all; a string past the budget is cut (ending in `…`)
    *  or left out. Defaults to no bound — for display, pass one. */
   readonly maxChars?: number;
+  /** Told each place values were replaced: its path (`a.b[2].c`) and how many. */
+  readonly onRedacted?: (path: string, count: number) => void;
+  /** How a key is written in an `onRedacted` path. Defaults to the key as it is. */
+  readonly pathKey?: (key: string) => string;
 }
 
 export interface RedactedValue extends Scrubbed<unknown> {
@@ -311,17 +325,58 @@ export interface RedactedValue extends Scrubbed<unknown> {
   readonly omitted: boolean;
 }
 
-function redactInto(value: unknown, options: RedactSecretsOptions, state: WalkState): unknown {
+/** JSON Schema / OpenAPI keywords whose values are literal instances of the property they sit
+ *  under — `properties.apiKey.default: "…"` is a value even in a document. */
+const SCHEMA_VALUE_KEYWORDS = new Set(['default', 'const', 'enum', 'examples', 'example']);
+
+/** Where the walk is: `field` — under a secret-named field (or a schema literal of a secret-named
+ *  property), so every secret value is replaced whole; `property` — directly under a secret-named
+ *  key of a document, whose schema literals are values; `plain` — anywhere else. */
+type Within = 'plain' | 'property' | 'field';
+
+function noted(state: WalkState, path: string | undefined, before: number): void {
+  const count = state.count - before;
+  if (count > 0 && path !== undefined) state.onRedacted?.(path, count);
+}
+
+function childPath(
+  path: string | undefined,
+  key: string,
+  options: RedactSecretsOptions,
+): string | undefined {
+  if (path === undefined) return undefined;
+  const written = options.pathKey ? options.pathKey(key) : key;
+  return path === '' ? written : `${path}.${written}`;
+}
+
+function redactInto(
+  value: unknown,
+  options: RedactSecretsOptions,
+  state: WalkState,
+  within: Within,
+  path: string | undefined,
+): unknown {
+  if (within === 'field' && isSecretFieldValue(value)) {
+    // Replaced unread: what it looks like does not matter.
+    state.count += 1;
+    if (path !== undefined) state.onRedacted?.(path, 1);
+    return REDACTED;
+  }
   if (typeof value === 'string') {
+    const before = state.count;
+    let out: string;
     if (value.length <= state.chars) {
       state.chars -= value.length;
-      return scrubInto(value, state);
+      out = scrubInto(value, state);
+    } else {
+      state.omitted = true;
+      if (state.chars <= 0) return OMITTED;
+      const head = value.slice(0, state.chars);
+      state.chars = 0;
+      out = `${scrubInto(head, state)}…`;
     }
-    state.omitted = true;
-    if (state.chars <= 0) return OMITTED;
-    const head = value.slice(0, state.chars);
-    state.chars = 0;
-    return `${scrubInto(head, state)}…`;
+    noted(state, path, before);
+    return out;
   }
   if (value === null || typeof value !== 'object') return value;
   state.nodes -= 1;
@@ -329,15 +384,35 @@ function redactInto(value: unknown, options: RedactSecretsOptions, state: WalkSt
     state.omitted = true;
     return OMITTED;
   }
-  if (Array.isArray(value)) return value.map((item) => redactInto(item, options, state));
+  if (Array.isArray(value)) {
+    // An array item is a value, not a property declaration: only `field` carries into it.
+    const itemWithin: Within = within === 'field' ? 'field' : 'plain';
+    return value.map((item, index) =>
+      redactInto(
+        item,
+        options,
+        state,
+        itemWithin,
+        path === undefined ? undefined : `${path}[${index}]`,
+      ),
+    );
+  }
   const out: Record<string, unknown> = {};
   for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
-    if (options.isSecretKey?.(key)) {
-      out[key] = REDACTED;
-      state.count += 1;
-    } else {
-      out[key] = redactInto(inner, options, state);
-    }
+    let innerWithin: Within;
+    if (within === 'field' || options.isSecretKey?.(key) === true) innerWithin = 'field';
+    else if (within === 'property' && SCHEMA_VALUE_KEYWORDS.has(key)) innerWithin = 'field';
+    else
+      innerWithin =
+        options.schemaLiterals === true && namesASecretField(key) ? 'property' : 'plain';
+    // Defined as an own property: assigning `out[key]` with a `"__proto__"` key would swap the
+    // prototype instead of keeping a field.
+    Object.defineProperty(out, key, {
+      value: redactInto(inner, options, state, innerWithin, childPath(path, key, options)),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return out;
 }
@@ -346,6 +421,12 @@ function redactInto(value: unknown, options: RedactSecretsOptions, state: WalkSt
  *  keys replaced whole), within the bounds `options` sets. */
 export function redactSecrets(value: unknown, options: RedactSecretsOptions = {}): RedactedValue {
   const state = freshState(options);
-  const redacted = redactInto(value, options, state);
+  const redacted = redactInto(
+    value,
+    options,
+    state,
+    'plain',
+    options.onRedacted === undefined ? undefined : '',
+  );
   return { value: redacted, redactedValues: state.count, omitted: state.omitted };
 }

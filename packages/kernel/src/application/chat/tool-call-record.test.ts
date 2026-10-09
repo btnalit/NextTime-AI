@@ -76,7 +76,7 @@ describe('redactToolArgs — values that are secrets wherever they appear', () =
 });
 
 describe('redactToolArgs — structured arguments', () => {
-  it('replaces a secret-named key and a capability’s declared secret params, keeping the shape', () => {
+  it('replaces every value under a secret-named key and a capability’s declared secret params, keeping the shape', () => {
     const { value, redactedValues } = redactToolArgs(
       {
         gatekeeperKind: 'http',
@@ -89,10 +89,10 @@ describe('redactToolArgs — structured arguments', () => {
     expect(value).toEqual({
       gatekeeperKind: 'http',
       connectionSecret: REDACTED,
-      credentials: REDACTED,
+      credentials: { user: REDACTED, pass: REDACTED },
       nested: [{ password: REDACTED, note: `use ${REDACTED}` }],
     });
-    expect(redactedValues).toBe(4);
+    expect(redactedValues).toBe(5);
   });
 
   it('reads a huge value only up to its bounds — what is past them is left out, never shown unscrubbed', () => {

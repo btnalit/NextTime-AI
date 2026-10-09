@@ -13,6 +13,7 @@ import {
   validateProcedure,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { reviewFieldNames } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
@@ -339,6 +340,7 @@ export function ProcedureEditor({
         kindLabel="Procedure"
         draft={proposed}
         detailHref={hrefs.catalog('procedures', proposed.id)}
+        fieldNames={reviewFieldNames('procedure', t)}
         onPublish={
           permissions.isDenied('publish_procedure')
             ? undefined

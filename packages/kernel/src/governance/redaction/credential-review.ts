@@ -1,4 +1,4 @@
-import { namesASecretValue, scrubSecretValues } from './secret-values.js';
+import { namesASecretField, redactSecrets, scrubSecretValues } from './secret-values.js';
 
 /**
  * governance/redaction/credential-review: a person confirms suspected credentials before content
@@ -8,12 +8,16 @@ import { namesASecretValue, scrubSecretValues } from './secret-values.js';
  * ActionRequest's `params` on `approve`, a draft's content on `publish_*`. The detector is this
  * module's own `secret-values.ts` — the same patterns that scrub a Turn's live stream, its stored
  * tool calls and reply (#520), the audit copy of a Handle-channel call and a Worker's report — so
- * "suspected" means one thing everywhere. Call arguments also count a non-blank string under a
- * field whose name names a secret (`password`, `apiKey`, `X-Api-Key` — `namesASecretValue`,
- * whose last-word rule keeps `max_tokens` / `tokenCount` out); a draft does not, because a
- * draft's field names are declarations (a JSON Schema's `properties.password`), not values. Both
- * count the literals a schema carries for a secret-named property (`default`, `const`, `enum`,
- * `examples`, `example` under `properties.apiKey`).
+ * "suspected" means one thing everywhere; the count is that redactor's own walk (`redactSecrets`),
+ * so it counts exactly what a scrub replaces, at any depth, inside a JSON string's `"apiKey": "…"`
+ * pairs included. Call arguments also count every string or number under a field whose name names
+ * a secret (`password`, `apiKey0`, `x-api-key`, `tokenValue` — `@nexttime/shared`'s
+ * `namesASecretField`, which keeps `maxTokens` / `tokenCount` / `tokenizer` out), at any depth:
+ * that is the rule the console masks by (`maskSecretFields`), so every `[redacted]` an approver
+ * sees is a counted value. A draft does not, because a draft's field names are declarations (a
+ * JSON Schema's `properties.password`), not values. Both count the literals a schema carries for a
+ * secret-named property (`default`, `const`, `enum`, `examples`, `example` under
+ * `properties.apiKey`, an object or array literal walked into).
  *
  * **Limits.** Over-counting is the accepted failure mode, as for the scrubs: a value that only
  * looks like a secret asks for one extra tick. An encoded secret (`base64`, split characters), or a
@@ -28,23 +32,9 @@ import { namesASecretValue, scrubSecretValues } from './secret-values.js';
  */
 
 export interface SuspectedSecretsOptions {
-  /** Also count a non-blank string under a field whose name names a secret — for call arguments.
-   *  Leave off for a document. */
+  /** Also count every secret value under a field whose name names a secret — for call
+   *  arguments, which fill fields. Leave off for a document, which declares them. */
   readonly secretFields?: boolean;
-}
-
-/** JSON Schema / OpenAPI keywords whose values are literal instances of the property they sit
- *  under — `properties.apiKey.default: "…"` is a value even in a document. */
-const SCHEMA_VALUE_KEYWORDS = new Set(['default', 'const', 'enum', 'examples', 'example']);
-
-function countLiterals(value: unknown): number {
-  if (typeof value === 'string') return value.trim() === '' ? 0 : 1;
-  if (Array.isArray(value)) {
-    let count = 0;
-    for (const item of value) count += countLiterals(item);
-    return count;
-  }
-  return 0;
 }
 
 /** At most this many paths go on the wire — the count stays exact. */
@@ -60,52 +50,6 @@ function segment(key: string): string {
     : scrubbed;
 }
 
-function join(path: string, key: string): string {
-  return path === '' ? segment(key) : `${path}.${segment(key)}`;
-}
-
-interface Walk {
-  count: number;
-  readonly paths: string[];
-}
-
-function note(walk: Walk, path: string, count: number): void {
-  if (count <= 0) return;
-  walk.count += count;
-  if (walk.paths.length < MAX_PATHS && !walk.paths.includes(path)) walk.paths.push(path);
-}
-
-function walkInto(
-  walk: Walk,
-  value: unknown,
-  path: string,
-  secretFields: boolean,
-  underSecretName: boolean,
-): void {
-  if (typeof value === 'string') {
-    note(walk, path, scrubSecretValues(value).redactedValues);
-    return;
-  }
-  if (value === null || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => walkInto(walk, item, `${path}[${index}]`, secretFields, false));
-    return;
-  }
-  for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
-    const secretName = namesASecretValue(key);
-    const innerPath = join(path, key);
-    if (secretFields && typeof inner === 'string' && inner.trim() !== '' && secretName) {
-      note(walk, innerPath, 1);
-    } else if (underSecretName && SCHEMA_VALUE_KEYWORDS.has(key)) {
-      // A literal the schema itself carries for a secret-named property: counted whether or not
-      // the pattern list recognises it (a bare `hunter2` matches none).
-      note(walk, innerPath, countLiterals(inner));
-    } else {
-      walkInto(walk, inner, innerPath, secretFields, secretName);
-    }
-  }
-}
-
 /** What the detector found: the exact count, and where (dot paths, `[i]` for array items, at most
  *  20) — the field names only, never a fragment of a value. */
 export interface SuspectedSecrets {
@@ -113,15 +57,26 @@ export interface SuspectedSecrets {
   readonly paths: readonly string[];
 }
 
-/** The secret-looking values `value` carries, and where. Callers pass content already bounded by
- *  its schema (capability params, a stored draft). */
+/** The secret-looking values `value` carries, and where. It is the redactor's own walk
+ *  (`redactSecrets`), so what is counted is exactly what a scrub of the same content replaces —
+ *  and, with `secretFields`, every value the console masks (`maskSecretFields`, the same
+ *  `namesASecretField` rule). Callers pass content already bounded by its schema (capability
+ *  params, a stored draft), so the walk is unbounded. */
 export function findSuspectedSecrets(
   value: unknown,
   options: SuspectedSecretsOptions = {},
 ): SuspectedSecrets {
-  const walk: Walk = { count: 0, paths: [] };
-  walkInto(walk, value, '', options.secretFields === true, false);
-  return { count: walk.count, paths: walk.paths };
+  const paths: string[] = [];
+  const { redactedValues } = redactSecrets(value, {
+    ...(options.secretFields === true ? { isSecretKey: namesASecretField } : {}),
+    schemaLiterals: true,
+    maxNodes: Number.POSITIVE_INFINITY,
+    pathKey: segment,
+    onRedacted: (path) => {
+      if (paths.length < MAX_PATHS && !paths.includes(path)) paths.push(path);
+    },
+  });
+  return { count: redactedValues, paths };
 }
 
 /** How many secret-looking values `value` carries. */

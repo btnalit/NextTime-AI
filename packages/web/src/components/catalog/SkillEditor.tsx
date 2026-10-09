@@ -17,6 +17,7 @@ import {
   validateSkill,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { reviewFieldNames } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { SkillRow } from '../../lib/governance.js';
 import { objectTypeOptions } from '../../lib/graph-view.js';
@@ -184,6 +185,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         kindLabel="Skill"
         draft={proposed}
         detailHref={hrefs.catalog('skills', proposed.id)}
+        fieldNames={reviewFieldNames('skill', t)}
         onPublish={
           permissions.isDenied('publish_skill')
             ? undefined

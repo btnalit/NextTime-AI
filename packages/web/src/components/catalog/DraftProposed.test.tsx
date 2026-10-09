@@ -31,6 +31,7 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
         onPublish={onPublish}
         onDone={vi.fn()}
         detailHref="#/govern/catalog/skills/sk-1"
+        fieldNames={{ markdown: '正文' }}
       />,
     );
     expect(screen.queryByTestId('credential-review')).toBeNull();
@@ -44,7 +45,8 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
     );
     expect(screen.queryByTestId('draft-publish-error')).toBeNull();
     // This screen does not show the content: the question names where and links to it.
-    expect(screen.getByTestId('credential-review-paths').textContent).toBe('markdown');
+    // Named as the editor labels it, not by the kernel's field name.
+    expect(screen.getByTestId('credential-review-paths').textContent).toBe('正文');
     expect(screen.getByTestId('draft-credential-detail-link').getAttribute('href')).toBe(
       '#/govern/catalog/skills/sk-1',
     );

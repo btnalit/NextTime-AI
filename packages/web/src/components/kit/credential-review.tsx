@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { namedReviewPath } from '../../lib/credential-review.js';
 import { useT } from '../../lib/i18n.js';
 
 /** The kernel's own cap on `suspectedSecretPaths` (governance/redaction/credential-review.ts). */
@@ -10,6 +11,9 @@ export interface CredentialReviewProps {
   /** Where the kernel found them: field paths (`headers.Authorization`, `steps[1].run`), never a
    *  value. Empty when the kernel did not say. */
   readonly paths?: readonly string[];
+  /** The console's names for the content's top-level fields (`lib/credential-review.ts`
+   *  `reviewFieldNames`), so a path reads as the editor's own label. */
+  readonly fieldNames?: Readonly<Record<string, string>>;
   /** What takes effect: the copy differs for an approval (params run as they are) and a publish
    *  (the content goes live for every agent that uses it). */
   readonly subject: 'approve' | 'publish';
@@ -33,6 +37,7 @@ export interface CredentialReviewProps {
 export function CredentialReview({
   count,
   paths = [],
+  fieldNames,
   subject,
   where,
   checked,
@@ -70,7 +75,7 @@ export function CredentialReview({
         >
           {paths.map((path) => (
             <li key={path}>
-              <code className="mono">{path}</code>
+              <code className="mono">{namedReviewPath(path, fieldNames)}</code>
             </li>
           ))}
           {more ? <li className="text-3">{t('等', 'and more')}</li> : null}

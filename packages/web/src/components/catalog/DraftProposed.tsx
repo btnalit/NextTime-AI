@@ -44,6 +44,9 @@ export interface DraftProposedProps {
   /** The draft's detail in the catalog, where its content is shown — the credential question
    *  (decision 2026-10-09 "二次确认") points there, since this screen does not show the content. */
   readonly detailHref?: string;
+  /** The editor's names for the content's top-level fields, so a flagged path reads as its label
+   *  (`lib/credential-review.ts` `reviewFieldNames`). */
+  readonly fieldNames?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -61,6 +64,7 @@ export function DraftProposed({
   unpublishedConsequence,
   reviewersSeeDraft = false,
   detailHref,
+  fieldNames,
 }: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
@@ -143,6 +147,7 @@ export function DraftProposed({
         <CredentialReview
           count={credentialReview.count}
           paths={credentialReview.paths}
+          fieldNames={fieldNames}
           subject="publish"
           where={
             detailHref !== undefined ? (

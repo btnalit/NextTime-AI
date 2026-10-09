@@ -7,6 +7,7 @@ import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type PublishCredentialReview,
+  reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
@@ -375,14 +376,17 @@ function PublishGovernanceConfirm({
 function PublishCredentialSlot({
   review,
   busy,
+  fieldNames,
 }: {
   readonly review: PublishCredentialReview;
   readonly busy: boolean;
+  readonly fieldNames?: Readonly<Record<string, string>>;
 }) {
   return (
     <CredentialReview
       count={review.count}
       paths={review.paths}
+      fieldNames={fieldNames}
       subject="publish"
       checked={review.checked}
       onChange={review.setChecked}
@@ -1087,7 +1091,11 @@ function SkillDetailView({
       </div>
 
       {canPublish && row.status === 'draft' ? (
-        <PublishCredentialSlot review={credentialReview} busy={busy} />
+        <PublishCredentialSlot
+          review={credentialReview}
+          busy={busy}
+          fieldNames={reviewFieldNames('skill', t)}
+        />
       ) : null}
       <div className="row-wrap">
         {canPropose ? (
@@ -1437,7 +1445,11 @@ function ProcedureDetailView({
       </div>
 
       {canPublish && row.status === 'draft' ? (
-        <PublishCredentialSlot review={credentialReview} busy={busy} />
+        <PublishCredentialSlot
+          review={credentialReview}
+          busy={busy}
+          fieldNames={reviewFieldNames('procedure', t)}
+        />
       ) : null}
       <div className="row-wrap">
         {canPropose ? (

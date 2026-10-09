@@ -1,3 +1,4 @@
+import { maskSecretFields } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 
 /**
@@ -186,23 +187,12 @@ export function excerpt(value: unknown, max = 120): string | undefined {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-const SENSITIVE_KEY =
-  /credential|secret|token|password|passwd|api[_-]?key|authorization|private[_-]?key/i;
-
-/** Deep-copies `value` with sensitive-looking keys replaced by `[redacted]`, so a params dump in
- *  the UI never shows what the kernel's own audit redaction (`dispatch.ts` `redactAuditParams`)
- *  would also hide. Display-only defense; the kernel already never returns credentials. */
+/** Deep-copies `value` with every string and number under a secret-named field replaced by
+ *  `[redacted]` (`@nexttime/shared`'s `maskSecretFields`). It is the kernel's own field rule: on an
+ *  approval, every value hidden here is one the kernel counted and asks the approver to confirm
+ *  (decision 2026-10-09 "二次确认"); values that only look like a secret under an ordinary name
+ *  stay visible there so the approver can read what they confirm. Display-only defence elsewhere
+ *  (audit payloads, object properties). */
 export function redactSensitive(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactSensitive);
-  if (value !== null && typeof value === 'object') {
-    // `Object.fromEntries` defines each key as an own property; assigning `out[key]` would turn a
-    // server-supplied `"__proto__"` key into a prototype swap instead of a displayed field.
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, inner]) => [
-        key,
-        SENSITIVE_KEY.test(key) ? '[redacted]' : redactSensitive(inner),
-      ]),
-    );
-  }
-  return value;
+  return maskSecretFields(value);
 }

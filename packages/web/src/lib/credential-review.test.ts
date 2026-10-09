@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   credentialReviewCount,
   credentialReviewParams,
+  namedReviewPath,
+  reviewFieldNames,
   usePublishCredentialReview,
 } from './credential-review.js';
 import { HttpError } from './http-client.js';
@@ -79,5 +81,16 @@ describe('usePublishCredentialReview', () => {
     expect(result.current.params()).toEqual({});
     rerender({ key: null });
     expect(result.current.count).toBe(0);
+  });
+});
+
+describe('namedReviewPath', () => {
+  const zh = ((zhText: string) => zhText) as Parameters<typeof reviewFieldNames>[1];
+  it('shows the first segment of a path under the editor label', () => {
+    expect(namedReviewPath('markdown', reviewFieldNames('skill', zh))).toBe('正文');
+    expect(namedReviewPath('steps[1].run', reviewFieldNames('procedure', zh))).toBe('步骤[1].run');
+    expect(namedReviewPath('other.x', reviewFieldNames('skill', zh))).toBe('other.x');
+    expect(namedReviewPath('toString', reviewFieldNames('skill', zh))).toBe('toString');
+    expect(namedReviewPath('markdown')).toBe('markdown');
   });
 });

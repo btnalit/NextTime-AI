@@ -1,3 +1,4 @@
+import { maskSecretFields } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CredentialReviewRequiredError,
@@ -6,6 +7,8 @@ import {
   countSuspectedSecrets,
   credentialReviewAudit,
   findSuspectedSecrets,
+  namesASecretField,
+  redactSecrets,
 } from './index.js';
 
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
@@ -20,16 +23,29 @@ describe('countSuspectedSecrets — the same detector as the scrubs', () => {
     expect(countSuspectedSecrets({ host: 'db.example.invalid', port: 5432, tags: ['a'] })).toBe(0);
   });
 
-  it('with secretFields, also counts a non-blank string under a secret-named field', () => {
-    const args = { user: 'ops', password: FAKE, nested: { apiKey: FAKE, clientSecret: FAKE } };
+  it('with secretFields, also counts every string and number under a secret-named field', () => {
+    const args = {
+      user: 'ops',
+      password: FAKE,
+      nested: { apiKey0: FAKE, clientSecret: FAKE, pin: { secretCode: 1234 } },
+      credentials: { user: 'u', pass: 'p' },
+    };
     expect(countSuspectedSecrets(args)).toBe(0);
-    expect(countSuspectedSecrets(args, { secretFields: true })).toBe(3);
+    expect(countSuspectedSecrets(args, { secretFields: true })).toBe(6);
   });
 
-  it('a secret-named field that is blank, not a string, or only names tokens as a quantity is not counted', () => {
+  it('a secret-named field that is blank, a boolean or null, or only names tokens as a quantity is not counted', () => {
     expect(
       countSuspectedSecrets(
-        { password: '', token: '   ', apiKey: null, max_tokens: 1024, tokenCount: 3 },
+        {
+          password: '',
+          token: '   ',
+          apiKey: null,
+          passwordRequired: true,
+          max_tokens: 1024,
+          tokenCount: 3,
+          tokenizer: 'cl100k',
+        },
         { secretFields: true },
       ),
     ).toBe(0);
@@ -51,6 +67,24 @@ describe('countSuspectedSecrets — the same detector as the scrubs', () => {
       },
     };
     expect(countSuspectedSecrets(schema)).toBe(3);
+  });
+
+  it('a schema literal that is an object or an array of objects is walked into', () => {
+    const token = `sk_live_${FAKE}`;
+    expect(countSuspectedSecrets({ properties: { apiKey: { default: { value: token } } } })).toBe(
+      1,
+    );
+    expect(countSuspectedSecrets({ properties: { apiKey: { examples: [{ v: token }] } } })).toBe(1);
+    expect(countSuspectedSecrets({ properties: { apiKey: { default: token } } })).toBe(1);
+    expect(countSuspectedSecrets({ properties: { config: { default: { v: token } } } })).toBe(1);
+    // A literal no pattern knows counts as well, inside an object literal too.
+    expect(countSuspectedSecrets({ properties: { apiKey: { default: { v: 'hunter2' } } } })).toBe(
+      1,
+    );
+  });
+
+  it('counts a secret-named pair inside a string that is itself JSON', () => {
+    expect(countSuspectedSecrets({ body: `{"apiKey0": "${FAKE}", "max_tokens": 10}` })).toBe(1);
   });
 });
 
@@ -89,6 +123,89 @@ describe('findSuspectedSecrets — where, by field path only', () => {
     const found = findSuspectedSecrets(many, { secretFields: true });
     expect(found.count).toBe(25);
     expect(found.paths).toHaveLength(20);
+  });
+});
+
+/** The paths where the console's mask put `[redacted]`, in the kernel's path notation. */
+function maskedPaths(original: unknown, masked: unknown, path = ''): string[] {
+  if (masked === '[redacted]' && original !== '[redacted]') return [path];
+  if (Array.isArray(masked)) {
+    return masked.flatMap((item, i) =>
+      maskedPaths((original as unknown[])[i], item, `${path}[${i}]`),
+    );
+  }
+  if (masked !== null && typeof masked === 'object') {
+    return Object.entries(masked).flatMap(([key, inner]) =>
+      maskedPaths(
+        (original as Record<string, unknown>)[key],
+        inner,
+        path === '' ? key : `${path}.${key}`,
+      ),
+    );
+  }
+  return [];
+}
+
+describe('one rule: what the console hides = what the kernel counts = what the redactor replaces', () => {
+  const keys = [
+    'apiKey0',
+    'api_key_2',
+    'x-api-key',
+    'password2',
+    'PGPASSWORD',
+    'tokenValue',
+    'accessToken',
+    'GITHUB_TOKEN',
+    'secretRef',
+    'authorizationHeader',
+    'clientSecret',
+    'credentials',
+    'Cookie',
+    'handle',
+    'maxTokens',
+    'max_tokens',
+    'tokenizer',
+    'tokenCount',
+    'note',
+    'host',
+  ];
+  const values: readonly unknown[] = [
+    'v1',
+    '',
+    7,
+    true,
+    null,
+    { inner: 'v', flag: false, n: 3 },
+    ['a', 2, false, { deep: 'd' }],
+  ];
+  const nestings: readonly ((key: string, value: unknown) => unknown)[] = [
+    (key, value) => ({ [key]: value }),
+    (key, value) => ({ outer: { [key]: value }, other: 'x' }),
+    (key, value) => ({ list: [{ ok: 1 }, { [key]: value }] }),
+  ];
+  const fixtures = keys.flatMap((key) =>
+    values.flatMap((value) => nestings.map((nest) => ({ key, value, params: nest(key, value) }))),
+  );
+
+  it.each(fixtures)('$key = $value', ({ params }) => {
+    const hidden = maskedPaths(params, maskSecretFields(params));
+    const counted = findSuspectedSecrets(params, { secretFields: true });
+    const redacted = redactSecrets(params, {
+      isSecretKey: namesASecretField,
+      maxNodes: Number.POSITIVE_INFINITY,
+    });
+    expect(counted.count).toBe(hidden.length);
+    expect([...counted.paths].sort()).toEqual([...hidden].sort());
+    expect(redacted.redactedValues).toBe(counted.count);
+    expect(redacted.value).toEqual(maskSecretFields(params));
+  });
+
+  it('the table covers both sides of the rule', () => {
+    const hiddenSomewhere = fixtures.filter(
+      ({ params }) => maskedPaths(params, maskSecretFields(params)).length > 0,
+    );
+    expect(hiddenSomewhere.length).toBeGreaterThan(100);
+    expect(fixtures.length - hiddenSomewhere.length).toBeGreaterThan(100);
   });
 });
 

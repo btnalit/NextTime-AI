@@ -229,6 +229,23 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-review-on-page').getAttribute('href')).toContain('ar-1');
   });
 
+  it('a field the card hides is one the kernel counted: apiKey0 shows [redacted], and the card offers only the approvals page', () => {
+    renderCard({
+      card: baseCard({
+        params: { apiKey0: 'abcdefghijklmnopqrstuvwxyz0123', maxTokens: 4096 },
+        suspectedSecretValues: 1,
+      }),
+    });
+    const params = screen.getByText(/apiKey0/).textContent ?? '';
+    expect(params).toContain('"apiKey0": "[redacted]"');
+    expect(params).toContain('"maxTokens": 4096');
+    expect(screen.getByTestId('approval-credential-review').textContent).toContain('含 1 处');
+    expect(screen.queryByTestId('approval-approve')).toBeNull();
+    expect(screen.queryByTestId('approval-always-allow')).toBeNull();
+    expect(screen.getByTestId('approval-reject')).toBeTruthy();
+    expect(screen.getByTestId('approval-review-on-page')).toBeTruthy();
+  });
+
   it('a card that did not know the count learns it from the kernel’s 400 and points to the page instead of showing an error', () => {
     renderCard({
       error: new HttpError(

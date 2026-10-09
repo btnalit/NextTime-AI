@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { HttpError } from './http-client.js';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/credential-review: the console side of decision 2026-10-09 "二次确认". The kernel counts
@@ -87,4 +88,27 @@ export function usePublishCredentialReview(subjectKey: string | null): PublishCr
       return true;
     },
   };
+}
+
+/** The console's names for the top-level fields of a draft's reviewed content (the kernel's
+ *  `skillReviewContent` / `procedureReviewContent`), so a flagged path reads as the editor's own
+ *  label (`markdown` → 正文). */
+export function reviewFieldNames(
+  kind: 'skill' | 'procedure',
+  t: Translate,
+): Readonly<Record<string, string>> {
+  const common = { name: t('名称', 'Name'), description: t('描述', 'Description') };
+  return kind === 'skill'
+    ? { ...common, markdown: t('正文', 'Markdown body'), applicable: t('适用范围', 'Applies to') }
+    : { ...common, steps: t('步骤', 'Steps') };
+}
+
+/** `path` with its first segment shown under its console name, when `names` has one:
+ *  `markdown` → `正文`, `steps[1].run` → `步骤[1].run`. */
+export function namedReviewPath(path: string, names?: Readonly<Record<string, string>>): string {
+  if (names === undefined) return path;
+  const end = path.search(/[.[]/);
+  const head = end === -1 ? path : path.slice(0, end);
+  const named = Object.hasOwn(names, head) ? names[head] : undefined;
+  return named === undefined ? path : `${named}${end === -1 ? '' : path.slice(end)}`;
 }
