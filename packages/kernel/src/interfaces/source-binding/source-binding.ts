@@ -3,6 +3,7 @@ import {
   type HandleBindingFileError,
   type HandleBindingReader,
   type HandleBindingSource,
+  SOURCE_BOUND_CAPABILITY_HANDLE,
   createHandleBindingReader,
   decideHandlePresentation,
   normalizePeerAddress,
@@ -25,8 +26,11 @@ import type { SubnetMatcher } from '../internal-auth/subnet.js';
  *     403 before any credential is looked at, so a container cannot act with a token it found
  *     somewhere (a member's `issue_handle` token pasted into a file, an API key);
  *   - authenticates `/api/cap/:name` with the Handle bound to the peer address only
- *     (`boundHandleFor`): a request that also carries `Authorization` or a cookie is refused, and
- *     so is a peer with no binding.
+ *     (`boundHandleFor`): a request that also carries a credential (`Authorization`, a cookie) is
+ *     refused, and so is a peer with no binding. `Authorization: Bearer source-bound` is not a
+ *     credential — it is what the platform extension of an older runtime image still sends (it
+ *     forwards `CAPABILITY_HANDLE`, now the marker), and a runtime image can stay selectable
+ *     across releases — so it counts as no header.
  *
  * The peer address is the socket's own `remoteAddress` — never a forwarded-for header (nothing on
  * the `workers` network sits in front of the kernel), the same rule interfaces/internal-auth uses.
@@ -67,6 +71,17 @@ export class SourceBindingRefused extends Error {
   }
 }
 
+/** What an older runtime image's platform extension sends for the `source-bound` marker. */
+const SOURCE_BOUND_AUTHORIZATION = `Bearer ${SOURCE_BOUND_CAPABILITY_HANDLE}`;
+
+function carriesCredential(request: FastifyRequest): boolean {
+  const authorization = request.headers.authorization;
+  return (
+    (authorization !== undefined && authorization.trim() !== SOURCE_BOUND_AUTHORIZATION) ||
+    request.headers.cookie !== undefined
+  );
+}
+
 function peerAddress(request: FastifyRequest): string | undefined {
   const address = request.socket?.remoteAddress;
   return address ? normalizePeerAddress(address) : undefined;
@@ -85,7 +100,7 @@ export function createSourceBinding(config: SourceBindingConfig): SourceBinding 
     async boundHandleFor(request) {
       const peer = peerAddress(request);
       if (peer === undefined || !inWorkersSubnet(peer)) return undefined;
-      if (request.headers.authorization !== undefined || request.headers.cookie !== undefined) {
+      if (carriesCredential(request)) {
         throw new UnauthorizedError('invalid credentials', {
           cause: new SourceBindingRefused('credential_from_bound_source'),
         });

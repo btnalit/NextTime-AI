@@ -210,6 +210,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         const response = await getObject(app, CONTAINER_ADDRESS, headers);
         expect(response.statusCode, Object.keys(headers)[0]).toBe(401);
       }
+      // The marker an older runtime image's extension forwards is not a credential.
+      const marker = await getObject(app, CONTAINER_ADDRESS, {
+        authorization: 'Bearer source-bound',
+      });
+      expect(marker.statusCode).toBe(200);
     });
 
     it('an unbound address on the workers network is refused, and a forwarded-for header changes nothing', async () => {
