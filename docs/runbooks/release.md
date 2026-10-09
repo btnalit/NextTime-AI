@@ -612,6 +612,72 @@ docker compose logs egress-proxy | grep 'can never match a host'
 
 graph 组新增只读能力 `list_facts`（按链接类型列出工作区的活跃 Fact），`get_entry_context` 多返回 `factCountsByLinkType`。入口 agent 的注入上下文改为先给图概览、再给最近 Fact 样本。入口 Handle 在应用后重启时按新的能力上限重新签发，不需要操作。用户在控制台自助签发的 MCP / Claude Code / pi interactive Handle 的 scope 是签发那一刻的能力清单，调 `list_facts` 会返回 `forbidden`，需要重新签发（`howto-connect-pi.md` 排障表）。已有工作区的入口 systemPrompt 不会随模板更新，关键指引放在了注入上下文与工具描述里。无迁移。主机验收 S5.7 dependency_chat 按至少 8/10 判定。
 
+### 3.15 agent-host 与 kernel 须同版本；agent 输出脱敏与发版后 Handle 核对（#520，v0.44.0 起）
+
+无迁移、无新的应用步骤。按 §3 入口整版应用即可，**agent-host 与 kernel 必须是同一版本**：新 agent-host 配旧内核时，旧内核会丢弃带 `name` 的工具结束帧，实时界面上那次调用一直显示"运行中"直到 Turn 结束；旧 agent-host 配新内核无害。gatekeeper-base 的路径模板正则有改动，门镜像随版本重建即可。
+
+行为变化：
+- 入口 Turn 的每个工具调用结束时，聊天历史里多一条 `role='tool'`、`kind: 'tool_call'` 的消息，刷新后仍可见，可见性与所在 Chat 相同；控制台的工具行渲染与本版同发。
+- 实时文本、工具调用、落库回复、Handle 通道调用的审计参数、Worker 报告里形似密钥的值显示为 `[redacted]`。实时文本会扣住末尾一个词，未完成的名值对和未闭合的引号值扣到值结束；4096 字符以上不断开的一段（压缩 JS、长 base64）实时只显示一个 `[redacted]`，Turn 结束后落库的回复照常显示。这是纵深防御：编码后的外带挡不住（STATUS 遗留 156）。
+- 新的只读能力 `graph_overview`。与 §3.14 一样，控制台自助签发的 Handle 要重新签发才能调用；入口 Handle 重启后自动按新上限签发。
+
+**应用后**（窗口内，S1–S4 之后）三项核对，结果记 `docs/private/`。
+
+**A. Handle 历史命中**：v0.43.0 及之前，agent 写出的内容都没有脱敏，可能含 Handle；#520 之后，Worker 提议与其他 `propose_*` / `request_action` 写入的内容仍原样保留（遗留 157）。所以除了聊天、审计、Task、Fact / evidence / decisions，还要扫 agent 能写入、以后还会被使用的位置：Skill 正文（发布后注入以后的 agent 上下文）、Procedure 步骤、ActionRequest 参数（批准后发往目标系统）、observations、待注入的上下文条目。这条正则匹配**所有** Handle，不只是入口 Handle：控制台自助签发的最长 30 天，服务 Handle 最长 365 天。所以不能看行的时间，要按每个 Handle 自己的 `jti` 查它是否仍有效、未吊销。在主机检出目录下执行；经 SSH 时与 §3.13 一样，把 heredoc 通过管道交给 ssh（不要加 `</dev/null`，stdin 就是 SQL）。输出只有计数和最晚过期时间，不打印 Handle 或 `jti`：
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+with p as (select 'eyJhbGciOiJFZERTQSJ9\.([A-Za-z0-9_-]{6,})\.[A-Za-z0-9_-]{6,}'::text as re),
+src(location, t) as (
+            select 'chat_messages', content::text from chat_messages
+  union all select 'audit_records', payload::text from audit_records
+  union all select 'tasks', input::text || ' ' || coalesce(result::text, '') from tasks
+  union all select 'activities', metadata::text from activities
+  union all select 'objects', properties::text from objects
+  union all select 'links', properties::text from links
+  union all select 'evidence', content::text from evidence
+  union all select 'decisions', coalesce(summary, '') || ' ' || coalesce(rationale::text, '') from decisions
+  union all select 'observations', content::text from observations
+  union all select 'skills', description || ' ' || markdown from skills
+  union all select 'procedures', description || ' ' || steps::text from procedures
+  union all select 'action_requests', params::text from action_requests
+  union all select 'pending_context_items', payload::text from pending_context_items
+), seg as (
+  select src.location, (regexp_matches(src.t, p.re, 'g'))[1] as s from src, p
+), jtis as (
+  select distinct location,
+         substring(encode(decode(rpad(translate(s, '-_', '+/'), (length(s) + 3) / 4 * 4, '='), 'base64'), 'escape')
+                   from '"jti":"([0-9a-f-]{36})"') as jti
+  from seg where length(s) % 4 <> 1
+)
+select j.location,
+       count(*) as distinct_handles,
+       count(*) filter (where h.jti is not null and h.revoked_at is null and h.expires_at > now()) as live_unrevoked,
+       count(*) filter (where h.jti is null) as not_found,
+       max(h.expires_at) filter (where h.revoked_at is null) as latest_expiry
+from jtis j left join capability_handles h on h.jti::text = j.jti
+where j.jti is not null
+group by j.location
+order by j.location;
+rollback;
+SQL
+```
+
+`eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。0 行，或每行 `live_unrevoked = 0`，即无事。中间段解不出 `jti` 的（截断、损坏）直接跳过，不会让事务中止。有 `live_unrevoked > 0` 时，找维护者决定是否吊销：按 `jti` 吊销（`capability_handles.revoked_at`，每次调用都检查）是改主机数据的操作，须维护者明确同意，本手册不自动做。历史行是否清洗另行决定（审计只追加）。
+
+**B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，历史里能看到这一轮的工具调用和结果。
+
+**C. 输出里的 Handle 被替换**：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页里都应显示为 `[redacted]`。
+
+### 3.16 llm-proxy 管理接口限流与密钥检查（#521，v0.44.0 起）
+
+无迁移、无新步骤。行为变化：
+- 控制台的拉模型列表、逐模型探测、「测试」按管理员限流（同时 2 个、排队 4 个、每分钟 60 次上游调用），超出时控制台提示暂停几秒，属预期。
+- 含 HTTP header 不能承载的字符（全角空格、中间空格、换行）的供应商密钥，以前让该供应商的每次模型调用 500，现在返回 502 `upstream_key_invalid`，控制台卡片提示「密钥含非法字符，请重新填写」。密钥首尾空白会被去掉，CRLF 结尾的 env 或密钥文件照常可用。
+
+应用后看一次日志：`docker compose logs llm-proxy | grep 'cannot carry'`。有输出就在控制台重新填写对应供应商的密钥（或修好密钥文件 / 环境变量），改之前这个供应商的模型对 agent 不可用。日志只有供应商 id 与来源，不含密钥值。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
