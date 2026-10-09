@@ -69,9 +69,11 @@ describe('UpdateReminder', () => {
         'sh /tmp/apply-release-v0.43.0.sh --prefetch v0.43.0',
       ].join('\n'),
     );
-    expect(within(steps).getByTestId('update-notice-platform-prefetch').textContent).toContain(
-      '维护窗口之前',
-    );
+    const prefetchStep = within(steps).getByTestId('update-notice-platform-prefetch').textContent;
+    expect(prefetchStep).toContain('维护窗口之前');
+    // The terminal only prints the log path; the verdict is the log's last line.
+    expect(prefetchStep).toContain('终端只打印日志路径');
+    expect(steps.textContent).toContain('tail -f');
     expect(steps.textContent).toContain('先确认镜像已预拉，再备份');
     expect(within(steps).getByTestId('update-notice-platform-migrations').textContent).toContain(
       'core 0041',
