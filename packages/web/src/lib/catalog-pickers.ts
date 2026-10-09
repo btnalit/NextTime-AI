@@ -1,6 +1,7 @@
 import { CAPABILITY_MODE_VALUES } from '@nexttime/shared';
 import { egressDenyHost } from './catalog-input.js';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 
 /**
  * lib/catalog-pickers (console-ux-3): the "pick it, don't type it" data shaping behind the catalog
@@ -17,7 +18,7 @@ const MODE_LABELS: Readonly<Record<string, { readonly zh: string; readonly en: s
 };
 
 export function capabilityModeLabel(mode: string, t: Translate): string {
-  const label = MODE_LABELS[mode];
+  const label = ownEntry(MODE_LABELS, mode);
   return label ? t(label.zh, label.en) : mode;
 }
 

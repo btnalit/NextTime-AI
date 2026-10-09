@@ -1,5 +1,6 @@
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 /** Renders any thrown value as a user-facing string. `WsClient`'s `RpcError`/`TurnAlreadyRunningError`
@@ -104,7 +105,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
  *  unknown code reads `出错了` in Chinese (the raw code is shown next to it either way) and the
  *  derived English label in English. */
 export function localizedErrorTitle(described: ErrorDescription, t: Translate): string {
-  const zh = CODE_TITLES_ZH[described.code];
+  const zh = ownEntry(CODE_TITLES_ZH, described.code);
   return t(zh ?? '出错了', described.title);
 }
 
@@ -132,7 +133,11 @@ export function transportErrorMessage(err: unknown, t: Translate): string | null
 export function describeError(err: unknown): ErrorDescription {
   if (err instanceof HttpError) {
     const code = err.kind === 'capability_error' ? (err.code ?? 'unknown') : err.kind;
-    return { code, title: CODE_TITLES[code] ?? titleFromCode(code), message: err.message };
+    return {
+      code,
+      title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),
+      message: err.message,
+    };
   }
   if (err instanceof TurnAlreadyRunningError) {
     return {
@@ -142,8 +147,12 @@ export function describeError(err: unknown): ErrorDescription {
     };
   }
   if (err instanceof RpcError) {
-    const code = RPC_CODE_NAMES[err.code] ?? `rpc_${err.code}`;
-    return { code, title: CODE_TITLES[code] ?? titleFromCode(code), message: err.message };
+    const code = ownEntry(RPC_CODE_NAMES, err.code) ?? `rpc_${err.code}`;
+    return {
+      code,
+      title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),
+      message: err.message,
+    };
   }
   const message = errorMessage(err);
   if (/^WsClient: /.test(message)) {

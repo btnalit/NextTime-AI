@@ -4,6 +4,7 @@ import { shortId } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
 import { neighbourId } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { ownEntry } from '../../lib/own.js';
 import { useGraphObjects, useResolvedObjects } from './GraphObjectsContext.js';
 
 export interface NeighbourhoodViewProps {
@@ -82,7 +83,8 @@ export function NeighbourhoodView({
     if (!current) byNeighbour.set(other, { tone, count: 1 });
     else {
       current.count += 1;
-      if ((TONE_RANK[tone] ?? 0) > (TONE_RANK[current.tone] ?? 0)) current.tone = tone;
+      if ((ownEntry(TONE_RANK, tone) ?? 0) > (ownEntry(TONE_RANK, current.tone) ?? 0))
+        current.tone = tone;
     }
   }
   const all = [...byNeighbour.entries()];

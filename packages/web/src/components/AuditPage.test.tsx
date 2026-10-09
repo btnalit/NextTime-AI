@@ -205,6 +205,18 @@ describe('AuditPage entry points', () => {
     );
   });
 
+  it('?resourceType=__proto__ in the URL renders the page instead of crashing it', async () => {
+    window.history.replaceState(null, '', '#/govern/audit?resourceType=__proto__');
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [auditRow()] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+    expect(await screen.findByTestId('audit-row')).toBeTruthy();
+    window.history.replaceState(null, '', '#/');
+  });
+
   it('?actionRequestId= shows the approval context, explains its decision node and filters the audit log on the request', async () => {
     const http = scriptedHttp({
       get_action: () => ({

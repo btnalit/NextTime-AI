@@ -1,6 +1,7 @@
 import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/shared';
 import { PUBLISHABLE_STATUS_VALUES } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 
 /**
  * lib/connections: wire shapes of the S2.13 connection flow as the web reads them —
@@ -237,11 +238,11 @@ export function isLooseningGovernanceChange(
   existing: OperationGovernanceFieldsView,
   announced: OperationGovernanceFieldsView,
 ): boolean {
-  const existingMode = GOVERNANCE_MODE_STRICTNESS[existing.mode] ?? 0;
-  const announcedMode = GOVERNANCE_MODE_STRICTNESS[announced.mode] ?? 0;
+  const existingMode = ownEntry(GOVERNANCE_MODE_STRICTNESS, existing.mode) ?? 0;
+  const announcedMode = ownEntry(GOVERNANCE_MODE_STRICTNESS, announced.mode) ?? 0;
   if (announcedMode < existingMode) return true;
-  const existingBlast = GOVERNANCE_BLAST_RADIUS_STRICTNESS[existing.blastRadius] ?? 0;
-  const announcedBlast = GOVERNANCE_BLAST_RADIUS_STRICTNESS[announced.blastRadius] ?? 0;
+  const existingBlast = ownEntry(GOVERNANCE_BLAST_RADIUS_STRICTNESS, existing.blastRadius) ?? 0;
+  const announcedBlast = ownEntry(GOVERNANCE_BLAST_RADIUS_STRICTNESS, announced.blastRadius) ?? 0;
   if (announcedBlast < existingBlast) return true;
   if (announced.autoApprovable && !existing.autoApprovable) return true;
   return false;
@@ -296,6 +297,6 @@ const CONNECTION_ERROR_MESSAGES: Readonly<
  *  normalized code so it stays transport-agnostic (`describeError(err).code`, HTTP or WS). A pure
  *  helper — takes `t` from its caller. */
 export function cancelConnectionRequestMessage(code: string, t: Translate): string | null {
-  const entry = CONNECTION_ERROR_MESSAGES[code];
+  const entry = ownEntry(CONNECTION_ERROR_MESSAGES, code);
   return entry ? t(entry.zh, entry.en) : null;
 }

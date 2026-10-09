@@ -1,5 +1,6 @@
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 
 /**
  * lib/platform-errors: the platform plane's stable wire codes → the bilingual one-liner the
@@ -181,7 +182,7 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
 export function platformErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   if (err.code === undefined) return null;
-  const entry = err.code !== undefined ? PLATFORM_ERROR_MESSAGES[err.code] : undefined;
+  const entry = err.code !== undefined ? ownEntry(PLATFORM_ERROR_MESSAGES, err.code) : undefined;
   return entry ? t(entry.zh, entry.en) : null;
 }
 

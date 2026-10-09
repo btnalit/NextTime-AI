@@ -20,6 +20,12 @@ const zhT: Translate = (zh) => zh;
 const enT: Translate = (_zh, en) => en;
 
 describe('lib/labels', () => {
+  it('inherited names (__proto__, constructor) fall back to the raw text, never a prototype member', () => {
+    expect(auditResourceTypeLabel('__proto__', zhT)).toBe('__proto__');
+    expect(auditResourceTypeLabel('constructor', zhT)).toBe('constructor');
+    expect(workerDefinitionKindLabel('constructor' as never, zhT)).toBe('constructor');
+  });
+
   it('label() picks the active language', () => {
     const entry = { zh: '中文', en: 'English' };
     expect(label(entry, zhT)).toBe('中文');

@@ -21,6 +21,7 @@ import { formatRelative } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
 import { roleLabel } from './labels.js';
+import { ownEntry } from './own.js';
 
 /**
  * lib/audit-pickers: where the audit pages' id / name filters get their candidates from, so a
@@ -355,7 +356,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
 export function resourceIdSource(resourceType: string, t: Translate): PickerSource | null {
   if (resourceType.trim() === '') return null;
   const recent = auditRecentSource(resourceType);
-  const factory = RESOURCE_SOURCES[resourceType];
+  const factory = ownEntry(RESOURCE_SOURCES, resourceType);
   return factory ? { ...factory(t), fallback: recent } : recent;
 }
 

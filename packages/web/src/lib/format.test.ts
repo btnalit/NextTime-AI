@@ -32,6 +32,14 @@ afterAll(() => {
 const NOW = Date.parse('2026-09-03T12:00:00.000Z');
 
 describe('format', () => {
+  it('redactSensitive keeps a "__proto__" key as a field instead of swapping the prototype', () => {
+    const parsed = JSON.parse('{"__proto__": {"apiKey": "k"}, "ok": 1}') as unknown;
+    const out = redactSensitive(parsed) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(Object.hasOwn(out, '__proto__')).toBe(true);
+    expect(JSON.stringify(out)).toBe('{"__proto__":{"apiKey":"[redacted]"},"ok":1}');
+  });
+
   it('shortId keeps 8 characters', () => {
     expect(shortId('0123456789abcdef')).toBe('01234567');
     expect(shortId('abc')).toBe('abc');

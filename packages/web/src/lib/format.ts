@@ -195,11 +195,14 @@ const SENSITIVE_KEY =
 export function redactSensitive(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSensitive);
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SENSITIVE_KEY.test(key) ? '[redacted]' : redactSensitive(inner);
-    }
-    return out;
+    // `Object.fromEntries` defines each key as an own property; assigning `out[key]` would turn a
+    // server-supplied `"__proto__"` key into a prototype swap instead of a displayed field.
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, inner]) => [
+        key,
+        SENSITIVE_KEY.test(key) ? '[redacted]' : redactSensitive(inner),
+      ]),
+    );
   }
   return value;
 }

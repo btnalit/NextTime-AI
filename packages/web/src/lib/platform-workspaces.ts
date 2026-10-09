@@ -4,6 +4,7 @@ import type {
   PurgeWorkspaceReasonWire,
 } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
+import { ownEntry } from './own.js';
 import { hrefs } from './router.js';
 
 // -------------------------------------------------------------------------------------------
@@ -121,7 +122,7 @@ const PURGE_COUNT_LABELS: Readonly<Record<string, { readonly zh: string; readonl
 };
 
 export function purgeCountLabel(key: string, t: Translate): string {
-  const known = PURGE_COUNT_LABELS[key];
+  const known = ownEntry(PURGE_COUNT_LABELS, key);
   if (known !== undefined) return t(known.zh, known.en);
   const words = key
     .replace(/([A-Z])/g, ' $1')

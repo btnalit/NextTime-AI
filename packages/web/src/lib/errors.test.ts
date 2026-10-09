@@ -11,6 +11,14 @@ import { HttpError } from './http-client.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 describe('describeError', () => {
+  it('a server code that names an Object.prototype member gets a plain string title', () => {
+    for (const code of ['__proto__', 'constructor', 'toString']) {
+      const described = describeError(new HttpError('capability_error', 'x', code));
+      expect(typeof described.title).toBe('string');
+      expect(localizedErrorTitle(described, (zh) => zh)).toBe('出错了');
+    }
+  });
+
   it('surfaces the HTTP wire code and the kernel message verbatim', () => {
     const described = describeError(
       new HttpError('capability_error', 'principal role "member" does not satisfy', 'forbidden'),

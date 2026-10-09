@@ -21,6 +21,14 @@ function caller(handlers: Record<string, (params: unknown) => unknown>): Capabil
 }
 
 describe('resourceIdSource', () => {
+  it('an inherited name from the URL (?resourceType=__proto__) gets the audit-log source, not a crash', () => {
+    for (const name of ['__proto__', 'constructor', 'toString']) {
+      const source = resourceIdSource(name, t);
+      expect(source?.key).toContain('audit_query');
+      expect(source?.fallback).toBeUndefined();
+    }
+  });
+
   it('has no source until a type is chosen', () => {
     expect(resourceIdSource('', t)).toBeNull();
   });
