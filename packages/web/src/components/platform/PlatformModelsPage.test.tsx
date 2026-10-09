@@ -138,6 +138,18 @@ function renderPage(http: CapabilityCaller, fetchImpl: typeof fetch) {
 }
 
 describe('PlatformModelsPage', () => {
+  it('P0-3: arriving with ?new=provider opens 新增供应商 and drops the query', async () => {
+    window.history.replaceState(null, '', '#/platform/models?new=provider');
+    const http = scriptedHttp();
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire([]) }),
+    });
+    renderPage(http, proxy.fetchImpl);
+    expect(await screen.findByTestId('provider-form')).toBeTruthy();
+    expect(window.location.hash).toBe('#/platform/models');
+    window.history.replaceState(null, '', '#/');
+  });
+
   it('lists providers with enabled / credential / source facts and mints one token for the burst', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({

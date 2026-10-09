@@ -223,6 +223,13 @@ export function AgentProfileForm({
             <option value={INHERIT_MODEL}>
               {t('继承工作区默认', 'Inherit workspace default')}
             </option>
+            {/* Audit P0-1 sweep: a stored model the workspace no longer offers stays visible as
+             *  itself instead of the select silently showing the first option. */}
+            {state.model !== INHERIT_MODEL && !allowedModels.some((m) => m.id === state.model) ? (
+              <option value={state.model}>
+                {t(`${state.model}（已不在可选范围内）`, `${state.model} (no longer allowed)`)}
+              </option>
+            ) : null}
             {allowedModels.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id}

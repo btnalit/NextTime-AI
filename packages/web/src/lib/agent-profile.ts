@@ -70,7 +70,8 @@ export interface SetAgentProfileParams {
 export interface AgentPolicy {
   readonly workspaceId: string;
   readonly allowedModels: readonly string[];
-  readonly defaultModel: string;
+  /** `null` = not set: the runtime uses the entry Worker's own model or its built-in default. */
+  readonly defaultModel: string | null;
   readonly memberCanEditProfile: boolean;
   readonly maxPromptAddendumChars: number;
   /** Empty = unrestricted (§S3.13 AgentPolicy: "空 = 不限制") — never read as "nothing allowed". */
@@ -85,7 +86,7 @@ export interface AgentPolicy {
 
 export interface SetAgentPolicyParams {
   readonly allowedModels?: readonly string[];
-  readonly defaultModel?: string;
+  readonly defaultModel?: string | null;
   readonly memberCanEditProfile?: boolean;
   readonly maxPromptAddendumChars?: number;
   readonly allowedSkills?: readonly string[];

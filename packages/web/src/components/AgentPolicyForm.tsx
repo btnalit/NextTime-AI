@@ -20,6 +20,7 @@ export interface AgentPolicyFormProps {
 
 interface FormState {
   readonly allowedModels: readonly string[];
+  /** `''` = not set (sent as `null`). */
   readonly defaultModel: string;
   readonly memberCanEditProfile: boolean;
   readonly maxPromptAddendumChars: string;
@@ -31,13 +32,17 @@ interface FormState {
 function initialState(policy: AgentPolicy): FormState {
   return {
     allowedModels: policy.allowedModels,
-    defaultModel: policy.defaultModel,
+    defaultModel: policy.defaultModel ?? '',
     memberCanEditProfile: policy.memberCanEditProfile,
     maxPromptAddendumChars: String(policy.maxPromptAddendumChars),
     allowedSkills: policy.allowedSkills,
     allowedGatekeepers: policy.allowedGatekeepers,
     allowMemberAutoApproveLow: policy.allowMemberAutoApproveLow,
   };
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((item) => b.includes(item));
 }
 
 function toggle(list: readonly string[], id: string): readonly string[] {
@@ -166,16 +171,28 @@ export function AgentPolicyForm({
 
   const publishedSkills = skills.filter((s) => s.status === 'published');
 
-  const defaultModelOptions =
-    state.allowedModels.length > 0 ? state.allowedModels : models.map((m) => m.id);
-  // C11 (console-completion-plan §2b), mirroring `platform/CreateWorkspaceForm.tsx`'s guard:
-  // un-ticking the current default must not leave the `<select>` bound to a value that is no
-  // longer an option (React renders the first option while the state still holds the stale id,
-  // and that stale id is what used to be submitted — a guaranteed `entry_model_not_allowed`).
-  // The first remaining option becomes the effective default, both on screen and on submit.
-  const defaultModelValue = defaultModelOptions.includes(state.defaultModel)
-    ? state.defaultModel
-    : (defaultModelOptions[0] ?? '');
+  const restrictedModels = state.allowedModels.length > 0;
+  const defaultModelOptions = restrictedModels ? state.allowedModels : models.map((m) => m.id);
+  // Audit P0-1: the select shows exactly what is stored. "Not set" is a real option while the
+  // model list is unrestricted (the kernel allows `null` then); with an explicit allow-list the
+  // kernel requires a default inside it (`modelPolicyViolation`), so a default that is unset or
+  // was just un-ticked shows as "请选择" and blocks the save with a field error — it is never
+  // replaced by the first option, on screen or on submit. A stored default the catalog no longer
+  // lists stays visible as its own option rather than silently becoming another model.
+  // The one exception is derivable, not a guess: when the allow-list leaves a single model, that
+  // model is the only valid default, and the select shows it.
+  const defaultModelValue =
+    state.defaultModel === '' || defaultModelOptions.includes(state.defaultModel)
+      ? restrictedModels && state.defaultModel === '' && defaultModelOptions.length === 1
+        ? (defaultModelOptions[0] as string)
+        : state.defaultModel
+      : restrictedModels
+        ? defaultModelOptions.length === 1
+          ? (defaultModelOptions[0] as string)
+          : ''
+        : state.defaultModel;
+  const defaultModelMissing = restrictedModels && defaultModelValue === '';
+  const [noChanges, setNoChanges] = useState(false);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setState((prev) => ({ ...prev, [key]: value }));
@@ -186,31 +203,51 @@ export function AgentPolicyForm({
     if (submitting) return;
     setFieldErrors({});
     setSubmitError(null);
+    setNoChanges(false);
 
     const maxChars = Number(state.maxPromptAddendumChars);
-    if (!Number.isFinite(maxChars) || maxChars < 0) {
-      setFieldErrors({ maxPromptAddendumChars: 'Must be a non-negative number.' });
-      return;
-    }
-
-    // C11: the kernel's `modelPolicyViolation` refuses a non-empty allow-list whose default is
-    // not in it; the guarded value below is what the select shows, so submit exactly that.
-    if (state.allowedModels.length > 0 && defaultModelValue === '') {
+    if (!Number.isInteger(maxChars) || maxChars <= 0) {
       setFieldErrors({
-        defaultModel: t('请先勾选至少一个模型作为默认', 'Pick a default from the allowed models.'),
+        maxPromptAddendumChars: t('请输入大于 0 的整数', 'Enter a whole number above 0.'),
       });
       return;
     }
 
-    const params: SetAgentPolicyParams = {
-      allowedModels: state.allowedModels,
-      defaultModel: defaultModelValue,
-      memberCanEditProfile: state.memberCanEditProfile,
-      maxPromptAddendumChars: maxChars,
-      allowedSkills: state.allowedSkills,
-      allowedGatekeepers: state.allowedGatekeepers,
-      allowMemberAutoApproveLow: state.allowMemberAutoApproveLow,
-    };
+    // The kernel's `modelPolicyViolation` refuses a non-empty allow-list without a default
+    // inside it; say so on the field instead of picking one on the owner's behalf.
+    if (defaultModelMissing) {
+      setFieldErrors({
+        defaultModel: t(
+          '限定了可选模型时必须从中选一个默认模型',
+          'With a restricted model list, pick a default from it.',
+        ),
+      });
+      return;
+    }
+
+    // `set_agent_policy` is a partial update: send only what the owner changed, so saving one
+    // toggle never rewrites a field the form merely displayed.
+    const original = initialState(policy);
+    const params: {
+      -readonly [K in keyof SetAgentPolicyParams]: SetAgentPolicyParams[K];
+    } = {};
+    if (!sameList(state.allowedModels, original.allowedModels))
+      params.allowedModels = state.allowedModels;
+    if (defaultModelValue !== original.defaultModel)
+      params.defaultModel = defaultModelValue === '' ? null : defaultModelValue;
+    if (state.memberCanEditProfile !== original.memberCanEditProfile)
+      params.memberCanEditProfile = state.memberCanEditProfile;
+    if (maxChars !== policy.maxPromptAddendumChars) params.maxPromptAddendumChars = maxChars;
+    if (!sameList(state.allowedSkills, original.allowedSkills))
+      params.allowedSkills = state.allowedSkills;
+    if (!sameList(state.allowedGatekeepers, original.allowedGatekeepers))
+      params.allowedGatekeepers = state.allowedGatekeepers;
+    if (state.allowMemberAutoApproveLow !== original.allowMemberAutoApproveLow)
+      params.allowMemberAutoApproveLow = state.allowMemberAutoApproveLow;
+    if (Object.keys(params).length === 0) {
+      setNoChanges(true);
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -258,7 +295,25 @@ export function AgentPolicyForm({
           onChange={(event) => update('defaultModel', event.target.value)}
           disabled={submitting}
           invalid={!!fieldErrors.defaultModel}
+          data-testid="agent-policy-default-model"
         >
+          {restrictedModels ? (
+            <option value="" disabled>
+              {t('请选择默认模型', 'Choose a default model')}
+            </option>
+          ) : (
+            <option value="">
+              {t(
+                '不设置（使用入口 Worker 的模型或运行时默认）',
+                "Not set (the entry Worker's model or the runtime default)",
+              )}
+            </option>
+          )}
+          {defaultModelValue !== '' && !defaultModelOptions.includes(defaultModelValue) ? (
+            <option value={defaultModelValue}>
+              {t(`${defaultModelValue}（目录中已没有）`, `${defaultModelValue} (no longer listed)`)}
+            </option>
+          ) : null}
           {defaultModelOptions.map((id) => (
             <option key={id} value={id}>
               {id}
@@ -285,7 +340,7 @@ export function AgentPolicyForm({
         <Input
           id="ap-max-prompt-chars"
           type="number"
-          min={0}
+          min={1}
           value={state.maxPromptAddendumChars}
           onChange={(event) => update('maxPromptAddendumChars', event.target.value)}
           disabled={submitting}
@@ -337,6 +392,12 @@ export function AgentPolicyForm({
 
       {submitError !== null ? (
         <ErrorBanner error={submitError} title={t('无法保存策略', 'Could not save the policy')} />
+      ) : null}
+
+      {noChanges ? (
+        <output className="field-hint" data-testid="agent-policy-no-changes">
+          {t('没有改动，无需保存。', 'Nothing changed, so nothing was saved.')}
+        </output>
       ) : null}
 
       <Notice>

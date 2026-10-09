@@ -421,6 +421,24 @@ describe('AgentProfilePage', () => {
     });
   });
 
+  it('P0-1 sweep: a stored model the policy no longer allows shows as itself, not as the first option', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({
+        items: [
+          { id: 'anthropic/claude', provider: 'anthropic', model: 'claude' },
+          { id: 'openai/gpt', provider: 'openai', model: 'gpt' },
+        ],
+      }),
+      get_agent_policy: () => policy({ allowedModels: ['anthropic/claude'] }),
+      get_agent_profile: () => profile({ model: 'openai/gpt' }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-profile-form');
+    const select = within(form).getByRole('combobox', { name: /模型/ }) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe('openai/gpt'));
+    expect(select.selectedOptions[0]?.textContent).toContain('已不在可选范围内');
+  });
+
   it('disables the form when workspace policy forbids members from editing their own profile', async () => {
     const http = scriptedHttp({
       get_agent_policy: () => policy({ memberCanEditProfile: false }),

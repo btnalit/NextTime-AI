@@ -174,6 +174,45 @@ describe('PlatformOverviewPage', () => {
     expect(audit.textContent).toContain('admin');
   });
 
+  it('P0-3: with no provider yet, the first step says to add one in the console and links to the new-provider drawer', async () => {
+    const base = overview();
+    const http = scriptedHttp({
+      platform_overview: () => ({
+        ...base,
+        checklist: base.checklist.map((item) =>
+          item.key === 'providers' ? { ...item, done: false } : item,
+        ),
+      }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+    });
+    renderPage(http);
+    const checklist = await screen.findByTestId('platform-checklist');
+    expect(checklist.textContent).toContain('在控制台添加一个');
+    expect(checklist.textContent).not.toContain('主机');
+    expect(screen.getByTestId('checklist-add-provider').getAttribute('href')).toBe(
+      '#/platform/models?new=provider',
+    );
+  });
+
+  it('P0-4: a discovered, never-enabled gate instance is listed under 需要人处理 with a link to it', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: (params) => {
+        expect(params).toEqual({ status: 'discovered' });
+        return {
+          items: [{ gateId: 'gate-mcp-1', displayName: 'Fixture MCP', status: 'discovered' }],
+        };
+      },
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    expect(list.textContent).toContain('Fixture MCP');
+    expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      '#/platform/integrations/gate-mcp-1',
+    );
+  });
+
   it('renders an unattributed-actor recent-audit row (遗留 54) with a clear label, never blank or "null"', async () => {
     const http = scriptedHttp({
       platform_overview: () =>

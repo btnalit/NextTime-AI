@@ -2,9 +2,10 @@ import type {
   AvailableGateInstanceWire,
   EnableGateInstanceResultWire,
   GateHostTokenWire,
+  GateInstanceWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
-import type { CapabilityListResult } from '../hooks/useCapability.js';
+import { type CapabilityListResult, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -35,6 +36,9 @@ export interface AvailableGateInstancesSectionProps {
   /** Owner-only: shows the 启用 button. Members still see the list and, on linked rows, the
    *  per-member credential entry (P-B2a). */
   readonly canEnable: boolean;
+  /** The signed-in user is a platform administrator: the empty state reads the platform's own
+   *  instance list to say which step is actually missing, with a direct link to it. */
+  readonly platformAdmin?: boolean;
 }
 
 /**
@@ -58,6 +62,7 @@ export function AvailableGateInstancesSection({
   available,
   onEnabled,
   canEnable,
+  platformAdmin = false,
 }: AvailableGateInstancesSectionProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -120,14 +125,18 @@ export function AvailableGateInstancesSection({
           testId="available-gates-error"
         />
       ) : rows.length === 0 ? (
-        <EmptyState
-          title={t('平台目录里还没有可启用的实例', 'Nothing to enable yet')}
-          body={t(
-            '需要管理员先把某个接入包设为「平台预置」，其实例才会出现在这里。',
-            'An administrator needs to set a connector to platform-preset for its instances to show up here.',
-          )}
-          testId="available-gates-empty"
-        />
+        platformAdmin ? (
+          <EmptyCatalogForAdmin http={http} />
+        ) : (
+          <EmptyState
+            title={t('平台目录里还没有可启用的实例', 'Nothing to enable yet')}
+            body={t(
+              '需要平台管理员在「平台 → 集成」里启用一个门实例，并把它的接入包设为「平台预置」，它才会出现在这里。请联系平台管理员。',
+              'A platform administrator has to enable a gate instance under Platform → Integrations and set its connector to platform preset before it shows up here. Ask a platform administrator.',
+            )}
+            testId="available-gates-empty"
+          />
+        )
       ) : (
         <div className="table-scroll">
           <table className="data-table" data-testid="available-gates-table">
@@ -263,5 +272,110 @@ function AvailableGateRow({
         ) : null}
       </td>
     </tr>
+  );
+}
+
+const ALL_GATE_INSTANCES: Readonly<Record<string, unknown>> = {};
+
+/**
+ * Audit P0-4: an empty workspace catalog has three different causes, and only the platform's own
+ * instance list (`list_gate_instances`, admin-only) can tell them apart — instances discovered but
+ * not enabled (the common first-run case: the step is 启用 in that instance's drawer), instances
+ * enabled whose connector is not platform preset, or no instance at all. Each gets its own
+ * sentence and a link to the exact place the next step happens.
+ */
+function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
+  const instances = useCapabilityList<GateInstanceWire>(
+    http,
+    'list_gate_instances',
+    ALL_GATE_INSTANCES,
+  );
+  if (instances.state.status === 'loading') {
+    return (
+      <SkeletonRows
+        count={1}
+        label={t('正在查看平台上的门实例…', 'Checking the platform gate instances')}
+        testId="available-gates-empty-loading"
+      />
+    );
+  }
+  if (instances.state.status === 'error') {
+    return (
+      <ErrorBanner
+        error={instances.state.error}
+        title={t('无法读取平台门实例', 'Could not read the platform gate instances')}
+        onRetry={() => void instances.reload()}
+        testId="available-gates-empty-error"
+      />
+    );
+  }
+  const items = instances.state.data.items;
+  const notEnabled = items.filter(
+    (row) => row.status === 'discovered' || row.status === 'disabled',
+  );
+  const enabled = items.filter((row) => row.status === 'enabled');
+  if (notEnabled.length > 0) {
+    return (
+      <EmptyState
+        title={t(
+          `平台上有 ${notEnabled.length} 个门实例还没启用`,
+          `${notEnabled.length} gate instance(s) on the platform are not enabled yet`,
+        )}
+        body={t(
+          '打开实例，确认它公布的 Operation 后点「启用」；接入包是「平台预置」时，它随即出现在这里供本工作区启用。',
+          'Open the instance, check the operations it announces and press Enable; once its connector is platform preset it shows up here for this workspace.',
+        )}
+        action={
+          <span className="row row-wrap">
+            {notEnabled.slice(0, 3).map((row) => (
+              <a
+                key={row.gateId}
+                href={hrefs.platformGateInstance(row.gateId)}
+                className="inline-flex min-h-9 items-center"
+                data-testid="available-gates-enable-link"
+              >
+                {t(`去启用：${row.displayName}`, `Enable ${row.displayName}`)}
+              </a>
+            ))}
+          </span>
+        }
+        testId="available-gates-empty"
+      />
+    );
+  }
+  if (enabled.length > 0) {
+    return (
+      <EmptyState
+        title={t(
+          `平台已启用 ${enabled.length} 个门实例，但它们的接入包还不是「平台预置」`,
+          `${enabled.length} gate instance(s) are enabled, but their connectors are not platform preset`,
+        )}
+        body={t(
+          '在「平台 → 集成」里把接入包设为「平台预置」后，它的实例就会出现在这里。',
+          'Set the connector to platform preset under Platform → Integrations and its instances show up here.',
+        )}
+        action={
+          <a
+            href={hrefs.platformIntegrations()}
+            className="inline-flex min-h-9 items-center"
+            data-testid="available-gates-integrations-link"
+          >
+            {t('打开平台集成', 'Open platform integrations')}
+          </a>
+        }
+        testId="available-gates-empty"
+      />
+    );
+  }
+  return (
+    <EmptyState
+      title={t('平台上还没有任何门实例', 'No gate instance on the platform yet')}
+      body={t(
+        '门实例启动后会自己出现在「平台 → 集成」里。用本页的「接入一个系统」按步骤开始。',
+        'A gate instance appears under Platform → Integrations once it starts. Use Connect a system on this page to begin.',
+      )}
+      testId="available-gates-empty"
+    />
   );
 }
