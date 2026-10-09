@@ -117,6 +117,12 @@ describe('worker-definition content schemas', () => {
           'intra',
         ]),
       ).toEqual(['internal.example', 'internal.example', 'blocked.example.com', 'intra']);
+      // Always the canonical form, even for a doubled root dot (#515 review).
+      expect(EgressDenyListSchema.parse(['x.example..', '.x.example.'])).toEqual([
+        'x.example',
+        'x.example',
+      ]);
+      expect(EgressDenyListSchema.safeParse(['x.example...']).success).toBe(false);
     });
 
     it.each([

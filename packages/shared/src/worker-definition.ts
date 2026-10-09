@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { WorkerDefinitionKind } from './enums.js';
-import { hostPatternProblem, isIpLiteral, normalizeDenyHostPattern } from './net-address.js';
+import {
+  hostPatternProblem,
+  isIpLiteral,
+  normalizeDenyHostPattern,
+  normalizeHostname,
+} from './net-address.js';
 
 /**
  * worker-definition: the Zod shape of `worker_definitions.definition` (design doc §5.1.4
@@ -87,7 +92,9 @@ export const EgressDenyListSchema = z.array(z.string().min(1)).transform((entrie
         message: `egressDeny entry "${raw}" ${problem}`,
       });
     }
-    return entry;
+    // `hostPatternProblem` judges the name with one more trailing root dot dropped, so return that
+    // form: `x..` is stored as `x`, never as the non-canonical `x.`.
+    return normalizeHostname(entry);
   }),
 );
 

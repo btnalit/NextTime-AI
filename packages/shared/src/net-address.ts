@@ -410,8 +410,8 @@ export function normalizeHostname(hostname: string): string {
  * kernel's `NEXTTIME_CONNECTION_ALLOW_HOSTS`): a pattern written as `.example.com` or
  * `*.example.com` never matches here, so it can only ever fail closed. Deny lists go through
  * `matchesDenySuffix` below, which accepts those spellings. Callers that load an allow list check
- * entries with `hostPatternProblem` — the kernel refuses one at startup, the egress proxy's source
- * map logs it — so such an entry is never silently inert.
+ * entries with `hostPatternProblem` — the kernel logs and drops one, the egress proxy's source map
+ * logs it — so such an entry is never silently inert.
  */
 export function matchesSuffix(hostname: string, patterns: readonly string[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false;

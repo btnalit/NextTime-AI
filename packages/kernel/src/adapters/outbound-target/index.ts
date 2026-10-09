@@ -23,9 +23,12 @@ import {
  *     self-connected gate even though they live on the platform's networks. A name matches itself
  *     and its subdomains; an IP literal only itself. An entry that could never match — notably a
  *     leading `.` / `*.` (fix/egress-suffix-match: the allow-side rule is strict, so such an entry
- *     used to be silently inert) — throws at construction, like a malformed subnet. It is refused
- *     rather than read as the bare name, because widening an allow-list entry that has never
- *     matched would open the escape hatch for names nobody has seen it open for.
+ *     used to be silently inert) — is logged as an `error` line naming the variable and the fix,
+ *     and dropped. Dropped, not read as the bare name: widening an allow-list entry that has never
+ *     matched would open the escape hatch for names nobody has seen it open for. Not fatal either,
+ *     unlike a malformed subnet: a bad subnet silently loses a deny rule (fail-open), a bad allow
+ *     entry only ever failed closed, and refusing to start would stop the whole stack — after an
+ *     apply's migrations have already committed — over an entry that never allowed anything.
  *   - `NEXTTIME_CONNECTION_FIXTURE_HOSTS` — a constant the compose file sets: the acceptance
  *     fixtures (`accept-s2-*`) `scripts/accept_s2.sh` / `drill-add-gatekeeper.sh` connect through
  *     `create_connection`. Allowing them permanently grants nothing — they resolve only while their
@@ -78,7 +81,15 @@ export function outboundTargetPolicyFromEnv(
   for (const name of ['NEXTTIME_CONNECTION_ALLOW_HOSTS', 'NEXTTIME_CONNECTION_FIXTURE_HOSTS']) {
     for (const entry of splitList(env[name])) {
       const problem = hostPatternProblem(entry);
-      if (problem) throw new Error(`${name} entry "${entry}" ${problem}`);
+      if (problem) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            msg: `outbound-target: ${name} entry "${entry}" ${problem} — ignored (it never matched a host)`,
+          }),
+        );
+        continue;
+      }
       allowHosts.push(entry);
     }
   }
