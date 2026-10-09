@@ -3856,6 +3856,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 密钥：`provider-keys.ts` 的 `checkProviderKey`（trim 后用 shared 的 `isHeaderSafeProviderKey`）是密钥进 header 前的唯一检查点，覆盖转发主路径（502 `upstream_key_invalid`，日志只记供应商、来源与环境变量名）、启动检查（按供应商一行 warn，不阻断）与供应商列表的 `credentialInvalid: true`（控制台卡片、抽屉、测试面板与两种密钥输入框提示）。列模型被 401 / 403 拒绝后不再自动探测。
 - 控制台「状态」列：`lib/provider-status.ts` 按停用、密钥无效、缺少密钥、地址不可用（shared `upstreamBaseUrlProblem`）、上次测试 401 / 403、补全失败、工具调用失败的顺序取第一条；供应商在测试后被编辑（`updatedAt` 晚于 `testedAt`）或测试模型已不在列表时上次测试结果作废；标签中文 ≤ 6 字、英文 ≤ 12 字符，列宽 140。判断不了：所有模型是否可用（探测结果不保存）、上次测试之后上游才坏掉。
 
+**控制台显示落库的工具调用与实时输出暂停提示（#523，2026-10-09 合入；遗留 147、159 部分关闭）**
+
+- 解析与归组：`packages/web/src/lib/tool-call-record.ts` 按 #520 的 `ToolCallMessageContentSchema` 解析 `role: 'tool'`、`kind: 'tool_call'` 消息，解析失败退回普通消息行；`threadItems` 只把同一 Turn 的**连续**记录收成一组（agent-host 会存每条带文本的 assistant 消息，所以被文字拆开的一轮是多组，按时间交错），标题「调用了 N 个工具」/ "N tool call(s)"，有失败或未完成时默认展开并在标题上计数；`persistedToolCallIds` 在落库记录到达后丢掉实时块里同一 `toolCallId` 的行。
+- 行视图：`ToolCallRowView` 新增 `PersistedToolCallRow` 与 `ToolCallGroup`：工具名、结果、起止时间、参数与结果预览（能解析成 JSON 时缩进显示，否则原样显示），`truncated` 时「已截断，原文至少 N 字符」（截断后 `totalChars` 是下界），`redactedValues > 0` 时「已隐藏 N 处疑似凭据」，组内注明是 agent 报告的调用并链接审计页。
+- 暂停提示：`lib/live-stream.ts` 在 Turn 运行中、流式文本**恰好**以 `[redacted]` 结尾时显示（不 `trimEnd()`：内核在中途替换的值后会连同空白一起放出，`trimEnd` 会让每个替换值都闪一次提示）；剩余误报见遗留 162。
+- 渲染成本：流式期间每个 `textDelta` 都重渲染 ChatPage；`ToolCallGroupView`、`MessageBody`（react-markdown，历史里每条 assistant 消息）与 `MessageReferences` 改为 `React.memo`，它们的 props 在流式期间保持同一引用（`records` 来自 `useMemo(threadItems, [messages])`）。
+- 范围：只改 `packages/web`，无 wire、内核或契约变化。e2e 的 fake 运行时不做工具调用，主机验收经 `release.md` §3.15 B 核对。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在

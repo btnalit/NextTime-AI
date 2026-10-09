@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { internalAuthorizationHeader } from '@nexttime/shared';
+import { createHandleBindingReader, internalAuthorizationHeader } from '@nexttime/shared';
 import type { KernelAuditEvent } from './admin-api.js';
 import { createAdminApi } from './admin-api.js';
 import type { BudgetSync } from './budget-sync.js';
@@ -28,6 +28,8 @@ import { createProxyServer } from './proxy.js';
 import { LlmUsageReporter } from './report.js';
 import type { RevocationSync } from './revocation.js';
 import { startRevocationSync } from './revocation.js';
+import type { ProxySourceBinding } from './source-binding.js';
+import { createFileHandleBindingReader, createProxySourceBinding } from './source-binding.js';
 
 /**
  * @nexttime/llm-proxy — per-provider passthrough proxy (design doc §7.7; docs/development-
@@ -105,6 +107,33 @@ function makeKernelAuditPoster(
     });
     if (!res.ok) throw new Error(`kernel responded ${res.status}`);
   };
+}
+
+/** Source binding (source-binding.ts): with `NEXTTIME_SUBNET_WORKERS` set, an agent container is
+ *  authenticated by the Handle bound to its address in `HANDLE_BINDINGS_FILE`. Without the file
+ *  every such request is refused (fail closed) — said once here, since no agent can call a model
+ *  then. A malformed subnet throws: a startup failure, never a guard that turned itself off. */
+function buildSourceBinding(
+  config: LlmProxyConfig,
+  log: (line: string) => void,
+): ProxySourceBinding | undefined {
+  if (!config.workersSubnet) return undefined;
+  if (!config.handleBindingsFile) {
+    log(
+      JSON.stringify({
+        level: 'error',
+        msg: 'llm-proxy: NEXTTIME_SUBNET_WORKERS is set but HANDLE_BINDINGS_FILE is not — every agent-container request will be refused',
+      }),
+    );
+  }
+  return createProxySourceBinding({
+    workersSubnet: config.workersSubnet,
+    reader: config.handleBindingsFile
+      ? createFileHandleBindingReader(config.handleBindingsFile, (err) =>
+          log(JSON.stringify({ level: 'error', msg: err.message, reason: err.reason })),
+        )
+      : createHandleBindingReader({ source: { version: () => undefined, read: () => '{}' } }),
+  });
 }
 
 /**
@@ -233,6 +262,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     providers: (name) => catalog.getRoutable(name),
     publicKey,
     isRevoked: (jti: string) => revocationSync.isRevoked(jti),
+    sourceBinding: buildSourceBinding(config, log),
     isBudgetExhausted: (workspaceId: string) => budgetSync.isExhausted(workspaceId),
     adminHandler,
     reporter,

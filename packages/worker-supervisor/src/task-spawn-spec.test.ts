@@ -27,7 +27,6 @@ describe('buildTaskSpawnSpec', () => {
     taskId: 'task-1',
     workerRunId: 'run-1',
     workspaceId: 'ws-1',
-    capabilityHandle: 'the-worker-handle-jwt',
     image: 'nexttime-ai-worker-runtime',
     networkName: 'nexttime-ai_workers',
   });
@@ -65,7 +64,7 @@ describe('buildTaskSpawnSpec', () => {
   it('carries the correct values for each env var', () => {
     expect(spec.env).toContain('KERNEL_URL=http://kernel:8080');
     expect(spec.env).toContain('KERNEL_LLM_URL=http://llm-proxy:8082');
-    expect(spec.env).toContain('CAPABILITY_HANDLE=the-worker-handle-jwt');
+    expect(spec.env).toContain('CAPABILITY_HANDLE=source-bound');
     expect(spec.env).toContain('TASK_ID=task-1');
     expect(spec.env).toContain('WORKSPACE_ID=ws-1');
     expect(spec.env).toContain('WORKER_RUN_ID=run-1');
@@ -92,7 +91,6 @@ describe('buildTaskSpawnSpec', () => {
         taskId: 'task-1',
         workerRunId: 'run-1',
         workspaceId: 'ws-1',
-        capabilityHandle: 'h',
         image: 'nexttime-ai-worker-runtime',
         networkName: 'workers',
       });
@@ -117,7 +115,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'the-worker-handle-jwt',
       image: 'nexttime-ai-worker-runtime',
       networkName: 'nexttime-ai_workers',
     });
@@ -137,7 +134,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'h',
       image: 'nexttime-ai-worker-runtime',
       networkName: 'workers',
       model: 'anthropic/claude-sonnet-5',
@@ -158,7 +154,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'h',
       image: 'nexttime-ai-worker-runtime',
       networkName: 'workers',
     });
@@ -175,7 +170,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'h',
       image: 'nexttime-ai-worker-runtime',
       networkName: 'workers',
     });
@@ -198,7 +192,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'h',
       image: 'nexttime-ai-worker-runtime',
       networkName: 'workers',
       egressDeny: ['blocked.example.com', '.suffix.example.net'],
@@ -212,7 +205,6 @@ describe('buildTaskSpawnSpec', () => {
       taskId: 'task-1',
       workerRunId: 'run-1',
       workspaceId: 'ws-1',
-      capabilityHandle: 'h',
       image: 'some-other-allowlisted-image',
       networkName: 'workers',
     });
@@ -227,7 +219,6 @@ describe('buildTaskSpawnSpec — correlation id', () => {
     taskId: 'task-1',
     workerRunId: 'run-1',
     workspaceId: 'ws-1',
-    capabilityHandle: 'the-worker-handle-jwt',
     image: 'nexttime-ai-worker-runtime',
     networkName: 'nexttime-ai_workers',
   };

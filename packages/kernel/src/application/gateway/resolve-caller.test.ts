@@ -95,6 +95,11 @@ function createFakePool(opts: {
       const [jti] = params as [string];
       return { rows: [{ revoked_at: revokedJtis.has(jti) ? new Date() : null }], rowCount: 1 };
     }
+    // handle-auth.ts `issuingSessionKind`: the fake has no Handle rows, so no session kind —
+    // every Handle here is a bearer one.
+    if (sql.startsWith('select s.kind')) {
+      return { rows: [], rowCount: 0 };
+    }
     if (sql.startsWith('select case when p.disabled_at is not null then p.disabled_at')) {
       const [, principalId] = params as [string, string];
       return {

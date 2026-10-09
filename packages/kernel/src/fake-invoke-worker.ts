@@ -7,7 +7,7 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from './adapters/supervisor-client/index.js';
-import { dispatchCapability, resolveCaller } from './application/gateway/index.js';
+import { dispatchCapability, resolveSourceBoundCaller } from './application/gateway/index.js';
 import {
   FAKE_DELEGATE_MARKER,
   type FakeDelegateOutcome,
@@ -56,10 +56,10 @@ import { listWorkerDefinitions } from './application/worker/index.js';
  *      for the real HTTP `TaskSupervisorClient` (via `createBackgroundServices`'s pre-existing
  *      `taskSupervisorClient` test seam). `spawn()` returns a fake container id immediately (same
  *      contract as a real spawn) and, fire-and-forget, authenticates as the Worker the same way a
- *      real one's own first API call back to the kernel would — `Authorization: Bearer
- *      <capabilityHandle>` — and calls `report_task_result` with a minimal valid contract
+ *      real one's own first API call back to the kernel would — with the Handle bound to its
+ *      address (`resolveSourceBoundCaller`) — and calls `report_task_result` with a minimal valid contract
  *      (`{summary}` — every other field is optional, `packages/shared/src/worker-result.ts`).
- *      Going through `resolveCaller` + `dispatchCapability` in-process (rather than a real HTTP
+ *      Going through `resolveSourceBoundCaller` + `dispatchCapability` in-process (rather than a real HTTP
  *      loopback call) exercises the exact same verification + dispatch pipeline
  *      `interfaces/http/capability-route.ts` uses, deterministically and without needing to know
  *      the kernel's own listening port. `main()` never overrides `loadHandlePublicKey` — the
@@ -175,7 +175,9 @@ export class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
   }
 
   private async reportResult(input: TaskSpawnInput): Promise<void> {
-    const caller = await resolveCaller(`Bearer ${input.capabilityHandle}`, {
+    // A Worker's Handle is container-held: the real path takes it from the source binding for the
+    // container's address (interfaces/source-binding), so this stand-in presents it the same way.
+    const caller = await resolveSourceBoundCaller(input.capabilityHandle, {
       pool: this.pool,
       loadHandlePublicKey: this.loadHandlePublicKey,
     });

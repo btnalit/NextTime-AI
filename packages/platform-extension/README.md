@@ -10,7 +10,7 @@ the platform) are all implemented.
 |-----|----------|---------|
 | `NEXTTIME_MODE` | yes | `entry`\|`worker`\|`interactive`; anything else throws on activation. |
 | `KERNEL_URL` | all modes | Base URL of the kernel, no trailing slash. |
-| `CAPABILITY_HANDLE` | all modes | Bearer credential (Handle JWT); never logged. |
+| `CAPABILITY_HANDLE` | interactive | Bearer credential (the member's `issue_handle` JWT); never logged. In an entry / worker container it is only the `source-bound` marker pi's `models.json` resolves, and this extension never reads it (see below). |
 | `WORKSPACE_ID` | entry, worker | Informational; the kernel derives the real workspace from the Handle. Not read in `interactive`. |
 | `TASK_ID` | worker | The Task this one-shot Worker runs (injected by worker-supervisor). |
 | `NEXTTIME_CORRELATION_ID` | no (worker) | Correlation id inherited from the delegating call; the kernel mints one when absent. |
@@ -36,5 +36,9 @@ the platform) are all implemented.
 
 ## HTTP convention
 
-`POST /api/cap/<name>` (`capabilityRoute`, `packages/shared/src/http.ts`), JSON body,
-`Authorization: Bearer <CAPABILITY_HANDLE>` → `{ok:true,result}`/`{ok:false,error:{code,message}}`.
+`POST /api/cap/<name>` (`capabilityRoute`, `packages/shared/src/http.ts`), JSON body →
+`{ok:true,result}`/`{ok:false,error:{code,message}}`. Interactive mode sends
+`Authorization: Bearer <CAPABILITY_HANDLE>`. Entry and worker mode send **no credential**: the
+container holds no Handle (design doc I19) — worker-supervisor binds it to the container's address
+on the `workers` network, the kernel authenticates the request by that address, and it refuses a
+request from that network that carries an `Authorization` header of its own.

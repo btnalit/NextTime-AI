@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.44.0](https://github.com/btnalit/NextTime-AI/compare/v0.43.0...v0.44.0) (2026-10-09)
+
+
+### Features
+
+* **console:** per-model probe, pick known values instead of typing, and the audit's P0 fixes ([#517](https://github.com/btnalit/NextTime-AI/issues/517)) ([d9ed3cf](https://github.com/btnalit/NextTime-AI/commit/d9ed3cf4c27282bbb8195b2f90c0cb4aa4b3e8f1))
+* **console:** provider form fills, normalizes and verifies; tool-call probe works on DeepSeek thinking mode ([#510](https://github.com/btnalit/NextTime-AI/issues/510)) ([f89eb67](https://github.com/btnalit/NextTime-AI/commit/f89eb671d58d2a93ab74ca6a09b36fbd84b8bcee))
+* **console:** show a Turn's persisted tool calls in chat history and say when the live reply paused ([#523](https://github.com/btnalit/NextTime-AI/issues/523)) ([289bc6e](https://github.com/btnalit/NextTime-AI/commit/289bc6e85ede625f682d980be33fc279d594eef6))
+* **kernel:** keep a Turn's tool calls in chat history, scrub secrets from agent output, add graph_overview ([#520](https://github.com/btnalit/NextTime-AI/issues/520)) ([c559cbc](https://github.com/btnalit/NextTime-AI/commit/c559cbce144ca58fdd33a00d76d8b79ee0e0a0f7))
+* **kernel:** list_facts capability lists a workspace's active facts by link type, with keyset paging and draft visibility per caller; get_entry_context returns factCountsByLinkType ([223b169](https://github.com/btnalit/NextTime-AI/commit/223b169dbcbf130692cf03ee05d99eddfd0e0eaa))
+* **llm-proxy:** POST /admin/model-probe per-model completion and tool-call probe ([d9ed3cf](https://github.com/btnalit/NextTime-AI/commit/d9ed3cf4c27282bbb8195b2f90c0cb4aa4b3e8f1))
+
+
+### Bug Fixes
+
+* **console:** default preset provider ids to pi's own provider names ([f89eb67](https://github.com/btnalit/NextTime-AI/commit/f89eb671d58d2a93ab74ca6a09b36fbd84b8bcee))
+* **console:** upgrade reminder gives the target tag's own prefetch-then-pull commands (legacy 140) ([#518](https://github.com/btnalit/NextTime-AI/issues/518)) ([037820b](https://github.com/btnalit/NextTime-AI/commit/037820bf46a80fb9c3aacb4b3fab89ea8ce6b50e))
+* **egress:** `.suffix` / `*.suffix` deny entries now deny; allow lists refuse them ([#515](https://github.com/btnalit/NextTime-AI/issues/515)) ([c23aa98](https://github.com/btnalit/NextTime-AI/commit/c23aa98bf3d8c12a348bccd661e6cb14988596d2))
+* **kernel:** a Turn whose message could not be stored ends failed, not completed ([#508](https://github.com/btnalit/NextTime-AI/issues/508)) ([275b54b](https://github.com/btnalit/NextTime-AI/commit/275b54b7585b2bd103785abd7c3039bdb1b2825b))
+* **kernel:** deterministic entry context and list_facts for graph relationship questions ([#514](https://github.com/btnalit/NextTime-AI/issues/514)) ([223b169](https://github.com/btnalit/NextTime-AI/commit/223b169dbcbf130692cf03ee05d99eddfd0e0eaa))
+* **llm-proxy:** cap upstream bodies, rate-limit provider checks per admin, refuse unusable keys ([#521](https://github.com/btnalit/NextTime-AI/issues/521)) ([710b8e6](https://github.com/btnalit/NextTime-AI/commit/710b8e6baab6928ffb025fec95097d3aa22dd590))
+* **llm-proxy:** refuse provider base URLs with a query, fragment or userinfo (SSRF); rows saved before the rule are kept out of testing, routing and models.json and logged at startup ([f89eb67](https://github.com/btnalit/NextTime-AI/commit/f89eb671d58d2a93ab74ca6a09b36fbd84b8bcee))
+* **llm-proxy:** retry the provider tool-call probe without a forced tool_choice on 400 ([f89eb67](https://github.com/btnalit/NextTime-AI/commit/f89eb671d58d2a93ab74ca6a09b36fbd84b8bcee))
+* **release:** acceptance uses the release's own images; prefetch takes the image pull out of the window (legacy 137) ([#513](https://github.com/btnalit/NextTime-AI/issues/513)) ([e25a35c](https://github.com/btnalit/NextTime-AI/commit/e25a35c04e8055d7cd159c448f447a0f722bc2a1))
+
 ## [0.43.0](https://github.com/btnalit/NextTime-AI/compare/v0.42.0...v0.43.0) (2026-10-09)
 
 

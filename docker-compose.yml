@@ -130,6 +130,11 @@ services:
         # scripts/validate-compose.mjs checks it). The kernel never fetches it (E3); it only takes
         # the owner/repo from it and drops any link in the downloaded record that points elsewhere.
         UPDATE_FEED_URL: "${UPDATE_FEED_URL:-https://github.com/btnalit/nexttime-ai/releases/download/channel/channel.json}",
+        # 来源绑定（@nexttime/shared handle-binding.ts）：入口 / Worker 容器不持 Handle，
+        # worker-supervisor 把它按容器在 workers 网络上的地址写进这个文件（handle-bindings 卷，
+        # 这里只读），内核对来自 NEXTTIME_SUBNET_WORKERS 的请求只认绑定在对端地址上的 Handle，并且只放行
+        # POST /api/cap/:name 与 GET /api/health（interfaces/source-binding）。
+        HANDLE_BINDINGS_FILE: /run/handle-bindings/bindings.json,
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
@@ -154,6 +159,7 @@ services:
         "${NEXTTIME_DATA:?}/models:/data/models:ro",
         "${NEXTTIME_DATA:?}/secrets/setup:/run/setup",
         "${NEXTTIME_DATA:?}/backups/last-success:/data/backups/last-success:ro",
+        "handle-bindings:/run/handle-bindings:ro",
       ]
     # healthcheck (lane-7 P2 fix): GET /api/health via node's own http client — no curl/wget in
     # the node:24-bookworm-slim runtime image (packages/kernel/Dockerfile). Backs caddy's and
@@ -410,6 +416,7 @@ services:
         "${NEXTTIME_DATA:?}/workspaces:/data/workspaces",
         "${NEXTTIME_DATA:?}/config:/data/config:ro",
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json",
+        "handle-bindings:/run/handle-bindings",
       ]
     # NEXTTIME_DATA here is the HOST path (not this container's own /data/workspaces mount) —
     # required to compute bind-mount *sources* for the containers this service asks the Docker
@@ -445,6 +452,9 @@ services:
         # through this separate, IMAGES=1-only proxy instead — see `docker-socket-proxy-images`'s
         # own comment above and `config.ts`'s `dockerImagesConnection` doc comment for why.
         DOCKER_IMAGES_HOST: tcp://docker-socket-proxy-images:2375,
+        # 来源绑定：入口 / Worker 容器的 Handle 不进容器 env，写进这个文件（地址 → Handle，0600，
+        # 改名替换；handle-bindings 卷，本服务唯一可写方），kernel 与 llm-proxy 只读（handle-bindings.ts）。
+        HANDLE_BINDINGS_FILE: /run/handle-bindings/bindings.json,
       }
     networks: [control, dockerapi, dockerapi-images]
     restart: unless-stopped
@@ -1079,6 +1089,7 @@ services:
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro",
         "${NEXTTIME_DATA:?}/config/ontology:/data/config/ontology:ro",
         "${NEXTTIME_DATA:?}/secrets/llm-provider-keys:/run/secrets/llm-provider-keys:ro",
+        "handle-bindings:/run/handle-bindings:ro",
       ]
     # LLM_PROVIDER_STORE_FILE / LLM_KEY_STORE_FILE / MODELS_JSON_OUT_FILE /
     # BUDGET_SYNC_INTERVAL_MS（S6-B / S7-A，packages/llm-proxy/src/config.ts）：前三个是上面两个
@@ -1094,6 +1105,11 @@ services:
         MODELS_JSON_OUT_FILE: /data/models/models.json,
         BUDGET_SYNC_INTERVAL_MS: "${BUDGET_SYNC_INTERVAL_MS:-15000}",
         LLM_PROVIDER_KEYS_DIR: /run/secrets/llm-provider-keys,
+        # 来源绑定（packages/llm-proxy/src/source-binding.ts）：来自 workers 子网的请求只认
+        # worker-supervisor 绑定在对端地址上的 Handle（请求头只能带 `source-bound` 标记），且只放行
+        # 模型路由与 /healthz；其他来源出示容器持有的 Handle（hld: container）一律 401。
+        NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
+        HANDLE_BINDINGS_FILE: /run/handle-bindings/bindings.json,
       }
     # internal_llm_proxy_to_kernel（fix/internal-plane-auth；R-03 起是它自己的凭证，挂在
     # /run/secrets/internal_token）：revocation sync（GET /internal/handle-revocations）与 usage 上报
@@ -1409,6 +1425,14 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
+volumes:
+  # 来源绑定（@nexttime/shared handle-binding.ts）：worker-supervisor 写、kernel / llm-proxy 只读的
+  # bindings.json（agent 容器地址 → 它的 Handle）。tmpfs：Handle 从不落盘，主机重启即清空；三个
+  # 服务都以 uid 10001 运行，目录 0700 归 10001。只要还有一个服务挂着它，内容就在（本地驱动对 tmpfs
+  # 挂载按引用计数），所以单独重启 worker-supervisor 不丢绑定（它启动时读回并按存活容器对账）。
+  handle-bindings:
+    driver: local
+    driver_opts: { type: tmpfs, device: tmpfs, o: "uid=10001,gid=10001,mode=0700,size=4m" }
 networks:
   control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL:?}" }] } }
   workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS:?}" }] } }

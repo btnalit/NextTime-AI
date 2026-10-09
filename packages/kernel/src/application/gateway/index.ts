@@ -15,13 +15,14 @@ export {
 } from './auth.js';
 export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
 
-export { authenticateHandle } from './handle-auth.js';
-export type { HandleAuthDeps } from './handle-auth.js';
+export { authenticateHandle, HandlePresentationRefused } from './handle-auth.js';
+export type { HandleAuthDeps, HandlePresentationKind } from './handle-auth.js';
 
 export {
   resolveCaller,
   resolvePlatformCaller,
   resolveRequestCaller,
+  resolveSourceBoundCaller,
   resolveConsoleUser,
   loadHandlePublicKeyFor,
   loadHandlePrivateKeyFor,

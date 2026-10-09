@@ -431,11 +431,13 @@ function createFakeMintClient() {
       return { rows: [{ id }], rowCount: 1 };
     }
 
-    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
-        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rows: row
+          ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf, kind: 'worker_run' }]
+          : [],
         rowCount: row ? 1 : 0,
       };
     }

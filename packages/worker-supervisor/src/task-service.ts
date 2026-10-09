@@ -55,6 +55,7 @@ import type { TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient } from './docker-client.js';
 import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
+import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import {
   localTaskWorkspacesRootDir,
   taskSystemPromptPath,
@@ -171,6 +172,8 @@ export interface TaskServiceDeps {
   readonly config: SupervisorConfig;
   readonly docker: DockerClient;
   readonly egressMap: EgressMapStore;
+  /** Where the container's Handle is bound to its address (handle-bindings.ts) — never its env. */
+  readonly handleBindings: HandleBindingStore;
   readonly now?: () => number;
   /** Leftover 87: called once per Worker container reaching a terminal state (metrics). */
   readonly onTaskFinished?: (event: TaskFinishedEvent) => void;
@@ -211,7 +214,8 @@ export interface TaskService {
 }
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
-  const { config, docker, egressMap } = deps;
+  const { config, docker, egressMap, handleBindings } = deps;
+  const isAt = containerAtAddress(docker);
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
   let cachedNetworkName: string | undefined;
@@ -255,7 +259,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     }
   }
 
-  function unregisterEgress(workerRunId: string, ip: string | undefined): void {
+  function unregisterEgress(workerRunId: string, entry: RegistryEntry): void {
+    const { ip } = entry;
     if (!ip) return;
     try {
       egressMap.unregister(ip);
@@ -264,6 +269,31 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         JSON.stringify({
           level: 'warn',
           msg: 'task egress unregistration failed',
+          workerRunId,
+          ip,
+          error: String(err),
+        }),
+      );
+    }
+    // The Handle binding goes with the egress registration (handle-bindings.ts): once this
+    // container is gone, nothing may be authenticated as it from that address.
+    unbindHandle(workerRunId, entry);
+  }
+
+  /** Removes the Handle bound to the entry's address if it is still this container's
+   *  (handle-bindings.ts) — before a terminate stops the container, while it still holds the
+   *  address, and again with its egress unregistration, when Docker may already have given the
+   *  address to another container, whose binding stays. */
+  function unbindHandle(workerRunId: string, entry: RegistryEntry): void {
+    const { ip, containerId } = entry;
+    if (!ip) return;
+    try {
+      handleBindings.unbind(ip, containerId);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'task handle unbinding failed (reconcile drops it later)',
           workerRunId,
           ip,
           error: String(err),
@@ -290,7 +320,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         ? 'exited'
         : 'failed';
     entry.state = finalState;
-    unregisterEgress(workerRunId, entry.ip);
+    unregisterEgress(workerRunId, entry);
     // Leftover 87: one line per finished Worker run, carrying the delegation's correlation id.
     const finished: TaskFinishedEvent = {
       workerRunId,
@@ -327,6 +357,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   ): Promise<void> {
     entry.terminating = true;
     entry.reason = reason;
+    unbindHandle(workerRunId, entry);
     await docker.stop(taskContainerName(workerRunId), TERMINATE_STOP_TIMEOUT_SECONDS);
     await reconcileOne(workerRunId, entry);
   }
@@ -401,7 +432,6 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         taskId,
         workerRunId,
         workspaceId,
-        capabilityHandle,
         image,
         model,
         networkName,
@@ -413,8 +443,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         created = await docker.createAndStart(spec);
       } catch (err) {
         // L6-18 (docs/code-review-2026-10-02.md, R-09): the create can succeed and the start (or
-        // the inspect after it) fail. That leaves a container with `CAPABILITY_HANDLE` in its env
-        // that is never registered below, so nothing here would ever stop or remove it — Task
+        // the inspect after it) fail. That leaves a container that is never registered below, so nothing here would ever stop or remove it — Task
         // container names are per-WorkerRun and never reused. Force-remove it (best-effort; a
         // container that was never created is a no-op) before the spawn error propagates.
         try {
@@ -431,6 +460,38 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         }
         throw err;
       }
+      // The Worker's Handle is bound to its address before this call returns (handle-bindings.ts)
+      // — never put in its environment. No binding means a Worker that cannot call anything, and
+      // an address another running container still holds is refused (`bindExclusive`), so a
+      // failure here removes the container and fails the spawn, like a failed start above.
+      try {
+        if (!created.ip) throw new Error('the container has no address on the workers network');
+        await bindExclusive(
+          handleBindings,
+          created.ip,
+          {
+            handle: capabilityHandle,
+            sourceId: taskSourceId(workspaceId, workerRunId),
+            containerId: created.id,
+          },
+          isAt,
+        );
+      } catch (err) {
+        try {
+          await docker.remove(spec.name);
+        } catch (removeErr) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'task container removal failed after a failed handle binding',
+              workerRunId,
+              error: String(removeErr),
+            }),
+          );
+        }
+        throw new Error(`binding the Worker's Handle failed: ${String(err)}`);
+      }
+
       // Only what the spec builder accepted (a valid id) is remembered and registered.
       const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
 

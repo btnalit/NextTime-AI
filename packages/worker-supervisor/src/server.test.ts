@@ -9,6 +9,7 @@ import { createResidentService } from './resident-service.js';
 import { PUBLIC_ROUTES, createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 // Resident ids must be UUIDs (config.ts IdClaimSchema): principalId becomes the per-user
 // workspace bind-mount source segment and the container name. Fixed, readable stand-ins.
@@ -55,8 +56,18 @@ function setup(
   });
   const docker = createFakeDockerClient();
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
-  const residentService = createResidentService({ config, docker, egressMap });
-  const taskService = createTaskService({ config, docker, egressMap });
+  const residentService = createResidentService({
+    config,
+    docker,
+    handleBindings: memoryHandleBindings(),
+    egressMap,
+  });
+  const taskService = createTaskService({
+    config,
+    docker,
+    handleBindings: memoryHandleBindings(),
+    egressMap,
+  });
   const internalToken =
     'internalToken' in serverOptions ? serverOptions.internalToken : TEST_INTERNAL_TOKEN;
   const agentHostToken =
@@ -450,8 +461,19 @@ describe('GET /images (S7-E inventory)', () => {
       throw upstreamError;
     };
     const egressMap = createEgressMapStore(config.egressSourceMapFile);
-    const residentService = createResidentService({ config, docker, imagesDocker, egressMap });
-    const taskService = createTaskService({ config, docker, egressMap });
+    const residentService = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      imagesDocker,
+      egressMap,
+    });
+    const taskService = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const app = createServer({
       residentService,
       taskService,
@@ -767,7 +789,12 @@ describe('POST /task/spawn', () => {
     const config = loadConfig({ NEXTTIME_DATA: '/host/data', LOCAL_DATA_DIR: dir });
     const docker = createFakeDockerClient();
     const egressMap = createEgressMapStore(config.egressSourceMapFile);
-    const residentService = createResidentService({ config, docker, egressMap });
+    const residentService = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const app = createServer({ residentService, internalToken: TEST_INTERNAL_TOKEN }); // no taskService/config
     const res = await app.inject({
       method: 'POST',
@@ -848,8 +875,14 @@ describe('correlation id + /internal/metrics (leftover 87)', () => {
     const docker = createFakeDockerClient();
     const egressMap = createEgressMapStore(config.egressSourceMapFile);
     const metrics = createSupervisorMetrics();
-    const residentService = createResidentService({ config, docker, egressMap });
+    const residentService = createResidentService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
     const taskService = createTaskService({
+      handleBindings: memoryHandleBindings(),
       config,
       docker,
       egressMap,

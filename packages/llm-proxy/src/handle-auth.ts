@@ -12,7 +12,19 @@ import type { ProviderAuth } from './config.js';
  * in-memory synced set), never a per-request kernel call.
  */
 
-export type HandleAuthFailureReason = 'missing' | 'invalid' | 'expired' | 'revoked';
+export type HandleAuthFailureReason =
+  | 'missing'
+  | 'invalid'
+  | 'expired'
+  | 'revoked'
+  /** Source binding (source-binding.ts): a container-held Handle (`hld: container`) presented in a
+   *  header, or a bound address whose binding holds anything else. */
+  | 'presentation_refused'
+  /** Source binding: a `workers`-network peer with no Handle bound to its address. */
+  | 'unbound_source'
+  /** Source binding: a `workers`-network peer whose Handle header carries a token of its own
+   *  instead of the `source-bound` marker. */
+  | 'credential_from_bound_source';
 
 /** Every failure mode here maps to HTTP 401 in proxy.ts (S1.7 acceptance: "无 Handle 401；过期 /
  *  撤销 Handle 401") — `reason` exists for logging/metrics, not to vary the response. */

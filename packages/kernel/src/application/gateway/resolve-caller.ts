@@ -147,6 +147,25 @@ export async function resolveCaller(
   }
 }
 
+/**
+ * Resolves the caller of a request from an agent container — the Handle worker-supervisor bound
+ * to the request's peer address (@nexttime/shared handle-binding.ts), never a credential the
+ * request carries. Handle channel only, and the Handle must be container-held
+ * (`authenticateHandle`'s `source` presentation). Throws `UnauthorizedError` otherwise.
+ */
+export async function resolveSourceBoundCaller(
+  boundHandle: string,
+  deps: ResolveCallerDeps,
+): Promise<ResolvedCaller> {
+  try {
+    const publicKey = await loadHandlePublicKeyFor(deps);
+    const claims = await authenticateHandle(deps.pool, boundHandle, { publicKey }, 'source');
+    return { channel: 'handle', claims };
+  } catch (err) {
+    throw new UnauthorizedError('invalid credentials', { cause: err });
+  }
+}
+
 // -------------------------------------------------------------------------------------------
 // S4.1: the console-session channel
 // -------------------------------------------------------------------------------------------

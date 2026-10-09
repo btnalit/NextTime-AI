@@ -7,7 +7,8 @@
  * resident mode's own tests/behavior must stay untouched (task brief: "keep resident mode's
  * behavior unchanged").
  *
- * Env is **exactly** `KERNEL_URL`, `KERNEL_LLM_URL`, `CAPABILITY_HANDLE`, `TASK_ID`,
+ * Env is **exactly** `KERNEL_URL`, `KERNEL_LLM_URL`, `CAPABILITY_HANDLE` (the marker
+ * `SOURCE_BOUND_CAPABILITY_HANDLE`, never the Handle — spawn-spec.ts), `TASK_ID`,
  * `WORKSPACE_ID`, `WORKER_RUN_ID`, `NEXTTIME_MODE=worker`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`
  * — plus the same lowercase `http_proxy`/`https_proxy`/`no_proxy` mirrors resident mode's own
  * `spawn-spec.ts` documents (verified there against the "httpoxy" plain-`http://`-only-honors-
@@ -29,7 +30,11 @@
  * explicitly (a `SOME_API_KEY` set on the test process must never appear in the built env).
  */
 
-import { CORRELATION_ID_ENV, isValidCorrelationId } from '@nexttime/shared';
+import {
+  CORRELATION_ID_ENV,
+  SOURCE_BOUND_CAPABILITY_HANDLE,
+  isValidCorrelationId,
+} from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import { hostModelsJsonPath, taskWorkspacePaths } from './host-paths.js';
@@ -67,7 +72,6 @@ export interface BuildTaskSpawnSpecInput {
   readonly taskId: string;
   readonly workerRunId: string;
   readonly workspaceId: string;
-  readonly capabilityHandle: string;
   /** Already validated against `config.taskImageAllowlist` by the caller (`server.ts`) — this
    *  builder does not re-check it; it only ever places the value into the spec. */
   readonly image: string;
@@ -92,7 +96,9 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
   const env: string[] = [
     `KERNEL_URL=${config.kernelUrl}`,
     `KERNEL_LLM_URL=${config.kernelLlmUrl}`,
-    `CAPABILITY_HANDLE=${input.capabilityHandle}`,
+    // The marker, never the Handle — see spawn-spec.ts (the Handle is bound to the container's
+    // address by task-service.ts).
+    `CAPABILITY_HANDLE=${SOURCE_BOUND_CAPABILITY_HANDLE}`,
     `TASK_ID=${input.taskId}`,
     `WORKSPACE_ID=${input.workspaceId}`,
     `WORKER_RUN_ID=${input.workerRunId}`,

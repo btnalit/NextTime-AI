@@ -502,11 +502,70 @@ env_step() {
   fi
   pass "env-no-api-keys" "0 *_API_KEY= vars in entry container env"
 
+  # Source binding (@nexttime/shared handle-binding.ts): the entry agent's Handle never enters its
+  # container. CAPABILITY_HANDLE is only the `source-bound` marker (not a secret — printable), and
+  # no JWT-shaped value (`eyJ….eyJ….…`, the form every Handle has) is anywhere the model's shell can
+  # read: no process environment, no file under the writable trees or /run. Names and counts only.
   handle_count=$(printf '%s\n' "$env_dump" | grep -c '^CAPABILITY_HANDLE=')
-  if [ "$handle_count" != "1" ]; then
-    fail "env-capability-handle" "expected exactly 1 CAPABILITY_HANDLE= var, found $handle_count"
+  handle_value=$(printf '%s\n' "$env_dump" | sed -n 's/^CAPABILITY_HANDLE=//p')
+  if [ "$handle_count" != "1" ] || [ "$handle_value" != "source-bound" ]; then
+    fail "env-capability-handle" "expected exactly 1 CAPABILITY_HANDLE=source-bound, found $handle_count var(s) (value not printed)"
   fi
-  pass "env-capability-handle" "CAPABILITY_HANDLE present exactly once (value never printed)"
+  pass "env-capability-handle" "CAPABILITY_HANDLE=source-bound (the Handle is bound to the container's address)"
+
+  token_files=$(docker exec "$alice_container" sh -c \
+    'grep -raElm1 "eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}" /proc/[0-9]*/environ /workspace /tmp /run 2>/dev/null' |
+    tr '\n' ' ')
+  if [ -n "$token_files" ]; then
+    fail "env-no-handle" "JWT-shaped value readable inside the entry container: $token_files(values not printed)"
+  fi
+  pass "env-no-handle" "no JWT-shaped value in any process environment or under /workspace /tmp /run"
+
+  # The workers network reaches only the agent-container routes (kernel: POST /api/cap/:name and
+  # /api/health; llm-proxy: the model routes and /healthz) — 403 before any credential is read.
+  plane_codes=$(docker exec "$alice_container" sh -c \
+    'printf "%s %s" "$(curl --noproxy "*" -s -o /dev/null -w "%{http_code}" --max-time 5 "$KERNEL_URL/api/auth/me")" "$(curl --noproxy "*" -s -o /dev/null -w "%{http_code}" --max-time 5 "$KERNEL_LLM_URL/admin/providers")"')
+  if [ "$plane_codes" != "403 403" ]; then
+    fail "env-workers-plane" "expected kernel /api/auth/me and llm-proxy /admin/providers to answer 403 from the entry container, got: $plane_codes"
+  fi
+  pass "env-workers-plane" "kernel /api/auth/me and llm-proxy /admin/providers answer 403 from the entry container"
+
+  # Source binding needs one address per container on the workers network — what the deployed
+  # runtime gives (runsc's --network=host passes network calls to the host kernel, but inside the
+  # container's own network namespace, on its own workers address). alice's and bob's entry
+  # containers (alice's is the one recreated after kill-alice-entry) have distinct addresses;
+  # worker-supervisor's bindings file binds each address to that container; asked from inside
+  # each container, the kernel names that same container (GET /api/source-binding answers with
+  # the bound container's id, never the Handle); and each container's entrypoint started pi only
+  # after that check (`check=handle_binding result=ok`). Addresses and container ids only.
+  bob_container="nexttime-entry-$BOB_PRINCIPAL_ID"
+  seen_addresses=""
+  for c in "$alice_container" "$bob_container"; do
+    cid=$(docker inspect -f '{{.Id}}' "$c" 2>/dev/null)
+    cip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$c" 2>/dev/null)
+    if [ -z "$cid" ] || [ -z "$cip" ]; then
+      fail "env-source-binding" "$c is not running with an address on the workers network (id='$cid' address='$cip')"
+    fi
+    case " $seen_addresses " in
+      *" $cip "*) fail "env-source-binding" "alice's and bob's entry containers share the address $cip — source binding cannot tell them apart" ;;
+    esac
+    seen_addresses="$seen_addresses $cip"
+    kernel_sees=$(docker exec "$c" sh -c 'curl --noproxy "*" -s --max-time 10 "$KERNEL_URL/api/source-binding"' </dev/null 2>/dev/null |
+      sed -n 's/.*"containerId"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
+    if [ "$kernel_sees" != "$cid" ]; then
+      fail "env-source-binding" "the kernel binds the address $cip (asked from inside $c) to container '${kernel_sees:-none}', not to $cid"
+    fi
+    filed=$(docker compose exec -T worker-supervisor node -e \
+      'const b = JSON.parse(require("fs").readFileSync(process.env.HANDLE_BINDINGS_FILE, "utf8")); console.log((b[process.argv[1]] || {}).containerId || "")' \
+      "$cip" </dev/null 2>/dev/null)
+    if [ "$filed" != "$cid" ]; then
+      fail "env-source-binding" "the bindings file binds $cip to container '${filed:-none}', not to $cid"
+    fi
+    if ! docker logs "$c" </dev/null 2>&1 | grep -q 'nexttime-selfcheck check=handle_binding result=ok'; then
+      fail "env-source-binding" "$c has no 'check=handle_binding result=ok' line — its entrypoint did not confirm its binding before starting pi"
+    fi
+  done
+  pass "env-source-binding" "alice and bob entry containers:$seen_addresses — distinct addresses, each bound to its own container, confirmed from inside by the kernel and by each entrypoint"
 }
 
 cleanup_step() {

@@ -14,6 +14,7 @@ export * from './events.js';
 export * from './action-description.js';
 export * from './http.js';
 export * from './handle-token.js';
+export * from './handle-binding.js';
 export * from './gate-host-token.js';
 export * from './llm-admin-token.js';
 export * from './internal-token.js';
