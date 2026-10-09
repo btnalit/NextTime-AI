@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { formatTime, prettyJson } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
@@ -147,8 +148,13 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
 }
 
 /** A Turn's persisted tool calls, folded into one disclosure above its reply — collapsed unless a
- *  call failed or did not finish, which is the case a reader opens it for. */
-export function ToolCallGroupView({ records }: { readonly records: readonly ToolCallRecord[] }) {
+ *  call failed or did not finish, which is the case a reader opens it for. Memoized: ChatPage
+ *  re-renders on every streamed delta, and `records` (from `threadItems`, memoized on
+ *  `messages`) keeps its identity meanwhile, so the history's previews are not re-formatted per
+ *  delta. */
+export const ToolCallGroupView = memo(function ToolCallGroupView({
+  records,
+}: { readonly records: readonly ToolCallRecord[] }) {
   const t = useT();
   const failed = records.filter((r) => r.outcome === 'failed').length;
   const unfinished = records.filter((r) => r.outcome === 'not_finished').length;
@@ -189,4 +195,4 @@ export function ToolCallGroupView({ records }: { readonly records: readonly Tool
       </div>
     </details>
   );
-}
+});

@@ -889,4 +889,15 @@ describe('live output paused by the stream scrubber (#520)', () => {
     act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: ' and done.' }));
     expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
   });
+
+  it('does not flash the paused hint for a value scrubbed mid-text', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await startRunningTurn(fake);
+    // What the kernel scrubber releases while it still holds the next word.
+    act(() =>
+      fake.stream('turn-1', { streamKind: 'textDelta', delta: 'the password: [redacted] ' }),
+    );
+    expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
+  });
 });

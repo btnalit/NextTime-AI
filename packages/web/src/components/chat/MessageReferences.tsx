@@ -1,5 +1,5 @@
 import type { ExplainResultWire } from '@nexttime/shared';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -62,8 +62,14 @@ function labelFor(
  * since superseded/invalidated still resolves (explain answers truthfully — its own
  * `invalidatedAt`/`invalidationReason` — journey ④'s "错" state), it is only an unrecognised id
  * that renders nothing.
+ *
+ * Memoized for the same reason as `MessageBody`: one per assistant message, re-rendered on every
+ * streamed delta otherwise.
  */
-export function MessageReferences({ http, text }: MessageReferencesProps) {
+export const MessageReferences = memo(function MessageReferences({
+  http,
+  text,
+}: MessageReferencesProps) {
   const t = useT();
   const idsKey = extractIdCandidates(text).join(',');
   const [resolved, setResolved] = useState<readonly ResolvedReference[]>([]);
@@ -120,4 +126,4 @@ export function MessageReferences({ http, text }: MessageReferencesProps) {
       ))}
     </div>
   );
-}
+});

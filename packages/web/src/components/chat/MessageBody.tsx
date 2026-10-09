@@ -1,4 +1,4 @@
-import { type ReactNode, Suspense, lazy } from 'react';
+import { type ReactNode, Suspense, lazy, memo } from 'react';
 import type { ChatMessage } from '../../lib/ws-client.js';
 
 /** `react-markdown` + `remark-gfm` would add ~191 kB raw / ~59 kB gzip to the single main chunk if
@@ -52,7 +52,14 @@ export interface MessageBodyProps {
   readonly trailing?: ReactNode;
 }
 
-export function MessageBody({ messageRole, text, trailing }: MessageBodyProps) {
+/** Memoized: ChatPage re-renders on every streamed delta, and without this every earlier
+ *  assistant message re-parses its Markdown each time. A history row's props (`messageRole`,
+ *  `text`, no `trailing`) keep their identity; the live row's `text` changes per delta anyway. */
+export const MessageBody = memo(function MessageBody({
+  messageRole,
+  text,
+  trailing,
+}: MessageBodyProps) {
   if (messageRole !== 'assistant') {
     return (
       <div className="message-bubble message-text">
@@ -69,4 +76,4 @@ export function MessageBody({ messageRole, text, trailing }: MessageBodyProps) {
       {trailing}
     </div>
   );
-}
+});
