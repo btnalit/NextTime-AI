@@ -86,6 +86,9 @@ jobs:
     # The test steps carry their own, tighter limits below and playwright.config.ts stops after a
     # handful of failures, so a suite-wide break costs a few minutes, not the whole budget.
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read # pull the GHCR postgres mirror (ci-image-mirror.yml)
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -176,6 +179,14 @@ jobs:
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
             run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null \
             | sudo tee "$NEXTTIME_DATA/models/models.json" >/dev/null
+
+      # postgres comes from the GHCR copy (deploy/ci/docker-compose.ci.yml, ci-image-mirror.yml);
+      # compose runs as root, so root's Docker config gets the login.
+      - name: Log in to GHCR (postgres mirror)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | sudo docker login ghcr.io -u "$ACTOR" --password-stdin
 
       - name: Start postgres
         run: |

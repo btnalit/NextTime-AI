@@ -58,9 +58,17 @@ jobs:
     name: probe
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The GHCR copy of pgvector/pgvector:pg17 by digest (ci-image-mirror.yml), not Docker Hub:
+    # an anonymous Docker Hub pull limit failed this job before any test ran (2026-10-09).
+    permissions:
+      contents: read
+      packages: read
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: ghcr.io/btnalit/nexttime-ai-ci-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: nexttime
           POSTGRES_PASSWORD: nexttime
