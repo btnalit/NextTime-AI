@@ -14,6 +14,7 @@ import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
 import { KeyStore, KeyStoreError } from './key-store.js';
+import type { ListUpstreamModelsResult } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import type { StoreTestResult } from './provider-store.js';
 import { createProxyServer } from './proxy.js';
@@ -110,6 +111,7 @@ interface Harness {
   logLines: string[];
   kernelEvents: KernelAuditEvent[];
   testRuns: Array<{ providerApi: string; model: string; realKey: string }>;
+  listRuns: Array<{ upstreamBaseUrl: string; authHeader: string; realKey: string }>;
   adminHeaders: () => Promise<Record<string, string>>;
   handle: () => Promise<string>;
   store: ProviderStore;
@@ -122,6 +124,7 @@ async function harness(
     testResult?: StoreTestResult;
     /** Put models.json under a directory that does not exist (the rewrite must fail). */
     modelsJsonUnwritable?: boolean;
+    listResult?: ListUpstreamModelsResult;
   } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-admin-'));
@@ -141,6 +144,7 @@ async function harness(
   const logLines: string[] = [];
   const kernelEvents: KernelAuditEvent[] = [];
   const testRuns: Harness['testRuns'] = [];
+  const listRuns: Harness['listRuns'] = [];
   const env = options.env ?? { FILE_KEY: 'sk-file' };
   const resolveApiKey = (name: string) => env[name];
 
@@ -168,6 +172,23 @@ async function harness(
           latency_ms: 42,
           error: null,
           tested_at: '2026-09-19T00:00:00.000Z',
+        }
+      );
+    },
+    listModels: async (request) => {
+      listRuns.push({
+        upstreamBaseUrl: request.upstreamBaseUrl,
+        authHeader: request.authHeader,
+        realKey: request.realKey,
+      });
+      return (
+        options.listResult ?? {
+          ok: true,
+          models: [
+            { id: 'acme-large', displayName: null },
+            { id: 'acme-small', displayName: null },
+          ],
+          truncated: false,
         }
       );
     },
@@ -200,6 +221,7 @@ async function harness(
     logLines,
     kernelEvents,
     testRuns,
+    listRuns,
     store,
     keyStore,
     adminHeaders: async () => {
@@ -1021,5 +1043,246 @@ describe('admin API — a key only goes to the upstream it was provisioned for (
     expect(upstreamKey('https://api.example.invalid:8443')).not.toBe(
       upstreamKey('https://api.example.invalid'),
     );
+  });
+});
+
+describe('admin API — POST /model-discovery', () => {
+  const DISCOVER = {
+    id: 'acme',
+    api: 'openai-completions',
+    upstreamBaseUrl: 'https://acme.example.invalid',
+    authHeader: 'authorization',
+  } as const;
+
+  it('lists models with the typed key before the provider exists, audited without the key', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: await h.adminHeaders(),
+      body: { ...DISCOVER, key: '  sk-typed  ' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      models: [
+        { id: 'acme-large', displayName: null },
+        { id: 'acme-small', displayName: null },
+      ],
+      credentialSource: 'inline',
+      truncated: false,
+    });
+    expect(h.listRuns).toEqual([
+      {
+        upstreamBaseUrl: 'https://acme.example.invalid',
+        authHeader: 'authorization',
+        realKey: 'sk-typed',
+      },
+    ]);
+    expect(h.kernelEvents.map((e) => e.action)).toEqual(['provider_models_listed']);
+    expect(h.kernelEvents[0]?.details).toMatchObject({ credentialSource: 'inline', count: 2 });
+    expect(JSON.stringify(h.kernelEvents)).not.toContain('sk-typed');
+    expect(h.logLines.join('\n')).not.toContain('sk-typed');
+    // Nothing was created.
+    expect(h.store.entries()).toEqual([]);
+  });
+
+  it('uses an existing provider’s console key only for its own upstream (R-23)', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-console' },
+    });
+    const same = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: { ...DISCOVER, upstreamBaseUrl: 'https://ACME.example.invalid/' },
+    });
+    expect(same.status).toBe(200);
+    expect(same.body).toMatchObject({ credentialSource: 'console' });
+    expect(h.listRuns.at(-1)?.realKey).toBe('sk-console');
+
+    const elsewhere = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: { ...DISCOVER, upstreamBaseUrl: 'https://attacker.example.invalid' },
+    });
+    expect(elsewhere.status).toBe(409);
+    expect((elsewhere.body as { error: { code: string } }).error.code).toBe('credential_missing');
+    expect(h.listRuns).toHaveLength(1);
+  });
+
+  it('sends an environment key only to an upstream it is paired with', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file' } });
+    const admin = await h.adminHeaders();
+    const paired = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: {
+        ...DISCOVER,
+        id: 'openai-copy',
+        upstreamBaseUrl: 'https://file.example.invalid',
+        apiKeyEnv: 'FILE_KEY',
+      },
+    });
+    expect(paired.status).toBe(200);
+    expect(paired.body).toMatchObject({ credentialSource: 'env' });
+    expect(h.listRuns.at(-1)?.realKey).toBe('sk-file');
+
+    const unpaired = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: { ...DISCOVER, apiKeyEnv: 'FILE_KEY' },
+    });
+    expect(unpaired.status).toBe(409);
+    expect((unpaired.body as { error: { code: string } }).error.code).toBe(
+      'api_key_env_not_allowed',
+    );
+    expect(h.listRuns).toHaveLength(1);
+  });
+
+  it('answers 409 credential_missing when no key resolves', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: await h.adminHeaders(),
+      body: { ...DISCOVER, apiKeyEnv: 'UNSET_KEY' },
+    });
+    expect(res.status).toBe(409);
+    expect((res.body as { error: { code: string } }).error.code).toBe('credential_missing');
+    expect(h.listRuns).toEqual([]);
+  });
+
+  it('maps an upstream failure to 502 with the sanitized message and audits it', async () => {
+    const h = await harness({
+      listResult: {
+        ok: false,
+        reason: 'upstream_status',
+        status: 401,
+        message: 'HTTP 401: invalid x-api-key',
+      },
+    });
+    const res = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: await h.adminHeaders(),
+      body: { ...DISCOVER, key: 'sk-wrong' },
+    });
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({
+      error: {
+        code: 'upstream_error',
+        message: 'HTTP 401: invalid x-api-key',
+        details: { status: 401 },
+      },
+    });
+    expect(h.kernelEvents[0]?.details).toMatchObject({ failed: 'upstream_status', status: 401 });
+  });
+
+  it('rejects a bad body, a wrong method, and an unauthenticated call', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    const bad = await request(h.port, 'POST', '/admin/model-discovery', {
+      headers: admin,
+      body: { ...DISCOVER, upstreamBaseUrl: 'not a url', key: 'sk-x' },
+    });
+    expect(bad.status).toBe(400);
+    expect(
+      (await request(h.port, 'GET', '/admin/model-discovery', { headers: admin })).status,
+    ).toBe(405);
+    expect(
+      (
+        await request(h.port, 'POST', '/admin/model-discovery', {
+          headers: { 'x-requested-with': 'nexttime' },
+          body: { ...DISCOVER },
+        })
+      ).status,
+    ).toBe(401);
+    expect(h.listRuns).toEqual([]);
+  });
+});
+
+// #510 review: `<base>/v1/…` is built by string concatenation, so a base carrying `?` or `#`
+// let its writer choose the whole request path (SSRF); userinfo would add a credential to the URL.
+describe('admin API — upstream base URL must be a bare http(s) base', () => {
+  const BAD_BASES = [
+    'http://internal.example.invalid/anything?x=',
+    'http://internal.example.invalid/anything#',
+    'http://internal.example.invalid/anything?',
+    'https://user:pass@acme.example.invalid',
+    'ftp://acme.example.invalid',
+  ];
+
+  it('refuses such a base on create, update and model discovery, before any upstream call', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    for (const upstreamBaseUrl of BAD_BASES) {
+      const created = await request(h.port, 'POST', '/admin/providers', {
+        headers: admin,
+        body: { ...NEW_PROVIDER, upstreamBaseUrl },
+      });
+      expect(created.status, upstreamBaseUrl).toBe(400);
+      const updated = await request(h.port, 'PUT', '/admin/providers/openai', {
+        headers: admin,
+        body: { ...NEW_PROVIDER, id: 'openai', upstreamBaseUrl },
+      });
+      expect(updated.status, upstreamBaseUrl).toBe(400);
+      const discovered = await request(h.port, 'POST', '/admin/model-discovery', {
+        headers: admin,
+        body: {
+          id: 'acme',
+          api: 'openai-completions',
+          upstreamBaseUrl,
+          authHeader: 'authorization',
+          key: 'sk-typed',
+        },
+      });
+      expect(discovered.status, upstreamBaseUrl).toBe(400);
+    }
+    expect(h.listRuns).toEqual([]);
+    expect(h.store.entries()).toEqual([]);
+  });
+
+  it('still accepts a LAN host and a path prefix', async () => {
+    const h = await harness();
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: await h.adminHeaders(),
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: 'http://192.0.2.10:11434/compatible-mode' },
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it('a row saved before the rule is neither tested, routed nor put in models.json', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file', LEGACY_KEY: 'sk-legacy' } });
+    // Written straight to the store, as v0.43.0's admin API could.
+    await h.store.upsert('legacy', {
+      api: 'openai-completions',
+      upstream_base_url: 'http://internal.example.invalid/anything?x=',
+      api_key_env: 'LEGACY_KEY',
+      auth: { header: 'authorization', scheme: 'Bearer' },
+      models: [{ id: 'm' }],
+      enabled: true,
+    });
+    const admin = await h.adminHeaders();
+    const tested = await request(h.port, 'POST', '/admin/providers/legacy/test', {
+      headers: admin,
+      body: {},
+    });
+    expect(tested.status).toBe(409);
+    expect((tested.body as { error: { code: string } }).error.code).toBe(
+      'upstream_base_url_invalid',
+    );
+    expect(h.testRuns).toEqual([]);
+
+    const routed = await request(h.port, 'GET', '/legacy/v1/models', {
+      headers: { authorization: `Bearer ${await h.handle()}` },
+    });
+    expect(routed.status).toBe(404);
+
+    // Any mutation rewrites models.json; the legacy row is left out of it.
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: NEW_PROVIDER,
+    });
+    expect(created.status).toBe(201);
+    const modelsJson = JSON.parse(readFileSync(h.modelsJsonFile, 'utf8')) as {
+      providers: Record<string, unknown>;
+    };
+    expect(Object.keys(modelsJson.providers).sort()).toEqual(['acme', 'openai']);
+    // Listing still shows it, so the administrator can find and fix it.
+    const list = await request(h.port, 'GET', '/admin/providers', { headers: admin });
+    expect(JSON.stringify(list.body)).toContain('"legacy"');
   });
 });

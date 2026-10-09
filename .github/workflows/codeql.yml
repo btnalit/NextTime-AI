@@ -14,7 +14,13 @@ on:
   push:
     branches:
       - main
+  # Docs-only pull requests have nothing to analyze (not a required check, so a path filter is
+  # safe here). Pushes to main stay unfiltered so every main commit keeps an analysis to compare
+  # pull requests against.
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   schedule:
     - cron: '38 4 * * 1' # weekly, Monday, off the hour to avoid GitHub's documented cron pile-up
   workflow_dispatch: {}

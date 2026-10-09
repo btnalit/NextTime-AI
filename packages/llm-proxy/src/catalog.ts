@@ -1,3 +1,4 @@
+import { upstreamBaseUrlProblem } from '@nexttime/shared';
 import type { ProviderConfig } from './config.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { storeProviderToConfig } from './provider-store.js';
@@ -103,7 +104,20 @@ export class ProviderCatalog {
    *  (404 `unknown_provider`), so disabling is an immediate, complete cut-off. */
   getRoutable(id: string): ProviderConfig | undefined {
     const provider = this.get(id);
-    return provider?.enabled ? provider.config : undefined;
+    return provider && isRoutable(provider) ? provider.config : undefined;
+  }
+
+  /** Providers whose saved `upstream_base_url` breaks the bare-base rule (shared
+   *  `upstreamBaseUrlProblem`: a `?`, `#`, userinfo or non-http scheme). The admin API refuses
+   *  such a base since #510, but a row saved before that (store or yaml) still loads — it is
+   *  never routed, tested or put in models.json, and index.ts logs it at startup so the operator
+   *  can fix it in the console. Loading rather than refusing the whole file keeps one bad row
+   *  from taking every other provider down with it. */
+  unsafeBaseUrls(): ReadonlyArray<{ readonly id: string; readonly problem: string }> {
+    return this.resolve().flatMap((provider) => {
+      const problem = upstreamBaseUrlProblem(provider.config.upstream_base_url);
+      return problem ? [{ id: provider.id, problem }] : [];
+    });
   }
 
   /** Records a test outcome where it can live: on the store entry when there is one, else in
@@ -126,4 +140,10 @@ function fromStore(id: string, entry: StoreProvider, overridesFile: boolean): Re
     updatedAt: entry.updated_at,
     lastTest: entry.last_test ?? null,
   };
+}
+
+/** Enabled, and its upstream base passes the bare-base rule — the one test for "requests may be
+ *  sent to this provider", shared by routing and the models.json rewrite. */
+export function isRoutable(provider: ResolvedProvider): boolean {
+  return provider.enabled && upstreamBaseUrlProblem(provider.config.upstream_base_url) === null;
 }

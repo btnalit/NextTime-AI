@@ -27,6 +27,14 @@ export type DrawerState =
   | { readonly kind: 'edit'; readonly provider: LlmProviderWire }
   | { readonly kind: 'detail'; readonly provider: LlmProviderWire };
 
+/** What the form asks for beyond the provider row (providers/ProviderForm.tsx
+ *  `ProviderFormExtras`, restated here so this file imports nothing from `components/ui/*`'s
+ *  neighbours). */
+export interface SaveExtras {
+  readonly key?: string;
+  readonly testAfterSave?: boolean;
+}
+
 export interface ProviderActionsState {
   readonly testing: string | null;
   readonly testResults: Record<string, LlmProviderTestResultWire>;
@@ -35,10 +43,11 @@ export interface ProviderActionsState {
   readonly save: (
     input: LlmProviderInputWire,
     existing: LlmProviderWire | undefined,
+    extras?: SaveExtras,
   ) => Promise<void>;
   readonly setEnabled: (provider: LlmProviderWire, enabled: boolean) => Promise<void>;
   readonly remove: (provider: LlmProviderWire) => Promise<void>;
-  readonly runTest: (provider: LlmProviderWire) => Promise<void>;
+  readonly runTest: (provider: LlmProviderWire, model?: string) => Promise<void>;
 }
 
 /**
@@ -70,24 +79,57 @@ export function useProviderActions(
     }));
   }
 
+  /**
+   * Saves the provider row, then — only once the row exists — applies the form's extras: the typed
+   * key becomes the provider's console key (`PUT /providers/:id/secret`), and 测试调用 runs right
+   * away. A saved row whose key could not be written is not a failed save: the drawer switches to
+   * the provider's detail (where the key can be set again) with the error shown, instead of the
+   * form reporting "could not save" for a row that is already there. With a test, the drawer also
+   * switches to the detail, so the result lands in front of the administrator.
+   */
   async function save(
     input: LlmProviderInputWire,
     existing: LlmProviderWire | undefined,
+    extras: SaveExtras = {},
   ): Promise<void> {
-    const saved = existing
-      ? await client.updateProvider(input)
-      : await client.createProvider(input);
+    let saved = existing ? await client.updateProvider(input) : await client.createProvider(input);
     replaceRow(saved);
-    setDrawer({ kind: 'closed' });
+    let keyError: unknown = null;
+    if (extras.key) {
+      try {
+        saved = await client.setProviderSecret(saved.id, extras.key);
+        replaceRow(saved);
+      } catch (error) {
+        keyError = error;
+      }
+    }
     toast.push({
-      tone: 'ok',
-      title: existing ? `已保存 ${saved.displayName}` : `已新增 ${saved.displayName}`,
-      description: t(
-        'models.json 已重写；工作区"模型与配额"可勾选它的模型。 models.json rewritten —',
-        'workspaces can now allow its models.',
-      ),
+      tone: keyError ? 'warn' : 'ok',
+      title: existing
+        ? t(`已保存 ${saved.displayName}`, `Saved ${saved.displayName}`)
+        : t(`已新增 ${saved.displayName}`, `Added ${saved.displayName}`),
+      description: keyError
+        ? t(
+            '供应商已保存，但密钥没有写入——在详情里重新设置。',
+            'The provider is saved, but the key was not written — set it again in the details.',
+          )
+        : t(
+            'models.json 已重写；工作区「模型与配额」里可以勾选它的模型。',
+            'models.json rewritten — workspaces can now allow its models.',
+          ),
     });
     void list.reload();
+    if (keyError) {
+      setRowError({ id: saved.id, error: keyError });
+      setDrawer({ kind: 'detail', provider: saved });
+      return;
+    }
+    if (extras.testAfterSave && saved.enabled && saved.credentialPresent) {
+      setDrawer({ kind: 'detail', provider: saved });
+      await runTest(saved);
+      return;
+    }
+    setDrawer({ kind: 'closed' });
   }
 
   async function setEnabled(provider: LlmProviderWire, enabled: boolean): Promise<void> {
@@ -119,29 +161,42 @@ export function useProviderActions(
     toast.push({
       tone: 'ok',
       title: result.restoredFileEntry
-        ? `已删除覆盖记录，恢复为 yaml 里的 ${provider.id}`
-        : `已删除 ${provider.displayName}`,
+        ? t(
+            `已删除覆盖记录，恢复为 yaml 里的 ${provider.id}`,
+            `Override dropped — ${provider.id} from the yaml is back`,
+          )
+        : t(`已删除 ${provider.displayName}`, `Deleted ${provider.displayName}`),
     });
     // P2 hotfix (post-v0.16.0 review): a deleted provider's console key is now also cleared
     // (llm-proxy's DELETE /providers/:id) — surface it separately so it is not lost inside the
     // delete toast's own title.
     if (result.secretCleared) {
-      toast.push({ tone: 'ok', title: t('已一并清除控制台密钥 ·', 'Console key cleared as well') });
+      toast.push({ tone: 'ok', title: t('已一并清除控制台密钥', 'Console key cleared as well') });
     }
     void list.reload();
   }
 
-  async function runTest(provider: LlmProviderWire): Promise<void> {
+  async function runTest(provider: LlmProviderWire, model?: string): Promise<void> {
     setTesting(provider.id);
     setRowError(null);
     try {
-      const result = await client.testProvider(provider.id);
+      const result = await client.testProvider(provider.id, model ? { model } : {});
       setTestResults((prev) => ({ ...prev, [provider.id]: result }));
       replaceRow({ ...provider, lastTest: result });
+      const passed = result.completion === 'ok' && result.toolCall === 'ok';
       toast.push({
-        tone: result.completion === 'ok' && result.toolCall === 'ok' ? 'ok' : 'warn',
-        title: `${provider.displayName}：补全 ${result.completion} · 工具调用 ${result.toolCall}`,
-        description: result.error ?? `${result.latencyMs} ms`,
+        tone: passed ? 'ok' : 'warn',
+        title: passed
+          ? t(`${provider.displayName}：测试通过`, `${provider.displayName}: test passed`)
+          : result.completion === 'ok'
+            ? t(
+                `${provider.displayName}：能对话，工具调用失败`,
+                `${provider.displayName}: chat ok, tool call failed`,
+              )
+            : t(`${provider.displayName}：调用失败`, `${provider.displayName}: call failed`),
+        description: passed
+          ? `${result.model} · ${result.latencyMs} ms`
+          : t('详情里有原因说明。', 'See the details for why.'),
       });
     } catch (error) {
       setRowError({ id: provider.id, error });

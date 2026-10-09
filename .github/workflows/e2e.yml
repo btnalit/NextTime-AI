@@ -21,7 +21,9 @@ name: e2e
 #
 # Keep the workflow name (`e2e`) and job name (`web-e2e`) byte-stable, and never add a `paths` /
 # `paths-ignore` filter: a required check that does not report on a PR (docs-only or otherwise)
-# blocks that PR from merging — this job is cheap enough (~2.5 min) to run unconditionally.
+# blocks that PR from merging. Docs-only changes skip web-e2e through the `changes` job instead
+# (scripts/ci-docs-only.sh, same rule as ci.yml): a skipped job still reports, and counts as
+# passed. It skips only on a definite code=false and still runs when `changes` itself fails.
 #
 # S8 W1-B added `workflow_dispatch`: the *only* supported way to (re)generate `e2e/00-gates/`'s
 # screenshot/axe/copy-guard baselines is a CI run on this Linux runner (never this repo's own
@@ -52,8 +54,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Docs-only change?
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/ci-docs-only.sh
+
   web-e2e:
     name: web-e2e
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
