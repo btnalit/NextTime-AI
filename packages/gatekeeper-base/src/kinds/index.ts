@@ -5,7 +5,14 @@ export type {
   TransportInvokeResult,
 } from './types.js';
 
-export { HttpTransport, encodePathSegment, importOpenApi, resolveBindingUrl } from './http.js';
+export {
+  HttpTransport,
+  encodePathSegment,
+  importOpenApi,
+  isGateOwnedHeader,
+  isGateOwnedQueryParam,
+  resolveBindingUrl,
+} from './http.js';
 export type { HttpTransportOptions, OpenApiDocumentLike } from './http.js';
 
 export { McpTransport, importMcpTools } from './mcp.js';

@@ -1,5 +1,6 @@
 import type { ToolCallMessageContent } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
@@ -704,7 +705,8 @@ export async function renameChat(
     action: 'chat.rename',
     resourceType: 'chat',
     resourceId: updated.id,
-    payload: { from: before.title, to: updated.title },
+    // The audit copy, like the dispatch row's `params.title`; the Chat keeps its title as written.
+    payload: redactedForAudit({ from: before.title, to: updated.title }),
   });
   publishChatPushEvent({
     type: 'chat.metadata',

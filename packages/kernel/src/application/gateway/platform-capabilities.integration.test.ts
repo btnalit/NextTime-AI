@@ -1038,6 +1038,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(history.rowCount).toBe(1);
       });
 
+      it('the audit copy is redacted by the shared rule; the settings and their history keep what was sent', async () => {
+        // Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet.
+        const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+        const before = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
+        const announcement = `rotate tonight: PGPASSWORD=${fake} ${randomUUID().slice(0, 8)}`;
+        const after = await callAsAdmin<PlatformSettingsWire>('update_platform_settings', {
+          announcement,
+          passwordMinLength: before.passwordMinLength,
+        });
+        expect(after.announcement).toBe(announcement);
+        expect(after.passwordMinLength).toBe(before.passwordMinLength);
+
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: { params?: unknown; redactedValues?: number } }>(
+            `select payload from audit_records
+              where action = 'update_platform_settings' and workspace_id is null
+              order by created_at desc limit 1`,
+          ),
+        );
+        // A credential-looking value, and — the accepted over-redaction of the field rule —
+        // `passwordMinLength`, whose value stays in the settings and `platform_settings_history`.
+        expect(audit.rows[0]?.payload.params).toEqual({
+          announcement: announcement.replace(fake, '[redacted]'),
+          passwordMinLength: '[redacted]',
+        });
+        expect(audit.rows[0]?.payload.redactedValues).toBe(2);
+        expect(JSON.stringify(audit.rows[0]?.payload)).not.toContain(fake);
+      });
+
       it('an unknown defaultWorkspaceId → workspace_not_found', async () => {
         await expectPlatformError(
           () => callAsAdmin('update_platform_settings', { defaultWorkspaceId: randomUUID() }),

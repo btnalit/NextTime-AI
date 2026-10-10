@@ -40,6 +40,7 @@ import {
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
+import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -130,6 +131,8 @@ function sleep(ms: number): Promise<void> {
 class RecordingTransport implements Transport {
   readonly kind = 'http' as const;
   readonly calls: Record<string, number> = {};
+  /** The params each operation was last invoked with — what actually reached the gate. */
+  readonly lastParams: Record<string, unknown> = {};
   readonly visibilityChecks: Record<string, boolean> = {};
   private readonly pool: Pool;
   private readonly workspaceId: string;
@@ -141,6 +144,7 @@ class RecordingTransport implements Transport {
 
   async invoke(operation: Operation, params: unknown): Promise<TransportInvokeResult> {
     this.calls[operation.name] = (this.calls[operation.name] ?? 0) + 1;
+    this.lastParams[operation.name] = params;
 
     if (operation.mode === 'execute') {
       const client = await this.pool.connect();
@@ -464,6 +468,171 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(facts.length).toBeGreaterThanOrEqual(1);
       expect(facts[0]?.epistemicStatus).toBe('observed');
+    });
+
+    // Legacy 175 (governance/redaction/credential-review.ts `reviewObserveParams`): both ways into
+    // an observation review its params first, on every channel. A literal credential (a JWT, a
+    // vendor key, a Bearer token, …) is refused before anything happens; any other suspected value
+    // — under a secret-named field, or query text that only mentions one — passes, reaches the
+    // gate as sent, and the audit row records how many and where, its audit copy redacted.
+    describe('observe params credential review (legacy 175)', () => {
+      /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+      const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+      function handleCaller(): ResolvedCaller {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: {
+              capabilities: ['request_action', 'observe_operation'],
+              resources: { gatekeeper: [gatekeeperId] },
+            },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      }
+
+      const ways = [
+        ['observe_operation', 'human'],
+        ['request_action', 'human'],
+        ['observe_operation', 'handle'],
+        ['request_action', 'handle'],
+      ] as const;
+
+      function callerFor(channel: 'human' | 'handle'): ResolvedCaller {
+        return channel === 'human' ? humanCaller(workspaceId, ownerId) : handleCaller();
+      }
+
+      async function auditRows(action: string) {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            actorPrincipalId: ownerId,
+            action,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            limit: 1000,
+          }),
+        );
+      }
+
+      async function activityCount(): Promise<number> {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ n: number }>(
+            `select count(*)::int as n from activities
+             where workspace_id = $1 and kind = 'gatekeeper_observe'`,
+            [workspaceId],
+          );
+          return result.rows[0]?.n ?? 0;
+        });
+      }
+
+      it.each(ways)(
+        '%s (%s channel) refuses a literal credential: nothing reaches the gate, nothing is written',
+        async (capability, channel) => {
+          const callsBefore = transport.calls['observe.stock'] ?? 0;
+          const auditBefore = (await auditRows(capability)).length;
+          const activitiesBefore = await activityCount();
+
+          const thrown = await dispatchCapability({ pool }, callerFor(channel), capability, {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: { warehouse: 'north', filter: `Authorization: Bearer ${FAKE}` },
+          }).catch((err: unknown) => err);
+
+          expect(thrown).toBeInstanceOf(ObserveParamsCarryCredentialsError);
+          expect((thrown as ObserveParamsCarryCredentialsError).details).toEqual({
+            suspectedSecretValues: 1,
+            suspectedSecretPaths: ['filter'],
+          });
+          expect((thrown as Error).message).not.toContain(FAKE);
+          expect(transport.calls['observe.stock'] ?? 0).toBe(callsBefore);
+          expect((await auditRows(capability)).length).toBe(auditBefore);
+          expect(await activityCount()).toBe(activitiesBefore);
+        },
+      );
+
+      it.each(ways)(
+        '%s (%s channel) passes a value under a secret-named field to the gate as sent, and the audit row records it redacted',
+        async (capability, channel) => {
+          const cursor = `cursor-${randomUUID()}`;
+          const result = (await dispatchCapability({ pool }, callerFor(channel), capability, {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: { pageToken: cursor, pageSize: 50 },
+          })) as { status: string };
+          expect(result.status).toBe('ok');
+          expect(transport.lastParams['observe.stock']).toEqual({
+            pageToken: cursor,
+            pageSize: 50,
+          });
+
+          const rows = await auditRows(capability);
+          const row = rows.find(
+            (r) =>
+              (r.payload as { params?: { params?: { pageSize?: unknown } } }).params?.params
+                ?.pageSize === 50 && JSON.stringify(r.payload).includes('credentialReview'),
+          );
+          expect(row).toBeDefined();
+          expect(JSON.stringify(rows)).not.toContain(cursor);
+          expect(row?.payload).toMatchObject({
+            channel,
+            credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['pageToken'] },
+            params: {
+              gatekeeperId,
+              operation: 'observe.stock',
+              params: { pageToken: '[redacted]', pageSize: 50 },
+            },
+            redactedValues: 1,
+          });
+        },
+      );
+
+      it.each(ways)(
+        '%s (%s channel) passes query text that only mentions a credential, and the audit row records it redacted',
+        async (capability, channel) => {
+          const marker = `north-${randomUUID()}`;
+          const filter = '{app="api"} |= "Authorization: failed"';
+          const result = (await dispatchCapability({ pool }, callerFor(channel), capability, {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: { warehouse: marker, filter },
+          })) as { status: string };
+          expect(result.status).toBe('ok');
+          expect(transport.lastParams['observe.stock']).toEqual({ warehouse: marker, filter });
+
+          const row = (await auditRows(capability)).find((r) =>
+            JSON.stringify(r.payload).includes(marker),
+          );
+          expect(row?.payload).toMatchObject({
+            channel,
+            credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['filter'] },
+            params: {
+              params: { warehouse: marker, filter: '{app="api"} |= "Authorization: [redacted]' },
+            },
+            redactedValues: 1,
+          });
+        },
+      );
+
+      it('ordinary params record no credentialReview', async () => {
+        const marker = `north-${randomUUID()}`;
+        await dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), 'observe_operation', {
+          gatekeeperId,
+          operation: 'observe.stock',
+          params: { warehouse: marker, limit: 20 },
+        });
+        const row = (await auditRows('observe_operation')).find((r) =>
+          JSON.stringify(r.payload).includes(marker),
+        );
+        expect(row?.payload).not.toHaveProperty('credentialReview');
+        expect(row?.payload).not.toHaveProperty('redactedValues');
+      });
     });
 
     // Authority-tightening fix (review job 652a4abc lane3 P1-5 / lane2 P1, item 1): a non-owner

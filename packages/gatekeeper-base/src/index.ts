@@ -138,6 +138,8 @@ export {
   HttpTransport,
   encodePathSegment,
   importOpenApi,
+  isGateOwnedHeader,
+  isGateOwnedQueryParam,
   resolveBindingUrl,
   McpTransport,
   importMcpTools,

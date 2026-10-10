@@ -56,6 +56,7 @@ import {
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
+import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
 
@@ -91,6 +92,23 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
     expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
       status: 400,
       code: 'reason_required',
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
+  it('ObserveParamsCarryCredentialsError maps to 400 credentials_in_observe_params with its details', () => {
+    expect(
+      mapCapabilityError(
+        new ObserveParamsCarryCredentialsError('inventory', 'list_items', {
+          count: 2,
+          paths: ['q', 'filter.key'],
+        }),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'credentials_in_observe_params',
+      details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
     });
   });
 });

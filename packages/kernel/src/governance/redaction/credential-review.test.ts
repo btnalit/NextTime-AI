@@ -2,17 +2,25 @@ import { maskSecretFields } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CredentialReviewRequiredError,
+  ObserveParamsCarryCredentialsError,
   assertCredentialsReviewed,
   assertDraftCredentialsReviewed,
   countSuspectedSecrets,
   credentialReviewAudit,
+  findCredentialValues,
   findSuspectedSecrets,
   namesASecretField,
   redactSecrets,
+  redactSuspectedSecrets,
+  reviewObserveParams,
 } from './index.js';
 
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+/** A Handle-shaped compact JWT; `.gitleaks.toml` allows its signature segment. */
+const HANDLE = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+/** A `Basic` credential's value, built at run time from the synthetic `FAKE`. */
+const BASIC = Buffer.from(`ops:${FAKE}`).toString('base64');
 
 describe('countSuspectedSecrets — the same detector as the scrubs', () => {
   it('counts secret-looking values inside strings, at any depth', () => {
@@ -207,6 +215,11 @@ describe('one rule: what the console hides = what the kernel counts = what the r
     expect([...counted.paths].sort()).toEqual([...hidden].sort());
     expect(redacted.redactedValues).toBe(counted.count);
     expect(redacted.value).toEqual(maskSecretFields(params));
+    // The audit copy (dispatch.ts) is the same walk: same value, count and paths.
+    const audited = redactSuspectedSecrets(params, { secretFields: true });
+    expect(audited.value).toEqual(maskSecretFields(params));
+    expect(audited.count).toBe(counted.count);
+    expect(audited.paths).toEqual(counted.paths);
   });
 
   it('plural token names stay secret (as under #520), usage counts do not', () => {
@@ -277,6 +290,186 @@ describe('credentialReviewAudit', () => {
     expect(credentialReviewAudit(0)).toEqual({});
     expect(credentialReviewAudit(3)).toEqual({
       credentialReview: { suspectedSecretValues: 3, confirmed: true },
+    });
+  });
+});
+
+describe("redactSuspectedSecrets — the audit copy of a call's params", () => {
+  it('replaces values under secret-named fields and secret-looking values anywhere, keeping the shape', () => {
+    const params = {
+      user: 'ops',
+      password: 'hunter2',
+      note: `Authorization: Bearer ${FAKE}`,
+      query: { limit: 20, maxTokens: 1024, pageToken: 'cursor-2' },
+      flag: true,
+    };
+    const audited = redactSuspectedSecrets(params, { secretFields: true });
+    expect(audited.value).toEqual({
+      user: 'ops',
+      password: '[redacted]',
+      note: 'Authorization: [redacted]',
+      query: { limit: 20, maxTokens: 1024, pageToken: '[redacted]' },
+      flag: true,
+    });
+    expect(audited.count).toBe(3);
+    expect(audited.paths).toEqual(['password', 'note', 'query.pageToken']);
+    expect(params.password).toBe('hunter2'); // the original is never touched
+  });
+});
+
+/**
+ * Legacy 175: an observe-class Operation's params. The table is the decision's two groups — a
+ * value that is almost certainly a credential whatever field holds it is refused (a JWT, a vendor
+ * key, a PEM key, a literal Bearer token, a URL's literal password); every other suspected value
+ * passes and is recorded: a value under a secret-named field (a pagination cursor, a resource id),
+ * and query text the other value patterns hit (a log search for failed Authorization, logfmt
+ * `token=expired`, `$VAR` placeholders).
+ */
+describe('reviewObserveParams — refuse what is certainly a credential, record the rest', () => {
+  const refused: readonly [string, Record<string, unknown>, readonly string[]][] = [
+    ['a Handle-shaped JWT in an ordinary field', { q: HANDLE }, ['q']],
+    ['a literal Bearer token', { header: `Bearer ${FAKE}` }, ['header']],
+    [
+      'a literal Bearer token in a curl line',
+      { cmd: `curl -H "Authorization: Bearer ${FAKE}" https://api.example.invalid/v1/items` },
+      ['cmd'],
+    ],
+    ['a vendor key, nested', { filter: { key: `sk-ant-${FAKE}` } }, ['filter.key']],
+    ['a GitHub token in a list', { ids: ['repo-1', `ghp_${FAKE}`] }, ['ids[1]']],
+    ['a URL with a password', { url: `postgres://ops:${FAKE}@db.example.invalid/app` }, ['url']],
+    [
+      'a PEM private key',
+      { pem: `-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----` },
+      ['pem'],
+    ],
+    ['a JWT as an env assignment’s value', { cmd: `TOKEN=${HANDLE} ./probe` }, ['cmd']],
+    ['a Basic credential (user:password)', { header: `Basic ${BASIC}` }, ['header']],
+    [
+      'a Basic credential in an Authorization header',
+      { raw: `Authorization: Basic ${BASIC}` },
+      ['raw'],
+    ],
+    [
+      'an Authorization header with the token scheme',
+      { raw: `Authorization: token ${FAKE}` },
+      ['raw'],
+    ],
+    [
+      'a literal Bearer token under a secret-named field',
+      { password: `Bearer ${FAKE}` },
+      ['password'],
+    ],
+  ];
+
+  it.each(refused)('refuses %s, naming the path and never the value', (_label, params, paths) => {
+    let thrown: unknown;
+    try {
+      reviewObserveParams('inventory', 'list_items', params);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ObserveParamsCarryCredentialsError);
+    const err = thrown as ObserveParamsCarryCredentialsError;
+    expect(err.code).toBe('credentials_in_observe_params');
+    expect(err.details).toEqual({ suspectedSecretValues: 1, suspectedSecretPaths: paths });
+    expect(err.message).toContain('inventory.list_items');
+    expect(err.message).toMatch(/Do not pass credentials/);
+    expect(err.message).not.toContain(FAKE);
+    expect(err.message).not.toContain(HANDLE);
+  });
+
+  const recorded: readonly [string, Record<string, unknown>, readonly string[]][] = [
+    // Query text: a search for, or a placeholder of, a credential is not one.
+    [
+      'a LogQL search for failed Authorization',
+      { q: '{app="api"} |= "Authorization: failed"' },
+      ['q'],
+    ],
+    ['logfmt text with token=expired', { q: 'level=error msg="invalid token=expired"' }, ['q']],
+    [
+      'a Bearer $TOKEN placeholder in a curl line',
+      { cmd: 'curl -H "Authorization: Bearer $TOKEN" https://api.example.invalid/v1/items' },
+      ['cmd'],
+    ],
+    [
+      'a --password=$VAR placeholder',
+      { cmd: 'mysql --password=$MYSQL_PWD -h db -e "select 1"' },
+      ['cmd'],
+    ],
+    [
+      'a ${VAR} placeholder as a URL’s password',
+      { url: 'postgres://ops:${PGPASS}@db/app' },
+      ['url'],
+    ],
+    ['a $VAR placeholder as a URL’s password', { url: 'postgres://ops:$PGPASS@db/app' }, ['url']],
+    [
+      'a long word run after Bearer (no digit)',
+      { q: 'Bearer authentication_failed_for_user' },
+      ['q'],
+    ],
+    ['a masked token in a log search', { q: '|= "Authorization: token ****"' }, ['q']],
+    // Text patterns that can carry a literal secret too — recorded, and hidden in the audit copy.
+    ['a Basic value that is not user:password', { header: `Basic ${FAKE}` }, ['header']],
+    ['an env assignment', { cmd: `PGPASSWORD=${FAKE} psql -h db` }, ['cmd']],
+    ['a secret pair inside JSON text', { body: `{"apiKey": "${FAKE}"}` }, ['body']],
+    ['a --password flag', { args: `--password ${FAKE}` }, ['args']],
+    [
+      'a page_token inside a next-page URL',
+      { next: `https://api.example.invalid/items?page_token=${FAKE}` },
+      ['next'],
+    ],
+    ['a pageToken inside a query string', { next: `/items?pageToken=${FAKE}` }, ['next']],
+    // Secret-named fields: as often an ordinary cursor or resource id.
+    ['pageToken', { pageToken: 'cursor-page-2', pageSize: 50 }, ['pageToken']],
+    ['nextPageToken', { nextPageToken: 'opaque-cursor-42' }, ['nextPageToken']],
+    ['page_token', { page_token: '3' }, ['page_token']],
+    [
+      'continuationToken, nested',
+      { filter: { continuationToken: 'c-17' } },
+      ['filter.continuationToken'],
+    ],
+    ['secretName (a resource id)', { secretName: 'prod/db-readonly' }, ['secretName']],
+    ['accessKeyId (a resource id)', { accessKeyId: 'key-0042' }, ['accessKeyId']],
+    ['apiKeyId (a resource id)', { apiKeyId: 'k-17' }, ['apiKeyId']],
+    ['credentialId (a resource id)', { credentialId: 'cred-9' }, ['credentialId']],
+    ['a password field', { password: 'hunter2' }, ['password']],
+  ];
+
+  it.each(recorded)('passes %s and records it for the audit row', (_label, params, paths) => {
+    expect(reviewObserveParams('inventory', 'list_items', params)).toEqual({
+      credentialReview: { suspectedSecretValues: paths.length, suspectedSecretPaths: paths },
+    });
+  });
+
+  it.each([
+    { query: 'status:open', limit: 20, since: '2026-10-01' },
+    { maxTokens: 1024, tokenCount: 3, sort: 'name', page: 2 },
+    { url: 'https://example.test/path?page=2&sort=name' },
+    { passwordRequired: true, secretName: '', token: null },
+    { header: 'Bearer $TOKEN', alt: 'Bearer ${TOKEN}' },
+    { q: 'WWW-Authenticate: Basic realm="api"' },
+    { q: 'msg="Basic auth failed for user=bob"' },
+    // `token` is an ordinary word outside an `Authorization:` header (`invalid token <id>`).
+    { q: `invalid token ${FAKE}` },
+    { q: "select id from builds where sha = '0123456789abcdef0123456789abcdef01234567'" },
+    {},
+  ])('records nothing for ordinary params: %j', (params) => {
+    expect(reviewObserveParams('inventory', 'list_items', params)).toEqual({});
+  });
+
+  it('the refused group is exactly the high-confidence patterns; whatever it finds is recorded too', () => {
+    for (const [, params] of recorded) expect(findCredentialValues(params).count).toBe(0);
+    for (const [, params] of refused) {
+      expect(findCredentialValues(params).count).toBe(1);
+      expect(findSuspectedSecrets(params, { secretFields: true }).count).toBeGreaterThan(0);
+    }
+  });
+
+  it('a schema-literal-shaped param under a secret-named key is recorded, not refused', () => {
+    const params = { apiKey: { default: 'x1' } };
+    expect(findCredentialValues(params).count).toBe(0);
+    expect(reviewObserveParams('inventory', 'list_items', params)).toEqual({
+      credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['apiKey.default'] },
     });
   });
 });

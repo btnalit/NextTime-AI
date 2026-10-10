@@ -225,6 +225,30 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(transition).not.toHaveProperty('credentialReview');
     });
 
+    it('approve / reject: a credential pasted into the reason never reaches an audit row', async () => {
+      for (const [capability, action] of [
+        ['approve', 'action_request.approve'],
+        ['reject', 'action_request.reject'],
+      ] as const) {
+        const id = await seedPending({ host: 'db.example.invalid' });
+        await call(capability, { actionRequestId: id, reason: `rotated, PGPASSWORD=${FAKE} now` });
+
+        const [transition] = await auditPayloads(action, id);
+        expect(transition?.reason).toBe('rotated, PGPASSWORD=[redacted] now');
+        const dispatched = await admin((client) =>
+          client.query<{ payload: { params: { reason?: string }; redactedValues?: number } }>(
+            `select payload from audit_records
+             where workspace_id = $1 and action = $2 and payload->'params'->>'actionRequestId' = $3`,
+            [workspaceId, capability, id],
+          ),
+        );
+        expect(dispatched.rows[0]?.payload.params.reason).toBe(
+          'rotated, PGPASSWORD=[redacted] now',
+        );
+        expect(dispatched.rows[0]?.payload.redactedValues).toBe(1);
+      }
+    });
+
     it('request_action: params carrying a suspected credential never auto-approve', async () => {
       const scope: CapabilityScope = {
         capabilities: ['request_action'],
