@@ -3887,6 +3887,34 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 范围外：verify / attest 事实、`resolve_conflict`（写入时已脱敏）、本体发布（遗留 176）、`publish_manifest` / `confirm_gate_manifest`（人写的）、`observe_operation`（按设计免审批，遗留 175）。
 - 遗留：172–178。
 
+**observe 参数凭据审查、门侧结构守卫与审计统一脱敏（#532，2026-10-10 合入，无迁移；遗留 175 / 180 关闭）**
+
+- 审查入口：`observe_operation` 与 `request_action` 的 observe 分支共用 kernel `reviewObserveParams`（`governance/redaction`）。拒绝集只含高置信字面值（`secret-values.ts`：PEM、JWT、厂商前缀密钥、`Authorization:` / `Proxy-Authorization:` 后 20 位以上带数字的 `Bearer` / `token`、规范 base64 且解码为可打印 `user:password` 的 `Basic`、URL 字面密码），`$VAR` / `${VAR}` 豁免，命中即 400 `credentials_in_observe_params`；其余按 #526 的计数放行并记 `credentialReview {suspectedSecretValues, suspectedSecretPaths}`（没有 `confirmed`）。
+- 审计副本：Handle、人、平台三个通道的 `params` 副本与 approve / reject reason、`chat.rename`、`connection.request_cancelled` 的调用方字段都走 #526 的字段名规则 + 值模式；处理器仍拿原参数。
+- 门侧结构守卫（`gatekeeper-base` `kinds/http.ts`）：只看名字不看值，在发请求前拒绝落到门拥有的东西上的调用方参数——认证头与门注入凭据用的头（大小写不敏感）、key / token / secret 类头、`X-Forwarded-*` / `X-Remote-User` / `Impersonate-*` / `Sudo`、账号 / 租户选择头、`Host` / `Forwarded` / 方法覆盖头（`isGateOwnedHeader`）；凭据 query 与预签名参数（`isGateOwnedQueryParam`，空 schema 的 GET 同样检查）；`x-in: cookie`；覆盖 binding 固定 query 的参数（不分大小写）。`GateOwnedParamRefusedError` 继承 `OperationRefusedError`，403 `operation_refused`，apply 释放幂等 key。分页游标：名字按 camelCase 拆词后只看 `token` 前一个词，分页 / 重试词放行，凭据词照拒。
+- 定义生效点：`importOpenApi` 不再声明门拥有的参数（内核 `create_connection` 与门的 host 都走它）；手写 manifest 的标记 / 拒绝留给遗留 188，门 host 自行导入绕过 R-18 是遗留 189。`McpTransport` 加 `redirect: 'error'`。
+- 缺陷类清单（门里所有调用方参数能影响身份、认证上下文或目标的路径，18 条）在 PR 描述；未堵的 body 身份参数、ssh 模式锚定、docker `id`、空 schema、manifestSource 重定向分别是遗留 195–199 与 execute 类审批。
+- 遗留：183–199。
+
+**模型选择处显示供应商健康（#530，2026-10-10 合入，无迁移；控制台审计 P0-2）**
+
+- 规则：`@nexttime/shared` `providerHealth(provider, lastTest)` 按 `disabled` → `key_invalid` → `key_missing` → `url_unsafe` → `key_rejected`（上次测试拿到供应商自己的 401 / 403）→ `test_failed` → `tools_failed` → `untested` → `ok` 取第一条；测试后编辑过或模型已不在列表时测试作废。`providerHealthUsability` 映射为 `ok` / `unverified` / `warn` / `blocked`。供应商表也用同一规则。
+- 传输：llm-proxy 是唯一知道凭据状态与测试结果的进程，在 `models.json` 同目录写 `provider-health.json`（启动、每次目录改写、测试、设置 / 清除密钥后；设置或清除密钥同时丢弃上次测试）。每项只有状态与测试时间；`ProviderHealthFileSchema` `.strict()`，多任何字段内核即丢弃整个文件。验收用 fake provider 时文件跟随 `MODELS_JSON_OUT_FILE` 写到验收目录。
+- 内核：`readModelCatalogWithHealth` 给每个模型挂健康；`list_models` / `list_platform_models` 带可选 `health`（没有即未知），只作提示：目录成员校验（`set_agent_profile`、允许的模型、Worker 模型）用 `withHealth: false`，路由从不读它。`platform_overview` 的 `modelsAvailable` 只计显式 `ok`（文件缺失或无效时为 0），新增 `counts.modelsConfigured`、`providerHealthFile: ok|missing|invalid`、`modelProviders`。
+- 原子写与安全读：llm-proxy `atomic-file.ts`（随机临时名、fsync、rename、目录 fsync、失败删临时文件、临时文件权限从第一个字节起等于目标）与 gatekeeper-base 本地 helper；`models.json` 与健康文件各一把锁、快照在锁内构建；启动时清扫中断写入留下的临时文件。健康文件改写失败时删除或清空旧文件，绝不留下过期状态。内核 `application/safe-file-read.ts`（`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`、`fstat` 须为普通文件、读前读中都查大小上限、mtime 取自同一 fd），覆盖 `models.json`、健康文件、`channel.json`、备份标记。同类清单（谁写谁读、是否原子）在 PR 描述。
+- 控制台：`components/kit/model-health.tsx`（`ModelOption` / `ModelHealthNote` / `ModelHealthTag`）用在全部 8 处模型选择与模型清单、工作区 × 模型矩阵；概览「需要人处理」按状态分组列出供应商。e2e 安装合成的 `provider-health.json`，`e2e/provider-health.spec.ts` 覆盖主路径与损坏 / 缺失。
+- 遗留：200–205。
+
+**崩溃重试与取消的状态修复（#534，2026-10-10 合入，无迁移）**
+
+- 规则：结束一个 WorkerRun 的那次调用才决定它的 Task；Task 决定之后它名下不留活 run。`terminateWorkerRunRow` 返回 `true` 当且仅当本次调用完成了带状态条件的转换（`moved`）。
+- `reactToSupervisorStatus`：`failed` 的不重试分支、`exited`、`terminated` 分支只在 `moved` 时失败 Task（重试分支本来就要求 `moved` 且赢得 `retry_count` bump，R-58）。reaper 时长上限清扫同样。
+- `terminateTask`：先做带状态条件的取消并提交，再列出并终止全部未终止 run（与 `failTaskAndReapWorkerRuns` 同序；另一写入方先决定了 Task 也照样清扫）。审计顺序变为 `task.cancel` 在 `worker_run.terminate` 之前，返回值不变。
+- `spawnWorkerRun`：Task 状态读 `for share`。与取消竞争只有两种结果：取消先提交，spawn 读到 `cancelled` 拒绝；spawn 先提交，取消之后的清扫看到这条 `provisioning` 行并终止它，spawn 的 `provisioning → running` 写入不生效并停容器。
+- `spawnWorkerRunForRetry`：认领之后的每一步都在 `try` 里，找不到可衰减的 Handle（`!handleRow`）或任何 spawn 前异常都走 `failTaskAndReapWorkerRuns(…, 'worker_failed')`。
+- 测试：`invoke.integration.test.ts` R-58 区块 6 个确定性屏障测试（迟到的反应、reaper 的 `terminate` 钩子里先跑轮询、取消清扫中跑崩溃反应、取消中看到 `terminated: requested`、取消 UPDATE 未提交时 spawn 等锁（`pg_stat_activity` 判定）、认领后无 Handle），各自去掉修复即红；原「与取消并发完成」用例改在取消的 UPDATE 前注入完成。
+- 剩余崩溃窗口（bump 提交后进程崩溃、取消两个事务之间崩溃）与增量审查的三条（`exited` / `terminated` 守卫无测试、取消后回收前崩溃、终态 Task 不清扫）并进遗留 206；纵深防御见 207。历史影响统计见 `release.md` §3.22。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
