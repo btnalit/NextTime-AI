@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.45.0](https://github.com/btnalit/NextTime-AI/compare/v0.44.0...v0.45.0) (2026-10-10)
+
+
+### Features
+
+* **console:** show each model provider's health wherever a model is picked ([#530](https://github.com/btnalit/NextTime-AI/issues/530)) ([4d3813e](https://github.com/btnalit/NextTime-AI/commit/4d3813ed25f7febb92c5397ad644f9ce450b88ec))
+* **governance:** confirm suspected credentials before approve and publish ([#526](https://github.com/btnalit/NextTime-AI/issues/526)) ([f4ea74f](https://github.com/btnalit/NextTime-AI/commit/f4ea74fb734d0414f280c1629e132a3b56e0ac90))
+* **handles:** keep agent-container Handles out of the container, bind them to its address ([#524](https://github.com/btnalit/NextTime-AI/issues/524)) ([69bc170](https://github.com/btnalit/NextTime-AI/commit/69bc170deb3f7365e4622f2d16bd34ab42fb211f))
+
+
+### Bug Fixes
+
+* **governance:** review observe params for credentials and redact every audit copy by one rule ([#532](https://github.com/btnalit/NextTime-AI/issues/532)) ([40b6c9e](https://github.com/btnalit/NextTime-AI/commit/40b6c9e777fc3e67318f3db4c4dda4d23acfaa79))
+* **kernel:** the call that ends a WorkerRun decides its Task; cancel decides before it reaps ([#534](https://github.com/btnalit/NextTime-AI/issues/534)) ([bdf4533](https://github.com/btnalit/NextTime-AI/commit/bdf4533a1bcc0d20f464e8fd14d6588329c5f2b0))
+
 ## [0.44.0](https://github.com/btnalit/NextTime-AI/compare/v0.43.0...v0.44.0) (2026-10-09)
 
 
