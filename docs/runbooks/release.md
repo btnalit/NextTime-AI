@@ -955,35 +955,105 @@ SQL
   该 Task（按 `task_id`），点「取消任务」→「确认取消」，状态变成 `cancelled`。这些 Task 在控制台里永远显示"进行中"，不取消的话
   任务列表永远不会清空（§3.17 的排空只看 `docker ps`）。
 
-### 3.23 升到 v0.45.0 的窗口总清单（起点 v0.43.0 或 v0.44.0）
+### 3.23 升级窗口总清单：v0.44.0 → v0.46.0（v0.45.0 不单独上主机）
 
-v0.45.0 跨过的小节分散在 §3.11–§3.22，这里按执行顺序排成一张清单。先确定起点：主机检出与在跑的栈一致（§3 入口保证），
-`git describe --tags --exact-match </dev/null` 输出的就是在跑的版本。
-
-- **起点 v0.44.0，且 v0.44.0 的应用后核对（§3.12、§3.13、§3.15、§3.16 的日志与 SQL，§3.11、§3.15 B/C、S5.7）已做完并记在
-  `docs/private/`**：表里标「v0.43.0 起点」的步骤跳过。
-- **起点 v0.43.0，或 v0.44.0 的核对没做完**：标「v0.43.0 起点」的步骤连带执行。
+主机 2026-10-10 已在 v0.44.0，应用后核对全部做完（STATUS 时间线），所以不再连带 v0.44.0 的各小节。v0.45.0 不单独上主机，
+下一次窗口直接升到 v0.46.0，一次跨过 §3.17–§3.22（v0.45.0）和 §3.24（v0.46.0）。迁移有两条，都只改数据或加可空列：
+governance 0018（吊销容器 Handle）与 0019（`action_requests.operation_digest`）。如果最终升的是 v0.45.0，表里 §3.24 的步骤跳过。
+先确认起点：主机检出与在跑的栈一致（§3 入口保证），`git describe --tags --exact-match </dev/null` 应输出 `v0.44.0`。
 
 「谁」一列：主机 = 远程 CLI 会话在主机 shell 里执行；**victor 手动** = 要登录控制台（§3 开头）；victor 决定 = 主机写操作，
 须维护者明确同意后才做。
 
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
-| 1 | 窗口前 | `--prefetch v0.45.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
-| 2 | 窗口前 | 只读核对，结果记 `docs/private/`：§3.20 SQL、§3.22 Q1–Q4；v0.43.0 起点另做 §3.13 A/B/C | 主机 |
+| 1 | 窗口前 | `--prefetch v0.46.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
+| 2 | 窗口前 | 只读核对，结果记 `docs/private/`：§3.20 SQL（判读时加上 §3.24 补的门拥有头名单）、§3.22 Q1–Q4、§3.24 的 1、2 两条 SQL | 主机 |
 | 3 | 窗口前 | §3.22 Q4 有命中：逐条在 使用 → 任务 取消 | **victor 手动** |
 | 4 | 窗口前 | §3.22 Q3 有命中**且容器还活着**：等它到时长上限被收掉，或停掉容器 | victor 决定 |
 | 5 | 窗口前 | 排空（§3.17）：`docker ps --filter label=nexttime.role=worker` 为空；此后到窗口结束不再发起 Worker | 主机；victor 不发起 |
-| 6 | 窗口内 | `--pull v0.45.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；`up` 会重建 postgres 与四个 socket-proxy 容器，属预期（§3.19） | 主机 |
+| 6 | 窗口内 | `--pull v0.46.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；`up` 会重建 postgres 与四个 socket-proxy 容器，属预期（§3.19）；内核与全部打包门由同一次 `up` 升到同版本（§3.24） | 主机 |
 | 7 | 应用后 | apply 日志里 S1 的 `env-no-handle`、`env-workers-plane`、`env-source-binding` 都是 PASS（§3.17），任何一步 FAIL 按 §5 判断回滚 | 主机 |
-| 8 | 应用后 | §3.17 SQL（截点取新 kernel 的启动时间）、§3.15 A SQL、§3.21 (a)；v0.43.0 起点另看 §3.12 `is not routed`、§3.13 两条日志、§3.16 `cannot carry` | 主机 |
-| 9 | 应用后 | §3.21 逐个测试与 (b)(c)、§3.18、§3.20 (a)–(d)；v0.43.0 起点另做 §3.11、§3.15 B/C、S5.7（§3.14） | **victor 手动** |
-| 10 | 应用后 | v0.43.0 起点：告诉自助签发过 MCP / Claude Code / pi Handle 的用户重新签发（§3.14、§3.15 的新能力） | victor |
+| 8 | 应用后 | §3.17 SQL（截点取新 kernel 的启动时间）、§3.15 A SQL、§3.21 (a) | 主机 |
+| 9 | 应用后 | §3.21 逐个测试与 (b)(c)、§3.18、§3.20 (a)–(d) | **victor 手动** |
+| 10 | 应用后 | §3.24 窗口后：每个 OpenAPI / MCP 平台门「审阅并采用」→ 各工作区「与门公告对齐」→ 逐条发布修订 → 抽查。做完之前，定义变了的 Operation 调用返回 409 `operation_definition_mismatch` | **victor 手动** |
 
 第 3、4 步必须在第 5 步之前：Q4 的 Task 永远显示"进行中"，Q3 的活容器让 `docker ps` 清不空。第 2 步的 §3.20 结果有会被拒的
-参数时，按 §3.20 的处置在应用后由 victor 手动处理，不阻塞窗口。
+参数时，按 §3.20 的处置在应用后由 victor 手动处理，不阻塞窗口。第 10 步尽量在窗口内做完：没做完的平台门在这期间对受影响的
+Operation 一律 409，不执行任何东西（fail closed）。
 
-**回滚**（§5）：回滚目标是起点版本。回滚前同样按第 5 步排空 Worker（§3.17 回滚段），其余按 §3.17、§3.19 的回滚说明。
+**回滚**（§5）：回滚目标是 v0.44.0。回滚前同样按第 5 步排空 Worker（§3.17 回滚段），其余按 §3.17、§3.19、§3.24 的回滚说明。
+
+### 3.24 门只运行被批准的那份定义；发布时拒绝门拥有的参数（#538，governance 0019，v0.45.0 之后的下一版起）
+
+行为与兼容：
+- 内核每次 observe / simulate / apply 都带上批准的那份 Operation 定义的摘要 `operationDigest`，门比对自己正在运行的定义，对不上
+  或没带就拒绝（409 `operation_definition_mismatch`），此时传输和凭据都没碰。**内核与全部打包门必须同版本升级**：按 §3 入口整版
+  应用，compose 一次完成；新门拒绝不带摘要的调用。
+- migration governance 0019：`action_requests` 加一列可空的 `operation_digest`（带形状约束：`sha256:<64 hex>`、`none` 或空），
+  不回填，可回滚（旧代码不读这一列）。execute 的摘要在建 ActionRequest 时记下；升级前遗留的空值行在执行时用当时已发布的版本，
+  门的定义已经变了就 409 失败。
+- `publish_operation` 拒绝声明了门拥有参数的 http Operation（400 `gate_owned_params`，列出参数名与位置）；`publish_manifest`、
+  `enable_gate_instance` 与 CLI `register-gatekeeper --publish` 跳过这类 Operation、其余照常发布，并在结果里报告。已发布的行不追溯，
+  运行时由门拒绝（§3.20 的 SQL 能列出它们）。
+- 门的拒绝在三个通道上保留门自己的状态码与错误码（以前一律 502 `gatekeeper_error`）；门拒绝导致的执行失败原因前面多了门的错误码。
+  I17 请求（建请求时既未发布也没有草稿）批准后不再执行，失败原因以 `operation_definition_unavailable:` 开头。
+- MCP 门遇到重定向时，报错写明状态码、目标地址，以及"把 URL 设成最终地址"。
+
+**维护窗口前**（只读，主机执行；经 SSH 按 §3 开头的方式把 heredoc 交给 ssh；结果记 `docs/private/`）：
+
+1. 未完成的 ActionRequest 计数。这些行升级后摘要为空，按执行时已发布的版本执行；门的定义已经变了的会 409 失败。§3.17 的排空
+   已覆盖大部分，计数是为了让升级后的失败可以解释：
+
+   ```sh
+   docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+   begin transaction read only;
+   select status, count(*) from action_requests
+   where status in ('proposed','policy_evaluated','auto_approved','pending_approval','approved','executing')
+   group by status order by 1;
+   rollback;
+   SQL
+   ```
+
+2. 非平台门（自连门，没有平台实例链接）清单：
+
+   ```sh
+   docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+   begin transaction read only;
+   select o.workspace_id, o.id as gatekeeper, o.properties->>'name' as name,
+          o.properties->>'transportKind' as transport
+   from objects o
+   where o.object_type = 'Gatekeeper'
+     and not exists (select 1 from workspace_gate_links l
+                     where l.workspace_id = o.workspace_id and l.gatekeeper_object_id = o.id)
+   order by 1, 3;
+   rollback;
+   SQL
+   ```
+
+   判读：基于旧 gatekeeper-base 的自连门不校验摘要，升级后照常工作。只有 owner 用新 base 重建、且门的清单与导入副本不一致的
+   自连门会被拒，处理见 `add-gatekeeper.md` §12；产品内没有同步路径（STATUS 遗留）。
+
+3. §3.20 的候选参数查询照跑，判读时门拥有的头名单补上：`es-security-runas-user`、`X-Run-As`、`X-Hasura-*`、`x-functions-key`、
+   `*-jwt-assertion`、`X-Forwarded-Email`、`X-Forwarded-Groups`。**这份查询只是预估**：SQL 算不了摘要，哪些 Operation 的定义变了，
+   以升级后对齐确认框里列出的为准（下面第 2 步）。
+
+**窗口后**（**victor 手动**，对每个 OpenAPI / MCP 平台门）：
+1. 平台 → 概览「需要人处理」或 平台 → 集成 列表里标着「新清单待采用」的门 → 「审阅并采用」。确认框列出采用后需要对齐的工作区；
+   点「采用」。
+2. 各工作区：治理 → 系统与授权 → 该系统卡片 → 「与门公告对齐」。确认框里标着「门运行的定义变了，打开修订草稿」的 Operation
+   就是要开修订的；点「对齐」。
+3. 对齐结果里每条修订草稿点「去能力目录发布」，核对「和已发布版本相比」的差异后发布。发布之前，这些 Operation 的调用返回 409
+   `operation_definition_mismatch`。
+4. 抽查：使用 → 对话 里让 agent 调一个刚发布修订的 observe Operation（参数用合成值），应成功。
+
+结果记 `docs/private/`。
+
+**回滚**：旧代码不读 `operation_digest`，列留着即可（schema 撤法见 §6 表）。回滚前按 §3.17 排空 Worker。打包门随 compose 一起回到旧版本，
+不校验摘要、按自己的清单执行，回到升级前的行为；窗口后发布的修订保持发布状态，不用撤回。
+**自连门例外**：升级期间 owner 用新版本 gatekeeper-base 重建过的自连门不随 compose 回退，它拒绝不带摘要的调用，回滚到旧内核后
+对它的每次调用都返回 409 `operation_definition_mismatch`。处理：owner 用旧版本 gatekeeper-base 重建这个门。§3.24 窗口前第 2 条
+SQL 列出的自连门清单就是要逐个确认的范围。
 
 ## 4. Hotfix 流程
 
@@ -1090,6 +1160,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.42.0 之后的下一版 | core `0042_definer_functions_bound_to_workspace`（S10 K4，遗留 123 的 L4-11 余项与 L4-13）：`find_active_fact_for_identity` / `latest_fact_invalidated_for_identity` 遇到不是 `app_workspace()` 的工作区参数报 42501，`link_visible_to_caller` / `conflict_visible_to_caller` 对它答 false；`workspace_gate_links_gatekeeper_idx` 换成唯一索引 `workspace_gate_links_gatekeeper_key (workspace_id, gatekeeper_object_id)`；收回 `nexttime_app` 对 `workspace_gate_links` 的 DELETE。不改数据、不加列 | 可逆（先过 §3.8 预检） | v0.42.0 的调用方都在 `withWorkspace` 里、传的都是本事务的工作区（GUC 对登录角色也设置），答案不变；v0.42.0 没有删关联的内核路径，手工解除关联走登录角色；v0.42.0 只在一个 Gatekeeper 还没有关联时插入关联（重复关联正是被拦下的情形）。已有重复关联时迁移本身失败、整体回滚，所以要先跑 §3.8 预检 | 只需回退代码；若要连 schema 一起撤：按 0013 / 0017 / 0027 / 0029 重建四个函数（`create or replace` 保留 0035 的授权），`drop index workspace_gate_links_gatekeeper_key` 后按 0023 重建非唯一索引，`grant delete on workspace_gate_links to nexttime_app` |
 | v0.42.0 之后的下一版 | task `0006_objective_outcome` + worker `0004_skill_procedure_attribution`（S10 E1 结果归因）：`tasks` 加五个可空的目标结果列（CHECK `tasks_objective_outcome_check`：全空，或第 1 版无前值，或第 2 版前值是另一值），`worker_runs.skills_recorded boolean not null default false`（PG 11+ 常量默认值不重写表），新表 `turn_outcomes`、`worker_run_skills`、`turn_procedure_claims`（工作区 RLS；后两张只授 `select, insert`）。不改既有数据 | 可逆 | 只加可空列、带常量默认值的列与新表：v0.42.0 的写入不碰新列（`skills_recorded` 取默认 false，读作"未记录"），也不知道新表；迁移可逆性探针用 v0.42.0 的测试在新 schema 上跑过（#480，2116 例通过，首跑唯一失败是遗留 123 已记的 `turn-terminal` 偶发超时，下一次提交上全过；合入头 `11252f3` 上探针也是绿的，那次 HEAD 已同时带 core 0041 / 0042 与 #482 的声明式判定） | 只需回退代码；若要连 schema 一起撤：`drop table turn_procedure_claims, worker_run_skills, turn_outcomes; alter table worker_runs drop column skills_recorded; alter table tasks drop constraint tasks_objective_outcome_check, drop column objective_outcome, drop column outcome_given_by, drop column outcome_given_at, drop column outcome_revision, drop column outcome_previous`（并从 `schema_migrations` 删掉这两条；不撤也无害——已记录的归因随之丢失） |
 | v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
+| v0.45.0 之后的下一版 | governance `0019_action_request_operation_digest`（#538，遗留 189）：`action_requests` 加一列可空的 `operation_digest`（text，检查约束 `action_requests_operation_digest_shape`：为空、`none` 或 `sha256:<64 hex>`），不回填 | 可逆 | 只加一列可空列和只约束这一列的检查。读了 v0.44.0 的 `governance/approval`：`action_requests` 的读写都用显式列清单（`ACTION_REQUEST_ROW_COLUMNS`），不读不写新列，旧代码插入的行恒为空，约束天然满足。回退后旧代码回到执行时不带摘要（即遗留 189 本身），新代码期间写下的摘要留在列里、旧代码看不见；重新升级后这些行照常按记下的摘要执行，回退期间写入的空值行按执行时已发布的版本执行 | 只需回退代码；若要连 schema 一起撤：`alter table action_requests drop column operation_digest`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 19`（不撤也无害） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
