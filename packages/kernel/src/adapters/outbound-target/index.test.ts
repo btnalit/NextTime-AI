@@ -125,7 +125,7 @@ describe('adapters/outbound-target (R-27)', () => {
     await expect(guard('https://api.example.com/openapi.json')).resolves.toBeUndefined();
   });
 
-  it('withoutRedirects forces redirect: error on every fetch it wraps', async () => {
+  it('withoutRedirects forces redirect: manual on every fetch it wraps', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response('{}'));
     await withoutRedirects(fetchImpl)('https://api.example.com/openapi.json', {
       method: 'GET',
@@ -133,7 +133,7 @@ describe('adapters/outbound-target (R-27)', () => {
     });
     expect(fetchImpl).toHaveBeenCalledWith('https://api.example.com/openapi.json', {
       method: 'GET',
-      redirect: 'error',
+      redirect: 'manual',
     });
   });
 });

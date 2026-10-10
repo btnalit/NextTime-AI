@@ -30,6 +30,10 @@ export const ExecutionReadinessMissingCodeSchema = z.enum([
    *  platform's connector deny list (平台 · 集成) — fixed by a platform admin, not by an owner or the
    *  member. */
   'disabled_by_platform',
+  /** Legacy K (UX acceptance of #538): the gate refuses calls to some published Operation on this
+   *  gate because it runs another definition than the published one — `gates[].definitionMismatch`
+   *  says which and whose step it is. */
+  'definition_mismatch',
 ]);
 export type ExecutionReadinessMissingCode = z.infer<typeof ExecutionReadinessMissingCodeSchema>;
 
@@ -44,12 +48,26 @@ export const GateUnreachableReasonSchema = z.enum([
    *  platform's connector deny list (平台 · 集成) — see `ExecutionReadinessMissingCodeSchema`'s own
    *  identical value above. */
   'disabled_by_platform',
+  /** Legacy K: the gate refuses every remaining published Operation on it — it runs another
+   *  definition than the published one (`ExecutionReadinessGateWire.definitionMismatch`). */
+  'definition_mismatch',
   'not_granted',
   'excluded_by_policy',
   'excluded_by_profile',
   'no_worker',
 ]);
 export type GateUnreachableReason = z.infer<typeof GateUnreachableReasonSchema>;
+
+/** Legacy K (`application/gates/definition-drift.ts`): whose step ends a definition mismatch —
+ *  `platform_adoption`: a platform admin adopts the gate's new manifest (Integrations) first;
+ *  `workspace_revision`: the workspace aligns the Operation and publishes the revision it opens. */
+export const DefinitionAwaitingSchema = z.enum(['platform_adoption', 'workspace_revision']);
+export type DefinitionAwaiting = z.infer<typeof DefinitionAwaitingSchema>;
+
+export const DefinitionMismatchWireSchema = z
+  .object({ operation: z.string(), awaiting: DefinitionAwaitingSchema })
+  .strict();
+export type DefinitionMismatchWire = z.infer<typeof DefinitionMismatchWireSchema>;
 
 export const ReachabilityWireSchema = z
   .object({
@@ -94,6 +112,13 @@ export const ExecutionReadinessGateWireSchema = z
      *  (production incident 2026-09-26) — a subset of the counts above; non-empty even when `status`
      *  is not `disabled_by_platform` (some, not all, published Operations disabled). */
     disabledOperations: z.array(z.string()),
+    /** Legacy K (UX acceptance of #538): published Operations on this gate the gate refuses
+     *  because it runs another definition than the published one, each with whose step ends it —
+     *  the same derivation the platform's held-manifest notice reads
+     *  (`application/gates/definition-drift.ts`). Empty for a gate the workspace connected itself
+     *  (the kernel has no record of what it runs). `status` is `definition_mismatch` only when no
+     *  other published Operation is left. */
+    definitionMismatch: z.array(DefinitionMismatchWireSchema),
     /** The workspace AgentPolicy's gate cap leaves it out — granted or not; blocks observation
      *  and execution alike. */
     excludedByPolicy: z.boolean(),

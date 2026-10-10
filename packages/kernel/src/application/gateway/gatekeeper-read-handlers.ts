@@ -9,6 +9,7 @@ import type { OperationStatsRow } from '../../governance/approval/index.js';
 import {
   type GatekeeperListEntry,
   GatekeeperNotFoundError,
+  type OperationDefinitionChange,
   type OperationGovernanceChange,
   type OperationRecord,
   type OperationViewer,
@@ -16,6 +17,7 @@ import {
   getGatekeeper,
   listGatekeepers,
   listOperations,
+  operationDefinitionChange,
   operationGovernanceChange,
   operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
@@ -144,13 +146,11 @@ function toWireGatekeeperSummary(entry: GatekeeperListEntry, operationCount: num
  * not actually groupable without knowing which gate each item belongs to; omitting it would make
  * that directory unusable the moment more than one Gatekeeper is registered.
  *
- * R-19 (D-17): `governanceChange` (from `governanceChangesForDrafts`) rides on a draft whose
- * identity has a published version — what publishing it would change, with the kernel's direction.
+ * R-19 (D-17): `governanceChange` (from `revisionChangesForDrafts`) rides on a draft whose
+ * identity has a published version — what publishing it would change, with the kernel's direction;
+ * legacy K: `definitionChange` beside it says what it changes in the definition the gate runs.
  */
-function toWireOperationSummary(
-  record: OperationRecord,
-  governanceChange?: OperationGovernanceChange,
-) {
+function toWireOperationSummary(record: OperationRecord, revision?: RevisionChange) {
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -172,28 +172,43 @@ function toWireOperationSummary(
     // STATUS leftover 123: whose row it is under D-24 — the console offers the description edit
     // only to that proposer and the owner (the kernel enforces it either way).
     ...(record.proposedBy !== undefined ? { proposedBy: record.proposedBy.id } : {}),
-    ...(governanceChange !== undefined ? { governanceChange } : {}),
+    ...(revision !== undefined ? { governanceChange: revision.governanceChange } : {}),
+    ...(revision?.definitionChange !== undefined
+      ? { definitionChange: revision.definitionChange }
+      : {}),
   };
+}
+
+/** What publishing a revision draft changes on its identity's published version. */
+interface RevisionChange {
+  readonly governanceChange: OperationGovernanceChange;
+  readonly definitionChange: OperationDefinitionChange | undefined;
 }
 
 /** R-19 (D-17): for every `draft` in `records` whose identity also has a `published` row there,
  *  the change publishing it would make to that row (`publishOperation` retires the published row of
- *  the identity, so that row is the "before"). Keyed by the draft's own Object id. `records` must
- *  be the unfiltered per-gate read, so both rows of an identity are present. */
-function governanceChangesForDrafts(
+ *  the identity, so that row is the "before") — its governance fields and, legacy K, the
+ *  definition the gate runs. Keyed by the draft's own Object id. `records` must be the unfiltered
+ *  per-gate read, so both rows of an identity are present. */
+function revisionChangesForDrafts(
   records: readonly OperationRecord[],
-): ReadonlyMap<string, OperationGovernanceChange> {
+): ReadonlyMap<string, RevisionChange> {
   const published = new Map<string, OperationRecord>();
   for (const record of records) {
     if (record.status === 'published') {
       published.set(`${record.gatekeeperId}:${record.name}`, record);
     }
   }
-  const changes = new Map<string, OperationGovernanceChange>();
+  const changes = new Map<string, RevisionChange>();
   for (const record of records) {
     if (record.status !== 'draft') continue;
     const live = published.get(`${record.gatekeeperId}:${record.name}`);
-    if (live) changes.set(record.id, operationGovernanceChange(live.operation, record.operation));
+    if (live) {
+      changes.set(record.id, {
+        governanceChange: operationGovernanceChange(live.operation, record.operation),
+        definitionChange: operationDefinitionChange(live.operation, record.operation),
+      });
+    }
   }
   return changes;
 }
@@ -257,7 +272,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   // client and run one after the other (S5.5 leftover 34).
   const healthProbe = probeGatekeeperHealth(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
-  const governanceChanges = governanceChangesForDrafts(allOperations);
+  const revisionChanges = revisionChangesForDrafts(allOperations);
   const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;
   const operations = allOperations.filter(
@@ -278,7 +293,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   return {
     result: {
       ...summary,
-      operations: operations.map((op) => toWireOperationSummary(op, governanceChanges.get(op.id))),
+      operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
       health,
     },
     resourceType: 'gatekeeper',
@@ -295,7 +310,7 @@ export const listOperationsHandler: CapabilityHandler = async (
   const { gatekeeperId, q } = params as { gatekeeperId?: string; q?: string };
   const viewer = operationViewerOf('list_operations', ctx);
   const records = await listOperations(client, workspaceId, { gatekeeperId });
-  const governanceChanges = governanceChangesForDrafts(records);
+  const revisionChanges = revisionChangesForDrafts(records);
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
   const linksByGatekeeper = new Map<string, GateLinkPolicyView | null>();
   const visible = [];
@@ -313,7 +328,7 @@ export const listOperationsHandler: CapabilityHandler = async (
   return {
     result: {
       items: visible.map((record) =>
-        toWireOperationSummary(record, governanceChanges.get(record.id)),
+        toWireOperationSummary(record, revisionChanges.get(record.id)),
       ),
     },
   };

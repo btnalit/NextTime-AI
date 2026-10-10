@@ -567,11 +567,26 @@ function GateInstancesTab({
                 >
                   <td>
                     <div className="stack-s" style={{ gap: 0 }}>
-                      <span>
-                        {row.displayName}
+                      <span className="row-wrap">
+                        <span>{row.displayName}</span>
                         {row.hosted ? (
                           <span className="tag" data-testid="gate-hosted-badge">
                             {t('宿主', 'hosted')}
+                          </span>
+                        ) : null}
+                        {/* Legacy K (UX acceptance of #538): a held manifest is visible from the
+                         *  list, and says when calls are already refused because of it. */}
+                        {row.pendingManifest ? (
+                          <span
+                            className="chip chip-s chip-warn"
+                            data-testid="gate-pending-manifest-badge"
+                          >
+                            {row.pendingManifest.refusedOperations.length > 0
+                              ? t(
+                                  '新清单待采用 · 调用被拒',
+                                  'New manifest to adopt · calls refused',
+                                )
+                              : t('新清单待采用', 'New manifest to adopt')}
                           </span>
                         ) : null}
                       </span>

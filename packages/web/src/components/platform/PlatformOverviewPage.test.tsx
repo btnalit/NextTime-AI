@@ -340,17 +340,71 @@ describe('PlatformOverviewPage', () => {
       platform_overview: () => overview({ health: [] }),
       list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
       list_gate_instances: (params) => {
-        expect(params).toEqual({ status: 'discovered' });
+        expect(params).toEqual({});
         return {
-          items: [{ gateId: 'gate-mcp-1', displayName: 'Fixture MCP', status: 'discovered' }],
+          items: [
+            { gateId: 'gate-mcp-1', displayName: 'Fixture MCP', status: 'discovered' },
+            {
+              gateId: 'gate-ok',
+              displayName: 'Quiet gate',
+              status: 'enabled',
+              pendingManifest: null,
+            },
+          ],
         };
       },
     });
     renderPage(http);
     const list = await screen.findByTestId('platform-attention-items');
     expect(list.textContent).toContain('Fixture MCP');
+    expect(list.textContent).not.toContain('Quiet gate');
     expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
       '#/platform/integrations/gate-mcp-1',
+    );
+  });
+
+  // UX acceptance of #538: a gate already running a manifest the platform has not adopted refuses
+  // calls; the overview says so (from `refusedOperations`) and links to where it is adopted.
+  it('lists a gate whose new manifest waits to be adopted, saying when calls are already refused', async () => {
+    const pending = (refusedOperations: string[]) => ({
+      digest: 'd'.repeat(64),
+      announcedAt: '2026-10-10T04:00:00.000Z',
+      operationCount: 1,
+      added: [],
+      removed: [],
+      changed: [],
+      refusedOperations,
+    });
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-stock',
+            displayName: 'Stock',
+            status: 'enabled',
+            pendingManifest: pending(['stock.get']),
+          },
+          {
+            gateId: 'gate-docs',
+            displayName: 'Docs',
+            status: 'enabled',
+            pendingManifest: pending([]),
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    const items = Array.from(list.querySelectorAll('[data-testid="platform-attention-item"]')).map(
+      (item) => item.textContent ?? '',
+    );
+    expect(items).toContainEqual(expect.stringContaining('门「Stock」公布了新清单，待采用'));
+    expect(items.find((text) => text.includes('Stock'))).toContain('对它的调用正被拒绝');
+    expect(items.find((text) => text.includes('Docs'))).not.toContain('拒绝');
+    expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      '#/platform/integrations/gate-stock',
     );
   });
 

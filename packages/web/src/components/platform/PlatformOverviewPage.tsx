@@ -218,15 +218,17 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
   const status = useCapability<PlatformStatusWire>(http, 'platform_status');
   // Audit P0-4: gate instances discovered but never enabled are a decision only an administrator
-  // can make, so they belong in 需要人处理. A separate read like `list_workspaces` above: a failure
-  // just leaves them out of the list.
+  // can make, so they belong in 需要人处理 — and so does (UX acceptance of #538) an instance whose
+  // new manifest waits to be adopted, since its gate may already refuse calls because of it. One
+  // unfiltered read for both; like `list_workspaces` above, a failure just leaves them out.
   const gateInstances = useCapabilityList<GateInstanceWire>(
     http,
     'list_gate_instances',
-    DISCOVERED_GATE_INSTANCES,
+    ALL_GATE_INSTANCES,
   );
-  const discoveredGates =
-    gateInstances.state.status === 'ready' ? gateInstances.state.data.items : [];
+  const allGates = gateInstances.state.status === 'ready' ? gateInstances.state.data.items : [];
+  const discoveredGates = allGates.filter((gate) => gate.status === 'discovered');
+  const pendingManifestGates = allGates.filter((gate) => gate.pendingManifest);
   const residue =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
@@ -284,6 +286,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           defaultWorkspaceRow={defaultWorkspaceRow}
           defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
           discoveredGates={discoveredGates}
+          pendingManifestGates={pendingManifestGates}
           nonResidueWorkspaceCount={nonResidueWorkspaceCount}
           onKeyBound={(result) => {
             onKeyBound?.(result);
@@ -296,7 +299,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
 }
 
 const RECENT_AUDIT_LIMIT = 5;
-const DISCOVERED_GATE_INSTANCES: Readonly<Record<string, unknown>> = { status: 'discovered' };
+const ALL_GATE_INSTANCES: Readonly<Record<string, unknown>> = {};
 
 function PlatformOverviewBody({
   data,
@@ -304,6 +307,7 @@ function PlatformOverviewBody({
   defaultWorkspaceRow,
   defaultWorkspaceRowsReady,
   discoveredGates,
+  pendingManifestGates,
   nonResidueWorkspaceCount,
   onKeyBound,
 }: {
@@ -313,6 +317,8 @@ function PlatformOverviewBody({
   readonly defaultWorkspaceRowsReady: boolean;
   /** Gate instances that announced themselves but were never enabled (audit P0-4). */
   readonly discoveredGates: readonly GateInstanceWire[];
+  /** Gate instances holding a new manifest that waits to be adopted (`pendingManifest`). */
+  readonly pendingManifestGates: readonly GateInstanceWire[];
   /** ui-audit O3 — `undefined` while `list_workspaces` is still loading; falls back to the
    *  kernel's raw `counts.workspaces` for that one frame (see this file's own module doc
    *  comment). */
@@ -320,7 +326,7 @@ function PlatformOverviewBody({
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
-  const attentionItems = buildAttentionItems(data, discoveredGates, t);
+  const attentionItems = buildAttentionItems(data, discoveredGates, pendingManifestGates, t);
   const recentAudit = data.recentAudit.slice(0, RECENT_AUDIT_LIMIT);
   return (
     <>
@@ -584,9 +590,28 @@ interface AttentionItem {
 function buildAttentionItems(
   data: PlatformOverviewWire,
   discoveredGates: readonly GateInstanceWire[],
+  pendingManifestGates: readonly GateInstanceWire[],
   t: Translate,
 ): readonly AttentionItem[] {
   const items: AttentionItem[] = [];
+  // Legacy K (UX acceptance of #538): first, since calls may already be refused because of it —
+  // the same `refusedOperations` the instance's own notice reads.
+  for (const gate of pendingManifestGates) {
+    const refusing = (gate.pendingManifest?.refusedOperations.length ?? 0) > 0;
+    items.push({
+      key: `gate-pending-manifest-${gate.gateId}`,
+      title: refusing
+        ? t(
+            `门「${gate.displayName}」公布了新清单，待采用（对它的调用正被拒绝）`,
+            `Gate "${gate.displayName}" announced a new manifest to adopt (calls to it are being refused)`,
+          )
+        : t(
+            `门「${gate.displayName}」公布了新清单，待采用`,
+            `Gate "${gate.displayName}" announced a new manifest to adopt`,
+          ),
+      href: hrefs.platformGateInstance(gate.gateId),
+    });
+  }
   for (const gate of discoveredGates) {
     items.push({
       key: `gate-discovered-${gate.gateId}`,

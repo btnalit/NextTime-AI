@@ -9,6 +9,7 @@ import { OperationRefusedError, TransportInvokeError, TransportTimeoutError } fr
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
+import { operationDefinitionDigest } from './operation-digest.js';
 import {
   type GateCallLogFields,
   createGatekeeperServer,
@@ -41,6 +42,9 @@ const executeOp: Operation = {
   reads: [],
   writes: [],
 };
+
+const OBSERVE_DIGEST = operationDefinitionDigest(observeOp);
+const EXECUTE_DIGEST = operationDefinitionDigest(executeOp);
 
 const TEST_TOKEN = 'test-gate-token-0123456789abcdef0123456789';
 const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` };
@@ -86,7 +90,7 @@ describe('gate auth (review lane 5, P1-1)', () => {
       method: 'POST',
       url: '/gate/observe',
       headers: { authorization: 'Bearer wrong-token-entirely-different-value' },
-      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: { sku: 'X1' } },
     });
     expect(response.statusCode).toBe(401);
     expect(response.body).not.toContain('wrong-token-entirely-different-value');
@@ -142,7 +146,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/observe',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: { sku: 'X1' } },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().result.data).toEqual({ echoed: { sku: 'X1' } });
@@ -154,7 +158,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/observe',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.get', params: {} },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: {} },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe('invalid_params');
@@ -178,7 +182,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: {} },
+      payload: { operation: 'stock.adjust', operationDigest: EXECUTE_DIGEST, params: {} },
     });
     expect(missingKey.statusCode).toBe(400);
 
@@ -186,7 +190,12 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-1' },
+      payload: {
+        operation: 'stock.adjust',
+        operationDigest: EXECUTE_DIGEST,
+        params: { qty: 1 },
+        actionRequestId: 'req-1',
+      },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().result.replayed).toBe(false);
@@ -195,7 +204,12 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-1' },
+      payload: {
+        operation: 'stock.adjust',
+        operationDigest: EXECUTE_DIGEST,
+        params: { qty: 1 },
+        actionRequestId: 'req-1',
+      },
     });
     expect(second.json().result.replayed).toBe(true);
   });
@@ -206,7 +220,12 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-conflict' },
+      payload: {
+        operation: 'stock.adjust',
+        operationDigest: EXECUTE_DIGEST,
+        params: { qty: 1 },
+        actionRequestId: 'req-conflict',
+      },
     });
     expect(first.statusCode).toBe(200);
 
@@ -214,7 +233,12 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 2 }, actionRequestId: 'req-conflict' },
+      payload: {
+        operation: 'stock.adjust',
+        operationDigest: EXECUTE_DIGEST,
+        params: { qty: 2 },
+        actionRequestId: 'req-conflict',
+      },
     });
     expect(second.statusCode).toBe(409);
     expect(second.json().error.code).toBe('idempotency_conflict');
@@ -232,7 +256,12 @@ describe('gatekeeper protocol server', () => {
         method: 'POST',
         url: '/gate/apply',
         headers: AUTH_HEADERS,
-        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-refused' },
+        payload: {
+          operation: 'stock.adjust',
+          operationDigest: EXECUTE_DIGEST,
+          params: {},
+          actionRequestId: 'req-refused',
+        },
       });
       expect(response.statusCode).toBe(403);
       expect(response.json().error).toEqual({
@@ -254,7 +283,12 @@ describe('gatekeeper protocol server', () => {
         method: 'POST',
         url: '/gate/apply',
         headers: AUTH_HEADERS,
-        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-failed' },
+        payload: {
+          operation: 'stock.adjust',
+          operationDigest: EXECUTE_DIGEST,
+          params: {},
+          actionRequestId: 'req-failed',
+        },
       });
       expect(response.statusCode).toBe(502);
       expect(response.json().error).toEqual({
@@ -278,12 +312,50 @@ describe('gatekeeper protocol server', () => {
         method: 'POST',
         url: '/gate/apply',
         headers: AUTH_HEADERS,
-        payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-unknown' },
+        payload: {
+          operation: 'stock.adjust',
+          operationDigest: EXECUTE_DIGEST,
+          params: {},
+          actionRequestId: 'req-unknown',
+        },
       });
       expect(response.statusCode).toBe(409);
       expect(response.json().error.code).toBe('apply_outcome_unknown');
     }
     expect(invocations).toBe(1);
+  });
+
+  it('POST /gate/* refuses a call without the approved definition digest, or with another one (legacy K)', async () => {
+    let invoked = 0;
+    app = buildApp({
+      kind: 'http',
+      async invoke() {
+        invoked += 1;
+        return { data: {} };
+      },
+    });
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/gate/apply',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-k' },
+    });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json().error.code).toBe('operation_definition_mismatch');
+    expect(missing.json().error.message).toMatch(/no operationDigest/);
+
+    const other = await app.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.get', operationDigest: EXECUTE_DIGEST, params: { sku: 'X1' } },
+    });
+    expect(other.statusCode).toBe(409);
+    expect(other.json().error.code).toBe('operation_definition_mismatch');
+    // The digest this gate runs, beside the message, for the kernel's record of the refusal.
+    expect(other.json().error.details).toEqual({ runningDigest: OBSERVE_DIGEST });
+    expect(missing.json().error.details).toEqual({ runningDigest: EXECUTE_DIGEST });
+    expect(invoked).toBe(0);
   });
 
   it('POST /gate/simulate returns a description without executing', async () => {
@@ -292,7 +364,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/simulate',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: {} },
+      payload: { operation: 'stock.adjust', operationDigest: EXECUTE_DIGEST, params: {} },
     });
     expect(response.statusCode).toBe(200);
     expect(typeof response.json().result.description).toBe('string');
@@ -386,7 +458,7 @@ describe('correlation id + /internal/metrics (leftover 87)', () => {
       method: 'POST',
       url: '/gate/observe',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: { sku: 'X1' } },
     });
     await app.inject({
       method: 'POST',
@@ -430,13 +502,13 @@ describe('correlation id + /internal/metrics (leftover 87)', () => {
       method: 'POST',
       url: '/gate/observe',
       headers: { 'x-correlation-id': 'turn-abcd-0001' },
-      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: { sku: 'X1' } },
     });
     await bare.inject({
       method: 'POST',
       url: '/gate/observe',
       headers: { 'x-correlation-id': 'bad id!' },
-      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+      payload: { operation: 'stock.get', operationDigest: OBSERVE_DIGEST, params: { sku: 'X1' } },
     });
     await bare.close();
 

@@ -8,6 +8,7 @@ import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { type EntryContextResult, renderEntryContext } from './entry-context.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
 
 /**
  * `interactive` mode (design doc §7.4 row "interactive | 你本机的 pi | 同 entry 或按 Handle | 同
@@ -233,7 +234,11 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
   // context injection (§7.4 "同 entry") — no turn-id correlation, no report_turn: see this file's
   // own module doc comment for why interactive mode has neither. Without a `turnId` the kernel
   // answers with a read-only peek (R-57 / D-23), so this never consumes the entry agent's items.
+  // The context goes last on every call; the cache breakpoint stays on the history before it
+  // (`prompt-cache.ts`).
+  const noteAppendedContext = keepCacheBreakpointOnHistory(pi);
   pi.on('context', async (event) => {
+    noteAppendedContext(undefined);
     let entryContext: EntryContextResult;
     try {
       entryContext = await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
@@ -256,6 +261,7 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
       display: false,
       timestamp: Date.now(),
     };
+    noteAppendedContext(text);
     return { messages: [...event.messages, contextMessage] };
   });
 }

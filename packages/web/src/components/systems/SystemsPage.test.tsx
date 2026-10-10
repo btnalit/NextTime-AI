@@ -41,6 +41,7 @@ function gate(overrides: Partial<ExecutionReadinessWire['gates'][number]> = {}) 
     observeOperationCount: 2,
     executeOperationCount: 1,
     disabledOperations: [],
+    definitionMismatch: [],
     excludedByPolicy: false,
     excludedByProfile: false,
     inEntryScope: true,
@@ -104,13 +105,25 @@ function scriptedHttp(
   };
 }
 
-function renderPage(http: CapabilityCaller) {
+function renderPage(http: CapabilityCaller, platformAdmin = false) {
   return render(
     <PermissionsProvider>
-      <SystemsPage http={http} />
+      <SystemsPage http={http} platformAdmin={platformAdmin} />
     </PermissionsProvider>,
   );
 }
+
+/** A workspace Gatekeeper linked to the platform instance `stock`. */
+const LINKED_STOCK_INSTANCE = {
+  gateId: 'stock',
+  displayName: '库存',
+  connector: 'openapi',
+  transportKind: 'http',
+  status: 'enabled',
+  health: 'ok',
+  operationCount: 2,
+  gatekeeperId: 'gk-1',
+};
 
 /** Radix `DropdownMenu`'s trigger opens on `onPointerDown` under jsdom — plain `fireEvent.click`
  *  leaves it closed (same as `ConnectionsPage.test.tsx`'s own note before this lane). */
@@ -489,6 +502,76 @@ describe('SystemsPage', () => {
     // Still no self-page link inside the drawer either — `not_granted`'s only listed fix-it
     // destination is this same page.
     expect(within(detail).queryByRole('link')).toBeNull();
+  });
+
+  it('legacy K (UX acceptance of #538): a gate refusing every call reads 「用不了」, never 「可直接调用」, and the drawer sends a platform admin to adopt the new manifest first', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [{ operation: 'stock.get', awaiting: 'platform_adoption' }],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    expect(chip.textContent).toBe('用不了');
+    expect(chip.getAttribute('title')).toContain('对它的调用正被拒绝');
+    expect(card.textContent).not.toContain('可直接调用');
+    // Every Operation is refused: the reachability chip says it, no second chip repeats it.
+    expect(within(card).queryByTestId('gatekeeper-refused-operations')).toBeNull();
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const notice = await within(drawer).findByTestId('system-definition-mismatch-adoption');
+    expect(notice.textContent).toContain(
+      '平台管理员还没采用。采用之前这里对齐不了，对 stock.get 的调用会被拒绝。',
+    );
+    await waitFor(() =>
+      expect(
+        within(drawer)
+          .getByTestId('system-definition-mismatch-adoption-adopt-link')
+          .getAttribute('href'),
+      ).toContain('stock'),
+    );
+    expect(within(drawer).queryByTestId('system-definition-mismatch-revision')).toBeNull();
+  });
+
+  it('legacy K: a gate refusing some Operations keeps its status but flags them, and the drawer names the workspace step', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              definitionMismatch: [{ operation: 'stock.get', awaiting: 'workspace_revision' }],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    expect(within(card).getByTestId('gatekeeper-refused-operations').textContent).toBe(
+      '1 个 Operation 调用被拒',
+    );
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const notice = within(drawer).getByTestId('system-definition-mismatch-revision');
+    expect(notice.textContent).toContain(
+      '门已经按新定义运行，对 stock.get 的调用会被拒绝，直到这个工作区对齐并发布修订。',
+    );
+    // The owner can do it here.
+    expect(notice.textContent).toContain('点下面的「与门公告对齐」');
+    expect(within(drawer).queryByTestId('system-definition-mismatch-adoption')).toBeNull();
   });
 
   // R-01 (maintainer decision D-01): a gate the workspace connected itself (no catalog link) gets

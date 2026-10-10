@@ -16,6 +16,12 @@ import {
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
 import { assertDraftCredentialsReviewed } from '../redaction/index.js';
+import { operationDefinitionDiffers } from './definition.js';
+import {
+  type GateOwnedParamDraft,
+  assertNoGateOwnedParams,
+  gateOwnedParamsOfDefinition,
+} from './gate-owned-params.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -797,6 +803,13 @@ export async function publishOperation(
     `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
   transition(PUBLISHABLE_TRANSITIONS, existing.status, 'publish');
+  // Legacy J: a definition offering a param the gate refuses on every call is never published,
+  // whoever publishes it (`gate-owned-params.ts`). Before the credentials question: a draft that
+  // cannot be published as it stands is not worth confirming.
+  assertNoGateOwnedParams(
+    `${input.gatekeeperId}/${input.name}@${existing.version}`,
+    existing.operation,
+  );
   // Decision 2026-10-09 "二次确认": the Operation definition an agent may have proposed. Values
   // only — its params schema's property names (`password`) are declarations, not values.
   assertDraftCredentialsReviewed(
@@ -849,6 +862,9 @@ export interface PublishManifestResult {
    *  proposals (and legacy drafts with no recorded origin). Each needs an owner's explicit
    *  `publish_operation`, which shows its full definition first. */
   readonly skippedDraftOperationNames: readonly string[];
+  /** Legacy J: the gate's own drafts left unpublished because they declare a param the gate sets
+   *  itself (`gate-owned-params.ts`), with those params. */
+  readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
 }
 
 /**
@@ -870,9 +886,15 @@ export async function publishManifest(
   const drafts = await listDraftOperationsForGatekeeper(client, workspaceId, input.gatekeeperId);
   const publishedOperationNames: string[] = [];
   const skippedDraftOperationNames: string[] = [];
+  const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
   for (const draft of drafts) {
     if (draft.origin !== 'import') {
       skippedDraftOperationNames.push(draft.name);
+      continue;
+    }
+    const params = gateOwnedParamsOfDefinition(draft.operation);
+    if (params.length > 0) {
+      gateOwnedParamDrafts.push({ name: draft.name, params });
       continue;
     }
     await publishOperation(client, workspaceId, {
@@ -881,7 +903,41 @@ export async function publishManifest(
     });
     publishedOperationNames.push(draft.name);
   }
-  return { gatekeeperId: input.gatekeeperId, publishedOperationNames, skippedDraftOperationNames };
+  return {
+    gatekeeperId: input.gatekeeperId,
+    publishedOperationNames,
+    skippedDraftOperationNames,
+    gateOwnedParamDrafts,
+  };
+}
+
+/**
+ * Publishes the `'import'`-origin drafts a gate's manifest was just imported as (`importManifest`'s
+ * `imported`) — `enable_gate_instance` and the CLI's `register-gatekeeper --publish`. A draft
+ * declaring a param the gate sets itself stays a draft and is reported (legacy J), like
+ * `publishManifest`.
+ */
+export async function publishImportedDrafts(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  imported: readonly OperationRecord[],
+): Promise<{
+  readonly publishedOperationNames: readonly string[];
+  readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
+}> {
+  const publishedOperationNames: string[] = [];
+  const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
+  for (const record of imported) {
+    const params = gateOwnedParamsOfDefinition(record.operation);
+    if (params.length > 0) {
+      gateOwnedParamDrafts.push({ name: record.name, params });
+      continue;
+    }
+    await publishOperation(client, workspaceId, { gatekeeperId, name: record.name });
+    publishedOperationNames.push(record.name);
+  }
+  return { publishedOperationNames, gateOwnedParamDrafts };
 }
 
 export interface DeprecateOperationInput {
@@ -1164,6 +1220,10 @@ export interface RefreshOperationGovernanceInput {
   readonly announcedOperations: readonly Operation[];
   /** Narrows which announced Operations are considered — `undefined`/omitted means every one. */
   readonly operationNames?: readonly string[];
+  /** Legacy K: who the revision drafts below are recorded as proposed by (the owner refreshing),
+   *  and the Activity they are written under. */
+  readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
+  readonly activityId: string;
 }
 
 export interface RefreshedOperationGovernance {
@@ -1179,12 +1239,30 @@ export interface RefreshedOperationGovernance {
   readonly direction: OperationGovernanceDirection;
 }
 
+/** Legacy K: a draft `refreshOperationGovernance` wrote so the workspace can publish what the gate
+ *  runs now — a revision opened for a published Operation whose definition the gate no longer
+ *  runs, or the gate's own pending draft rewritten to the announced entry. */
+export interface OperationRevisionDraft {
+  /** The draft's Object id (kernel-internal, for its AuditRecord — not on the wire). */
+  readonly id: string;
+  readonly name: string;
+  readonly version: number;
+  /** The published row it revises — absent for a draft of a name never published. */
+  readonly draftOf?: string;
+  /** `true` when an existing `'import'`-origin draft was rewritten in place (same version),
+   *  `false` when a new revision was opened at `version + 1`. */
+  readonly replaced: boolean;
+}
+
 export interface RefreshOperationGovernanceResult {
   readonly refreshed: readonly RefreshedOperationGovernance[];
-  /** Every selected name that was not refreshed — already matching the manifest, not present at
-   *  all under this identity, or currently a pending draft (module doc comment: refreshing a
-   *  pending revision draft is out of scope, same as `preview_gate_instance_enable`'s own
-   *  draft-is-"to import"-not-"already present" branch). */
+  /** Legacy K: one `'import'`-origin draft per selected name carrying the announced entry — a
+   *  revision opened for a published Operation whose definition differs from it, or the gate's
+   *  own pending draft rewritten to it. */
+  readonly revisionDrafts: readonly OperationRevisionDraft[];
+  /** Every selected name that was neither refreshed nor given a draft — already matching the
+   *  manifest, not present at all under this identity, or a pending draft that is someone's
+   *  proposal (an agent's or a person's, never overwritten) or already the announced entry. */
   readonly unchanged: readonly string[];
 }
 
@@ -1195,9 +1273,10 @@ export interface RefreshOperationGovernanceResult {
  * omitted):
  *
  *   - `getOperation` resolves the identity's *current* row (draft-first priority, `manifest.ts`'s
- *     own module doc comment) — `null` or a `draft` row means there is nothing "already present"
- *     to refresh (exactly `preview_gate_instance_enable`'s own branch), so the name goes to
- *     `unchanged` untouched;
+ *     own module doc comment) — `null` means there is nothing "already present" to refresh
+ *     (exactly `preview_gate_instance_enable`'s own branch), so the name goes to `unchanged`
+ *     untouched; a `draft` row is not refreshed in place either (see the legacy K note below for
+ *     the one kind that is rewritten);
  *   - otherwise `diffOperationGovernanceFields` (the exact function `preview_gate_instance_enable`
  *     uses) decides whether it differs; no difference → `unchanged`; a difference → the announced
  *     fields are written **in place** (no new `version` — this module's own doc comment on why)
@@ -1207,7 +1286,65 @@ export interface RefreshOperationGovernanceResult {
  * Writes nothing for a name that never appears in the announced manifest (silently absent from
  * both `refreshed` and `unchanged` — there is no governance drift to report for an Operation the
  * gate does not currently declare at all).
+ *
+ * **Legacy K: a changed definition.** A gate refuses calls made under a definition it does not run
+ * (`@nexttime/gatekeeper-base` `operation-digest.ts`), so a published Operation whose announced
+ * definition changed (binding, params_schema, result_mapping, mode, reversibility; blast_radius
+ * for ssh) cannot be called until the workspace publishes the new one. That is a new version, not
+ * an in-place edit: what was approved must stay what it was. So for each such `published`
+ * Operation this opens an `'import'`-origin revision draft at `version + 1` (`draftOf` the
+ * published row) carrying the announced entry, the same draft `importManifest` writes for a new
+ * name. The published row stays live and unchanged (besides the in-place governance refresh
+ * above) until an owner publishes the draft through `publish_operation` / `publish_manifest`,
+ * where its definition and any suspected credentials in it are reviewed (#526). Returned in
+ * `revisionDrafts`, never in `unchanged`.
+ *
+ * A pending draft of the gate's own (`'import'` origin: a revision an earlier refresh opened, or an
+ * import a bulk publish held back for declaring a gate-owned param, legacy J) is rewritten to the
+ * announced entry at its own version when its definition or governance differs, as
+ * `importManifest` replaces it — otherwise a gate that changed twice, or fixed its manifest, would
+ * leave the workspace a draft it can never call under. A proposal of an agent or a person is
+ * theirs and is left alone.
  */
+async function rewriteImportDraft(
+  client: PoolClient,
+  workspaceId: string,
+  input: RefreshOperationGovernanceInput,
+  draft: OperationRecord,
+  announced: Operation,
+): Promise<OperationRevisionDraft | null> {
+  if (draft.origin !== 'import') return null;
+  const differs =
+    operationDefinitionDiffers(draft, announced) ||
+    diffOperationGovernanceFields(
+      operationGovernanceFieldsOf(draft.operation),
+      operationGovernanceFieldsOf(announced),
+    ).differs;
+  if (!differs) return null;
+  // Carried forward as `importManifest` does (R-08): replacing a revision keeps it a revision.
+  const draftOf =
+    draft.draftOf ??
+    (await getPublishedOperation(client, workspaceId, input.gatekeeperId, draft.name))?.id;
+  const written = await registerOperationDraftObject(client, workspaceId, {
+    gatekeeperId: input.gatekeeperId,
+    name: draft.name,
+    version: draft.version,
+    draftOf,
+    operation: announced,
+    proposedBy: input.proposedBy,
+    activityId: input.activityId,
+    origin: 'import',
+  });
+  if (!written) return null;
+  return {
+    id: written.operationObjectId,
+    name: draft.name,
+    version: draft.version,
+    ...(draftOf !== undefined ? { draftOf } : {}),
+    replaced: true,
+  };
+}
+
 export async function refreshOperationGovernance(
   client: PoolClient,
   workspaceId: string,
@@ -1220,6 +1357,7 @@ export async function refreshOperationGovernance(
     : input.announcedOperations;
 
   const refreshed: RefreshedOperationGovernance[] = [];
+  const revisionDrafts: OperationRevisionDraft[] = [];
   const unchanged: string[] = [];
 
   for (const operation of selected) {
@@ -1229,33 +1367,81 @@ export async function refreshOperationGovernance(
       input.gatekeeperId,
       operation.name,
     );
-    if (existingRecord === null || existingRecord.status === 'draft') {
+    if (existingRecord === null) {
       unchanged.push(operation.name);
+      continue;
+    }
+    if (existingRecord.status === 'draft') {
+      const rewritten = await rewriteImportDraft(
+        client,
+        workspaceId,
+        input,
+        existingRecord,
+        operation,
+      );
+      if (rewritten) revisionDrafts.push(rewritten);
+      else unchanged.push(operation.name);
       continue;
     }
     const before = operationGovernanceFieldsOf(existingRecord.operation);
     const after = operationGovernanceFieldsOf(operation);
     const diff = diffOperationGovernanceFields(before, after);
-    if (!diff.differs) {
-      unchanged.push(operation.name);
-      continue;
+    if (diff.differs) {
+      await setOperationGovernanceFieldsObject(
+        client,
+        workspaceId,
+        { gatekeeperId: input.gatekeeperId, name: operation.name, version: existingRecord.version },
+        after,
+      );
+      refreshed.push({
+        id: existingRecord.id,
+        name: operation.name,
+        before,
+        after,
+        direction: classifyOperationGovernanceChange(before, after, diff.changedFields),
+      });
     }
-    await setOperationGovernanceFieldsObject(
-      client,
-      workspaceId,
-      { gatekeeperId: input.gatekeeperId, name: operation.name, version: existingRecord.version },
-      after,
-    );
-    refreshed.push({
-      id: existingRecord.id,
-      name: operation.name,
-      before,
-      after,
-      direction: classifyOperationGovernanceChange(before, after, diff.changedFields),
-    });
+
+    // Compared as it stands after the in-place write: a `mode` (or an ssh `blast_radius`) the
+    // governance refresh just aligned is no longer a difference in definition.
+    const deployed: OperationRecord = diff.differs
+      ? {
+          ...existingRecord,
+          operation: {
+            ...existingRecord.operation,
+            mode: after.mode,
+            blast_radius: after.blastRadius,
+            auto_approvable: after.autoApprovable,
+          },
+        }
+      : existingRecord;
+    const revision =
+      existingRecord.status === 'published' && operationDefinitionDiffers(deployed, operation)
+        ? await registerOperationDraftObject(client, workspaceId, {
+            gatekeeperId: input.gatekeeperId,
+            name: operation.name,
+            version: existingRecord.version + 1,
+            draftOf: existingRecord.id,
+            operation,
+            proposedBy: input.proposedBy,
+            activityId: input.activityId,
+            origin: 'import',
+          })
+        : null;
+    if (revision) {
+      revisionDrafts.push({
+        id: revision.operationObjectId,
+        name: operation.name,
+        version: existingRecord.version + 1,
+        draftOf: existingRecord.id,
+        replaced: false,
+      });
+    } else if (!diff.differs) {
+      unchanged.push(operation.name);
+    }
   }
 
-  return { refreshed, unchanged };
+  return { refreshed, revisionDrafts, unchanged };
 }
 
 export { IllegalTransition };

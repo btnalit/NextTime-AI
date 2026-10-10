@@ -568,6 +568,13 @@ export const PendingGateManifestWireSchema = z
     added: z.array(GateOperationSummaryWireSchema),
     removed: z.array(GateOperationSummaryWireSchema),
     changed: z.array(PendingGateManifestChangeWireSchema),
+    /** Legacy K (UX acceptance of #538): Operations of the manifest in effect that this
+     *  announcement defines differently (binding, params, result mapping, mode, reversibility) or
+     *  drops. The gate already runs the announcement, so it refuses calls to these until the
+     *  announcement is adopted and each enabling workspace publishes the revision it opens
+     *  (`application/gates/definition-drift.ts`). Empty when only governance fields changed:
+     *  those wait for the confirm, and calls keep running meanwhile. */
+    refusedOperations: z.array(z.string()),
   })
   .strict();
 export type PendingGateManifestWire = z.infer<typeof PendingGateManifestWireSchema>;
@@ -683,12 +690,33 @@ export const GateLinkDriftWireSchema = z
   .strict();
 export type GateLinkDriftWire = z.infer<typeof GateLinkDriftWireSchema>;
 
+/** Legacy J: a param an `http` Operation declares that only the gate sets — a request header that
+ *  says who is calling, on whose account or where the call goes (`header`), a credential in the
+ *  query string (`query`), a cookie (`cookie`), or a query parameter the binding fixes
+ *  (`binding`). The gate refuses it on every call that passes it. */
+export const GateOwnedParamWireSchema = z
+  .object({
+    param: z.string(),
+    location: z.enum(['header', 'query', 'cookie', 'binding']),
+  })
+  .strict();
+export type GateOwnedParamWire = z.infer<typeof GateOwnedParamWireSchema>;
+
+/** Legacy J: a gate's imported draft a bulk publish left unpublished, and the params that kept it
+ *  back. It stays a draft until the gate's manifest drops them (then a refresh rewrites it). */
+export const GateOwnedParamDraftWireSchema = z
+  .object({ name: z.string(), params: z.array(GateOwnedParamWireSchema) })
+  .strict();
+export type GateOwnedParamDraftWire = z.infer<typeof GateOwnedParamDraftWireSchema>;
+
 export const EnableGateInstanceResultWireSchema = z
   .object({
     gateId: z.string(),
     gatekeeperId: z.string(),
     publishedOperationNames: z.array(z.string()),
     skippedOperationNames: z.array(z.string()),
+    /** Legacy J: imported drafts left unpublished because they declare a gate-owned param. */
+    gateOwnedParamDrafts: z.array(GateOwnedParamDraftWireSchema),
     /** S8 W2-K2: `true` only when this call linked a pre-existing Gatekeeper (found by endpoint,
      *  §"association key") instead of registering a new one — including the idempotent-relink
      *  case. `false` for a fresh registration, and for the pre-existing-`workspace_gate_links`-row
@@ -741,6 +769,13 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
     /** R-19 (D-17): which way aligning this Operation to the announcement moves its governance —
      *  the kernel's own classification, `neutral` exactly when `differs` is `false`. */
     direction: OperationGovernanceChangeDirectionSchema,
+    /** Legacy K: `true` when the gate announces another definition of this Operation (binding,
+     *  params_schema, result_mapping, mode or reversibility; blast_radius for ssh) than the one
+     *  deployed. The gate refuses every call made under the deployed one
+     *  (`operation_definition_mismatch`) until a revision carrying the announced definition is
+     *  published: `refresh_operation_governance` opens that revision as a draft for an owner to
+     *  publish. Independent of `differs`, which compares only the governance fields. */
+    definitionDiffers: z.boolean(),
   })
   .strict();
 export type GateInstanceEnablePreviewOperationPresentWire = z.infer<
@@ -766,6 +801,15 @@ export const PreviewGateInstanceEnableResultWireSchema = z
      *  `refresh_operation_governance` requires it back and `enable_gate_instance` accepts it; both
      *  refuse `manifest_changed` when the manifest in effect is no longer the one shown. */
     manifestDigest: z.string(),
+    /** Legacy K (UX acceptance of #538): the gate already runs a manifest the platform has not
+     *  adopted, and it defines these Operations (listed above, to import or already deployed)
+     *  differently from the manifest in effect — so calls to them are refused, and nothing this
+     *  workspace aligns or publishes can fix that until a platform admin adopts it (Integrations).
+     *  `null` when no listed Operation is affected (`application/gates/definition-drift.ts`). */
+    awaitingPlatformAdoption: z
+      .object({ announcedAt: z.string(), operations: z.array(z.string()) })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type PreviewGateInstanceEnableResultWire = z.infer<
@@ -793,13 +837,27 @@ export type RefreshedOperationGovernanceWire = z.infer<
   typeof RefreshedOperationGovernanceWireSchema
 >;
 
+/** Legacy K: a draft `refresh_operation_governance` wrote (origin `import`, at `version`) carrying
+ *  the announced entry — a revision opened for a published Operation whose announced definition
+ *  changed, or the gate's own pending draft rewritten to it. It is published like any other draft
+ *  (`publish_operation` / `publish_manifest`), which replaces the live version. */
+export const OperationRevisionDraftWireSchema = z
+  .object({
+    name: z.string(),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type OperationRevisionDraftWire = z.infer<typeof OperationRevisionDraftWireSchema>;
+
 export const RefreshOperationGovernanceResultWireSchema = z
   .object({
     gatekeeperId: z.string(),
     refreshed: z.array(RefreshedOperationGovernanceWireSchema),
+    revisionDrafts: z.array(OperationRevisionDraftWireSchema),
     /** Every selected (or, when `operationNames` was omitted, every announced) Operation name that
-     *  was not refreshed — already matching the manifest, or with nothing "already present" to
-     *  refresh (no deployed row, or a pending revision draft — see the handler's own doc comment). */
+     *  was neither refreshed nor given a draft — already matching the manifest, with no row at
+     *  all, or a pending draft that is an agent's or a person's proposal (never overwritten) or
+     *  already the announced entry. */
     unchanged: z.array(z.string()),
   })
   .strict();

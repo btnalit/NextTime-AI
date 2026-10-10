@@ -92,6 +92,10 @@ export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
   excluded_by_profile: { zh: '在我的智能体里被取消', en: 'Unticked on My Agent' },
   excluded_by_policy: { zh: '工作区策略未包含', en: 'Left out by workspace policy' },
   disabled_by_platform: { zh: '被平台停用', en: 'Disabled by the platform' },
+  definition_mismatch: {
+    zh: '门拒绝调用（定义不一致）',
+    en: 'Refused by the gate (definition changed)',
+  },
 };
 
 export function executionReadinessMissingCodeLabel(
@@ -250,4 +254,32 @@ export function transportKindLabel(kind: string, t: Translate): string {
     kind,
   );
   return entry ? label(entry, t) : kind;
+}
+
+// -------------------------------------------------------------------------------------------
+// Operation fields (R-18 `otherChangedFields`, legacy K `definitionChange.changedFields`) — a
+// manifest change or a revision names the fields it changes; the console says them in plain words
+// instead of the manifest's own snake_case keys (UX acceptance of #538). Keyed by the manifest key,
+// not an enum: a field this table does not know keeps its own name.
+// -------------------------------------------------------------------------------------------
+
+export const OPERATION_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  binding: { zh: '调用目标', en: 'Call target' },
+  params_schema: { zh: '参数定义', en: 'Parameters' },
+  result_mapping: { zh: '结果映射', en: 'Result mapping' },
+  mode: { zh: '模式', en: 'Mode' },
+  reversibility: { zh: '可撤销性', en: 'Reversibility' },
+  blast_radius: { zh: '影响级', en: 'Blast radius' },
+  auto_approvable: { zh: '是否可自动批准', en: 'Auto-approvable' },
+  await_decision: { zh: '是否等审批结果', en: 'Waits for the decision' },
+  reads: { zh: '读取的资源', en: 'Reads' },
+  writes: { zh: '写入的资源', en: 'Writes' },
+  read_only_hint: { zh: '只读提示', en: 'Read-only hint' },
+  destructive_hint: { zh: '破坏性提示', en: 'Destructive hint' },
+  idempotent_hint: { zh: '幂等提示', en: 'Idempotent hint' },
+};
+
+export function operationFieldLabel(field: string, t: Translate): string {
+  const entry = ownEntry(OPERATION_FIELD_LABELS, field);
+  return entry ? label(entry, t) : field;
 }

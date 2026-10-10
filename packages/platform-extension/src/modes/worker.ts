@@ -151,6 +151,22 @@ function renderWorkerContext(ctx: WorkerTaskContext): string {
   return ['## NextTime worker context', ...sections].join('\n\n');
 }
 
+/**
+ * The Worker context goes in front of the first user message (the kickoff, which refers to it as
+ * "above"), not after the last one. It is computed once per run, so at a fixed position it is part
+ * of the prefix every later request repeats, and the provider's prompt cache covers it; appended
+ * last, it pushed the cache breakpoint onto content the next request no longer had at that spot
+ * (`prompt-cache.ts`).
+ */
+export function withWorkerContextFirst<T extends { readonly role: string }>(
+  messages: readonly T[],
+  contextMessage: T,
+): T[] {
+  const firstUser = messages.findIndex((message) => message.role === 'user');
+  if (firstUser < 0) return [...messages, contextMessage];
+  return [...messages.slice(0, firstUser), contextMessage, ...messages.slice(firstUser)];
+}
+
 function logKernelError(error: unknown, capabilityName: string): void {
   const message = error instanceof KernelError ? `${error.kind}: ${error.message}` : String(error);
   // Never interpolates the capability Handle — KernelError's message never carries it.
@@ -535,7 +551,7 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
       display: false,
       timestamp: Date.now(),
     };
-    return { messages: [...event.messages, contextMessage] };
+    return { messages: withWorkerContextFirst(event.messages, contextMessage) };
   });
 
   pi.on('agent_end', (event) => {

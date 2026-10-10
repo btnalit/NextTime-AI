@@ -573,6 +573,46 @@ describe('PlatformIntegrationsPage', () => {
     await screen.findByTestId('gate-instance-detail');
   });
 
+  it('legacy K (UX acceptance of #538): a held manifest is flagged on its row — with 「调用被拒」 when the gate already refuses calls', async () => {
+    const pending = {
+      digest: 'd'.repeat(64),
+      announcedAt: '2026-10-10T04:00:00.000Z',
+      operationCount: 1,
+      added: [],
+      removed: [],
+      changed: [],
+    };
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({
+            gateId: 'gate-1',
+            displayName: 'UX538 库存宿主',
+            status: 'enabled',
+            pendingManifest: { ...pending, refusedOperations: ['stock.get'] },
+          }),
+          gateInstance({
+            gateId: 'gate-2',
+            displayName: 'Docker prod',
+            status: 'enabled',
+            pendingManifest: { ...pending, refusedOperations: [] },
+          }),
+          gateInstance({ gateId: 'gate-3', displayName: 'Billing', status: 'enabled' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const badges = within(table).getAllByTestId('gate-pending-manifest-badge');
+    expect(badges.map((badge) => badge.textContent)).toEqual([
+      '新清单待采用 · 调用被拒',
+      '新清单待采用',
+    ]);
+    // The name stays its own text, apart from the badge.
+    expect(within(table).getByText('UX538 库存宿主')).toBeTruthy();
+  });
+
   it('hosted instance with no heartbeat shows the hosted badge and waiting-for-host status', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [hostedGateInstance()] }),

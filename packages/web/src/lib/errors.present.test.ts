@@ -4,6 +4,7 @@ import {
   CODE_TITLES_ZH,
   ERROR_NEXT_STEPS,
   errorToastText,
+  gateReasonNextStep,
   presentError,
 } from './errors.js';
 import { GateHostError } from './gate-host.js';
@@ -128,5 +129,37 @@ describe('presentError', () => {
   it('page overrides still win over a console-written sentence for the same code', () => {
     const shown = presentError(new LocalizedError('x'), zh, { invalid_input: 'y' });
     expect(shown.message).toBe('y');
+  });
+});
+
+describe('legacy K / J codes (review of #538, G3)', () => {
+  it.each(['operation_definition_mismatch', 'gate_owned_params'])(
+    '%s reads as its next step, with a title in both languages',
+    (code) => {
+      const err = new HttpError('capability_error', 'kernel text in English', code);
+      const shown = presentError(err, zh);
+      expect(shown).toMatchObject({ code, curated: true });
+      expect(shown.title).toBe(CODE_TITLES_ZH[code]);
+      expect(shown.message).not.toContain('kernel text');
+      expect(shown.raw).toBe('kernel text in English');
+      expect(presentError(err, en).title).toBe(CODE_TITLES[code]);
+    },
+  );
+
+  it('the mismatch says how to get calls through again: align, publish the revision, request again', () => {
+    const step = ERROR_NEXT_STEPS.operation_definition_mismatch;
+    expect(step?.zh).toContain('与门公告对齐');
+    expect(step?.zh).toContain('修订草稿');
+  });
+
+  it('reads a failure reason’s gate code out of a tool result, and nothing out of one without', () => {
+    expect(
+      gateReasonNextStep('{"status":"failed","reason":"operation_definition_unavailable: …"}', zh),
+    ).toMatchObject({ code: 'operation_definition_unavailable', title: '没有批准过的定义' });
+    expect(gateReasonNextStep('operation_definition_mismatch: operation "x": …', en)?.title).toBe(
+      'The gate runs another definition',
+    );
+    expect(gateReasonNextStep('{"status":"executed"}', zh)).toBeNull();
+    expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });
 });

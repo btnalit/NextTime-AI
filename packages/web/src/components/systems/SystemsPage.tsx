@@ -489,6 +489,7 @@ export function SystemsPage({
                 onRevoke={handleRevoke}
                 onGranted={reloadGrants}
                 selfPrincipalId={selfPrincipalId}
+                platformAdmin={platformAdmin}
               />
             );
           })}

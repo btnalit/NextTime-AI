@@ -47,12 +47,15 @@ export interface ReadinessReader {
  * reader gets a link is the kernel's own predicate (`roleMayUseCapability`, shared `roles.ts`)
  * rather than a hand-kept role table; `platform` for what only a platform administrator changes;
  * `member_self` for another member's own 我的智能体 setting, which no page of the reader's reaches
- * (review R2).
+ * (review R2); `explained` for a state whose destination itself says whose step it is (a
+ * definition mismatch: the system's drawer names the platform adoption or the workspace revision
+ * still owed — #538), which any reader may open.
  */
 type Fix =
   | { readonly kind: 'capability'; readonly name: FixCapability }
   | { readonly kind: 'platform' }
-  | { readonly kind: 'member_self' };
+  | { readonly kind: 'member_self' }
+  | { readonly kind: 'explained' };
 
 type FixCapability =
   | 'request_connection'
@@ -64,6 +67,7 @@ type FixCapability =
 
 const PLATFORM_FIX: Fix = { kind: 'platform' };
 const MEMBER_SELF_FIX: Fix = { kind: 'member_self' };
+const EXPLAINED_FIX: Fix = { kind: 'explained' };
 
 function capabilityFix(name: FixCapability): Fix {
   return { kind: 'capability', name };
@@ -74,6 +78,7 @@ function capabilityFix(name: FixCapability): Fix {
  *  member only their own, and only when the policy's `memberCanEditProfile` allows it). The reader
  *  fixing their own readiness is always editing their own profile. */
 function readerCanFix(fix: Fix, reader: ReadinessReader | undefined): boolean {
+  if (fix.kind === 'explained') return true;
   if (fix.kind !== 'capability') return false;
   const role = reader?.role ?? null;
   if (role === null) return true;
@@ -95,7 +100,7 @@ function linkFor(
 
 /** What a reader who cannot make the fix themselves does instead — ask whoever can. */
 function askFor(fix: Fix, reader: ReadinessReader, t: Translate): string | undefined {
-  if (fix.kind === 'platform') return undefined;
+  if (fix.kind === 'platform' || fix.kind === 'explained') return undefined;
   if (fix.kind === 'member_self') {
     return t('要这位成员自己重新勾选。', 'That member has to tick it again themselves.');
   }
@@ -136,6 +141,8 @@ function missingFix(code: ExecutionReadinessMissingWire['code']): Fix {
       return capabilityFix('set_agent_profile');
     case 'disabled_by_platform':
       return PLATFORM_FIX;
+    case 'definition_mismatch':
+      return EXPLAINED_FIX;
   }
 }
 
@@ -157,6 +164,8 @@ function gateReasonFix(reason: GateUnreachableReason, about: ReasonSubject): Fix
       return capabilityFix('publish_worker_definition');
     case 'disabled_by_platform':
       return PLATFORM_FIX;
+    case 'definition_mismatch':
+      return EXPLAINED_FIX;
   }
 }
 
@@ -253,6 +262,18 @@ export function missingCauseText(
             'A system’s operations were disabled by a platform administrator — a workspace cannot fix this.',
           );
     }
+    case 'definition_mismatch': {
+      const name = item.gateId ? gateNames.get(item.gateId) : undefined;
+      return name
+        ? t(
+            `门「${name}」运行的定义和已发布的不一样，对其中的操作调用正被拒绝。`,
+            `The “${name}” gate runs another definition than the published one, so calls to some of its operations are refused.`,
+          )
+        : t(
+            '有系统运行的定义和已发布的不一样，对它的调用正被拒绝。',
+            'A system runs another definition than the published one, so calls to it are refused.',
+          );
+    }
   }
 }
 
@@ -282,6 +303,9 @@ function missingDestination(item: ExecutionReadinessMissingWire): string | undef
       return hrefs.models();
     case 'disabled_by_platform':
       return undefined;
+    // The system's own drawer says which Operations and whose step it is.
+    case 'definition_mismatch':
+      return item.gateId ? hrefs.gatekeeper(item.gateId) : hrefs.systems();
   }
 }
 
@@ -305,6 +329,8 @@ export function missingLinkLabel(
       return t('去模型与配额', 'Go to Models & Quotas');
     case 'disabled_by_platform':
       return undefined;
+    case 'definition_mismatch':
+      return t('看下一步', 'See what to do');
   }
 }
 
@@ -356,6 +382,11 @@ export function gateReasonText(
         '平台管理员在「平台 · 集成」停用了这个系统的操作，这不是工作区能修复的。',
         'A platform administrator disabled operations on this system under Platform · Integrations — a workspace cannot fix this.',
       );
+    case 'definition_mismatch':
+      return t(
+        '门运行的定义和已发布的不一样，对它的调用正被拒绝。',
+        'The gate runs another definition than the published one, so calls to it are refused.',
+      );
     case undefined:
       return t('暂时用不了。', 'Not usable right now.');
   }
@@ -386,6 +417,9 @@ function gateReasonDestination(reason: GateUnreachableReason): string | undefine
       return hrefs.catalog(CATALOG_WORKERS_TAB);
     case 'disabled_by_platform':
       return undefined;
+    // Said on the system's own row and drawer (`DefinitionMismatchNotice`), not another page.
+    case 'definition_mismatch':
+      return undefined;
   }
 }
 
@@ -402,6 +436,7 @@ export function gateReasonLink(reason: GateUnreachableReason, t: Translate): str
     case 'no_worker':
       return t('去能力目录', 'Go to Catalog');
     case 'disabled_by_platform':
+    case 'definition_mismatch':
       return undefined;
   }
 }

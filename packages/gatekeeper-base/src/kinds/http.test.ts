@@ -9,6 +9,7 @@ import { mapGatekeeperError } from '../server.js';
 import {
   HttpTransport,
   encodePathSegment,
+  gateOwnedParamsOf,
   importOpenApi,
   isGateOwnedHeader,
   isGateOwnedQueryParam,
@@ -154,7 +155,7 @@ describe('HttpTransport', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('sets redirect:"error" so credential headers never follow a cross-origin redirect (review lane 5, P2-2)', async () => {
+  it('never lets fetch follow a redirect, so credential headers never follow one (review lane 5, P2-2)', async () => {
     const fetchImpl = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
         new Response(JSON.stringify({ qty: 1 }), { status: 200 }),
@@ -164,7 +165,32 @@ describe('HttpTransport', () => {
     const call = fetchImpl.mock.calls[0];
     expect(call).toBeDefined();
     const [, init] = call as NonNullable<typeof call>;
-    expect(init?.redirect).toBe('error');
+    expect(init?.redirect).toBe('manual');
+  });
+
+  it('fails a redirect with its status and target path, not "request failed" (review of #532, item 4)', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('', { status: 301, headers: { location: '/v2/stock/X1?sig=s3cr3t' } }),
+    );
+    const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+    const thrown = await transport
+      .invoke(observeOperation, { id: 'X1' }, { credential: { token: 'configured-on-the-gate' } })
+      .catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(TransportInvokeError);
+    expect((thrown as Error).message).toContain('responded 301, a redirect to "/v2/stock/X1"');
+    expect((thrown as Error).message).not.toContain('s3cr3t');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats 304 as a response, not a redirect', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 304 }));
+    const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+    const thrown = await transport
+      .invoke(observeOperation, { id: 'X1' }, {})
+      .catch((err: unknown) => err);
+    expect((thrown as Error).message).toContain('responded 304');
+    expect((thrown as Error).message).not.toContain('redirect');
   });
 
   // R-22 (review 2026-10-02): a path parameter can never climb out of its template.
@@ -412,6 +438,17 @@ describe('HttpTransport', () => {
       'X-Forwarded-For',
       'X-Original-URL',
       'X-HTTP-Method-Override',
+      // Review of #532, item 5.
+      'es-security-runas-user',
+      'X-Run-As',
+      'run_as_user',
+      'X-Hasura-Role',
+      'X-Hasura-User-Id',
+      'x-functions-key',
+      'x-jwt-assertion',
+      'X-Goog-IAP-JWT-Assertion',
+      'X-Forwarded-Email',
+      'X-Forwarded-Groups',
     ])('refuses a %s header param before any request, on invoke and simulate', async (header) => {
       const fetchImpl = vi.fn();
       const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
@@ -587,6 +624,66 @@ describe('HttpTransport', () => {
       }
     });
 
+    it('routes a hand-written `x-in` without case, so `Header` meets the header guard', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const operation: Operation = {
+        ...withHeaderParam('x-trace-id'),
+        params_schema: {
+          type: 'object',
+          properties: { Authorization: { type: 'string', 'x-in': 'Header' } },
+        },
+      };
+      const thrown = await transport
+        .invoke(operation, { Authorization: `Basic ${FAKE}` }, {})
+        .catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+      expect((thrown as GateOwnedParamRefusedError).location).toBe('header');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'X-Scope-OrgID',
+      'x-scope-orgid',
+      'Authorization',
+      'OpenAI-Organization',
+      'X-Tenant-Id',
+      'Impersonate-User',
+      'X-Forwarded-User',
+      'X-Hasura-Role',
+      'run_as',
+      'jwt',
+      'sudo',
+    ])(
+      'refuses an undeclared GET param named like the %s identity header (review of #532, item 3)',
+      async (name) => {
+        const fetchImpl = vi.fn();
+        const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+        const undeclared: Operation = { ...withHeaderParam('x-trace-id'), params_schema: {} };
+        const thrown = await transport
+          .invoke(undeclared, { [name]: 'tenant-a' }, {})
+          .catch((err: unknown) => err);
+        expect(thrown).toBeInstanceOf(GateOwnedParamRefusedError);
+        expect((thrown as GateOwnedParamRefusedError).location).toBe('query');
+        expect(fetchImpl).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['host', 'Host', 'forwarded', 'X-Forwarded-For', 'x-forwarded-host', 'tenant_id'])(
+      'sends an undeclared GET param named %s to the query string: routing names are filters there',
+      async (name) => {
+        const fetchImpl = vi.fn(
+          async (_input: string | URL | Request, _init?: RequestInit) =>
+            new Response('{}', { status: 200 }),
+        );
+        const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+        const undeclared: Operation = { ...withHeaderParam('x-trace-id'), params_schema: {} };
+        await transport.invoke(undeclared, { [name]: 'web-1' }, {});
+        const url = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+        expect(url.searchParams.get(name)).toBe('web-1');
+      },
+    );
+
     it('compares a binding’s own query without case', async () => {
       const fetchImpl = vi.fn();
       const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
@@ -602,5 +699,91 @@ describe('HttpTransport', () => {
       expect((thrown as GateOwnedParamRefusedError).location).toBe('binding');
       expect(fetchImpl).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('gateOwnedParamsOf (legacy J)', () => {
+  function op(
+    method: string,
+    path: string,
+    properties: Record<string, Record<string, unknown>>,
+  ): Operation {
+    return {
+      name: 'items.call',
+      binding: { kind: 'http', method, path },
+      params_schema: { type: 'object', properties },
+      mode: method === 'GET' ? 'observe' : 'execute',
+      blast_radius: 'low',
+      reversibility: false,
+      auto_approvable: true,
+      await_decision: false,
+      reads: [],
+      writes: [],
+    };
+  }
+
+  const GET_ITEMS = op('GET', '/items/{token}?api-version=2024-01-01', {
+    token: { type: 'string', 'x-in': 'path' },
+    Authorization: { type: 'string', 'x-in': 'Header' },
+    'X-Request-Id': { type: 'string', 'x-in': 'header' },
+    access_token: { type: 'string', 'x-in': 'query' },
+    page_token: { type: 'string', 'x-in': 'query' },
+    session: { type: 'string', 'x-in': 'cookie' },
+    'API-Version': { type: 'string', 'x-in': 'query' },
+    api_key: { type: 'string' },
+    q: { type: 'string' },
+  });
+  const POST_ITEMS = op('POST', '/items', {
+    password: { type: 'string' },
+    'X-Tenant-Id': { type: 'string', 'x-in': 'header' },
+    pageToken: { type: 'string', 'x-in': 'query' },
+    sig: { type: 'string', 'x-in': 'query' },
+  });
+
+  it('names every declared param the transport refuses, and where', () => {
+    // Sorted by name (code point order), whatever the declaration order.
+    expect(gateOwnedParamsOf(GET_ITEMS)).toEqual([
+      { param: 'API-Version', location: 'binding' },
+      { param: 'Authorization', location: 'header' },
+      { param: 'access_token', location: 'query' },
+      // Undeclared location on a GET: the query string.
+      { param: 'api_key', location: 'query' },
+      { param: 'session', location: 'cookie' },
+    ]);
+    // A POST's unlocated param is body, not query: `password` there is the target's own field.
+    expect(gateOwnedParamsOf(POST_ITEMS)).toEqual([
+      { param: 'X-Tenant-Id', location: 'header' },
+      { param: 'sig', location: 'query' },
+    ]);
+  });
+
+  it('agrees with the call: a declared param is reported exactly when invoke refuses it', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+    const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+    for (const operation of [GET_ITEMS, POST_ITEMS]) {
+      const reported = new Set(gateOwnedParamsOf(operation).map((entry) => entry.param));
+      const properties = (operation.params_schema as { properties: Record<string, unknown> })
+        .properties;
+      for (const name of Object.keys(properties)) {
+        const params = { token: 't1', [name]: 'v' };
+        const thrown = await transport.invoke(operation, params, {}).catch((err: unknown) => err);
+        expect([name, thrown instanceof GateOwnedParamRefusedError]).toEqual([
+          name,
+          reported.has(name),
+        ]);
+      }
+    }
+  });
+
+  it('is empty for another binding kind, and for a definition without properties', () => {
+    expect(
+      gateOwnedParamsOf({
+        ...GET_ITEMS,
+        binding: { kind: 'mcp', tool_name: 'items' },
+      }),
+    ).toEqual([]);
+    expect(gateOwnedParamsOf({ ...GET_ITEMS, params_schema: {} })).toEqual([]);
+    expect(gateOwnedParamsOf(null)).toEqual([]);
+    expect(gateOwnedParamsOf({ binding: { kind: 'http' } })).toEqual([]);
   });
 });

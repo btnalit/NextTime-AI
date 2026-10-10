@@ -4,6 +4,7 @@ import {
   GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
+  gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import {
@@ -89,6 +90,7 @@ import {
 } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
+  OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
   OperationNotFoundError,
 } from '../../governance/gatekeepers/index.js';
@@ -210,6 +212,15 @@ export const WS_ERROR_CODES = {
   WORKER_DEFINITION_NOT_ENABLED: -32016,
 } as const;
 
+/** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
+ *  and 409 have one; 424 (no credential for this account) stays `UPSTREAM_ERROR`. */
+const WS_CODE_FOR_GATE_REFUSAL_STATUS: Readonly<Record<number, number>> = {
+  400: WS_ERROR_CODES.INVALID_PARAMS,
+  403: WS_ERROR_CODES.FORBIDDEN,
+  404: WS_ERROR_CODES.NOT_FOUND,
+  409: WS_ERROR_CODES.ILLEGAL_TRANSITION,
+};
+
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
  *  application/chat's service functions to a JSON-RPC error code + message. Mirrors
  *  interfaces/http/capability-route.ts's `mapCapabilityError` (same error classes, same
@@ -302,6 +313,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Credential-looking observe params, refused (see capability-route.ts's own mapping).
   if (err instanceof ObserveParamsCarryCredentialsError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).
+  if (err instanceof OperationDeclaresGateOwnedParamsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
@@ -407,7 +422,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.UPSTREAM_ERROR, message: err.message };
   }
   if (err instanceof GatekeeperClientError) {
-    return { code: WS_ERROR_CODES.UPSTREAM_ERROR, message: `${err.code}: ${err.message}` };
+    // A gate refusal the caller can act on — same split as capability-route.ts (`gateRefusalOf`);
+    // the gate's code stays at the front of the message, WS having no string code of its own.
+    const refusal = gateRefusalOf(err);
+    const code =
+      refusal === undefined
+        ? WS_ERROR_CODES.UPSTREAM_ERROR
+        : (WS_CODE_FOR_GATE_REFUSAL_STATUS[refusal.status] ?? WS_ERROR_CODES.UPSTREAM_ERROR);
+    return { code, message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };

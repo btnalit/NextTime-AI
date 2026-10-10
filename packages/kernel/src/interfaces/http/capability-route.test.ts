@@ -11,6 +11,8 @@ import {
   GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
+  HttpGatekeeperClient,
+  platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
@@ -55,7 +57,10 @@ import {
   ConnectionRequestNotFoundError,
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
-import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDeclaresGateOwnedParamsError,
+  OperationIdentityConflictError,
+} from '../../governance/gatekeepers/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
@@ -109,6 +114,29 @@ describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
       status: 400,
       code: 'credentials_in_observe_params',
       details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy J gate-owned params (unit)', () => {
+  it('OperationDeclaresGateOwnedParamsError maps to 400 gate_owned_params naming each param', () => {
+    expect(
+      mapCapabilityError(
+        new OperationDeclaresGateOwnedParamsError('gk-1/stock.list@1', [
+          { param: 'Authorization', location: 'header' },
+          { param: 'api-version', location: 'binding' },
+        ]),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'gate_owned_params',
+      message: expect.stringContaining('"Authorization" (header), "api-version" (binding)'),
+      details: {
+        params: [
+          { param: 'Authorization', location: 'header' },
+          { param: 'api-version', location: 'binding' },
+        ],
+      },
     });
   });
 });
@@ -202,6 +230,72 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     );
     expect(mapped).toMatchObject({ status: 502, code: 'gatekeeper_error' });
     expect(mapped.message).toContain('connected_account_store_not_configured');
+  });
+
+  it.each([
+    ['operation_refused', 403],
+    ['invalid_params', 400],
+    ['operation_not_found', 404],
+    ['operation_definition_mismatch', 409],
+    ['credential_unavailable', 424],
+  ])(
+    'passes a gate refusal %s through with its own status instead of 502 (review of #532)',
+    (code, status) => {
+      const mapped = mapCapabilityError(
+        new GatekeeperClientError('param "Authorization" is set by the gate', { code, status }),
+      );
+      expect(mapped).toEqual({
+        status,
+        code,
+        message: 'param "Authorization" is set by the gate',
+      });
+    },
+  );
+
+  it.each([
+    ['operation_refused', 403],
+    ['transport_error', 502],
+  ])('hides a credential in what a gate answers with %s (review of #538)', async (code, status) => {
+    // Synthetic, key-shaped — never a real credential.
+    const key = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+    const client = new HttpGatekeeperClient({
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ ok: false, error: { code, message: `bad key ${key}` } }), {
+          status,
+        }),
+    });
+    const err = await client
+      .observe(platformGateTarget('https://gate.example.test'), {
+        operation: 'list',
+        operationDigest: undefined,
+      })
+      .catch((thrown: unknown) => thrown);
+    const mapped = mapCapabilityError(err);
+    expect(mapped.message).not.toContain(key);
+    expect(mapped.message).toContain('bad key [redacted]');
+  });
+
+  it.each([
+    // Between the kernel and the gate, not the caller's to fix.
+    ['unauthorized', 401],
+    ['transport_error', 502],
+    ['internal_error', 500],
+    // A known code with a status the protocol never answers it with — a self-connected gate does
+    // not pick the kernel's status.
+    ['operation_refused', 401],
+    ['operation_refused', 200],
+    // Not a gate answer at all.
+    ['network_error', 0],
+    ['redirect_refused', 307],
+    // Unknown codes, including an own-property name of a plain object.
+    ['forbidden', 403],
+    ['constructor', 403],
+  ])('keeps %s (status %i) an upstream failure', (code, status) => {
+    expect(mapCapabilityError(new GatekeeperClientError('m', { code, status }))).toMatchObject({
+      status: 502,
+      code: 'gatekeeper_error',
+      message: `${code}: m`,
+    });
   });
 
   // Review 2026-09, P0 (docs/development-tasks.md S2.4 "实现说明补充") — `propose_operation` over an

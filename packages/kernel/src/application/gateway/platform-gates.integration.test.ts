@@ -13,11 +13,14 @@ import type {
   AvailableGateInstanceWire,
   ConnectorWire,
   EnableGateInstanceResultWire,
+  ExecutionReadinessWire,
   ExternalRuntimeWire,
   GateInstanceWire,
   ListEnvelope,
   Operation,
+  OperationSummaryWire,
   PreviewGateInstanceEnableResultWire,
+  RefreshOperationGovernanceResultWire,
   Role,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
@@ -2296,6 +2299,9 @@ describe.runIf(DATABASE_URL !== undefined)(
               otherChangedFields: [],
             },
           ],
+          // A governance-only change (an mcp blast_radius) leaves what the gate runs alone: no call
+          // is refused while it waits.
+          refusedOperations: [],
         });
         expect(after.pendingManifest?.digest).toMatch(/^[0-9a-f]{64}$/);
 
@@ -2409,7 +2415,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           { gateId: PENDING_GATE },
         );
         const drifting = preview.operationsAlreadyPresent.find((o) => o.name === EXECUTE_OP.name);
-        expect(drifting).toMatchObject({ differs: true, direction: 'loosened' });
+        // A loosened mcp blast_radius is governance only: the gate never sees it (legacy K).
+        expect(drifting).toMatchObject({
+          differs: true,
+          direction: 'loosened',
+          definitionDiffers: false,
+        });
         expect(
           preview.operationsAlreadyPresent.find((o) => o.name === OBSERVE_OP.name)?.direction,
         ).toBe('neutral');
@@ -2421,16 +2432,161 @@ describe.runIf(DATABASE_URL !== undefined)(
             manifestDigest: 'f'.repeat(64),
           }),
         ).rejects.toMatchObject({ code: 'manifest_changed' });
-        const refreshed = await callAsOwner<{
-          refreshed: readonly { name: string; direction: string }[];
-        }>('refresh_operation_governance', {
-          gatekeeperId,
-          operationNames: [EXECUTE_OP.name],
-          manifestDigest: preview.manifestDigest,
-        });
+        const refreshed = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [EXECUTE_OP.name],
+            manifestDigest: preview.manifestDigest,
+          },
+        );
         expect(refreshed.refreshed).toEqual([
           expect.objectContaining({ name: EXECUTE_OP.name, direction: 'loosened' }),
         ]);
+        expect(refreshed.revisionDrafts).toEqual([]);
+      });
+
+      it('legacy K: a confirmed change to what the gate runs opens a revision the owner publishes; calls match again only after that', async () => {
+        const available = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
+          'list_available_gate_instances',
+        );
+        const gatekeeperId = available.items.find(
+          (item) => item.gateId === PENDING_GATE,
+        )?.gatekeeperId;
+        if (!gatekeeperId) throw new Error('expected the pending fixture to be enabled here');
+        // Same name, same governance, a different request: the gate now sends a `filter` param.
+        const filteredObserve: Operation = {
+          ...OBSERVE_OP,
+          params_schema: { type: 'object', properties: { filter: { type: 'string' } } },
+        };
+        await announce({
+          ...pendingBody,
+          operations: [filteredObserve, loosenedExecute, ADDED_OP],
+        });
+        const held = (await instance()).pendingManifest;
+        if (!held) throw new Error('expected the binding change to be held for review');
+        expect(held.changed).toEqual([
+          expect.objectContaining({
+            name: OBSERVE_OP.name,
+            direction: 'neutral',
+            otherChangedFields: ['params_schema'],
+          }),
+        ]);
+        // UX acceptance of #538: the gate already runs the held manifest, so every surface says
+        // that the call is refused and that adopting it comes first — aligning cannot help yet.
+        const mismatchOf = async () =>
+          (await callAsOwner<ExecutionReadinessWire>('execution_readiness', {})).gates.find(
+            (gate) => gate.gateId === gatekeeperId,
+          )?.definitionMismatch;
+        const present = (name: string, wire: PreviewGateInstanceEnableResultWire) =>
+          wire.operationsAlreadyPresent.find((o) => o.name === name);
+        expect(held.refusedOperations).toEqual([OBSERVE_OP.name]);
+        const beforeAdoption = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(beforeAdoption.awaitingPlatformAdoption).toEqual({
+          announcedAt: held.announcedAt,
+          operations: [OBSERVE_OP.name],
+        });
+        expect(present(OBSERVE_OP.name, beforeAdoption)).toMatchObject({
+          definitionDiffers: false,
+        });
+        expect(await mismatchOf()).toEqual([
+          { operation: OBSERVE_OP.name, awaiting: 'platform_adoption' },
+        ]);
+
+        await callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: held.digest });
+
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(preview.awaitingPlatformAdoption).toBeNull();
+        expect(await mismatchOf()).toEqual([
+          { operation: OBSERVE_OP.name, awaiting: 'workspace_revision' },
+        ]);
+        expect(present(OBSERVE_OP.name, preview)).toMatchObject({
+          differs: false,
+          definitionDiffers: true,
+        });
+        expect(present(EXECUTE_OP.name, preview)).toMatchObject({ definitionDiffers: false });
+
+        const refreshed = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [OBSERVE_OP.name, EXECUTE_OP.name],
+            manifestDigest: preview.manifestDigest,
+          },
+        );
+        expect(refreshed.refreshed).toEqual([]);
+        expect(refreshed.revisionDrafts).toEqual([{ name: OBSERVE_OP.name, version: 2 }]);
+        expect(refreshed.unchanged).toEqual([EXECUTE_OP.name]);
+        const drafted = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => queryAudit(client, workspaceId, { action: 'operation.revision_drafted' }),
+        );
+        expect(drafted.map((row) => row.payload)).toEqual([
+          expect.objectContaining({
+            gatekeeperId,
+            name: OBSERVE_OP.name,
+            version: 2,
+            reason: 'definition_changed',
+          }),
+        ]);
+
+        // Until the revision is published the workspace still approves the old definition.
+        const stillOld = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => getPublishedOperation(client, workspaceId, gatekeeperId, OBSERVE_OP.name),
+        );
+        expect(stillOld?.version).toBe(1);
+        // A second refresh opens nothing more: the revision is already pending.
+        const again = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [OBSERVE_OP.name],
+            manifestDigest: preview.manifestDigest,
+          },
+        );
+        expect(again.revisionDrafts).toEqual([]);
+
+        // The catalog shows what the revision changes before it is published.
+        const listed = await callAsOwner<ListEnvelope<OperationSummaryWire>>('list_operations', {
+          gatekeeperId,
+        });
+        expect(
+          listed.items.find((op) => op.name === OBSERVE_OP.name && op.status === 'draft')
+            ?.definitionChange,
+        ).toEqual({
+          changedFields: ['params_schema'],
+          paramsAdded: [{ name: 'filter', required: false }],
+          paramsRemoved: [],
+          paramsChanged: [],
+        });
+        expect(
+          listed.items.find((op) => op.name === OBSERVE_OP.name && op.status === 'published')
+            ?.definitionChange,
+        ).toBeUndefined();
+
+        await callAsOwner('publish_operation', { gatekeeperId, name: OBSERVE_OP.name });
+        expect(await mismatchOf()).toEqual([]);
+        const published = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => getPublishedOperation(client, workspaceId, gatekeeperId, OBSERVE_OP.name),
+        );
+        expect(published?.version).toBe(2);
+        expect(published?.operation.params_schema).toEqual(filteredObserve.params_schema);
+        const after = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(present(OBSERVE_OP.name, after)).toMatchObject({ definitionDiffers: false });
       });
     });
   },

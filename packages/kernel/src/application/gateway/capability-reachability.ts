@@ -1,4 +1,4 @@
-import type { Role } from '@nexttime/shared';
+import type { DefinitionMismatchWire, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   InvokeWorkerAttenuationError,
@@ -15,12 +15,15 @@ import { WORKER_CEILING_CAPABILITIES, entryScope } from '../../governance/capabi
 import {
   listGatekeepers,
   listPublishedOperationsForGatekeepers,
+  operationRecordDigestOrNull,
 } from '../../governance/gatekeepers/index.js';
 import {
+  definitionRefusal,
   observeExclusionsOf,
   observeGateExclusion,
   observeRefusal,
   operationPlatformStatus,
+  readGateDefinitionsForWorkspace,
   readGateLinkPoliciesForWorkspace,
 } from '../gates/index.js';
 import { listWorkerDefinitions } from '../worker/index.js';
@@ -53,8 +56,8 @@ import { resolveAvailableResources } from './agent-profile-handlers.js';
  *
  * A gate's own `status` is `direct` when at least one of its observe-class Operations is; otherwise
  * `reason` names the first unmet condition, in the order a person fixes them: nothing published →
- * disabled by the platform's connector deny list → (only for a gate with nothing left to observe)
- * not granted → excluded by the workspace AgentPolicy cap → excluded by the member's own
+ * disabled by the platform's connector deny list → the gate runs another definition than every
+ * remaining one (legacy K) → (only for a gate with nothing left to observe) not granted → excluded by the workspace AgentPolicy cap → excluded by the member's own
  * AgentProfile → no Worker covers it. `not_granted` is therefore an execute-path reason only: a
  * gate with an observable Operation is never `not_granted`. Read-only; decides nothing itself.
  *
@@ -65,6 +68,12 @@ import { resolveAvailableResources } from './agent-profile-handlers.js';
  * `direct` here while every one of its Operations was refused in practice. `disabled_by_platform`
  * and each gate's own `disabledOperations` go through the same shared predicate enforcement uses
  * (`operationPlatformStatus`, application/gates/store.ts — also inside `observeRefusal`).
+ *
+ * Legacy K (UX acceptance of #538): a platform gate refuses every call made under a definition it
+ * does not run, and the kernel cannot overrule that. `definitionMismatch` names those Operations
+ * (`definitionRefusal`, application/gates/definition-drift.ts — the comparison the gate makes,
+ * from what the gate last announced), they are never `direct`, and a gate with nothing else left
+ * reads `definition_mismatch`, ranked right after the platform deny list.
  */
 
 export type ReachabilityStatus = 'direct' | 'via_worker' | 'unreachable';
@@ -72,6 +81,7 @@ export type ReachabilityStatus = 'direct' | 'via_worker' | 'unreachable';
 export type UnreachableReason =
   | 'no_published_operation'
   | 'disabled_by_platform'
+  | 'definition_mismatch'
   | 'not_granted'
   | 'excluded_by_policy'
   | 'excluded_by_profile'
@@ -103,8 +113,12 @@ export interface GateReachability {
    *  even when the gate's own `status` is not `disabled_by_platform` (some, not all, published
    *  Operations disabled) — `operationReachability` below flags exactly those by name. */
   readonly disabledOperations: readonly string[];
-  /** The observe-class Operations `observeRefusal` accepts for this member — exactly the ones a
-   *  real `observe_operation` call would run and `list_allowed_operations` projects as tools. */
+  /** Legacy K: published Operations (not platform-disabled) the gate refuses because it runs
+   *  another definition, with whose step ends it (`definitionRefusal`). Empty for a gate the
+   *  workspace connected itself. */
+  readonly definitionMismatch: readonly DefinitionMismatchWire[];
+  /** The observe-class Operations `observeRefusal` accepts for this member and the gate runs as
+   *  published — the ones a real `observe_operation` call would run. */
   readonly directOperations: readonly string[];
   /** Delegable, not-excluded Workers whose child scope carries this gate. */
   readonly workerDefinitionIds: readonly string[];
@@ -238,10 +252,18 @@ export async function computeCapabilityReachability(
     gateEntries.map((entry) => entry.gatekeeperId),
   );
   const gateLinkPolicies = await readGateLinkPoliciesForWorkspace(client, workspaceId);
-  const publishedByGate = new Map<string, { name: string; mode: string }[]>();
+  const gateDefinitions = await readGateDefinitionsForWorkspace(client, workspaceId);
+  const publishedByGate = new Map<
+    string,
+    { name: string; mode: string; digest: string | null }[]
+  >();
   for (const op of publishedOps) {
     const list = publishedByGate.get(op.gatekeeperId);
-    const entry = { name: op.name, mode: op.operation.mode };
+    const entry = {
+      name: op.name,
+      mode: op.operation.mode,
+      digest: operationRecordDigestOrNull(op),
+    };
     if (list) list.push(entry);
     else publishedByGate.set(op.gatekeeperId, [entry]);
   }
@@ -254,9 +276,23 @@ export async function computeCapabilityReachability(
     const gateLink = gateLinkPolicies.get(gateId);
     const published = publishedByGate.get(gateId) ?? [];
     const exclusion = observeGateExclusion(exclusions, gateId);
+    const disabledOperations = published
+      .filter((op) => operationPlatformStatus(gateLink, op.name).disabled)
+      .map((op) => op.name);
+    const definitions = gateDefinitions.get(gateId);
+    const definitionMismatch: DefinitionMismatchWire[] = [];
+    if (definitions) {
+      for (const op of published) {
+        if (disabledOperations.includes(op.name)) continue;
+        const awaiting = definitionRefusal(definitions, op.name, op.digest);
+        if (awaiting !== null) definitionMismatch.push({ operation: op.name, awaiting });
+      }
+    }
+    const refused = new Set(definitionMismatch.map((entry) => entry.operation));
     const directOperations = published
       .filter(
         (op) =>
+          !refused.has(op.name) &&
           observeRefusal(exclusions, {
             gatekeeperId: gateId,
             gateEnabled: true,
@@ -266,12 +302,10 @@ export async function computeCapabilityReachability(
           }) === undefined,
       )
       .map((op) => op.name);
-    const disabledOperations = published
-      .filter((op) => operationPlatformStatus(gateLink, op.name).disabled)
-      .map((op) => op.name);
     const executeCount = published.filter((op) => op.mode === 'execute').length;
     const enabledObserveCount = published.filter(
-      (op) => op.mode !== 'execute' && !disabledOperations.includes(op.name),
+      (op) =>
+        op.mode !== 'execute' && !disabledOperations.includes(op.name) && !refused.has(op.name),
     ).length;
     const workerDefinitionIds = workers
       .filter((worker) => worker.childGateIds.includes(gateId))
@@ -289,6 +323,7 @@ export async function computeCapabilityReachability(
       observeOperationCount: published.length - executeCount,
       executeOperationCount: executeCount,
       disabledOperations,
+      definitionMismatch,
       directOperations,
       workerDefinitionIds,
       executeWorkerDefinitionIds,
@@ -324,6 +359,7 @@ function firstGap(
     readonly observeOperationCount: number;
     readonly executeOperationCount: number;
     readonly disabledOperations: readonly string[];
+    readonly definitionMismatch: readonly DefinitionMismatchWire[];
   },
   enabledObserveCount: number,
 ): UnreachableReason | undefined {
@@ -333,6 +369,11 @@ function firstGap(
   // subset of the gate's own published names, so equality with the total published count means none
   // of them survive.
   if (gate.disabledOperations.length === publishedCount) return 'disabled_by_platform';
+  // Legacy K: the gate refuses every one that is left — `definitionMismatch` never names a
+  // platform-disabled Operation, so the two lists are disjoint.
+  if (gate.disabledOperations.length + gate.definitionMismatch.length === publishedCount) {
+    return 'definition_mismatch';
+  }
   if (!gate.granted && enabledObserveCount === 0) return 'not_granted';
   if (gate.excludedByPolicy) return 'excluded_by_policy';
   if (gate.excludedByProfile) return 'excluded_by_profile';
@@ -353,7 +394,8 @@ function firstGap(
  * Operation is `unreachable`/`disabled_by_platform` even when the gate itself still reads `direct`/
  * `via_worker` because one of its *other* Operations is still enabled (production incident
  * 2026-09-26: `find_operations` must flag exactly the Operation a real `request_action`/
- * `observe_operation` call would refuse, not just the gate it lives on).
+ * `observe_operation` call would refuse, not just the gate it lives on). Then against its
+ * `definitionMismatch` (legacy K), for the same reason: the gate refuses that one Operation.
  */
 export function operationReachability(
   reachability: CapabilityReachability,
@@ -365,6 +407,9 @@ export function operationReachability(
   if (!gate) return { status: 'unreachable', reason: 'not_granted' };
   if (gate.disabledOperations.includes(operationName)) {
     return { status: 'unreachable', reason: 'disabled_by_platform' };
+  }
+  if (gate.definitionMismatch.some((entry) => entry.operation === operationName)) {
+    return { status: 'unreachable', reason: 'definition_mismatch' };
   }
   if (mode !== 'execute') {
     if (gate.directOperations.includes(operationName)) return { status: 'direct' };

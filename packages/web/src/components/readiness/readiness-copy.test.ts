@@ -28,6 +28,8 @@ const MISSING_FIX: Record<string, string | null> = {
   no_worker_gate: 'publish_worker_definition',
   excluded_by_profile: 'set_agent_profile',
   disabled_by_platform: null,
+  // #538: the link opens the system's drawer, which says whose step it is — any reader may open it.
+  definition_mismatch: 'get_gatekeeper',
 };
 
 const GATE_REASON_FIX: Record<string, string | null> = {
@@ -37,6 +39,8 @@ const GATE_REASON_FIX: Record<string, string | null> = {
   no_worker: 'publish_worker_definition',
   excluded_by_profile: 'set_agent_profile',
   disabled_by_platform: null,
+  // Said on the system's own row (no link); no one to ask from here.
+  definition_mismatch: null,
 };
 
 /** What the kernel would authorize: the role predicate, plus `set_agent_profile`'s own rule — a

@@ -38,8 +38,9 @@ import {
 import type { WorkspacePurpose } from '../application/workspace/index.js';
 import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
 import {
+  type GateOwnedParamDraft,
   importManifest,
-  publishOperation,
+  publishImportedDrafts,
   registerGatekeeper,
 } from '../governance/gatekeepers/index.js';
 import { writeAudit } from '../substrate/audit/index.js';
@@ -301,6 +302,9 @@ export interface RegisterGatekeeperCliResult {
    *  Operation of the same name (always empty for the fresh Gatekeeper this command registers). */
   readonly skippedOperationNames: readonly string[];
   readonly publishedOperationNames: readonly string[];
+  /** Legacy J: imported drafts `--publish` left unpublished because they declare a param the gate
+   *  sets itself, with those params (always empty without `--publish`). */
+  readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
 }
 
 /** Fetches the target endpoint's `describe_operations`, registers it as a Gatekeeper instance,
@@ -351,13 +355,9 @@ export async function registerGatekeeperFromCli(
         requireDescription: true,
       });
 
-      const publishedOperationNames: string[] = [];
-      if (input.publish) {
-        for (const record of imported.imported) {
-          await publishOperation(dbClient, input.workspaceId, { gatekeeperId, name: record.name });
-          publishedOperationNames.push(record.name);
-        }
-      }
+      const published = input.publish
+        ? await publishImportedDrafts(dbClient, input.workspaceId, gatekeeperId, imported.imported)
+        : { publishedOperationNames: [], gateOwnedParamDrafts: [] };
 
       await endActivity(dbClient, input.workspaceId, activity.id, 'completed');
 
@@ -365,7 +365,8 @@ export async function registerGatekeeperFromCli(
         gatekeeperId,
         importedOperationNames: imported.imported.map((record) => record.name),
         skippedOperationNames: imported.skipped.map((entry) => entry.name),
-        publishedOperationNames,
+        publishedOperationNames: published.publishedOperationNames,
+        gateOwnedParamDrafts: published.gateOwnedParamDrafts,
       };
     },
   );
@@ -1090,8 +1091,17 @@ async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
     console.log(
       result.publishedOperationNames.length > 0
         ? `published operations: ${result.publishedOperationNames.join(', ')}`
-        : 'published operations: (none — pass --publish true to publish every imported operation)',
+        : flags.publish === 'true'
+          ? 'published operations: (none)'
+          : 'published operations: (none — pass --publish true to publish every imported operation)',
     );
+    for (const draft of result.gateOwnedParamDrafts) {
+      console.log(
+        `left as draft (declares params only the gate sets — fix the manifest): ${draft.name}: ${draft.params
+          .map((entry) => `${entry.param} (${entry.location})`)
+          .join(', ')}`,
+      );
+    }
   } finally {
     await pool.end();
   }

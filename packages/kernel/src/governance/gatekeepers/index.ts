@@ -42,6 +42,7 @@ export {
   operationVisibleTo,
   publishOperation,
   publishManifest,
+  publishImportedDrafts,
   deprecateOperation,
   updateOperationDescription,
   refreshOperationGovernance,
@@ -57,6 +58,20 @@ export {
   OperationDescriptionInvalidError,
   IllegalTransition,
 } from './manifest.js';
+export type { OperationDefinitionChange, OperationParamSummary } from './definition.js';
+export {
+  OperationDefinitionUnreadableError,
+  operationDefinitionChange,
+  operationDefinitionDiffers,
+  operationRecordDigest,
+  operationRecordDigestOrNull,
+} from './definition.js';
+export {
+  OperationDeclaresGateOwnedParamsError,
+  assertNoGateOwnedParams,
+  gateOwnedParamsOfDefinition,
+} from './gate-owned-params.js';
+export type { GateOwnedParam, GateOwnedParamDraft } from './gate-owned-params.js';
 export type {
   OperationRecord,
   OperationViewer,
@@ -71,6 +86,7 @@ export type {
   UpdateOperationDescriptionInput,
   RefreshOperationGovernanceInput,
   RefreshOperationGovernanceResult,
+  OperationRevisionDraft,
   RefreshedOperationGovernance,
   OperationGovernanceChange,
   OperationGovernanceChangeDirection,
