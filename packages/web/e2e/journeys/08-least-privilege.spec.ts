@@ -54,6 +54,13 @@ function trackCapabilityCalls(page: Page): () => Promise<void> {
   };
 }
 
+/** The sections on the page that only say "this role cannot see this" — a dead end. */
+async function deadEnds(page: Page): Promise<(string | null)[]> {
+  return page
+    .locator('main [data-state="empty"][data-testid$="-forbidden"]:visible')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));
+}
+
 /** The 使用 and 治理 nav items this role is shown (the Explorer link opens another app). */
 async function visibleNavItems(page: Page): Promise<string[]> {
   const items = page.locator(
@@ -132,6 +139,7 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       await settled();
       expect(await localRefusals.take(), 'asked for on switching to the workspace').toEqual([]);
       const fixLinks = new Set<string>();
+      const pageLinks = new Set<string>();
       const navItems = await visibleNavItems(page);
       expect(navItems.length).toBeGreaterThan(0);
       test.info().annotations.push({ type: 'pages', description: navItems.join(' ') });
@@ -145,10 +153,7 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
         ).toEqual([]);
         const main = page.locator('main');
         // A nav entry leads to a page with content, never to one that only says "not your role".
-        const deadEnds = await main
-          .locator('[data-state="empty"][data-testid$="-forbidden"]:visible')
-          .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));
-        expect(deadEnds, `${navTestId}: a section this role can never see`).toEqual([]);
+        expect(await deadEnds(page), `${navTestId}: a section this role can never see`).toEqual([]);
         await expectNoHalfEnglish(main);
         // A role refusal is said as what this role can do, never as a 「无法加载」 with a 重试.
         const refusals = await main
@@ -165,15 +170,40 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
             NAMES_WHOM_TO_ASK,
           );
         }
+        // #541 review N2: every in-app link on the page is followed below.
+        for (const href of await main
+          .locator('a[href^="#/"]:visible')
+          .evaluateAll((links) => links.map((link) => link.getAttribute('href') ?? ''))) {
+          if (href) pageLinks.add(href);
+        }
+        // #541 review N1: 接入一个系统 opens for every role that sees it, asking for nothing
+        // this role cannot have.
+        const connect = main.getByTestId('connect-system-button');
+        if (navTestId === 'nav-systems' && (await connect.isVisible())) {
+          await connect.click();
+          await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
+          await settled();
+          expect(
+            await localRefusals.take(),
+            '接入一个系统: asked for what this role cannot have',
+          ).toEqual([]);
+          await page.keyboard.press('Escape');
+          await expect(page.getByRole('dialog')).toBeHidden({ timeout: 15_000 });
+        }
       }
-      for (const href of fixLinks) {
+      // Every hint's link and every in-app link a page offered this role leads to a page with
+      // content: nothing refused on the way, no section that only says "not your role".
+      for (const href of new Set([...fixLinks, ...pageLinks])) {
         await page.goto(`/${href}`);
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15_000 });
         await settled();
         expect(
           await localRefusals.take(),
-          `${href}: a hint led to what this role cannot have`,
+          `${href}: a link led to what this role cannot have`,
         ).toEqual([]);
+        expect(await deadEnds(page), `${href}: a link led to a page this role cannot see`).toEqual(
+          [],
+        );
       }
 
       expectNoForbiddenCalls();

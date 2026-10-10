@@ -1,4 +1,3 @@
-import { getCapability, roleMayUseCapability } from '@nexttime/shared';
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -7,6 +6,7 @@ import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
+import { roleMayOpen } from '../../lib/route-access.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
 import { LangSwitch } from '../LangSwitch.js';
@@ -140,12 +140,10 @@ export function SidebarContent({
   const t = useT();
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
-  // A page whose own read the known role may not use is not offered (`NavItem.capability`, the
-  // kernel's own `roleMayUseCapability`); until the role is known every item shows.
+  // A page the known role cannot open is not offered (`lib/route-access`, the same table every
+  // in-app link asks); until the role is known every item shows.
   const roleSeesItem = (item: NavItem) =>
-    role.kind !== 'known' ||
-    item.capability === undefined ||
-    roleMayUseCapability(role.role, getCapability(item.capability));
+    role.kind !== 'known' || roleMayOpen(role.role, item.href);
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   const navRef = useRef<HTMLElement>(null);

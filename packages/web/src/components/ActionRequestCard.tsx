@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useCanOpen } from '../hooks/useCanOpen.js';
 import {
   type ActionCardData,
   DECIDABLE_STATUS,
@@ -63,6 +64,7 @@ export function ActionRequestCard({
   canDecide,
 }: ActionRequestCardProps) {
   const t = useT();
+  const canOpen = useCanOpen();
   // The reason typed when "总是允许" was clicked, while its confirm is open (null = closed).
   const [pendingAlwaysAllow, setPendingAlwaysAllow] = useState<{
     readonly reason: string | undefined;
@@ -115,7 +117,11 @@ export function ActionRequestCard({
           <span title={card.policyDecision}>{policyDecisionLabel(card.policyDecision, t)}</span>
         ) : undefined
       }
-      approvalsHref={canDecide ? hrefs.approval(card.actionRequestId) : undefined}
+      approvalsHref={
+        canDecide && canOpen(hrefs.approval(card.actionRequestId)) !== false
+          ? hrefs.approval(card.actionRequestId)
+          : undefined
+      }
       readOnly={!decidable || !canDecide}
       suspectedSecretValues={suspectedSecretValues}
       onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}

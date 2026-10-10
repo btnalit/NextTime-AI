@@ -17,6 +17,7 @@ import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 // file's `components/ui/*` imports are unchanged (this file stays on
 // `scripts/guards/legacy-ui-importers.json`; out of this lane's scope to migrate fully).
 import { EmptyState } from './kit/empty-state.js';
+import { RouteLink } from './kit/route-link.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -342,14 +343,14 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
         action={
           <span className="row row-wrap">
             {notEnabled.slice(0, 3).map((row) => (
-              <a
+              <RouteLink
                 key={row.gateId}
                 href={hrefs.platformGateInstance(row.gateId)}
                 className="inline-flex min-h-9 items-center"
-                data-testid="available-gates-enable-link"
+                testId="available-gates-enable-link"
               >
                 {t(`去启用：${row.displayName}`, `Enable ${row.displayName}`)}
-              </a>
+              </RouteLink>
             ))}
           </span>
         }
@@ -369,13 +370,13 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
           'Set the connector to platform preset under Platform → Integrations and its instances show up here.',
         )}
         action={
-          <a
+          <RouteLink
             href={hrefs.platformIntegrations()}
             className="inline-flex min-h-9 items-center"
-            data-testid="available-gates-integrations-link"
+            testId="available-gates-integrations-link"
           >
             {t('打开平台集成', 'Open platform integrations')}
-          </a>
+          </RouteLink>
         }
         testId="available-gates-empty"
       />

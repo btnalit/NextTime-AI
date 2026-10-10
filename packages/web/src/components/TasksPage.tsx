@@ -34,7 +34,7 @@ export interface TasksPageProps {
   readonly pushes: PushSource;
   readonly selectedId?: string;
   readonly onSelect: (taskId: string | null) => void;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  readonly onOpenApproval?: (actionRequestId: string) => void;
 }
 
 type Filter = 'active' | 'all' | 'done';
@@ -243,7 +243,7 @@ interface TaskDetailContentProps {
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
   readonly principalNames: ReadonlyMap<string, string>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onCancel: (task: TaskSummary) => Promise<void>;
   readonly canCancel: boolean;
 }

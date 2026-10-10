@@ -37,7 +37,8 @@ export interface ChatPageProps {
    *  P3-2, V3: the list stays on screen next to an open conversation, so picking another row here
    *  must navigate without first going back to the bare chats route. */
   readonly onSelectChat: (chatId: string) => void;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
+  readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onOpenTask: (taskId: string) => void;
 }
 

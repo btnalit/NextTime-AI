@@ -3,6 +3,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
+import { RouteLink } from '../kit/route-link.js';
 
 /**
  * components/connect/DefinitionDrift (legacy K, UX acceptance of #538): what a workspace reads when
@@ -59,12 +60,12 @@ export function AwaitingAdoptionNotice({
               )}
         </span>
         {platformAdmin && platformGateId !== undefined ? (
-          <a
+          <RouteLink
             href={hrefs.platformGateInstance(platformGateId)}
-            data-testid={testId ? `${testId}-adopt-link` : undefined}
+            testId={testId ? `${testId}-adopt-link` : undefined}
           >
             {t('去集成采用', 'Adopt it under Integrations')}
-          </a>
+          </RouteLink>
         ) : (
           <span className="text-3">
             {t(

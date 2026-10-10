@@ -1,4 +1,3 @@
-import type { CapabilityName } from '@nexttime/shared';
 import { CAPABILITY_REGISTRY, capabilityHasSideEffects, getCapability } from '@nexttime/shared';
 import type { ExplainResultWire } from '@nexttime/shared';
 import type {
@@ -218,18 +217,23 @@ export interface AuditRecordRow {
 }
 
 /** The console route an audit row's `resourceType:resourceId` opens, when the console has a page
- *  for that resource and the reader's role may open it (`can`, `hooks/useRoleCan` — an auditor
- *  may not read an ActionRequest, #541 acceptance); `undefined` otherwise (the chip stays a plain
- *  reference). */
+ *  for that resource and the reader may open it (`canOpen`, `hooks/useCanOpen` — the route table;
+ *  an auditor may not open an ActionRequest, #541 acceptance); `undefined` otherwise (the chip
+ *  stays a plain reference). */
 export function resourceHref(
   resourceType: string | null,
   resourceId: string | null,
-  can: (capabilityName: CapabilityName) => boolean = () => true,
+  canOpen: (href: string) => boolean | null = () => true,
 ): string | undefined {
+  const href = resourceRoute(resourceType, resourceId);
+  return href !== undefined && canOpen(href) !== false ? href : undefined;
+}
+
+function resourceRoute(resourceType: string | null, resourceId: string | null): string | undefined {
   if (!resourceId) return undefined;
   switch (resourceType) {
     case 'action_request':
-      return can('get_action') ? hrefs.approval(resourceId) : undefined;
+      return hrefs.approval(resourceId);
     case 'task':
       return hrefs.task(resourceId);
     case 'chat':

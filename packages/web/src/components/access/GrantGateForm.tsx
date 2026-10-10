@@ -1,6 +1,7 @@
 import type { OperationSummaryWire } from '@nexttime/shared';
 import { useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   type GatekeeperListRow,
@@ -57,7 +58,25 @@ export interface GrantGateFormProps {
  * enforced `capability_grants.scope`, and since 2026-09-25 `grant_capability` no longer accepts it
  * (leftover 80). A grant covers the whole gate, and the Operations list says so.
  */
-export function GrantGateForm({
+/** Granting is the workspace owner's (`grant_capability`): any other role is told so, and the
+ *  form — with its member directory read — is never mounted for it (#541 review N1). */
+export function GrantGateForm(props: GrantGateFormProps) {
+  const t = useT();
+  const can = useRoleCan(props.http);
+  if (can('grant_capability') === false) {
+    return (
+      <Notice testId={props.testId ? `${props.testId}-owner-only` : undefined}>
+        {t(
+          '把系统授权给成员由工作区所有者完成。',
+          'The workspace owner grants systems to members.',
+        )}
+      </Notice>
+    );
+  }
+  return <GrantGateFormBody {...props} />;
+}
+
+function GrantGateFormBody({
   http,
   lockedGatekeeper,
   onGranted,
@@ -66,6 +85,7 @@ export function GrantGateForm({
   testId,
 }: GrantGateFormProps) {
   const t = useT();
+  const can = useRoleCan(http);
 
   // ---- Member picker -----------------------------------------------------------------------
   const [memberQuery, setMemberQuery] = useState('');
@@ -73,7 +93,7 @@ export function GrantGateForm({
     http,
     'list_principals',
     memberQuery.trim() ? { q: memberQuery.trim() } : {},
-    { autoLoadAll: true },
+    { autoLoadAll: true, enabled: can('list_principals') === true },
   );
   const memberOptions =
     principals.state.status === 'ready'

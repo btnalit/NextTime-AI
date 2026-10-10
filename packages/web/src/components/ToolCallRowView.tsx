@@ -6,6 +6,7 @@ import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
 import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record.js';
 import { Notice } from './kit/notice.js';
+import { RouteLink } from './kit/route-link.js';
 import { Icon } from './ui/Icon.js';
 
 /** The `gatekeeperId` a gate call's arguments name — an object, or its JSON text (a persisted
@@ -236,7 +237,7 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
             'agent 自己报告的调用，参数和结果已脱敏、截断。能力调用的权威记录在',
             'Reported by the agent; arguments and results are redacted and shortened. The authoritative record of capability calls is the',
           )}{' '}
-          <a href={hrefs.audit()}>{t('审计', 'audit log')}</a>
+          <RouteLink href={hrefs.audit()}>{t('审计', 'audit log')}</RouteLink>
           {t('。', '.')}
         </span>
         {records.map((record) => (

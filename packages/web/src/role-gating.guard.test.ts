@@ -9,13 +9,15 @@ import {
   roleMayUseCapability,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from './lib/nav.js';
+import { ROUTE_REQUIRES, routeRequirement } from './lib/route-access.js';
+import { hrefs } from './lib/router.js';
 
 /**
- * #541 review M1/M3 guard: what a reader's role may do is decided by the kernel's own predicate
+ * #541 review M1/M3/N1/N2 guard: what a reader's role may do is decided by the kernel's own predicate
  * (`useRoleCan` → `roleMayUseCapability`), never by "it was refused once already"
  * (`permissions.isDenied`, which shows the control until the first refusal), and every
- * capability name the console checks or calls is one the registry knows.
+ * capability name the console checks or calls is one the registry knows. Where a route leads is
+ * decided by the route table (`lib/route-access`), never by "only X ever reaches this link".
  */
 
 const SRC = fileURLToPath(new URL('.', import.meta.url));
@@ -54,7 +56,6 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
   'components/members/IssueServiceHandleSection.tsx': "MembersPage's header menu, behind canManage",
   'components/OnboardingWizard.tsx': "SystemsPage's more-ways-to-connect menu, behind canCreate",
   'components/CompleteConnectionForm.tsx': "SystemsPage's complete / register, behind canCreate",
-  'components/OnboardingWizardReview.tsx': 'inside the wizard / a linked launcher (owner)',
   'components/RequestConnectionForm.tsx':
     "SystemsPage's connect-a-system button, behind canRequest",
   'components/AgentPolicyForm.tsx': 'ModelsPage, owner only (isOwner)',
@@ -74,28 +75,25 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
   'components/systems/SystemsPage.tsx':
     'revoke via SystemAccessCard canRevoke (canManage); cancel inside the requests section (canRequest)',
   'components/systems/SystemAccessCard.tsx': 'SystemsPage hands it canPublish / canManage',
-  'components/access/GrantGateForm.tsx':
-    'GrantGateDrawer and the linked launcher, both owner paths',
   'components/approvals/useApprovalQueue.ts':
-    'the approvals page, a nav entry gated on list_pending (operator)',
+    'the approvals route, which the route table gates on list_pending (the same roles)',
   'components/chat/useActionCards.ts': "ChatPage's canDecide / canAlwaysAllow",
 };
 
 /** Files that read something some role may not, without a `can('<name>')` of their own: each is
  *  only reached by the roles that may read it — where is the reason. Only ever shrinks. */
 const READ_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
-  'components/ApprovalQueuePage.tsx': 'the approvals page, a nav entry gated on list_pending',
-  'components/approvals/useApprovalQueue.ts': 'the approvals page, as above',
-  'components/MembersPage.tsx': 'a nav entry gated on list_principals',
-  'components/AuditPage.tsx': 'a nav entry gated on audit_query (reconstruct: the same roles)',
+  'components/ApprovalQueuePage.tsx':
+    'the approvals route, gated on list_pending by the route table (list_action_requests: the same roles)',
+  'components/approvals/useApprovalQueue.ts': 'the approvals route, as above',
+  'components/MembersPage.tsx': 'the members route, gated on list_principals by the route table',
+  'components/AuditPage.tsx':
+    'the audit route, gated on audit_query by the route table (reconstruct: the same roles)',
   'components/audit/AuditLogSection.tsx': 'AuditPage, as above',
   'components/audit/ExplainSection.tsx': 'AuditPage, as above (export_prov: the same roles)',
   'components/audit/ApprovalContext.tsx':
-    "AuditPage opened from an approval's provenance link (owner); ExplainSection gates get_action",
+    "AuditPage mounts it only when can('get_action') (an auditor gets a sentence instead)",
   'components/CompleteConnectionForm.tsx': "SystemsPage's complete / register, behind canCreate",
-  'components/access/GrantGateForm.tsx':
-    'GrantGateDrawer and the linked launcher, both owner paths',
-  'components/connect/ConnectSystemLauncher.tsx': "SystemsPage's canCreate and the platform page",
   'components/connect/EnableGateConfirm.tsx': "SystemsPage's canEnable",
   'components/connect/RefreshOperationGovernanceConfirm.tsx': "SystemAccessCard's canManage",
   'components/readiness/useExecutionReadiness.ts':
@@ -103,6 +101,32 @@ const READ_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
   'components/systems/useMemberReachability.ts':
     "SystemsPage passes the grantees of list_grants, read only with can('list_grants')",
 };
+
+/** Files that build an href to a route the table gates without asking the table (`RouteLink`,
+ *  `useCanOpen`, `roleMayOpen`) — each for a reason the table cannot express. Only ever shrinks. */
+const ROUTE_LINK_ALLOWED: Readonly<Record<string, string>> = {
+  'lib/nav.ts': "the sidebar's items; Sidebar filters them with roleMayOpen",
+  'lib/graph-route.ts': 'builds auditHrefForNode; its callers render it through the table',
+  'lib/platform-workspaces.ts': 'builds the residue href for the platform pages',
+  'components/platform/PlatformOverviewPage.tsx':
+    'a platform page (requireAdmin): every platform route is open to its reader',
+  'components/platform/PlatformModelsPage.tsx': 'a platform page, as above',
+  'components/platform/PlatformSettingsPage.tsx': 'a platform page, as above',
+  'components/platform/PlatformStatusPage.tsx': 'a platform page, as above',
+  'session/useSessionMachine.ts':
+    'lands a platform-only session (an administrator, no workspace) on the platform overview',
+};
+
+/** Every helper that builds an href to a route the table gates: the `hrefs` whose route has a
+ *  requirement, plus the audit deep-link builders. */
+const GATED_HREF_BUILDERS: readonly string[] = [
+  ...Object.entries(hrefs)
+    .filter(([, build]) => routeRequirement((build as (...args: string[]) => string)('x')))
+    .map(([name]) => `hrefs.${name}(`),
+  'auditHref(',
+  'auditHrefForNode(',
+  'resourceHref(',
+];
 
 /** Every write some workspace role may not make (`roleMayUseCapability`). */
 const ROLE_LIMITED_WRITES: ReadonlySet<string> = new Set(
@@ -195,11 +219,29 @@ describe('role gating guard (#541 review M1/M3)', () => {
     expect(unknown).toEqual([]);
   });
 
-  it('every nav entry gated on a capability names a registered one', () => {
-    const named = [...WORK_NAV, ...GOVERN_NAV, ...PLATFORM_NAV]
-      .map((item) => item.capability)
-      .filter((name): name is NonNullable<typeof name> => name !== undefined);
+  it('every route requirement names a registered capability', () => {
+    const named = Object.values(ROUTE_REQUIRES).flatMap((requirement) =>
+      requirement && 'capability' in requirement ? [requirement.capability] : [],
+    );
     expect(named.length).toBeGreaterThan(0);
     expect(named.filter((name) => getCapability(name) === undefined)).toEqual([]);
+  });
+
+  it('every in-app link to a gated route asks the route table (#541 review N2)', () => {
+    // The table gates the approvals, members, audit and platform routes — if this list ever
+    // empties, the builders were renamed and the scan below sees nothing.
+    expect(GATED_HREF_BUILDERS.length).toBeGreaterThan(10);
+    const builds = (text: string) => GATED_HREF_BUILDERS.some((name) => text.includes(name));
+    const asks = (text: string) =>
+      /\bRouteLink\b|\buseCanOpen\(|\bcanOpen\(|\broleMayOpen\(/.test(text);
+    const unasked = FILES.filter(
+      ({ path, text }) => !(path in ROUTE_LINK_ALLOWED) && builds(text) && !asks(text),
+    ).map(({ path }) => path);
+    expect(unasked, 'render it with `kit/route-link` or check `useCanOpen()(href)`').toEqual([]);
+    const stale = Object.keys(ROUTE_LINK_ALLOWED).filter((path) => {
+      const text = FILES.find((file) => file.path === path)?.text ?? '';
+      return !builds(text) || asks(text);
+    });
+    expect(stale, 'remove these from ROUTE_LINK_ALLOWED').toEqual([]);
   });
 });

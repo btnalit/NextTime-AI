@@ -17,6 +17,7 @@ import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
+import { RouteLink } from '../kit/route-link.js';
 import { Select } from '../kit/select.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { useGraphObjects, useResolvedObjects } from './GraphObjectsContext.js';
@@ -301,13 +302,13 @@ function ConflictSide({
               </span>
             ) : null}
           </div>
-          <a
+          <RouteLink
             className="text-13"
             href={auditHrefForNode(factId)}
-            data-testid="graph-conflict-side-provenance"
+            testId="graph-conflict-side-provenance"
           >
             {t('完整溯源', 'Full provenance')}
-          </a>
+          </RouteLink>
         </>
       ) : null}
     </section>

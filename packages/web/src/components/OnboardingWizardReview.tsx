@@ -5,6 +5,7 @@ import {
 } from '@nexttime/shared';
 import { useCallback, useRef, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GraphObjectRow,
@@ -122,7 +123,25 @@ export async function loadGateOperations(
   return rows;
 }
 
-export function OnboardingWizardReview({
+/** Reviewing the classification proposes and publishes Operations (builder, owner): any other
+ *  role is told whose step it is instead (#541 review N1). */
+export function OnboardingWizardReview(props: OnboardingWizardReviewProps) {
+  const t = useT();
+  const can = useRoleCan(props.http);
+  if (can('publish_operation') === false || can('propose_operation') === false) {
+    return (
+      <Notice testId="wizard-review-builder-only">
+        {t(
+          '审核并发布 Operation 由 builder 或工作区所有者完成。',
+          'A builder or the workspace owner reviews and publishes the Operations.',
+        )}
+      </Notice>
+    );
+  }
+  return <OnboardingWizardReviewBody {...props} />;
+}
+
+function OnboardingWizardReviewBody({
   http,
   gatekeeperId,
   onDone,

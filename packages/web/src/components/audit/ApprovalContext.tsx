@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
@@ -36,6 +37,7 @@ export function ApprovalContext({
   onLoaded,
 }: ApprovalContextProps) {
   const t = useT();
+  const canOpen = useCanOpen();
   const [row, setRow] = useState<ActionRequestRow | null>(null);
   const [error, setError] = useState<unknown | null>(null);
   // Read at load time only — a fresh `onLoaded` closure per render must not re-fetch.
@@ -105,7 +107,9 @@ export function ApprovalContext({
             ) : undefined
           }
           readOnly
-          approvalsHref={hrefs.approval(row.id)}
+          approvalsHref={
+            canOpen(hrefs.approval(row.id)) !== false ? hrefs.approval(row.id) : undefined
+          }
           testId="approval-context-card"
         >
           <dl className="definition-list">

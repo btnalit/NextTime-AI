@@ -19,7 +19,8 @@ export interface LinkedApprovalsProps {
   readonly pushes: PushSource;
   readonly taskId: string;
   readonly principalNames?: ReadonlyMap<string, string>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
+  readonly onOpenApproval?: (actionRequestId: string) => void;
 }
 
 const PAGE_SIZE = 20;
@@ -119,7 +120,7 @@ function LinkedApprovalsList({
             <ListRow
               key={row.id}
               testId="linked-approval-row"
-              onSelect={() => onOpenApproval(row.id)}
+              onSelect={() => onOpenApproval?.(row.id)}
             >
               <span className="row-wrap">
                 <StatusChip machine="actionRequest" status={row.status} size="s" />

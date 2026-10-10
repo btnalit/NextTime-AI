@@ -1,4 +1,3 @@
-import type { CapabilityName } from '@nexttime/shared';
 import type { BreadcrumbItem } from '../components/kit/page-header.js';
 import type { NavSection } from './router.js';
 import { hrefs } from './router.js';
@@ -12,11 +11,9 @@ export interface NavItem {
    *  (`scripts/guards/legacy-ui-importers.json` only shrinks, S8 §5e risk ①). Sidebar.tsx, already
    *  on that allowlist, casts back to `IconName` at the one place it renders `<Icon>`. */
   readonly icon: string;
+  /** What the page needs is the route's own declaration (`lib/route-access`), not the item's: the
+   *  sidebar hides an item whose route the reader's role cannot open. */
   readonly href: string;
-  /** The read the page cannot work without. Once the reader's role is known, the item is hidden
-   *  when that role may not use it (`roleMayUseCapability`) — a page that could only say "your role
-   *  cannot" is not offered (#541 acceptance sweep). */
-  readonly capability?: CapabilityName;
 }
 
 /** A nav entry that opens outside the console's own hash-routed shell — no `section` (it never
@@ -69,7 +66,6 @@ export const WORK_NAV: readonly NavItem[] = [
     href: hrefs.approvals(),
     // Only an operator or the owner reads the queue: for every other role the page could only
     // say "not you" (#541 acceptance P2 — a dead end for the read-only auditor first of all).
-    capability: 'list_pending',
   },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
   // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
@@ -94,7 +90,6 @@ export const GOVERN_NAV: readonly NavItem[] = [
     sub: 'Members',
     icon: 'users',
     href: hrefs.members(),
-    capability: 'list_principals',
   },
   // Console redesign P2 (docs/console-redesign-plan-2026-09-25.md §4): 访问's per-member grant
   // half merged into this page (`components/systems/SystemsPage.tsx`) — no separate 访问 nav item
@@ -114,7 +109,6 @@ export const GOVERN_NAV: readonly NavItem[] = [
     sub: 'Audit',
     icon: 'clock',
     href: hrefs.audit(),
-    capability: 'audit_query',
   },
 ];
 

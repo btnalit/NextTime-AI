@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { isDecidable } from '../../lib/action-card.js';
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
@@ -119,6 +120,8 @@ export function ApprovalDetail({
   const suspectedSecretPaths = row.suspectedSecretPaths ?? credentialReviewPaths(error);
   const reviewed = suspectedSecretValues > 0 && credentialsReviewed;
   const approveBlocked = suspectedSecretValues > 0 && !credentialsReviewed;
+  // #541 review N2: an operator works this page but cannot read the audit log.
+  const canOpen = useCanOpen();
   const provenance = auditHref({
     actionRequestId: row.id,
     ...(row.approvalDecisionId ? { nodeId: row.approvalDecisionId } : {}),
@@ -295,11 +298,13 @@ export function ApprovalDetail({
             {humanizeKind(row.actionKindTag)}
             {scopeLabel ? <span className="mono text-2"> · {scopeLabel}</span> : null}
           </h2>
-          <Button variant="secondary" size="s" asChild>
-            <a href={provenance} data-testid="approval-provenance-link">
-              {t('查看溯源', 'View provenance')}
-            </a>
-          </Button>
+          {canOpen(provenance) !== false ? (
+            <Button variant="secondary" size="s" asChild>
+              <a href={provenance} data-testid="approval-provenance-link">
+                {t('查看溯源', 'View provenance')}
+              </a>
+            </Button>
+          ) : null}
         </div>
         <div className="row-wrap text-3">
           <span>{t('由', 'Proposed by')}</span>

@@ -1,6 +1,6 @@
 import type { ExplainResultWire, ExportProvResult } from '@nexttime/shared';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { type ProvenanceNodeKind, provenanceNodeSource } from '../../lib/audit-pickers.js';
 import {
@@ -53,7 +53,7 @@ const IDLE: ExplainState = { busy: false, error: null, nodeId: null, result: nul
  */
 export function ExplainSection({ http, requestedNodeId, principalNames }: ExplainSectionProps) {
   const t = useT();
-  const can = useRoleCan(http);
+  const canOpen = useCanOpen(http);
   const toast = useToast();
   const [nodeId, setNodeId] = useState(requestedNodeId ?? '');
   // Which recent nodes the picker offers — `explain` itself takes any of the three untyped.
@@ -190,7 +190,7 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           view={view}
           raw={state.result}
           principalNames={principalNames}
-          canOpenApproval={can('get_action') !== false}
+          canOpen={canOpen}
         />
       ) : null}
     </section>
@@ -201,13 +201,13 @@ function ExplainResultView({
   view,
   raw,
   principalNames,
-  canOpenApproval,
+  canOpen,
 }: {
   readonly view: ExplainView;
   readonly raw: unknown;
   readonly principalNames?: ReadonlyMap<string, string>;
-  /** The reader's role may open an ActionRequest (`get_action`); otherwise its chip is not a link. */
-  readonly canOpenApproval: boolean;
+  /** `hooks/useCanOpen`: a chip whose route the reader cannot open is not a link. */
+  readonly canOpen: (href: string) => boolean | null;
 }) {
   const t = useT();
   const { decision, links } = view;
@@ -303,7 +303,11 @@ function ExplainResultView({
                     kind="actionRequest"
                     id={links.actionRequestId}
                     name="ActionRequest"
-                    href={canOpenApproval ? hrefs.approval(links.actionRequestId) : undefined}
+                    href={
+                      canOpen(hrefs.approval(links.actionRequestId)) !== false
+                        ? hrefs.approval(links.actionRequestId)
+                        : undefined
+                    }
                     size="s"
                     testId="explain-link-action-request"
                   />
