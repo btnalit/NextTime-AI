@@ -6,9 +6,11 @@ import {
   errorToastText,
   presentError,
 } from './errors.js';
+import { GateHostError } from './gate-host.js';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { LlmAdminError } from './llm-admin.js';
+import { LocalizedError } from './localized-error.js';
 
 /** errors.present.test (console audit P1-1): the readable body for an error, never the kernel's
  *  own text, which moves to the technical details with the code. */
@@ -97,5 +99,34 @@ describe('presentError', () => {
       ).toBeTruthy();
     }
     expect(Object.keys(CODE_TITLES).sort()).toEqual(Object.keys(CODE_TITLES_ZH).sort());
+  });
+
+  it('a sentence the console wrote itself stays the body, never folded away (review R1)', () => {
+    const shown = presentError(new LocalizedError('请填写理由。'), zh);
+    expect(shown).toMatchObject({
+      code: 'invalid_input',
+      title: '请检查输入',
+      message: '请填写理由。',
+      raw: null,
+      curated: true,
+    });
+  });
+
+  it('a gate host refusal keeps its sentence as the body and the browser text in the fold', () => {
+    const shown = presentError(
+      new GateHostError('无法连接门宿主：检查网络。', 'Failed to fetch'),
+      zh,
+    );
+    expect(shown).toMatchObject({
+      code: 'gate_host_error',
+      message: '无法连接门宿主：检查网络。',
+      raw: 'Failed to fetch',
+      curated: true,
+    });
+  });
+
+  it('page overrides still win over a console-written sentence for the same code', () => {
+    const shown = presentError(new LocalizedError('x'), zh, { invalid_input: 'y' });
+    expect(shown.message).toBe('y');
   });
 });

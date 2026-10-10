@@ -1,6 +1,7 @@
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
+import { LocalizedError } from './localized-error.js';
 import { ownEntry } from './own.js';
 import { platformErrorMessage } from './platform-errors.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
@@ -81,6 +82,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   turn_not_found: 'Turn not found',
   no_active_turn: 'Nothing is running',
   operation_refused: 'The gate refused this call',
+  invalid_input: 'Check the input',
+  gate_host_error: 'Gate host error',
   connection_target_refused: 'Address not allowed',
   credentials_in_observe_params: 'Credentials in the parameters',
   unknown: 'Error',
@@ -122,6 +125,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   turn_not_found: '找不到这一轮对话',
   no_active_turn: '没有正在运行的一轮',
   operation_refused: '门拒绝了这次调用',
+  invalid_input: '请检查输入',
+  gate_host_error: '门宿主没有完成这次写入',
   connection_target_refused: '这个地址不允许接入',
   credentials_in_observe_params: '参数里带了凭据',
   unknown: '出错了',
@@ -270,7 +275,8 @@ export const ERROR_NEXT_STEPS: Readonly<
  * An error as the console shows it (console audit P1-1): a short title, a body that says what
  * happened in the viewer's language and what to do next, and the kernel's own text plus the raw
  * code for the 「技术细节」 disclosure (`kit/error-details`). The body's sources, most specific
- * first: the page's own `overrides` for this code, `lib/platform-errors.ts`'s copy, the
+ * first: the page's own `overrides` for this code, a sentence the console wrote itself
+ * (`lib/localized-error`), `lib/platform-errors.ts`'s copy, the model proxy's copy, the
  * transport sentence, `ERROR_NEXT_STEPS`; for an unknown code with none of those, a line that
  * points at the technical details.
  */
@@ -297,6 +303,7 @@ export function presentError(
   const step = ownEntry(ERROR_NEXT_STEPS, described.code);
   const curated =
     (overrides ? ownEntry(overrides, described.code) : undefined) ??
+    (err instanceof LocalizedError ? err.message : null) ??
     platformErrorMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
@@ -307,7 +314,8 @@ export function presentError(
       '操作没有完成，原因见下方「技术细节」。',
       'This did not complete; see the technical details below.',
     );
-  const raw = described.message.trim();
+  // A console-written sentence is the body itself; only its underlying detail goes in the fold.
+  const raw = (err instanceof LocalizedError ? (err.detail ?? '') : described.message).trim();
   return {
     code: described.code,
     title: localizedErrorTitle(described, t),
@@ -367,6 +375,14 @@ export function describeError(err: unknown): ErrorDescription {
     return {
       code: err.code,
       title: ownEntry(CODE_TITLES, err.code) ?? 'Model proxy error',
+      message: err.message,
+    };
+  }
+  // The console's own sentence (lib/localized-error); `presentError` shows it as the body.
+  if (err instanceof LocalizedError) {
+    return {
+      code: err.code,
+      title: ownEntry(CODE_TITLES, err.code) ?? titleFromCode(err.code),
       message: err.message,
     };
   }

@@ -3,10 +3,8 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { HttpError } from '../../lib/http-client.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { purgeUserSkipReasonLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
@@ -27,13 +25,6 @@ export interface PurgeUsersDialogProps {
 /** `purge_user{userIds}` is `max(200)` (`capabilities.ts`); the candidate list pages at the same
  *  size so one page is one batch at most. */
 const BATCH_MAX = 200;
-
-/** Kernel 4xx with the console's bilingual copy as its message, for `Confirm`'s own inline banner. */
-function friendly(err: unknown, t: Translate): unknown {
-  const mapped = platformErrorMessage(err, t);
-  if (mapped === null || !(err instanceof HttpError)) return err;
-  return new HttpError(err.kind, mapped, err.code);
-}
 
 /**
  * components/platform/PurgeUsersDialog (S6-A A6, docs/console-completion-plan.md §5.2
@@ -85,15 +76,11 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
   }
 
   async function execute(): Promise<void> {
-    try {
-      const answered = await http.call<PurgeUsersResultWire>('purge_user', {
-        userIds: chosen.map((row) => row.id),
-      });
-      setResult(answered);
-      onPurged(answered);
-    } catch (err) {
-      throw friendly(err, t);
-    }
+    const answered = await http.call<PurgeUsersResultWire>('purge_user', {
+      userIds: chosen.map((row) => row.id),
+    });
+    setResult(answered);
+    onPurged(answered);
   }
 
   if (step === 'confirm') {

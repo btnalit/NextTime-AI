@@ -11,6 +11,7 @@ import {
   conflictValueRows,
 } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { LocalizedError } from '../../lib/localized-error.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -343,7 +344,7 @@ function ResolveConflictButton({
         onConfirm={async () => {
           const trimmedReason = reason.trim();
           if (trimmedReason === '') {
-            throw new Error(t('请填写理由。', 'A reason is required.'));
+            throw new LocalizedError(t('请填写理由。', 'A reason is required.'));
           }
           await http.call('resolve_conflict', {
             conflictId: conflict.id,

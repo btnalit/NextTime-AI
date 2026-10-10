@@ -386,7 +386,7 @@ describe('AgentProfilePage', () => {
     expect(empty.textContent).toContain('所有者授权');
   });
 
-  it('a 400 invalid_params on save shows an inline field error', async () => {
+  it('a 400 invalid_params on save marks the field in Chinese, the kernel text under 技术细节', async () => {
     const http = scriptedHttp({
       get_agent_profile: () => profile(),
       set_agent_profile: () =>
@@ -397,7 +397,11 @@ describe('AgentProfilePage', () => {
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
     fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
-    await waitFor(() => expect(screen.getByText('model not in allow-list')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('这一项没有通过校验，原因见下方「技术细节」。')).toBeTruthy(),
+    );
+    const raw = screen.getByText('model not in allow-list');
+    expect(raw.closest('details.error-details')).not.toBeNull();
   });
 
   it('narrows the model select to policy.allowedModels when non-empty', async () => {

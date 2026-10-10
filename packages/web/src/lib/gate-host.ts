@@ -1,5 +1,6 @@
 import type { GateHostTokenWire } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
+import { LocalizedError } from './localized-error.js';
 
 /**
  * lib/gate-host: P-B2a (决定 ⑩) — posting a credential straight from the browser to the platform
@@ -20,9 +21,13 @@ import type { Translate } from './i18n.js';
  * holds the reference, which every browser's native `fetch` rejects.
  */
 
-export class GateHostError extends Error {
-  constructor(message: string) {
-    super(message);
+/** Already in the viewer's language, so shown as the error's body (`lib/localized-error`). */
+export class GateHostError extends LocalizedError {
+  constructor(message: string, detail?: string) {
+    super(
+      message,
+      detail === undefined ? { code: 'gate_host_error' } : { code: 'gate_host_error', detail },
+    );
     this.name = 'GateHostError';
   }
 }
@@ -63,7 +68,11 @@ export async function postGateCredential(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new GateHostError(
-      t(`无法连接门宿主：${detail}`, `Could not reach the gate host: ${detail}`),
+      t(
+        '无法连接门宿主：检查网络，或请平台管理员确认门宿主正在运行。',
+        'Could not reach the gate host. Check the network, or ask a platform administrator to confirm it is running.',
+      ),
+      detail,
     );
   }
 
