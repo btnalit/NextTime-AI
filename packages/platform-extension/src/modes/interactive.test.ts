@@ -99,8 +99,12 @@ describe('registerInteractiveMode', () => {
     expect(fake.tools.has('request_action')).toBe(false);
   });
 
-  it('subscribes only to session_start and context — no input/agent_start/agent_end/agent_settled (no Turn to correlate)', () => {
-    expect([...fake.handlers.keys()].sort()).toEqual(['context', 'session_start']);
+  it('subscribes only to session_start, context and before_provider_request (prompt cache) — no input/agent_start/agent_end/agent_settled (no Turn to correlate)', () => {
+    expect([...fake.handlers.keys()].sort()).toEqual([
+      'before_provider_request',
+      'context',
+      'session_start',
+    ]);
   });
 
   it('session_start projects only observe-class allowed Operations as <gate>.<op> tools that call observe_operation', async () => {
