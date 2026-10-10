@@ -181,14 +181,14 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
         const connect = main.getByTestId('connect-system-button');
         if (navTestId === 'nav-systems' && (await connect.isVisible())) {
           await connect.click();
-          await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
+          await expect(page.getByTestId('connect-system-drawer')).toBeVisible({ timeout: 15_000 });
           await settled();
           expect(
             await localRefusals.take(),
             '接入一个系统: asked for what this role cannot have',
           ).toEqual([]);
           await page.keyboard.press('Escape');
-          await expect(page.getByRole('dialog')).toBeHidden({ timeout: 15_000 });
+          await expect(page.getByTestId('connect-system-drawer')).toBeHidden({ timeout: 15_000 });
         }
       }
       // Every hint's link and every in-app link a page offered this role leads to a page with
