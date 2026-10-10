@@ -369,9 +369,11 @@ export function SystemAccessCard({
         </div>
         <div className="data-row-meta" data-testid="gatekeeper-ops-summary">
           <span>
+            {/* The short id differs on every run: data-volatile masks it in the screenshot gate. */}
+            gate <span data-volatile="">{shortId(gate.gateId)}</span>
             {t(
-              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
-              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
+              ` · ${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
+              ` · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
             )}
           </span>
           {healthInfo.linked && healthInfo.health !== undefined ? (
