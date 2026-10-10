@@ -347,7 +347,7 @@ export function upstreamStatus(error: string | null): number | null {
 export function explainUpstreamError(
   error: string | null,
   t: Translate,
-  phase?: 'completion' | 'tool_call',
+  phase?: 'completion' | 'tool_call' | 'model_list',
 ): string | null {
   if (!error) return null;
   // Checked first: when the forced tool_choice was refused and the retry answered in prose, the
@@ -377,6 +377,13 @@ export function explainUpstreamError(
     return t(
       '能正常对话，但上游拒绝了带工具的请求：这个模型或中转多半不支持工具调用，Worker 和门工具会用不了，换一个支持工具调用的模型。',
       'Chat works, but the upstream refused a request carrying tools — this model or relay most likely does not support tool calling, so Workers and gate tools will not work. Pick a model that does.',
+    );
+  }
+  // Fetching the model list names no model, so a 404 there cannot be a misspelt model id.
+  if (status === 404 && phase === 'model_list') {
+    return t(
+      '上游没有模型列表接口（404）：这个中转可能不提供，或 Base URL 不对（应为不带 /v1 的源站）。',
+      'The upstream has no model list endpoint (404): this relay may not offer one, or the Base URL is wrong (the origin, without /v1).',
     );
   }
   if (status === 404) {

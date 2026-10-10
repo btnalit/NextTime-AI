@@ -359,6 +359,26 @@
   flex-shrink: 0;
 }
 
+/* Console audit P1-1: the kernel's raw code and text, folded under the readable body. */
+.error-details {
+  margin-top: var(--space-1);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+.error-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.error-details-raw {
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .notice {
   display: flex;
   gap: var(--space-2);

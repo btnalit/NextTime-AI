@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { ResourceState } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { errorToastText } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -153,7 +154,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
       toast.push({
         tone: 'danger',
         title: t('重建失败', 'Rebuild failed'),
-        description: error instanceof Error ? error.message : String(error),
+        description: errorToastText(error, t),
       });
     } finally {
       setRolling(false);

@@ -8,6 +8,7 @@ import type {
 } from '@nexttime/shared';
 import { LLM_PROVIDER_PROBE_MAX_MODELS } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { presentError } from '../../../lib/errors.js';
 import { useT } from '../../../lib/i18n.js';
 import {
   type LlmAdminClient,
@@ -30,6 +31,8 @@ import {
   providerKeyProblem,
   slugifyProviderId,
 } from '../../../lib/provider-form.js';
+import { ErrorDetails } from '../../kit/error-details.js';
+import { InlineError } from '../../kit/inline-error.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../../ui/Field.js';
@@ -460,10 +463,10 @@ export function ProviderForm({
 
   const mapped = llmAdminErrorMessage(error, t);
   const discoveryError = discovery.status === 'error' ? discovery.error : null;
-  const discoveryErrorText = discoveryError ? llmAdminErrorMessage(discoveryError, t) : null;
+  const discoveryShown = discoveryError ? presentError(discoveryError, t) : null;
   const discoveryExplain =
     discoveryError instanceof LlmAdminError
-      ? explainUpstreamError(discoveryError.message, t)
+      ? explainUpstreamError(discoveryError.message, t, 'model_list')
       : null;
   const filterLower = filter.trim().toLowerCase();
   const visibleDiscovered = (discovered ?? []).filter(
@@ -784,8 +787,7 @@ export function ProviderForm({
 
         {discoveryError !== null ? (
           <div className="field-error" role="alert" data-testid="provider-discover-error">
-            {discoveryErrorText ??
-              (discoveryError instanceof Error ? discoveryError.message : String(discoveryError))}
+            {discoveryShown?.message}
             {discoveryExplain ? <div className="text-2">{discoveryExplain}</div> : null}
             {relayMayNotListModels(discoveryError) ? (
               <div className="text-2" data-testid="provider-discover-manual-hint">
@@ -794,6 +796,9 @@ export function ProviderForm({
                   'Some relays do not list models — type the model ids below instead.',
                 )}
               </div>
+            ) : null}
+            {discoveryShown ? (
+              <ErrorDetails code={discoveryShown.code} raw={discoveryShown.raw} />
             ) : null}
           </div>
         ) : null}
@@ -1041,14 +1046,7 @@ export function ProviderForm({
 
       {error !== null ? (
         mapped !== null ? (
-          <div
-            className="field-error"
-            role="alert"
-            data-testid="provider-form-error"
-            data-error-code={error instanceof LlmAdminError ? error.code : undefined}
-          >
-            {mapped}
-          </div>
+          <InlineError error={error} testId="provider-form-error" />
         ) : (
           <ErrorBanner
             error={error}
@@ -1094,13 +1092,12 @@ function ModelProbeStatus({ probe }: { readonly probe: Probe | undefined }) {
     );
   }
   if (probe.status === 'error') {
-    const message =
-      llmAdminErrorMessage(probe.error, t) ??
-      (probe.error instanceof Error ? probe.error.message : String(probe.error));
+    const shown = presentError(probe.error, t);
     return (
-      <p className="field-error" data-testid="provider-model-probe" data-state="error">
-        {t(`没能验证：${message}`, `Could not check: ${message}`)}
-      </p>
+      <div className="field-error" data-testid="provider-model-probe" data-state="error">
+        {t(`没能验证：${shown.message}`, `Could not check: ${shown.message}`)}
+        <ErrorDetails code={shown.code} raw={shown.raw} />
+      </div>
     );
   }
   const { outcome } = probe;

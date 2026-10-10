@@ -255,45 +255,52 @@ describe('PlatformOverviewPage', () => {
   });
 
   // Review M1 / #530 必修 1: no readable provider-health.json — nothing reads as available.
-  it('M1: an unreadable provider health file — the tile says 状态未知, the step is not done, 需要人处理 says so once', async () => {
-    const base = overview();
-    const http = scriptedHttp({
-      platform_overview: () => ({
-        ...base,
-        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 14 },
-        providerHealthFile: 'missing',
-        health: [
-          { service: 'kernel', status: 'ok' },
-          { service: 'llm-proxy', status: 'degraded', detail: 'provider health unknown' },
-        ],
-        modelProviders: [
-          { id: 'deepseek', health: null, models: 10 },
-          { id: 'anthropic', health: null, models: 4 },
-        ],
-        checklist: base.checklist.map((item) =>
-          item.key === 'providers' ? { ...item, done: false } : item,
-        ),
-      }),
-      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+  for (const [file, cause] of [
+    ['missing', '没写出状态文件'],
+    ['invalid', '状态文件写坏了或读不了'],
+  ] as const) {
+    it(`M1: an unreadable provider health file (${file}) — the tile says 状态未知, the step is not done, 需要人处理 says so once`, async () => {
+      const base = overview();
+      const http = scriptedHttp({
+        platform_overview: () => ({
+          ...base,
+          counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 14 },
+          providerHealthFile: file,
+          health: [
+            { service: 'kernel', status: 'ok' },
+            { service: 'llm-proxy', status: 'degraded', detail: 'provider health unknown' },
+          ],
+          modelProviders: [
+            { id: 'deepseek', health: null, models: 10 },
+            { id: 'anthropic', health: null, models: 4 },
+          ],
+          checklist: base.checklist.map((item) =>
+            item.key === 'providers' ? { ...item, done: false } : item,
+          ),
+        }),
+        list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      });
+      renderPage(http);
+      const checklist = await screen.findByTestId('platform-checklist');
+      expect(checklist.textContent).toContain('已配置 14 个模型，但没读到供应商状态');
+      // #530 audit P2: a malformed file is not "not written".
+      expect(checklist.textContent).toContain(cause);
+      expect(screen.getByTestId('checklist-test-provider')).toBeTruthy();
+      expect(
+        screen.getByTestId('platform-count-models').querySelector('.platform-tile-value')
+          ?.textContent,
+      ).toBe('—');
+      expect(screen.getByTestId('platform-count-models-sub').textContent).toBe(
+        '已配置 14 个，状态未知',
+      );
+      const items = screen
+        .getAllByTestId('platform-attention-item')
+        .map((item) => item.textContent ?? '');
+      expect(items.filter((text) => text.includes('读不到模型供应商状态'))).toHaveLength(1);
+      expect(items.some((text) => text.includes('llm-proxy'))).toBe(false);
+      expect(items.some((text) => text.includes('deepseek'))).toBe(false);
     });
-    renderPage(http);
-    const checklist = await screen.findByTestId('platform-checklist');
-    expect(checklist.textContent).toContain('已配置 14 个模型，但没读到供应商状态');
-    expect(screen.getByTestId('checklist-test-provider')).toBeTruthy();
-    expect(
-      screen.getByTestId('platform-count-models').querySelector('.platform-tile-value')
-        ?.textContent,
-    ).toBe('—');
-    expect(screen.getByTestId('platform-count-models-sub').textContent).toBe(
-      '已配置 14 个，状态未知',
-    );
-    const items = screen
-      .getAllByTestId('platform-attention-item')
-      .map((item) => item.textContent ?? '');
-    expect(items.filter((text) => text.includes('读不到模型供应商状态'))).toHaveLength(1);
-    expect(items.some((text) => text.includes('llm-proxy'))).toBe(false);
-    expect(items.some((text) => text.includes('deepseek'))).toBe(false);
-  });
+  }
 
   it('P0-4: a discovered, never-enabled gate instance is listed under 需要人处理 with a link to it', async () => {
     const http = scriptedHttp({

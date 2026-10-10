@@ -2,7 +2,7 @@ import type { ObjectiveOutcome, TurnAttributionWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError, isForbiddenError } from '../../lib/errors.js';
+import { errorToastText, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
@@ -67,7 +67,7 @@ export function TurnOutcomeControl({
       await mark(next);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('mark_turn_outcome');
-      onError(t('无法记录目标结果', 'Could not record the outcome'), describeError(err).message);
+      onError(t('无法记录目标结果', 'Could not record the outcome'), errorToastText(err, t));
     } finally {
       setBusy(null);
     }

@@ -1,9 +1,4 @@
-import type {
-  ConnectorModeWire,
-  ConnectorWire,
-  ExternalRuntimeWire,
-  GateInstanceWire,
-} from '@nexttime/shared';
+import type { ConnectorModeWire, ConnectorWire, ExternalRuntimeWire } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -98,7 +93,7 @@ export function PlatformIntegrationsPage({
       <PageHeader
         title={t('集成', 'Integrations')}
         description={t(
-          '平台的集成目录：接入包、announce 过的门实例、以及在用它们的外部运行时。',
+          '平台的集成目录：接入包、已公布的门实例，以及正在使用它们的外部运行时。',
           "The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them.",
         )}
         breadcrumb={breadcrumbFor('platformIntegrations')}

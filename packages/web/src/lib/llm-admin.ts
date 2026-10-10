@@ -246,13 +246,13 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
     // unlike the server-originated codes below, which fall through to `error.message` verbatim
     // when unmatched — they get a real bilingual mapping here instead of `request`'s raw
     // `Error.message` (English-only fallback for a caller that skips this function).
-    case 'network': {
-      const detail = typeof error.details === 'string' ? error.details : error.message;
+    // The browser's own text (e.g. `getaddrinfo ENOTFOUND`) stays in the error's `message` for
+    // the 「技术细节」 disclosure (`lib/errors.ts` `presentError`), not in this body (P1-1).
+    case 'network':
       return t(
-        `无法连接模型代理，检查网络或确认模型代理正在运行（${detail}）`,
-        `Could not reach the model proxy. Check the network or that the model proxy is running (${detail})`,
+        '无法连接模型代理：检查网络，或请平台管理员确认模型代理正在运行。',
+        'Could not reach the model proxy. Check the network, or ask a platform administrator to confirm the model proxy is running.',
       );
-    }
     case 'invalid_response':
       return t(
         `模型代理返回了无法识别的响应（HTTP ${error.status}）`,
@@ -286,13 +286,24 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
     case 'upstream_error':
     case 'upstream_unreachable':
     case 'upstream_invalid_response': {
-      const prefix =
-        error.code === 'upstream_unreachable'
-          ? t('连不上供应商', 'Could not reach the provider')
-          : error.code === 'upstream_invalid_response'
-            ? t('供应商没有返回模型列表', 'The provider returned no model list')
-            : t('供应商拒绝了请求', 'The provider refused the request');
-      return `${prefix}：${error.message}`;
+      // The upstream's own words go to the 「技术细节」 disclosure (P1-1); the caller adds the
+      // status-specific explanation (`lib/provider-form.ts` `explainUpstreamError`) when it has one.
+      if (error.code === 'upstream_unreachable') {
+        return t(
+          '连不上供应商：检查 Base URL 是否写对，这个地址是否能从服务器访问。',
+          'Could not reach the provider. Check the Base URL and that it is reachable from the server.',
+        );
+      }
+      if (error.code === 'upstream_invalid_response') {
+        return t(
+          '供应商没有返回能识别的模型列表：检查 Base URL 是否指向 OpenAI 兼容接口的源站。',
+          'The provider returned no recognizable model list. Check the Base URL points at an OpenAI-compatible origin.',
+        );
+      }
+      return t(
+        '供应商拒绝了请求：它的原话在下方「技术细节」里。',
+        'The provider refused the request; its own words are in the technical details below.',
+      );
     }
     case 'rate_limited': {
       const details = error.details;

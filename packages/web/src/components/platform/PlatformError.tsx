@@ -1,6 +1,6 @@
-import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
+import { InlineError } from '../kit/inline-error.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 
 export interface PlatformErrorProps {
@@ -17,28 +17,17 @@ export interface PlatformErrorProps {
  * message and raw code. `data-error-code` is on both branches so a test (and a screenshot) can
  * name the exact kernel state either way.
  *
- * C10 (console-completion-plan §2b): a mapped code also keeps the kernel's own `message` as a
- * secondary line (`data-testid="<testId>-detail"`), because one wire code can cover more than one
- * kernel condition — `last_admin` was reused for "you cannot disable yourself" until the kernel
- * split it into `self_disable` — and the fixed copy alone hid which one it was. Dropped when the
- * kernel text is empty or merely repeats the mapped copy.
+ * C10 (console-completion-plan §2b): a mapped code also keeps the kernel's own `message`
+ * (`data-testid="<testId>-detail"`), because one wire code can cover more than one kernel
+ * condition — `last_admin` was reused for "you cannot disable yourself" until the kernel split it
+ * into `self_disable` — and the fixed copy alone hid which one it was. Since console audit P1-1 it
+ * sits in the 「技术细节」 disclosure (`kit/inline-error`), not as a second line of the body.
  */
 export function PlatformError({ error, title, testId }: PlatformErrorProps) {
   const t = useT();
   if (error === null || error === undefined) return null;
-  const mapped = platformErrorMessage(error, t);
-  if (mapped === null) return <ErrorBanner error={error} title={title} testId={testId} />;
-  const described = describeError(error);
-  const detail =
-    described.message.trim().length > 0 && described.message !== mapped ? described.message : null;
-  return (
-    <div className="field-error" role="alert" data-testid={testId} data-error-code={described.code}>
-      <p>{mapped}</p>
-      {detail ? (
-        <p className="text-3" data-testid={testId ? `${testId}-detail` : undefined}>
-          {detail}
-        </p>
-      ) : null}
-    </div>
-  );
+  if (platformErrorMessage(error, t) === null) {
+    return <ErrorBanner error={error} title={title} testId={testId} />;
+  }
+  return <InlineError error={error} testId={testId} />;
 }

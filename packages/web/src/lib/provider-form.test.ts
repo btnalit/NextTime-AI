@@ -75,6 +75,10 @@ describe('lib/provider-form', () => {
   it('explains upstream failures in words', () => {
     expect(explainUpstreamError('HTTP 401: invalid', zh)).toContain('密钥');
     expect(explainUpstreamError('HTTP 404: model not found', zh)).toContain('拼错');
+    // P1-1: fetching the model list names no model — a 404 there is a missing endpoint.
+    const listing = explainUpstreamError('HTTP 404: not found', zh, 'model_list');
+    expect(listing).toContain('模型列表接口');
+    expect(listing).not.toContain('拼错');
     expect(explainUpstreamError('HTTP 429: slow down', zh)).toContain('限流');
     expect(
       explainUpstreamError('completion request failed: TypeError: fetch failed', zh),

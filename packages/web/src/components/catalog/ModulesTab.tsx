@@ -3,10 +3,7 @@ import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
-import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Confirm } from '../kit/confirm.js';
 import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
@@ -100,13 +97,9 @@ export function ModulesTab({ http }: ModulesTabProps) {
       permissions.markAllowed(capability);
       reload();
     } catch (err) {
-      // I-P1 `ontology_namespace_conflict` (and any other mapped code) reads as its own sentence,
-      // with the raw code kept beside it.
-      const mapped = platformErrorMessage(err, t);
-      const shown = mapped
-        ? new HttpError('capability_error', mapped, describeError(err).code)
-        : err;
-      setRowError((prev) => ({ ...prev, [name]: shown }));
+      // I-P1 `ontology_namespace_conflict` (and any other mapped code) reads as its own sentence
+      // (`ErrorBanner` → `lib/errors.ts` `presentError`), the kernel's text under 「技术细节」.
+      setRowError((prev) => ({ ...prev, [name]: err }));
       throw err;
     } finally {
       setPending(null);

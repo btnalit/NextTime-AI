@@ -2,9 +2,10 @@ import type { LlmProviderWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import { useT } from '../../../lib/i18n.js';
 import type { LlmAdminClient } from '../../../lib/llm-admin.js';
-import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
+import { llmAdminErrorMessage } from '../../../lib/llm-admin.js';
 import { providerKeyProblem } from '../../../lib/provider-form.js';
 import { Confirm } from '../../kit/confirm.js';
+import { InlineError } from '../../kit/inline-error.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Input } from '../../ui/Field.js';
@@ -133,14 +134,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
       ) : null}
       {error !== null ? (
         mapped !== null ? (
-          <div
-            className="field-error"
-            role="alert"
-            data-testid="provider-secret-error"
-            data-error-code={error instanceof LlmAdminError ? error.code : undefined}
-          >
-            {mapped}
-          </div>
+          <InlineError error={error} testId="provider-secret-error" />
         ) : (
           <ErrorBanner
             error={error}

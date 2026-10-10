@@ -10,7 +10,7 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
-import { describeError, isForbiddenError } from '../lib/errors.js';
+import { errorToastText, isForbiddenError } from '../lib/errors.js';
 import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
   type CapabilityNameRow,
@@ -24,7 +24,6 @@ import {
 import { type Translate, useT } from '../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
-import { platformErrorMessage } from '../lib/platform-errors.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -786,7 +785,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
-        description: platformErrorMessage(err, t) ?? describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -937,7 +936,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               '说明这个 Operation 做什么——会用于自然语言检索与在目录 / 审批卡片里展示。',
               "What this Operation does — used for natural-language search and shown wherever it's listed.",
             )}
-            error={descriptionError !== null ? describeError(descriptionError).message : undefined}
+            error={descriptionError !== null ? errorToastText(descriptionError, t) : undefined}
           >
             <Textarea
               id={descriptionFieldId}
@@ -1198,7 +1197,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
-        description: platformErrorMessage(err, t) ?? describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1224,7 +1223,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1549,7 +1548,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
-        description: platformErrorMessage(err, t) ?? describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1575,7 +1574,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1945,7 +1944,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法发布该草稿', 'Could not publish this draft'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1969,7 +1968,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法弃用该定义', 'Could not deprecate this definition'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);
@@ -1999,7 +1998,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(null);

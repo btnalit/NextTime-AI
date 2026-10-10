@@ -1,5 +1,4 @@
 import type { ProviderHealthWire } from '@nexttime/shared';
-import type { ReactNode } from 'react';
 import { useT } from '../../lib/i18n.js';
 import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
 import { hrefs } from '../../lib/router.js';

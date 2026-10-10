@@ -254,7 +254,7 @@ export function GateInstanceDetailPanel({
             </span>
             {instance.operations.length === 0 ? (
               <p className="text-3">
-                {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
+                {t('这个实例还没有公布任何操作（Operation）。', 'No Operations announced.')}
               </p>
             ) : (
               <div className="table-scroll">

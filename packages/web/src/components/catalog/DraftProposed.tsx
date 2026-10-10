@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
-import { describeError } from '../../lib/errors.js';
+import { errorToastText } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { CredentialReview } from '../kit/credential-review.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -104,7 +103,7 @@ export function DraftProposed({
           `无法发布 ${draft.name ?? draft.id}`,
           `Could not publish ${draft.name ?? draft.id}`,
         ),
-        description: platformErrorMessage(err, t) ?? describeError(err).message,
+        description: errorToastText(err, t),
       });
     } finally {
       setBusy(false);

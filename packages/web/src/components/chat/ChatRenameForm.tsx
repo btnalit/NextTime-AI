@@ -7,8 +7,8 @@ import {
   renameChat,
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
+import { InlineError } from '../kit/inline-error.js';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Field.js';
 
@@ -32,7 +32,8 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
   const t = useT();
   const [value, setValue] = useState(chat.title ?? '');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A blank-title hint (string) or the kernel's error, shown through `InlineError` (P1-1).
+  const [error, setError] = useState<unknown>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
     try {
       onSaved(await renameChat(client, chat.id, title));
     } catch (err) {
-      setError(describeError(err).message);
+      setError(err);
       setBusy(false);
     }
   }
@@ -103,10 +104,12 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
           {t('取消', 'Cancel')}
         </Button>
       </div>
-      {error !== null ? (
+      {typeof error === 'string' ? (
         <p className="field-error" role="alert">
           {error}
         </p>
+      ) : error !== null ? (
+        <InlineError error={error} />
       ) : null}
     </div>
   );

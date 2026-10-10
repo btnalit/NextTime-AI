@@ -5,12 +5,10 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
-import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import {
   type GovernanceChangeItem,
@@ -110,17 +108,12 @@ export function RefreshOperationGovernanceConfirm({
 
   async function confirmRefresh(): Promise<void> {
     if (diffs === null || manifestDigest === null) return;
-    let result: RefreshOperationGovernanceResultWire;
-    try {
-      result = await http.call<RefreshOperationGovernanceResultWire>(
-        'refresh_operation_governance',
-        { gatekeeperId, operationNames: diffs.map((op) => op.name), manifestDigest },
-      );
-    } catch (err) {
-      const mapped = platformErrorMessage(err, t);
-      const described = describeError(err);
-      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
-    }
+    // A refused refresh propagates as-is: `kit/confirm` renders it through `presentError`, which
+    // maps a known platform code to its copy and keeps the kernel's text in 「技术细节」.
+    const result = await http.call<RefreshOperationGovernanceResultWire>(
+      'refresh_operation_governance',
+      { gatekeeperId, operationNames: diffs.map((op) => op.name), manifestDigest },
+    );
     setLastResult(result);
     setDiffs(null);
     onRefreshed(result);
@@ -143,7 +136,7 @@ export function RefreshOperationGovernanceConfirm({
       {checkError !== null ? (
         <Notice tone="warn" testId={testId ? `${testId}-check-error` : undefined}>
           {t('读不到公告差异：', 'Could not load the announcement diff: ')}
-          {describeError(checkError).message}
+          <NoticeErrorBody error={checkError} />
         </Notice>
       ) : null}
       {alignedNotice ? (

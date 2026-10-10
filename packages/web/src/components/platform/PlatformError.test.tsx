@@ -60,6 +60,10 @@ describe('PlatformError (C10 client half)', () => {
       />,
     );
     expect(screen.getByTestId('err').getAttribute('data-error-code')).toBe('something_else');
-    expect(screen.queryByTestId('err-detail')).toBeNull();
+    // P1-1: an unknown code's kernel text is not the body — it sits in 「技术细节」.
+    expect(screen.getByTestId('err').querySelector('.error-banner-message')?.textContent).toContain(
+      '技术细节',
+    );
+    expect(screen.getByTestId('err-detail').textContent).toBe('boom');
   });
 });

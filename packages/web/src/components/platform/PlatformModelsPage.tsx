@@ -1,5 +1,4 @@
 import type {
-  LlmProviderInputWire,
   LlmProviderListWire,
   LlmProviderTestResultWire,
   LlmProviderWire,
@@ -12,13 +11,14 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
+import { LlmAdminClient, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { providerStatus } from '../../lib/provider-status.js';
 import { hrefs, readNewProviderPreset, readProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { InlineError } from '../kit/inline-error.js';
 import { ModelHealthTag } from '../kit/model-health.js';
 import { PageHeader } from '../kit/page-header.js';
 import { DashboardCard } from '../kit/section.js';
@@ -174,13 +174,13 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             data-testid="provider-enabled-chip"
             data-status={status.kind}
             data-tone={status.tone}
-            title={
-              status.detailZh
-                ? [t(status.detailZh, status.detailEn ?? status.detailZh), lastTest?.error]
-                    .filter(Boolean)
-                    .join(' — ')
-                : t(status.zh, status.en)
-            }
+            title={[
+              t(status.detailZh, status.detailEn),
+              status.adminNextZh ? t(status.adminNextZh, status.adminNextEn ?? '') : null,
+              lastTest?.error,
+            ]
+              .filter(Boolean)
+              .join(' — ')}
           >
             {t(status.zh, status.en)}
           </span>
@@ -256,7 +256,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 }
                 title={t('停用供应商', 'Disable provider')}
                 description={t(
-                  '代理立即对它返回 404，它会从 models.json 消失；已在工作区里被勾选的模型对话会失败，直到重新启用。',
+                  '模型代理会立即停止转发它，它的模型从模型目录里消失；用到这些模型的对话会失败，直到重新启用。',
                   'The proxy 404s it at once and it leaves models.json; chats on its models fail until re-enabled.',
                 )}
                 target={provider.displayName}
@@ -332,7 +332,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                         'The host yaml entry becomes visible again.',
                       )
                     : t(
-                        '从代理存储里删除这条记录并重写 models.json；工作区里对它模型的勾选会失效。',
+                        '从模型代理里删除这个供应商，它的模型也从模型目录里移除；工作区里对这些模型的勾选会失效。',
                         'Removes the record from the proxy store and rewrites models.json; workspace selections of its models stop working.',
                       )
                 }
@@ -348,10 +348,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             ) : null}
           </div>
           {rowError && rowError.id === provider.id ? (
-            <div className="field-error" role="alert" data-testid="provider-row-error">
-              {llmAdminErrorMessage(rowError.error, t) ??
-                (rowError.error instanceof Error ? rowError.error.message : String(rowError.error))}
-            </div>
+            <InlineError error={rowError.error} testId="provider-row-error" />
           ) : null}
         </>
       ),
@@ -426,7 +423,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         breadcrumb={breadcrumbFor('platformModels')}
         title={t('模型与供应商', 'Models & providers')}
         description={t(
-          'llm-proxy 里的供应商：名称、API 种类、Base URL、鉴权头、密钥环境变量、模型清单、启用；测试调用含一次工具调用往返。工作区侧只从这里的投影里选。',
+          '模型代理里配置的供应商：名称、API 种类、Base URL、鉴权头、密钥、模型清单和是否启用；「测试调用」会做一次对话和一次工具调用。工作区只能从这里列出的模型里选。',
           'The providers llm-proxy routes to; workspaces only pick from this projection.',
         )}
         primaryAction={
@@ -489,14 +486,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         ) : list.state.status === 'error' ? (
           llmAdminErrorMessage(list.state.error, t) !== null ? (
             <div className="stack-s">
-              <div
-                className="field-error"
-                role="alert"
-                data-testid="providers-error"
-                data-error-code={(list.state.error as LlmAdminError).code}
-              >
-                {llmAdminErrorMessage(list.state.error, t)}
-              </div>
+              <InlineError error={list.state.error} testId="providers-error" />
               <div>
                 <Button
                   variant="secondary"
@@ -546,7 +536,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         open={drawer.kind === 'create'}
         title={t('新增供应商', 'Add provider')}
         subtitle={t(
-          '保存后代理立即路由它，并重写 models.json。',
+          '保存后模型代理立即开始转发它，它的模型出现在模型目录里。',
           'Routed by the proxy and written to models.json on save.',
         )}
         onClose={() => setDrawer({ kind: 'closed' })}
@@ -745,12 +735,7 @@ function ProviderTestPanel({
           )}
         </p>
       ) : null}
-      {error ? (
-        <div className="field-error" role="alert" data-testid="provider-detail-test-error">
-          {llmAdminErrorMessage(error, t) ??
-            (error instanceof Error ? error.message : String(error))}
-        </div>
-      ) : null}
+      {error ? <InlineError error={error} testId="provider-detail-test-error" /> : null}
       {result && !testing ? (
         <ProviderTestResult result={result} testId="provider-detail-test" />
       ) : !testing && !error ? (

@@ -1,5 +1,10 @@
 import { type Page, type Route, expect, test } from '@playwright/test';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
+import {
+  expectNoHalfEnglish,
+  expectReadableErrors,
+  watchForbiddenCapabilityCalls,
+} from '../lib/ux-lint.js';
 import { asAdmin, goToByLabel } from './helpers.js';
 
 /**
@@ -171,6 +176,7 @@ test.describe('Journey ⑦: 接入一个 LLM 供应商并选好能用的模型',
     page,
   }) => {
     test.slow();
+    const expectNoForbiddenCalls = watchForbiddenCapabilityCalls(page);
     const calls = await stubProxy(page);
     const form = await openNewProviderForm(page);
 
@@ -198,6 +204,8 @@ test.describe('Journey ⑦: 接入一个 LLM 供应商并选好能用的模型',
     const verdict = page.getByTestId('provider-test-verdict');
     await expect(verdict).toBeVisible({ timeout: 15_000 });
     await expect(verdict).toHaveAttribute('data-verdict', 'ok');
+    await expectNoHalfEnglish(page.locator('body'));
+    expectNoForbiddenCalls();
 
     const writes = calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
     expect(writes).toEqual([
@@ -231,7 +239,12 @@ test.describe('Journey ⑦: 接入一个 LLM 供应商并选好能用的模型',
     await form.getByTestId('provider-preset-deepseek').click();
     await form.getByTestId('provider-key').fill(KEY);
     await form.getByTestId('provider-key').blur();
-    await expect(form.getByTestId('provider-discover-error')).toBeVisible();
+    const discoverError = form.getByTestId('provider-discover-error');
+    await expect(discoverError).toBeVisible();
+    // A 404 from the model list names no model, so it must not blame a misspelt model id.
+    await expect(discoverError).toContainText('没有模型列表接口');
+    await expect(discoverError).not.toContainText('拼错');
+    await expectReadableErrors(page, form);
     const suggestions = form.getByTestId('provider-model-suggestions');
     await expect(suggestions).toBeVisible();
 

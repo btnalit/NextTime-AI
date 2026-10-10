@@ -892,7 +892,7 @@ describe('PlatformModelsPage', () => {
       expect(calls).toEqual([{ model: 'anthropic/claude-sonnet-5' }]);
     });
 
-    it('picking pi 自己的默认值', async () => {
+    it('picking 运行时自带的默认模型', async () => {
       const calls: unknown[] = [];
       const http = scriptedHttp({
         get_platform_settings: () =>

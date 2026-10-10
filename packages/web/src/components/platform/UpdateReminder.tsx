@@ -142,8 +142,8 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
               `${migrations.length} migrations from ${migrations[0]}`,
             ),
     notice.breaking
-      ? t('含 breaking 变更', 'includes breaking changes')
-      : t('非 breaking', 'not breaking'),
+      ? t('含不兼容变更', 'includes breaking changes')
+      : t('无不兼容变更', 'not breaking'),
   ].filter((fact): fact is string => fact !== null);
 
   return (
@@ -223,7 +223,7 @@ function PlatformReleaseBody({ notice }: { readonly notice: PlatformReleaseNotic
             {notice.breaking ? (
               <li>
                 {t(
-                  '含 breaking 变更：升级前先读完发版说明。',
+                  '含不兼容变更：升级前先读完发版说明。',
                   'It includes breaking changes: read the release notes before upgrading.',
                 )}
               </li>

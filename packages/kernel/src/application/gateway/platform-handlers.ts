@@ -1853,7 +1853,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
           modelsAvailable > 0
             ? `${modelsAvailable} model(s) available; default ${settings.defaultEntryModel ?? DEFAULT_PLATFORM_SETTINGS.defaultEntryModel ?? 'pi default'}`
             : modelsConfigured > 0 && healthUnknown
-              ? `${modelsConfigured} model(s) configured; provider health unknown — llm-proxy has not written provider-health.json (check its log)`
+              ? `${modelsConfigured} model(s) configured; provider health unknown — llm-proxy's provider-health.json ${providerHealthFile === 'missing' ? 'is not written' : 'is malformed or unreadable'} (check its log)`
               : modelsConfigured > 0
                 ? `${modelsConfigured} model(s) configured, none whose provider passed a test — test the provider in the console`
                 : 'no model provider yet — add one in the console',

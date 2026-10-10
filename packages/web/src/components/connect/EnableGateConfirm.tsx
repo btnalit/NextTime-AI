@@ -5,12 +5,10 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
-import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -84,23 +82,14 @@ export function EnableGateConfirm({
   }
 
   async function confirmEnable(): Promise<void> {
-    let result: EnableGateInstanceResultWire;
-    try {
-      // R-18 (D-18): bind the enable to the manifest this preview showed — the kernel refuses
-      // `manifest_changed` if an administrator confirmed a newer one in between.
-      result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
-        gateId,
-        ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
-      });
-    } catch (err) {
-      // Re-map a known platform wire code (e.g. connector_not_preset, gate_not_enabled,
-      // ambiguous_existing_gatekeeper) to its bilingual copy before `kit/confirm`'s own error
-      // banner renders it — that banner shows `describeError(error).message` verbatim, which is
-      // the kernel's raw English text, not the mapped copy `PlatformError` used to give this flow.
-      const mapped = platformErrorMessage(err, t);
-      const described = describeError(err);
-      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
-    }
+    // R-18 (D-18): bind the enable to the manifest this preview showed — the kernel refuses
+    // `manifest_changed` if an administrator confirmed a newer one in between. A refusal
+    // propagates as-is: `kit/confirm` renders it through `presentError` (a known platform code
+    // such as connector_not_preset or gate_not_enabled reads as its own copy).
+    const result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
+      gateId,
+      ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
+    });
     onEnabled(result);
   }
 
@@ -145,7 +134,7 @@ export function EnableGateConfirm({
         <Notice tone="warn" testId={testId ? `${testId}-preview-error` : undefined}>
           {t('读不到启用预览：', 'Could not load the enable preview: ')}
           {/* L4-13 `gatekeeper_already_linked` (and any other mapped code) reads as its own sentence. */}
-          {platformErrorMessage(previewError, t) ?? describeError(previewError).message}
+          <NoticeErrorBody error={previewError} />
         </Notice>
       ) : null}
       <Confirm
@@ -236,7 +225,7 @@ function EnablePreviewBody({
       {noOperations ? (
         <p className="text-3" data-testid="enable-preview-empty">
           {t(
-            '该门实例还没有 announce 任何 Operation。',
+            '该门实例还没有公布任何操作（Operation）。',
             'This gate instance has not announced any operations yet.',
           )}
         </p>

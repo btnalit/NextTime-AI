@@ -72,7 +72,7 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
       <div className="stack-s">
         <p className="text-3 text-small">
           {t(
-            '新工作区（未显式指定入口模型时）与新用户的 AgentProfile 取它；留空 = 用 pi 自己的默认值。',
+            '新建的工作区（没指定入口模型时）和新用户的智能体默认用这个模型；选「运行时自带的默认模型」则不指定。',
             "New workspaces (when no explicit entry model is given) and new users' AgentProfiles take this; empty = pi's own default.",
           )}
         </p>
@@ -98,7 +98,9 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             disabled={submitting}
             data-testid="platform-default-model-select"
           >
-            <option value={PI_DEFAULT}>{t('pi 自己的默认值', "pi's own default")}</option>
+            <option value={PI_DEFAULT}>
+              {t('运行时自带的默认模型', "The runtime's own default")}
+            </option>
             {catalog.map((model) => (
               <ModelOption key={model.id} model={model} selected={model.id === currentDefault} />
             ))}
