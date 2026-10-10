@@ -38,6 +38,8 @@ function setup(value: TurnAttributionWire, viewerId: string | null = 'p-me') {
     });
   const http: CapabilityCaller = {
     call: vi.fn(async (name: string, params?: unknown) => {
+      // The reader's role (`useRoleCan`): left unread here, so the control shows as before.
+      if (name === 'get_workspace') throw new Error('not scripted');
       calls.push({ name, params });
       return marked((params as { outcome: 'achieved' | 'not_achieved' }).outcome, value);
     }) as CapabilityCaller['call'],

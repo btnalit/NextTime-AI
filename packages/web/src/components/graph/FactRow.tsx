@@ -1,5 +1,6 @@
 import type { ConflictWire, FactWire } from '@nexttime/shared';
 import { useId, useState } from 'react';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
@@ -97,7 +98,14 @@ export function FactRow({
   // Only an active Fact can be attested, superseded or invalidated (the kernel refuses the rest:
   // `attest_fact`'s FactNotActiveError, the Fact lifecycle table for the other two).
   const isActive = fact.supersededAt === null && fact.invalidatedAt === null;
-  const canChange = http !== undefined && isActive;
+  // #541 review M3: the 更多 menu's writes only for a role that may make them (not the auditor).
+  const can = useRoleCan(http);
+  const canChange =
+    http !== undefined &&
+    isActive &&
+    can('attest_fact') !== false &&
+    can('supersede_fact') !== false &&
+    can('invalidate_fact') !== false;
   const neighbourLabel =
     otherId === objectId ? t('自身', 'self') : (nameOf(otherId) ?? otherId.slice(0, 8));
   // How a person reads this Fact in a dialog: the relation, then the Object on the other end.
@@ -107,7 +115,11 @@ export function FactRow({
   // pre-checked here: this console has no read for "does this Fact have Evidence" cheaper than
   // just trying the write, and every other write-gap in this app degrades the same way, through
   // the confirm's own inline error rather than a second round trip first).
-  const canVerify = canChange && fact.epistemicStatus !== 'verified';
+  const canVerify =
+    http !== undefined &&
+    isActive &&
+    fact.epistemicStatus !== 'verified' &&
+    can('verify_fact') !== false;
   const freshness = freshnessOf(
     {
       lastObservedAt: fact.lastObservedAt,

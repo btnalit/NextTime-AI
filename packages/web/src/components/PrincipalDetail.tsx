@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -27,7 +28,7 @@ export interface PrincipalDetailProps {
   readonly principal: PrincipalRow;
   readonly canManage: boolean;
   readonly onChanged: (principal: PrincipalRow) => void;
-  readonly onForbidden: (capabilityName: string) => void;
+  readonly onForbidden: (capabilityName: CapabilityName) => void;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   useCapabilityList,
 } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -865,6 +866,7 @@ function PublishProposalButton({
   readonly t: Translate;
 }) {
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [open, setOpen] = useState(false);
 
   // Hidden, not merely disabled, once a 403 has proven this caller cannot publish (same
@@ -875,7 +877,7 @@ function PublishProposalButton({
   // never rip the confirm out from under a caller who already opened it — the failed attempt that
   // just set this denial is itself shown inline, in the still-open confirm's own error banner; the
   // entry point disappears on the *next* visit to this proposal, not mid-flow.
-  if (permissions.isDenied('publish_ontology_version') && !open) return null;
+  if (can('publish_ontology_version') === false && !open) return null;
 
   return (
     <Confirm
@@ -930,11 +932,12 @@ function DiscardProposalButton({
   readonly t: Translate;
 }) {
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
 
   // Same hide-after-a-real-403 idiom (and `&& !open` rule) as `PublishProposalButton` above.
-  if (permissions.isDenied('discard_draft') && !open) return null;
+  if (can('discard_draft') === false && !open) return null;
 
   return (
     <Confirm

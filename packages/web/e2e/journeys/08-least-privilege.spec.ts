@@ -1,7 +1,11 @@
 import { type Page, type Request, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from '../auth-helpers.js';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
-import { expectNoHalfEnglish, watchForbiddenCapabilityCalls } from '../lib/ux-lint.js';
+import {
+  expectNoHalfEnglish,
+  watchForbiddenCapabilityCalls,
+  watchLocalRefusals,
+} from '../lib/ux-lint.js';
 import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from './helpers.js';
 
 /**
@@ -19,8 +23,12 @@ import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from
  *   - 无权限: 这条旅程本身：角色拿不到的页不出现在侧栏，拿不到的数据不去要，改不了的地方说找谁。
  *   - 窄屏: 不单独重跑（`00-gates/` 的截图覆盖布局）。
  * 成功判据:
- *   - 整条走下来没有一个 `/api/cap/*` 请求被拒（403）——页面没有替这个角色去要它拿不到的东西
- *     （`lib/http-client.ts` 的 `roleGate` 在发出前按内核同一判定拦下，侧栏与按钮按同一判定收起）；
+ *   - 整条走下来没有一个 `/api/cap/*` 请求被拒（403），也没有一个被控制台自己按角色拦下——页面没有
+ *     替这个角色去要它拿不到的东西（`lib/http-client.ts` 的 `roleGate` 拦下时发
+ *     `nexttime:capability-refused-locally`，这里逐页数；#541 审查 M1：本地拦截不走网络，只看 403
+ *     会漏）；
+ *   - 侧栏里的每一项都通向有内容的页：页上没有一块"你的角色不能看"的空态（`[data-state="empty"]`
+ *     且 testid 以 `-forbidden` 结尾）——那样的页不该出现在这个角色的侧栏里；
  *   - 每个"下一步"提示要么这个角色点得动（点过去也不 403），要么写明该找工作区所有者 / 平台管理员 /
  *     这位成员自己。
  */
@@ -68,6 +76,7 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       page,
     }) => {
       test.slow();
+      const localRefusals = await watchLocalRefusals(page);
       const suffix = Date.now().toString(36);
       const displayName = `Journey ${role} ${suffix}`;
 
@@ -120,6 +129,8 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       });
 
       // Steps 4–5: every page; collect the hints' links, check the hints without one name someone.
+      await settled();
+      expect(await localRefusals.take(), 'asked for on switching to the workspace').toEqual([]);
       const fixLinks = new Set<string>();
       const navItems = await visibleNavItems(page);
       expect(navItems.length).toBeGreaterThan(0);
@@ -128,7 +139,16 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
         await page.getByTestId(navTestId).click();
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15_000 });
         await settled();
+        expect(
+          await localRefusals.take(),
+          `${navTestId}: asked for what this role cannot have`,
+        ).toEqual([]);
         const main = page.locator('main');
+        // A nav entry leads to a page with content, never to one that only says "not your role".
+        const deadEnds = await main
+          .locator('[data-state="empty"][data-testid$="-forbidden"]:visible')
+          .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));
+        expect(deadEnds, `${navTestId}: a section this role can never see`).toEqual([]);
         await expectNoHalfEnglish(main);
         // A role refusal is said as what this role can do, never as a 「无法加载」 with a 重试.
         const refusals = await main
@@ -150,6 +170,10 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
         await page.goto(`/${href}`);
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15_000 });
         await settled();
+        expect(
+          await localRefusals.take(),
+          `${href}: a hint led to what this role cannot have`,
+        ).toEqual([]);
       }
 
       expectNoForbiddenCalls();

@@ -6,6 +6,7 @@ import {
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import { type EgressDenyNormalization, normalizeEgressDenyText } from '../../lib/catalog-input.js';
 import {
@@ -347,6 +348,7 @@ export function WorkerDefinitionEditor({
 }: WorkerDefinitionEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<WorkerDefinitionForm>(() =>
     newVersionOf
       ? workerDefinitionFormFromWire(
@@ -432,7 +434,7 @@ export function WorkerDefinitionEditor({
         draft={proposed}
         detailHref={hrefs.catalog('workers', `${proposed.id}@${proposed.version}`)}
         onPublish={
-          permissions.isDenied('publish_worker_definition')
+          can('publish_worker_definition') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_worker_definition', {
@@ -532,10 +534,7 @@ export function WorkerDefinitionEditor({
 
       {view === 'json' ? (
         <JsonEditor
-          label={t(
-            'Worker 定义（JSON）',
-            'Worker definition (JSON)',
-          )}
+          label={t('Worker 定义（JSON）', 'Worker definition (JSON)')}
           value={content}
           onApply={applyJson}
           disabled={busy}

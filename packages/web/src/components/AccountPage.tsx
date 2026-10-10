@@ -1,8 +1,7 @@
 import type { WorkspaceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import { useCapability } from '../hooks/useCapability.js';
-import { usePermissions } from '../hooks/usePermissions.js';
-import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import {
   type MeResult,
   type SessionResult,
@@ -140,10 +139,8 @@ export function AccountPage({
  *  in every mode that has no workspace in scope. */
 function HandleCard({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
-  const permissions = usePermissions();
-  const { role } = useWorkspaceIdentity(http);
-  const canManage =
-    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('issue_handle');
+  const can = useRoleCan(http);
+  const canManage = can('issue_handle') !== false;
   if (!canManage) return null;
   return (
     <Card title={t('接 Claude Code / MCP', 'Connect Claude Code / MCP')}>

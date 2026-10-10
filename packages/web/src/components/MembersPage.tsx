@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -107,13 +108,13 @@ function MoreIcon() {
 export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
-  const { role, principalId: ownPrincipalId } = useWorkspaceIdentity(http);
+  const { principalId: ownPrincipalId } = useWorkspaceIdentity(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
 
-  const canManage =
-    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('create_principal');
+  const canManage = can('create_principal') !== false;
 
   function refreshList(): void {
     invalidateCapability(http, 'list_principals');

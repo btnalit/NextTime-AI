@@ -1,8 +1,14 @@
-import { getCapability, roleMayUseCapability } from '@nexttime/shared';
+import { type CapabilityName, getCapability, roleMayUseCapability } from '@nexttime/shared';
 import { useCallback } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { usePermissions } from './usePermissions.js';
 import { useWorkspaceIdentity } from './useWorkspaceIdentity.js';
+
+/** For a component rendered without a workspace caller (a read-only view): no role is read, so
+ *  every name answers from this session's 403s. */
+const NO_CALLER: CapabilityCaller = {
+  call: () => Promise.reject(new Error('no workspace caller')),
+};
 
 /**
  * hooks/useRoleCan: "may the signed-in reader use this capability here?" with the kernel's own
@@ -13,13 +19,15 @@ import { useWorkspaceIdentity } from './useWorkspaceIdentity.js';
  * until it is sure (`can(x) === true`) — #541 acceptance must-fix 2; the same rule
  * `lib/http-client.ts`'s `roleGate` applies to the request itself.
  */
-export function useRoleCan(http: CapabilityCaller): (capabilityName: string) => boolean | null {
-  const { role, roleSettled } = useWorkspaceIdentity(http);
+export function useRoleCan(
+  http: CapabilityCaller | undefined,
+): (capabilityName: CapabilityName) => boolean | null {
+  const { role, roleSettled } = useWorkspaceIdentity(http ?? NO_CALLER);
   const permissions = usePermissions();
   const knownRole = role.kind === 'known' ? role.role : null;
   const { isDenied } = permissions;
   return useCallback(
-    (capabilityName: string) =>
+    (capabilityName: CapabilityName) =>
       knownRole !== null
         ? roleMayUseCapability(knownRole, getCapability(capabilityName))
         : roleSettled

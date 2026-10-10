@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import { CAPABILITY_REGISTRY, capabilityHasSideEffects, getCapability } from '@nexttime/shared';
 import type { ExplainResultWire } from '@nexttime/shared';
 import type {
@@ -223,7 +224,7 @@ export interface AuditRecordRow {
 export function resourceHref(
   resourceType: string | null,
   resourceId: string | null,
-  can: (capabilityName: string) => boolean = () => true,
+  can: (capabilityName: CapabilityName) => boolean = () => true,
 ): string | undefined {
   if (!resourceId) return undefined;
   switch (resourceType) {

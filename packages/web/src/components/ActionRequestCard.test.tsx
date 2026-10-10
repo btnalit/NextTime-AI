@@ -49,6 +49,7 @@ function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
     onApprove: vi.fn(),
     onReject: vi.fn(),
     canAlwaysAllow: true,
+    canDecide: true,
     ...overrides,
   };
   return { ...render(<ActionRequestCard {...props} />), props };
@@ -263,5 +264,16 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-credential-review').textContent).toContain('含 3 处');
     expect(screen.queryByTestId('approval-approve')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('ActionRequestCard for a reader who may not decide (#541 review M3)', () => {
+  it('shows the request and who decides, with no approve/reject button and no approvals-page link', () => {
+    renderCard({ canDecide: false });
+    expect(screen.getByTestId('action-card-awaits-approver').textContent).toContain(
+      'operator 或工作区所有者',
+    );
+    expect(screen.queryByRole('button', { name: /批准|拒绝|总是允许/ })).toBeNull();
+    expect(screen.queryByTestId('approval-open-page')).toBeNull();
   });
 });

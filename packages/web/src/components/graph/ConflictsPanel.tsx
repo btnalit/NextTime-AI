@@ -1,6 +1,7 @@
 import type { ConflictWire, ExplainResultWire } from '@nexttime/shared';
 import { useId, useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
@@ -100,6 +101,9 @@ function ConflictRow({
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const compareId = useId();
+  // #541 review M3: a role that may not resolve (the auditor) still compares the two sides.
+  const can = useRoleCan(http);
+  const canResolve = can('resolve_conflict') !== false;
 
   return (
     <li
@@ -128,12 +132,21 @@ function ConflictRow({
           onClick={() => setExpanded((value) => !value)}
           data-testid="graph-conflict-review"
         >
-          {expanded ? t('收起', 'Hide') : t('对比并解决', 'Review')}
+          {expanded
+            ? t('收起', 'Hide')
+            : canResolve
+              ? t('对比并解决', 'Review')
+              : t('对比', 'Compare')}
         </Button>
       </div>
       {expanded ? (
         <div id={compareId} className="graph-conflict-review" data-testid="graph-conflict-compare">
-          <ConflictComparison http={http} conflict={conflict} onResolved={onResolved} />
+          <ConflictComparison
+            http={http}
+            conflict={conflict}
+            canResolve={canResolve}
+            onResolved={onResolved}
+          />
         </div>
       ) : null}
     </li>
@@ -145,10 +158,12 @@ function ConflictRow({
 function ConflictComparison({
   http,
   conflict,
+  canResolve,
   onResolved,
 }: {
   readonly http: CapabilityCaller;
   readonly conflict: ConflictWire;
+  readonly canResolve: boolean;
   readonly onResolved: () => void;
 }) {
   const t = useT();
@@ -182,7 +197,9 @@ function ConflictComparison({
         <ConflictSide label="A" factId={conflict.factAId} side={sideA} values={values} pick="a" />
         <ConflictSide label="B" factId={conflict.factBId} side={sideB} values={values} pick="b" />
       </div>
-      <ResolveConflictButton http={http} conflict={conflict} onResolved={onResolved} />
+      {canResolve ? (
+        <ResolveConflictButton http={http} conflict={conflict} onResolved={onResolved} />
+      ) : null}
     </>
   );
 }

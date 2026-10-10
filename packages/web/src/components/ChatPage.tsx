@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { useT } from '../lib/i18n.js';
@@ -75,6 +76,7 @@ export function ChatPage({
 }: ChatPageProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const [sendError, setSendError] = useState<unknown | null>(null);
 
@@ -116,7 +118,8 @@ export function ChatPage({
   const persistedIds = useMemo(() => persistedToolCallIds(messages), [messages]);
   const liveToolCalls = turn.toolCalls.filter((row) => !persistedIds.has(row.toolCallId));
 
-  const canAlwaysAllow = !permissions.isDenied('set_auto_approved_action_kind');
+  const canAlwaysAllow = can('set_auto_approved_action_kind') !== false;
+  const canDecide = can('approve') !== false && can('reject') !== false;
   // #530 必修 3: the model the next Turn runs, when its provider is not known to work.
   const [runningModel, setRunningModel] = useState<RunningModelHealth | null>(null);
   const { chat, archived } = chatSummary;
@@ -177,6 +180,7 @@ export function ChatPage({
                       latestActionStatus={actionCards.latestActionStatus}
                       cardErrors={actionCards.cardErrors}
                       canAlwaysAllow={canAlwaysAllow}
+                      canDecide={canDecide}
                       onApprove={actionCards.handleApprove}
                       onReject={actionCards.handleReject}
                       onOpenApproval={onOpenApproval}

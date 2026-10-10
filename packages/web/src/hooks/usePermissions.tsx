@@ -1,6 +1,15 @@
 import { CAPABILITY_REGISTRY, getCapability } from '@nexttime/shared';
-import type { Role } from '@nexttime/shared';
-import { type ReactNode, createContext, useCallback, useContext, useMemo, useState } from 'react';
+import type { CapabilityName, Role } from '@nexttime/shared';
+import {
+  type ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { CALLER_ROLE_CHANGED_EVENT } from '../lib/http-client.js';
 
 /**
  * hooks/usePermissions: what this session has learned it may, and may not, do. No capability
@@ -24,8 +33,8 @@ import { type ReactNode, createContext, useCallback, useContext, useMemo, useSta
  */
 export interface Permissions {
   readonly denied: ReadonlySet<string>;
-  readonly isDenied: (capabilityName: string) => boolean;
-  readonly markDenied: (capabilityName: string) => void;
+  readonly isDenied: (capabilityName: CapabilityName) => boolean;
+  readonly markDenied: (capabilityName: CapabilityName) => void;
   /** Capabilities that have succeeded at least once this session (S3.14) — positive role evidence
    *  for `lib/role.ts`. Unlike `denied`, this carries no closure: a `list_quotas` (operator-
    *  minRole) success says nothing about whether an untried owner-minRole capability would also
@@ -63,6 +72,16 @@ export function PermissionsProvider({ children }: { readonly children: ReactNode
   }, []);
   const markAllowed = useCallback((name: string) => {
     setAllowed((prev) => (prev.has(name) ? prev : new Set(prev).add(name)));
+  }, []);
+  // What was learned under the old role says nothing about the new one (#541 review M2): a
+  // control hidden after a 403 comes back once the owner grants the role.
+  useEffect(() => {
+    const forget = () => {
+      setDenied(new Set());
+      setAllowed(new Set());
+    };
+    window.addEventListener(CALLER_ROLE_CHANGED_EVENT, forget);
+    return () => window.removeEventListener(CALLER_ROLE_CHANGED_EVENT, forget);
   }, []);
   const value = useMemo<Permissions>(
     () => ({ denied, isDenied: (name) => denied.has(name), markDenied, allowed, markAllowed }),

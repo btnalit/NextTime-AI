@@ -35,6 +35,10 @@ export interface ActionRequestCardProps {
   /** `false` hides "总是允许 Always allow" — `set_auto_approved_action_kind` is operator+, and
    *  the session has already been told 403 for it (hooks/usePermissions). */
   readonly canAlwaysAllow: boolean;
+  /** `false` when the reader's role may not `approve`/`reject` (operator and owner only): the
+   *  card shows the request and its progress, says who decides, and offers no button the kernel
+   *  must refuse (#541 review M3). */
+  readonly canDecide: boolean;
 }
 
 /**
@@ -56,6 +60,7 @@ export function ActionRequestCard({
   onApprove,
   onReject,
   canAlwaysAllow,
+  canDecide,
 }: ActionRequestCardProps) {
   const t = useT();
   // The reason typed when "总是允许" was clicked, while its confirm is open (null = closed).
@@ -110,14 +115,24 @@ export function ActionRequestCard({
           <span title={card.policyDecision}>{policyDecisionLabel(card.policyDecision, t)}</span>
         ) : undefined
       }
-      approvalsHref={hrefs.approval(card.actionRequestId)}
-      readOnly={!decidable}
+      approvalsHref={canDecide ? hrefs.approval(card.actionRequestId) : undefined}
+      readOnly={!decidable || !canDecide}
       suspectedSecretValues={suspectedSecretValues}
       onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
       onReject={(reason) => onReject(card.actionRequestId, reason)}
-      onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
+      onAlwaysAllow={
+        offerAlwaysAllow && canDecide ? (reason) => setPendingAlwaysAllow({ reason }) : undefined
+      }
       testId="action-request-card"
     >
+      {decidable && !canDecide ? (
+        <Notice testId="action-card-awaits-approver">
+          {t(
+            '这一步要由 operator 或工作区所有者批准；这里会显示结果。',
+            'An operator or the workspace owner approves this step; the outcome shows here.',
+          )}
+        </Notice>
+      ) : null}
       {card.description && card.description !== card.title ? (
         <p className="pre-wrap text-2">{card.description}</p>
       ) : null}

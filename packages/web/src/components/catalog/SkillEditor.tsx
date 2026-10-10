@@ -6,6 +6,7 @@ import {
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { finalizeSkillName, slugifySkillNameDraft } from '../../lib/catalog-input.js';
 import {
   EMPTY_SKILL_FORM,
@@ -63,6 +64,7 @@ const GATE_KINDS: readonly string[] = GateTransportKindWireSchema.options;
 export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: SkillEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<SkillForm>(() =>
     copyOf
       ? {
@@ -189,7 +191,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
         detailHref={hrefs.catalog('skills', proposed.id)}
         fieldNames={reviewFieldNames('skill', t)}
         onPublish={
-          permissions.isDenied('publish_skill')
+          can('publish_skill') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })

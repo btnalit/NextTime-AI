@@ -2,6 +2,7 @@ import type { SkillDetailWire } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -827,6 +828,7 @@ const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
 function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const operations = useCapabilityList<OperationCatalogRow>(http, 'list_operations');
   // Own capability call, own degrade path — a `get_operation_stats` failure (not deployed yet, a
@@ -993,10 +995,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       row={selected}
       usage={statsFor(selected)}
       gatekeeperNames={gatekeeperNames}
-      canPublish={!permissions.isDenied('publish_operation')}
-      canDeprecate={!permissions.isDenied('deprecate_operation')}
+      canPublish={can('publish_operation') !== false}
+      canDeprecate={can('deprecate_operation') !== false}
       canEditDescription={
-        !permissions.isDenied('update_operation_description') &&
+        can('update_operation_description') !== false &&
         mayEditOperationDescription(selected, role, principalId)
       }
       busy={busy === catalogOperationKey(selected)}
@@ -1253,6 +1255,7 @@ function SkillDetailView({
 function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const skills = useCapabilityList<SkillRow>(http, 'list_skills');
   const { principalId } = useWorkspaceIdentity(http);
@@ -1342,10 +1345,10 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
-  const canPropose = !permissions.isDenied('propose_skill');
-  const canPublish = !permissions.isDenied('publish_skill');
-  const canDeprecate = !permissions.isDenied('deprecate_skill');
-  const canDiscard = !permissions.isDenied('discard_draft');
+  const canPropose = can('propose_skill') !== false;
+  const canPublish = can('publish_skill') !== false;
+  const canDeprecate = can('deprecate_skill') !== false;
+  const canDiscard = can('discard_draft') !== false;
 
   const editorPane = editor ? (
     <div className="stack">
@@ -1608,6 +1611,7 @@ function ProcedureDetailView({
 function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const procedures = useCapabilityList<ProcedureRow>(http, 'list_procedures');
   const { principalId } = useWorkspaceIdentity(http);
@@ -1694,10 +1698,10 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
-  const canPropose = !permissions.isDenied('propose_procedure');
-  const canPublish = !permissions.isDenied('publish_procedure');
-  const canDeprecate = !permissions.isDenied('deprecate_procedure');
-  const canDiscard = !permissions.isDenied('discard_draft');
+  const canPropose = can('propose_procedure') !== false;
+  const canPublish = can('publish_procedure') !== false;
+  const canDeprecate = can('deprecate_procedure') !== false;
+  const canDiscard = can('discard_draft') !== false;
 
   const editorPane = editor ? (
     <div className="stack">
@@ -1997,6 +2001,7 @@ function WorkerDetailView({
 function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   // `itemId` is the row's `id@version` (`workerKey`), so a new version asks afresh.
   const credentialReview = usePublishCredentialReview(itemId ?? null);
@@ -2015,8 +2020,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // into `WorkerEditorHost` as a prop instead of that component loading its own second copy.
   const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
   // Audit P1-7: the same readiness read the card above the tabs makes (one cached call) — the
-  // gates granted to the reader start ticked in the ops-runner template.
-  const readiness = useExecutionReadiness(http);
+  // gates granted to the reader start ticked in the ops-runner template. Held until the role is
+  // known (an auditor never reads it).
+  const readiness = useExecutionReadiness(http, {
+    enabled: can('execution_readiness') === true,
+  });
   const grantedGateIds =
     readiness.state.status === 'ready'
       ? readiness.state.data.gates.filter((gate) => gate.granted).map((gate) => gate.gateId)
@@ -2127,10 +2135,10 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
-  const canPropose = !permissions.isDenied('propose_worker_definition');
-  const canPublish = !permissions.isDenied('publish_worker_definition');
-  const canDiscard = !permissions.isDenied('discard_draft');
-  const canDeprecate = !permissions.isDenied('deprecate_worker_definition');
+  const canPropose = can('propose_worker_definition') !== false;
+  const canPublish = can('publish_worker_definition') !== false;
+  const canDiscard = can('discard_draft') !== false;
+  const canDeprecate = can('deprecate_worker_definition') !== false;
 
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
 

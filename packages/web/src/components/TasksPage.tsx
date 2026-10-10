@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type Resource, useResource } from '../hooks/useResource.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
@@ -69,6 +70,7 @@ type Filter = 'active' | 'all' | 'done';
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const t = useT();
   const toast = useToast();
+  const can = useRoleCan(http);
   const load = useCallback(async () => {
     let items: readonly TaskSummary[] = [];
     let cursor: string | undefined;
@@ -165,6 +167,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
       principalNames={principalNames}
       onOpenApproval={onOpenApproval}
       onCancel={performCancel}
+      canCancel={can('cancel_task') !== false}
     />
   );
 
@@ -242,6 +245,7 @@ interface TaskDetailContentProps {
   readonly principalNames: ReadonlyMap<string, string>;
   readonly onOpenApproval: (actionRequestId: string) => void;
   readonly onCancel: (task: TaskSummary) => Promise<void>;
+  readonly canCancel: boolean;
 }
 
 /** The detail pane's (wide layout) / sheet's (narrow layout) shared content — one selected Task,
@@ -258,6 +262,7 @@ function TaskDetailContent({
   principalNames,
   onOpenApproval,
   onCancel,
+  canCancel,
 }: TaskDetailContentProps) {
   if (selected) {
     return (
@@ -270,6 +275,7 @@ function TaskDetailContent({
         principalNames={principalNames}
         onOpenApproval={onOpenApproval}
         onCancel={onCancel}
+        canCancel={canCancel}
       />
     );
   }

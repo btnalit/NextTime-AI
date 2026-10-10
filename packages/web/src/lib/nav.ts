@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import type { BreadcrumbItem } from '../components/kit/page-header.js';
 import type { NavSection } from './router.js';
 import { hrefs } from './router.js';
@@ -15,7 +16,7 @@ export interface NavItem {
   /** The read the page cannot work without. Once the reader's role is known, the item is hidden
    *  when that role may not use it (`roleMayUseCapability`) — a page that could only say "your role
    *  cannot" is not offered (#541 acceptance sweep). */
-  readonly capability?: string;
+  readonly capability?: CapabilityName;
 }
 
 /** A nav entry that opens outside the console's own hash-routed shell — no `section` (it never
@@ -93,7 +94,7 @@ export const GOVERN_NAV: readonly NavItem[] = [
     sub: 'Members',
     icon: 'users',
     href: hrefs.members(),
-    capability: 'list_members',
+    capability: 'list_principals',
   },
   // Console redesign P2 (docs/console-redesign-plan-2026-09-25.md §4): 访问's per-member grant
   // half merged into this page (`components/systems/SystemsPage.tsx`) — no separate 访问 nav item

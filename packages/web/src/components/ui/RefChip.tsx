@@ -86,7 +86,7 @@ export function defaultRefName(row: unknown): string | undefined {
 
 /**
  * Builds the id → name map a page feeds its `RefChip`s from a list envelope it already loaded
- * (`useCapabilityList(http, 'list_principals')`, `list_gatekeepers`, `list_worker_definitions`,
+ * (`list_principals` through `useCapabilityList`, `list_gatekeepers`, `list_worker_definitions`,
  * …). Memoized on the source identity; a row without a resolvable name is simply absent, so the
  * chip falls back to the bare id. `pick` overrides the default name resolution for other shapes.
  */

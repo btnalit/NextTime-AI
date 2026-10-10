@@ -1,10 +1,4 @@
-import {
-  type AvailableGateInstanceWire,
-  type OperationSummaryWire,
-  type Role,
-  getCapability,
-  roleMayUseCapability,
-} from '@nexttime/shared';
+import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -124,7 +118,7 @@ export function SystemsPage({
 }: SystemsPageProps) {
   const t = useT();
   const permissions = usePermissions();
-  const { role, principalId: selfPrincipalId } = useWorkspaceIdentity(http);
+  const { principalId: selfPrincipalId } = useWorkspaceIdentity(http);
   // #541 acceptance must-fix 2: what this reader's role may do here, by the kernel's predicate.
   const can = useRoleCan(http);
   const [filter, setFilter] = useState<RequestFilter>('requested');
@@ -196,13 +190,20 @@ export function SystemsPage({
   }
 
   // ---- 谁能用: owner/operator directory, degrading to a self-only view on a 403 --------------
+  // Both held until the role is known: a builder / member gets the self-only view without asking
+  // (#541 review M3).
   const principalsList = useCapabilityList<PrincipalRow>(
     http,
     'list_principals',
     {},
-    { autoLoadAll: true },
+    { autoLoadAll: true, enabled: can('list_principals') === true },
   );
-  const grantsList = useCapabilityList<GrantRow>(http, 'list_grants', {}, { autoLoadAll: true });
+  const grantsList = useCapabilityList<GrantRow>(
+    http,
+    'list_grants',
+    {},
+    { autoLoadAll: true, enabled: can('list_grants') === true },
+  );
   const directory = principalsList.state.status === 'ready' && grantsList.state.status === 'ready';
 
   const principalNames = useMemo(() => {
@@ -267,20 +268,27 @@ export function SystemsPage({
     }
   }
 
-  const canManage =
-    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('grant_capability');
+  const canManage = can('grant_capability') !== false;
 
   // ---- 连接申请 Connection requests (ported from ConnectionsPage, unchanged behavior) --------
+  // An owner-only read, held until the role is known: a role that may not make it is told so,
+  // without asking (#541 review M3).
+  const readsRequests = can('list_connection_requests');
   const loadRequests = useCallback(
-    () =>
-      http
-        .call<{ items: readonly ConnectionRequestRow[] }>('list_connection_requests', {})
-        .then((result) => result.items),
-    [http],
+    (): Promise<readonly ConnectionRequestRow[]> =>
+      readsRequests === true
+        ? http
+            .call<{ items: readonly ConnectionRequestRow[] }>('list_connection_requests', {})
+            .then((result) => result.items)
+        : readsRequests === false
+          ? Promise.resolve([])
+          : new Promise<never>(() => undefined),
+    [http, readsRequests],
   );
   const requests = useResource(loadRequests);
   const requestsForbidden =
-    requests.state.status === 'error' && isForbiddenError(requests.state.error);
+    readsRequests === false ||
+    (requests.state.status === 'error' && isForbiddenError(requests.state.error));
   useEffect(() => {
     if (requestsForbidden) permissions.markDenied('list_connection_requests');
   }, [requestsForbidden, permissions]);
@@ -327,10 +335,7 @@ export function SystemsPage({
   const readsReadiness = can('execution_readiness') !== false;
   // #541 review: enabling a prepared instance is `enable_gate_instance` (owner) — once the reader's
   // role is known, the kernel's own predicate decides; before that, the 403 still tells.
-  const canEnable =
-    canCreate &&
-    (role.kind !== 'known' ||
-      roleMayUseCapability(role.role, getCapability('enable_gate_instance')));
+  const canEnable = canCreate && can('enable_gate_instance') !== false;
   // Platform instances this workspace has not enabled yet (an enabled one already carries its
   // gatekeeper and is listed above as a connected system).
   const enableableCount = availableRows.filter((row) => !row.gatekeeperId).length;
@@ -524,26 +529,24 @@ export function SystemsPage({
             ) : null}
           </div>
 
-          {requests.state.status === 'loading' ? (
+          {requestsForbidden ? (
+            <Notice testId="requests-forbidden">
+              {t(
+                '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
+                'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
+              )}
+            </Notice>
+          ) : requests.state.status === 'loading' ? (
             <p className="text-3 text-small" data-testid="requests-loading">
               {t('正在加载连接申请…', 'Loading connection requests')}
             </p>
           ) : requests.state.status === 'error' ? (
-            requestsForbidden ? (
-              <Notice testId="requests-forbidden">
-                {t(
-                  '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
-                  'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
-                )}
-              </Notice>
-            ) : (
-              <ErrorBanner
-                error={requests.state.error}
-                title={t('无法加载连接申请', 'Could not load connection requests')}
-                onRetry={() => void requests.reload()}
-                testId="requests-error"
-              />
-            )
+            <ErrorBanner
+              error={requests.state.error}
+              title={t('无法加载连接申请', 'Could not load connection requests')}
+              onRetry={() => void requests.reload()}
+              testId="requests-error"
+            />
           ) : requestRows.length === 0 ? (
             <EmptyState
               title={

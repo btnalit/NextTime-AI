@@ -40,7 +40,13 @@
  * already being unconditional.
  */
 
-import { ROLE_VALUES, type Role, getCapability, roleMayUseCapability } from '@nexttime/shared';
+import {
+  type CapabilityName,
+  ROLE_VALUES,
+  type Role,
+  getCapability,
+  roleMayUseCapability,
+} from '@nexttime/shared';
 
 export type HttpErrorKind = 'network' | 'invalid_response' | 'capability_error';
 
@@ -154,6 +160,34 @@ export interface HttpClientOptions {
  *  (an owner may change this member's role meanwhile). */
 const ROLE_TTL_MS = 60_000;
 
+/** A read older than this is re-read before a call is refused locally on it — a refusal is the
+ *  one place a stale role would be visible as "your role cannot" (#541 review M2). */
+const ROLE_RECHECK_MS = 5_000;
+
+/** Window event a role-gated client dispatches when a `get_workspace` read finds the caller's role
+ *  changed since its previous read (an owner promoted or demoted them meanwhile). `detail` is
+ *  {@link CallerRoleChange}: the shell's identity and the session's denial memory refresh from it
+ *  without another request (`hooks/useWorkspaceIdentity`, `hooks/usePermissions`). */
+export const CALLER_ROLE_CHANGED_EVENT = 'nexttime:caller-role-changed';
+
+/** Window event dispatched each time a role-gated client refuses a call locally — the request was
+ *  never sent. A page that asks for what its reader's role cannot have shows up here even though
+ *  nothing reaches the network (journey ⑧ counts these; #541 review M1/M3). */
+export const CAPABILITY_REFUSED_LOCALLY_EVENT = 'nexttime:capability-refused-locally';
+
+export interface CapabilityRefusedLocally {
+  readonly capability: string;
+  readonly role: Role;
+}
+
+export interface CallerRoleChange {
+  readonly client: HttpClient;
+  readonly from: Role | null;
+  readonly to: Role | null;
+  /** The `get_workspace` result the change was read from. */
+  readonly workspace: unknown;
+}
+
 function callerRoleOf(workspace: unknown): Role | null {
   const role = (workspace as { caller?: { role?: unknown } } | null | undefined)?.caller?.role;
   return typeof role === 'string' && (ROLE_VALUES as readonly string[]).includes(role)
@@ -185,6 +219,8 @@ export class HttpClient {
   private readonly onUnauthorized: (() => void) | undefined;
   private readonly roleGate: boolean;
   private roleRead: { readonly role: Promise<Role | null>; readonly at: number } | null = null;
+  /** The role the last successful `get_workspace` read said; `undefined` before the first. */
+  private lastRole: Role | null | undefined = undefined;
 
   constructor(options: HttpClientOptions) {
     this.auth = options.auth;
@@ -196,10 +232,22 @@ export class HttpClient {
   /** Calls one capability. Resolves with `result` on `{ok:true}`; throws {@link HttpError}
    *  otherwise (network failure, malformed response body, `{ok:false}`, or — with `roleGate` — a
    *  local `forbidden` for a capability the caller's role cannot use). */
-  async call<T = unknown>(capabilityName: string, params: unknown = {}): Promise<T> {
+  async call<T = unknown>(capabilityName: CapabilityName, params: unknown = {}): Promise<T> {
     if (this.roleGate && roleMatters(capabilityName)) {
-      const role = await this.callerRole();
+      const read = this.roleRead;
+      let role = await this.callerRole();
+      if (role !== null && roleRefuses(role, capabilityName) && this.roleRead === read) {
+        // Not refused on an old read: the owner may have just granted this role.
+        if (read !== null && Date.now() - read.at > ROLE_RECHECK_MS) {
+          this.roleRead = null;
+          role = await this.callerRole();
+        }
+      }
       if (role !== null && roleRefuses(role, capabilityName)) {
+        if (typeof window !== 'undefined') {
+          const detail: CapabilityRefusedLocally = { capability: capabilityName, role };
+          window.dispatchEvent(new CustomEvent(CAPABILITY_REFUSED_LOCALLY_EVENT, { detail }));
+        }
         throw new HttpError(
           'capability_error',
           `principal role "${role}" may not use capability "${capabilityName}" (checked in the console; not sent)`,
@@ -208,11 +256,38 @@ export class HttpClient {
         );
       }
     }
-    const result = await this.send<T>(capabilityName, params);
-    if (capabilityName === 'get_workspace') {
-      this.roleRead = { role: Promise.resolve(callerRoleOf(result)), at: Date.now() };
+    let result: T;
+    try {
+      result = await this.send<T>(capabilityName, params);
+    } catch (error) {
+      // The kernel refused what the last read said this role may do: the role changed. Re-read it
+      // now (one request) so the next call, and the shell, go by the new one.
+      if (
+        this.roleGate &&
+        error instanceof HttpError &&
+        error.code === 'forbidden' &&
+        roleMatters(capabilityName)
+      ) {
+        this.roleRead = null;
+        void this.callerRole();
+      }
+      throw error;
     }
+    if (capabilityName === 'get_workspace') this.noteWorkspace(result);
     return result;
+  }
+
+  /** Records a `get_workspace` answer as this client's role read, and announces a changed role. */
+  private noteWorkspace(workspace: unknown): Role | null {
+    const role = callerRoleOf(workspace);
+    this.roleRead = { role: Promise.resolve(role), at: Date.now() };
+    const from = this.lastRole;
+    this.lastRole = role;
+    if (this.roleGate && from !== undefined && from !== role && typeof window !== 'undefined') {
+      const detail: CallerRoleChange = { client: this, from, to: role, workspace };
+      window.dispatchEvent(new CustomEvent(CALLER_ROLE_CHANGED_EVENT, { detail }));
+    }
+    return role;
   }
 
   /** The caller's role in this client's workspace, `null` when it cannot be read (no workspace
@@ -220,7 +295,10 @@ export class HttpClient {
   private callerRole(): Promise<Role | null> {
     if (this.roleRead === null || Date.now() - this.roleRead.at > ROLE_TTL_MS) {
       this.roleRead = {
-        role: this.send<unknown>('get_workspace', {}).then(callerRoleOf, () => null),
+        role: this.send<unknown>('get_workspace', {}).then(
+          (workspace) => this.noteWorkspace(workspace),
+          () => null,
+        ),
         at: Date.now(),
       };
     }

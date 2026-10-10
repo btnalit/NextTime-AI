@@ -3,6 +3,7 @@ import type { ActionRequestStatus } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../lib/format.js';
@@ -76,6 +77,7 @@ function waitingLabel(iso: string | undefined, t: Translate): string {
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const principalNames = usePrincipalNames(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -91,7 +93,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       detailError={detailError}
       principalNames={principalNames}
       gatekeeperNames={gatekeeperNames}
-      canAlwaysAllow={!permissions.isDenied('set_auto_approved_action_kind')}
+      canAlwaysAllow={can('set_auto_approved_action_kind') !== false}
       onApprove={queue.handleApprove}
       onReject={queue.handleReject}
       decisionError={selectedRow ? (queue.decision[selectedRow.id]?.error ?? null) : null}

@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import type {
   ActionPendingPush,
   ActionUpdatedPush,
@@ -13,7 +14,7 @@ import type {
  * plain object with a `vi.fn()` `call` and no-op subscriptions — no socket, no fetch, no kernel.
  */
 export interface CapabilityCaller {
-  call<T = unknown>(capabilityName: string, params?: unknown): Promise<T>;
+  call<T = unknown>(capabilityName: CapabilityName, params?: unknown): Promise<T>;
 }
 
 export interface PushSource {

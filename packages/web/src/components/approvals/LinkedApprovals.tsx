@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
-import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../../lib/format.js';
@@ -52,11 +52,9 @@ function LinkedApprovalsForbidden() {
  * of a session is learned here through `useCapabilityList`'s own permission marking.
  */
 export function LinkedApprovals(props: LinkedApprovalsProps) {
-  const permissions = usePermissions();
-  if (permissions.isDenied('list_action_requests')) {
-    return (
-      <LinkedApprovalsForbidden />
-    );
+  const can = useRoleCan(props.http);
+  if (can('list_action_requests') === false) {
+    return <LinkedApprovalsForbidden />;
   }
   return <LinkedApprovalsList {...props} />;
 }
@@ -88,9 +86,7 @@ function LinkedApprovalsList({
   }
   if (linked.state.status === 'error') {
     if (isForbiddenError(linked.state.error)) {
-      return (
-        <LinkedApprovalsForbidden />
-      );
+      return <LinkedApprovalsForbidden />;
     }
     return (
       <ErrorBanner

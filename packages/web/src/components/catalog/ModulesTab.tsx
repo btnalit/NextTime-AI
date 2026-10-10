@@ -2,6 +2,7 @@ import type { WorkspaceModuleWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
@@ -72,13 +73,13 @@ export function ModulesTab({ http }: ModulesTabProps) {
   const t = useT();
   const modules = useCapabilityList<WorkspaceModuleWire>(http, 'list_workspace_modules', {});
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [pending, setPending] = useState<string | null>(null);
   const [confirmFor, setConfirmFor] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, unknown>>({});
 
   const rows = modules.state.status === 'ready' ? modules.state.data.items : [];
-  const canWrite =
-    !permissions.isDenied('install_module') && !permissions.isDenied('upgrade_module');
+  const canWrite = can('install_module') !== false && can('upgrade_module') !== false;
 
   function reload(): void {
     invalidateCapability(http, 'list_workspace_modules');

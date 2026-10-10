@@ -17,6 +17,7 @@ export interface ChatMessageRowProps {
   readonly latestActionStatus: ReadonlyMap<string, string>;
   readonly cardErrors: Readonly<Record<string, unknown>>;
   readonly canAlwaysAllow: boolean;
+  readonly canDecide: boolean;
   readonly onApprove: (
     id: string,
     options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
@@ -42,6 +43,7 @@ export function ChatMessageRow({
   latestActionStatus,
   cardErrors,
   canAlwaysAllow,
+  canDecide,
   onApprove,
   onReject,
   onOpenApproval,
@@ -63,6 +65,7 @@ export function ChatMessageRow({
           onApprove={onApprove}
           onReject={onReject}
           canAlwaysAllow={canAlwaysAllow}
+          canDecide={canDecide}
         />
       );
     }

@@ -37,6 +37,8 @@ export interface TaskDetailProps {
   /** The confirmed cancel — throws so the confirm stays open with the kernel's error (`kit/confirm`
    *  renders it inline; there is no separate parent-level error banner any more, S8 W1-A7). */
   readonly onCancel: (task: TaskSummary) => Promise<void>;
+  /** `false` hides 取消任务 for a role that may not `cancel_task` (#541 review M3). */
+  readonly canCancel?: boolean;
 }
 
 /**
@@ -66,6 +68,7 @@ export function TaskDetail({
   principalNames,
   onOpenApproval,
   onCancel,
+  canCancel = true,
 }: TaskDetailProps) {
   const t = useT();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -167,7 +170,7 @@ export function TaskDetail({
         <div className="row-wrap">
           <StatusChip machine="task" status={task.status} size="s" />
           <RefChip kind="task" id={task.id} name={null} size="s" />
-          {isCancellable(task.status) ? (
+          {canCancel && isCancellable(task.status) ? (
             <Confirm
               tier="medium"
               open={confirmOpen}

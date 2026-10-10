@@ -1,5 +1,6 @@
 import { type FormEvent, useMemo, useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
   EMPTY_PROCEDURE_FORM,
   type FieldErrors,
@@ -265,6 +266,7 @@ export function ProcedureEditor({
 }: ProcedureEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<ProcedureForm>(() =>
     copyOf
       ? {
@@ -345,7 +347,7 @@ export function ProcedureEditor({
         detailHref={hrefs.catalog('procedures', proposed.id)}
         fieldNames={reviewFieldNames('procedure', t)}
         onPublish={
-          permissions.isDenied('publish_procedure')
+          can('publish_procedure') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_procedure', {
@@ -400,10 +402,7 @@ export function ProcedureEditor({
 
       {view === 'json' ? (
         <JsonEditor
-          label={t(
-            '流程定义（JSON）',
-            'Procedure definition (JSON)',
-          )}
+          label={t('流程定义（JSON）', 'Procedure definition (JSON)')}
           value={content}
           onApply={applyJson}
           disabled={busy}

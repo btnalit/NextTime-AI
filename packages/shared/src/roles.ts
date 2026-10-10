@@ -1,4 +1,4 @@
-import { type Capability, capabilityHasSideEffects } from './capabilities.js';
+import { type Capability, type CapabilityName, capabilityHasSideEffects } from './capabilities.js';
 import type { Role } from './enums.js';
 
 // Moved from kernel `governance/capability/roles.ts` (no behavior change) so the console decides
@@ -46,7 +46,7 @@ export function roleSatisfiesMinRole(role: Role, minRole: Role | undefined): boo
  * Explicit names, not a rule derived from `mode`: a capability added later is not available to an
  * auditor until someone puts it here.
  */
-export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set([
+export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<CapabilityName>([
   // audit and provenance
   'audit_query',
   'export_prov',
@@ -97,7 +97,7 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set([
 
 /** See `AUDITOR_READ_CAPABILITIES`: the writes an auditor's own conversation with its read-only
  *  entry agent needs — its chats, the Turn's context-item lease and Turn record. */
-export const AUDITOR_CONVERSATION_CAPABILITIES: ReadonlySet<string> = new Set([
+export const AUDITOR_CONVERSATION_CAPABILITIES: ReadonlySet<string> = new Set<CapabilityName>([
   'new_chat',
   'send_chat_message',
   'stop_agent',

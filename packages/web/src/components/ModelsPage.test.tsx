@@ -41,7 +41,8 @@ function scriptedHttp(
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
   const calls: { name: string; params: unknown }[] = [];
   const base: Record<string, (params: unknown) => unknown> = {
-    get_workspace: () => workspace('member'),
+    // An operator reads every section (quotas and policies are operator reads), edits none.
+    get_workspace: () => workspace('operator'),
     list_skills: () => ({ items: [] }),
     list_gatekeepers: () => ({ items: [] }),
     get_agent_policy: () => agentPolicy(),
@@ -163,15 +164,34 @@ describe('ModelsPage', () => {
     await screen.findByTestId('agent-policy-error');
   });
 
-  it('shows a role explanation on 403 for the owner-only quotas/policies sections', async () => {
+  it('with no readable role, a 403 on the quotas/policies reads takes those sections away', async () => {
     const http = scriptedHttp({
+      // The role cannot be read (an older kernel): the sections ask, and say why they were refused.
+      get_workspace: () => Promise.reject(new HttpError('capability_error', 'no', 'not_found')),
       list_models: () => ({ items: [] }),
       list_quotas: () => Promise.reject(new HttpError('capability_error', 'nope', 'forbidden')),
       list_policies: () => Promise.reject(new HttpError('capability_error', 'nope', 'forbidden')),
     });
     renderPage(http);
-    await screen.findByTestId('quotas-forbidden');
-    await screen.findByTestId('policies-forbidden');
+    await screen.findByTestId('models-empty');
+    await waitFor(() => expect(screen.queryByTestId('quotas-loading')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('policies-loading')).toBeNull());
+    expect(http.calls.map((call) => call.name)).toContain('list_quotas');
+    expect(screen.queryByTestId('quotas-table')).toBeNull();
+    expect(screen.queryByTestId('policies-table')).toBeNull();
+  });
+
+  it('#541 review M3: a member is not shown the quota and policy sections, nor asks for them', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({ items: [] }),
+      get_workspace: () => workspace('member'),
+    });
+    renderPage(http);
+    await screen.findByTestId('agent-policy-readonly');
+    expect(screen.queryByTestId('quotas-forbidden')).toBeNull();
+    expect(screen.queryByTestId('policies-forbidden')).toBeNull();
+    expect(screen.queryByText('配额')).toBeNull();
+    expect(http.calls.map((call) => call.name)).not.toContain('list_quotas');
   });
 
   it('a member sees a read-only AgentPolicy summary, not the editable form', async () => {

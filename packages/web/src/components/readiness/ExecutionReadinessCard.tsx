@@ -51,7 +51,8 @@ export function ExecutionReadinessCard(props: ExecutionReadinessCardProps) {
   // #541 acceptance must-fix 2: a role that can never read its own readiness (an auditor — not on
   // the kernel's auditor allowlist) gets no card at all, rather than a 「无法加载」 with a 重试 that
   // can only fail again; its read-only role is said on the pages it can use.
-  const allowed = useRoleCan(props.http)('execution_readiness');
+  const can = useRoleCan(props.http);
+  const allowed = can('execution_readiness');
   return allowed === false ? null : <ReadinessCardBody {...props} roleChecked={allowed === true} />;
 }
 
