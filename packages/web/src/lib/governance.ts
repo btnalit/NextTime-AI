@@ -232,6 +232,13 @@ export function operationKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'na
   return `${row.gatekeeperId}::${row.name}`;
 }
 
+/** The catalog's selection key for the pending revision of a published Operation: the draft shares
+ *  `operationKey` with the version in effect, so the catalog tells the two apart (`CatalogPage`'s
+ *  `catalogOperationKey`). Legacy K: an alignment's revision drafts link here to be published. */
+export function revisionDraftKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'name'>): string {
+  return `${operationKey(row)}@draft`;
+}
+
 /** `get_operation_stats` (S3.12 catalog-usage follow-up, `gatekeeper-read-handlers.ts`'s
  *  `toWireOperationStats`) — verified against the real kernel projection. Execute-class Operations
  *  only, current-status snapshot rather than cumulative decision history, and never includes an

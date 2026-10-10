@@ -13,7 +13,9 @@
 -- definition the request was made against, taken from the published Operation (or, for an
 -- unpublished one, I17, from its current draft) in the same transaction as the insert. The
 -- executor sends it, never a digest read at execution time: a revision published in between is
--- not what was approved.
+-- not what was approved. An unpublished Operation with no draft records `none`: nothing was
+-- approved against a definition, and the executor refuses the row rather than run whatever is
+-- published by then.
 --
 -- Nullable, not backfilled: a row written before this migration (or by the previous release
 -- after a rollback) was never tied to a definition. The executor then uses the Operation published
@@ -28,4 +30,7 @@
 -- this module (core/0001_identity.sql's comment has the full rationale).
 select pg_advisory_xact_lock(7241000201);
 
-alter table action_requests add column if not exists operation_digest text;
+alter table action_requests add column if not exists operation_digest text
+  constraint action_requests_operation_digest_shape
+  check (operation_digest is null or operation_digest = 'none'
+         or operation_digest ~ '^sha256:[0-9a-f]{64}$');

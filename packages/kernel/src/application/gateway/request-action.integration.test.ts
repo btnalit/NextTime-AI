@@ -27,6 +27,7 @@ import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.
 import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ApprovalDrainer,
+  NO_OPERATION_DEFINITION,
   approveActionRequest,
   getActionRequest,
   rejectActionRequest,
@@ -2081,7 +2082,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(result.status).toBe('failed');
         expect(await failureReason(result.id)).toMatch(
-          /"k\.drifted": the definition that was approved \([0-9a-f]{12}\) is not the one this gate runs \([0-9a-f]{12}\) — refused, nothing ran/,
+          /^operation_definition_mismatch: operation "k\.drifted": the definition that was approved \([0-9a-f]{12}\) is not the one this gate runs \([0-9a-f]{12}\) — refused, nothing ran/,
         );
         expect(kTransport.calls[APPROVED_DRIFTED.name]).toBeUndefined();
       });
@@ -2160,6 +2161,68 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(orphan.ok).toBe(false);
         expect(orphan.reason).toMatch(/^operation_definition_unavailable: "k\.never\.published"/);
         expect(apply).not.toHaveBeenCalled();
+      });
+
+      it('a request made against no definition (unpublished, no draft) is refused even once the Operation is published (review of #538)', async () => {
+        const name = 'k.published.after.request';
+        const requested = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'request_action',
+          { gatekeeperId: kGatekeeperId, operation: name, params: {} },
+        )) as { status: string; id: string };
+        expect(requested.status).toBe('pending_approval');
+        expect((await readRow(requested.id)).operationDigest).toBe(NO_OPERATION_DEFINITION);
+
+        // Published while the request waits — not what it was approved against.
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revision',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId: kGatekeeperId,
+            operation: { ...SAME, name },
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId: kGatekeeperId, name });
+        });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          approveActionRequest(client, workspaceId, {
+            actionRequestId: requested.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+
+        const gatekeeperClient = testGatekeeperClient();
+        const apply = vi.spyOn(gatekeeperClient, 'apply');
+        const executor = createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: createAdminWithTransaction(pool),
+        });
+        const result = await executor.execute(await readRow(requested.id));
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(
+          /^operation_definition_unavailable: "k\.published\.after\.request" was requested while it was not published and had no draft/,
+        );
+        expect(apply).not.toHaveBeenCalled();
+      });
+
+      it('the column holds a digest, the no-definition marker, or nothing (review of #538)', async () => {
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            client.query(
+              `insert into action_requests (
+                 workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+                 await_decision, on_behalf_of, actor_runtime, params, operation_digest
+               ) values ($1, 'pending_approval', $2, 'k.any', 'low', 'require_approval', true, $3,
+                 'pi', '{}'::jsonb, 'unreadable')`,
+              [workspaceId, kGatekeeperId, ownerId],
+            ),
+          ),
+        ).rejects.toMatchObject({ constraint: 'action_requests_operation_digest_shape' });
       });
     });
   },

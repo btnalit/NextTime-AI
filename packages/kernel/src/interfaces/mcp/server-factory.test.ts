@@ -5,7 +5,11 @@ import type { HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
+import {
+  GatekeeperClientError,
+  HttpGatekeeperClient,
+  platformGateTarget,
+} from '../../adapters/gatekeeper-client/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
 import { buildToolCatalog } from './tool-projection.js';
@@ -137,6 +141,30 @@ describe('mapCapabilityErrorToToolResult', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([
       { type: 'text', text: 'operation_refused: param "X-Scope-OrgID" is set by the gate' },
+    ]);
+  });
+
+  it('hides a credential in a gate’s answer before it reaches the agent’s model (review of #538)', async () => {
+    // Synthetic, key-shaped — never a real credential.
+    const key = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+    const client = new HttpGatekeeperClient({
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: { code: 'operation_refused', message: `bad key ${key}` },
+          }),
+          { status: 403 },
+        ),
+    });
+    const err = await client
+      .observe(platformGateTarget('https://gate.example.test'), {
+        operation: 'list',
+        operationDigest: undefined,
+      })
+      .catch((thrown: unknown) => thrown);
+    expect(mapCapabilityErrorToToolResult(err).content).toEqual([
+      { type: 'text', text: 'operation_refused: bad key [redacted]' },
     ]);
   });
 

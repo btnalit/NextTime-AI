@@ -49,10 +49,16 @@ export interface ActionRequestRow {
   readonly requesterCanApprove: boolean | null;
   /** Legacy K (migrations/governance/0019_action_request_operation_digest.sql): the digest of the
    *  Operation definition this request was made against — what the executor tells the gate was
-   *  approved. `null` on a row written before that migration, or for an unpublished Operation
-   *  (I17) with no draft to name. */
+   *  approved. `NO_OPERATION_DEFINITION` for an unpublished Operation (I17) with no draft to name;
+   *  `null` only on a row written before that migration (or by the previous release). */
   readonly operationDigest: string | null;
 }
+
+/** Legacy K: `ActionRequestRow.operationDigest` of a request made against no definition at all —
+ *  an unpublished Operation (I17) with no draft. Not a digest (those are `sha256:…`), and never sent
+ *  to a gate: the executor refuses the row, so a definition published after the approval is not run
+ *  in its name (review of #538). Kept apart from `null`, a row from before digests were recorded. */
+export const NO_OPERATION_DEFINITION = 'none';
 
 export interface ActionRequestDbRow {
   workspace_id: string;

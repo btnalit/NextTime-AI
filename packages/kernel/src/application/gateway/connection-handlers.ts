@@ -34,6 +34,7 @@ import {
   getGatekeeper,
   setGatekeeperConnectionSecretSalt,
 } from '../../governance/gatekeepers/index.js';
+import { scrubSecretValues } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { readConnectorMode } from '../gates/index.js';
@@ -143,12 +144,38 @@ function outboundTargetGuard(current: ConnectionHandlerDeps): OutboundTargetGuar
   return defaultGuard;
 }
 
+/** The most characters of a manifest URL an error repeats — as `redirectTargetForDisplay`. */
+const MAX_SHOWN_MANIFEST_SOURCE_CHARS = 300;
+
+/** `manifestSource` as an error repeats it (review of #538, item 2): origin and path only, quoted —
+ *  never the userinfo, query or fragment, where an owner-supplied URL carries a key
+ *  (`?api_key=…`); the same rule as a refused redirect's target (`redirectTargetForDisplay`). */
+function manifestSourceForDisplay(manifestSource: string): string {
+  let url: URL;
+  try {
+    url = new URL(manifestSource);
+  } catch {
+    return 'an unparseable URL';
+  }
+  const shown = `${url.origin}${url.pathname}`;
+  return JSON.stringify(
+    shown.length > MAX_SHOWN_MANIFEST_SOURCE_CHARS
+      ? `${shown.slice(0, MAX_SHOWN_MANIFEST_SOURCE_CHARS)}…`
+      : shown,
+  );
+}
+
 export class ConnectionManifestFetchError extends Error {
   constructor(manifestSource: string, options?: { cause?: unknown }) {
     // The cause says why — a status, a redirect and where it pointed, a timeout — which the owner
-    // needs to fix the URL; it used to be dropped.
-    const cause = options?.cause instanceof Error ? `: ${options.cause.message}` : '';
-    super(`create_connection: failed to fetch manifestSource "${manifestSource}"${cause}`, options);
+    // needs to fix the URL; it used to be dropped. Scrubbed: an MCP server's error or a body the
+    // JSON parser quotes can echo the credentials sent with the fetch.
+    const cause =
+      options?.cause instanceof Error ? `: ${scrubSecretValues(options.cause.message).value}` : '';
+    super(
+      `create_connection: failed to fetch manifestSource ${manifestSourceForDisplay(manifestSource)}${cause}`,
+      options,
+    );
     this.name = 'ConnectionManifestFetchError';
   }
 }

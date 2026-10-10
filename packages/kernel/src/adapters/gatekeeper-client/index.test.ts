@@ -441,3 +441,83 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Review of #538, item 1: a gate's error text reaches the caller on every surface (and, through an
+ * agent's tool result, its model), and a self-connected gate can answer anything — scrubbed and
+ * bounded here once, for the pass-through refusals and the 502 alike.
+ */
+describe('HttpGatekeeperClient — a gate’s error text', () => {
+  /** Synthetic, key-shaped — never a real credential. */
+  const KEY = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+
+  async function refusal(error: unknown, status = 403): Promise<GatekeeperClientError> {
+    const fetchImpl = vi.fn(async () => jsonResponse({ ok: false, error }, status));
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    const failure = await client
+      .observe(GATE, { operation: 'list', operationDigest: DIGEST })
+      .catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(GatekeeperClientError);
+    return failure as GatekeeperClientError;
+  }
+
+  it('hides a credential in the message, keeping the code and the rest of the text', async () => {
+    const err = await refusal({ code: 'operation_refused', message: `bad key ${KEY} for /v1` });
+    expect(err).toMatchObject({ code: 'operation_refused', status: 403 });
+    expect(err.message).not.toContain(KEY);
+    expect(err.message).toBe('bad key [redacted] for /v1');
+  });
+
+  it('scrubs an upstream failure (the 502 path) too', async () => {
+    const err = await refusal(
+      { code: 'transport_error', message: `untrusted: {"error":"Authorization: Bearer ${KEY}"}` },
+      502,
+    );
+    expect(err).toMatchObject({ code: 'transport_error', status: 502 });
+    expect(err.message).not.toContain(KEY);
+  });
+
+  it('cuts a long message on a UTF-8 boundary and says so, after scrubbing what the cut lands in', async () => {
+    // The key straddles the 4 KiB cut: hidden before the cut, so no prefix of it survives.
+    const message = `${'é'.repeat(2045)} ${KEY} ${'x'.repeat(10_000)}`;
+    const err = await refusal({ code: 'invalid_params', message }, 400);
+    expect(err.message).not.toContain('sk-ant-');
+    expect(err.message).toMatch(/… \[truncated, \d+ bytes total\]$/);
+    const body = err.message.replace(/… \[truncated, \d+ bytes total\]$/, '');
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(4096);
+    expect(body).not.toContain('�');
+  });
+
+  it.each([
+    ['a number', 42],
+    ['an object', { text: KEY }],
+    ['an empty string', ''],
+    ['nothing', undefined],
+  ])('reads a message that is %s as one the gate did not give', async (_label, message) => {
+    const err = await refusal({ code: 'operation_refused', message });
+    expect(err).toMatchObject({ code: 'operation_refused', status: 403 });
+    expect(err.message).toBe('gatekeeper client: gate/observe answered an error without a message');
+  });
+
+  it.each([
+    ['not snake_case', 'Operation Refused'],
+    ['too long', `${'a_'.repeat(40)}a`],
+    ['key-shaped', KEY],
+    ['a 40-character hex token', `a${'0123456789abcdef'.repeat(2)}0123456`],
+    ['not a string', 403],
+  ])('does not repeat a code that is %s', async (_label, code) => {
+    const err = await refusal({ code, message: 'no' });
+    expect(err.code).toBe('unrecognized_gate_error');
+    expect(err.message).toBe('no');
+  });
+
+  it.each([
+    ['no error at all', { ok: false }],
+    ['a non-object envelope', 'nope'],
+    ['null', null],
+  ])('maps %s to an error instead of crashing', async (_label, body) => {
+    const fetchImpl = vi.fn(async () => jsonResponse(body, 500));
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    await expect(client.health(GATE)).rejects.toBeInstanceOf(GatekeeperClientError);
+  });
+});

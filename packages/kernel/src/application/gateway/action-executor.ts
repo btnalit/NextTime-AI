@@ -12,6 +12,7 @@ import type { ActionExecutor, ActionExecutorResult } from '../../governance/appr
 import type { ActionRequestRow } from '../../governance/approval/index.js';
 import {
   DEFAULT_MAX_REPLAY_ATTEMPTS,
+  NO_OPERATION_DEFINITION,
   listStaleExecutingActionRequests,
   markActionRequestExecuted,
   markActionRequestFailed,
@@ -166,14 +167,21 @@ const SETTLED_FAILURE_CODES = new Set([
 ]);
 
 /** Legacy K: the digest the gate is told was approved for `actionRequest` — the one recorded when
- *  the request was made (migrations/governance/0019). A row that names none (made before that
- *  migration, or for an unpublished Operation with no draft, I17) falls back to the Operation
- *  published now, which is what it would have run before, now checked by the gate. `refusal`:
- *  there is nothing to send, or the stored definition does not parse. */
+ *  the request was made (migrations/governance/0019). A request made against no definition (an
+ *  unpublished Operation with no draft, I17: `NO_OPERATION_DEFINITION`) is refused — whatever is
+ *  published by now was never what it was approved against (review of #538). A row from before
+ *  that migration (`null`) falls back to the Operation published now, which is what it would have
+ *  run before, now checked by the gate. `refusal`: there is nothing to send, or the stored
+ *  definition does not parse. */
 async function approvedOperationDigest(
   client: PoolClient,
   actionRequest: ActionRequestRow,
 ): Promise<{ readonly digest: string } | { readonly refusal: string }> {
+  if (actionRequest.operationDigest === NO_OPERATION_DEFINITION) {
+    return {
+      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" was requested while it was not published and had no draft, so it was approved without a definition — nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
+    };
+  }
   if (actionRequest.operationDigest !== null) return { digest: actionRequest.operationDigest };
   const published = await getPublishedOperation(
     client,
@@ -183,7 +191,7 @@ async function approvedOperationDigest(
   );
   if (!published) {
     return {
-      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" was requested while it was not published and had no draft, and it is still not published — this workspace holds no definition to hold the gate to, so nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
+      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" names no definition (it was requested before requests recorded one) and is not published now — this workspace holds no definition to hold the gate to, so nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
     };
   }
   try {
@@ -214,7 +222,14 @@ function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
   if (err instanceof GatekeeperClientError) {
     if (err.code === 'apply_outcome_unknown') return { kind: 'outcome_unknown', message };
     if (err.code === 'idempotency_conflict') return { kind: 'in_doubt', message };
-    return { kind: 'failed', message, settled: SETTLED_FAILURE_CODES.has(err.code) };
+    // The gate's code leads the reason (`operation_definition_mismatch: …`), as on the MCP and WS
+    // surfaces — the same reason-prefix convention as `outcome_unknown` / `operation_disabled`, so a
+    // reader (the console's tool row, an agent) can tell which refusal it was (review of #538, G3).
+    return {
+      kind: 'failed',
+      message: `${err.code}: ${message}`,
+      settled: SETTLED_FAILURE_CODES.has(err.code),
+    };
   }
   return { kind: 'failed', message, settled: false };
 }

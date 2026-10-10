@@ -145,6 +145,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
               direction: 'tightened',
             },
           ],
+          revisionDrafts: [],
           unchanged: [],
         };
       },
@@ -182,6 +183,151 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(onRefreshed.mock.calls[0]?.[0]).toMatchObject({ gatekeeperId: 'gk-1' });
     const result = await screen.findByTestId('align-gk-1-result');
     expect(result.textContent).toContain('1');
+    expect(within(result).queryByTestId('align-gk-1-drafts')).toBeNull();
+  });
+
+  it('legacy K (G1/G2): a changed definition with matching governance is not "aligned" — the confirm says the gate refuses calls until the revision is published, and the result links each draft to the catalog', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            differs: false,
+            direction: 'neutral',
+            definitionDiffers: true,
+          },
+          {
+            name: 'container.list',
+            existing: {
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            differs: false,
+            direction: 'neutral',
+            definitionDiffers: false,
+          },
+        ]),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['container.restart'],
+          manifestDigest: 'digest-1',
+        });
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'container.restart', version: 2 }],
+          unchanged: [],
+        };
+      },
+    });
+    const onRefreshed = renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(screen.queryByTestId('align-gk-1-aligned')).toBeNull();
+    const redefined = within(confirm).getByTestId('align-gk-1-redefined');
+    expect(redefined.textContent).toContain('container.restart');
+    expect(redefined.textContent).toContain('门会拒绝对它们的调用');
+    expect(redefined.textContent).not.toContain('container.list');
+    // No governance change to list, and nothing loosens.
+    expect(within(confirm).queryByTestId('governance-diff-list')).toBeNull();
+    expect(confirmButtonIsDanger(confirm)).toBe(false);
+    expect(confirm.textContent).toContain('container.restart：门运行的定义变了，打开修订草稿');
+    expect(confirm.textContent).not.toContain('就地修正');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+    const result = await screen.findByTestId('align-gk-1-result');
+    expect(result.textContent).not.toContain('已对齐 0');
+    const drafts = within(result).getByTestId('align-gk-1-drafts');
+    expect(drafts.textContent).toContain('container.restart');
+    expect(drafts.textContent).toContain('修订');
+    expect(drafts.textContent).toContain('v2');
+    expect(drafts.textContent).toContain('发布之前，门会拒绝对它们的调用');
+    expect(within(drafts).getByTestId('align-gk-1-draft-link').getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Acontainer.restart%40draft',
+    );
+  });
+
+  it('legacy K: a governance change and a definition change in one alignment — both are sent, only the first is a classification change', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: {
+              mode: 'observe',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+            differs: true,
+            direction: 'tightened',
+            definitionDiffers: true,
+          },
+          {
+            name: 'container.logs',
+            existing: {
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            differs: false,
+            direction: 'neutral',
+            definitionDiffers: true,
+          },
+        ]),
+      refresh_operation_governance: (params) => {
+        expect((params as { operationNames: string[] }).operationNames).toEqual([
+          'container.restart',
+          'container.logs',
+        ]);
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [
+            {
+              name: 'container.restart',
+              before: { mode: 'observe', blastRadius: 'medium', autoApprovable: false },
+              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              direction: 'tightened',
+            },
+          ],
+          revisionDrafts: [
+            { name: 'container.restart', version: 3 },
+            { name: 'container.logs', version: 2 },
+          ],
+          unchanged: [],
+        };
+      },
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(within(confirm).getAllByTestId('governance-diff-list-item')).toHaveLength(1);
+    expect(confirm.textContent).toContain('就地修正');
+    const redefined = within(confirm).getByTestId('align-gk-1-redefined');
+    expect(redefined.textContent).toContain('container.restart、container.logs');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const result = await screen.findByTestId('align-gk-1-result');
+    expect(result.textContent).toContain('已对齐');
+    expect(result.textContent).toContain('1');
+    expect(within(result).getAllByTestId('align-gk-1-draft-link')).toHaveLength(2);
   });
 
   it('auto-approve switched on at high impact is a loosening, said accurately (high still needs a person)', async () => {

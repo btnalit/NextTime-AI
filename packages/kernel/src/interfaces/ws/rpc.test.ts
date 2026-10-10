@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
+import {
+  GatekeeperClientError,
+  HttpGatekeeperClient,
+  platformGateTarget,
+} from '../../adapters/gatekeeper-client/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
@@ -49,6 +53,29 @@ describe('mapDispatchError — gate refusals (review of #532)', () => {
       });
     },
   );
+});
+
+describe('mapDispatchError — a gate’s error text (review of #538)', () => {
+  it.each([
+    ['operation_refused', 403],
+    ['transport_error', 502],
+  ])('hides a credential in what a gate answers with %s', async (code, status) => {
+    // Synthetic, key-shaped — never a real credential.
+    const key = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+    const client = new HttpGatekeeperClient({
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ ok: false, error: { code, message: `bad key ${key}` } }), {
+          status,
+        }),
+    });
+    const err = await client
+      .observe(platformGateTarget('https://gate.example.test'), {
+        operation: 'list',
+        operationDigest: undefined,
+      })
+      .catch((thrown: unknown) => thrown);
+    expect(mapDispatchError(err)).toMatchObject({ message: `${code}: bad key [redacted]` });
+  });
 });
 
 describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P0)', () => {

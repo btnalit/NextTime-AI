@@ -11,6 +11,8 @@ import {
   GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
+  HttpGatekeeperClient,
+  platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
@@ -249,6 +251,29 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
       });
     },
   );
+
+  it.each([
+    ['operation_refused', 403],
+    ['transport_error', 502],
+  ])('hides a credential in what a gate answers with %s (review of #538)', async (code, status) => {
+    // Synthetic, key-shaped — never a real credential.
+    const key = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+    const client = new HttpGatekeeperClient({
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ ok: false, error: { code, message: `bad key ${key}` } }), {
+          status,
+        }),
+    });
+    const err = await client
+      .observe(platformGateTarget('https://gate.example.test'), {
+        operation: 'list',
+        operationDigest: undefined,
+      })
+      .catch((thrown: unknown) => thrown);
+    const mapped = mapCapabilityError(err);
+    expect(mapped.message).not.toContain(key);
+    expect(mapped.message).toContain('bad key [redacted]');
+  });
 
   it.each([
     // Between the kernel and the gate, not the caller's to fix.

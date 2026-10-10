@@ -27,6 +27,13 @@ import {
  *   - 错: 连接信息错误/端点不可达——测试连通要给出具体原因，不是泛化的"失败"（这个 owner 角色走不到
  *     步骤②本身，见下方说明；`gate-host.spec.ts` 走的是"测试连接"成功的那条真实路径，
  *     ConnectSystemLauncher.test.tsx 与 EnableGateConfirm 自己的失败态由组件测试覆盖）。
+ *   - 错（门的定义变了，遗留 K / #538 G1–G2）: 门公告里某个 Operation 的定义变了、治理字段没变时，
+ *     "与门公告对齐"不能说"已一致"——确认框要说清在发布修订之前门会拒绝调用，结果要列出打开的修订
+ *     草稿并链到能力目录去发布。CI 的 fixture 门每 60 秒按原样重新公告、改不了它的定义，所以这一步
+ *     用 `page.route` 改写真实预览的 `definitionDiffers`，并替身 `refresh_operation_governance`
+ *     的结果（同旅程 ⑦ 的做法）；内核一侧（修订草稿、发布后 409 消失）由
+ *     `platform-gates.integration.test.ts` 覆盖。截图写到 `test-results/review/`，随
+ *     `playwright-report` 产物上传，供体验验收。
  *   - 无权限: 跳过——governance.spec.ts 已经覆盖"builder 以下角色看不到治理分组"的同类断言，本旅程
  *     不重复建号。
  *   - 窄屏: 跳过——W1-B 的截图/axe 门槛与批量设计评审已覆盖向导多步表单在 768px 下的可用性，本旅程
@@ -171,5 +178,74 @@ test.describe('Journey ②: 接入一个新系统', () => {
     });
     await expect(catalogList.getByText(OBSERVE_OP, { exact: true })).toHaveCount(1);
     await expect(catalogList.getByText(EXECUTE_OP, { exact: true })).toHaveCount(1);
+
+    // --- 错: 门运行的定义变了（治理字段没变）——对齐打开修订草稿，并说清发布前门会拒绝调用 -------
+    // The real preview, with EXECUTE_OP's definition flagged as changed; the refresh answers what
+    // the kernel answers for that case (see this file's header).
+    let refreshParams: { gatekeeperId?: string; operationNames?: string[] } | undefined;
+    await page.route('**/api/cap/preview_gate_instance_enable', async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        ok: boolean;
+        result?: { operationsAlreadyPresent: Array<Record<string, unknown>> };
+      };
+      if (body.ok && body.result) {
+        body.result.operationsAlreadyPresent = body.result.operationsAlreadyPresent.map((op) =>
+          op.name === EXECUTE_OP ? { ...op, definitionDiffers: true } : op,
+        );
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.route('**/api/cap/refresh_operation_governance', async (route) => {
+      refreshParams = route.request().postDataJSON() as typeof refreshParams;
+      await route.fulfill({
+        json: {
+          ok: true,
+          result: {
+            gatekeeperId: refreshParams?.gatekeeperId,
+            refreshed: [],
+            revisionDrafts: [{ name: EXECUTE_OP, version: 2 }],
+            unchanged: [],
+          },
+        },
+      });
+    });
+
+    await goToByLabel(page, '系统与授权');
+    const gateCard = page.getByTestId('gatekeeper-card').filter({ hasText: GATE_DISPLAY_NAME });
+    await expect(gateCard).toHaveCount(1, { timeout: 15_000 });
+    await gateCard.getByTestId('system-access-summary').click();
+    const accessDrawer = page.getByTestId('system-access-drawer');
+    const alignButton = accessDrawer.getByTestId('system-governance-refresh');
+    await expect(alignButton).toBeVisible({ timeout: 15_000 });
+    await alignButton.click();
+
+    const alignConfirm = page.getByTestId('system-governance-refresh-confirm');
+    await expect(alignConfirm).toBeVisible({ timeout: 15_000 });
+    await expect(accessDrawer.getByTestId('system-governance-refresh-aligned')).toHaveCount(0);
+    const redefined = alignConfirm.getByTestId('system-governance-refresh-redefined');
+    await expect(redefined).toContainText(EXECUTE_OP);
+    await expect(redefined).toContainText('门会拒绝对它们的调用');
+    await expect(redefined).not.toContainText(OBSERVE_OP);
+    await page.screenshot({ path: 'test-results/review/k-definition-drift-confirm.png' });
+
+    await alignConfirm.getByTestId('confirm-button').click();
+    const alignResult = accessDrawer.getByTestId('system-governance-refresh-result');
+    await expect(alignResult).toBeVisible({ timeout: 15_000 });
+    expect(refreshParams?.operationNames).toEqual([EXECUTE_OP]);
+    await expect(alignResult.getByTestId('system-governance-refresh-drafts')).toContainText(
+      EXECUTE_OP,
+    );
+    const draftLink = alignResult.getByTestId('system-governance-refresh-draft-link');
+    await expect(draftLink).toHaveAttribute(
+      'href',
+      new RegExp(`^#/govern/catalog/operations/.+${EXECUTE_OP}%40draft$`),
+    );
+    await page.screenshot({ path: 'test-results/review/k-definition-drift-result.png' });
+
+    await draftLink.click();
+    await expect(page).toHaveURL(/#\/govern\/catalog\/operations\//, { timeout: 15_000 });
+    await page.unroute('**/api/cap/preview_gate_instance_enable');
+    await page.unroute('**/api/cap/refresh_operation_governance');
   });
 });

@@ -221,6 +221,43 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
   );
 
   it.each([
+    ['http', 'https://api.owner.example/openapi.json'],
+    ['mcp', 'https://api.owner.example/mcp'],
+  ])(
+    'a failed %s manifest fetch names the URL by origin and path only, and scrubs the reason (review of #538, item 2)',
+    async (kind, base) => {
+      const { fetchImpl } = wire();
+      // Synthetic, key-shaped — never a real credential.
+      const key = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123';
+      fetchImpl.mockImplementation(async () =>
+        kind === 'http'
+          ? new Response('nope', { status: 401 })
+          : new Response(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                error: { code: -1, message: `bad key ${key}` },
+              }),
+            ),
+      );
+      const thrown = await call({
+        kind,
+        target: 'x',
+        endpoint: 'https://gate.owner.example',
+        credentialKind: 'shared',
+        connectionSecret: secrets.mint(WORKSPACE).secret,
+        manifestSource: `https://owner:pa55word@${base.slice('https://'.length)}?api_key=k3y#frag`,
+      }).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(ConnectionManifestFetchError);
+      const message = (thrown as Error).message;
+      expect(message).toContain(`failed to fetch manifestSource "${base}"`);
+      for (const leak of ['pa55word', 'owner:', 'k3y', 'frag', key]) {
+        expect(message).not.toContain(leak);
+      }
+    },
+  );
+
+  it.each([
     ['http://worker-supervisor:8081', 'bare-hostname'],
     ['http://localhost:8090', 'bare-hostname'],
     ['http://127.0.0.1:8090', 'loopback'],

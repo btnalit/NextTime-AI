@@ -13,6 +13,7 @@ import {
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import { correlationHeaders } from '@nexttime/shared';
+import { scrubSecretValues } from '../../governance/redaction/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import {
   type OutboundTargetGuard,
@@ -243,6 +244,61 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 class ResponseTooLargeError extends Error {}
 
+/** The most bytes of a gate's error text the kernel passes on: room for a gate's own message plus
+ *  the 2 KiB of target-system text `@nexttime/gatekeeper-base` `boundUntrustedText` folds into one. */
+const MAX_GATE_ERROR_MESSAGE_BYTES = 4 * 1024;
+/** How much of it is scrubbed before the cut — past the cut by more than any credential is long, so
+ *  a value the cut lands in is already hidden, and the scrub stays linear in a bounded string. */
+const GATE_ERROR_SCRUB_WINDOW_BYTES = 64 * 1024;
+/** A gate's error code as the kernel repeats it: lower-case words joined by `_`, no digits, like
+ *  every code the protocol defines (`invalid_params`, `operation_refused`, …) — so a token, which
+ *  has digits or other characters, is never one. */
+const GATE_ERROR_CODE = /^[a-z]+(?:_[a-z]+){0,7}$/;
+const MAX_GATE_ERROR_CODE_LENGTH = 64;
+
+/** `text` cut to at most `maxBytes` of UTF-8 — never mid-character — and marked when cut. */
+function boundBytes(text: string, maxBytes: number, marked: boolean): string {
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= maxBytes) return text;
+  const cut = buf
+    .subarray(0, maxBytes)
+    .toString('utf8')
+    .replace(/\uFFFD+$/, '');
+  return marked ? `${cut}… [truncated, ${buf.length} bytes total]` : cut;
+}
+
+/**
+ * A gate's `{ ok: false, error }` as the kernel repeats it (review of #538, item 1). The message
+ * reaches the caller on every surface — the HTTP and WS error, the MCP tool result an agent hands
+ * its model, an ActionRequest's failure reason — and a self-connected gate is owner-supplied code
+ * that can answer anything, including a target system's reply that echoes a key. So the text is
+ * scrubbed (`scrubSecretValues`) and bounded here, once, for the pass-through refusals and the 502
+ * alike; a message or code that is not what the protocol says it is reads as one the gate did not
+ * give.
+ */
+export function gateErrorOf(
+  error: unknown,
+  path: string,
+): { readonly code: string; readonly message: string } {
+  const { code: rawCode, message: rawMessage } =
+    error !== null && typeof error === 'object'
+      ? (error as { code?: unknown; message?: unknown })
+      : {};
+  const code =
+    typeof rawCode === 'string' &&
+    rawCode.length <= MAX_GATE_ERROR_CODE_LENGTH &&
+    GATE_ERROR_CODE.test(rawCode)
+      ? rawCode
+      : 'unrecognized_gate_error';
+  if (typeof rawMessage !== 'string' || rawMessage.trim() === '') {
+    return { code, message: `gatekeeper client: ${path} answered an error without a message` };
+  }
+  const scrubbed = scrubSecretValues(
+    boundBytes(rawMessage, GATE_ERROR_SCRUB_WINDOW_BYTES, false),
+  ).value;
+  return { code, message: boundBytes(scrubbed, MAX_GATE_ERROR_MESSAGE_BYTES, true) };
+}
+
 /**
  * R-49: reads `response`'s body as UTF-8 text, refusing past `maxBytes`, and gives up the moment
  * `signal` aborts — raced explicitly, so the budget holds whether or not the fetch implementation
@@ -418,11 +474,18 @@ export class HttpGatekeeperClient implements GatekeeperClient {
         status: response.status,
       });
     }
-    if (!envelope.ok) {
-      throw new GatekeeperClientError(envelope.error.message, {
-        code: envelope.error.code,
-        status: response.status,
-      });
+    if (envelope === null || typeof envelope !== 'object') {
+      throw new GatekeeperClientError(
+        `gatekeeper client: ${path} returned a non-envelope response`,
+        {
+          code: 'invalid_response',
+          status: response.status,
+        },
+      );
+    }
+    if (envelope.ok !== true) {
+      const { code, message } = gateErrorOf((envelope as { error?: unknown }).error, path);
+      throw new GatekeeperClientError(message, { code, status: response.status });
     }
     return envelope.result;
   }

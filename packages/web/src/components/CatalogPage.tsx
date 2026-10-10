@@ -20,6 +20,7 @@ import {
   type SkillRow,
   operationKey,
   operationStatsKey,
+  revisionDraftKey,
 } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../lib/labels.js';
@@ -398,9 +399,7 @@ function PublishCredentialSlot({
  *  (it carries `governanceChange`) — both rows share the identity, and the draft must stay
  *  selectable on its own to be published from here (R-19). */
 function catalogOperationKey(row: OperationCatalogRow): string {
-  return row.status === 'draft' && row.governanceChange
-    ? `${operationKey(row)}@draft`
-    : operationKey(row);
+  return row.status === 'draft' && row.governanceChange ? revisionDraftKey(row) : operationKey(row);
 }
 
 /** S8 W3 K2 (leftover 82): the caller's own private draft's "丢弃" action — a `kit/confirm`

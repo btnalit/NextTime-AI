@@ -20,6 +20,7 @@ import {
 } from '../../governance/agent-profile/index.js';
 import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
+  NO_OPERATION_DEFINITION,
   awaitActionRequestResolution,
   getActionRequest,
   requestAction,
@@ -897,7 +898,7 @@ async function runGovernedRequest(
           // own digest, also on a replay. A row with none (I17 with no draft, or a row from before
           // digests were recorded) has nothing to simulate against.
           const operationDigest = actionRequest.operationDigest;
-          if (operationDigest === null) {
+          if (operationDigest === null || operationDigest === NO_OPERATION_DEFINITION) {
             simulate = {
               unavailable: true,
               reason: `this request names no definition of "${args.operationName}" (it is not published and has no draft) — nothing to simulate against`,
@@ -1351,11 +1352,13 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     // I17: draft/unknown Operation → unclassified, always require_approval, never auto-executed.
     // Legacy K: the definition it is requested against is its current draft, when there is one —
     // the gate then runs it after approval only if it still runs that definition. With no draft
-    // the workspace holds no definition, and the executor refuses the row (nothing to hold the
-    // gate to) unless the Operation has been published by then.
+    // the workspace holds no definition: the row says so (`NO_OPERATION_DEFINITION`), and the
+    // executor refuses it, even if the Operation is published by then — that definition was never
+    // what this request was approved against.
     const draft = await getOperation(client, workspaceId, gatekeeperId, operationName);
     return runGovernedRequest(client, workspaceId, {
-      operationDigest: draft?.status === 'draft' ? operationRecordDigest(draft) : undefined,
+      operationDigest:
+        draft?.status === 'draft' ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
       gatekeeper,
       operationName,
       operationParams: resolvedParams,

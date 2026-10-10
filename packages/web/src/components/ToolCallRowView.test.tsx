@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ToolCallRowView } from './ToolCallRowView.js';
+import { PersistedToolCallRowView, ToolCallRowView } from './ToolCallRowView.js';
 
 afterEach(cleanup);
 
@@ -35,5 +35,61 @@ describe('ToolCallRowView', () => {
     );
     const chip = screen.getByText('完成');
     expect(chip.getAttribute('data-tool-outcome')).toBe('ok');
+  });
+
+  it('says what a gate refusal in the result means and what to do, above the raw result (review of #538, G3)', () => {
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c1',
+          name: 'nexttime_request_action',
+          status: 'ended',
+          result: {
+            status: 'failed',
+            reason:
+              'operation_definition_mismatch: operation "db.restart": the definition that was approved (0123456789ab) is not the one this gate runs (ba9876543210) — refused, nothing ran.',
+          },
+        }}
+      />,
+    );
+    const note = screen.getByTestId('tool-call-gate-reason');
+    expect(note.textContent).toContain('门运行的定义和批准的不一样');
+    expect(note.textContent).toContain('与门公告对齐');
+    // The raw result stays as the agent saw it.
+    expect(screen.getByText(/is not the one this gate runs/)).toBeTruthy();
+  });
+
+  it('has nothing to add to a result that names no gate refusal', () => {
+    render(
+      <ToolCallRowView
+        row={{ toolCallId: 'c1', name: 'bash', status: 'ended', result: { ok: true } }}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-gate-reason')).toBeNull();
+  });
+});
+
+describe('PersistedToolCallRowView', () => {
+  it('explains a request made against no definition (operation_definition_unavailable)', () => {
+    render(
+      <PersistedToolCallRowView
+        record={{
+          toolCallId: 'c2',
+          name: 'nexttime_request_action',
+          outcome: 'done',
+          result: {
+            text: '{"status":"failed","reason":"operation_definition_unavailable: \\"k.op\\" was requested while it was not published and had no draft"}',
+            truncated: false,
+            totalChars: 120,
+          },
+          redactedValues: 0,
+          startedAt: null,
+          endedAt: null,
+        }}
+      />,
+    );
+    const note = screen.getByTestId('tool-call-gate-reason');
+    expect(note.textContent).toContain('没有批准过的定义');
+    expect(note.textContent).toContain('先在能力目录发布它');
   });
 });
