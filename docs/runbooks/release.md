@@ -1049,8 +1049,11 @@ Operation 一律 409，不执行任何东西（fail closed）。
 
 结果记 `docs/private/`。
 
-**回滚**：旧代码不读 `operation_digest`，列留着即可；旧门不要求摘要。回滚前按 §3.17 排空 Worker。回滚后旧门不校验摘要、按自己的清单执行，
-回到升级前的行为；窗口后发布的修订保持发布状态，不用撤回。
+**回滚**：旧代码不读 `operation_digest`，列留着即可（schema 撤法见 §6 表）。回滚前按 §3.17 排空 Worker。打包门随 compose 一起回到旧版本，
+不校验摘要、按自己的清单执行，回到升级前的行为；窗口后发布的修订保持发布状态，不用撤回。
+**自连门例外**：升级期间 owner 用新版本 gatekeeper-base 重建过的自连门不随 compose 回退，它拒绝不带摘要的调用，回滚到旧内核后
+对它的每次调用都返回 409 `operation_definition_mismatch`。处理：owner 用旧版本 gatekeeper-base 重建这个门。§3.24 窗口前第 2 条
+SQL 列出的自连门清单就是要逐个确认的范围。
 
 ## 4. Hotfix 流程
 
@@ -1157,6 +1160,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.42.0 之后的下一版 | core `0042_definer_functions_bound_to_workspace`（S10 K4，遗留 123 的 L4-11 余项与 L4-13）：`find_active_fact_for_identity` / `latest_fact_invalidated_for_identity` 遇到不是 `app_workspace()` 的工作区参数报 42501，`link_visible_to_caller` / `conflict_visible_to_caller` 对它答 false；`workspace_gate_links_gatekeeper_idx` 换成唯一索引 `workspace_gate_links_gatekeeper_key (workspace_id, gatekeeper_object_id)`；收回 `nexttime_app` 对 `workspace_gate_links` 的 DELETE。不改数据、不加列 | 可逆（先过 §3.8 预检） | v0.42.0 的调用方都在 `withWorkspace` 里、传的都是本事务的工作区（GUC 对登录角色也设置），答案不变；v0.42.0 没有删关联的内核路径，手工解除关联走登录角色；v0.42.0 只在一个 Gatekeeper 还没有关联时插入关联（重复关联正是被拦下的情形）。已有重复关联时迁移本身失败、整体回滚，所以要先跑 §3.8 预检 | 只需回退代码；若要连 schema 一起撤：按 0013 / 0017 / 0027 / 0029 重建四个函数（`create or replace` 保留 0035 的授权），`drop index workspace_gate_links_gatekeeper_key` 后按 0023 重建非唯一索引，`grant delete on workspace_gate_links to nexttime_app` |
 | v0.42.0 之后的下一版 | task `0006_objective_outcome` + worker `0004_skill_procedure_attribution`（S10 E1 结果归因）：`tasks` 加五个可空的目标结果列（CHECK `tasks_objective_outcome_check`：全空，或第 1 版无前值，或第 2 版前值是另一值），`worker_runs.skills_recorded boolean not null default false`（PG 11+ 常量默认值不重写表），新表 `turn_outcomes`、`worker_run_skills`、`turn_procedure_claims`（工作区 RLS；后两张只授 `select, insert`）。不改既有数据 | 可逆 | 只加可空列、带常量默认值的列与新表：v0.42.0 的写入不碰新列（`skills_recorded` 取默认 false，读作"未记录"），也不知道新表；迁移可逆性探针用 v0.42.0 的测试在新 schema 上跑过（#480，2116 例通过，首跑唯一失败是遗留 123 已记的 `turn-terminal` 偶发超时，下一次提交上全过；合入头 `11252f3` 上探针也是绿的，那次 HEAD 已同时带 core 0041 / 0042 与 #482 的声明式判定） | 只需回退代码；若要连 schema 一起撤：`drop table turn_procedure_claims, worker_run_skills, turn_outcomes; alter table worker_runs drop column skills_recorded; alter table tasks drop constraint tasks_objective_outcome_check, drop column objective_outcome, drop column outcome_given_by, drop column outcome_given_at, drop column outcome_revision, drop column outcome_previous`（并从 `schema_migrations` 删掉这两条；不撤也无害——已记录的归因随之丢失） |
 | v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
+| v0.45.0 之后的下一版 | governance `0019_action_request_operation_digest`（#538，遗留 189）：`action_requests` 加一列可空的 `operation_digest`（text，检查约束 `action_requests_operation_digest_shape`：为空、`none` 或 `sha256:<64 hex>`），不回填 | 可逆 | 只加一列可空列和只约束这一列的检查。读了 v0.44.0 的 `governance/approval`：`action_requests` 的读写都用显式列清单（`ACTION_REQUEST_ROW_COLUMNS`），不读不写新列，旧代码插入的行恒为空，约束天然满足。回退后旧代码回到执行时不带摘要（即遗留 189 本身），新代码期间写下的摘要留在列里、旧代码看不见；重新升级后这些行照常按记下的摘要执行，回退期间写入的空值行按执行时已发布的版本执行 | 只需回退代码；若要连 schema 一起撤：`alter table action_requests drop column operation_digest`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 19`（不撤也无害） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
