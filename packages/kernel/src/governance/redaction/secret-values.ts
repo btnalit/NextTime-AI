@@ -42,8 +42,9 @@ import { SECRET_FIELD_MASK, isSecretFieldValue, namesASecretField } from '@nextt
  * pass on top of that (`redactSecrets`'s `maxChars`, the chat sink's own limits).
  *
  * Users: application/chat (a Turn's tool calls, the stored reply), application/gateway (the audit
- * copy of every Handle-channel call's params, a Worker's result report) and, for a stream,
- * `secret-stream.ts`.
+ * copy of every call's params — with the field rule, `credential-review.ts` — a Worker's result
+ * report), the review of an observe call's params (`HIGH_CONFIDENCE_SECRET_PATTERNS` refuse, the
+ * rest record) and, for a stream, `secret-stream.ts`.
  */
 
 export const REDACTED = SECRET_FIELD_MASK;
@@ -92,6 +93,21 @@ function looksIssued(value: string): boolean {
   return /\d/.test(value) || value.length >= 20;
 }
 
+/** A `Basic` value that decodes to `user:password` — canonical base64 of printable text with a
+ *  colon — rather than the next word (`Basic realm="api"`, `Basic auth failed`). */
+function decodesToUserPass(value: string): boolean {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.toString('base64') !== value) return false;
+  const text = bytes.toString('utf8');
+  if (!text.includes(':') || text.includes('\uFFFD')) return false;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
+}
+
 /** `value` replaced, its quotes kept. */
 function redactedValue(value: string): string {
   const quote = value.charAt(0);
@@ -130,36 +146,52 @@ export const JSON_SECRET_PAIR: ValuePattern = {
     value === undefined || value === REDACTED ? undefined : `"${key}"${separator}"${REDACTED}"`,
 };
 
+const PEM_PRIVATE_KEY: ValuePattern = {
+  pattern:
+    /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|$)/g,
+  redact: () => REDACTED,
+};
+
+// A compact JWS/JWT: three base64url segments, the first a JSON header (`{"` → `eyJ`). Starts only
+// where a base64url run starts — `\b` would also start after every `-` inside one.
+const COMPACT_JWT: ValuePattern = {
+  pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
+  redact: () => REDACTED,
+};
+
+const VENDOR_KEY: ValuePattern = {
+  pattern:
+    /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,})/g,
+  redact: () => REDACTED,
+};
+
+/** `scheme://user:password@host`, the password captured. */
+const URL_PASSWORD =
+  /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}):(?!\[redacted\]@)([^\s/@]{1,256})@/g;
+
+/** An env-variable reference standing in for a value (`$PGPASS`, `${TOKEN}`), not a value. */
+const PLACEHOLDER = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
+
 /** Applied in order to every string. Exported for `secret-stream.ts`, which must know where a
  *  match starts and ends (`secretMatches`). */
 export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
-  {
-    pattern:
-      /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|$)/g,
-    redact: () => REDACTED,
-  },
+  PEM_PRIVATE_KEY,
   // `Authorization: token …`, `Cookie: a=1; b=2` — the whole value, to the end of the line.
   {
     pattern:
       /(?<![A-Za-z0-9-])((?:proxy-)?authorization|(?:set-)?cookie)([ \t]{0,8}:[ \t]{0,8})(?!\[redacted\])[^\r\n]+/gi,
     redact: (_match, [name, separator]) => `${name}${separator}${REDACTED}`,
   },
-  // A compact JWS/JWT: three base64url segments, the first a JSON header (`{"` → `eyJ`). Starts
-  // only where a base64url run starts — `\b` would also start after every `-` inside one.
-  {
-    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
-    redact: () => REDACTED,
-  },
+  COMPACT_JWT,
   {
     pattern: /\b(Bearer|Basic)([ \t]{1,16})([A-Za-z0-9._~+/=-]{8,})/gi,
     redact: (_match, [scheme, space, value]) =>
-      value !== undefined && looksIssued(value) ? `${scheme}${space}${REDACTED}` : undefined,
+      value !== undefined &&
+      (looksIssued(value) || (scheme?.toLowerCase() === 'basic' && decodesToUserPass(value)))
+        ? `${scheme}${space}${REDACTED}`
+        : undefined,
   },
-  {
-    pattern:
-      /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,})/g,
-    redact: () => REDACTED,
-  },
+  VENDOR_KEY,
   // `PGPASSWORD=…`, `export API_TOKEN="…"` — an `env` / `.env` line. Upper case only, the env-var
   // convention; the name is matched whole and judged afterwards.
   {
@@ -195,12 +227,52 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
       value === undefined ? undefined : `${flag}${separator ?? ''}${redactedValue(value)}`,
   },
   // `scheme://user:password@host` — keeps the user, drops the password.
+  { pattern: URL_PASSWORD, redact: (_match, [prefix]) => `${prefix}:${REDACTED}@` },
+  JSON_SECRET_PAIR,
+];
+
+/**
+ * The patterns that match only what is almost certainly a credential itself, never text that
+ * merely talks about one — stricter than `SECRET_VALUE_PATTERNS`, which hides whatever these
+ * match: a PEM private key, a compact JWT (a Handle is one), a vendor key with a well-known prefix,
+ * an issued-looking value after `Bearer` (20 or more token characters with a digit — `Bearer
+ * $TOKEN` / `${TOKEN}` never match, `$` and `{` are not token characters), a `Basic` value that
+ * decodes to `user:password`, the same issued-looking value after the `token` scheme of an
+ * `Authorization:` header (`Authorization: token ****` does not match), and a URL's password that
+ * is not an env reference (`$PGPASS`, `${PGPASS}`).
+ * Not here, because ordinary query text hits them: an `Authorization:` / `Cookie:` header's value
+ * otherwise (`|= "Authorization: failed"`), `name=value` / `name: value` and `--flag value`
+ * (`token=expired`, `--password=$VAR`), an env assignment, a `"…token…": "…"` pair and a short
+ * `Bearer` value. For refusing content outright (an observe-class Operation's params, legacy
+ * 175), where every other pattern is only recorded.
+ */
+export const HIGH_CONFIDENCE_SECRET_PATTERNS: readonly ValuePattern[] = [
+  PEM_PRIVATE_KEY,
+  COMPACT_JWT,
+  {
+    pattern: /\b(Bearer)([ \t]{1,16})([A-Za-z0-9._~+/=-]{20,})/gi,
+    redact: (_match, [scheme, space, value]) =>
+      value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
+  },
+  {
+    pattern: /\b(Basic)([ \t]{1,16})([A-Za-z0-9._~+/=-]{8,})/gi,
+    redact: (_match, [scheme, space, value]) =>
+      value !== undefined && decodesToUserPass(value) ? `${scheme}${space}${REDACTED}` : undefined,
+  },
+  // `Authorization: token …` (GitHub's scheme). Only right after the header's name: `token` alone
+  // is an ordinary word in text.
   {
     pattern:
-      /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}):(?!\[redacted\]@)[^\s/@]{1,256}@/g,
-    redact: (_match, [prefix]) => `${prefix}:${REDACTED}@`,
+      /(?<=(?<![A-Za-z0-9-])(?:proxy-)?authorization[ \t]{0,8}:[ \t]{0,8})(token)([ \t]{1,16})([A-Za-z0-9._~+/=-]{20,})/gi,
+    redact: (_match, [scheme, space, value]) =>
+      value !== undefined && /\d/.test(value) ? `${scheme}${space}${REDACTED}` : undefined,
   },
-  JSON_SECRET_PAIR,
+  VENDOR_KEY,
+  {
+    pattern: URL_PASSWORD,
+    redact: (_match, [prefix, password]) =>
+      password === undefined || PLACEHOLDER.test(password) ? undefined : `${prefix}:${REDACTED}@`,
+  },
 ];
 
 /** Where one match of a pattern starts and ends, and what replaces it (`undefined`: kept). */
@@ -253,11 +325,12 @@ interface WalkState {
   omitted: boolean;
   /** Where values were replaced — only for a caller that asked (`onRedacted`). */
   readonly onRedacted: ((path: string, count: number) => void) | undefined;
+  readonly patterns: readonly ValuePattern[];
 }
 
 function scrubInto(text: string, state: WalkState): string {
   let out = text;
-  for (const valuePattern of SECRET_VALUE_PATTERNS) {
+  for (const valuePattern of state.patterns) {
     let scrubbed = '';
     let from = 0;
     for (const { start, end, replacement } of secretMatches(valuePattern, out)) {
@@ -278,6 +351,7 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     chars: options.maxChars ?? Number.POSITIVE_INFINITY,
     omitted: false,
     onRedacted: options.onRedacted,
+    patterns: options.patterns ?? SECRET_VALUE_PATTERNS,
   };
 }
 
@@ -318,6 +392,9 @@ export interface RedactSecretsOptions {
   readonly onRedacted?: (path: string, count: number) => void;
   /** How a key is written in an `onRedacted` path. Defaults to the key as it is. */
   readonly pathKey?: (key: string) => string;
+  /** The value patterns run over every string. Defaults to `SECRET_VALUE_PATTERNS`; a check that
+   *  refuses rather than redacts passes `HIGH_CONFIDENCE_SECRET_PATTERNS`. */
+  readonly patterns?: readonly ValuePattern[];
 }
 
 export interface RedactedValue extends Scrubbed<unknown> {
