@@ -102,7 +102,18 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 
 上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
 
-跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。
+跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走。
+
+**本节命令的执行方式**：所有命令都在主机检出目录下执行。SQL 一律经
+`docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1` 交给 psql，并包在
+`begin transaction read only; … rollback;` 里。经 SSH 执行时：
+- 带 SQL 或脚本的命令，把 heredoc 通过管道交给 ssh，stdin 就是 SQL，不要加 `</dev/null`：
+  `ssh <主机别名> 'cd <检出目录> && docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1' <<'SQL'`，然后是 SQL 正文，最后一行 `SQL`；
+- 不需要输入的命令（`docker ps`、`docker compose logs`、`docker inspect`、`stat`）用 `ssh -n`，或在命令末尾加 `</dev/null`，
+  否则 ssh 会吃掉后面命令的 stdin。
+
+标「**victor 手动**」的步骤要登录控制台，由维护者本人做，远程 CLI 会话不做、也不要索取管理员凭据；控制台路径写成
+「分组 → 页面 → 按钮」，分组是侧栏的「使用 / 治理 / 平台」。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
@@ -666,9 +677,9 @@ SQL
 
 `eyJhbGciOiJFZERTQSJ9` 是 Handle 的头部 `{"alg":"EdDSA"}`，只匹配 Handle。0 行，或每行 `live_unrevoked = 0`，即无事。中间段解不出 `jti` 的（截断、损坏）直接跳过，不会让事务中止。有 `live_unrevoked > 0` 时，找维护者决定是否吊销：按 `jti` 吊销（`capability_handles.revoked_at`，每次调用都检查）是改主机数据的操作，须维护者明确同意，本手册不自动做。历史行是否清洗另行决定（审计只追加）。
 
-**B. 工具调用留在历史里**：在控制台问一个需要查图的问题，刷新页面，回复上方能看到「调用了 N 个工具」组（#523），展开后每行有工具名、结果（完成 / 失败 / 未完成）、起止时间与参数和结果预览。
+**B. 工具调用留在历史里**（**victor 手动**）：使用 → 对话，新建一个对话，问一个需要查图的问题（例如「图谱里有哪些系统？」），等回复结束后刷新页面，回复上方能看到「调用了 N 个工具」组（#523），展开后每行有工具名、结果（完成 / 失败 / 未完成）、起止时间与参数和结果预览。
 
-**C. 输出里的 Handle 被替换**：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页里都应显示为 `[redacted]`。
+**C. 输出里的 Handle 被替换**（**victor 手动**，使用 → 对话）：不要让 agent 运行 `env`：工具结果会原样回到模型上下文，经 llm-proxy 发给上游模型供应商，等于把真实的入口 Handle 送出主机。改用合成值验证同一条脱敏路径：让 agent 运行 `echo "CAPABILITY_HANDLE=eyJhbGciOiJub25lIn0.c3ludGhldGlj.bm90LWEtcmVhbC1zaWc"`。它同时命中 `NAME=value` 与 JWT 两类模式，头部是 `{"alg":"none"}`，不会被 A 计入。实时流、刷新后的历史、审计页（治理 → 审计，打开「显示读操作」）里都应显示为 `[redacted]`。
 
 ### 3.16 llm-proxy 管理接口限流与密钥检查（#521，v0.44.0 起）
 
@@ -685,8 +696,9 @@ SQL
 对端地址上的 Handle，请求自带凭证即 401，`workers` 平面以外的路由 403（设计文档 I19，`host-worker-runtime.md`）。
 
 **窗口前（必须）**：
-1. **排空 Worker**：确认没有运行中的 WorkerRun——控制台任务列表没有进行中的任务，且
-   `docker ps --filter label=nexttime.role=worker` 为空。进行中的 WorkerRun 会失败：governance 0018 吊销它的 Handle，新的
+1. **排空 Worker**：判据只有一条，`docker ps --filter label=nexttime.role=worker` 为空（经 SSH 用 `ssh -n`）。
+   控制台任务列表只作参考：§3.22 Q4 命中的 Task 永远显示"进行中"、名下却没有容器，先按 §3.22 处置，不要等它们消失；
+   Q3 命中且容器还活着的，也要先按 §3.22 处置，否则 `docker ps` 清不空。进行中的 WorkerRun 会失败：governance 0018 吊销它的 Handle，新的
    supervisor 也不会为旧容器建绑定。入口容器不用管，下一个 Turn 会自动重签并重建。`apply-release.sh` 目前不替你检查这一步（遗留 170）。
    排空之后到窗口结束之前不要新发起 Worker；`queued` 的 Task 在应用后由新代码起容器，不受影响。
 2. 照常 `--prefetch` 目标 tag 并确认 `RESULT ok`（§3）。
@@ -708,21 +720,34 @@ SQL
   的文字变了。`apply-release.sh` 在一次运行里按 S3 → S1 → S2 → S4 跑完全部验收，失败只计数、不会停下，所以要在 apply 日志里
   确认这三步都是 PASS：任何一步 FAIL 都视为来源绑定没有生效，按 §5 判断是否回滚，不能只看 `RESULT` 的失败计数。
 - 0018 只在执行那一刻存在未过期、未吊销的容器 Handle 时才写审计行 `principal.container_handles_revoked`（例如 24 h 内没有
-  Turn、也没有 Worker，就是 0 行，不代表失败）。所以用下面的只读 SQL 核对：应用前签发、至今仍有效的容器 Handle 应为 0
-  （`<apply 日志的开始时间>` 换成日志第一行的时间）：
+  Turn、也没有 Worker，就是 0 行，不代表失败）。所以用下面的只读 SQL 核对：新 kernel 启动之前签发、至今仍有效的容器 Handle
+  应为 0。截点是**新 kernel 容器的启动时间**，不是 apply 日志的开始时间：`apply-release.sh` 在 `STEP migrate ok` 之后、
+  `up` 之前，旧栈还在跑，旧内核这段时间仍可能签出放进容器 env 的旧式 Handle，0018 吊销不到它们，按日志开始时间截会漏掉。
+  先取截点：
 
-  ```sql
+  ```sh
+  docker inspect -f '{{.State.StartedAt}}' $(docker compose ps -q kernel) </dev/null
+  ```
+
+  把输出（UTC，形如 `2026-10-10T01:23:45.678901234Z`）填进下面的 `<kernel 启动时间>`：
+
+  ```sh
+  docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
   begin transaction read only;
   select count(*) from capability_handles h
     join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
    where s.kind in ('entry','worker_run') and h.revoked_at is null
-     and h.expires_at > now() and h.created_at < '<apply 日志的开始时间>';
+     and h.expires_at > now() and h.created_at < '<kernel 启动时间>'::timestamptz;
   rollback;
+  SQL
   ```
+
+  结果大于 0 时按遗留 167 处理：经维护者同意，手工再跑一次 0018 的 `update`（主机写操作）。
 - 用 §3.15 A 的只读 SQL 再数一次历史 Handle 命中：容器 Handle 副本此时应已全部吊销，剩下的 `live_unrevoked` 是用户粘贴进去的
   bearer Handle（遗留 157），结果记 `docs/private/`。
 
-**回滚**：旧代码不读绑定文件；旧 kernel / llm-proxy 的严格 claims schema 拒绝带 `hld` 的 token，入口 agent 会从旧内核拿到新
+**回滚**：回滚前同样按第 1 步排空 Worker：新版本起的 WorkerRun 容器里只有 `source-bound` 标记，旧 kernel / llm-proxy 不认，
+这些 run 会失败。旧代码不读绑定文件；旧 kernel / llm-proxy 的严格 claims schema 拒绝带 `hld` 的 token，入口 agent 会从旧内核拿到新
 Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不需要。卷可以留着。回滚后再升级的窗口见遗留 167。
 
 ### 3.18 含疑似凭据的内容生效前须二次确认（#526，v0.44.0 之后的下一版起）
@@ -732,11 +757,14 @@ Handle。fail closed，不丢数据；0018 的吊销不随回滚恢复，也不�
 否则内核返回 400 `credentials_review_required`；含疑似凭据的参数不再被自动批准或「总是允许」放行。控制台的对话审批卡遇到
 这种请求只给「去审批页核对」与拒绝。用脚本或 CLI 批准 / 发布含凭据内容的调用方要显式带这个字段。
 
-**应用后核对**（只用合成值，不要用真实凭据或真实 Handle）：
-- (a) 一个参数为 `{"password": "abcdefghijklmnopqrstuvwxyz0123"}` 的审批请求（合成值放在 `password` 字段里，按字段名计数；
-  若把 `password=abc…` 整串放进别的字段，比如 `cmd`，路径显示的是 `cmd`），在审批页显示「含 1 处疑似凭据」和字段 `password`，勾选前「批准」不可用；对话审批卡
-  只链接到审批页，不能直接批准。
-- (b) 批准后，该审批的审计行带 `credentialReview`（`suspectedSecretValues: 1`、`confirmed: true`）。
+**应用后核对**（**victor 手动**；只用合成值，不要用真实凭据或真实 Handle）：
+- 造一个审批请求：需要一个要审批的 Operation（`mode` 为 act、不自动批准的任意一个；治理 → 能力目录里能看到）。使用 → 对话，
+  让 agent 对它发起 `request_action`，参数里放 `{"password": "abcdefghijklmnopqrstuvwxyz0123"}`（合成值放在 `password` 字段里，
+  按字段名计数；若把 `password=abc…` 整串放进别的字段，比如 `cmd`，路径显示的是 `cmd`）。
+- (a) 对话里的审批卡只有「去审批页核对」和拒绝，不能直接批准。使用 → 待我审批，打开这一条：显示「含 1 处疑似凭据」和字段
+  `password`，「批准」不可用并提示「先勾选「已核对凭据」」；勾选后「批准」可用。
+- (b) 批准后，治理 → 审计里这次批准的审计行带 `credentialReview`（`suspectedSecretValues: 1`、`confirmed: true`）。批准会让
+  Operation 真的执行，所以挑一个对目标系统无害的 Operation；不想执行就在 (a) 看完后点拒绝，(b) 留到下一次真实审批时核对。
 
 结果记 `docs/private/`。
 
@@ -772,41 +800,65 @@ digest 与上一版完全相同，镜像内容不变，只换来源。
 - `http` 门拒绝任何落到门自己拥有的 header、凭据 query 参数、cookie 或 binding 固定 query（不分大小写）上的参数（403
   `operation_refused`），分页游标按参数名豁免；`importOpenApi` 不再声明这类参数；MCP transport 不再跟随重定向。
 
-**维护窗口前**（与 `--prefetch` 同时，在当前版本上跑，只读）：找出线上已经声明了会被门侧守卫拒绝的参数的 Operation。结果为空就
-不需要任何动作。结果记 `docs/private/`。
+**维护窗口前**（与 `--prefetch` 同时，在当前版本上跑，只读，主机执行；经 SSH 按 §3 开头的方式把 heredoc 交给 ssh）：
+列出线上 Operation 声明的、可能落到门侧守卫上的参数。门侧守卫对没写 `x-in` 的参数也检查：GET / HEAD 的这类参数默认进 query
+（`toQuery` → `isGateOwnedQueryParam`），手写 manifest 通常不写 `x-in`；与 binding 路径里固定 query 同名的参数也会被拒。
+所以下面的查询把这两类都列出来，并输出 `binding_path` 供对照固定 query。结果记 `docs/private/`。
 
 ```sh
 docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
 begin transaction read only;
 -- 门公告的 manifest（gate_instances 有 read_all 策略）
-select gi.gate_id, op->>'name' as op, p.key as param, p.value->>'x-in' as loc
+select gi.gate_id, op->>'name' as op, upper(op->'binding'->>'method') as method,
+       op->'binding'->>'path' as binding_path,
+       p.key as param, coalesce(p.value->>'x-in', '(GET/HEAD 默认 query)') as loc
 from gate_instances gi,
      jsonb_array_elements(gi.operations) op,
      jsonb_each(coalesce(op->'params_schema'->'properties','{}'::jsonb)) p
-where p.value->>'x-in' in ('header','query','cookie');
+where p.value->>'x-in' in ('header','query','cookie')
+   or (p.value->>'x-in' is null and upper(op->'binding'->>'method') in ('GET','HEAD'))
+order by 1, 2, 5;
 -- 工作区里 draft / published 的 Operation（含 create_connection 注册的外部门与手写 manifest）
-select o.workspace_id, o.identity_key->>'gatekeeperId' as gatekeeper,
-       o.identity_key->>'name' as op, o.properties->>'status' as status,
-       p.key as param, p.value->>'x-in' as loc
+select o.workspace_id, o.identity_key->>'gatekeeperId' as gatekeeper, o.identity_key->>'name' as op,
+       o.properties->>'status' as status, upper(o.properties->'binding'->>'method') as method,
+       o.properties->'binding'->>'path' as binding_path,
+       p.key as param, coalesce(p.value->>'x-in', '(GET/HEAD 默认 query)') as loc
 from objects o,
      jsonb_each(coalesce(o.properties->'params_schema'->'properties','{}'::jsonb)) p
 where o.object_type = 'Operation'
   and o.properties->>'status' in ('draft','published')
-  and p.value->>'x-in' in ('header','query','cookie');
+  and (p.value->>'x-in' in ('header','query','cookie')
+       or (p.value->>'x-in' is null and upper(o.properties->'binding'->>'method') in ('GET','HEAD')))
+order by 1, 2, 3, 7;
 rollback;
 SQL
 ```
 
-- 对结果按 `isGateOwnedHeader` / `isGateOwnedQueryParam`（`packages/gatekeeper-base`）核对参数名；`x-in` 为 `cookie` 的一律会被拒。
-- 有命中时，应用后控制台里受影响的门会出现「待确认 manifest」，逐个确认；原来由调用方传的租户、组织头，要从参数挪到门凭据的
-  `headers` 里。
+判读（结果是候选，不是命中）：
+- 逐行按 `isGateOwnedHeader` / `isGateOwnedQueryParam`（`packages/gatekeeper-base`）核对参数名：`Authorization`、`Cookie`、
+  `X-Api-Key` 这类头，`access_token` / `api_key` / `token` 这类凭据 query 名会被拒；`x-in` 为 `cookie` 的一律会被拒；
+  名字与 `binding_path` 里 `?` 之后某个固定 query 同名（不分大小写）的也会被拒。分页游标（如 `pageToken`）按参数名豁免。
+  其余普通业务参数（`q`、`limit`、`id` 等）不受影响。
+- 门凭据里配置的注入 header 名在库里看不到（只在门的凭据文件里），所以"与门凭据注入的 header 同名"这一类本查询查不出；
+  对有命中的门，在 平台 → 集成 → 该门 的凭据里看一眼 `headers` 的名字。
+- 核对后没有会被拒的参数，就不需要任何动作。有的话，应用后这些调用会返回 403 `operation_refused`，处置见下。
 
-**应用后核对**（只用合成值，不要用真实 Handle 或 key）：
-- (a) 用合成的 Bearer 形字符串（20 位以上、带数字）调一次 observe 工具：返回 400 `credentials_in_observe_params`，门侧没有收到调用。
-- (b) 用 `{app="x"} |= "Authorization: failed"` 这类查询文本调一次：放行，审计行带 `credentialReview`，副本里是 `Authorization: [redacted]`。
-- (c) 带 `pageToken` 调一次：审计行带 `credentialReview`，`params.params.pageToken` 为 `[redacted]`。
-- (d) 重新导入的 OpenAPI 门的工具列表里没有 `Authorization` 这类头参数；若有手写 manifest 声明了这类参数，用合成值对它 simulate
-  一次，返回 403 `operation_refused`。
+有会被拒的参数时（**victor 手动**，应用后）：
+- 门重新公告的 manifest 不再声明这类参数，平台 → 集成 → 该门 会出现「这个门 announce 了与生效清单不同的 Operation」，点「审阅并采用」
+  → 「采用」；然后各工作区在 治理 → 系统与授权 → 该系统卡片 点「与门公告对齐」→「对齐」。
+- 原来由调用方传的租户、组织头，要从参数挪到门凭据的 `headers` 里（平台 → 集成 → 该门 → 凭据）。
+- 手写 manifest 声明的这类参数，在 治理 → 系统与授权 发布去掉该参数的新版本。
+
+**应用后核对**（**victor 手动**；只用合成值，不要用真实 Handle 或 key）。四项都在 使用 → 对话 里让 agent 调一个 observe 工具
+（任一已启用门的观察类 Operation），再到 治理 → 审计 打开「显示读操作」，在「动作」里填 `observe_operation` 看审计行：
+- (a) 让 agent 把参数值写成 `Bearer abcdefghij0123456789` 调用：工具结果是 400 `credentials_in_observe_params`，在对话的工具行里
+  能看到。审计流里这一时刻的 `observe_operation` 若有记录，结果是被拒而不是成功；拒绝发生在内核把请求交给门之前，所以不会有
+  这次调用的观察结果。
+- (b) 让 agent 用 `{app="x"} |= "Authorization: failed"` 这类查询文本调用：放行，审计行带 `credentialReview`，参数副本里是
+  `Authorization: [redacted]`。
+- (c) 带一个 `pageToken` 参数调用（值用合成串）：审计行带 `credentialReview`，`params.params.pageToken` 为 `[redacted]`。
+- (d) 在 治理 → 系统与授权 重新导入一个 OpenAPI 门：它的工具列表里没有 `Authorization` 这类头参数。若窗口前的查询找到过手写
+  manifest 声明这类参数，让 agent 用合成值调一次那个 Operation，返回 403 `operation_refused`。
 
 ### 3.21 模型供应商健康状态文件 `provider-health.json`（#530，v0.44.0 之后的下一版起）
 
@@ -817,11 +869,20 @@ SQL
 行为变化：概览的「可用模型」只计供应商测试通过的模型，第一次应用后在每个供应商测试通过之前会显示 0（或「状态未知」），属预期：
 在控制台「模型与供应商」逐个点「测试」即可。
 
-**应用后核对**（只读）：
-- (a) `provider-health.json` 存在于 `models.json` 同目录，属主 uid 10001、权限 0644，每个供应商只有 `status` / `testedAt`；
-  llm-proxy 启动日志里没有 `provider-health.json not writable`。
-- (b) 上次测试被拒的供应商在供应商表里显示「密钥被拒」，它的模型在「我的智能体」和对话头部不可选，概览「需要人处理」列出它。
-- (c) 重新测试通过后，同样的模型无需重启内核即可选择。
+**应用后核对**：
+- (a)（主机，只读）`provider-health.json` 存在于 `models.json` 同目录，属主 uid 10001、权限 0644，每个供应商只有 `status` /
+  `testedAt`；llm-proxy 日志里没有 `provider-health.json not writable`：
+
+  ```sh
+  docker compose exec -T llm-proxy stat -c '%u %a %n' /data/models/provider-health.json </dev/null
+  docker compose logs llm-proxy </dev/null | grep 'provider-health.json not writable'
+  ```
+
+  第一条应输出 `10001 644 /data/models/provider-health.json`，第二条没有输出。llm-proxy 启动时就写这个文件，逐个测试之后各供应商的 `status` 随之更新。
+- 逐个测试（**victor 手动**）：平台 → 模型与供应商，对每个供应商点「测试调用」，结果都应是可用。
+- (b)（**victor 手动**）上次测试被拒的供应商在供应商表里显示「密钥被拒」，它的模型在 使用 → 我的智能体 的模型选择和对话头部
+  不可选，平台 → 概览 的「需要人处理」列出它。没有被拒的供应商就跳过。
+- (c)（**victor 手动**）把 (b) 的供应商修好密钥后再点「测试调用」，通过后同样的模型无需重启内核即可在 我的智能体 里选择。
 
 结果记 `docs/private/`。
 
@@ -832,7 +893,8 @@ SQL
 超时、或与取消并发时，可能出现：重试还在跑的 Task 被标成 failed、用户的取消变成 `failed: terminated`、已取消或已失败的 Task 下
 留着一个持有效 Handle 的 run、认领重试后 Task 永久停在 `running`。
 
-**维护窗口前**（在当前版本上跑，只读）：统计历史上受影响的 Task。结果是候选清单，逐条对照审计再判断。结果记 `docs/private/`。
+**维护窗口前**（在当前版本上跑，只读，主机执行；经 SSH 按 §3 开头的方式把 heredoc 交给 ssh，不要加 `</dev/null`）：统计历史上
+受影响的 Task。结果是候选清单，逐条对照审计再判断。结果记 `docs/private/`。Q3、Q4 的处置要在 §3.17 排空之前做完。
 
 ```sh
 docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
@@ -882,12 +944,46 @@ SQL
 ```
 
 处置：
-- **Q3（终态 Task 下的活 run）**：升级窗口按 §3.17 排空 Worker，governance 0018 吊销所有 `entry` / `worker_run` Handle，所以窗口
-  过后这些 run 不再持有可用 Handle，不需要单独处理。升级前它们就是终态 Task 下的有效 Handle，要尽快升级；若要在升级前单独终止，
-  属于主机写操作，先找维护者确认。
+- **Q3（终态 Task 下的活 run）**：先看容器是否还活着：对每个 `worker_run_id` 跑
+  `docker ps --filter label=nexttime.worker-run-id=<worker_run_id> --format '{{.ID}} {{.Status}}' </dev/null`。
+  - 没有输出：只是库里的行没收尾，governance 0018 会吊销它的 Handle，窗口过后不持有可用 Handle，不需要单独处理。
+  - 有输出：它会让 §3.17 的排空判据清不空。等它跑到 WorkerDefinition 的时长上限被 reaper 收掉，或由 victor 决定后停掉容器
+    （主机写操作，须 victor 明确同意）。升级前它就是终态 Task 下的有效 Handle，要尽快处理。
 - **Q1 / Q2（历史结果）**：调用方当时看到的是 `failed`，重试提交的结果已被拒。不要自动修复（重跑会重复副作用），列给 Task 的
   owner 决定是否重新发起。
-- **Q4（`running` 却没有活 run）**：走受治理的取消路径（控制台或 `cancel_task`），不要直接 UPDATE。
+- **Q4（`running` 却没有活 run）**（**victor 手动**，排空之前做）：走受治理的取消路径，不要直接 UPDATE。逐条在 使用 → 任务 打开
+  该 Task（按 `task_id`），点「取消任务」→「确认取消」，状态变成 `cancelled`。这些 Task 在控制台里永远显示"进行中"，不取消的话
+  任务列表永远不会清空（§3.17 的排空只看 `docker ps`）。
+
+### 3.23 升到 v0.45.0 的窗口总清单（起点 v0.43.0 或 v0.44.0）
+
+v0.45.0 跨过的小节分散在 §3.11–§3.22，这里按执行顺序排成一张清单。先确定起点：主机检出与在跑的栈一致（§3 入口保证），
+`git describe --tags --exact-match </dev/null` 输出的就是在跑的版本。
+
+- **起点 v0.44.0，且 v0.44.0 的应用后核对（§3.12、§3.13、§3.15、§3.16 的日志与 SQL，§3.11、§3.15 B/C、S5.7）已做完并记在
+  `docs/private/`**：表里标「v0.43.0 起点」的步骤跳过。
+- **起点 v0.43.0，或 v0.44.0 的核对没做完**：标「v0.43.0 起点」的步骤连带执行。
+
+「谁」一列：主机 = 远程 CLI 会话在主机 shell 里执行；**victor 手动** = 要登录控制台（§3 开头）；victor 决定 = 主机写操作，
+须维护者明确同意后才做。
+
+| # | 时机 | 步骤 | 谁 |
+|---|---|---|---|
+| 1 | 窗口前 | `--prefetch v0.45.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
+| 2 | 窗口前 | 只读核对，结果记 `docs/private/`：§3.20 SQL、§3.22 Q1–Q4；v0.43.0 起点另做 §3.13 A/B/C | 主机 |
+| 3 | 窗口前 | §3.22 Q4 有命中：逐条在 使用 → 任务 取消 | **victor 手动** |
+| 4 | 窗口前 | §3.22 Q3 有命中**且容器还活着**：等它到时长上限被收掉，或停掉容器 | victor 决定 |
+| 5 | 窗口前 | 排空（§3.17）：`docker ps --filter label=nexttime.role=worker` 为空；此后到窗口结束不再发起 Worker | 主机；victor 不发起 |
+| 6 | 窗口内 | `--pull v0.45.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；`up` 会重建 postgres 与四个 socket-proxy 容器，属预期（§3.19） | 主机 |
+| 7 | 应用后 | apply 日志里 S1 的 `env-no-handle`、`env-workers-plane`、`env-source-binding` 都是 PASS（§3.17），任何一步 FAIL 按 §5 判断回滚 | 主机 |
+| 8 | 应用后 | §3.17 SQL（截点取新 kernel 的启动时间）、§3.15 A SQL、§3.21 (a)；v0.43.0 起点另看 §3.12 `is not routed`、§3.13 两条日志、§3.16 `cannot carry` | 主机 |
+| 9 | 应用后 | §3.21 逐个测试与 (b)(c)、§3.18、§3.20 (a)–(d)；v0.43.0 起点另做 §3.11、§3.15 B/C、S5.7（§3.14） | **victor 手动** |
+| 10 | 应用后 | v0.43.0 起点：告诉自助签发过 MCP / Claude Code / pi Handle 的用户重新签发（§3.14、§3.15 的新能力） | victor |
+
+第 3、4 步必须在第 5 步之前：Q4 的 Task 永远显示"进行中"，Q3 的活容器让 `docker ps` 清不空。第 2 步的 §3.20 结果有会被拒的
+参数时，按 §3.20 的处置在应用后由 victor 手动处理，不阻塞窗口。
+
+**回滚**（§5）：回滚目标是起点版本。回滚前同样按第 5 步排空 Worker（§3.17 回滚段），其余按 §3.17、§3.19 的回滚说明。
 
 ## 4. Hotfix 流程
 
@@ -913,6 +1009,7 @@ SQL
 - **回滚一次已经打了 tag 的发布**：不删 tag（tag 是历史记录，删了会打乱其它人已经 fetch 过的
   引用）。按 §3 把主机切到上一个已知良好的 tag。要不要在 `main` 上补一个 revert commit（会被
   release-please 算进下一个版本），看这次发布的问题是否需要在代码层面修正。
+  从 v0.45.0 及之后的版本回滚到 v0.44.0 及更早时，回滚前同样排空 Worker（§3.17 回滚段）。
 - **回滚一次还没合并的 release PR**（比如 CHANGELOG 分类算错了）：直接改这个 PR 里的
   `CHANGELOG.md`/`package.json` 内容手动修正后合并——release-please 不会覆盖人工改过的这个PR
   分支，下次跑会基于新的 manifest 状态继续。或者直接关闭该 PR，release-please 下次 push 到
