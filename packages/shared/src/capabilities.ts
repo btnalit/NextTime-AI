@@ -749,7 +749,7 @@ const gateCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: gateObserveResultSchema,
     description:
-      'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused.',
+      'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused. Params carrying a literal credential (a JWT, a vendor API key, a private key, a Bearer or Authorization token, a Basic user:password, a URL with a password) are refused before the gate is called — 400 credentials_in_observe_params (details: suspectedSecretValues, suspectedSecretPaths); a gate authenticates with the credentials configured on it. Any other suspected value passes and the audit row records how many and where: one under a secret-named field (pageToken), or query text that only mentions a credential (an Authorization header name, token=expired, a $VAR placeholder).',
   },
   {
     // Placeholder pattern (this group's own module doc comment: "not dispatchable — the real
@@ -1726,7 +1726,7 @@ const governanceCapabilities: readonly Capability[] = [
         .strict(),
     ]),
     description:
-      'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest. A Handle caller’s gates are re-checked at call time against what its member may act on now (Grants minus My Agent exclusions, capped by the AgentPolicy; an owner keeps the Handle’s gates minus the same exclusions) — a gate dropped since the Handle was minted is denied (R-37).',
+      'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest. A Handle caller’s gates are re-checked at call time against what its member may act on now (Grants minus My Agent exclusions, capped by the AgentPolicy; an owner keeps the Handle’s gates minus the same exclusions) — a gate dropped since the Handle was minted is denied (R-37). An observe-class Operation runs as observe_operation does, with the same credential review of its params (400 credentials_in_observe_params).',
   },
   {
     // S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §6, §12 item 6): `reason` is

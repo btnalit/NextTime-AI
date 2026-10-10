@@ -407,6 +407,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(audit.rows[0]?.payload).toMatchObject({ from: null, to: 'my renamed chat' });
     });
 
+    it('renameChat: the chat.rename audit copy has a credential-looking title redacted; the Chat keeps it as written', async () => {
+      // Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet.
+      const title = 'deploy key ghp_abcdefghijklmnopqrstuvwxyz0123';
+      const chat = await inTxAs(ownerId, (client) => newChat(client, workspaceId, ownerId, {}));
+      const renamed = await inTxAs(ownerId, (client) =>
+        renameChat(client, workspaceId, { chatId: chat.id, title, actorPrincipalId: ownerId }),
+      );
+      expect(renamed.title).toBe(title);
+      const audit = await inTxAs(ownerId, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+           where workspace_id = $1 and resource_type = 'chat' and resource_id = $2 and action = 'chat.rename'`,
+          [workspaceId, chat.id],
+        ),
+      );
+      expect(audit.rows[0]?.payload).toEqual({ from: null, to: 'deploy key [redacted]' });
+    });
+
     it('setChatArchived: archive hides the chat from listChats by default (includeArchived shows it), is idempotent, unarchive restores; both audited', async () => {
       const chat = await inTxAs(ownerId, (client) =>
         newChat(client, workspaceId, ownerId, { title: 'to archive' }),

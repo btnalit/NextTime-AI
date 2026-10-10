@@ -81,6 +81,41 @@ export class OperationRefusedError extends Error {
   }
 }
 
+/** Legacy 175 follow-up (review of #532): an Operation's param the `http` transport would put
+ *  where only the gate's own configuration may: a request header that says who is calling, on
+ *  whose account or where the call goes (`Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`,
+ *  `Impersonate-User`, `X-Forwarded-Host`, `X-HTTP-Method-Override`, one the gate's own
+ *  credential injection sets — `kinds/http.ts`'s `isGateOwnedHeader`), a credential in the query
+ *  string (`access_token`, `api_key` — `isGateOwnedQueryParam`), a cookie, or a query parameter
+ *  the Operation's binding fixes. Refused by name before any request is made, whatever the value:
+ *  the gate authenticates with the credential configured on it, never with one a caller passes,
+ *  and an observe-class call has no approval. An `OperationRefusedError`, so `server.ts` maps it
+ *  to 403 `operation_refused` and `apply` frees the call's key. */
+export class GateOwnedParamRefusedError extends OperationRefusedError {
+  readonly operationName: string;
+  readonly param: string;
+  readonly location: 'header' | 'query' | 'cookie' | 'binding';
+  constructor(
+    operationName: string,
+    param: string,
+    location: 'header' | 'query' | 'cookie' | 'binding',
+  ) {
+    const why = {
+      header: `would be sent as the "${param}" request header, which says who is calling, on whose account or where the call goes`,
+      query: `would be sent as the "${param}" query parameter, which carries who is calling`,
+      cookie: 'is declared as a cookie, which carries session state',
+      binding: `would replace the "${param}" query parameter the Operation's binding fixes`,
+    }[location];
+    super(
+      `operation "${operationName}": param "${param}" ${why} — refused, nothing was sent. Only the gate's own configuration sets these; it authenticates with the credential configured on it.`,
+    );
+    this.name = 'GateOwnedParamRefusedError';
+    this.operationName = operationName;
+    this.param = param;
+    this.location = location;
+  }
+}
+
 export class RevertNotSupportedError extends Error {
   constructor(name: string) {
     super(`operation "${name}" does not support revert`);

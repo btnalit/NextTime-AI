@@ -40,6 +40,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
+import { reviewObserveParams } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
@@ -293,6 +294,12 @@ async function recordWorkerGateObservationSafely(
   }
 }
 
+/** One observation, for both ways in (`observe_operation`, `request_action`'s observe branch),
+ *  once the caller may observe. First the params' credential review (legacy 175,
+ *  governance/redaction's `reviewObserveParams`): a literal credential (a JWT, a vendor key, a
+ *  Bearer token, …) is refused before the Activity starts or the gate is called; any other
+ *  suspected value — under a secret-named field, or query text that only mentions one — is
+ *  recorded in the audit row (`auditPayload.credentialReview`). */
 async function runObserve(
   client: PoolClient,
   workspaceId: string,
@@ -302,6 +309,7 @@ async function runObserve(
   onBehalfOf: string,
   workerRun?: WorkerRunRow,
 ): Promise<CapabilityHandlerResult> {
+  const credentialReview = reviewObserveParams(gatekeeper.name, operationName, operationParams);
   const activity = await startActivity(client, workspaceId, {
     kind: 'gatekeeper_observe',
     principalId: onBehalfOf,
@@ -340,6 +348,7 @@ async function runObserve(
       result: { status: 'ok', data: observeResult.data, observedFactCount: written.length },
       resourceType: 'gatekeeper',
       resourceId: gatekeeper.gatekeeperId,
+      auditPayload: credentialReview,
     };
   } catch (err) {
     await endActivity(client, workspaceId, activity.id, 'failed');
@@ -1090,7 +1099,9 @@ async function resolveRequesterScope(
  *     `request_action` on the human channel reads an observe-class Operation the same way (no
  *     Grant); its execute-class and unclassified paths keep `assertHumanGatekeeperAccess`.
  *
- * Either way the call is audited by `dispatch.ts`, exactly as before.
+ * Either way the params pass the same credential review first (`runObserve`, legacy 175) — a
+ * literal credential is a 400 `credentials_in_observe_params`, nothing reaches the gate — and the
+ * call is audited by `dispatch.ts`, with `credentialReview` when any other value is suspect.
  */
 export const observeOperationHandler: CapabilityHandler = async (
   client,

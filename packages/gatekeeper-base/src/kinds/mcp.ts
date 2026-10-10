@@ -52,6 +52,9 @@ export class McpTransport implements Transport {
         },
         body: JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params }),
         signal: controller.signal,
+        // As in `http.ts` (review lane 5, P2-2): 'follow' would resend the credential header above
+        // to whatever host a 3xx names; a redirect is a hard failure instead.
+        redirect: 'error',
       });
       if (!response.ok) {
         throw new TransportInvokeError(`mcp transport: ${method} responded ${response.status}`);

@@ -5,6 +5,7 @@ import type { HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
 import { buildToolCatalog } from './tool-projection.js';
 
@@ -113,6 +114,16 @@ describe('mapCapabilityErrorToToolResult', () => {
     const result = mapCapabilityErrorToToolResult(new Error('some domain-specific failure'));
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([{ type: 'text', text: 'some domain-specific failure' }]);
+  });
+
+  it('prefixes a refused observe’s credential-looking params with its code, keeping the message that says what to do', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new ObserveParamsCarryCredentialsError('inventory', 'list_items', { count: 1, paths: ['q'] }),
+    );
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/^credentials_in_observe_params: inventory\.list_items: /);
+    expect(text).toMatch(/Do not pass credentials/);
   });
 
   it('stringifies a non-Error throw rather than crashing', () => {

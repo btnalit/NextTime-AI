@@ -11,6 +11,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
+import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
@@ -327,7 +328,9 @@ export async function cancelConnectionRequest(
     payload: {
       resultingStatus: cancelled.status,
       kind: cancelled.kind,
-      target: cancelled.target,
+      // The audit copy of an owner-supplied URL (a password in it is replaced), like the dispatch
+      // row's `params`.
+      ...redactedForAudit({ target: cancelled.target }),
       requestedBy: cancelled.requestedBy,
     },
   });

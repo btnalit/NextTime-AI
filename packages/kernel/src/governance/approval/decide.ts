@@ -12,6 +12,7 @@ import {
   assertCredentialsReviewed,
   credentialReviewAudit,
   findSuspectedSecrets,
+  redactedForAudit,
 } from '../redaction/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
@@ -291,8 +292,10 @@ export async function approveActionRequest(
     action: 'action_request.approve',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
+    // The audit copy of the reason, like the dispatch row's `params.reason`; the Decision keeps it
+    // as written.
     extraAuditPayload: {
-      ...(reason ? { reason } : {}),
+      ...(reason ? redactedForAudit({ reason }) : {}),
       ...credentialReviewAudit(suspectedSecretValues),
     },
   });
@@ -344,7 +347,7 @@ export async function rejectActionRequest(
     action: 'action_request.reject',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
-    extraAuditPayload: reason ? { reason } : undefined,
+    extraAuditPayload: reason ? redactedForAudit({ reason }) : undefined,
   });
 
   return updated;

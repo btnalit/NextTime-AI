@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { OMITTED, REDACTED, redactSecrets, scrubSecretValues } from './index.js';
+import {
+  HIGH_CONFIDENCE_SECRET_PATTERNS,
+  OMITTED,
+  REDACTED,
+  redactSecrets,
+  scrubSecretValues,
+} from './index.js';
 
 /** A Handle-shaped compact JWT. Synthetic — `.gitleaks.toml` allows this signature segment, and
  *  every other fixture here spells out `abcdefghijklmnopqrstuvwxyz`, which it allows too. */
@@ -103,6 +109,100 @@ describe('scrubSecretValues — linear time on adversarial input', () => {
     const started = performance.now();
     scrubSecretValues(text);
     expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('HIGH_CONFIDENCE_SECRET_PATTERNS — a credential itself, never text about one', () => {
+  const certain = (text: string) =>
+    redactSecrets(text, { patterns: HIGH_CONFIDENCE_SECRET_PATTERNS });
+  /** A `Basic` value, built at run time from the synthetic `FAKE`. */
+  const BASIC = Buffer.from(`ops:${FAKE}`).toString('base64');
+
+  it.each([
+    ['a JWT', `token ${HANDLE}`, `token ${REDACTED}`],
+    ['a vendor key', `key sk-ant-${FAKE}`, `key ${REDACTED}`],
+    [
+      'a literal Bearer token',
+      `Authorization: Bearer ${FAKE}`,
+      `Authorization: Bearer ${REDACTED}`,
+    ],
+    [
+      'a URL’s literal password',
+      `postgres://ops:${FAKE}@db/app`,
+      `postgres://ops:${REDACTED}@db/app`,
+    ],
+    [
+      'a PEM private key',
+      `-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----`,
+      REDACTED,
+    ],
+    ['a Basic user:password', `Authorization: Basic ${BASIC}`, `Authorization: Basic ${REDACTED}`],
+    ['a bare Basic user:password', `Basic ${BASIC}`, `Basic ${REDACTED}`],
+    [
+      'the token scheme of an Authorization header',
+      `Authorization: token ${FAKE}`,
+      `Authorization: token ${REDACTED}`,
+    ],
+  ])('replaces %s — as the full pattern set does', (_label, text, expected) => {
+    expect(certain(text)).toMatchObject({ value: expected, redactedValues: 1 });
+    expect(scrubSecretValues(text).redactedValues).toBe(1);
+  });
+
+  it.each([
+    '{app="api"} |= "Authorization: failed"',
+    'level=error msg="invalid token=expired"',
+    'curl -H "Authorization: Bearer $TOKEN" https://api.example.invalid',
+    'curl -H "Authorization: Bearer ${TOKEN}" https://api.example.invalid',
+    'mysql --password=$MYSQL_PWD -h db',
+    'postgres://ops:$PGPASS@db/app',
+    'postgres://ops:${PGPASS}@db/app',
+    'WWW-Authenticate: Bearer authentication_failed_for_user',
+    'Authorization: token ****',
+    'WWW-Authenticate: Basic realm="api"',
+    'msg="Basic auth failed for user=bob"',
+    `invalid token ${FAKE}`,
+    `Basic ${FAKE}`,
+    `PGPASSWORD=${FAKE} psql`,
+    `{"apiKey": "${FAKE}"}`,
+    `--password ${FAKE}`,
+    `https://api.example.invalid/items?page_token=${FAKE}`,
+  ])('leaves text the other patterns hit: %s', (text) => {
+    expect(certain(text)).toMatchObject({ value: text, redactedValues: 0 });
+  });
+
+  const SIZE = 200_000;
+  const repeat = (unit: string) => unit.repeat(Math.ceil(SIZE / unit.length)).slice(0, SIZE);
+  it.each([
+    'Bearer ',
+    'Bearer aaaaaaaaaaaaaaaaaaaaaaaaa ',
+    'a://b:',
+    'a://b:$',
+    'a://b:${',
+    'sk-',
+    'eyJaaaaaaa.',
+    'Basic YWFhYWFh',
+    'Basic YWFhYWFhOmE= ',
+    'authorization: token ',
+    'authorization:token aaaaaaaaaaaaaaaaaaaaa1 ',
+    'authorization',
+  ])('%j × 200 KB within 1 s', (unit) => {
+    const text = repeat(unit);
+    certain(text.slice(0, 1_000));
+    const started = performance.now();
+    certain(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('scrubSecretValues — a Basic credential', () => {
+  it('replaces a short Basic value that decodes to user:password, not the next word', () => {
+    const short = Buffer.from('user:pass').toString('base64');
+    expect(scrubSecretValues(`Basic ${short}`)).toEqual({
+      value: `Basic ${REDACTED}`,
+      redactedValues: 1,
+    });
+    expect(scrubSecretValues('Basic configuration').redactedValues).toBe(0);
+    expect(scrubSecretValues('Basic realm="api"').redactedValues).toBe(0);
   });
 });
 

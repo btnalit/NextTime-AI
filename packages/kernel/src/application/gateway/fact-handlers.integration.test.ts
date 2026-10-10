@@ -237,6 +237,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(audit[0]?.payload.channel).toBe('human');
       expect(audit[0]?.payload.params.reason).toBe('decommissioned last week');
 
+      expect(audit[0]?.payload).not.toHaveProperty('redactedValues');
+
       // Invalidated is terminal — a second attempt is an illegal transition, not a silent no-op.
       await expect(
         dispatchCapability({ pool }, humanCaller(workspaceId, memberId), 'invalidate_fact', {
@@ -286,6 +288,44 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(audit[0]?.actor_principal_id).toBe(memberId);
       expect(audit[0]?.payload.channel).toBe('human');
       expect(audit[0]?.payload.params.factId).toBe(original.id);
+    });
+
+    it('a person’s call is audited under the shared redaction rule: a secret-named field and a credential-looking value never reach the audit row', async () => {
+      // Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet.
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const original = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, memberId, ['assert_fact']),
+        'assert_fact',
+        { sourceObjectId, targetObjectId, linkType: 'has_note', properties: { note: 'v1' } },
+      )) as { id: string };
+
+      const replacement = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, memberId),
+        'supersede_fact',
+        {
+          factId: original.id,
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: `header Bearer ${fake}`, password: 'hunter2', maxTokens: 1024 },
+        },
+      )) as { id: string };
+
+      const audit = await auditRow('supersede_fact', replacement.id);
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.payload.channel).toBe('human');
+      expect(audit[0]?.payload.params.properties).toEqual({
+        note: 'header Bearer [redacted]',
+        password: '[redacted]',
+        maxTokens: 1024,
+      });
+      expect((audit[0]?.payload as { redactedValues?: number }).redactedValues).toBe(2);
+      expect(JSON.stringify(audit[0]?.payload)).not.toContain(fake);
+      expect(JSON.stringify(audit[0]?.payload)).not.toContain('hunter2');
     });
 
     it('a Handle without invalidate_fact / supersede_fact in scope is refused (403) and nothing changes', async () => {
