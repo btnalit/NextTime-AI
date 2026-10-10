@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.46.0](https://github.com/btnalit/NextTime-AI/compare/v0.45.0...v0.46.0) (2026-10-10)
+
+
+### Features
+
+* **console:** readable error bodies with next steps, raw text under 技术细节 (P1-1) ([#537](https://github.com/btnalit/NextTime-AI/issues/537)) ([6f233d6](https://github.com/btnalit/NextTime-AI/commit/6f233d6a938bf980f3472ee09e769062d08dc0dd))
+
+
+### Bug Fixes
+
+* **governance:** a gate runs only the definition that was approved; refuse gate-owned params at publish ([#538](https://github.com/btnalit/NextTime-AI/issues/538)) ([73a6f57](https://github.com/btnalit/NextTime-AI/commit/73a6f579ac8a4b2d7054e1b4fc554e338647329e))
+* **platform-extension:** keep the prompt-cache breakpoint on persistent history ([#542](https://github.com/btnalit/NextTime-AI/issues/542)) ([ba423fc](https://github.com/btnalit/NextTime-AI/commit/ba423fc096b430a5ddd563fcc63dabcd03a9cef7))
+
 ## [0.45.0](https://github.com/btnalit/NextTime-AI/compare/v0.44.0...v0.45.0) (2026-10-10)
 
 
