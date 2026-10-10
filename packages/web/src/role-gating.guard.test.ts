@@ -55,7 +55,8 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
     'MembersPage hands it canManage; the page needs list_principals',
   'components/members/IssueServiceHandleSection.tsx': "MembersPage's header menu, behind canManage",
   'components/OnboardingWizard.tsx': "SystemsPage's more-ways-to-connect menu, behind canCreate",
-  'components/CompleteConnectionForm.tsx': "SystemsPage's complete / register, behind canCreate",
+  'components/CompleteConnectionForm.tsx':
+    "SystemsPage's complete / register and OnboardingWizard, both behind canCreate",
   'components/RequestConnectionForm.tsx':
     "SystemsPage's connect-a-system button, behind canRequest",
   'components/AgentPolicyForm.tsx': 'ModelsPage, owner only (isOwner)',
@@ -64,7 +65,8 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
   'components/AgentProfileForm.tsx': "AgentProfilePage's editForbidden (role, then policy)",
   'components/AvailableGateInstancesSection.tsx':
     "SystemsPage's canEnterCredential / canEnable props",
-  'components/connect/EnableGateConfirm.tsx': "SystemsPage's canEnable",
+  'components/connect/EnableGateConfirm.tsx':
+    "SystemsPage's canEnable; ConnectSystemLauncher mounts it behind the same canEnable",
   'components/connect/RefreshOperationGovernanceConfirm.tsx': "SystemAccessCard's canManage",
   'components/account/IssueOwnHandleSection.tsx': "AccountPage's HandleCard, can('issue_handle')",
   'components/catalog/SkillEditor.tsx': 'CatalogPage opens it only with canPropose',
@@ -93,8 +95,10 @@ const READ_GATED_AT_ENTRY: Readonly<Record<string, string>> = {
   'components/audit/ExplainSection.tsx': 'AuditPage, as above (export_prov: the same roles)',
   'components/audit/ApprovalContext.tsx':
     "AuditPage mounts it only when can('get_action') (an auditor gets a sentence instead)",
-  'components/CompleteConnectionForm.tsx': "SystemsPage's complete / register, behind canCreate",
-  'components/connect/EnableGateConfirm.tsx': "SystemsPage's canEnable",
+  'components/CompleteConnectionForm.tsx':
+    "SystemsPage's complete / register and OnboardingWizard, both behind canCreate",
+  'components/connect/EnableGateConfirm.tsx':
+    "SystemsPage's canEnable; ConnectSystemLauncher mounts it behind the same canEnable",
   'components/connect/RefreshOperationGovernanceConfirm.tsx': "SystemAccessCard's canManage",
   'components/readiness/useExecutionReadiness.ts':
     'the hook itself: each file using it is checked as reading execution_readiness',
