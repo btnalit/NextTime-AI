@@ -13,6 +13,7 @@ import {
 import { describeError } from '../lib/errors.js';
 import { isAbsoluteUrl, withDefaultScheme } from '../lib/gate-input.js';
 import type { PrincipalRow } from '../lib/governance.js';
+import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
@@ -77,6 +78,17 @@ export function fieldErrorExplanation(
   code: string,
   t: Translate,
 ): string {
+  if (code === 'credentials_in_connection_params') {
+    return field === 'endpoint'
+      ? t(
+          '门端点里不能带用户名、密码、查询参数（?）或片段（#），已拒绝，什么也没保存：只填门自己的地址，凭据填到「凭证」里或配置在门上。',
+          'The Gatekeeper endpoint cannot carry a user name, password, query string (?) or fragment (#) — refused, nothing was saved. Enter only the gate’s own address; put the credential in Credentials or in the gate’s configuration.',
+        )
+      : t(
+          '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称，凭据填到「凭证」里或配置在门上。',
+          'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name; put the credential in Credentials or in the gate’s configuration.',
+        );
+  }
   if (code === 'connection_target_refused') {
     return t(
       '这个地址指向平台自身的服务，已被拒绝：请填写门在网络上可达的地址（带域名或 IP），不要用 localhost 或单段主机名。',
@@ -105,6 +117,13 @@ export function fieldErrorExplanation(
         'The target system was not accepted — enter a base URL, host or service name.',
       );
   }
+}
+
+/** The field a `credentials_in_connection_params` 400 names (`details.field`, legacy 186) — the
+ *  kernel's message mentions "credentials" too, so it is never guessed from the text. */
+function connectionCredentialField(err: unknown): keyof FieldErrors | undefined {
+  const field = err instanceof HttpError ? err.details?.field : undefined;
+  return field === 'target' || field === 'endpoint' ? field : undefined;
 }
 
 /** Maps a kernel `invalid_params` (400) to the field it is most likely about. */
@@ -251,9 +270,12 @@ export function CompleteConnectionForm({
     } catch (err) {
       setCredentials('');
       const described = describeError(err);
-      const field = FIELD_ERROR_CODES.has(described.code)
-        ? fieldForInvalidParams(described.message)
-        : undefined;
+      const field =
+        described.code === 'credentials_in_connection_params'
+          ? connectionCredentialField(err)
+          : FIELD_ERROR_CODES.has(described.code)
+            ? fieldForInvalidParams(described.message)
+            : undefined;
       if (field) {
         // A Chinese-first explanation of the field, with the kernel's own (English) text kept as
         // the secondary detail rather than shown alone.

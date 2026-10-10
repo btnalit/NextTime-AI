@@ -1,5 +1,12 @@
-import { ACTION_REQUEST_TRANSITIONS, transition } from '@nexttime/shared';
+import { ACTION_REQUEST_TRANSITIONS, namesASecretField, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import {
+  redactSuspectedSecrets,
+  redactedForAudit,
+  scrubSecretLiterals,
+  scrubSecretLiteralsIn,
+  secretFieldLiterals,
+} from '../redaction/index.js';
 import { getActionRequestForUpdate, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
@@ -268,8 +275,51 @@ export interface ActionRequestActorOptions {
 export interface MarkExecutedOptions extends ActionRequestActorOptions {
   /** Free-form result metadata (S2.4's Gatekeeper `apply` response) — no dedicated column on
    *  `action_requests` for it, so it is recorded in the AuditRecord payload instead
-   *  (`transition-log.ts`'s `extraAuditPayload`), same treatment as `MarkFailedOptions.reason`. */
+   *  (`transition-log.ts`'s `extraAuditPayload`), same treatment as `MarkFailedOptions.reason`.
+   *  Recorded redacted (`resultAuditFields`). */
   readonly resultMetadata?: Record<string, unknown>;
+}
+
+/**
+ * The audit fields of a gate's `apply` output (legacy 187). A gate can return what it issued — a
+ * token, a deploy key, a generated password — and an AuditRecord is append-only (I11), so the copy
+ * it keeps is the call-argument rule's (`redactSuspectedSecrets`: a field named after a secret, at
+ * any depth, and every secret-looking value) — the rule every capability call's `params` copy
+ * follows (#532) — and, first, the request's own secret param values (`secretFieldLiterals`)
+ * wherever the output repeats them ("created user bob with password …"). `resultRedaction:
+ * { redactedValues, paths }` says how many values were hidden, and where — field names only.
+ *
+ * This copy is also what the caller gets back: `request_action` reads a terminal request's outcome
+ * from this row (application/gateway's `readTerminalOutcome`), so an agent sees `[redacted]` in
+ * place of an issued credential too — the agent and kernel hold no credentials (design floor), and
+ * a credential that reached the agent would go on to its model provider.
+ */
+export function resultAuditFields(
+  resultMetadata: Record<string, unknown>,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const quoted = scrubSecretLiteralsIn(
+    resultMetadata,
+    secretFieldLiterals(params, namesASecretField),
+  );
+  const redacted = redactSuspectedSecrets(quoted.value, { secretFields: true });
+  const redactedValues = quoted.redactedValues + redacted.count;
+  return {
+    resultMetadata: redacted.value,
+    ...(redactedValues > 0 ? { resultRedaction: { redactedValues, paths: redacted.paths } } : {}),
+  };
+}
+
+/** The audit field of a failure's `reason` — a gate's or the executor's error text, which can quote
+ *  what the gate sent or got back (an MCP server echoing its arguments, a command's stderr): the
+ *  request's own secret param values hidden as literals, then the rule of the `params` copy
+ *  (`redactedForAudit`). The caller reads it back from this row too (`resultAuditFields`). */
+export function reasonAuditFields(
+  reason: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const quoted = scrubSecretLiterals(reason, secretFieldLiterals(params, namesASecretField));
+  return redactedForAudit({ reason: quoted.value });
 }
 
 /** `executing -> executed`. */
@@ -293,7 +343,7 @@ export async function markActionRequestExecuted(
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
     extraAuditPayload: options.resultMetadata
-      ? { resultMetadata: options.resultMetadata }
+      ? resultAuditFields(options.resultMetadata, existing.params)
       : undefined,
   });
 
@@ -324,7 +374,9 @@ export async function markActionRequestFailed(
     action: 'action_request.fail',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
-    extraAuditPayload: options.reason ? { reason: options.reason } : undefined,
+    extraAuditPayload: options.reason
+      ? reasonAuditFields(options.reason, existing.params)
+      : undefined,
   });
 
   return updated;

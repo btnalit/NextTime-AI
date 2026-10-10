@@ -118,7 +118,10 @@ import {
   NotProposerError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
-import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
+import {
+  ConnectionParamsCarryCredentialsError,
+  ConnectionRequestNotFoundError,
+} from '../../governance/connections/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -440,6 +443,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // `connected_account_store_not_configured` → "use credentialKind: 'shared'").
   if (err instanceof ConnectionCredentialRequiredError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // Legacy 186 (governance/connections/credentials.ts): a credential in a connection's `target` or
+  // `endpoint` — refused before anything is stored; `details.field` says which, never the value.
+  if (err instanceof ConnectionParamsCarryCredentialsError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // STATUS leftover 36 (connection-handlers.ts "Endpoint guard"): the address belongs to a
   // platform-catalog gate instance; the caller's route to it is `enable_gate_instance`.

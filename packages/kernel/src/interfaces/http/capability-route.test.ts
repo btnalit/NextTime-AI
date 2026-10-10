@@ -57,6 +57,7 @@ import {
   ConnectionRequestNotFoundError,
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
+import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -114,6 +115,22 @@ describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
       status: 400,
       code: 'credentials_in_observe_params',
       details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy 186 connection params (unit)', () => {
+  it('ConnectionParamsCarryCredentialsError maps to 400 credentials_in_connection_params naming the field', () => {
+    const err = new ConnectionParamsCarryCredentialsError(
+      'create_connection',
+      'endpoint',
+      'must not contain a query string (?)',
+    );
+    expect(mapCapabilityError(err)).toEqual({
+      status: 400,
+      code: 'credentials_in_connection_params',
+      message: err.message,
+      details: { field: 'endpoint' },
     });
   });
 });

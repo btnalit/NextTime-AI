@@ -96,7 +96,13 @@ import {
   setAutoApprovedActionKind,
   setPolicy,
 } from '../../governance/policy/index.js';
-import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
+import {
+  countSuspectedSecrets,
+  credentialReviewAudit,
+  findSuspectedSecrets,
+  redactSuspectedSecrets,
+  scrubSecretValues,
+} from '../../governance/redaction/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
@@ -833,6 +839,15 @@ async function resolveEntryContextTurn(
   return readOwnAgentTurn(client, workspaceId, principalId, running.id);
 }
 
+/** Text an agent wrote that the kernel stores for people to read (a Turn's `report_turn` summary
+ *  and decisions, a `record_decision` summary) — scrubbed of every secret-looking value, as the
+ *  Turn's own reply is (application/chat's `redactMessageContent`; governance/redaction has the
+ *  why: the agent runs next to its own Handle and can be talked into repeating it). Legacy 183.
+ *  Capability params are bounded (1 MiB), and the scrub is linear. */
+function scrubAgentText(text: string): string {
+  return scrubSecretValues(text).value;
+}
+
 /**
  * §7.2 "扩展每轮把 turn_id 写入会话条目...回传 Turn 结果". Ends a still-running Turn Activity
  * `completed` through `endTurn` (R-55 — a Turn already ended keeps its status) and records
@@ -842,6 +857,9 @@ async function resolveEntryContextTurn(
  * RLS policy (`activities_visibility`, migrations/core/0003_chat.sql) — a `turnId` outside the
  * caller's own chats simply matches no row, indistinguishable from a nonexistent one, same masking
  * convention as application/chat/service.ts's `requireChatAccess`.
+ *
+ * `summary` and `decisions` are agent text, stored the way the Turn's reply is: every
+ * secret-looking value scrubbed first (`scrubAgentText`, legacy 183).
  */
 const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { turnId, summary, decisions } = params as {
@@ -849,8 +867,8 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
     summary: string;
     decisions?: string[];
   };
-  const metadataPatch: Record<string, unknown> = { summary };
-  if (decisions !== undefined) metadataPatch.decisions = decisions;
+  const metadataPatch: Record<string, unknown> = { summary: scrubAgentText(summary) };
+  if (decisions !== undefined) metadataPatch.decisions = decisions.map(scrubAgentText);
 
   // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a
   // Turn that already ended (Stop, accept timeout, agent-host's own `turnEnded`) keeps its status,
@@ -924,6 +942,8 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
  * flag this exact gap ("关联语义...本任务不代为决定") without resolving it; stashed in the existing
  * free-form `rationale` jsonb here rather than a new migration column speculatively adding a query
  * shape nothing yet needs.
+ *
+ * `summary` is agent text, stored scrubbed (`scrubAgentText`, legacy 183).
  */
 const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { summary, relatedFactIds, relatedTaskId } = params as {
@@ -946,7 +966,7 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
     [
       workspaceId,
       attributedTurn.id,
-      summary,
+      scrubAgentText(summary),
       JSON.stringify({
         relatedFactIds: relatedFactIds ?? [],
         relatedTaskId: relatedTaskId ?? null,
@@ -1522,6 +1542,21 @@ export function deriveDefaultInvokeWorkerIdempotencyKey(args: {
   return `${DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX}${args.identity}:${args.definitionId}@${args.version}:${intentHash}`;
 }
 
+/** `invoke_worker`'s audit fields for its `input`: `credentialReview: { suspectedSecretValues,
+ *  suspectedSecretPaths }` (call-argument rule, paths within `input`), as an observe call records
+ *  its params' — nothing when no value is suspect. No `confirmed`: nobody is asked. */
+function inputCredentialReview(input: unknown): Record<string, unknown> {
+  const found = findSuspectedSecrets(input, { secretFields: true });
+  return found.count > 0
+    ? {
+        credentialReview: {
+          suspectedSecretValues: found.count,
+          suspectedSecretPaths: found.paths,
+        },
+      }
+    : {};
+}
+
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
   const principalId = ctx?.principalId ?? '';
   const attributedTurn = principalId
@@ -1550,12 +1585,17 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
     { ...input, idempotencyKey },
     getConfiguredTaskRuntime(),
   );
+  // Legacy 184: `input` is stored as given — it is what the Worker runs on — so the audit row
+  // records how many suspected credentials it carries, and where (paths within `input`); every
+  // reader but the Worker gets it masked (`toWireTask`).
+  const auditPayload = inputCredentialReview(input.input);
 
   if (!input.wait) {
     return {
       result: toWireInvokeWorkerResult(created),
       resourceType: 'task',
       resourceId: created.taskId,
+      auditPayload,
     };
   }
 
@@ -1563,6 +1603,7 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
     result: toWireInvokeWorkerResult(created),
     resourceType: 'task',
     resourceId: created.taskId,
+    auditPayload,
     afterCommit: () =>
       waitForOutcome(
         getConfiguredTaskRuntime(),
@@ -1603,11 +1644,20 @@ function toWireWorkerRun(
 /** The wire shape one Task + its WorkerRuns projects to, shared by `get_task` and the S2.10
  *  addition `list_tasks` (one Task per array entry there, same per-Task shape). S10 E1 adds the
  *  attribution (`readTaskAttributions`, batched per page): the generating Turn — `turn` only when
- *  the caller can see that Turn's Chat — and the Task's own objective outcome. */
+ *  the caller can see that Turn's Chat — and the Task's own objective outcome.
+ *
+ *  `input` (legacy 184) is what one agent wrote for another — `invoke_worker`'s `input`, stored as
+ *  given because it is what the Worker runs on. Only the Worker running it reads it as stored
+ *  (`inputAsStored`: `get_task` from one of the Task's own WorkerRun sessions — platform-extension's
+ *  worker mode reads its task input this way); every other reader — the console, the requester's
+ *  entry agent — gets it with every suspected credential replaced by `[redacted]`
+ *  (`redactSuspectedSecrets`, call-argument rule: the same copy `invoke_worker`'s audit row keeps,
+ *  and what the console's `maskSecretFields` hides). */
 function toWireTask(
   task: TaskRow,
   workerRuns: readonly WorkerRunRow[],
   attributions: TaskAttributions,
+  options: { readonly inputAsStored?: boolean } = {},
 ) {
   const turn = task.createdByActivityId
     ? attributions.turns.get(task.createdByActivityId)
@@ -1618,7 +1668,10 @@ function toWireTask(
     onBehalfOf: task.onBehalfOf,
     workerDefinitionId: task.workerDefinitionId,
     workerDefinitionVersion: task.workerDefinitionVersion,
-    input: task.input,
+    input:
+      options.inputAsStored === true
+        ? task.input
+        : redactSuspectedSecrets(task.input, { secretFields: true }).value,
     result: task.result,
     tokenBudget: task.tokenBudget,
     tokensUsed: task.tokensUsed,
@@ -1658,8 +1711,12 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ct
     [task],
     workerRuns.map((run) => run.id),
   );
+  // The Task's own Worker reads the input it runs on as stored (`toWireTask`'s doc comment).
+  const sessionId = ctx?.claims?.sid;
+  const inputAsStored =
+    sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
   return {
-    result: toWireTask(task, workerRuns, attributions),
+    result: toWireTask(task, workerRuns, attributions, { inputAsStored }),
     resourceType: 'task',
     resourceId: task.id,
   };

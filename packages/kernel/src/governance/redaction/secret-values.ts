@@ -323,6 +323,8 @@ interface WalkState {
   nodes: number;
   chars: number;
   omitted: boolean;
+  /** Hidden as literals in every string, before the patterns run (`RedactSecretsOptions`). */
+  readonly literals: readonly string[];
   /** Where values were replaced — only for a caller that asked (`onRedacted`). */
   readonly onRedacted: ((path: string, count: number) => void) | undefined;
   readonly patterns: readonly ValuePattern[];
@@ -330,6 +332,11 @@ interface WalkState {
 
 function scrubInto(text: string, state: WalkState): string {
   let out = text;
+  if (state.literals.length > 0) {
+    const literal = scrubSecretLiterals(out, state.literals);
+    state.count += literal.redactedValues;
+    out = literal.value;
+  }
   for (const valuePattern of state.patterns) {
     let scrubbed = '';
     let from = 0;
@@ -352,6 +359,7 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
     omitted: false,
     onRedacted: options.onRedacted,
     patterns: options.patterns ?? SECRET_VALUE_PATTERNS,
+    literals: options.literals ?? [],
   };
 }
 
@@ -360,6 +368,275 @@ function freshState(options: RedactSecretsOptions = {}): WalkState {
 export function scrubSecretValues(text: string): Scrubbed<string> {
   const state = freshState();
   return { value: scrubInto(text, state), redactedValues: state.count };
+}
+
+/** Whether a character code is JSON whitespace. */
+function isJsonWhitespace(code: number): boolean {
+  return code === 0x20 || code === 0x0a || code === 0x0d || code === 0x09;
+}
+
+/** A character of a JSON number or of `true` / `false` / `null`. */
+function isJsonScalarChar(code: number): boolean {
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    code === 0x2b ||
+    code === 0x2d ||
+    code === 0x2e
+  );
+}
+
+/** Where an open object or array of `redactSecretFieldsInJsonText`'s walk is: before a key (an
+ *  object, after `{` or `,`), between a key and its `:`, before a value (an array after `[` or
+ *  `,`, an object after `:`), or after a value (before `,` or the close). */
+type JsonExpecting = 'key' | 'colon' | 'value' | 'next';
+
+/** One open object or array of `redactSecretFieldsInJsonText`'s walk. */
+interface JsonFrame {
+  readonly array: boolean;
+  /** Under a secret-named key: every value inside is a secret value. */
+  readonly secret: boolean;
+  expecting: JsonExpecting;
+  /** The key the object's current value sits under names a secret. */
+  keySecret: boolean;
+}
+
+/** The string literal that starts at `start` (a `"`): the index of its closing quote, or
+ *  `text.length` when the text ends inside it. */
+function jsonStringEnd(text: string, start: number): number {
+  let index = start + 1;
+  while (index < text.length) {
+    const code = text.charCodeAt(index);
+    if (code === 0x5c) index += 2;
+    else if (code === 0x22) return index;
+    else index += 1;
+  }
+  return text.length;
+}
+
+/** A key as written in JSON (`"apiKey"` → `apiKey`); the raw text between the quotes when it
+ *  does not decode. */
+function decodedJsonKey(literal: string): string {
+  try {
+    const decoded: unknown = JSON.parse(literal);
+    return typeof decoded === 'string' ? decoded : literal.slice(1, -1);
+  } catch {
+    return literal.slice(1, -1);
+  }
+}
+
+/**
+ * `text` that is JSON — or the start of JSON, cut anywhere — with every secret value under a key
+ * `isSecretKey` names replaced by `"[redacted]"`: the field rule of `redactSecrets`'s
+ * `isSecretKey`, applied to JSON *text*. A capability tool's result is its JSON as text
+ * (`JSON.stringify(result, null, 2)`), and a result that echoes the call's arguments (an
+ * ActionRequest's `params`) must show a field the way the arguments showed it — hidden, and counted
+ * (legacy 185; the value patterns alone miss a number, an object or an array under `password`).
+ * Every string or number inside such a key's value, at any depth, is replaced (a blank string, a
+ * boolean or `null` shows — `isSecretFieldValue`), and a string the text ends inside is replaced to
+ * its end. Formatting is kept. Text that does not start as JSON (`{` or `[` after whitespace) is
+ * returned as it is, and so is everything from the first character that cannot continue it (a
+ * runtime's `[… more characters omitted]` note) — the value patterns still run over all of it.
+ *
+ * One pass, linear in `text`: each character is visited once (a key is decoded once more, by
+ * `JSON.parse` of its own literal), and nesting is an explicit stack, never recursion.
+ */
+export function redactSecretFieldsInJsonText(
+  text: string,
+  isSecretKey: (key: string) => boolean,
+): Scrubbed<string> {
+  const length = text.length;
+  let index = 0;
+  while (index < length && isJsonWhitespace(text.charCodeAt(index))) index += 1;
+  const first = text.charCodeAt(index);
+  if (first !== 0x7b && first !== 0x5b) return { value: text, redactedValues: 0 };
+
+  const stack: JsonFrame[] = [];
+  const parts: string[] = [];
+  let copiedTo = 0;
+  let redactedValues = 0;
+  const replace = (start: number, end: number): void => {
+    parts.push(text.slice(copiedTo, start), `"${REDACTED}"`);
+    copiedTo = end;
+    redactedValues += 1;
+  };
+
+  scan: while (index < length) {
+    const code = text.charCodeAt(index);
+    if (isJsonWhitespace(code)) {
+      index += 1;
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    // No frame only before the outermost value (the walk ends when it closes).
+    const atValue = top === undefined || top.expecting === 'value';
+    const valueIsSecret = top !== undefined && (top.secret || (!top.array && top.keySecret));
+    switch (code) {
+      case 0x7b: // {
+      case 0x5b: {
+        // [
+        if (!atValue) break scan;
+        if (top !== undefined) top.expecting = 'next';
+        stack.push({
+          array: code === 0x5b,
+          secret: valueIsSecret,
+          expecting: code === 0x5b ? 'value' : 'key',
+          keySecret: false,
+        });
+        index += 1;
+        break;
+      }
+      case 0x7d: // }
+      case 0x5d: {
+        // ]
+        if (top === undefined || top.array !== (code === 0x5d)) break scan;
+        if (top.expecting !== 'next' && top.expecting !== (top.array ? 'value' : 'key')) {
+          break scan;
+        }
+        stack.pop();
+        index += 1;
+        // The outermost value is done; whatever follows is not part of it.
+        if (stack.length === 0) break scan;
+        break;
+      }
+      case 0x3a: // :
+        if (top === undefined || top.expecting !== 'colon') break scan;
+        top.expecting = 'value';
+        index += 1;
+        break;
+      case 0x2c: // ,
+        if (top === undefined || top.expecting !== 'next') break scan;
+        top.expecting = top.array ? 'value' : 'key';
+        top.keySecret = false;
+        index += 1;
+        break;
+      case 0x22: {
+        // "
+        if (top === undefined) break scan;
+        const end = jsonStringEnd(text, index);
+        if (top.expecting === 'key') {
+          if (end >= length) break scan;
+          top.keySecret = isSecretKey(decodedJsonKey(text.slice(index, end + 1)));
+          top.expecting = 'colon';
+        } else if (top.expecting === 'value') {
+          // Blank, or already the mask (a copy scrubbed before): nothing to hide or count.
+          const inner = text.slice(index + 1, end);
+          if (valueIsSecret && inner.trim() !== '' && inner !== REDACTED) {
+            replace(index, Math.min(end + 1, length));
+          }
+          top.expecting = 'next';
+        } else {
+          break scan;
+        }
+        index = end + 1;
+        break;
+      }
+      default: {
+        // A number or a literal (`true`, `false`, `null`): a run of the characters they use.
+        if (top === undefined || top.expecting !== 'value') break scan;
+        const start = index;
+        while (index < length && isJsonScalarChar(text.charCodeAt(index))) index += 1;
+        if (index === start) break scan;
+        const isNumber = code === 0x2d || (code >= 0x30 && code <= 0x39);
+        if (isNumber && valueIsSecret) replace(start, index);
+        top.expecting = 'next';
+        break;
+      }
+    }
+  }
+  if (redactedValues === 0) return { value: text, redactedValues: 0 };
+  parts.push(text.slice(copiedTo));
+  return { value: parts.join(''), redactedValues };
+}
+
+/** A secret value shorter than this is not hidden as a literal: a 1–3 character value (`0`, `on`)
+ *  would hide ordinary text wherever it appears. The value patterns still run. */
+export const MIN_SECRET_LITERAL_CHARS = 4;
+/** At most this many literals are collected, and none longer than `MAX_SECRET_LITERAL_CHARS` —
+ *  longer ones (a PEM key) are what the value patterns find on their own. */
+export const MAX_SECRET_LITERALS = 64;
+export const MAX_SECRET_LITERAL_CHARS = 4_096;
+
+/**
+ * The secret values `value` holds under a key `isSecretKey` names — every string or number at any
+ * depth below one (`isSecretFieldValue`), as text, longest first. These are the values the field
+ * rule hides in a structured copy; text that *quotes* them — a gate's error, a URL or command a
+ * gate rendered from the params, a tool result that repeats an argument — must hide them too, as
+ * literals (`scrubSecretLiterals`): no pattern can tell `mysql -phunter2`'s password from any other
+ * word. Walks at most `MAX_WALK_NODES` objects and arrays, with an explicit stack.
+ */
+export function secretFieldLiterals(
+  value: unknown,
+  isSecretKey: (key: string) => boolean,
+): string[] {
+  const found = new Set<string>();
+  const stack: { readonly value: unknown; readonly secret: boolean }[] = [{ value, secret: false }];
+  let nodes = MAX_WALK_NODES;
+  while (stack.length > 0 && found.size < MAX_SECRET_LITERALS) {
+    const next = stack.pop() as { readonly value: unknown; readonly secret: boolean };
+    const current = next.value;
+    if (next.secret && isSecretFieldValue(current)) {
+      const text = String(current);
+      if (text.length >= MIN_SECRET_LITERAL_CHARS && text.length <= MAX_SECRET_LITERAL_CHARS) {
+        found.add(text);
+      }
+      continue;
+    }
+    if (current === null || typeof current !== 'object') continue;
+    nodes -= 1;
+    if (nodes < 0) break;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push({ value: item, secret: next.secret });
+    } else {
+      for (const [key, inner] of Object.entries(current as Record<string, unknown>)) {
+        stack.push({ value: inner, secret: next.secret || isSecretKey(key) });
+      }
+    }
+  }
+  return [...found].sort((a, b) => b.length - a.length);
+}
+
+/** `text` with every occurrence of each of `literals` (`secretFieldLiterals`, longest first)
+ *  replaced by `[redacted]`. One search per literal — at most `MAX_SECRET_LITERALS` of them. */
+export function scrubSecretLiterals(text: string, literals: readonly string[]): Scrubbed<string> {
+  let out = text;
+  let redactedValues = 0;
+  for (const literal of literals) {
+    if (
+      literal.length < MIN_SECRET_LITERAL_CHARS ||
+      REDACTED.includes(literal) ||
+      !out.includes(literal)
+    ) {
+      continue;
+    }
+    const pieces = out.split(literal);
+    redactedValues += pieces.length - 1;
+    out = pieces.join(REDACTED);
+  }
+  return { value: out, redactedValues };
+}
+
+/** A JSON value with `scrubSecretLiterals` applied to every string in it (keys stay). */
+export function scrubSecretLiteralsIn(
+  value: unknown,
+  literals: readonly string[],
+): Scrubbed<unknown> {
+  if (literals.length === 0 || value === undefined) return { value, redactedValues: 0 };
+  let redactedValues = 0;
+  let scrubbed: unknown;
+  try {
+    scrubbed = JSON.parse(JSON.stringify(value), (_key, inner: unknown) => {
+      if (typeof inner !== 'string') return inner;
+      const result = scrubSecretLiterals(inner, literals);
+      redactedValues += result.redactedValues;
+      return result.value;
+    });
+  } catch {
+    // Not JSON (a cycle, a BigInt): nothing a gate or the wire produces.
+    return { value, redactedValues: 0 };
+  }
+  return { value: scrubbed, redactedValues };
 }
 
 export function safeStringify(value: unknown): string {
@@ -395,6 +672,9 @@ export interface RedactSecretsOptions {
   /** The value patterns run over every string. Defaults to `SECRET_VALUE_PATTERNS`; a check that
    *  refuses rather than redacts passes `HIGH_CONFIDENCE_SECRET_PATTERNS`. */
   readonly patterns?: readonly ValuePattern[];
+  /** Known secret values (`secretFieldLiterals` of the content this value quotes — a tool call's
+   *  arguments, for its result) hidden as literals in every string, before the patterns. */
+  readonly literals?: readonly string[];
 }
 
 export interface RedactedValue extends Scrubbed<unknown> {

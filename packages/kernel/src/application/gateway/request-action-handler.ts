@@ -1,4 +1,4 @@
-import { IllegalTransition, getCapability } from '@nexttime/shared';
+import { IllegalTransition, getCapability, namesASecretField } from '@nexttime/shared';
 import type {
   ActionRequestStatus,
   CapabilityChannel,
@@ -43,7 +43,11 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
-import { reviewObserveParams } from '../../governance/redaction/index.js';
+import {
+  reviewObserveParams,
+  scrubSecretLiteralsIn,
+  secretFieldLiterals,
+} from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
@@ -918,6 +922,13 @@ async function runGovernedRequest(
             reason: err instanceof Error ? err.message : String(err),
           };
         }
+        // The gate renders the params into a URL, a command or a request body; a secret param's
+        // value would be repeated there as plain text, where no key rule can find it — hidden as a
+        // literal (legacy 185), as the call's own audit copy hides it.
+        simulate = scrubSecretLiteralsIn(
+          simulate,
+          secretFieldLiterals(args.operationParams, namesASecretField),
+        ).value;
         return {
           result: { ...toWireActionRequest(actionRequest), simulate },
           resourceType: 'action_request',
