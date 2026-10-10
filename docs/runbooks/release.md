@@ -761,6 +761,134 @@ digest 与上一版完全相同，镜像内容不变，只换来源。
   引用它们，删了就无法重建或回滚到那一版。仓库里没有任何删除包版本的工作流，`prune-images.sh` 只清主机本地的
   `nexttime-ai-*`；GHCR 不会自动清理容器包版本。在 GitHub 包设置里手动清理时跳过这些包。
 
+### 3.20 observe 参数凭据审查与门侧结构守卫（#532，v0.44.0 之后的下一版起）
+
+无迁移、无部署变化。行为变化：
+- `observe_operation` 与 `request_action` 的 observe 分支对参数做凭据审查。只有高置信的字面凭据会被拒（400
+  `credentials_in_observe_params`）：PEM、JWT、厂商前缀密钥、字面 `Bearer` / `Authorization: token`、能解码成 `user:password`
+  的 `Basic`、URL 里的字面密码；`$VAR` / `${VAR}` 占位符放行。其余可疑值放行，审计行带
+  `credentialReview {suspectedSecretValues, suspectedSecretPaths}`。
+- 审计里的参数副本在 Handle、人、平台三个通道都按 #526 的同一规则脱敏（字段名规则 + 值模式）。
+- `http` 门拒绝任何落到门自己拥有的 header、凭据 query 参数、cookie 或 binding 固定 query（不分大小写）上的参数（403
+  `operation_refused`），分页游标按参数名豁免；`importOpenApi` 不再声明这类参数；MCP transport 不再跟随重定向。
+
+**维护窗口前**（与 `--prefetch` 同时，在当前版本上跑，只读）：找出线上已经声明了会被门侧守卫拒绝的参数的 Operation。结果为空就
+不需要任何动作。结果记 `docs/private/`。
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+-- 门公告的 manifest（gate_instances 有 read_all 策略）
+select gi.gate_id, op->>'name' as op, p.key as param, p.value->>'x-in' as loc
+from gate_instances gi,
+     jsonb_array_elements(gi.operations) op,
+     jsonb_each(coalesce(op->'params_schema'->'properties','{}'::jsonb)) p
+where p.value->>'x-in' in ('header','query','cookie');
+-- 工作区里 draft / published 的 Operation（含 create_connection 注册的外部门与手写 manifest）
+select o.workspace_id, o.identity_key->>'gatekeeperId' as gatekeeper,
+       o.identity_key->>'name' as op, o.properties->>'status' as status,
+       p.key as param, p.value->>'x-in' as loc
+from objects o,
+     jsonb_each(coalesce(o.properties->'params_schema'->'properties','{}'::jsonb)) p
+where o.object_type = 'Operation'
+  and o.properties->>'status' in ('draft','published')
+  and p.value->>'x-in' in ('header','query','cookie');
+rollback;
+SQL
+```
+
+- 对结果按 `isGateOwnedHeader` / `isGateOwnedQueryParam`（`packages/gatekeeper-base`）核对参数名；`x-in` 为 `cookie` 的一律会被拒。
+- 有命中时，应用后控制台里受影响的门会出现「待确认 manifest」，逐个确认；原来由调用方传的租户、组织头，要从参数挪到门凭据的
+  `headers` 里。
+
+**应用后核对**（只用合成值，不要用真实 Handle 或 key）：
+- (a) 用合成的 Bearer 形字符串（20 位以上、带数字）调一次 observe 工具：返回 400 `credentials_in_observe_params`，门侧没有收到调用。
+- (b) 用 `{app="x"} |= "Authorization: failed"` 这类查询文本调一次：放行，审计行带 `credentialReview`，副本里是 `Authorization: [redacted]`。
+- (c) 带 `pageToken` 调一次：审计行带 `credentialReview`，`params.params.pageToken` 为 `[redacted]`。
+- (d) 重新导入的 OpenAPI 门的工具列表里没有 `Authorization` 这类头参数；若有手写 manifest 声明了这类参数，用合成值对它 simulate
+  一次，返回 403 `operation_refused`。
+
+### 3.21 模型供应商健康状态文件 `provider-health.json`（#530，v0.44.0 之后的下一版起）
+
+无迁移、无 compose / env / 权限变化。llm-proxy 在它已拥有的 `models/` 目录里、`models.json` 旁边新写一个
+`provider-health.json`（每个供应商只有状态与测试时间，不含密钥或上游错误原文），内核经已有的只读挂载读取，控制台所有模型选择处
+据此显示「可用 / 未测试 / 测试失败 / 状态未知」。备份本来就包含 `models/`。
+
+行为变化：概览的「可用模型」只计供应商测试通过的模型，第一次应用后在每个供应商测试通过之前会显示 0（或「状态未知」），属预期：
+在控制台「模型与供应商」逐个点「测试」即可。
+
+**应用后核对**（只读）：
+- (a) `provider-health.json` 存在于 `models.json` 同目录，属主 uid 10001、权限 0644，每个供应商只有 `status` / `testedAt`；
+  llm-proxy 启动日志里没有 `provider-health.json not writable`。
+- (b) 上次测试被拒的供应商在供应商表里显示「密钥被拒」，它的模型在「我的智能体」和对话头部不可选，概览「需要人处理」列出它。
+- (c) 重新测试通过后，同样的模型无需重启内核即可选择。
+
+结果记 `docs/private/`。
+
+### 3.22 崩溃重试与取消的状态修复：升级前统计受影响的 Task（#534，v0.44.0 之后的下一版起）
+
+无迁移。行为变化：结束一个 WorkerRun 的那次调用才决定它的 Task；`cancel_task` 先把 Task 改成 `cancelled` 再回收它名下的 run
+（审计里 `task.cancel` 现在排在 `worker_run.terminate` 之前）；spawn 读 Task 状态时加 `for share`。修复前，崩溃重试与 reaper
+超时、或与取消并发时，可能出现：重试还在跑的 Task 被标成 failed、用户的取消变成 `failed: terminated`、已取消或已失败的 Task 下
+留着一个持有效 Handle 的 run、认领重试后 Task 永久停在 `running`。
+
+**维护窗口前**（在当前版本上跑，只读）：统计历史上受影响的 Task。结果是候选清单，逐条对照审计再判断。结果记 `docs/private/`。
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+-- Q1 Task 失败时它的崩溃重试还活着，或晚于 failed_at 才终止（reaper 超时的变体 failure_reason = 'timeout'）。
+-- 正常的重试失败在同一事务里终止 run 并失败 Task（now() 相同），不会命中。
+select t.workspace_id, t.id as task_id, t.failure_reason, t.failed_at,
+       wr.id as worker_run_id, wr.status as run_status, wr.started_at, wr.terminated_at
+from tasks t
+join worker_runs wr on wr.workspace_id = t.workspace_id and wr.task_id = t.id
+where t.status = 'failed'
+  and t.retry_count = 1
+  and t.failure_reason in ('worker_failed', 'timeout')
+  and (wr.status <> 'terminated' or wr.terminated_at > t.failed_at)
+order by t.failed_at desc;
+
+-- Q2 认领了重试却没起来：迟到的反应先失败了 Task，重试的 spawn 因此被拒。
+-- 相似情况：重试 spawn 在写入 run 行之前就失败了。逐条对照审计。
+select t.workspace_id, t.id as task_id, t.failed_at
+from tasks t
+where t.status = 'failed' and t.retry_count = 1 and t.failure_reason = 'worker_failed'
+  and (select count(*) from worker_runs wr
+       where wr.workspace_id = t.workspace_id and wr.task_id = t.id) = 1
+order by t.failed_at desc;
+
+-- Q3 failed / cancelled 的 Task 下仍有未终止的 WorkerRun。
+select t.workspace_id, t.id as task_id, t.status as task_status, t.failure_reason,
+       coalesce(t.failed_at, t.cancelled_at) as ended_at,
+       wr.id as worker_run_id, wr.status as run_status, wr.started_at
+from worker_runs wr
+join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id
+where wr.status in ('provisioning', 'running', 'suspended')
+  and t.status in ('failed', 'cancelled')
+order by wr.started_at;
+
+-- Q4 running 的 Task 名下没有活的 WorkerRun；忽略最近几分钟内更新过的行。
+select t.workspace_id, t.id as task_id, t.retry_count, t.updated_at
+from tasks t
+where t.status = 'running'
+  and not exists (select 1 from worker_runs wr
+                  where wr.workspace_id = t.workspace_id and wr.task_id = t.id
+                    and wr.status in ('provisioning', 'running', 'suspended'))
+  and t.updated_at < now() - interval '10 minutes'
+order by t.updated_at;
+rollback;
+SQL
+```
+
+处置：
+- **Q3（终态 Task 下的活 run）**：升级窗口按 §3.17 排空 Worker，governance 0018 吊销所有 `entry` / `worker_run` Handle，所以窗口
+  过后这些 run 不再持有可用 Handle，不需要单独处理。升级前它们就是终态 Task 下的有效 Handle，要尽快升级；若要在升级前单独终止，
+  属于主机写操作，先找维护者确认。
+- **Q1 / Q2（历史结果）**：调用方当时看到的是 `failed`，重试提交的结果已被拒。不要自动修复（重跑会重复副作用），列给 Task 的
+  owner 决定是否重新发起。
+- **Q4（`running` 却没有活 run）**：走受治理的取消路径（控制台或 `cancel_task`），不要直接 UPDATE。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
