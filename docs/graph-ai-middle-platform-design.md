@@ -371,6 +371,8 @@ flowchart TB
 
 **接口注入的机制**：扩展启动时向内核请求 Handle 内允许的 Operation 列表（含参数 schema 与说明），逐个注册为 pi 工具 `<gate>.<op>`；工具调用 → observe 类直接经内核转门；execute 类由 `tool_call` 拦截转 `request_action`。Worker 从头到尾只看到工具名与参数，看不到传输、地址、凭证。拦截是便利闸门，安全边界在 gateway。
 
+**注入位置与提示缓存**：`context` 注入的消息不持久化，每次调用重算。`entry` / `interactive` 的注入是实时状态，放在最后一条，但缓存断点留在它之前的历史上（`before_provider_request` 把 pi-ai 放在最后一条消息上的断点前移），所以历史每次都能命中缓存，注入本身不缓存；`worker` 的注入每次运行只算一次，放在启动消息之前的固定位置，随前缀一起缓存。按前缀自动缓存的 provider（DeepSeek、OpenAI）不带断点，同样只有注入之后的部分是新的。实现见 `packages/platform-extension/src/modes/prompt-cache.ts`，回归测试 `prompt-cache.sdk.test.ts` 用真实 pi-ai 构造的请求逐字节比对。
+
 ### 7.5 Gatekeeper：通用传输种类 + 接口清单
 
 - **传输种类（S2 全部交付通用基类）**：`http`（REST / GraphQL，清单可从 OpenAPI 导入，GET 默认 observe、其余默认 execute 并按动词给默认影响半径）、`mcp`（代理外部 MCP server，`tools/list` 即清单，`readOnlyHint` 为 observe，其余 execute；自动批准需 `vetted`）、`cli`（门容器内的命令模板，如 `kubectl`、`gh`、厂商 CLI）、`ssh`（远程命令模板 + 命令策略表，兼容 RouterOS 这类只有 CLI 的设备）。后续：`db`（默认只读 SQL，写入以声明的存储过程为 Operation）、`browser`（无 API 系统的 RPA）。`docker` 是 `cli` 种类的一个预置清单。

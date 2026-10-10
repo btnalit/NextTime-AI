@@ -17,6 +17,7 @@ import {
   gateToolDescription,
   truncateToolResult,
 } from './gate-tools.js';
+import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
  *  which an entry Handle does not hold) and returns the observed data verbatim (truncated — S8
@@ -320,7 +321,11 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
   // active) rejects the param as `invalid_params`; this process then falls back to `{}`, the only
   // form that kernel accepts, for the rest of its life.
   let sendTurnIdToEntryContext = true;
+  // The context goes last on every call; the cache breakpoint stays on the history before it
+  // (`prompt-cache.ts`).
+  const noteAppendedContext = keepCacheBreakpointOnHistory(pi);
   pi.on('context', async (event) => {
+    noteAppendedContext(undefined);
     let entryContext: EntryContextResult;
     try {
       const turnParams =
@@ -355,6 +360,7 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
       display: false,
       timestamp: Date.now(),
     };
+    noteAppendedContext(text);
     return { messages: [...event.messages, contextMessage] };
   });
 
