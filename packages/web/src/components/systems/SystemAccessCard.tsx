@@ -31,6 +31,7 @@ import { StatusChip } from '../kit/status-chip.js';
 import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
 import {
   type ReadinessReader,
+  type ReasonSubject,
   gateReasonAsk,
   gateReasonHref,
   gateReasonLink,
@@ -468,7 +469,7 @@ export function SystemAccessCard({
               </span>
               <p className="field-hint" data-testid="system-access-approver-hint">
                 {t(
-                  '授权给 operator 时，他同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
+                  '授权给 operator 时，这位成员同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
                   'A grant to an operator also makes them an approver of every action on this gate — they can approve or reject other members’ writes. Owners can approve everything anyway.',
                 )}
               </p>
@@ -567,6 +568,9 @@ function GranteeRow({
   const reader = useReadinessReader(http);
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const gateStatus = readiness?.gates.find((entry) => entry.gateId === gateId);
+  // #541 review R2: another member's reasons are about their entry agent, not the reader's — a
+  // setting only they change gets no link to the reader's own page.
+  const about: ReasonSubject = isSelf ? 'me' : 'them';
   const approver = row.principalRole !== undefined && gateGrantMakesApprover(row.principalRole);
 
   return (
@@ -606,18 +610,16 @@ function GranteeRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span className="text-3 text-small">
-            {gateReasonText(gateStatus.reason, t, isSelf ? 'me' : 'them')}
-          </span>
+          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t, about)}</span>
           {gateStatus.reason !== undefined ? (
             <FixHint
               href={
-                isSelfPageHref(gateReasonHref(gateStatus.reason, reader))
+                isSelfPageHref(gateReasonHref(gateStatus.reason, reader, about))
                   ? undefined
-                  : gateReasonHref(gateStatus.reason, reader)
+                  : gateReasonHref(gateStatus.reason, reader, about)
               }
               label={gateReasonLink(gateStatus.reason, t)}
-              ask={gateReasonAsk(gateStatus.reason, reader, t)}
+              ask={gateReasonAsk(gateStatus.reason, reader, t, about)}
             />
           ) : null}
         </>

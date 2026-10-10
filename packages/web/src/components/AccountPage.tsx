@@ -22,6 +22,11 @@ import {
   normalizeLoginInput,
 } from '../lib/login-input.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import {
+  passwordLengthHint,
+  passwordLengthNeed,
+  passwordLengthProblem,
+} from '../lib/password-rule.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { LangSwitch } from './LangSwitch.js';
@@ -230,13 +235,15 @@ function ClaimPasswordCard({
   const loginMessage = loginError(normalizedLogin, t);
   const loginInvalid = loginMessage !== null;
   const loginNote = loginNormalizedNote(login, t);
-  const passwordTooShort = password.length > 0 && password.length < 8;
+  // #541 review: the same length rule (floor and 256 cap) as every other password form.
+  const passwordProblem = passwordLengthProblem(password, t);
   const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
   const canSubmit =
     Boolean(apiKey) &&
     LOGIN_PATTERN.test(normalizedLogin) &&
     displayName.trim().length > 0 &&
-    password.length >= 8 &&
+    password !== '' &&
+    passwordProblem === null &&
     password === confirmPassword;
   // Audit P1-9: a disabled 设置密码 says what it still waits for (field labels' own words).
   const missing = [
@@ -249,8 +256,8 @@ function ClaimPasswordCard({
     displayName.trim() === '' ? t('填写显示名', 'enter a display name') : null,
     password === ''
       ? t('填写密码', 'enter a password')
-      : password.length < 8
-        ? t('密码至少 8 位', 'make the password at least 8 characters')
+      : passwordProblem !== null
+        ? passwordLengthNeed(password, t)
         : null,
     confirmPassword === ''
       ? t('确认密码', 'confirm the password')
@@ -327,15 +334,8 @@ function ClaimPasswordCard({
           id="account-claim-password"
           label={t('密码', 'Password')}
           required
-          hint={t('至少 8 位', 'At least 8 characters')}
-          error={
-            passwordTooShort
-              ? t(
-                  `密码太短：当前 ${password.length} 位，至少需要 8 位。`,
-                  `Password too short: ${password.length} characters, at least 8 are needed.`,
-                )
-              : null
-          }
+          hint={passwordLengthHint(t)}
+          error={passwordProblem}
         >
           <Input
             id="account-claim-password"
@@ -344,7 +344,7 @@ function ClaimPasswordCard({
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={submitting}
-            invalid={passwordTooShort}
+            invalid={passwordProblem !== null}
           />
         </Field>
 
@@ -463,15 +463,19 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
   const [saved, setSaved] = useState(false);
 
   const passwordsMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
-  const newPasswordTooShort = newPassword.length > 0 && newPassword.length < 8;
-  const canSubmit = currentPassword && newPassword.length >= 8 && newPassword === confirmPassword;
+  const newPasswordProblem = passwordLengthProblem(newPassword, t);
+  const canSubmit =
+    currentPassword &&
+    newPassword !== '' &&
+    newPasswordProblem === null &&
+    newPassword === confirmPassword;
   // Audit P1-9: a disabled 更改密码 says what it still waits for (field labels' own words).
   const missing = [
     currentPassword === '' ? t('填写当前密码', 'enter the current password') : null,
     newPassword === ''
       ? t('填写新密码', 'enter the new password')
-      : newPassword.length < 8
-        ? t('新密码至少 8 位', 'make the new password at least 8 characters')
+      : newPasswordProblem !== null
+        ? passwordLengthNeed(newPassword, t)
         : null,
     confirmPassword === ''
       ? t('确认新密码', 'confirm the new password')
@@ -530,13 +534,10 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           id="account-new-password"
           label={t('新密码', 'New password')}
           required
-          hint={t('至少 8 位', 'At least 8 characters')}
+          hint={passwordLengthHint(t)}
           error={
-            newPasswordTooShort
-              ? t(
-                  `密码太短：当前 ${newPassword.length} 位，至少需要 8 位。`,
-                  `Password too short: ${newPassword.length} characters, at least 8 are needed.`,
-                )
+            newPasswordProblem !== null
+              ? newPasswordProblem
               : newPasswordWeak
                 ? t(
                     '密码不满足平台的最短长度要求（平台设置的最短长度可能高于 8 位），请换一个更长的密码。',
@@ -552,7 +553,7 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
             disabled={submitting}
-            invalid={newPasswordTooShort || newPasswordWeak}
+            invalid={newPasswordProblem !== null || newPasswordWeak}
           />
         </Field>
         <Field

@@ -131,7 +131,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改选“决定”。',
+            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改选“决定”。',
             'Fact suggestions come from the audit log (auditor role) — paste an id, or switch to Decision.',
           )}
           disabled={state.busy}
@@ -288,11 +288,11 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
         <AuditIdPicker
           http={http}
           id="precedents-object-id"
-          label={t('对象 id', 'Object id')}
+          label={t('对象 ID', 'Object id')}
           value={objectId}
           onChange={setObjectId}
           source={objects}
-          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          placeholder={t('粘贴对象 ID，或输入名称搜索', 'Paste an Object id or type a name')}
           disabled={state.busy}
           testId="precedents-object-id"
         />

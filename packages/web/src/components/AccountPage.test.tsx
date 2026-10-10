@@ -243,7 +243,13 @@ describe('AccountPage: API-key mode (no user)', () => {
     );
     fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'abc' } });
     expect(screen.getByText(/密码太短：当前 3 位，至少需要 8 位/)).toBeTruthy();
-    expect(screen.getByText('至少 8 位')).toBeTruthy();
+    expect(screen.getByText(/^至少 8 位/)).toBeTruthy();
+  });
+
+  it('#541 review: the 256-character cap applies here too, as on every other password form', () => {
+    render(<AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/^新密码/), { target: { value: 'x'.repeat(257) } });
+    expect(screen.getByText(/密码太长：当前 257 位，最多 256 位/)).toBeTruthy();
   });
 });
 
@@ -389,7 +395,7 @@ describe('AccountPage: cookie mode', () => {
     fireEvent.change(screen.getByLabelText(/当前密码/), { target: { value: 'old' } });
     fireEvent.change(screen.getByLabelText(/^新密码/), { target: { value: 'short' } });
     fireEvent.change(screen.getByLabelText(/确认新密码/), { target: { value: 'other' } });
-    expect(missing()).toBe('还差：新密码至少 8 位、让两次输入的密码一致');
+    expect(missing()).toBe('还差：密码至少 8 位、让两次输入的密码一致');
 
     fireEvent.change(screen.getByLabelText(/^新密码/), { target: { value: 'newnewnew' } });
     fireEvent.change(screen.getByLabelText(/确认新密码/), { target: { value: 'newnewnew' } });

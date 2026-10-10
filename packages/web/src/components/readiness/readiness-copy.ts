@@ -1,4 +1,10 @@
-import type { ExecutionReadinessMissingWire, GateUnreachableReason, Role } from '@nexttime/shared';
+import {
+  type ExecutionReadinessMissingWire,
+  type GateUnreachableReason,
+  type Role,
+  getCapability,
+  roleMayUseCapability,
+} from '@nexttime/shared';
 import type { Translate } from '../../lib/i18n.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
 
@@ -22,81 +28,135 @@ export type GateNameLookup = ReadonlyMap<string, string>;
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
 
 /**
- * Console audit P1-4 / P1-5: who is reading a fix, so a fix link is offered only to someone who
- * can act on it, and never points at the page the reader is already on.
+ * Console audit P1-4 / P1-5: who is reading a fix, so a fix link is offered only to someone the
+ * kernel would let make it, and never points at the page the reader is already on.
  */
 export interface ReadinessReader {
   /** The reader's workspace role once `get_workspace` said it; `null` while unknown — the link is
    *  then shown, and the page it opens says itself what this role cannot do. */
   readonly role: Role | null;
+  /** `get_agent_policy.memberCanEditProfile` once read; `null` (or absent) while unknown — read
+   *  like an unknown role: the link is shown and 我的智能体 says itself it is read-only. */
+  readonly memberCanEditProfile?: boolean | null;
   /** The page the card sits on (`hrefs.*`): a fix link to it would only reload the same page. */
   readonly currentHref?: string;
 }
 
-/** Who can make a fix: the registry `minRole` of the capability behind it (`grant_capability`,
- *  `set_agent_policy`: owner; `publish_worker_definition`, `publish_operation`: builder), `anyone`
- *  for the reader's own settings and the systems page (a member requests a connection there),
- *  `platform` for what only a platform administrator can change. */
-type FixOwner = 'anyone' | 'owner' | 'builder' | 'platform';
+/**
+ * What makes a fix (#541 review R1): the registry capability that changes it, so whether the
+ * reader gets a link is the kernel's own predicate (`roleMayUseCapability`, shared `roles.ts`)
+ * rather than a hand-kept role table; `platform` for what only a platform administrator changes;
+ * `member_self` for another member's own 我的智能体 setting, which no page of the reader's reaches
+ * (review R2).
+ */
+type Fix =
+  | { readonly kind: 'capability'; readonly name: FixCapability }
+  | { readonly kind: 'platform' }
+  | { readonly kind: 'member_self' };
 
-function readerCanFix(owner: FixOwner, reader: ReadinessReader | undefined): boolean {
-  if (owner === 'platform') return false;
+type FixCapability =
+  | 'request_connection'
+  | 'grant_capability'
+  | 'set_agent_policy'
+  | 'publish_worker_definition'
+  | 'publish_operation'
+  | 'set_agent_profile';
+
+const PLATFORM_FIX: Fix = { kind: 'platform' };
+const MEMBER_SELF_FIX: Fix = { kind: 'member_self' };
+
+function capabilityFix(name: FixCapability): Fix {
+  return { kind: 'capability', name };
+}
+
+/** Whether `reader` may make `fix` — exactly what the kernel would authorize: the role predicate
+ *  for the capability, plus `set_agent_profile`'s own rule (an owner edits anyone's profile; a
+ *  member only their own, and only when the policy's `memberCanEditProfile` allows it). The reader
+ *  fixing their own readiness is always editing their own profile. */
+function readerCanFix(fix: Fix, reader: ReadinessReader | undefined): boolean {
+  if (fix.kind !== 'capability') return false;
   const role = reader?.role ?? null;
-  if (role === null || owner === 'anyone' || role === 'owner') return true;
-  return role === owner;
+  if (role === null) return true;
+  if (!roleMayUseCapability(role, getCapability(fix.name))) return false;
+  if (fix.name === 'set_agent_profile' && role !== 'owner') {
+    return reader?.memberCanEditProfile !== false;
+  }
+  return true;
 }
 
 function linkFor(
   href: string | undefined,
-  owner: FixOwner,
+  fix: Fix,
   reader: ReadinessReader | undefined,
 ): string | undefined {
-  if (href === undefined || !readerCanFix(owner, reader)) return undefined;
+  if (href === undefined || !readerCanFix(fix, reader)) return undefined;
   return href === reader?.currentHref ? undefined : href;
 }
 
-/** What a reader who cannot make the fix themselves does instead — ask the role that can. */
-function askFor(owner: FixOwner, reader: ReadinessReader, t: Translate): string | undefined {
-  if (owner === 'anyone' || owner === 'platform' || readerCanFix(owner, reader)) return undefined;
-  return owner === 'owner'
+/** What a reader who cannot make the fix themselves does instead — ask whoever can. */
+function askFor(fix: Fix, reader: ReadinessReader, t: Translate): string | undefined {
+  if (fix.kind === 'platform') return undefined;
+  if (fix.kind === 'member_self') {
+    return t('要这位成员自己重新勾选。', 'That member has to tick it again themselves.');
+  }
+  if (readerCanFix(fix, reader)) return undefined;
+  if (
+    fix.name === 'set_agent_profile' &&
+    reader.role !== null &&
+    roleMayUseCapability(reader.role, getCapability(fix.name))
+  ) {
+    return t(
+      '工作区策略不允许成员自己改「我的智能体」，请联系工作区所有者。',
+      'The workspace policy does not let members edit My Agent themselves; ask a workspace owner.',
+    );
+  }
+  return getCapability(fix.name)?.minRole === 'builder'
     ? t(
-        '这一步要工作区所有者来做，请联系他们。',
-        'A workspace owner has to do this; ask one of them.',
-      )
-    : t(
         '这一步要构建者或工作区所有者来做，请联系他们。',
         'A builder or a workspace owner has to do this; ask one of them.',
+      )
+    : t(
+        '这一步要工作区所有者来做，请联系他们。',
+        'A workspace owner has to do this; ask one of them.',
       );
 }
 
-function missingFixOwner(code: ExecutionReadinessMissingWire['code']): FixOwner {
+function missingFix(code: ExecutionReadinessMissingWire['code']): Fix {
   switch (code) {
     case 'no_enabled_gate':
-    case 'excluded_by_profile':
-      return 'anyone';
+      return capabilityFix('request_connection');
     case 'no_grant':
+      return capabilityFix('grant_capability');
     case 'excluded_by_policy':
-      return 'owner';
+      return capabilityFix('set_agent_policy');
     case 'no_published_worker':
     case 'no_worker_gate':
-      return 'builder';
+      return capabilityFix('publish_worker_definition');
+    case 'excluded_by_profile':
+      return capabilityFix('set_agent_profile');
     case 'disabled_by_platform':
-      return 'platform';
+      return PLATFORM_FIX;
   }
 }
 
-function gateReasonFixOwner(reason: GateUnreachableReason): FixOwner {
+/** Whose entry agent a gate reason is about: the reader's own (`me`) or another member's row on
+ *  系统与授权's 「谁能用」 (`them`). */
+export type ReasonSubject = 'me' | 'them';
+
+function gateReasonFix(reason: GateUnreachableReason, about: ReasonSubject): Fix {
   switch (reason) {
     case 'excluded_by_profile':
-      return 'anyone';
+      return about === 'me' ? capabilityFix('set_agent_profile') : MEMBER_SELF_FIX;
     case 'not_granted':
+      return capabilityFix('grant_capability');
     case 'excluded_by_policy':
-      return 'owner';
+      return capabilityFix('set_agent_policy');
     case 'no_published_operation':
+      return capabilityFix('publish_operation');
     case 'no_worker':
-      return 'builder';
+      return capabilityFix('publish_worker_definition');
     case 'disabled_by_platform':
-      return 'platform';
+      return PLATFORM_FIX;
   }
 }
 
@@ -107,7 +167,7 @@ export function missingAsk(
   reader: ReadinessReader,
   t: Translate,
 ): string | undefined {
-  return askFor(missingFixOwner(item.code), reader, t);
+  return askFor(missingFix(item.code), reader, t);
 }
 
 /** `missingAsk` for one gate's `reason`. */
@@ -115,8 +175,9 @@ export function gateReasonAsk(
   reason: GateUnreachableReason,
   reader: ReadinessReader,
   t: Translate,
+  about: ReasonSubject = 'me',
 ): string | undefined {
-  return askFor(gateReasonFixOwner(reason), reader, t);
+  return askFor(gateReasonFix(reason, about), reader, t);
 }
 
 /** One line explaining *why* this item is missing — never the raw `code`, never a bare id. */
@@ -203,7 +264,7 @@ export function missingLinkHref(
   item: ExecutionReadinessMissingWire,
   reader?: ReadinessReader,
 ): string | undefined {
-  return linkFor(missingDestination(item), missingFixOwner(item.code), reader);
+  return linkFor(missingDestination(item), missingFix(item.code), reader);
 }
 
 function missingDestination(item: ExecutionReadinessMissingWire): string | undefined {
@@ -254,7 +315,7 @@ export function missingLinkLabel(
 export function gateReasonText(
   reason: GateUnreachableReason | undefined,
   t: Translate,
-  about: 'me' | 'them' = 'me',
+  about: ReasonSubject = 'me',
 ): string {
   if (about === 'them') {
     if (reason === 'not_granted') {
@@ -306,8 +367,9 @@ export function gateReasonText(
 export function gateReasonHref(
   reason: GateUnreachableReason,
   reader?: ReadinessReader,
+  about: ReasonSubject = 'me',
 ): string | undefined {
-  return linkFor(gateReasonDestination(reason), gateReasonFixOwner(reason), reader);
+  return linkFor(gateReasonDestination(reason), gateReasonFix(reason, about), reader);
 }
 
 function gateReasonDestination(reason: GateUnreachableReason): string | undefined {

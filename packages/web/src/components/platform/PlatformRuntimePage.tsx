@@ -288,7 +288,7 @@ function RuntimeBody({
     },
     {
       id: 'id',
-      header: t('镜像 id', 'Id'),
+      header: t('镜像 ID', 'Image ID'),
       cell: (image) => (
         <span className="mono text-small" title={image.id}>
           {shortImageId(image.id)}

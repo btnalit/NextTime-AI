@@ -160,6 +160,46 @@ describe('SystemsPage', () => {
     expect(within(empty).getByTestId('systems-empty-see-available')).toBeTruthy();
   });
 
+  it('#541 review: a member is told an owner enables the waiting systems, not to enable them', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'docker',
+            displayName: 'Docker',
+            connector: 'docker',
+            transportKind: 'cli',
+            status: 'available',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: null,
+          },
+          {
+            gateId: 'ragflow',
+            displayName: 'RagFlow',
+            connector: 'ragflow',
+            transportKind: 'http',
+            status: 'available',
+            health: 'ok',
+            operationCount: 2,
+            gatekeeperId: 'gk-already-enabled',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const empty = await screen.findByTestId('systems-empty');
+    // Only the instance not enabled yet counts.
+    await waitFor(() =>
+      expect(empty.textContent).toContain('有 1 个系统已就绪，等工作区所有者启用'),
+    );
+    expect(empty.textContent).toContain('请联系工作区所有者');
+    expect(empty.textContent).not.toContain('等待启用');
+  });
+
   it('P0-4: an admin with a discovered but not enabled instance is told so and linked to enable it', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({

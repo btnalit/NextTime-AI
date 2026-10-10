@@ -219,7 +219,9 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-on-behalf-of').getAttribute('data-ref-id')).toBe(
       'principal-9',
     );
-    expect(screen.getByTestId('approval-policy').textContent).toBe('require_approval');
+    // #541 review R3: the chat's inline approval card shows the decision's label, not its raw value.
+    expect(screen.getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
+    expect(screen.getByTestId('approval-policy').textContent).not.toContain('require_approval');
   });
 
   it('a card carrying a suspected-credential count sends the approver to the approvals page (decision 2026-10-09)', () => {

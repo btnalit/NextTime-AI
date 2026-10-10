@@ -255,7 +255,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version}{' '}
               复制（已预填当前版本的正文）：内核的 propose_skill 不接受 skillId，提交会创建一个
-              <strong>新的</strong> Skill（新 id、v1），不是 同一 Skill 的新版本。
+              <strong>新的</strong> Skill（新 ID、v1），不是 同一 Skill 的新版本。
             </>,
             <>
               Copied from {copyOf.name} v{copyOf.version} (the current version’s body is

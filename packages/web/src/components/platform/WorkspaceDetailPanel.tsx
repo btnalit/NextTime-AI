@@ -236,7 +236,7 @@ export function WorkspaceDetailPanel({
       <DrawerSections>
         <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
-            <dt>Id</dt>
+            <dt>ID</dt>
             <dd>
               <CopyId id={workspace.id} label="workspace" />
             </dd>

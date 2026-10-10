@@ -147,14 +147,14 @@ export function ActionRequestDetail({
 
       {card.params && Object.keys(card.params).length > 0 ? (
         <div className="stack-s">
-          <span className="section-title">Parameters</span>
+          <span className="section-title">{t('参数', 'Parameters')}</span>
           <pre className="code-block params-block">{prettyJson(redactSensitive(card.params))}</pre>
         </div>
       ) : null}
 
       {card.simulated !== undefined ? (
         <div className="stack-s">
-          <span className="section-title">Simulated effect</span>
+          <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
           <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
         </div>
       ) : null}

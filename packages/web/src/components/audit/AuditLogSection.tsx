@@ -191,10 +191,10 @@ export function AuditLogSection({
             onChange={setActor}
             source={actorSource}
             refusedNote={t(
-              '也无法读取审计记录，请直接粘贴 principal id。',
+              '也无法读取审计记录，请直接粘贴 principal ID。',
               'The audit log is not readable either — paste a principal id.',
             )}
-            placeholder={t('粘贴 principal id，或从下方选择', 'Paste a principal id or pick below')}
+            placeholder={t('粘贴 principal ID，或从下方选择', 'Paste a principal id or pick below')}
             testId="audit-actor-input"
           />
         )}
@@ -233,7 +233,7 @@ export function AuditLogSection({
         <AuditIdPicker
           http={http}
           id="audit-resource-id"
-          label={t('资源 id', 'Resource id')}
+          label={t('资源 ID', 'Resource id')}
           value={resourceId}
           onChange={setResourceId}
           source={resourceSource}

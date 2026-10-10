@@ -150,7 +150,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             hint={
               usersRefused
                 ? t(
-                    '无权读取用户目录，请粘贴用户 id。',
+                    '无权读取用户目录，请粘贴用户 ID。',
                     'The user directory is not readable — paste a user id.',
                   )
                 : undefined
@@ -160,7 +160,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
               id="platform-audit-actor"
               value={actorUserIdInput}
               onChange={(event) => setActorUserIdInput(event.target.value)}
-              placeholder={t('粘贴用户 id', 'Paste a user id')}
+              placeholder={t('粘贴用户 ID', 'Paste a user id')}
               mono
               data-testid="platform-audit-actor-input"
             />

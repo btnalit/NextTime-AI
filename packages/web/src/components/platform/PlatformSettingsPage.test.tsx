@@ -220,7 +220,7 @@ describe('PlatformSettingsPage', () => {
       ]),
     );
     expect(picker.value).toBe('ws-1');
-    expect(within(form).queryByLabelText(/工作区 id/)).toBeNull();
+    expect(within(form).queryByLabelText(/工作区 ID/)).toBeNull();
     fireEvent.change(picker, { target: { value: 'ws-2' } });
     fireEvent.click(within(form).getByRole('button', { name: '保存' }));
     await screen.findByTestId('platform-settings-saved');

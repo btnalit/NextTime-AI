@@ -220,7 +220,7 @@ export function UserDetailPanel({
       <dl className="definition-list">
         <dt>{t('登录名', 'Login')}</dt>
         <dd className="mono">{user.login}</dd>
-        <dt>Id</dt>
+        <dt>ID</dt>
         <dd>
           <CopyId id={user.id} label="user" />
         </dd>

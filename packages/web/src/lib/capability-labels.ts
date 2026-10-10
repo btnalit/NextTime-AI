@@ -794,7 +794,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   resolve_refs: {
     zh: '解析引用名称',
     en: 'Resolve references',
-    zhHint: '把一批 id 解析成可读的名称。',
+    zhHint: '把一批 ID 解析成可读的名称。',
     enHint: 'Resolves a batch of ids to readable names.',
   },
   list_models: {

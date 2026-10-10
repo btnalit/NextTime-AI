@@ -595,7 +595,7 @@ function OnBehalfOfField({
           value={value}
           onChange={(event) => onChange(event.target.value.trim())}
           disabled={disabled}
-          placeholder={t('principal id（可选）', 'principal id (optional)')}
+          placeholder={t('principal ID（可选）', 'principal id (optional)')}
           data-testid="cc-obo-manual"
           mono
         />

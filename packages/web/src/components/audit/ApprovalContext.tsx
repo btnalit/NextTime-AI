@@ -3,6 +3,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { policyDecisionLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf, resourceScopeLabel } from '../approvals/useDirectoryNames.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
@@ -98,7 +99,11 @@ export function ApprovalContext({
               ? { id: row.onBehalfOf, name: nameOf(principalNames, row.onBehalfOf) }
               : undefined
           }
-          policySummary={row.policyDecision ?? undefined}
+          policySummary={
+            row.policyDecision ? (
+              <span title={row.policyDecision}>{policyDecisionLabel(row.policyDecision, t)}</span>
+            ) : undefined
+          }
           readOnly
           approvalsHref={hrefs.approval(row.id)}
           testId="approval-context-card"

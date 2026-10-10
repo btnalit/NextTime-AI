@@ -153,7 +153,7 @@ export function PrincipalDetail({
   const metadataItems: KeyValueItem[] = [
     {
       key: 'id',
-      label: 'Id',
+      label: 'ID',
       value: <RefChip kind="principal" id={principal.id} name={principal.displayName} size="s" />,
     },
     { key: 'kind', label: t('类型', 'Kind'), value: principalKindLabel(principal.kind, t) },

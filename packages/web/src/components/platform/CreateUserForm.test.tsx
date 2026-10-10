@@ -145,7 +145,7 @@ describe('CreateUserForm', () => {
     // A workspace nobody belongs to yet is offered too; an ephemeral one says so.
     expect(texts).toEqual(['默认工作区', '无', 'Acme 团队', 'Fresh', 'Trial（临时）']);
     expect(texts.some((text) => text?.includes('其他'))).toBe(false);
-    expect(screen.queryByLabelText(/工作区 id/)).toBeNull();
+    expect(screen.queryByLabelText(/工作区 ID/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'dana' } });
     fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Dana' } });
@@ -169,7 +169,7 @@ describe('CreateUserForm', () => {
       'Zeta 研发',
     ]);
     fireEvent.change(filter, { target: { value: 'nothing-like-this' } });
-    expect(screen.getByText(/没有名称或 id 含“nothing-like-this”的工作区/)).toBeTruthy();
+    expect(screen.getByText(/没有名称或 ID 含“nothing-like-this”的工作区/)).toBeTruthy();
   });
 
   it('a short list has no filter box', async () => {

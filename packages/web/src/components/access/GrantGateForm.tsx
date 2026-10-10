@@ -286,7 +286,7 @@ export function GrantGateForm({
       {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
         <Notice tone="warn" testId="ggf-approver-notice">
           {t(
-            `${selectedPrincipal.displayName} 的角色是${roleLabel(selectedPrincipal.role, t)}：授予门的同时，他也会成为所授予门上所有动作的审批者——能批准或驳回其他成员经 Worker 提出的写操作。撤销授权会同时收回这份审批权。`,
+            `${selectedPrincipal.displayName} 的角色是${roleLabel(selectedPrincipal.role, t)}：授予门的同时，这位成员也会成为所授予门上所有动作的审批者——能批准或驳回其他成员经 Worker 提出的写操作。撤销授权会同时收回这份审批权。`,
             `${selectedPrincipal.displayName} has the ${roleLabel(selectedPrincipal.role, t)} role: a gate grant also makes them an approver of every action on the granted gate(s) — they can approve or reject the writes other members request through a Worker. Revoking the grant removes that approval right too.`,
           )}
         </Notice>
@@ -402,7 +402,7 @@ export function GrantGateForm({
           </span>
           <p className="field-hint">
             {t(
-              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，他同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
+              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，这位成员同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
               'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Granted to an operator, it also makes them an approver of every action on this gate. Read operations need no grant — every member of the workspace can call them.',
             )}
           </p>

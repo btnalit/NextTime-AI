@@ -367,7 +367,7 @@ export function ProcedureEditor({
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：提交会创建一个
-              <strong>新的</strong> Procedure（新 id、v1），不是同一 Procedure 的新版本。
+              <strong>新的</strong> Procedure（新 ID、v1），不是同一 Procedure 的新版本。
             </>,
             <>
               Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: submitting creates a{' '}

@@ -729,7 +729,7 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
             <thead>
               <tr>
                 <th>{t('工作区', 'Workspace')}</th>
-                <th>Principal</th>
+                <th>{t('主体', 'Principal')}</th>
                 <th>{t('会话种类', 'Session kind')}</th>
                 <th>{t('创建时间', 'Created')}</th>
                 <th>{t('过期', 'Expires')}</th>

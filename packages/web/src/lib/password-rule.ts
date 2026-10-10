@@ -33,3 +33,16 @@ export function passwordLengthHint(t: Translate): string {
     `At least ${PASSWORD_MIN_FLOOR} characters (a longer platform minimum applies if set)`,
   );
 }
+
+/** A 还差 line item for a password whose length is wrong (pair with `passwordLengthProblem`). */
+export function passwordLengthNeed(password: string, t: Translate): string {
+  return password.length > PASSWORD_MAX_LENGTH
+    ? t(
+        `密码最多 ${PASSWORD_MAX_LENGTH} 位`,
+        `keep the password to ${PASSWORD_MAX_LENGTH} characters`,
+      )
+    : t(
+        `密码至少 ${PASSWORD_MIN_FLOOR} 位`,
+        `make the password at least ${PASSWORD_MIN_FLOOR} characters`,
+      );
+}

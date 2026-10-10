@@ -279,7 +279,7 @@ describe('GrantGateForm', () => {
     );
     // The always-visible hint states the effect for operators too.
     expect((await screen.findByTestId('ggf-operations-scope')).textContent).toContain(
-      '授予 operator 时，他同时成为这个门上所有动作的审批者',
+      '授予 operator 时，这位成员同时成为这个门上所有动作的审批者',
     );
 
     await selectMember('p-1');

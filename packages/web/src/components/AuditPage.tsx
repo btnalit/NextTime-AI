@@ -76,7 +76,7 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
         breadcrumb={breadcrumbFor('audit')}
         title={t('审计', 'Audit')}
         description={t(
-          '按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',
+          '按 ID 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',
           'Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat.',
         )}
       />
@@ -169,15 +169,15 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
         <AuditIdPicker
           http={http}
           id="reconstruct-entity-id"
-          label={t('实体 id', 'Entity id')}
+          label={t('实体 ID', 'Entity id')}
           hint={t(
-            '图对象 id：从审计记录重建其历史。输入名称可搜索对象。',
+            '图对象 ID：从审计记录重建其历史。输入名称可搜索对象。',
             'A graph Object id — its history rebuilt from the audit records. Type a name to search Objects.',
           )}
           value={entityId}
           onChange={setEntityId}
           source={source}
-          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          placeholder={t('粘贴对象 ID，或输入名称搜索', 'Paste an Object id or type a name')}
           disabled={state.busy}
           testId="reconstruct-entity-id"
         />

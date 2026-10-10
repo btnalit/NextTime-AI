@@ -1,4 +1,10 @@
-import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
+import {
+  type AvailableGateInstanceWire,
+  type OperationSummaryWire,
+  type Role,
+  getCapability,
+  roleMayUseCapability,
+} from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -308,6 +314,15 @@ export function SystemsPage({
 
   const cancelOverrides = cancelConnectionRequestOverrides(t);
   const canCreate = !permissions.isDenied('create_connection');
+  // #541 review: enabling a prepared instance is `enable_gate_instance` (owner) — once the reader's
+  // role is known, the kernel's own predicate decides; before that, the 403 still tells.
+  const canEnable =
+    canCreate &&
+    (role.kind !== 'known' ||
+      roleMayUseCapability(role.role, getCapability('enable_gate_instance')));
+  // Platform instances this workspace has not enabled yet (an enabled one already carries its
+  // gatekeeper and is listed above as a connected system).
+  const enableableCount = availableRows.filter((row) => !row.gatekeeperId).length;
   const gates = readiness.state.status === 'ready' ? readiness.state.data.gates : [];
 
   return (
@@ -363,19 +378,34 @@ export function SystemsPage({
           onRetry={() => void readiness.reload()}
           testId="systems-error"
         />
-      ) : gates.length === 0 && availableRows.length > 0 ? (
+      ) : gates.length === 0 && enableableCount > 0 ? (
         // Audit P1-16: systems the platform already prepared are one click away below — "nothing
         // connected yet" next to them read as a contradiction. The header's 接入一个系统 stays the
-        // one primary button on the page.
+        // one primary button on the page. #541 review: only rows not yet enabled count, and only a
+        // reader who can enable them (`canEnable` below) is told to.
         <EmptyState
-          title={t(
-            `有 ${availableRows.length} 个系统已就绪，等待启用`,
-            `${availableRows.length} system(s) ready to enable`,
-          )}
-          body={t(
-            '平台已经准备好了下面这些系统，启用后就能在这里授权成员使用。',
-            'The platform has prepared the systems below; enable one, then grant members access to it here.',
-          )}
+          title={
+            canEnable
+              ? t(
+                  `有 ${enableableCount} 个系统已就绪，等待启用`,
+                  `${enableableCount} system(s) ready to enable`,
+                )
+              : t(
+                  `有 ${enableableCount} 个系统已就绪，等工作区所有者启用`,
+                  `${enableableCount} system(s) ready, waiting for a workspace owner to enable`,
+                )
+          }
+          body={
+            canEnable
+              ? t(
+                  '平台已经准备好了下面这些系统，启用后就能在这里授权成员使用。',
+                  'The platform has prepared the systems below; enable one, then grant members access to it here.',
+                )
+              : t(
+                  '平台已经准备好了下面这些系统，需要工作区所有者启用并授权后你才能使用，请联系工作区所有者。',
+                  'The platform has prepared the systems below; a workspace owner has to enable one and grant you access before you can use it. Ask a workspace owner.',
+                )
+          }
           action={
             <Button
               variant="secondary"
@@ -386,7 +416,9 @@ export function SystemsPage({
               }
               data-testid="systems-empty-see-available"
             >
-              {t('查看待启用的系统', 'See the systems to enable')}
+              {canEnable
+                ? t('查看待启用的系统', 'See the systems to enable')
+                : t('查看这些系统', 'See these systems')}
             </Button>
           }
           testId="systems-empty"
@@ -578,7 +610,7 @@ export function SystemsPage({
           http={http}
           available={available}
           onEnabled={reloadRegistry}
-          canEnable={canCreate}
+          canEnable={canEnable}
           platformAdmin={platformAdmin}
         />
       </section>
@@ -654,7 +686,7 @@ export function SystemsPage({
               http={http}
               origin="workspace"
               platformAdmin={platformAdmin}
-              canEnable={canCreate}
+              canEnable={canEnable}
               available={availableRows}
               onEnabled={() => {
                 void available.reload();

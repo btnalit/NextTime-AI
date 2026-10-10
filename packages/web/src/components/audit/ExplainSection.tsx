@@ -144,13 +144,13 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         <AuditIdPicker
           http={http}
           id="explain-node-id"
-          label={t('节点 id', 'Node id')}
-          hint={t('Fact、Decision 或 Activity 的 id。', 'A Fact, Decision, or Activity id.')}
+          label={t('节点 ID', 'Node id')}
+          hint={t('Fact、Decision 或 Activity 的 ID。', 'A Fact, Decision, or Activity id.')}
           value={nodeId}
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改为从最近的决定中选择。',
+            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改为从最近的决定中选择。',
             'Fact and activity suggestions come from the audit log (auditor role) — paste an id, or suggest from recent decisions.',
           )}
           disabled={state.busy}

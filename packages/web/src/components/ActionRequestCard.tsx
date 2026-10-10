@@ -8,7 +8,7 @@ import {
 import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
-import { actorRuntimeLabel } from '../lib/labels.js';
+import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
@@ -105,7 +105,11 @@ export function ActionRequestCard({
       target={<span className="mono">{card.resourceScope ?? '—'}</span>}
       gatekeeper={card.gatekeeperId ? { id: card.gatekeeperId } : undefined}
       onBehalfOf={card.onBehalfOf !== undefined ? { id: card.onBehalfOf } : undefined}
-      policySummary={card.policyDecision ? card.policyDecision : undefined}
+      policySummary={
+        card.policyDecision ? (
+          <span title={card.policyDecision}>{policyDecisionLabel(card.policyDecision, t)}</span>
+        ) : undefined
+      }
       approvalsHref={hrefs.approval(card.actionRequestId)}
       readOnly={!decidable}
       suspectedSecretValues={suspectedSecretValues}
