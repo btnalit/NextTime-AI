@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalJson } from '@nexttime/gatekeeper-base';
 import type {
   GateOperationSummaryWire,
   Operation,
@@ -24,22 +25,9 @@ import { operationGovernanceChange } from '../../governance/gatekeepers/index.js
  */
 
 /** JSON with every object's keys sorted, arrays kept in order (`undefined` members dropped, as
- *  `JSON.stringify` does). */
-export function canonicalJson(value: unknown): string {
-  return (
-    JSON.stringify(value, (_key, member: unknown) => {
-      if (member !== null && typeof member === 'object' && !Array.isArray(member)) {
-        const record = member as Record<string, unknown>;
-        return Object.fromEntries(
-          Object.keys(record)
-            .sort()
-            .map((key) => [key, record[key]]),
-        );
-      }
-      return member;
-    }) ?? 'null'
-  );
-}
+ *  `JSON.stringify` does) — the one implementation the gate's Operation digest also uses (legacy
+ *  K, `@nexttime/gatekeeper-base` `operation-digest.ts`). */
+export { canonicalJson };
 
 export function manifestDigest(storedManifest: unknown): string {
   return createHash('sha256')

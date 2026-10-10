@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { operationDefinitionDigest } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import { IllegalTransition } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
@@ -16,6 +17,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
 import { setOperationStatusObject } from '../../substrate/ontology/index.js';
+import { OperationDeclaresGateOwnedParamsError } from './gate-owned-params.js';
 import type { OperationRecord } from './manifest.js';
 import {
   OperationDescriptionInvalidError,
@@ -32,6 +34,7 @@ import {
   listPublishedOperationsForGatekeepers,
   operationGovernanceFieldsOf,
   proposeOperation,
+  publishImportedDrafts,
   publishManifest,
   publishOperation,
   refreshOperationGovernance,
@@ -1314,14 +1317,19 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         blast_radius: 'low' as const,
         auto_approvable: true,
       };
+      const refreshAct = await newActivity();
       const outcome = await inTx((client) =>
         refreshOperationGovernance(client, workspaceId, {
           gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
           announcedOperations: [announcedDrifted, matching],
         }),
       );
 
       expect(outcome.unchanged).toEqual([matching.name]);
+      // Legacy K: `mode` is aligned in place, so the deployed definition matches — no revision.
+      expect(outcome.revisionDrafts).toEqual([]);
       expect(outcome.refreshed).toHaveLength(1);
       const [entry] = outcome.refreshed;
       expect(entry?.name).toBe(drifted.name);
@@ -1347,11 +1355,101 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       const again = await inTx((client) =>
         refreshOperationGovernance(client, workspaceId, {
           gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
           announcedOperations: [announcedDrifted],
         }),
       );
       expect(again.refreshed).toEqual([]);
       expect(again.unchanged).toEqual([drifted.name]);
+    });
+
+    it('legacy K: a published Operation whose announced definition changed gets an import revision draft carrying it; the live version is untouched until it is published', async () => {
+      const deployed = testOperation({
+        name: `gov.definition.${randomUUID()}`,
+        mode: 'execute',
+        binding: { kind: 'http', method: 'POST', path: '/v1' },
+      });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [deployed],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: deployed.name }),
+      );
+
+      const announced = {
+        ...deployed,
+        binding: { kind: 'http' as const, method: 'POST', path: '/v2' },
+        auto_approvable: !deployed.auto_approvable,
+      };
+      const refreshAct = await newActivity();
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(outcome.revisionDrafts).toEqual([
+        {
+          id: expect.any(String),
+          name: deployed.name,
+          version: 2,
+          draftOf: published.id,
+          replaced: false,
+        },
+      ]);
+      expect(outcome.refreshed.map((entry) => entry.name)).toEqual([deployed.name]);
+      expect(outcome.unchanged).toEqual([]);
+
+      const draft = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, deployed.name),
+      );
+      expect(draft).toMatchObject({ status: 'draft', origin: 'import', version: 2 });
+      expect(draft?.draftOf).toBe(published.id);
+      expect(operationDefinitionDigest(draft?.operation)).toBe(
+        operationDefinitionDigest(announced),
+      );
+      const live = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, deployed.name),
+      );
+      expect(live).toMatchObject({ version: 1, status: 'published' });
+      expect(live?.operation.binding).toEqual({ kind: 'http', method: 'POST', path: '/v1' });
+
+      // While the revision waits, a second refresh leaves it alone.
+      const pendingAct = await newActivity();
+      const again = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: pendingAct,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(again).toMatchObject({
+        refreshed: [],
+        revisionDrafts: [],
+        unchanged: [deployed.name],
+      });
+
+      // Publishing it replaces the live version with the definition the gate runs.
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: deployed.name }),
+      );
+      const current = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, deployed.name),
+      );
+      expect(current?.version).toBe(2);
+      expect(operationDefinitionDigest(current?.operation)).toBe(
+        operationDefinitionDigest(announced),
+      );
     });
 
     it('operationNames narrows the selection — only the named Operations are touched, the rest are silently absent', async () => {
@@ -1383,9 +1481,12 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
 
       const announcedA = { ...opA, auto_approvable: true };
       const announcedB = { ...opB, auto_approvable: true };
+      const refreshAct = await newActivity();
       const outcome = await inTx((client) =>
         refreshOperationGovernance(client, workspaceId, {
           gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
           announcedOperations: [announcedA, announcedB],
           operationNames: [opA.name],
         }),
@@ -1401,8 +1502,9 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(stillB?.operation.auto_approvable).toBe(false);
     });
 
-    it('a draft (never-published) Operation has nothing "already present" to refresh — reported unchanged, left as a draft', async () => {
+    it("legacy K: the gate's own pending draft follows what it announces (rewritten at its version); someone's proposal is never overwritten", async () => {
       const draftOnly = testOperation({ name: `gov.draft-only.${randomUUID()}`, mode: 'execute' });
+      const proposalName = `gov.proposal.${randomUUID()}`;
       const importAct = await newActivity();
       await inTx((client) =>
         importManifest(client, workspaceId, {
@@ -1412,22 +1514,173 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: importAct,
         }),
       );
+      await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name: proposalName, mode: 'execute' }),
+          proposedBy: { id: attackerId, kind: 'agent' },
+          activityId: importAct,
+        }),
+      );
 
       const announced = { ...draftOnly, mode: 'observe' as const };
+      const announcedProposal = testOperation({ name: proposalName, mode: 'observe' });
+      const refreshAct = await newActivity();
       const outcome = await inTx((client) =>
         refreshOperationGovernance(client, workspaceId, {
           gatekeeperId,
-          announcedOperations: [announced],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          announcedOperations: [announced, announcedProposal],
         }),
       );
       expect(outcome.refreshed).toEqual([]);
-      expect(outcome.unchanged).toEqual([draftOnly.name]);
+      expect(outcome.revisionDrafts).toEqual([
+        { id: expect.any(String), name: draftOnly.name, version: 1, replaced: true },
+      ]);
+      expect(outcome.unchanged).toEqual([proposalName]);
 
-      const stillDraft = await inTx((client) =>
+      const rewritten = await inTx((client) =>
         getOperation(client, workspaceId, gatekeeperId, draftOnly.name),
       );
-      expect(stillDraft?.status).toBe('draft');
-      expect(stillDraft?.operation.mode).toBe('execute');
+      expect(rewritten).toMatchObject({ status: 'draft', origin: 'import', version: 1 });
+      expect(rewritten?.operation.mode).toBe('observe');
+      const proposal = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, proposalName),
+      );
+      expect(proposal).toMatchObject({ status: 'draft', origin: 'agent' });
+      expect(proposal?.operation.mode).toBe('execute');
+
+      // Already the announced entry: nothing to rewrite.
+      const againAct = await newActivity();
+      const again = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: againAct,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(again).toMatchObject({ revisionDrafts: [], unchanged: [draftOnly.name] });
+    });
+  });
+
+  describe('legacy J: an http Operation declaring a param only the gate sets is never published', () => {
+    function withGateOwnedParams(name: string): Operation {
+      return testOperation({
+        name,
+        binding: { kind: 'http', method: 'GET', path: '/stock?api-version=1' },
+        params_schema: {
+          type: 'object',
+          properties: {
+            sku: { type: 'string', 'x-in': 'query' },
+            Authorization: { type: 'string', 'x-in': 'header' },
+            'api-version': { type: 'string', 'x-in': 'query' },
+          },
+        },
+      });
+    }
+
+    it('publishOperation refuses it by name and location, writing nothing; the draft stays a draft', async () => {
+      const op = withGateOwnedParams(`j.single.${randomUUID()}`);
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [op],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const thrown = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: op.name }),
+      ).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(OperationDeclaresGateOwnedParamsError);
+      expect(thrown).toMatchObject({
+        code: 'gate_owned_params',
+        details: {
+          params: [
+            { param: 'Authorization', location: 'header' },
+            { param: 'api-version', location: 'binding' },
+          ],
+        },
+      });
+      const after = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, op.name),
+      );
+      expect(after?.status).toBe('draft');
+    });
+
+    it('publishManifest and publishImportedDrafts publish the rest and report it', async () => {
+      const bad = withGateOwnedParams(`j.bulk.bad.${randomUUID()}`);
+      const good = testOperation({ name: `j.bulk.good.${randomUUID()}` });
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [bad, good],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const result = await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      expect(result.publishedOperationNames).toContain(good.name);
+      expect(result.publishedOperationNames).not.toContain(bad.name);
+      expect(result.gateOwnedParamDrafts).toContainEqual({
+        name: bad.name,
+        params: [
+          { param: 'Authorization', location: 'header' },
+          { param: 'api-version', location: 'binding' },
+        ],
+      });
+
+      const other = withGateOwnedParams(`j.imported.${randomUUID()}`);
+      const act2 = await newActivity();
+      const imported = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [other],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act2,
+        }),
+      );
+      const bulk = await inTx((client) =>
+        publishImportedDrafts(client, workspaceId, gatekeeperId, imported.imported),
+      );
+      expect(bulk.publishedOperationNames).toEqual([]);
+      expect(bulk.gateOwnedParamDrafts.map((entry) => entry.name)).toEqual([other.name]);
+    });
+
+    it('once the gate drops the params, a refresh rewrites the held draft and it publishes', async () => {
+      const held = withGateOwnedParams(`j.fixed.${randomUUID()}`);
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [held],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const fixed = {
+        ...held,
+        params_schema: { type: 'object', properties: { sku: { type: 'string', 'x-in': 'query' } } },
+      };
+      const refreshAct = await newActivity();
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          announcedOperations: [fixed],
+        }),
+      );
+      expect(outcome.revisionDrafts.map((entry) => entry.name)).toEqual([held.name]);
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: held.name }),
+      );
+      expect(published.status).toBe('published');
+      expect(operationDefinitionDigest(published.operation)).toBe(operationDefinitionDigest(fixed));
     });
   });
 });

@@ -8,7 +8,9 @@ import {
   type RevertResponse,
   type SimulateResponse,
   gateAuthorizationHeader,
+  isRedirectStatus,
   normalizeGateToken,
+  redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
 import { correlationHeaders } from '@nexttime/shared';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
@@ -102,6 +104,38 @@ export class GatekeeperClientError extends Error {
   }
 }
 
+/**
+ * Gate answers a caller can act on (review of #532, error mapping): the gate said, the same way
+ * every time, that this call as made will not run — a param the gate owns, params its schema
+ * refuses, an Operation it does not have or runs from another definition, no credential for this
+ * account, a key already applied. The capability surfaces pass these through with the gate's own
+ * code instead of 502 `gatekeeper_error`, which reads as an outage an agent would retry. The
+ * status is this table's: an answer counts only when the gate's status line agrees with it — a
+ * self-connected gate is owner-supplied, and its response does not get to pick the kernel's
+ * status. Anything else (401 between kernel and gate, a 5xx, a network failure, a refused
+ * redirect, an unknown code) stays an upstream failure.
+ */
+const GATE_REFUSAL_STATUS: Readonly<Record<string, number>> = {
+  invalid_params: 400,
+  revert_not_supported: 400,
+  operation_refused: 403,
+  operation_not_found: 404,
+  operation_definition_mismatch: 409,
+  idempotency_conflict: 409,
+  apply_outcome_unknown: 409,
+  credential_unavailable: 424,
+};
+
+/** `err` as a gate refusal to pass through (`GATE_REFUSAL_STATUS`), or `undefined`. */
+export function gateRefusalOf(
+  err: GatekeeperClientError,
+): { readonly status: number; readonly code: string } | undefined {
+  const status = Object.hasOwn(GATE_REFUSAL_STATUS, err.code)
+    ? GATE_REFUSAL_STATUS[err.code]
+    : undefined;
+  return status !== undefined && err.status === status ? { status, code: err.code } : undefined;
+}
+
 export class GatekeeperTimeoutError extends Error {
   /** The gate path that timed out (`gate/apply`, `gate/observe`, …) — `action-executor.ts` treats a
    *  `gate/apply` timeout as "outcome unknown" rather than a failure (the gate may still finish). */
@@ -134,6 +168,14 @@ export interface GatekeeperCallInput {
   readonly operation: string;
   readonly params?: unknown;
   readonly onBehalfOf?: string;
+  /**
+   * Legacy K: the digest of the Operation definition the kernel approved
+   * (`governance/gatekeepers`'s `operationRecordDigest`); the gate refuses the call when it runs
+   * another one (409 `operation_definition_mismatch`). Required, so no call site can forget it.
+   * `undefined` only on the reaper's replay of a row that names no definition: the gate then
+   * answers from its idempotency store and refuses anything else.
+   */
+  readonly operationDigest: string | undefined;
 }
 
 export interface GatekeeperApplyInput extends GatekeeperCallInput {
@@ -330,6 +372,19 @@ export class HttpGatekeeperClient implements GatekeeperClient {
           code: 'network_error',
           status: 0,
         });
+      }
+      // Never followed (an owner-supplied endpoint's fetch is `withoutRedirects`); said so, with
+      // where it pointed, instead of failing to parse the 3xx body (review of #532, item 4).
+      if (isRedirectStatus(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        throw new GatekeeperClientError(
+          redirectRefusalMessage(`gatekeeper client: ${path}`, response, url, {
+            follower:
+              "The kernel does not follow a gate's redirects (the gate's secret would go along)",
+            fix: "set the Gatekeeper's endpoint to the final address",
+          }),
+          { code: 'redirect_refused', status: response.status },
+        );
       }
       // R-49: the abort stays armed through the body. A gate (or a workspace owner's endpoint) that
       // sends its headers and then trickles the body must not hold the call — and, for a read

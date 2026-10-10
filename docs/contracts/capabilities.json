@@ -4042,6 +4042,47 @@
         "gateId": {
           "type": "string"
         },
+        "gateOwnedParamDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "params": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "params"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -4066,6 +4107,7 @@
         "gatekeeperId",
         "publishedOperationNames",
         "skippedOperationNames",
+        "gateOwnedParamDrafts",
         "linkedExisting"
       ],
       "type": "object"
@@ -15405,6 +15447,9 @@
                 ],
                 "type": "object"
               },
+              "definitionDiffers": {
+                "type": "boolean"
+              },
               "differs": {
                 "type": "boolean"
               },
@@ -15464,7 +15509,8 @@
               "existing",
               "announced",
               "differs",
-              "direction"
+              "direction",
+              "definitionDiffers"
             ],
             "type": "object"
           },
@@ -16152,6 +16198,47 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "gateOwnedParamDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "params": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "params"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -16171,7 +16258,8 @@
       "required": [
         "gatekeeperId",
         "publishedOperationNames",
-        "skippedDraftOperationNames"
+        "skippedDraftOperationNames",
+        "gateOwnedParamDrafts"
       ],
       "type": "object"
     },
@@ -17587,6 +17675,26 @@
           },
           "type": "array"
         },
+        "revisionDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "unchanged": {
           "items": {
             "type": "string"
@@ -17597,6 +17705,7 @@
       "required": [
         "gatekeeperId",
         "refreshed",
+        "revisionDrafts",
         "unchanged"
       ],
       "type": "object"

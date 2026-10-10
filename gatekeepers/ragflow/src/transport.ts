@@ -1,8 +1,10 @@
 import {
   BindingKindMismatchError,
   HttpTransport,
+  NO_REDIRECTS,
   TransportInvokeError,
   encodePathSegment,
+  refuseRedirect,
   resolveBindingUrl,
 } from '@nexttime/gatekeeper-base';
 import type {
@@ -151,9 +153,10 @@ export class RagflowTransport implements Transport {
         body: form,
         signal: controller.signal,
         // Same redirect policy as HttpTransport.invoke (kinds/http.ts) — never resend a credential
-        // header to a 3xx-named host.
-        redirect: 'error',
+        // header to a 3xx-named host; the failure says where it pointed.
+        redirect: NO_REDIRECTS,
       });
+      await refuseRedirect(`ragflow transport: POST ${url.pathname}`, response, url);
       const text = await response.text();
       const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
       if (!response.ok) {

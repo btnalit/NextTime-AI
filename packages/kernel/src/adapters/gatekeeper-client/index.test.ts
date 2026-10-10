@@ -19,6 +19,8 @@ import {
  */
 
 const GATE = platformGateTarget('https://example.test');
+/** Legacy K: any digest — this client sends it as given and the gate checks it. */
+const DIGEST = `sha256:${'0'.repeat(64)}`;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,6 +48,7 @@ describe('HttpGatekeeperClient', () => {
         operation: 'stock.get',
         params: { sku: 'X1' },
         onBehalfOf: 'user-a',
+        operationDigest: DIGEST,
       });
       return jsonResponse({ ok: true, result: { data: { qty: 3 } } });
     });
@@ -54,6 +57,7 @@ describe('HttpGatekeeperClient', () => {
       operation: 'stock.get',
       params: { sku: 'X1' },
       onBehalfOf: 'user-a',
+      operationDigest: DIGEST,
     });
     expect(result).toEqual({ data: { qty: 3 } });
   });
@@ -62,6 +66,7 @@ describe('HttpGatekeeperClient', () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string);
       expect(body.actionRequestId).toBe('req-1');
+      expect(body.operationDigest).toBe(DIGEST);
       return jsonResponse({ ok: true, result: { data: {}, observedFacts: [], replayed: false } });
     });
     const client = new HttpGatekeeperClient({ fetchImpl });
@@ -69,6 +74,7 @@ describe('HttpGatekeeperClient', () => {
       operation: 'stock.adjust',
       params: {},
       actionRequestId: 'req-1',
+      operationDigest: DIGEST,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -78,13 +84,15 @@ describe('HttpGatekeeperClient', () => {
       jsonResponse({ ok: false, error: { code: 'operation_not_found', message: 'nope' } }, 404),
     );
     const client = new HttpGatekeeperClient({ fetchImpl });
-    await expect(client.observe(GATE, { operation: 'x' })).rejects.toMatchObject({
+    await expect(
+      client.observe(GATE, { operation: 'x', operationDigest: DIGEST }),
+    ).rejects.toMatchObject({
       code: 'operation_not_found',
       status: 404,
     });
-    await expect(client.observe(GATE, { operation: 'x' })).rejects.toBeInstanceOf(
-      GatekeeperClientError,
-    );
+    await expect(
+      client.observe(GATE, { operation: 'x', operationDigest: DIGEST }),
+    ).rejects.toBeInstanceOf(GatekeeperClientError);
   });
 
   it('throws GatekeeperTimeoutError when the request aborts', async () => {
@@ -115,12 +123,14 @@ describe('HttpGatekeeperClient', () => {
         }),
     );
     const client = new HttpGatekeeperClient({ fetchImpl, timeoutMs: 5, applyTimeoutMs: 1_000 });
-    await expect(client.observe(GATE, { operation: 'x' })).rejects.toMatchObject({
+    await expect(
+      client.observe(GATE, { operation: 'x', operationDigest: DIGEST }),
+    ).rejects.toMatchObject({
       name: 'GatekeeperTimeoutError',
       path: 'gate/observe',
     });
     await expect(
-      client.apply(GATE, { operation: 'x', actionRequestId: 'ar-1' }),
+      client.apply(GATE, { operation: 'x', actionRequestId: 'ar-1', operationDigest: DIGEST }),
     ).resolves.toMatchObject({ data: 1 });
   });
 
@@ -145,12 +155,14 @@ describe('HttpGatekeeperClient', () => {
         ),
     );
     const client = new HttpGatekeeperClient({ fetchImpl, timeoutMs: 20, applyTimeoutMs: 30 });
-    await expect(client.observe(GATE, { operation: 'x' })).rejects.toMatchObject({
+    await expect(
+      client.observe(GATE, { operation: 'x', operationDigest: DIGEST }),
+    ).rejects.toMatchObject({
       name: 'GatekeeperTimeoutError',
       path: 'gate/observe',
     });
     await expect(
-      client.apply(GATE, { operation: 'x', actionRequestId: 'ar-1' }),
+      client.apply(GATE, { operation: 'x', actionRequestId: 'ar-1', operationDigest: DIGEST }),
     ).rejects.toMatchObject({ name: 'GatekeeperTimeoutError', path: 'gate/apply' });
     expect(cancelled).toBe(2);
   });
@@ -265,9 +277,9 @@ describe('HttpGatekeeperClient — x-correlation-id', () => {
     });
     const client = new HttpGatekeeperClient({ fetchImpl, token: 'gate-token-for-tests' });
     await runWithCorrelationId('turn-5555-6666', () =>
-      client.observe(GATE, { operation: 'stock.get' }),
+      client.observe(GATE, { operation: 'stock.get', operationDigest: DIGEST }),
     );
-    await client.observe(GATE, { operation: 'stock.get' });
+    await client.observe(GATE, { operation: 'stock.get', operationDigest: DIGEST });
     expect(seen).toEqual(['turn-5555-6666', null]);
   });
 });
@@ -317,9 +329,39 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
       credential: { kind: 'connection', workspaceId: WORKSPACE, salt: SALT },
     });
     const secret = deriveConnectionSecret(GATE_TOKEN, WORKSPACE, SALT);
-    expect(calls).toEqual([{ authorization: `Bearer ${secret}`, redirect: 'error' }]);
+    expect(calls).toEqual([{ authorization: `Bearer ${secret}`, redirect: 'manual' }]);
     expect(calls[0]?.authorization).not.toContain(GATE_TOKEN);
     expect(guard).toHaveBeenCalledWith(SELF, 'gate endpoint');
+  });
+
+  it('refuses a self-connected gate’s redirect, saying where it pointed (review of #532, item 4)', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response('moved', {
+          status: 307,
+          headers: { location: 'https://elsewhere.example/gate/health?token=t0k3n' },
+        }),
+    );
+    const client = new HttpGatekeeperClient({
+      fetchImpl,
+      token: GATE_TOKEN,
+      outboundTargetGuard: allowAll,
+    });
+    const thrown = await client
+      .health({
+        endpoint: SELF,
+        credential: { kind: 'connection', workspaceId: WORKSPACE, salt: SALT },
+      })
+      .catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(GatekeeperClientError);
+    expect(thrown).toMatchObject({ code: 'redirect_refused', status: 307 });
+    const message = (thrown as Error).message;
+    expect(message).toContain(
+      'gatekeeper client: gate/health responded 307, a redirect to "https://elsewhere.example/gate/health"',
+    );
+    expect(message).toContain("set the Gatekeeper's endpoint to the final address");
+    expect(message).not.toContain('t0k3n');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('never calls a self-connected gate that has no secret on record (connection_secret_missing, 401)', async () => {
@@ -330,7 +372,10 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
       outboundTargetGuard: allowAll,
     });
     await expect(
-      client.observe({ endpoint: SELF, credential: { kind: 'none' } }, { operation: 'x' }),
+      client.observe(
+        { endpoint: SELF, credential: { kind: 'none' } },
+        { operation: 'x', operationDigest: DIGEST },
+      ),
     ).rejects.toMatchObject({
       name: 'GatekeeperClientError',
       code: 'connection_secret_missing',
@@ -360,7 +405,7 @@ describe('HttpGatekeeperClient — which credential a gate gets (D-01)', () => {
           endpoint: 'http://worker-supervisor:8081',
           credential: { kind: 'connection', workspaceId: WORKSPACE, salt: SALT },
         },
-        { operation: 'x', actionRequestId: 'ar-1' },
+        { operation: 'x', actionRequestId: 'ar-1', operationDigest: DIGEST },
       ),
     ).rejects.toMatchObject({ code: 'target_refused' });
     expect(fetchImpl).not.toHaveBeenCalled();

@@ -7,12 +7,13 @@ import {
   InMemoryIdempotencyStore,
   TransportTimeoutError,
   createGatekeeperServer,
+  operationDefinitionDigest,
 } from '@nexttime/gatekeeper-base';
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type { Operation, Role } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
@@ -37,6 +38,7 @@ import {
 } from '../../governance/capability/index.js';
 import {
   importManifest,
+  proposeOperation,
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
@@ -1801,6 +1803,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         params,
         onBehalfOf: ownerId,
         actionRequestId,
+        operationDigest: operationDefinitionDigest(AUTO_OP),
       });
       await sleep(200);
 
@@ -1933,6 +1936,231 @@ describe.runIf(DATABASE_URL !== undefined)(
         finalStatus = row?.status;
       }
       expect(finalStatus).toBe('executed');
+    });
+
+    describe('legacy K: a gate runs only the definition that was approved', () => {
+      // The workspace published each Operation as below; the gate runs its own manifest, in which
+      // `k.drifted` and `k.drifted.read` changed after publishing (another path) and the others
+      // did not. Their own gate, so no row on the shared gatekeeper above waits on them.
+      const SAME: Operation = {
+        ...AUTO_OP,
+        name: 'k.same',
+        binding: { kind: 'http', method: 'POST', path: '/k/same' },
+        params_schema: { type: 'object', properties: { qty: { type: 'number', 'x-in': 'body' } } },
+      };
+      const APPROVED_DRIFTED: Operation = {
+        ...AUTO_OP,
+        name: 'k.drifted',
+        binding: { kind: 'http', method: 'POST', path: '/k/v1' },
+      };
+      const APPROVED_READ: Operation = {
+        ...OBSERVE_OP,
+        name: 'k.drifted.read',
+        binding: { kind: 'http', method: 'GET', path: '/k/v1/read' },
+      };
+      const REVISED: Operation = {
+        ...PENDING_OP,
+        name: 'k.revised',
+        await_decision: false,
+        binding: { kind: 'http', method: 'POST', path: '/k/revised' },
+      };
+      const RUNNING = [
+        SAME,
+        { ...APPROVED_DRIFTED, binding: { kind: 'http', method: 'POST', path: '/k/v2' } },
+        { ...APPROVED_READ, binding: { kind: 'http', method: 'GET', path: '/k/v2/read' } },
+        REVISED,
+      ] satisfies Operation[];
+      const K_SALT = 'f'.repeat(32);
+
+      let kGatekeeperId: string;
+      let kTransport: RecordingTransport;
+      let kGateApp: FastifyInstance;
+
+      async function readRow(id: string) {
+        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequest(client, workspaceId, id),
+        );
+        if (!row) throw new Error(`action request ${id} not found`);
+        return row;
+      }
+
+      async function failureReason(id: string): Promise<string | undefined> {
+        const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            resourceType: 'action_request',
+            resourceId: id,
+            action: 'action_request.fail',
+          }),
+        );
+        return (audit[0]?.payload as { reason?: string } | undefined)?.reason;
+      }
+
+      /** An auto-approved row as the previous release wrote it: no `operation_digest`. */
+      async function seedApprovedRowWithoutDigest(actionKind: string): Promise<string> {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+               await_decision, on_behalf_of, actor_runtime, params
+             ) values ($1, 'auto_approved', $2, $3, 'low', 'allow', false, $4, 'pi', $5::jsonb)
+             returning id`,
+            [workspaceId, kGatekeeperId, actionKind, ownerId, JSON.stringify({ qty: 1 })],
+          );
+          return result.rows[0]?.id as string;
+        });
+      }
+
+      beforeAll(async () => {
+        kTransport = new RecordingTransport(pool, workspaceId);
+        kGateApp = createGatekeeperServer({
+          gate: new GatekeeperBase({
+            manifest: RUNNING,
+            transport: kTransport,
+            credentialResolver: { resolve: async () => ({}) },
+            idempotencyStore: new InMemoryIdempotencyStore(),
+          }),
+          token: deriveConnectionSecret(GATE_TEST_TOKEN, workspaceId, K_SALT),
+        });
+        await kGateApp.listen({ port: 0, host: '127.0.0.1' });
+        const endpoint = `http://127.0.0.1:${(kGateApp.server.address() as AddressInfo).port}`;
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: 'k-gate',
+            transportKind: 'http',
+            target: 'k-system',
+            endpoint,
+            connectionSecretSalt: K_SALT,
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          kGatekeeperId = registered.gatekeeperId;
+          const approved = [SAME, APPROVED_DRIFTED, APPROVED_READ, REVISED];
+          await importManifest(client, workspaceId, {
+            gatekeeperId: kGatekeeperId,
+            operations: approved,
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          for (const op of approved) {
+            await publishOperation(client, workspaceId, {
+              gatekeeperId: kGatekeeperId,
+              name: op.name,
+            });
+          }
+        });
+      });
+
+      afterAll(async () => {
+        await kGateApp.close();
+      });
+
+      it('runs a call made under the definition the gate runs, and records that definition on the row (jsonb round trip)', async () => {
+        const result = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'request_action',
+          { gatekeeperId: kGatekeeperId, operation: SAME.name, params: { qty: 1 } },
+        )) as { status: string; id: string };
+
+        expect(result.status).toBe('executed');
+        expect(kTransport.calls[SAME.name]).toBe(1);
+        expect((await readRow(result.id)).operationDigest).toBe(operationDefinitionDigest(SAME));
+      });
+
+      it('fails an execute call for a definition the gate no longer runs, readably, and runs nothing', async () => {
+        const result = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'request_action',
+          { gatekeeperId: kGatekeeperId, operation: APPROVED_DRIFTED.name, params: {} },
+        )) as { status: string; id: string };
+
+        expect(result.status).toBe('failed');
+        expect(await failureReason(result.id)).toMatch(
+          /"k\.drifted": the definition that was approved \([0-9a-f]{12}\) is not the one this gate runs \([0-9a-f]{12}\) — refused, nothing ran/,
+        );
+        expect(kTransport.calls[APPROVED_DRIFTED.name]).toBeUndefined();
+      });
+
+      it('refuses an observe call for a definition the gate no longer runs: 409 operation_definition_mismatch', async () => {
+        await expect(
+          dispatchCapability({ pool }, humanCaller(workspaceId, ownerId), 'observe_operation', {
+            gatekeeperId: kGatekeeperId,
+            operation: APPROVED_READ.name,
+            params: {},
+          }),
+        ).rejects.toMatchObject({ code: 'operation_definition_mismatch', status: 409 });
+        expect(kTransport.calls[APPROVED_READ.name]).toBeUndefined();
+      });
+
+      it('runs the definition a request was made against, not a revision published before it was approved', async () => {
+        const requested = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'request_action',
+          { gatekeeperId: kGatekeeperId, operation: REVISED.name, params: {} },
+        )) as { status: string; id: string };
+        expect(requested.status).toBe('pending_approval');
+
+        // Published while the request waits: a revision the gate does not run.
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revision',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId: kGatekeeperId,
+            operation: { ...REVISED, binding: { kind: 'http', method: 'POST', path: '/k/other' } },
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId: kGatekeeperId,
+            name: REVISED.name,
+          });
+        });
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          approveActionRequest(client, workspaceId, {
+            actionRequestId: requested.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+        await drainer.drainGatekeeper(workspaceId, ownerId, kGatekeeperId);
+
+        expect((await readRow(requested.id)).status).toBe('executed');
+        expect(kTransport.calls[REVISED.name]).toBe(1);
+      });
+
+      it('a row that names no definition runs the one published now; with none published it is refused without calling the gate', async () => {
+        const gatekeeperClient = testGatekeeperClient();
+        const apply = vi.spyOn(gatekeeperClient, 'apply');
+        const executor = createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: createAdminWithTransaction(pool),
+        });
+
+        const before = kTransport.calls[SAME.name] ?? 0;
+        const legacy = await executor.execute(
+          await readRow(await seedApprovedRowWithoutDigest(SAME.name)),
+        );
+        expect(legacy.ok).toBe(true);
+        expect(kTransport.calls[SAME.name]).toBe(before + 1);
+        expect(apply.mock.calls.at(-1)?.[1].operationDigest).toBe(operationDefinitionDigest(SAME));
+
+        apply.mockClear();
+        const orphan = await executor.execute(
+          await readRow(await seedApprovedRowWithoutDigest('k.never.published')),
+        );
+        expect(orphan.ok).toBe(false);
+        expect(orphan.reason).toMatch(/^operation_definition_unavailable: "k\.never\.published"/);
+        expect(apply).not.toHaveBeenCalled();
+      });
     });
   },
 );

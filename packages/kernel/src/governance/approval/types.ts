@@ -47,6 +47,11 @@ export interface ActionRequestRow {
    *  (self-approval not blocked) rather than retroactively locking out a historical row this fix
    *  never evaluated; every row `request-action.ts` writes going forward always sets it. */
   readonly requesterCanApprove: boolean | null;
+  /** Legacy K (migrations/governance/0019_action_request_operation_digest.sql): the digest of the
+   *  Operation definition this request was made against — what the executor tells the gate was
+   *  approved. `null` on a row written before that migration, or for an unpublished Operation
+   *  (I17) with no draft to name. */
+  readonly operationDigest: string | null;
 }
 
 export interface ActionRequestDbRow {
@@ -70,6 +75,7 @@ export interface ActionRequestDbRow {
   failed_at: Date | null;
   params: Record<string, unknown>;
   requester_can_approve: boolean | null;
+  operation_digest: string | null;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -94,6 +100,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     failedAt: row.failed_at,
     params: row.params,
     requesterCanApprove: row.requester_can_approve,
+    operationDigest: row.operation_digest,
   };
 }
 
@@ -101,7 +108,7 @@ export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
   'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, params, ' +
-  'requester_can_approve';
+  'requester_can_approve, operation_digest';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

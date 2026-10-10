@@ -34,11 +34,13 @@ import {
   OperationNotFoundError,
   SYSTEM_ACTOR_PLACEHOLDER,
   getGatekeeper,
+  getOperation,
   getOrCreateGatekeeperServicePrincipal,
   getPublishedOperation,
   mcpAutoApproveAllowed,
+  operationRecordDigest,
 } from '../../governance/gatekeepers/index.js';
-import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
+import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { reviewObserveParams } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
@@ -295,21 +297,24 @@ async function recordWorkerGateObservationSafely(
 }
 
 /** One observation, for both ways in (`observe_operation`, `request_action`'s observe branch),
- *  once the caller may observe. First the params' credential review (legacy 175,
+ *  once the caller may observe `published`. First the params' credential review (legacy 175,
  *  governance/redaction's `reviewObserveParams`): a literal credential (a JWT, a vendor key, a
  *  Bearer token, …) is refused before the Activity starts or the gate is called; any other
  *  suspected value — under a secret-named field, or query text that only mentions one — is
- *  recorded in the audit row (`auditPayload.credentialReview`). */
+ *  recorded in the audit row (`auditPayload.credentialReview`). The gate is told which definition
+ *  was published (legacy K) and refuses the call if it runs another. */
 async function runObserve(
   client: PoolClient,
   workspaceId: string,
   gatekeeper: GatekeeperRecord,
-  operationName: string,
+  published: OperationRecord,
   operationParams: unknown,
   onBehalfOf: string,
   workerRun?: WorkerRunRow,
 ): Promise<CapabilityHandlerResult> {
+  const operationName = published.name;
   const credentialReview = reviewObserveParams(gatekeeper.name, operationName, operationParams);
+  const operationDigest = operationRecordDigest(published);
   const activity = await startActivity(client, workspaceId, {
     kind: 'gatekeeper_observe',
     principalId: onBehalfOf,
@@ -321,6 +326,7 @@ async function runObserve(
       operation: operationName,
       params: operationParams,
       onBehalfOf,
+      operationDigest,
     });
     const written = await writeObservedFacts(
       client,
@@ -657,6 +663,11 @@ interface RunGovernedRequestArgs {
   /** S3.13: `onBehalfOf`'s own resolved `effective.autoApproveLow` — threaded straight through to
    *  `requestAction`/`evaluate()`'s field of the same name (see that module's own doc comment). */
   readonly principalAutoApproveLowEnabled: boolean;
+  /** Legacy K: the digest of the definition this request is made against — the published
+   *  Operation's, or for an unpublished one (I17) its current draft's; `undefined` when the
+   *  workspace holds no definition of it at all. Stored on the ActionRequest
+   *  (`operation_digest`) for the executor, and sent with the simulate call below. */
+  readonly operationDigest: string | undefined;
 }
 
 /** Best-effort — see `gate-observation.ts`'s own doc comment. Unlike the observe path
@@ -753,6 +764,7 @@ async function runGovernedRequest(
     idempotencyKey: args.idempotencyKey,
     parentWorkerRunId: args.parentWorkerRunId,
     principalAutoApproveLowEnabled: args.principalAutoApproveLowEnabled,
+    ...(args.operationDigest !== undefined ? { operationDigest: args.operationDigest } : {}),
   });
 
   switch (actionRequest.status) {
@@ -881,12 +893,24 @@ async function runGovernedRequest(
         // this on a replay is harmless — read-only, and its result is decoration only.
         let simulate: unknown;
         try {
-          const gate = await resolveGateTarget(client, workspaceId, args.gatekeeper);
-          simulate = await requireDeps().gatekeeperClient.simulate(gate, {
-            operation: args.operationName,
-            params: args.operationParams,
-            onBehalfOf: args.onBehalfOf,
-          });
+          // Legacy K: simulated against the definition the request was made against — the row's
+          // own digest, also on a replay. A row with none (I17 with no draft, or a row from before
+          // digests were recorded) has nothing to simulate against.
+          const operationDigest = actionRequest.operationDigest;
+          if (operationDigest === null) {
+            simulate = {
+              unavailable: true,
+              reason: `this request names no definition of "${args.operationName}" (it is not published and has no draft) — nothing to simulate against`,
+            };
+          } else {
+            const gate = await resolveGateTarget(client, workspaceId, args.gatekeeper);
+            simulate = await requireDeps().gatekeeperClient.simulate(gate, {
+              operation: args.operationName,
+              params: args.operationParams,
+              onBehalfOf: args.onBehalfOf,
+              operationDigest,
+            });
+          }
         } catch (err) {
           simulate = {
             unavailable: true,
@@ -1142,6 +1166,7 @@ export const observeOperationHandler: CapabilityHandler = async (
   });
   if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId); // narrowing only — refused above
+  if (!published) throw new OperationNotFoundError(gatekeeperId, operationName); // ditto
 
   // A Worker's own WorkerRun (by `sid`, the identity `request_action` and `report_task_result`
   // already trust) — `null` for a human caller or a Handle whose session is not a WorkerRun
@@ -1153,7 +1178,7 @@ export const observeOperationHandler: CapabilityHandler = async (
     client,
     workspaceId,
     gatekeeper,
-    operationName,
+    published,
     operationParams ?? {},
     onBehalfOf,
     workerRun ?? undefined,
@@ -1282,7 +1307,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       client,
       workspaceId,
       gatekeeper,
-      operationName,
+      published,
       resolvedParams,
       onBehalfOf,
       workerRun ?? undefined,
@@ -1323,8 +1348,14 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   );
 
   if (!published) {
-    // I17: draft/unknown Operation → unclassified, always require_approval, never execute.
+    // I17: draft/unknown Operation → unclassified, always require_approval, never auto-executed.
+    // Legacy K: the definition it is requested against is its current draft, when there is one —
+    // the gate then runs it after approval only if it still runs that definition. With no draft
+    // the workspace holds no definition, and the executor refuses the row (nothing to hold the
+    // gate to) unless the Operation has been published by then.
+    const draft = await getOperation(client, workspaceId, gatekeeperId, operationName);
     return runGovernedRequest(client, workspaceId, {
+      operationDigest: draft?.status === 'draft' ? operationRecordDigest(draft) : undefined,
       gatekeeper,
       operationName,
       operationParams: resolvedParams,
@@ -1353,6 +1384,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       idempotentHint: operation.idempotent_hint,
     });
   return runGovernedRequest(client, workspaceId, {
+    operationDigest: operationRecordDigest(published),
     gatekeeper,
     operationName,
     operationParams: resolvedParams,

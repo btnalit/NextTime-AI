@@ -6,7 +6,7 @@ import {
   PublishableStatusSchema,
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
-import { OperationGovernanceChangeWireSchema } from './platform.js';
+import { GateOwnedParamDraftWireSchema, OperationGovernanceChangeWireSchema } from './platform.js';
 
 /**
  * wire/connection: Gatekeeper / ConnectionRequest / Operation wire shapes
@@ -161,6 +161,8 @@ export const PublishManifestResultWireSchema = z
     gatekeeperId: z.string(),
     publishedOperationNames: z.array(z.string()),
     skippedDraftOperationNames: z.array(z.string()),
+    /** Legacy J: the gate's own drafts left unpublished because they declare a gate-owned param. */
+    gateOwnedParamDrafts: z.array(GateOwnedParamDraftWireSchema),
   })
   .strict();
 

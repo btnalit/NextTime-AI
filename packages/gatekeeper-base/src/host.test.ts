@@ -12,6 +12,7 @@ import { SignJWT, exportSPKI, generateKeyPair } from 'jose';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConnectedAccountStore } from './credentials/index.js';
 import { type GateHost, createGateHost } from './host.js';
+import { operationDefinitionDigest } from './operation-digest.js';
 
 /**
  * host.test: `createGateHost` (P-B2a) end-to-end against a fake kernel + fake MCP target, driven
@@ -21,6 +22,17 @@ import { type GateHost, createGateHost } from './host.js';
 
 const KERNEL_URL = 'http://kernel.test';
 const GATE_TOKEN = 'gate-host-test-gate-token-0123456789abcdef0123456789';
+
+/** Legacy K: the digest a kernel sends for `name` — computed from what the instance describes. */
+async function announcedDigest(host: GateHost, gateId: string, name: string): Promise<string> {
+  const described = await host.app.inject({
+    method: 'GET',
+    url: `/i/${gateId}/gate/describe_operations`,
+    headers: { authorization: `Bearer ${GATE_TOKEN}` },
+  });
+  const operations = described.json().result.operations as { name: string }[];
+  return operationDefinitionDigest(operations.find((op) => op.name === name));
+}
 const INTERNAL_TOKEN = 'gate-host-test-internal-token-0123456789abcdef01234567';
 
 interface McpTool {
@@ -354,7 +366,11 @@ describe('createGateHost (P-B2a)', () => {
       method: 'POST',
       url: '/i/demo-mcp/gate/observe',
       headers: { authorization: `Bearer ${GATE_TOKEN}` },
-      payload: { operation: 'read_tool', params: {} },
+      payload: {
+        operation: 'read_tool',
+        params: {},
+        operationDigest: await announcedDigest(host, 'demo-mcp', 'read_tool'),
+      },
     });
     expect(observed.statusCode).toBe(200);
 
@@ -572,7 +588,16 @@ describe('createGateHost (P-B2a)', () => {
         method: 'POST',
         url: '/i/demo-mcp/gate/observe',
         headers: { authorization: `Bearer ${GATE_TOKEN}` },
-        payload: { operation: 'read_tool', params: {} },
+        payload: {
+          operation: 'read_tool',
+          params: {},
+          // Legacy K: the digest of the definition the host announced — what the kernel approves.
+          operationDigest: operationDefinitionDigest(
+            (state.announcements[0]?.body.operations as { name: string }[]).find(
+              (op) => op.name === 'read_tool',
+            ),
+          ),
+        },
       });
       expect(observed.statusCode).toBe(200);
 

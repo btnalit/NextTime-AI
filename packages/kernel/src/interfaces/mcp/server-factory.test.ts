@@ -5,6 +5,7 @@ import type { HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
 import { buildToolCatalog } from './tool-projection.js';
@@ -124,6 +125,19 @@ describe('mapCapabilityErrorToToolResult', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^credentials_in_observe_params: inventory\.list_items: /);
     expect(text).toMatch(/Do not pass credentials/);
+  });
+
+  it('puts a gate answer’s code in front, so a refusal reads as one (review of #532)', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new GatekeeperClientError('param "X-Scope-OrgID" is set by the gate', {
+        code: 'operation_refused',
+        status: 403,
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: 'text', text: 'operation_refused: param "X-Scope-OrgID" is set by the gate' },
+    ]);
   });
 
   it('stringifies a non-Error throw rather than crashing', () => {

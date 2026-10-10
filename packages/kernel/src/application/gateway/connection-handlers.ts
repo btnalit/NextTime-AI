@@ -1,4 +1,10 @@
-import { McpTransport, importMcpTools, importOpenApi } from '@nexttime/gatekeeper-base';
+import {
+  McpTransport,
+  importMcpTools,
+  importOpenApi,
+  isRedirectStatus,
+  redirectRefusalMessage,
+} from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
 import type { Operation, PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -139,7 +145,10 @@ function outboundTargetGuard(current: ConnectionHandlerDeps): OutboundTargetGuar
 
 export class ConnectionManifestFetchError extends Error {
   constructor(manifestSource: string, options?: { cause?: unknown }) {
-    super(`create_connection: failed to fetch manifestSource "${manifestSource}"`, options);
+    // The cause says why — a status, a redirect and where it pointed, a timeout — which the owner
+    // needs to fix the URL; it used to be dropped.
+    const cause = options?.cause instanceof Error ? `: ${options.cause.message}` : '';
+    super(`create_connection: failed to fetch manifestSource "${manifestSource}"${cause}`, options);
     this.name = 'ConnectionManifestFetchError';
   }
 }
@@ -325,6 +334,15 @@ async function resolveManifestOperations(
       const response = await ownerFetch(manifestSource, {
         signal: AbortSignal.timeout(MANIFEST_FETCH_TIMEOUT_MS),
       });
+      if (isRedirectStatus(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error(
+          redirectRefusalMessage('GET', response, manifestSource, {
+            follower: 'The kernel does not follow redirects for an owner-supplied URL',
+            fix: 'set manifestSource to the final address',
+          }),
+        );
+      }
       if (!response.ok) {
         throw new Error(`responded ${response.status}`);
       }

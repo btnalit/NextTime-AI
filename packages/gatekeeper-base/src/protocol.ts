@@ -22,6 +22,12 @@ export type ObservedFactCandidate = z.infer<typeof ObservedFactCandidateSchema>;
 
 export const OnBehalfOfSchema = z.string().min(1).optional();
 
+/** Legacy K: the digest of the Operation definition the kernel approved (`operation-digest.ts`).
+ *  Optional in the shape, so a gate can name a call that left it out: `GatekeeperBase` refuses
+ *  every observe / simulate / apply / revert without one (409 `operation_definition_mismatch`).
+ *  A gate built on an older `gatekeeper-base` drops the field and checks nothing. */
+export const OperationDigestSchema = z.string().min(1).optional();
+
 // -------------------------------------------------------------------------------------------
 // describe_operations
 // -------------------------------------------------------------------------------------------
@@ -42,6 +48,7 @@ export const ObserveRequestSchema = z.object({
   operation: z.string().min(1),
   params: z.unknown().optional(),
   onBehalfOf: OnBehalfOfSchema,
+  operationDigest: OperationDigestSchema,
 });
 export type ObserveRequest = z.infer<typeof ObserveRequestSchema>;
 
@@ -60,6 +67,7 @@ export const SimulateRequestSchema = z.object({
   operation: z.string().min(1),
   params: z.unknown().optional(),
   onBehalfOf: OnBehalfOfSchema,
+  operationDigest: OperationDigestSchema,
 });
 export type SimulateRequest = z.infer<typeof SimulateRequestSchema>;
 
@@ -87,6 +95,7 @@ export const ApplyRequestSchema = z.object({
   params: z.unknown().optional(),
   onBehalfOf: OnBehalfOfSchema,
   actionRequestId: z.string().min(1),
+  operationDigest: OperationDigestSchema,
 });
 export type ApplyRequest = z.infer<typeof ApplyRequestSchema>;
 
@@ -110,6 +119,7 @@ export const RevertRequestSchema = z.object({
   /** The `actionRequestId` of the `apply` call being reverted, when known — same rename as
    *  `ApplyRequestSchema.actionRequestId` above, for the same reason. */
   actionRequestId: z.string().min(1).optional(),
+  operationDigest: OperationDigestSchema,
 });
 export type RevertRequest = z.infer<typeof RevertRequestSchema>;
 

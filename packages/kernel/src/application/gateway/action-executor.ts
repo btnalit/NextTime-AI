@@ -17,7 +17,12 @@ import {
   markActionRequestFailed,
   recordActionRequestReplayAttempt,
 } from '../../governance/approval/index.js';
-import { getGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDefinitionUnreadableError,
+  getGatekeeper,
+  getPublishedOperation,
+  operationRecordDigest,
+} from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import { resolveGateTarget } from './gate-target.js';
@@ -150,12 +155,46 @@ export type GatekeeperActionExecutor = ActionExecutor & ActionReplayer;
 
 /** Gate error codes (`@nexttime/gatekeeper-base` `server.ts`) that settle an `apply` for its key on
  *  a replay (R-48): the call's own stored failure (502 `transport_error`, R-51), or a refusal that
- *  ran nothing and freed the key (403 `operation_refused`, 424 `credential_unavailable`). */
+ *  ran nothing and freed the key (403 `operation_refused`, 424 `credential_unavailable`, 409
+ *  `operation_definition_mismatch` — legacy K: the gate answers a key that holds a result before
+ *  it compares definitions, so this one means the key holds none). */
 const SETTLED_FAILURE_CODES = new Set([
   'transport_error',
   'operation_refused',
   'credential_unavailable',
+  'operation_definition_mismatch',
 ]);
+
+/** Legacy K: the digest the gate is told was approved for `actionRequest` — the one recorded when
+ *  the request was made (migrations/governance/0019). A row that names none (made before that
+ *  migration, or for an unpublished Operation with no draft, I17) falls back to the Operation
+ *  published now, which is what it would have run before, now checked by the gate. `refusal`:
+ *  there is nothing to send, or the stored definition does not parse. */
+async function approvedOperationDigest(
+  client: PoolClient,
+  actionRequest: ActionRequestRow,
+): Promise<{ readonly digest: string } | { readonly refusal: string }> {
+  if (actionRequest.operationDigest !== null) return { digest: actionRequest.operationDigest };
+  const published = await getPublishedOperation(
+    client,
+    actionRequest.workspaceId,
+    actionRequest.gatekeeperId,
+    actionRequest.actionKind,
+  );
+  if (!published) {
+    return {
+      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" was requested while it was not published and had no draft, and it is still not published — this workspace holds no definition to hold the gate to, so nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
+    };
+  }
+  try {
+    return { digest: operationRecordDigest(published) };
+  } catch (err) {
+    if (err instanceof OperationDefinitionUnreadableError) {
+      return { refusal: `operation_definition_unavailable: ${err.message}` };
+    }
+    throw err;
+  }
+}
 
 type ApplyErrorVerdict =
   /** The gate gave no verdict on this key: the call timed out, or the gate answered 409
@@ -223,18 +262,19 @@ export function createGatekeeperActionExecutor(
     };
   }
 
-  function applyInput(actionRequest: ActionRequestRow) {
+  function applyInput(actionRequest: ActionRequestRow, operationDigest: string | undefined) {
     return {
       operation: actionRequest.actionKind,
       params: actionRequest.params,
       onBehalfOf: actionRequest.onBehalfOf,
       actionRequestId: actionRequest.id,
+      operationDigest,
     };
   }
 
   return {
     async execute(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const { gate, disabled } = await deps.withTransaction(
+      const { gate, disabled, approved } = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
         async (client) => {
@@ -255,6 +295,7 @@ export function createGatekeeperActionExecutor(
               ? await resolveGateTarget(client, actionRequest.workspaceId, record)
               : null,
             disabled: operationPlatformStatus(link, actionRequest.actionKind).disabled,
+            approved: await approvedOperationDigest(client, actionRequest),
           };
         },
       );
@@ -270,10 +311,14 @@ export function createGatekeeperActionExecutor(
           reason: `operation_disabled: "${actionRequest.actionKind}" was disabled by the platform after this request was made`,
         };
       }
+      if ('refusal' in approved) return { ok: false, reason: approved.refusal };
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(gate, applyInput(actionRequest));
+        applyResult = await deps.gatekeeperClient.apply(
+          gate,
+          applyInput(actionRequest, approved.digest),
+        );
       } catch (err) {
         const verdict = applyErrorVerdict(err);
         if (verdict.kind === 'in_doubt') {
@@ -309,7 +354,7 @@ export function createGatekeeperActionExecutor(
      * free, so this replay runs the effect fresh — `apply` is the only lookup the gate protocol has.
      */
     async replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const gate = await deps.withTransaction(
+      const { gate, approved } = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
         async (client) => {
@@ -318,7 +363,12 @@ export function createGatekeeperActionExecutor(
             actionRequest.workspaceId,
             actionRequest.gatekeeperId,
           );
-          return record ? resolveGateTarget(client, actionRequest.workspaceId, record) : null;
+          return {
+            gate: record
+              ? await resolveGateTarget(client, actionRequest.workspaceId, record)
+              : null,
+            approved: await approvedOperationDigest(client, actionRequest),
+          };
         },
       );
       if (!gate) {
@@ -329,9 +379,16 @@ export function createGatekeeperActionExecutor(
         };
       }
 
+      // Legacy K: unlike `execute`, no refusal here — the first call may have run, and the gate
+      // answers a key that holds a result whatever digest comes with it. With none to send, it
+      // answers only from its store and refuses (settles) a key that holds nothing.
+      const operationDigest = 'digest' in approved ? approved.digest : undefined;
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(gate, applyInput(actionRequest));
+        applyResult = await deps.gatekeeperClient.apply(
+          gate,
+          applyInput(actionRequest, operationDigest),
+        );
       } catch (err) {
         const verdict = applyErrorVerdict(err);
         if (verdict.kind === 'outcome_unknown') {

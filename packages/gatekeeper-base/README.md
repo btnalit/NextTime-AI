@@ -13,13 +13,22 @@ An HTTP server (`createGatekeeperServer`, Fastify) exposes six operations under 
 |---|---|---|---|
 | GET | `/gate/describe_operations` | — | Returns the whole manifest. |
 | GET | `/gate/health` | — | `{status: 'ok'\|'degraded'\|'down'}`. |
-| POST | `/gate/observe` | `{operation, params, onBehalfOf?}` | Only `mode: 'observe'` Operations. |
-| POST | `/gate/simulate` | `{operation, params, onBehalfOf?}` | Dry-run description, never executes. |
-| POST | `/gate/apply` | `{operation, params, onBehalfOf?, idempotencyKey}` | Only `mode: 'execute'`; idempotent by `idempotencyKey`. |
-| POST | `/gate/revert` | `{operation, params, onBehalfOf?, idempotencyKey?}` | Only `reversibility: true` Operations whose transport implements `revert`. |
+| POST | `/gate/observe` | `{operation, params, onBehalfOf?, operationDigest}` | Only `mode: 'observe'` Operations. |
+| POST | `/gate/simulate` | `{operation, params, onBehalfOf?, operationDigest}` | Dry-run description, never executes. |
+| POST | `/gate/apply` | `{operation, params, onBehalfOf?, idempotencyKey, operationDigest}` | Only `mode: 'execute'`; idempotent by `idempotencyKey`. |
+| POST | `/gate/revert` | `{operation, params, onBehalfOf?, idempotencyKey?, operationDigest}` | Only `reversibility: true` Operations whose transport implements `revert`. |
 
 Every response is `{ok: true, result}` or `{ok: false, error: {code, message}}` — the kernel's
 `adapters/gatekeeper-client` (`packages/kernel/src/adapters/gatekeeper-client`) parses this shape.
+
+`operationDigest` (legacy K) is the digest of the definition the kernel approved
+(`operation-digest.ts`: `sha256:` over the canonical JSON of `name`, `binding`, `params_schema`,
+`result_mapping`, `mode`, `reversibility`, plus `blast_radius` for `ssh`). The gate compares it with
+the definition it runs and refuses a missing or different one with 409
+`operation_definition_mismatch` before the transport or the credential is touched — so what was
+approved is what runs. The one exception is an `apply` whose key already holds a stored answer:
+that answer is returned, because the call did run. The schema marks the field optional only so a
+missing one gets that readable 409 rather than a 400.
 
 ## Auth
 

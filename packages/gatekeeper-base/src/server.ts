@@ -11,6 +11,7 @@ import {
   ConnectedAccountStoreNotConfiguredError,
   CredentialResolutionError,
   IdempotencyConflictError,
+  OperationDefinitionMismatchError,
   OperationModeMismatchError,
   OperationNotFoundError,
   OperationRefusedError,
@@ -82,6 +83,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
   }
   if (err instanceof ApplyOutcomeUnknownError) {
     return { status: 409, code: 'apply_outcome_unknown', message: err.message };
+  }
+  if (err instanceof OperationDefinitionMismatchError) {
+    return { status: 409, code: 'operation_definition_mismatch', message: err.message };
   }
   if (err instanceof OperationRefusedError) {
     return { status: 403, code: 'operation_refused', message: err.message };
@@ -270,6 +274,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
     try {
       const result = await ctx.gate.observe(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
+        operationDigest: parsed.data.operationDigest ?? null,
       });
       return ok(reply, { data: result.data, observedFacts: result.observedFacts });
     } catch (err) {
@@ -288,6 +293,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
     try {
       const result = await ctx.gate.simulate(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
+        operationDigest: parsed.data.operationDigest ?? null,
       });
       return ok(reply, result);
     } catch (err) {
@@ -308,7 +314,10 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
         parsed.data.operation,
         parsed.data.params,
         parsed.data.actionRequestId,
-        { onBehalfOf: parsed.data.onBehalfOf },
+        {
+          onBehalfOf: parsed.data.onBehalfOf,
+          operationDigest: parsed.data.operationDigest ?? null,
+        },
       );
       return ok(reply, result);
     } catch (err) {
@@ -327,6 +336,7 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
     try {
       const result = await ctx.gate.revert(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
+        operationDigest: parsed.data.operationDigest ?? null,
       });
       return ok(reply, result);
     } catch (err) {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
@@ -14,7 +15,10 @@ import {
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
-import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationDeclaresGateOwnedParamsError,
+  OperationIdentityConflictError,
+} from '../../governance/gatekeepers/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
@@ -26,6 +30,26 @@ import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js
  * exercised indirectly through the existing HTTP-side unit tests and the WS integration tests, not
  * duplicated here.
  */
+
+describe('mapDispatchError — gate refusals (review of #532)', () => {
+  it.each([
+    ['operation_refused', 403, WS_ERROR_CODES.FORBIDDEN],
+    ['invalid_params', 400, WS_ERROR_CODES.INVALID_PARAMS],
+    ['operation_not_found', 404, WS_ERROR_CODES.NOT_FOUND],
+    ['operation_definition_mismatch', 409, WS_ERROR_CODES.ILLEGAL_TRANSITION],
+    ['credential_unavailable', 424, WS_ERROR_CODES.UPSTREAM_ERROR],
+    ['transport_error', 502, WS_ERROR_CODES.UPSTREAM_ERROR],
+    ['operation_refused', 401, WS_ERROR_CODES.UPSTREAM_ERROR],
+  ])(
+    'maps the gate answer %s (%i) to its own code, the gate code first in the message',
+    (code, status, wsCode) => {
+      expect(mapDispatchError(new GatekeeperClientError('why', { code, status }))).toEqual({
+        code: wsCode,
+        message: `${code}: why`,
+      });
+    },
+  );
+});
 
 describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P0)', () => {
   it('maps to ILLEGAL_TRANSITION (-32011), the same state-conflict code as IllegalTransition', () => {
@@ -51,6 +75,16 @@ describe('mapDispatchError — legacy 175 observe params', () => {
       count: 1,
       paths: ['q'],
     });
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('OperationDeclaresGateOwnedParamsError (legacy J) maps to INVALID_PARAMS with its message', () => {
+    const err = new OperationDeclaresGateOwnedParamsError('gk-1/stock.list@1', [
+      { param: 'Cookie', location: 'header' },
+    ]);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

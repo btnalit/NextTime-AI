@@ -4,6 +4,7 @@ import {
   GateOwnedParamRefusedError,
   TransportInvokeError,
 } from '../errors.js';
+import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
 /**
@@ -144,17 +145,19 @@ function paramLocation(paramsSchema: Operation['params_schema'], name: string): 
   const prop = properties?.[name];
   if (prop && typeof prop === 'object') {
     const loc = (prop as Record<string, unknown>)['x-in'];
-    if (typeof loc === 'string') return loc;
+    // Compared without case (review of #532, item 3): a hand-written `x-in: 'Header'` used to
+    // miss every branch below and go to the query string, header guard and all.
+    if (typeof loc === 'string') return loc.trim().toLowerCase();
   }
   return undefined;
 }
 
 /**
  * Request headers the gate owns: they say who is calling, on whose account, or where and how the
- * call goes — so only the gate's own configuration sets them, never a caller's param. By exact
- * name:
+ * call goes — so only the gate's own configuration sets them, never a caller's param. Who is
+ * calling and on whose account, by exact name:
  */
-const GATE_OWNED_HEADERS = new Set([
+const IDENTITY_HEADERS = new Set([
   // Who is calling.
   'authorization',
   'proxy-authorization',
@@ -173,7 +176,18 @@ const GATE_OWNED_HEADERS = new Set([
   'x-vault-namespace',
   'x-tenant-id',
   'x-on-behalf-of',
-  // Where and how the call goes, past the binding's own host, path and method.
+]);
+/** …and by pattern: `X-Auth-Token` / `X-Auth-Key` / `X-Auth-Email` and oauth2-proxy's
+ *  `X-Auth-Request-*`, Grafana's `X-WEBAUTH-*`, Kubernetes' `Impersonate-User` / `-Group`, a
+ *  proxy's `X-Forwarded-User` / `-Email` / `-Groups`, Azure's `X-MS-CLIENT-PRINCIPAL*`, Hasura's
+ *  `X-Hasura-Role` / `-User-Id` (review of #532, item 5), and any name with the word `jwt`,
+ *  `assertion` or `run-as` in it — `x-jwt-assertion`, `X-Goog-IAP-JWT-Assertion`, Elasticsearch's
+ *  `es-security-runas-user`. */
+const IDENTITY_HEADER_PATTERN =
+  /^(?:x-auth[-_]|x-webauth[-_]|(?:x-)?impersonate[-_]|x-forwarded-(?:user|email|preferred-username|groups?)(?:$|[-_])|x-ms-client-principal|x-hasura-)|(?:^|[-_])(?:jwt|assertion|run[-_]?as)(?:$|[-_])/;
+/** Where and how the call goes, past the binding's own host, path and method — headers only: as
+ *  a query parameter `host=web-1` is an ordinary filter. By exact name… */
+const ROUTING_HEADERS = new Set([
   'host',
   'forwarded',
   'x-original-url',
@@ -181,17 +195,13 @@ const GATE_OWNED_HEADERS = new Set([
   'x-rewrite-url',
   'x-method-override',
 ]);
-/** …by prefix: `X-Auth-Token` / `X-Auth-Key` / `X-Auth-Email` and oauth2-proxy's
- *  `X-Auth-Request-*`, Grafana's `X-WEBAUTH-*`, Kubernetes' `Impersonate-User` / `-Group`, a
- *  proxy's `X-Forwarded-User` / `-Email` / `-Host` / `-For`, Azure's `X-MS-CLIENT-PRINCIPAL*`,
- *  `X-HTTP-Method-Override`… */
-const GATE_OWNED_HEADER_PREFIX =
-  /^(?:x-auth[-_]|x-webauth[-_]|(?:x-)?impersonate[-_]|x-forwarded-|x-ms-client-principal|x-http-method)/;
+/** …and by prefix: a proxy's `X-Forwarded-Host` / `-For` / `-Proto`, `X-HTTP-Method-Override`. */
+const ROUTING_HEADER_PREFIX = /^(?:x-forwarded-|x-http-method)/;
 /** …or a name whose last word names a credential: `X-API-Key`, `Api-Key`, `apikey`,
  *  `PRIVATE-TOKEN`, `X-Amz-Security-Token`, `Ocp-Apim-Subscription-Key`, `DD-APPLICATION-KEY`,
- *  `X-Client-Secret`. */
+ *  `x-functions-key` (Azure Functions), `X-Client-Secret`. */
 const CREDENTIAL_NAME =
-  /(?:token|apikey|(?:^|[-_])(?:api|access|secret|private|subscription|auth|session|security|master|client|license|app|application|consumer|developer|service)[-_]?key|secret|password|passwd|passphrase|credentials?|(?:^|[-_])auth)$/;
+  /(?:token|apikey|(?:^|[-_])(?:api|access|secret|private|subscription|auth|session|security|master|client|license|app|application|consumer|developer|service|functions?)[-_]?key|secret|password|passwd|passphrase|credentials?|(?:^|[-_])auth)$/;
 /** A name ending in `token` that is a pagination cursor or a retry key, not who is calling — the
  *  word before `token` says so: `X-Page-Token`, `pageToken`, `startPageToken`, `NextToken`,
  *  `PaginationToken`, `continuation-token`, `x-ms-continuationtoken`, `syncToken`, Microsoft's
@@ -216,10 +226,16 @@ function namesACredential(name: string): boolean {
   );
 }
 
+/** Who is calling or on whose account (`IDENTITY_HEADERS`, `IDENTITY_HEADER_PATTERN`), as a
+ *  header or a query parameter. */
+function namesAnIdentity(lower: string): boolean {
+  return IDENTITY_HEADERS.has(lower) || IDENTITY_HEADER_PATTERN.test(lower);
+}
+
 /**
- * Whether the request header `name` is one the gate owns (`GATE_OWNED_HEADERS` and the patterns
- * after it), or one its own credential injection sets (`injected`, lower-case). Case-insensitive,
- * as header names are. A denylist: a header it does not name (`X-Page-Token`, `Idempotency-Key`,
+ * Whether the request header `name` is one the gate owns (`IDENTITY_HEADERS`, `ROUTING_HEADERS`
+ * and the patterns after them), or one its own credential injection sets (`injected`,
+ * lower-case). Case-insensitive, as header names are. A denylist: a header it does not name (`X-Page-Token`, `Idempotency-Key`,
  * `X-Request-Id`) is sent as declared.
  */
 export function isGateOwnedHeader(
@@ -228,34 +244,129 @@ export function isGateOwnedHeader(
 ): boolean {
   const lower = name.trim().toLowerCase();
   return (
-    GATE_OWNED_HEADERS.has(lower) ||
+    namesAnIdentity(lower) ||
+    ROUTING_HEADERS.has(lower) ||
+    ROUTING_HEADER_PREFIX.test(lower) ||
     injected.has(lower) ||
-    GATE_OWNED_HEADER_PREFIX.test(lower) ||
     namesACredential(name)
   );
 }
 
-/** Query parameters that carry who is calling, by exact name: GitLab's `sudo`, a pre-signed URL's
- *  `sig` / `signature` (Azure SAS and others). */
-const GATE_OWNED_QUERY_PARAMS = new Set(['sudo', 'sig', 'signature']);
+/** Query parameters that carry who is calling, by exact name: a pre-signed URL's `sig` /
+ *  `signature` (Azure SAS and others). */
+const GATE_OWNED_QUERY_PARAMS = new Set(['sig', 'signature']);
 
 /**
  * Whether the query parameter `name` carries who is calling: one whose last word names a
  * credential, as for a header (`access_token`, `api_key`, `apikey`, `auth_token`,
  * `client_secret`, `password` — `page_token`, `next_token` stay), a pre-signed URL's
- * (`X-Amz-*`, `X-Goog-*`, `sig`, `signature`), or `sudo`. A bare `key` stays: it is as often a
- * lookup key (a KV store's, an object's) as Google's API key.
+ * (`X-Amz-*`, `X-Goog-*`, `sig`, `signature`), or a header name that says who is calling or on
+ * whose account (`sudo`, `X-Scope-OrgID`, `Authorization`, `run_as`, `jwt` — review of #532,
+ * item 3: an undeclared GET param goes to the query string, so a header param a newer import
+ * dropped, still passed by a caller, used to reach the target as `?X-Scope-OrgID=…`). Routing
+ * header names stay (`host=web-1` is an ordinary filter), and so does a bare `key`: it is as often
+ * a lookup key (a KV store's, an object's) as Google's API key.
  */
 export function isGateOwnedQueryParam(name: string): boolean {
   const lower = name.trim().toLowerCase();
   return (
-    GATE_OWNED_QUERY_PARAMS.has(lower) || /^x-(?:amz|goog)-/.test(lower) || namesACredential(name)
+    GATE_OWNED_QUERY_PARAMS.has(lower) ||
+    /^x-(?:amz|goog)-/.test(lower) ||
+    namesAnIdentity(lower) ||
+    namesACredential(name)
   );
 }
 
 /** The header names `credentialHeaders` can set, whatever the gate's credential is: a caller's
  *  param never takes one of them, even on a gate configured with no credential at all. */
 const INJECTED_HEADER_NAMES = ['authorization', 'x-api-key'] as const;
+
+/** Where a param would set something only the gate's own configuration may (`GateOwnedParamRefusedError`). */
+export type GateOwnedParamLocation = 'header' | 'query' | 'cookie' | 'binding';
+
+/**
+ * The one routing rule both `HttpTransport.request` (a call's params, refused before anything is
+ * sent) and `gateOwnedParamsOf` (a definition's declared params, refused at publish) use: where
+ * param `name`, declared at `location` (its `x-in`, lower-case) and not consumed by the path
+ * template, would land that the gate owns — `null` when it lands somewhere a caller may set.
+ * Every param of a GET or HEAD that is not a header or a cookie goes to the query string.
+ */
+function gateOwnedLocation(
+  name: string,
+  location: string | undefined,
+  method: string,
+  fixedQuery: ReadonlySet<string>,
+  injected: ReadonlySet<string>,
+): GateOwnedParamLocation | null {
+  if (location === 'header') return isGateOwnedHeader(name, injected) ? 'header' : null;
+  if (location === 'cookie') return 'cookie';
+  if (location === 'query' || method === 'GET' || method === 'HEAD') {
+    // Compared without case: many servers (ASP.NET, so Azure) read `API-Version` as `api-version`.
+    if (fixedQuery.has(name.toLowerCase())) return 'binding';
+    if (isGateOwnedQueryParam(name)) return 'query';
+  }
+  return null;
+}
+
+/** The lower-cased query parameter names a binding path fixes (`/items?api-version=2024-01-01`). */
+function fixedQueryOf(searchParams: URLSearchParams): Set<string> {
+  return new Set([...searchParams.keys()].map((key) => key.toLowerCase()));
+}
+
+/** The param names a binding path template consumes (`{sku}`), as `renderPath` substitutes them. */
+function templateParams(path: string): Set<string> {
+  return new Set([...path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1] ?? ''));
+}
+
+/** One declared param of an Operation that the gate would refuse on every call that passes it. */
+export interface GateOwnedParam {
+  readonly param: string;
+  readonly location: GateOwnedParamLocation;
+}
+
+/**
+ * Legacy J (review of #532): the params an `http` Operation's `params_schema` declares that
+ * `HttpTransport.request` would refuse whenever a caller passes them — a gate-owned header, a
+ * credential in the query string, a cookie, or a query parameter the binding fixes. Such a
+ * definition offers the agent a param the gate never sends, and a `required` one makes the
+ * Operation impossible to call; the kernel refuses to publish it (`publishOperation`). The same
+ * rule as the call (`gateOwnedLocation`), minus what only a call knows: the header names a gate's
+ * configured credential adds beyond `Authorization` / `X-API-Key`, which the call still refuses.
+ * Empty for any other binding kind, and for a definition that is not an object with properties.
+ */
+export function gateOwnedParamsOf(operation: unknown): GateOwnedParam[] {
+  if (!operation || typeof operation !== 'object') return [];
+  const { binding, params_schema: paramsSchema } = operation as {
+    binding?: { kind?: unknown; method?: unknown; path?: unknown };
+    params_schema?: unknown;
+  };
+  if (binding?.kind !== 'http' || typeof binding.path !== 'string') return [];
+  if (!paramsSchema || typeof paramsSchema !== 'object') return [];
+  const properties = (paramsSchema as { properties?: unknown }).properties;
+  if (!properties || typeof properties !== 'object') return [];
+  const path = binding.path;
+  const method = typeof binding.method === 'string' ? binding.method.toUpperCase() : '';
+  const queryAt = path.indexOf('?');
+  const fixedQuery = fixedQueryOf(
+    new URLSearchParams(queryAt === -1 ? '' : path.slice(queryAt + 1)),
+  );
+  const consumed = templateParams(path);
+  const injected = new Set<string>(INJECTED_HEADER_NAMES);
+  const found: GateOwnedParam[] = [];
+  for (const name of Object.keys(properties)) {
+    if (consumed.has(name)) continue;
+    const location = gateOwnedLocation(
+      name,
+      paramLocation(paramsSchema as Operation['params_schema'], name),
+      method,
+      fixedQuery,
+      injected,
+    );
+    if (location) found.push({ param: name, location });
+  }
+  // By name, so the report is the same however the definition was stored (jsonb reorders keys).
+  return found.sort((a, b) => (a.param < b.param ? -1 : a.param > b.param ? 1 : 0));
+}
 
 function credentialHeaders(credential: unknown): Record<string, string> {
   if (!credential || typeof credential !== 'object') return {};
@@ -319,31 +430,18 @@ export class HttpTransport implements Transport {
       ...INJECTED_HEADER_NAMES,
       ...Object.keys(credentialHeaders(ctx.credential)).map((name) => name.toLowerCase()),
     ]);
-    // Compared without case: many servers (ASP.NET, so Azure) read `API-Version` as `api-version`.
-    const fixedQuery = new Set([...url.searchParams.keys()].map((key) => key.toLowerCase()));
-    const toQuery = (key: string, value: unknown): void => {
-      if (fixedQuery.has(key.toLowerCase())) {
-        throw new GateOwnedParamRefusedError(operation.name, key, 'binding');
-      }
-      if (isGateOwnedQueryParam(key)) {
-        throw new GateOwnedParamRefusedError(operation.name, key, 'query');
-      }
-      url.searchParams.set(key, String(value));
-    };
+    const fixedQuery = fixedQueryOf(url.searchParams);
     for (const [key, value] of Object.entries(bag)) {
       if (used.has(key)) continue;
       const location = paramLocation(operation.params_schema, key);
+      const refused = gateOwnedLocation(key, location, method, fixedQuery, injected);
+      if (refused) throw new GateOwnedParamRefusedError(operation.name, key, refused);
       if (location === 'header') {
-        if (isGateOwnedHeader(key, injected)) {
-          throw new GateOwnedParamRefusedError(operation.name, key, 'header');
-        }
         headerParams[key] = String(value);
         continue;
       }
-      if (location === 'cookie')
-        throw new GateOwnedParamRefusedError(operation.name, key, 'cookie');
       if (location === 'query') {
-        toQuery(key, value);
+        url.searchParams.set(key, String(value));
         continue;
       }
       remaining[key] = value;
@@ -353,7 +451,8 @@ export class HttpTransport implements Transport {
     if (method === 'GET' || method === 'HEAD') {
       // Every other param of a GET goes to the query string too — undeclared ones included when
       // the Operation's `params_schema` is empty (a not-yet-refined import accepts anything).
-      for (const [key, value] of Object.entries(remaining)) toQuery(key, value);
+      for (const [key, value] of Object.entries(remaining))
+        url.searchParams.set(key, String(value));
     } else if (Object.keys(remaining).length > 0) {
       body = JSON.stringify(remaining);
     }
@@ -385,10 +484,11 @@ export class HttpTransport implements Transport {
         signal: controller.signal,
         // Review lane 5, P2-2: 'follow' (the fetch default) resends every header — including the
         // credential header just above — to whatever host a 3xx response names, cross-origin or
-        // not. 'error' makes a redirect response a hard failure instead of silently leaking the
-        // credential to an unintended target.
-        redirect: 'error',
+        // not. A redirect is a failure instead of silently leaking the credential to an
+        // unintended target, and it says where it pointed (`redirect.ts`).
+        redirect: NO_REDIRECTS,
       });
+      await refuseRedirect(`http transport: ${method} ${url.pathname}`, response, url);
       const text = await response.text();
       const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
       if (!response.ok) {

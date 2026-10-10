@@ -32,7 +32,11 @@ base.ts`）在**门自己的进程里**按 `Operation.name` 建一个 Map（`ope
 `create_connection{manifestSource}` 导入的是**图里的 Operation 草稿**（`find_operations`/审核向导
 看到的那份），两者是**两份独立的拷贝**——只有 `manifestSource` 省略、走"直接问门要 `describe_
 operations`"这条路径时，两份才**保证**是同一份（因为图里导入的就是门自己吐出来的那份）。见 §6 的
-详细说明与 §9 的已知陷阱——这是本文档写作时在代码里核实到的一个真实、容易踩的坑。
+详细说明与 §9 的已知陷阱——这是本文档写作时在代码里核实到的一个真实、容易踩的坑。两份不一致时
+门**拒绝调用**（遗留 K）：内核每次调用都带上它批准的那份定义的摘要（`operationDigest`），门与自己
+运行的定义比对，不符即 409 `operation_definition_mismatch`、什么也不执行——以前是静默按门的那份执行。
+比对的字段是 `name`、`binding`、`params_schema`、`result_mapping`、`mode`、`reversibility`（`ssh` 另含
+`blast_radius`）；`description` 与 `auto_approvable` 等只影响内核侧治理的字段不计入。处理见 §12。
 
 **三条互补的注册路径，不是二选一淘汰关系。** ①主机操作员的 CLI 路径（`bootstrap.js
 register-gatekeeper`，不经过任何用户/权限模型，见 `docs/runbooks/host-gatekeepers.md` §5）；
@@ -487,4 +491,6 @@ delete from workspace_gate_links where workspace_id = '<workspace-id>' and gate_
 | 门服务一直重启循环，日志里有 `NODE_TLS_REJECT_UNAUTHORIZED` 相关警告后进程退出 | `fix/gate-protocol-hardening` 后门在启动阶段检测到这个变量直接拒绝启动 | 按 `docs/runbooks/host-gatekeepers.md` §11.1 用 `GATE_TLS_CA_FILE`/`GATE_TLS_SERVERNAME`，不要关闭证书校验 |
 | `create_connection` 一直 `manifest_fetch_failed`/`gatekeeper_timeout` | `endpoint`/`manifestSource` 不可达，或门还没起（`docker compose ps gatekeeper-<system>`） | 先按 §4 步骤 4 单独验证门自己的 `/gate/health`/`describe_operations`，确认门本身没问题再重试 `create_connection` |
 | 想设置"默认要审、owner 可以一键设为总是允许"，结果 `set_auto_approved_action_kind` 之后仍然每次都要审 | Operation 发布时 `auto_approvable` 写成了 `false`——见 §6 表格 | 改清单把该 Operation 的 `auto_approvable` 设为 `true`，走 `propose_operation`/`publish_operation` 发一个修订版本（§8） |
+| `observe_operation` / `request_action` 报 409 `operation_definition_mismatch` | 门运行的定义与工作区发布的不同（§2）：门的清单在发布后改了，或 `manifestSource` 导入的副本与门自己的 `GATE_MANIFEST_FILE` 不一致 | 平台门：管理员确认门宣告的清单 → 工作区「刷新治理字段」（`refresh_operation_governance`）为定义变了的 Operation 开修订草稿 → owner 发布它；自连门：让门加载与导入结果一致的清单（§4 步骤 1），或省略 `manifestSource` 重新接入 |
+| `publish_operation` 报 400 `gate_owned_params`，或 `publish_manifest` / 启用结果的 `gateOwnedParamDrafts` 非空 | 清单给 `http` Operation 声明了门拥有的参数（身份 / 账号 / 路由类请求头、query 里的凭据、cookie、覆盖 binding 自带 query 的参数），门对这类参数每次调用都拒绝（遗留 J） | 从 `params_schema` 删掉这些参数（门用它自己配置的凭据认证，binding 自带的 query 不再声明为参数）；平台门改清单后经确认与刷新，草稿按新宣告重写，再发布 |
 | `propose_operation` 报 409 `conflict` | 目标 Operation 还是 `origin:'import'` 且从未 `publish_manifest`/`publish_operation` 过（I16） | 先 `publish_manifest` 把它变成 `published`，再对已发布身份提议修订（§8） |
