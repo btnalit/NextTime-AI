@@ -86,6 +86,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   gate_host_error: 'Gate host error',
   connection_target_refused: 'Address not allowed',
   credentials_in_observe_params: 'Credentials in the parameters',
+  operation_definition_mismatch: 'The gate runs another definition',
+  operation_definition_unavailable: 'No approved definition',
+  gate_owned_params: 'Declares parameters the gate sets',
   unknown: 'Error',
 };
 
@@ -129,6 +132,9 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   gate_host_error: '门宿主没有完成这次写入',
   connection_target_refused: '这个地址不允许接入',
   credentials_in_observe_params: '参数里带了凭据',
+  operation_definition_mismatch: '门运行的定义和批准的不一样',
+  operation_definition_unavailable: '没有批准过的定义',
+  gate_owned_params: '声明了门自己设置的参数',
   unknown: '出错了',
 };
 
@@ -138,9 +144,10 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
  * not the body any more (it is often English, names a capability, or describes the check rather
  * than the fix); it moves into the banner's 「技术细节」 disclosure with the raw code.
  *
- * Gate-side codes (`operation_refused`, `credentials_in_observe_params`, …) are listed even where
- * the kernel still relays them as `gatekeeper_error`, so the copy is ready when the code reaches
- * the console; an MCP endpoint that answers with a redirect has no code of its own yet.
+ * Gate-side codes (`operation_refused`, `operation_definition_mismatch`, …) reach the console with
+ * the gate's own code (the kernel passes a gate's refusal through instead of 502
+ * `gatekeeper_error`). `operation_definition_unavailable` is never an error code — it is the
+ * prefix of an ActionRequest's failure reason, read from a tool row by `gateReasonNextStep` below.
  */
 export const ERROR_NEXT_STEPS: Readonly<
   Record<string, { readonly zh: string; readonly en: string }>
@@ -236,6 +243,19 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
     en: 'The parameters carry a credential, so nothing was sent. Do not pass credentials as parameters; the gate authenticates with its own.',
   },
+  // Legacy K (review of #538, G3).
+  operation_definition_mismatch: {
+    zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在能力目录发布和门一致的定义，然后重新发起。',
+    en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. For a gate you connected yourself: publish the definition the gate runs in the catalog, then request again.',
+  },
+  operation_definition_unavailable: {
+    zh: '发起请求时这个 Operation 还没有发布，也没有草稿，所以批准时没有对应的定义，调用没有执行。先在能力目录发布它，再重新发起。',
+    en: 'When this was requested the Operation was neither published nor drafted, so no definition was approved and nothing ran. Publish it in the catalog first, then request again.',
+  },
+  gate_owned_params: {
+    zh: '这个 Operation 的参数里声明了门自己设置的请求头、凭据类查询参数或 cookie，门每次都会拒绝，所以没有发布。从参数定义里去掉它们（门用自己配置的凭据认证）后再发布。',
+    en: 'This Operation declares parameters the gate sets itself (a header, a credential query parameter or a cookie); the gate would refuse every call, so it was not published. Remove them from the parameters (the gate authenticates with its own credential) and publish again.',
+  },
   not_proposer: {
     zh: '只有它的提议人或工作区所有者能做这一步。',
     en: 'Only its proposer or a workspace owner can do this.',
@@ -330,6 +350,34 @@ export function presentError(
 export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOverrides): string {
   const shown = presentError(err, t, overrides);
   return `${shown.curated ? shown.message : (shown.raw ?? shown.message)} (${shown.code})`;
+}
+
+/** Gate refusals a tool call's result can name (`request_action`'s failure reason, an observe
+ *  call's error) — the codes the reason starts with or the result carries. */
+const GATE_REASON_CODES = [
+  'operation_definition_mismatch',
+  'operation_definition_unavailable',
+  'operation_refused',
+  'credentials_in_observe_params',
+] as const;
+const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
+
+/** What to do about a gate refusal a tool call's result names (review of #538, G3) — the chat's
+ *  tool row shows it above the raw result, which stays as the agent saw it. `null` for any other
+ *  result. */
+export function gateReasonNextStep(
+  text: string,
+  t: Translate,
+): { readonly code: string; readonly title: string; readonly message: string } | null {
+  const code = GATE_REASON_PATTERN.exec(text)?.[1];
+  if (code === undefined) return null;
+  const step = ownEntry(ERROR_NEXT_STEPS, code);
+  if (!step) return null;
+  return {
+    code,
+    title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
+    message: t(step.zh, step.en),
+  };
 }
 
 /** The error's short title in the viewer's language. Known codes use the curated tables; an

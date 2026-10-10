@@ -375,6 +375,7 @@ describe('GateInstanceDetailPanel', () => {
           otherChangedFields: ['binding'],
         },
       ],
+      refusedOperations: ['container_restart'],
     };
 
     it('renders nothing when nothing is held', () => {
@@ -394,7 +395,13 @@ describe('GateInstanceDetailPanel', () => {
       const block = screen.getByTestId('gate-instance-pending-manifest');
       expect(block.textContent).toContain('container_remove');
       expect(block.textContent).toContain('container_restart: 影响级');
-      expect(block.textContent).toContain('binding');
+      // Field names read as words, never the manifest's own key.
+      expect(block.textContent).toContain('调用目标');
+      expect(block.textContent).not.toContain('binding');
+      // Legacy K: the gate already runs what it announced, so the notice says calls are refused.
+      expect(screen.getByTestId('gate-instance-pending-manifest-notice').textContent).toContain(
+        '门已经在按新清单运行。采用、并让启用它的工作区对齐和发布修订之前，对 container_restart 的调用会被拒绝。',
+      );
 
       fireEvent.click(within(block).getByTestId('gate-instance-pending-manifest-review'));
       const confirm = await screen.findByTestId('gate-instance-pending-manifest-confirm');
@@ -409,6 +416,46 @@ describe('GateInstanceDetailPanel', () => {
       );
       fireEvent.click(within(confirm).getByTestId('confirm-button'));
       await waitFor(() => expect(onChanged).toHaveBeenCalledWith(adopted));
+    });
+
+    it('legacy K: the adopt confirm names the workspaces that must align and publish afterwards', async () => {
+      renderPanel(
+        scriptedHttp({}),
+        gateInstance({
+          status: 'enabled',
+          pendingManifest,
+          enabledWorkspaceCount: 3,
+          enablingWorkspaces: [
+            { id: 'ws-1', name: '仓储' },
+            { id: 'ws-2', name: '财务' },
+          ],
+        }),
+      );
+      fireEvent.click(screen.getByTestId('gate-instance-pending-manifest-review'));
+      const confirm = await screen.findByTestId('gate-instance-pending-manifest-confirm');
+      expect(
+        within(confirm).getByTestId('gate-instance-pending-manifest-workspaces').textContent,
+      ).toBe(
+        '采用后，仓储、财务 等 3 个工作区需要到「系统与授权」对齐并发布修订，对 container_restart 的调用才会恢复。',
+      );
+    });
+
+    it('legacy K: a held change that refuses nothing says it takes no effect until adopted, and names no workspaces', async () => {
+      renderPanel(
+        scriptedHttp({}),
+        gateInstance({
+          status: 'enabled',
+          pendingManifest: { ...pendingManifest, refusedOperations: [] },
+          enabledWorkspaceCount: 1,
+          enablingWorkspaces: [{ id: 'ws-1', name: '仓储' }],
+        }),
+      );
+      expect(screen.getByTestId('gate-instance-pending-manifest-notice').textContent).toContain(
+        '采用之前不生效',
+      );
+      fireEvent.click(screen.getByTestId('gate-instance-pending-manifest-review'));
+      const confirm = await screen.findByTestId('gate-instance-pending-manifest-confirm');
+      expect(within(confirm).queryByTestId('gate-instance-pending-manifest-workspaces')).toBeNull();
     });
 
     it('a manifest replaced since the page loaded is refused with its own copy', async () => {

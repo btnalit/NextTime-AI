@@ -4,6 +4,7 @@ import {
   GateConnectionSecretsUnavailableError,
   GatekeeperClientError,
   GatekeeperTimeoutError,
+  gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import {
@@ -119,6 +120,7 @@ import {
 } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
+  OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
   OperationNotFoundError,
 } from '../../governance/gatekeepers/index.js';
@@ -332,6 +334,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof ObserveParamsCarryCredentialsError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
+  // Legacy J (governance/gatekeepers/gate-owned-params.ts): `publish_operation` on an http
+  // Operation declaring a param only the gate sets — `details.params` names each and where.
+  if (err instanceof OperationDeclaresGateOwnedParamsError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { params: err.details.params.map((entry) => ({ ...entry })) },
+    };
+  }
   if (
     err instanceof ActionRequestNotFoundError ||
     err instanceof GrantNotFoundError ||
@@ -462,6 +474,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 504, code: 'gatekeeper_timeout', message: err.message };
   }
   if (err instanceof GatekeeperClientError) {
+    // A refusal the caller can act on keeps the gate's own status and code (`gateRefusalOf`) —
+    // 403 `operation_refused` used to arrive as 502 and read as an outage worth retrying.
+    const refusal = gateRefusalOf(err);
+    if (refusal) return { status: refusal.status, code: refusal.code, message: err.message };
     return { status: 502, code: 'gatekeeper_error', message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {

@@ -7,6 +7,7 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import {
   GovernanceChangeList,
@@ -23,6 +24,10 @@ export interface PendingManifestReviewProps {
   readonly gateId: string;
   readonly displayName: string;
   readonly pending: PendingGateManifestWire;
+  /** The workspaces that enabled this instance (`GateInstanceWire.enablingWorkspaces`, possibly
+   *  truncated) and their true total — those that must align and publish after the adoption. */
+  readonly enablingWorkspaces: readonly { readonly id: string; readonly name: string }[];
+  readonly enabledWorkspaceCount: number;
   /** `confirm_gate_manifest` answered with the instance, the held manifest now in effect. */
   readonly onConfirmed: (instance: GateInstanceWire) => void;
 }
@@ -41,12 +46,19 @@ export interface PendingManifestReviewProps {
  * danger-styled when it adds an Operation or the kernel says a change loosens one. Adopting it
  * does not touch any workspace's deployed Operations — each owner aligns those with their own
  * preview and confirm.
+ *
+ * Legacy K (UX acceptance of #538): a gate runs what it announced, so a held change to what it runs
+ * (`refusedOperations`) is not "without effect until confirmed" — calls to those Operations are
+ * refused from the moment it was announced. The notice says so, and the confirm names the
+ * workspaces that must then align and publish the revision before calls resume.
  */
 export function PendingManifestReview({
   http,
   gateId,
   displayName,
   pending,
+  enablingWorkspaces,
+  enabledWorkspaceCount,
   onConfirmed,
 }: PendingManifestReviewProps) {
   const t = useT();
@@ -72,19 +84,27 @@ export function PendingManifestReview({
       .filter((change) => change.otherChangedFields.length > 0)
       .map((change) =>
         t(
-          `${change.name} 的定义变了：${change.otherChangedFields.join('、')}`,
-          `${change.name} definition changed: ${change.otherChangedFields.join(', ')}`,
+          `${change.name} 的定义变了：${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join('、')}`,
+          `${change.name} definition changed: ${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join(', ')}`,
         ),
       ),
   ];
+  const refused = pending.refusedOperations;
+  const workspaceNames = enablingWorkspaces.map((workspace) => workspace.name);
+  const moreWorkspaces = enabledWorkspaceCount - workspaceNames.length;
 
   return (
     <div className="stack-s" data-testid="gate-instance-pending-manifest">
-      <Notice tone="warn">
-        {t(
-          `这个门 announce 了与生效清单不同的 Operation（${pending.operationCount} 个），确认之前不生效。`,
-          `This gate announced operations that differ from the manifest in effect (${pending.operationCount}); they take no effect until confirmed.`,
-        )}{' '}
+      <Notice tone="warn" testId="gate-instance-pending-manifest-notice">
+        {refused.length > 0
+          ? t(
+              `门已经在按新清单运行。采用、并让启用它的工作区对齐和发布修订之前，对 ${refused.join('、')} 的调用会被拒绝。`,
+              `The gate already runs its new manifest. Calls to ${refused.join(', ')} are refused until it is adopted and every workspace that enabled it aligns and publishes the revision.`,
+            )
+          : t(
+              `门公布了与生效清单不同的 Operation（${pending.operationCount} 个），采用之前不生效。`,
+              `The gate announced operations that differ from the manifest in effect (${pending.operationCount}); they take no effect until adopted.`,
+            )}{' '}
         <time title={formatDateTime(pending.announcedAt)}>
           {formatRelative(pending.announcedAt)}
         </time>
@@ -130,6 +150,24 @@ export function PendingManifestReview({
                   <li key={line}>{line}</li>
                 ))}
               </ul>
+            </Notice>
+          ) : null}
+          {refused.length > 0 && enabledWorkspaceCount > 0 ? (
+            <Notice tone="warn" testId="gate-instance-pending-manifest-workspaces">
+              {workspaceNames.length === 0
+                ? t(
+                    `采用后，启用它的 ${enabledWorkspaceCount} 个工作区需要到「系统与授权」对齐并发布修订，对 ${refused.join('、')} 的调用才会恢复。`,
+                    `After adopting, the ${enabledWorkspaceCount} workspace(s) that enabled it must align under Systems & access and publish the revision before calls to ${refused.join(', ')} resume.`,
+                  )
+                : moreWorkspaces > 0
+                  ? t(
+                      `采用后，${workspaceNames.join('、')} 等 ${enabledWorkspaceCount} 个工作区需要到「系统与授权」对齐并发布修订，对 ${refused.join('、')} 的调用才会恢复。`,
+                      `After adopting, ${workspaceNames.join(', ')} and ${moreWorkspaces} more workspace(s) must align under Systems & access and publish the revision before calls to ${refused.join(', ')} resume.`,
+                    )
+                  : t(
+                      `采用后，${workspaceNames.join('、')} 工作区需要到「系统与授权」对齐并发布修订，对 ${refused.join('、')} 的调用才会恢复。`,
+                      `After adopting, ${workspaceNames.join(', ')} must align under Systems & access and publish the revision before calls to ${refused.join(', ')} resume.`,
+                    )}
             </Notice>
           ) : null}
           {governed.length > 0 ? <GovernanceChangeList items={governed} /> : null}

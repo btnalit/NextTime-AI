@@ -3,6 +3,7 @@ import { getCapability } from '@nexttime/shared';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
 import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
@@ -194,6 +195,83 @@ function auditParams(
 }
 
 /**
+ * UX acceptance of #538 ("审计只增不减"): a call a gate refused (`gateRefusalOf` — the gate said this
+ * call as made will not run: a definition mismatch, params its schema refuses, no credential, …)
+ * leaves an audit row too, so a refused call can be reconstructed from the audit log. The call's
+ * own transaction rolled back with the refusal, so this row is written in one of its own: the
+ * call's action, its redacted params as on a successful call, `outcome: 'refused'`, and `refusal`
+ * with the gate's code and, for a call that named an Operation, that Operation and the definition
+ * digests on both sides (`runningDigest` only when the gate reported a well-formed one). Never the
+ * gate's message, which can carry target-system text. Not `Decision`: no person decided anything.
+ * Failing to write it is logged and never replaces the refusal itself.
+ */
+async function auditGateRefusal(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  if (!(call.err instanceof GatekeeperClientError)) return;
+  const refusal = gateRefusalOf(call.err);
+  if (refusal === undefined) return;
+  const gateCall = call.err.call;
+  const gatekeeperId =
+    typeof call.params.gatekeeperId === 'string' ? call.params.gatekeeperId : undefined;
+  const resourceRef = auditResourceRef(gatekeeperId);
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          resourceType: gatekeeperId !== undefined ? 'gatekeeper' : undefined,
+          resourceId: resourceRef.resourceId,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...auditParams(call.capability, call.params),
+            ...(resourceRef.resourceRef !== undefined
+              ? { resourceRef: resourceRef.resourceRef }
+              : {}),
+            outcome: 'refused',
+            refusal: {
+              code: refusal.code,
+              status: refusal.status,
+              ...(gateCall !== undefined
+                ? {
+                    operation: gateCall.operation,
+                    approvedDigest: gateCall.approvedDigest,
+                    ...(gateCall.runningDigest !== undefined
+                      ? { runningDigest: gateCall.runningDigest }
+                      : {}),
+                  }
+                : {}),
+            },
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    // One log line whatever the values carry: a line break would let them forge entries.
+    console.error(
+      `[kernel] audit of a gate refusal failed (capability=${call.name}, code=${refusal.code}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
  * authorize.ts), `InvalidCapabilityParamsError` (400), `CapabilityNotImplementedError` (501), or —
  * only when `KERNEL_VALIDATE_RESULTS=1` — `CapabilityResultValidationError`; resolves with the
@@ -336,7 +414,18 @@ export async function dispatchCapability(
       });
       return result;
     },
-  );
+  ).catch(async (err: unknown) => {
+    await auditGateRefusal(deps, {
+      workspaceId,
+      principalId,
+      channel: caller.channel,
+      capability,
+      name,
+      params: parsed.data as Record<string, unknown>,
+      err,
+    });
+    throw err;
+  });
 
   const finalResult = handlerResult.afterCommit
     ? await handlerResult.afterCommit(deps.pool)

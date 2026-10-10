@@ -257,6 +257,7 @@ export const publishManifestHandler: CapabilityHandler = async (client, workspac
       gatekeeperId,
       publishedOperationNames: published.publishedOperationNames,
       skippedDraftOperationNames: published.skippedDraftOperationNames,
+      gateOwnedParamDrafts: published.gateOwnedParamDrafts,
     },
     resourceType: 'gatekeeper',
     resourceId: gatekeeperId,

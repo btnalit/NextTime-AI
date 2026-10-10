@@ -158,6 +158,7 @@ export function AvailableGateInstancesSection({
                   row={row}
                   onEnabled={handleEnabled}
                   canEnable={canEnable}
+                  platformAdmin={platformAdmin}
                 />
               ))}
             </tbody>
@@ -173,11 +174,13 @@ function AvailableGateRow({
   row,
   onEnabled,
   canEnable,
+  platformAdmin,
 }: {
   readonly http: CapabilityCaller;
   readonly row: AvailableGateInstanceWire;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
   readonly canEnable: boolean;
+  readonly platformAdmin: boolean;
 }) {
   const t = useT();
   const toast = useToast();
@@ -258,6 +261,7 @@ function AvailableGateRow({
             gateId={row.gateId}
             gateDisplayName={row.displayName}
             onEnabled={handleEnabled}
+            platformAdmin={platformAdmin}
             testId={`enable-gate-${row.gateId}`}
           />
         ) : (

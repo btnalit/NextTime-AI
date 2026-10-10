@@ -74,3 +74,11 @@ export {
   observeRefusal,
   readObserveExclusions,
 } from './observe-access.js';
+export type { DefinitionAwaiting, GateRunningDefinitions } from './definition-drift.js';
+export {
+  definitionRefusal,
+  gateRunningDefinitions,
+  operationsRefusedUntilAdopted,
+  readGateDefinitions,
+  readGateDefinitionsForWorkspace,
+} from './definition-drift.js';

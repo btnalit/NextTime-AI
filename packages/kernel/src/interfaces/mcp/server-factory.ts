@@ -3,6 +3,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { HandleClaims } from '@nexttime/shared';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
 import {
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
@@ -60,6 +61,9 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
   // do instead; the code tells it apart from a schema mistake.
   else if (err instanceof ObserveParamsCarryCredentialsError)
     message = `${err.code}: ${err.message}`;
+  // A gate's own answer (`operation_refused`, `invalid_params`, …): its code tells a refusal the
+  // agent should not retry from an upstream failure.
+  else if (err instanceof GatekeeperClientError) message = `${err.code}: ${err.message}`;
   else message = err instanceof Error ? err.message : String(err);
   return { content: [{ type: 'text', text: message }], isError: true };
 }

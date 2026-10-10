@@ -249,6 +249,158 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('legacy K (UX acceptance of #538): a revision draft shows what it changes against the published version before Publish', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.get',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            version: 1,
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.get',
+            status: 'draft',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            version: 2,
+            governanceChange: {
+              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              direction: 'neutral',
+            },
+            definitionChange: {
+              changedFields: ['binding', 'params_schema'],
+              paramsAdded: [{ name: 'warehouse', in: 'query', required: false }],
+              paramsRemoved: [{ name: 'unit', required: true }],
+              paramsChanged: [{ name: 'sku', in: 'header', required: true }],
+            },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.get@draft');
+    const detail = await screen.findByTestId('catalog-detail');
+    const diff = await within(detail).findByTestId('operation-revision-diff');
+    expect(diff.textContent).toContain('和已发布版本相比');
+    expect(
+      within(diff)
+        .getAllByTestId('operation-revision-diff-line')
+        .map((line) => line.textContent),
+    ).toEqual([
+      '参数：+warehouse（query，可选）',
+      '参数：−unit（必填）',
+      '参数：~sku（header，必填）',
+      // params_schema is spelled out param by param above; the binding only by name.
+      '调用目标变了',
+    ]);
+    // The published row has no diff of its own.
+    const rows = screen.getAllByTestId('catalog-row');
+    await selectRow(rows[0] as HTMLElement);
+    expect(screen.queryByTestId('operation-revision-diff')).toBeNull();
+  });
+
+  it('legacy K: a revision draft whose definition and classification match says so', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.get',
+            status: 'draft',
+            version: 2,
+            governanceChange: {
+              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              direction: 'neutral',
+            },
+            definitionChange: {
+              changedFields: [],
+              paramsAdded: [],
+              paramsRemoved: [],
+              paramsChanged: [],
+            },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.get@draft');
+    const diff = await screen.findByTestId('operation-revision-diff');
+    expect(diff.textContent).toContain('和已发布版本没有差异');
+  });
+
+  it('legacy K (UX acceptance of #538): publishing a revision draft follows it to the version now in effect and says which version', async () => {
+    let published = false;
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: published
+          ? [
+              {
+                gatekeeperId: 'gk-1',
+                name: 'stock.get',
+                status: 'published',
+                version: 2,
+              },
+              {
+                gatekeeperId: 'gk-1',
+                name: 'stock.get',
+                status: 'deprecated',
+                version: 1,
+              },
+            ]
+          : [
+              { gatekeeperId: 'gk-1', name: 'stock.get', status: 'published', version: 1 },
+              {
+                gatekeeperId: 'gk-1',
+                name: 'stock.get',
+                status: 'draft',
+                version: 2,
+                governanceChange: {
+                  before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+                  after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+                  direction: 'neutral',
+                },
+              },
+            ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => {
+        published = true;
+        return {};
+      },
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderPage(http, 'operations', 'gk-1::stock.get@draft');
+      const detail = await screen.findByTestId('catalog-detail');
+      fireEvent.click(await within(detail).findByRole('button', { name: /发布/ }));
+      const toast = await screen.findByTestId('toast');
+      expect(toast.textContent).toMatch(/stock\.get 已发布 v2/);
+      // The detail now shows the published version, never 「未找到」.
+      await waitFor(() =>
+        expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
+          'gk-1::stock.get',
+        ),
+      );
+      expect(screen.getByTestId('operation-detail').textContent).not.toContain('未找到');
+      // The retired version and the one in effect are listed with keys of their own.
+      await waitFor(() => expect(screen.getAllByTestId('catalog-row')).toHaveLength(2));
+      expect(consoleError.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(
+        false,
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('Operations: renders usage counters from get_operation_stats, degrading to "—" for a row with no matching stats', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

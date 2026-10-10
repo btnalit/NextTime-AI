@@ -112,6 +112,13 @@ export type {
 
 export * from './errors.js';
 
+export {
+  canonicalJson,
+  operationDefinition,
+  operationDefinitionDigest,
+  shortOperationDigest,
+} from './operation-digest.js';
+
 export { resolveGateDataDir } from './data-dir.js';
 
 export { parseManifestJson } from './manifest.js';
@@ -137,6 +144,7 @@ export type { CredentialResolver, ResolvedCredential } from './credentials/index
 export {
   HttpTransport,
   encodePathSegment,
+  gateOwnedParamsOf,
   importOpenApi,
   isGateOwnedHeader,
   isGateOwnedQueryParam,
@@ -147,17 +155,25 @@ export {
   renderCommandTemplate,
   SshTransport,
   classifyCommand,
+  NO_REDIRECTS,
+  isRedirectStatus,
+  redirectRefusalMessage,
+  redirectTargetForDisplay,
+  refuseRedirect,
 } from './kinds/index.js';
 export type {
   Transport,
   TransportKind,
   TransportInvokeContext,
   TransportInvokeResult,
+  GateOwnedParam,
+  GateOwnedParamLocation,
   HttpTransportOptions,
   OpenApiDocumentLike,
   McpTransportOptions,
   McpToolLike,
   McpToolsListResult,
+  RedirectAdvice,
   CliTransportOptions,
   ExecFileFn,
   SshTransportOptions,

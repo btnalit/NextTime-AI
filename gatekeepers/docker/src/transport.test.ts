@@ -5,6 +5,7 @@ import {
   GatekeeperBase,
   InMemoryIdempotencyStore,
   createGatekeeperServer,
+  operationDefinitionDigest,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
@@ -28,6 +29,11 @@ const MANIFEST_PATH = path.resolve(
   'manifest.json',
 );
 const MANIFEST = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as Operation[];
+
+/** Legacy K: what the kernel sends with a call — the digest of the manifest entry it published. */
+function approvedDigest(name: string): string {
+  return operationDefinitionDigest(MANIFEST.find((op) => op.name === name));
+}
 
 function buildGate(seeds: readonly FakeContainerSeed[] = []) {
   const client = createFakeDockerClient(seeds);
@@ -359,7 +365,11 @@ describe('docker gate never lists or touches the platform agent containers (R-04
         method: 'POST',
         url: '/gate/observe',
         headers,
-        payload: { operation: 'container.logs_tail', params: { id: ENTRY.name } },
+        payload: {
+          operation: 'container.logs_tail',
+          params: { id: ENTRY.name },
+          operationDigest: approvedDigest('container.logs_tail'),
+        },
       });
       expect(observe.statusCode).toBe(403);
       expect(observe.json()).toMatchObject({ ok: false, error: { code: 'operation_refused' } });
@@ -371,6 +381,7 @@ describe('docker gate never lists or touches the platform agent containers (R-04
           operation: 'container.restart',
           params: { id: TASK.id },
           actionRequestId: 'req-1',
+          operationDigest: approvedDigest('container.restart'),
         },
       });
       expect(apply.statusCode).toBe(403);

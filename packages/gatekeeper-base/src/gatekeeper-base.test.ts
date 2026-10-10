@@ -7,6 +7,7 @@ import {
   ApplyOutcomeUnknownError,
   CredentialResolutionError,
   IdempotencyConflictError,
+  OperationDefinitionMismatchError,
   OperationRefusedError,
   TransportInvokeError,
   TransportTimeoutError,
@@ -18,6 +19,7 @@ import {
   hashIdempotencyParams,
 } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
+import { operationDefinitionDigest } from './operation-digest.js';
 
 function observeOp(overrides: Partial<Operation> = {}): Operation {
   return {
@@ -386,5 +388,142 @@ describe('GatekeeperBase', () => {
       idempotencyStore: new InMemoryIdempotencyStore(),
     });
     await expect(gate.health()).resolves.toEqual({ status: 'ok' });
+  });
+});
+
+describe('GatekeeperBase: the approved definition (legacy K)', () => {
+  const approved = executeOp();
+  const approvedDigest = operationDefinitionDigest(approved);
+  // The gate's manifest changed after `approved` was published: same name, another path.
+  const changed = executeOp({ binding: { kind: 'http', method: 'POST', path: '/admin/wipe' } });
+
+  function gateRunning(operations: Operation[], invoke = vi.fn(async () => ({ data: { ok: 1 } }))) {
+    const idempotencyStore = new InMemoryIdempotencyStore();
+    const gate = new GatekeeperBase({
+      manifest: operations,
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore,
+    });
+    return { gate, invoke, idempotencyStore };
+  }
+
+  it('runs a call whose digest is the definition this gate runs', async () => {
+    const { gate, invoke } = gateRunning([observeOp(), approved]);
+    await gate.observe(
+      'stock.get',
+      {},
+      { operationDigest: operationDefinitionDigest(observeOp()) },
+    );
+    await gate.apply('stock.adjust', {}, 'req-k1', { operationDigest: approvedDigest });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(gate.definitionDigest(approved)).toBe(approvedDigest);
+  });
+
+  it('refuses every protocol call for another definition, before the credential or the transport', async () => {
+    const resolve = vi.fn(async () => ({}));
+    const invoke = vi.fn(async () => ({ data: {} }));
+    const gate = new GatekeeperBase({
+      manifest: [observeOp({ params_schema: { type: 'object', required: ['sku'] } }), changed],
+      transport: { kind: 'http', invoke, revert: invoke },
+      credentialResolver: { resolve },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    const stale = { operationDigest: operationDefinitionDigest(observeOp()) };
+    await expect(gate.observe('stock.get', {}, stale)).rejects.toBeInstanceOf(
+      OperationDefinitionMismatchError,
+    );
+    const ctx = { operationDigest: approvedDigest };
+    await expect(gate.simulate('stock.adjust', {}, ctx)).rejects.toBeInstanceOf(
+      OperationDefinitionMismatchError,
+    );
+    await expect(gate.apply('stock.adjust', {}, 'req-k2', ctx)).rejects.toThrow(
+      /the definition that was approved \([0-9a-f]{12}\) is not the one this gate runs \([0-9a-f]{12}\) — refused, nothing ran/,
+    );
+    await expect(gate.revert('stock.adjust', {}, ctx)).rejects.toBeInstanceOf(
+      OperationDefinitionMismatchError,
+    );
+    expect(resolve).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses a call that names no definition (null), and checks nothing for an in-process caller (undefined)', async () => {
+    const { gate, invoke } = gateRunning([approved]);
+    await expect(
+      gate.apply('stock.adjust', {}, 'req-k3', { operationDigest: null }),
+    ).rejects.toThrow(/no operationDigest/);
+    expect(invoke).not.toHaveBeenCalled();
+    await gate.apply('stock.adjust', {}, 'req-k3');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused apply frees its key: the same key runs once the definitions agree', async () => {
+    const { gate, invoke } = gateRunning([approved]);
+    await expect(
+      gate.apply('stock.adjust', { qty: 1 }, 'req-k4', {
+        operationDigest: operationDefinitionDigest(changed),
+      }),
+    ).rejects.toBeInstanceOf(OperationDefinitionMismatchError);
+    const result = await gate.apply('stock.adjust', { qty: 1 }, 'req-k4', {
+      operationDigest: approvedDigest,
+    });
+    expect(result.replayed).toBe(false);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a replay is answered from the store even after the manifest changed — the call did run', async () => {
+    const before = gateRunning([approved]);
+    await before.gate.apply('stock.adjust', { qty: 1 }, 'req-k5', {
+      operationDigest: approvedDigest,
+    });
+    await expect(
+      before.gate.apply('stock.adjust', { qty: 2 }, 'req-k6', { operationDigest: approvedDigest }),
+    ).resolves.toMatchObject({ replayed: false });
+
+    // The gate re-handshakes with a changed manifest; its idempotency store survives.
+    const invokeAfter = vi.fn(async () => ({ data: {} }));
+    const after = new GatekeeperBase({
+      manifest: [changed],
+      transport: fakeTransport(invokeAfter),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: before.idempotencyStore,
+    });
+    await expect(
+      after.apply('stock.adjust', { qty: 1 }, 'req-k5', { operationDigest: approvedDigest }),
+    ).resolves.toEqual({ data: { ok: 1 }, observedFacts: [], replayed: true });
+    // A new key under the old definition is refused; the changed definition never ran.
+    await expect(
+      after.apply('stock.adjust', { qty: 1 }, 'req-k7', { operationDigest: approvedDigest }),
+    ).rejects.toBeInstanceOf(OperationDefinitionMismatchError);
+    expect(invokeAfter).not.toHaveBeenCalled();
+  });
+
+  it('a stored failure is answered again under a mismatch, not refused (R-51)', async () => {
+    const invoke = vi.fn(async () => {
+      throw new TransportInvokeError('target failed mid-call');
+    });
+    const before = gateRunning([approved], invoke);
+    await expect(
+      before.gate.apply('stock.adjust', {}, 'req-k8', { operationDigest: approvedDigest }),
+    ).rejects.toBeInstanceOf(TransportInvokeError);
+    const after = new GatekeeperBase({
+      manifest: [changed],
+      transport: fakeTransport(),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: before.idempotencyStore,
+    });
+    await expect(
+      after.apply('stock.adjust', {}, 'req-k8', { operationDigest: approvedDigest }),
+    ).rejects.toThrow('target failed mid-call');
+  });
+
+  it('a gate definition that does not parse refuses every call', async () => {
+    const broken = { ...approved, binding: { kind: 'ssh' } } as unknown as Operation;
+    const { gate, invoke } = gateRunning([broken]);
+    expect(gate.definitionDigest(broken)).toBe('unreadable');
+    await expect(
+      gate.apply('stock.adjust', {}, 'req-k9', { operationDigest: approvedDigest }),
+    ).rejects.toThrow(/is not the one this gate runs \(unreadable\)/);
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

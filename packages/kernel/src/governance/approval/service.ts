@@ -51,6 +51,7 @@ export {
   ActionRequestNotFoundError,
   ApprovalReasonRequiredError,
   ApprovalScopeError,
+  NO_OPERATION_DEFINITION,
   type ActionRequestRow,
 } from './types.js';
 

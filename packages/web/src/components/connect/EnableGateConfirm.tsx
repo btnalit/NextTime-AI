@@ -12,6 +12,7 @@ import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
 
 export interface EnableGateConfirmProps {
   readonly http: CapabilityCaller;
@@ -25,6 +26,9 @@ export interface EnableGateConfirmProps {
   /** Trigger label override — defaults to 在本工作区启用; a caller offering 重新启用 for a
    *  previously-disabled link passes its own. */
   readonly label?: string;
+  /** `session.user?.platformRole === 'admin'` — the notice for a gate whose new manifest still
+   *  waits for the platform then links to it (UX acceptance of #538). */
+  readonly platformAdmin?: boolean;
   /** Rendered on the trigger button; the confirm popover uses `${testId}-confirm`, the ambiguous
    *  notice `${testId}-ambiguous`. Callers that render one of these per row/gate should also pass
    *  `key={gateId}` at the call site — this component keeps no effect resetting its own state when
@@ -53,6 +57,7 @@ export function EnableGateConfirm({
   gateDisplayName,
   onEnabled,
   label,
+  platformAdmin = false,
   testId,
 }: EnableGateConfirmProps) {
   const t = useT();
@@ -152,7 +157,14 @@ export function EnableGateConfirm({
         onConfirm={confirmEnable}
         testId={testId ? `${testId}-confirm` : undefined}
       >
-        {preview ? <EnablePreviewBody preview={preview} http={http} /> : null}
+        {preview ? (
+          <EnablePreviewBody
+            preview={preview}
+            http={http}
+            platformAdmin={platformAdmin}
+            testId={testId}
+          />
+        ) : null}
       </Confirm>
     </div>
   );
@@ -161,16 +173,32 @@ export function EnableGateConfirm({
 function EnablePreviewBody({
   preview,
   http,
+  platformAdmin,
+  testId,
 }: {
   readonly preview: PreviewGateInstanceEnableResultWire;
   readonly http: CapabilityCaller;
+  readonly platformAdmin: boolean;
+  readonly testId?: string;
 }) {
   const t = useT();
   const toImportCount = preview.operationsToImport.length;
   const presentCount = preview.operationsAlreadyPresent.length;
   const noOperations = toImportCount === 0 && presentCount === 0;
+  // Read as absent when a kernel without it answers — never as "awaiting".
+  const awaiting = preview.awaitingPlatformAdoption ?? null;
   return (
     <div className="stack-s">
+      {awaiting ? (
+        <AwaitingAdoptionNotice
+          operations={awaiting.operations}
+          announcedAt={awaiting.announcedAt}
+          platformAdmin={platformAdmin}
+          platformGateId={preview.gateId}
+          enabling
+          testId={testId ? `${testId}-awaiting-adoption` : undefined}
+        />
+      ) : null}
       {preview.wouldLink ? (
         <div className="stack-s" data-testid="enable-preview-would-link">
           <span className="text-13">

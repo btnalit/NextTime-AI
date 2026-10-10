@@ -7,8 +7,10 @@ import {
   findGatekeepersByEndpoint,
   getOperation,
   importManifest,
+  operationDefinitionDiffers,
   operationGovernanceChangeDirection,
-  publishOperation,
+  operationRecordDigestOrNull,
+  publishImportedDrafts,
   refreshOperationGovernance,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
@@ -16,6 +18,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
+  definitionRefusal,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   getConnector,
@@ -24,6 +27,7 @@ import {
   listAvailableGateInstances,
   manifestDigest,
   operationsOf,
+  readGateDefinitions,
 } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -35,8 +39,8 @@ import { gateHostCredentialUrl } from './platform-gates-handlers.js';
  * `list_available_gate_instances` / `enable_gate_instance`, `scope:'workspace'`, owner.
  *
  * Enabling mirrors `cli/bootstrap.ts`'s `register-gatekeeper --publish` step for step — one
- * Activity, `registerGatekeeper`, `importManifest` (origin `import`), `publishOperation` for every
- * imported draft, `ConnectionCreated` — and then writes the `workspace_gate_links` row that lets
+ * Activity, `registerGatekeeper`, `importManifest` (origin `import`), `publishImportedDrafts` for
+ * every imported draft (one declaring a gate-owned param stays a draft, legacy J), `ConnectionCreated` — and then writes the `workspace_gate_links` row that lets
  * the approval decision read the instance's `trust` and the connector's deny list live. It runs on
  * the workspace plane on purpose: `registerGatekeeper` and the Activity need a real Principal,
  * which the platform plane does not have; an administrator who is not a member delegates first.
@@ -313,6 +317,7 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
         gatekeeperId: existing.gatekeeperObjectId,
         publishedOperationNames: [],
         skippedOperationNames: [],
+        gateOwnedParamDrafts: [],
         // This call made no link/create decision at all — it just returned the prior outcome.
         linkedExisting: false,
       },
@@ -367,11 +372,12 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     proposedBy: actor,
     activityId: activity.id,
   });
-  const publishedOperationNames: string[] = [];
-  for (const record of imported.imported) {
-    await publishOperation(client, workspaceId, { gatekeeperId, name: record.name });
-    publishedOperationNames.push(record.name);
-  }
+  const { publishedOperationNames, gateOwnedParamDrafts } = await publishImportedDrafts(
+    client,
+    workspaceId,
+    gatekeeperId,
+    imported.imported,
+  );
   await endActivity(client, workspaceId, activity.id, 'completed');
   await insertGateLink(client, {
     workspaceId,
@@ -392,6 +398,7 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
       gatekeeperId,
       publishedOperationNames,
       skippedOperationNames: imported.skipped.map((entry) => entry.name),
+      gateOwnedParamDrafts,
       linkedExisting: resolution.kind === 'link',
       ...(drift !== undefined ? { drift } : {}),
     },
@@ -425,6 +432,18 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     resolution.kind === 'link' ? resolution.existing.gatekeeperId : undefined;
 
   const { operations, digest } = await readManifestInEffect(client, gateId, undefined);
+  // Legacy K: what the gate runs right now, to say which listed Operation it refuses until the
+  // platform adopts its held announcement (definition-drift.ts).
+  const definitions = await readGateDefinitions(client, gateId);
+  const awaitingAdoption: string[] = [];
+  const noteAdoption = (name: string, approvedDigest: string | null) => {
+    if (
+      definitions &&
+      definitionRefusal(definitions, name, approvedDigest) === 'platform_adoption'
+    ) {
+      awaitingAdoption.push(name);
+    }
+  };
   const operationsToImport: {
     name: string;
     mode: Operation['mode'];
@@ -447,6 +466,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     };
     differs: boolean;
     direction: ReturnType<typeof operationGovernanceChangeDirection>;
+    definitionDiffers: boolean;
   }[] = [];
 
   for (const operation of operations) {
@@ -454,6 +474,8 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       ? await getOperation(client, workspaceId, targetGatekeeperId, operation.name)
       : null;
     if (existingRecord === null || existingRecord.status === 'draft') {
+      // Importing publishes the manifest in effect's definition.
+      noteAdoption(operation.name, definitions?.adopted.get(operation.name) ?? null);
       operationsToImport.push({
         name: operation.name,
         mode: operation.mode,
@@ -484,7 +506,11 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       differs: diffOperationGovernanceFields(existingFields, announced).differs,
       // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
       direction: operationGovernanceChangeDirection(existingFields, announced),
+      // Legacy K: the gate refuses calls made under the deployed definition until a revision
+      // carrying the announced one is published (`refresh_operation_governance` opens it).
+      definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
     });
+    noteAdoption(operation.name, operationRecordDigestOrNull(existingRecord));
   }
 
   return {
@@ -501,6 +527,13 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       operationsToImport,
       operationsAlreadyPresent,
       manifestDigest: digest,
+      awaitingPlatformAdoption:
+        awaitingAdoption.length > 0 && definitions?.pendingAnnouncedAt
+          ? {
+              announcedAt: definitions.pendingAnnouncedAt.toISOString(),
+              operations: awaitingAdoption.sort(),
+            }
+          : null,
     },
     resourceType: 'gate_instance',
     resourceId: gateId,
@@ -562,11 +595,20 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     link.gateId,
     expectedDigest,
   );
+  // Legacy K: the revision drafts a changed definition gets are written under this Activity.
+  const activity = await startActivity(client, workspaceId, {
+    kind: 'governance.refresh_operation_governance',
+    principalId: ctx.principal.id,
+    metadata: { gatekeeperId, gateId: link.gateId },
+  });
   const outcome = await refreshOperationGovernance(client, workspaceId, {
     gatekeeperId,
     announcedOperations,
     ...(operationNames !== undefined ? { operationNames } : {}),
+    proposedBy: { id: ctx.principal.id, kind: ctx.principal.kind },
+    activityId: activity.id,
   });
+  await endActivity(client, workspaceId, activity.id, 'completed');
 
   for (const entry of outcome.refreshed) {
     await writeAudit(client, {
@@ -589,12 +631,31 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     });
   }
 
+  for (const draft of outcome.revisionDrafts) {
+    await writeAudit(client, {
+      workspaceId,
+      actorPrincipalId: ctx.principal.id,
+      action: 'operation.revision_drafted',
+      resourceType: 'operation',
+      resourceId: draft.id,
+      payload: {
+        gatekeeperId,
+        name: draft.name,
+        version: draft.version,
+        draftOf: draft.draftOf ?? null,
+        replaced: draft.replaced,
+        reason: 'definition_changed',
+      },
+    });
+  }
+
   return {
     result: {
       gatekeeperId,
       // `entry.id` is kernel-internal bookkeeping for the AuditRecord above, not part of this
       // capability's wire result shape (`RefreshOperationGovernanceResultWireSchema` has no `id`).
       refreshed: outcome.refreshed.map(({ id: _id, ...rest }) => rest),
+      revisionDrafts: outcome.revisionDrafts.map(({ name, version }) => ({ name, version })),
       unchanged: outcome.unchanged,
     },
     resourceType: 'gatekeeper',

@@ -59,7 +59,10 @@ interface ExecutionReadinessMissing {
     /** Production incident 2026-09-26: every published Operation on this gate is disabled by the
      *  platform's connector deny list — fixed on 平台 · 集成 by a platform admin, not by an owner or
      *  the member. See `capability-reachability.ts`'s own `UnreachableReason` doc comment. */
-    | 'disabled_by_platform';
+    | 'disabled_by_platform'
+    /** Legacy K: the gate refuses calls to some published Operation on it — it runs another
+     *  definition (`gates[].definitionMismatch` says which and whose step it is). */
+    | 'definition_mismatch';
   readonly gateId?: string;
   readonly workerDefinitionId?: string;
 }
@@ -104,6 +107,7 @@ export const executionReadinessHandler: CapabilityHandler = async (
     observeOperationCount: gate.observeOperationCount,
     executeOperationCount: gate.executeOperationCount,
     disabledOperations: [...gate.disabledOperations],
+    definitionMismatch: gate.definitionMismatch.map((entry) => ({ ...entry })),
     excludedByPolicy: gate.excludedByPolicy,
     excludedByProfile: gate.excludedByProfile,
     inEntryScope: gate.inEntryScope,
@@ -115,6 +119,11 @@ export const executionReadinessHandler: CapabilityHandler = async (
     if (gate.excludedByProfile) addMissing({ code: 'excluded_by_profile', gateId: gate.gateId });
     if (gate.reason === 'disabled_by_platform') {
       addMissing({ code: 'disabled_by_platform', gateId: gate.gateId });
+    }
+    // Any refused Operation is worth naming, not only a gate with nothing left: unlike the deny
+    // list, nobody chose it.
+    if (gate.definitionMismatch.length > 0) {
+      addMissing({ code: 'definition_mismatch', gateId: gate.gateId });
     }
   }
 

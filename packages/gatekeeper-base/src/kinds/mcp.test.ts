@@ -69,7 +69,7 @@ describe('McpTransport', () => {
 
   it('never follows a redirect with the credential header (as http.ts, review lane 5 P2-2)', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(init?.redirect).toBe('error');
+      expect(init?.redirect).toBe('manual');
       const body = JSON.parse((init?.body ?? '{}') as string);
       return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }), {
         status: 200,
@@ -78,6 +78,40 @@ describe('McpTransport', () => {
     const transport = new McpTransport({ endpoint: 'https://example.test/mcp', fetchImpl });
     await transport.invoke(operation, {}, { credential: { token: 'configured-on-the-gate' } });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    // Starlette / FastMCP mounted at `/mcp` (review of #532, item 4).
+    ['/mcp/', 307, '"/mcp/"'],
+    // Another origin: its origin and path, never the query (a login redirect's can carry a token).
+    [
+      'https://login.example.test/authorize?code=abc&token=t0k3n#x',
+      302,
+      '"https://login.example.test/authorize"',
+    ],
+  ])(
+    'says where a redirect to %s pointed instead of "request failed", and does not follow it',
+    async (location, status, shown) => {
+      const fetchImpl = vi.fn(async () => new Response('moved', { status, headers: { location } }));
+      const transport = new McpTransport({ endpoint: 'https://example.test/mcp', fetchImpl });
+      const thrown = await transport.listTools().catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(TransportInvokeError);
+      const message = (thrown as Error).message;
+      expect(message).toContain(
+        `mcp transport: tools/list responded ${status}, a redirect to ${shown}`,
+      );
+      expect(message).toContain('set the target URL to the final address');
+      expect(message).not.toContain('t0k3n');
+      expect(message).not.toContain('code=');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('names a redirect with no Location header', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 308 }));
+    const transport = new McpTransport({ endpoint: 'https://example.test/mcp', fetchImpl });
+    const thrown = await transport.listTools().catch((err: unknown) => err);
+    expect((thrown as Error).message).toContain('responded 308, a redirect to nowhere');
   });
 
   it('surfaces a JSON-RPC error as TransportInvokeError', async () => {

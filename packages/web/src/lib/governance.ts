@@ -1,5 +1,6 @@
 import {
   type GrantStatus,
+  type OperationDefinitionChangeWire,
   type OperationGovernanceChangeWire,
   type PrincipalKind,
   type ProviderHealthWire,
@@ -210,8 +211,8 @@ export interface OperationCatalogRow {
   readonly mode?: string;
   readonly blastRadius?: string;
   readonly autoApprovable?: boolean;
-  /** Always `1` today — no per-Operation revision counter exists yet (`toWireOperationSummary`'s
-   *  own doc comment). Kept on the wire type so a future real version renders without a UI change. */
+  /** The identity's version (S3.12): a revision draft is `published.version + 1`, and the version
+   *  it replaces stays listed as `deprecated` — so the version tells those rows apart. */
   readonly version?: number;
   /** S8 W3-K1 (leftover 81) — absent or blank means "未填写描述", never coerced to `''` here so the
    *  page can tell "no description" from "kernel omitted the field" the same way either way. */
@@ -223,6 +224,9 @@ export interface OperationCatalogRow {
   /** R-19 (D-17): on a draft that revises a published version — what publishing it would change,
    *  with the kernel's direction (`OperationSummaryWire.governanceChange`). */
   readonly governanceChange?: OperationGovernanceChangeWire;
+  /** Legacy K (UX acceptance of #538): on the same drafts — what publishing it changes in the
+   *  definition the gate runs (`OperationSummaryWire.definitionChange`). */
+  readonly definitionChange?: OperationDefinitionChangeWire;
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see
@@ -230,6 +234,13 @@ export interface OperationCatalogRow {
  *  instead of a fabricated `id`. */
 export function operationKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'name'>): string {
   return `${row.gatekeeperId}::${row.name}`;
+}
+
+/** The catalog's selection key for the pending revision of a published Operation: the draft shares
+ *  `operationKey` with the version in effect, so the catalog tells the two apart (`CatalogPage`'s
+ *  `catalogOperationKey`). Legacy K: an alignment's revision drafts link here to be published. */
+export function revisionDraftKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'name'>): string {
+  return `${operationKey(row)}@draft`;
 }
 
 /** `get_operation_stats` (S3.12 catalog-usage follow-up, `gatekeeper-read-handlers.ts`'s

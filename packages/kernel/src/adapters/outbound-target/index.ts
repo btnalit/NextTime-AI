@@ -125,8 +125,11 @@ export function createOutboundTargetGuard(
   };
 }
 
-/** A `fetch` that refuses to follow redirects — every fetch of an owner-supplied URL uses one, so a
- *  URL that passed the guard cannot hand the kernel a `Location:` pointing anywhere else. */
+/** A `fetch` that never follows a redirect — every fetch of an owner-supplied URL uses one, so a
+ *  URL that passed the guard cannot hand the kernel a `Location:` pointing anywhere else.
+ *  `'manual'`, not `'error'`: the 3xx comes back as itself, and each caller refuses it with a
+ *  failure that says where it pointed (`@nexttime/gatekeeper-base` `redirectRefusalMessage`)
+ *  instead of a bare "request failed" (review of #532, item 4). */
 export function withoutRedirects(fetchImpl: typeof fetch): typeof fetch {
-  return (input, init) => fetchImpl(input, { ...init, redirect: 'error' });
+  return (input, init) => fetchImpl(input, { ...init, redirect: 'manual' });
 }

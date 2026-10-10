@@ -37,6 +37,7 @@ function emptyPreview(overrides: Record<string, unknown> = {}) {
     ambiguousCandidates: [],
     operationsToImport: [],
     operationsAlreadyPresent: [],
+    awaitingPlatformAdoption: null,
     ...overrides,
   };
 }
@@ -150,6 +151,39 @@ describe('EnableGateConfirm', () => {
     expect(within(confirm).getByTestId('enable-preview-drift').textContent).toContain('new-name');
     expect(within(confirm).getByTestId('enable-preview-differs')).toBeTruthy();
     expect(within(confirm).getByTestId('confirm-button').textContent).toContain('关联并启用');
+  });
+
+  it('UX acceptance of #538: enabling while the gate’s new manifest waits for the platform says calls to those Operations will be refused until it is adopted', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        emptyPreview({
+          operationsToImport: [
+            { name: 'stock.get', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+          ],
+          awaitingPlatformAdoption: {
+            announcedAt: '2026-10-10T04:00:00.000Z',
+            operations: ['stock.get'],
+          },
+        }),
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="库存"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    const notice = within(confirm).getByTestId('enable-gate-1-awaiting-adoption');
+    expect(notice.textContent).toContain(
+      '平台管理员还没采用。现在启用的话，采用之前对 stock.get 的调用会被拒绝。',
+    );
+    // Not a platform admin: told who to ask, no link.
+    expect(notice.textContent).toContain('请平台管理员在「集成」里采用门的新清单。');
+    expect(within(confirm).queryByTestId('enable-gate-1-awaiting-adoption-adopt-link')).toBeNull();
   });
 
   it('J4: ambiguousCandidates blocks the confirm entirely — only the notice renders', async () => {

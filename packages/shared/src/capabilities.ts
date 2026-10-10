@@ -894,7 +894,8 @@ const connectionCapabilities: readonly Capability[] = [
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id }).strict(),
     resultSchema: wire.PublishManifestResultWireSchema,
-    description: 'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17).',
+    description:
+      'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17): the gate’s own import-origin drafts; an agent’s or person’s proposal stays a draft (skippedDraftOperationNames) for publish_operation. Legacy J: a draft declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) stays a draft and is listed in gateOwnedParamDrafts with those params.',
   },
   {
     name: 'connect_gatekeeper',
@@ -1013,7 +1014,7 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.EnableGateInstanceResultWireSchema,
     description:
-      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess. L4-13: a single match already linked to a different gate instance refuses 409 gatekeeper_already_linked (one link per Gatekeeper). R-18: an optional manifestDigest (from preview_gate_instance_enable) makes it refuse 409 manifest_changed when the manifest in effect is no longer the previewed one.',
+      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess. L4-13: a single match already linked to a different gate instance refuses 409 gatekeeper_already_linked (one link per Gatekeeper). R-18: an optional manifestDigest (from preview_gate_instance_enable) makes it refuse 409 manifest_changed when the manifest in effect is no longer the previewed one. Legacy J: an imported draft declaring a param only the gate sets stays a draft, listed in gateOwnedParamDrafts.',
   },
   {
     // S8 W2-K2 (audit J3 "一键写入 ... 没有预览或确认"): the console ConfirmTier's read model for
@@ -1027,7 +1028,7 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
     resultSchema: wire.PreviewGateInstanceEnableResultWireSchema,
     description:
-      'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper, or 409 gatekeeper_already_linked when that Gatekeeper is already linked to another instance), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
+      'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper, or 409 gatekeeper_already_linked when that Gatekeeper is already linked to another instance), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2; legacy K: definitionDiffers when the gate announces another definition, which it refuses to run calls under until a revision is published). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
   },
   {
     // S8 W3-K1 (leftover 79, audit CO2): the write half of preview_gate_instance_enable's own
@@ -1053,7 +1054,7 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.RefreshOperationGovernanceResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification.',
+      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification. Legacy K: a selected published Operation whose announced definition changed (the gate refuses calls under the deployed one) gets an import-origin revision draft at the next version carrying the announced definition, listed in revisionDrafts and audited as operation.revision_drafted; an owner publishes it with publish_operation / publish_manifest. A pending import-origin draft (an earlier revision, or one a bulk publish held back for a gate-owned param, legacy J) is rewritten to the announced entry at its own version when it differs, and listed the same way; an agent’s or person’s proposal is never overwritten.',
   },
   {
     name: 'issue_gate_credential_token',
@@ -1194,7 +1195,7 @@ const metaCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.OperationPublishResultWireSchema,
     description:
-      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Legacy J: an http Operation declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) is never published — 400 gate_owned_params (details: params [{param, location}]).',
   },
   {
     name: 'deprecate_operation',
