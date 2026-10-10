@@ -24,6 +24,19 @@ export interface LinkedApprovalsProps {
 
 const PAGE_SIZE = 20;
 
+/** The Task's approvals are an operator/owner read: say whom to ask, never the capability name. */
+function LinkedApprovalsForbidden() {
+  const t = useT();
+  return (
+    <Notice testId="linked-approvals-forbidden">
+      {t(
+        '关联的审批只有 operator 和工作区所有者能看。要查看，请工作区所有者把你的角色改为 operator。',
+        'Only operators and the workspace owner see linked approvals. To see them, ask the workspace owner to make you an operator.',
+      )}
+    </Notice>
+  );
+}
+
 /**
  * components/approvals/LinkedApprovals (console redesign P3-4 part B, on `components/kit/*` only;
  * S6-A C28 — docs/console-completion-plan.md §5.5, §6; runbook web-console.md 已知缺口 6): the Task
@@ -42,10 +55,7 @@ export function LinkedApprovals(props: LinkedApprovalsProps) {
   const permissions = usePermissions();
   if (permissions.isDenied('list_action_requests')) {
     return (
-      <Notice testId="linked-approvals-forbidden">
-        查看关联审批需要 operator 角色。 Linked approvals need the operator role
-        (`list_action_requests`).
-      </Notice>
+      <LinkedApprovalsForbidden />
     );
   }
   return <LinkedApprovalsList {...props} />;
@@ -79,10 +89,7 @@ function LinkedApprovalsList({
   if (linked.state.status === 'error') {
     if (isForbiddenError(linked.state.error)) {
       return (
-        <Notice testId="linked-approvals-forbidden">
-          查看关联审批需要 operator 角色。 Linked approvals need the operator role
-          (`list_action_requests`).
-        </Notice>
+        <LinkedApprovalsForbidden />
       );
     }
     return (

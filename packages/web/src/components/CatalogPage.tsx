@@ -716,7 +716,7 @@ function OperationDetailView({
         title={
           usage
             ? `${usage.calls} calls, ${usage.approved} approved, ${usage.rejected} rejected in the trailing window`
-            : 'No usage data for this Operation (get_operation_stats unavailable, or no calls in the window)'
+            : 'No usage data for this Operation (stats unavailable, or no calls in the window)'
         }
       >
         {usage

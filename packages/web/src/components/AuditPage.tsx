@@ -201,7 +201,14 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
       {forbidden ? (
         <EmptyState
           icon="shield"
-          title={t('需要 auditor 角色', 'Needs the auditor role')}
+          title={t(
+            '重建只有审计员和工作区所有者能做',
+            'Only auditors and the workspace owner can reconstruct',
+          )}
+          body={t(
+            '要重建，请工作区所有者把你的角色改为 auditor。',
+            'To reconstruct, ask the workspace owner to make you an auditor.',
+          )}
           testId="reconstruct-forbidden"
         />
       ) : state.error !== null ? (

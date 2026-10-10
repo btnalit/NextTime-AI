@@ -66,6 +66,9 @@ export const WORK_NAV: readonly NavItem[] = [
     sub: 'Approvals',
     icon: 'approvals',
     href: hrefs.approvals(),
+    // Only an operator or the owner reads the queue: for every other role the page could only
+    // say "not you" (#541 acceptance P2 — a dead end for the read-only auditor first of all).
+    capability: 'list_pending',
   },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
   // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the

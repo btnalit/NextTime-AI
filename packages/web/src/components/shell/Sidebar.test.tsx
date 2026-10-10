@@ -48,6 +48,31 @@ describe('Sidebar', () => {
     expect(screen.queryByTestId('nav-members')).toBeNull();
   });
 
+  it('#541 acceptance P2: 待我审批 shows only for a role that reads the queue (operator, owner)', () => {
+    for (const [role, shown] of [
+      ['owner', true],
+      ['operator', true],
+      ['builder', false],
+      ['member', false],
+      ['auditor', false],
+    ] as const) {
+      render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={{ kind: 'known', role }}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTestId('nav-approvals') !== null, role).toBe(shown);
+      expect(screen.getByTestId('nav-chats')).toBeTruthy();
+      cleanup();
+    }
+  });
+
   it('shows 治理', () => {
     for (const role of [INFERRED_UNKNOWN, INFERRED_OWNER, INFERRED_OPERATOR_PLUS, KNOWN_OWNER]) {
       const { unmount } = render(

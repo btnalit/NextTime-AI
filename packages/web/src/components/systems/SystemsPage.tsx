@@ -552,8 +552,8 @@ export function SystemsPage({
                   : t('没有连接申请', 'No connection requests')
               }
               body={t(
-                'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
-                'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
+                '智能体（或你自己）可以申请接入一个系统；在这里完成申请，会注册这个门，并把它的 Operation 导入为草稿。',
+                'An agent (or you) can request a system; completing the request here registers the Gatekeeper and imports its Operations as drafts.',
               )}
               action={
                 <Button variant="secondary" onClick={() => setDrawer({ kind: 'request' })}>

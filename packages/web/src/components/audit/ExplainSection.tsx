@@ -173,8 +173,8 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         isForbiddenError(exportError) ? (
           <Notice tone="warn" testId="explain-export-forbidden">
             {t(
-              '导出需要 auditor 角色（export_prov）。',
-              'Export needs the auditor role (export_prov).',
+              '导出溯源只有审计员和工作区所有者能做；要导出，请工作区所有者把你的角色改为 auditor。',
+              'Only auditors and the workspace owner can export provenance; to export, ask the workspace owner to make you an auditor.',
             )}
           </Notice>
         ) : (

@@ -331,8 +331,8 @@ function TasksList({
             : t('没有符合筛选的任务', 'No tasks match this filter')
         }
         body={t(
-          '入口智能体把工作委派给 Worker（invoke_worker）时会创建任务；它的运行、结果契约与审批都在这里。',
-          'A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here.',
+          '入口智能体把工作委派给 Worker 时会创建任务；它的运行、结果契约与审批都在这里。',
+          'A Task is created when the entry agent delegates work to a Worker. Its runs, result contract and approvals show up here.',
         )}
         testId="tasks-empty"
       />

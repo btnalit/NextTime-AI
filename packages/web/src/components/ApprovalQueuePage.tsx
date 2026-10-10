@@ -284,10 +284,13 @@ function PendingList({
     if (forbidden) {
       return (
         <EmptyState
-          title={t('审批需要 operator 角色', 'Approvals need the operator role')}
+          title={t(
+            '审批由 operator 和工作区所有者处理',
+            'Approvals are handled by operators and the workspace owner',
+          )}
           body={t(
-            '当前主体不能调用 list_pending；请工作区 owner 授予 operator 角色。',
-            'Your principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions.',
+            '你的角色看不到审批队列。要参与审批，请工作区所有者把你的角色改为 operator。',
+            'Your role does not see the approval queue. To take part in approvals, ask the workspace owner to make you an operator.',
           )}
           testId="approvals-forbidden"
         />
@@ -470,10 +473,13 @@ function ApprovalHistoryTab({
       ) : history.state.status === 'error' ? (
         forbidden ? (
           <EmptyState
-            title={t('审批历史需要 operator 角色', 'Approval history needs the operator role')}
+            title={t(
+              '审批历史只有 operator 和工作区所有者能看',
+              'Only operators and the workspace owner see the approval history',
+            )}
             body={t(
-              '当前主体不能调用 list_action_requests。',
-              'Your principal cannot call list_action_requests. Ask the workspace owner for an operator-role principal.',
+              '要查看，请工作区所有者把你的角色改为 operator。',
+              'To see it, ask the workspace owner to make you an operator.',
             )}
             testId="approval-history-forbidden"
           />

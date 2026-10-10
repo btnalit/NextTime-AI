@@ -186,8 +186,8 @@ export function AuditLogSection({
             id="audit-actor"
             label={t('操作者', 'Actor')}
             hint={t(
-              '当前角色无权读取成员目录（list_principals 需要 operator），候选取自最近审计记录中的操作者。',
-              'Your role cannot read the member directory (list_principals needs operator); suggestions are the actors of recent audit rows.',
+              '你的角色看不到成员名单，这里的候选取自最近审计记录里的操作者。',
+              'Your role does not see the member list; suggestions are the actors of recent audit rows.',
             )}
             value={actor}
             onChange={setActor}
@@ -260,8 +260,14 @@ export function AuditLogSection({
         forbidden ? (
           <EmptyState
             icon="shield"
-            title={t('审计流需要 auditor 角色', 'The audit log needs the auditor role')}
-            body={t('当前主体不能调用 audit_query。', 'Your principal cannot call audit_query.')}
+            title={t(
+              '审计流只有审计员和工作区所有者能看',
+              'Only auditors and the workspace owner see the audit log',
+            )}
+            body={t(
+              '要查看，请工作区所有者把你的角色改为 auditor。',
+              'To see it, ask the workspace owner to make you an auditor.',
+            )}
             testId="audit-query-forbidden"
           />
         ) : (

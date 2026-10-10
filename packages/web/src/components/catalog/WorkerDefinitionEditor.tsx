@@ -533,8 +533,8 @@ export function WorkerDefinitionEditor({
       {view === 'json' ? (
         <JsonEditor
           label={t(
-            'definition（propose_worker_definition 的 definition 字段）',
-            'The definition record',
+            'Worker 定义（JSON）',
+            'Worker definition (JSON)',
           )}
           value={content}
           onApply={applyJson}

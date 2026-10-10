@@ -304,8 +304,8 @@ function OperationReviewRow({
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
               <Notice>
                 {t(
-                  '先创建新草稿（propose_operation），确认分类变化后再发布（publish_operation）——分类变更永远经过这两步，不提供直接改的捷径。',
-                  'First a new draft (propose_operation), then — after you confirm the classification change — the publish (publish_operation). A classification change always takes both steps; there is no direct edit.',
+                  '改分类要走两步：先存成新草稿，确认分类变化后再发布。没有直接修改的捷径。',
+                  'Changing the classification takes two steps: save a new draft, then publish it once you have confirmed the change. There is no direct edit.',
                 )}
               </Notice>
               <div className="row">

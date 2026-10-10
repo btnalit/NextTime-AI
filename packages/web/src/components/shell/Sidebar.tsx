@@ -140,6 +140,12 @@ export function SidebarContent({
   const t = useT();
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
+  // A page whose own read the known role may not use is not offered (`NavItem.capability`, the
+  // kernel's own `roleMayUseCapability`); until the role is known every item shows.
+  const roleSeesItem = (item: NavItem) =>
+    role.kind !== 'known' ||
+    item.capability === undefined ||
+    roleMayUseCapability(role.role, getCapability(item.capability));
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   const navRef = useRef<HTMLElement>(null);
@@ -212,7 +218,9 @@ export function SidebarContent({
 
       <nav className="sidebar-nav" aria-label="Sections" ref={navRef}>
         <NavSectionGroup titleZh="使用" titleEn="Use" testId="nav-section-use">
-          {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+          {WORK_NAV.filter(roleSeesItem).map((item) =>
+            renderNavItem(item, active, pendingCount, t),
+          )}
         </NavSectionGroup>
 
         {showGovern ? (
@@ -232,12 +240,9 @@ export function SidebarContent({
             scopeEn="This workspace"
             testId="nav-section-govern"
           >
-            {GOVERN_NAV.filter(
-              (item) =>
-                role.kind !== 'known' ||
-                item.capability === undefined ||
-                roleMayUseCapability(role.role, getCapability(item.capability)),
-            ).map((item) => renderNavItem(item, active, pendingCount, t))}
+            {GOVERN_NAV.filter(roleSeesItem).map((item) =>
+              renderNavItem(item, active, pendingCount, t),
+            )}
             {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV, t) : null}
           </NavSectionGroup>
         ) : null}

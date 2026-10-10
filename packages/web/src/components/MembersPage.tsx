@@ -194,10 +194,13 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
       ) : principals.state.status === 'error' ? (
         forbidden ? (
           <EmptyState
-            title={t('需要 owner 权限', 'Owner role required')}
+            title={t(
+              '成员名单只有 operator 和工作区所有者能看',
+              'Only operators and the workspace owner see the member list',
+            )}
             body={t(
-              'list_principals 仅工作区 owner 可读。',
-              'list_principals is restricted to the workspace owner.',
+              '要查看，请工作区所有者把你的角色改为 operator。',
+              'To see it, ask the workspace owner to make you an operator.',
             )}
             testId="members-forbidden"
           />

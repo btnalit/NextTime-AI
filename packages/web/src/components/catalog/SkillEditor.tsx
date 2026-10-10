@@ -257,13 +257,13 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version}{' '}
-              复制（已预填当前版本的正文）：内核的 propose_skill 不接受 skillId，提交会创建一个
-              <strong>新的</strong> Skill（新 ID、v1），不是 同一 Skill 的新版本。
+              复制（已预填当前版本的正文）：提交会创建一个<strong>新的</strong> Skill（从 v1
+              开始），不是这个 Skill 的新版本。
             </>,
             <>
               Copied from {copyOf.name} v{copyOf.version} (the current version’s body is
-              pre-filled): propose_skill takes no skillId, so submitting creates a{' '}
-              <strong>new</strong> Skill (new id, v1), not a new version of this one.
+              pre-filled): submitting creates a <strong>new</strong> Skill (starting at v1), not a
+              new version of this one.
             </>,
           )}
         </Notice>

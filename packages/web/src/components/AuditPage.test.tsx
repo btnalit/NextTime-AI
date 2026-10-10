@@ -552,7 +552,7 @@ describe('AuditPage pickers', () => {
     });
     renderPage(http);
     const input = await screen.findByTestId('audit-actor-input');
-    expect(screen.getByText(/list_principals/)).toBeTruthy();
+    expect(screen.getByText(/看不到成员名单/)).toBeTruthy();
     const pick = await screen.findByTestId('audit-actor-input-pick');
     await waitFor(() => expect(pick.textContent).toContain('Grace'));
 

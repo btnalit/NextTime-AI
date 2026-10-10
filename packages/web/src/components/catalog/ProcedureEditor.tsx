@@ -401,8 +401,8 @@ export function ProcedureEditor({
       {view === 'json' ? (
         <JsonEditor
           label={t(
-            'procedure（propose_procedure 的 procedure 字段）',
-            'The propose_procedure payload',
+            '流程定义（JSON）',
+            'Procedure definition (JSON)',
           )}
           value={content}
           onApply={applyJson}
