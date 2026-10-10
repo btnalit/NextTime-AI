@@ -107,10 +107,12 @@ function sqlStateOf(err: unknown): string | null {
 }
 
 /** `toolName` names the capability whose declared secret params are redacted too — the call's
- *  start names it; an end carries it only from a newer runtime. */
+ *  start names it; an end carries it only from a newer runtime. `args`, the call's arguments as its
+ *  start carried them, hides in the result every value it hid (`redactToolResult`). */
 function toChatStreamPayload(
   event: Extract<AgentRuntimeEvent, { type: 'toolCallStarted' | 'toolCallEnded' }>,
   toolName?: string,
+  args?: unknown,
 ) {
   switch (event.type) {
     case 'toolCallStarted':
@@ -124,7 +126,9 @@ function toChatStreamPayload(
       return {
         streamKind: 'toolCallEnded' as const,
         toolCallId: event.toolCallId,
-        ...('result' in event ? { result: redactToolResult(event.result, toolName).value } : {}),
+        ...('result' in event
+          ? { result: redactToolResult(event.result, toolName, args).value }
+          : {}),
         ...(event.isError !== undefined ? { isError: event.isError } : {}),
       };
   }
@@ -381,7 +385,11 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
             type: 'chat.stream',
             chatId: event.chatId,
             turnId: event.turnId,
-            payload: toChatStreamPayload(event, name ?? undefined),
+            payload: toChatStreamPayload(
+              event,
+              name ?? undefined,
+              opened?.hasArgs ? opened.args : undefined,
+            ),
           });
           if (!admitRecord(event.turnId, calls)) return;
           await storeToolCallRecords(event, [

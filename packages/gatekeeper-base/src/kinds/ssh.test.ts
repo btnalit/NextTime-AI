@@ -212,6 +212,32 @@ describe('SshTransport', () => {
     ).rejects.toThrow(/Host key verification failed\. \(exit 255\)/);
   });
 
+  it('never repeats the command line Node puts in a failed command’s message (identity file, target, rendered params)', async () => {
+    const execImpl = vi.fn(async () => {
+      throw Object.assign(
+        new Error(
+          "Command failed: ssh -n -i /run/secrets/id_ed25519 -p 22 admin@198.51.100.10 -- mysql -p'hunter2-synthetic'\n",
+        ),
+        { stderr: '', code: 1, signal: null, cmd: 'ssh … mysql -p…' },
+      );
+    });
+    const transport = new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl,
+    });
+    const failure: unknown = await transport
+      .invoke(patternOperation, { command: 'show interfaces' }, {})
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    expect(failure).toBeInstanceOf(Error);
+    const { message } = failure as Error;
+    expect(message).toMatch(/the command failed with no output on stderr \(exit 1\)/);
+    expect(message).not.toMatch(/hunter2|id_ed25519|198\.51\.100\.10|Command failed/);
+  });
+
   it('execFiles ssh with connection args and the literal command as the last argument (no local shell)', async () => {
     const execImpl = vi.fn(async () => ({ stdout: 'ok', stderr: '' }));
     const transport = new SshTransport({

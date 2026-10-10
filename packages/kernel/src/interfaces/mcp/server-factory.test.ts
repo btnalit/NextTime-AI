@@ -10,6 +10,7 @@ import {
   HttpGatekeeperClient,
   platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
+import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
 import { buildToolCatalog } from './tool-projection.js';
@@ -129,6 +130,20 @@ describe('mapCapabilityErrorToToolResult', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^credentials_in_observe_params: inventory\.list_items: /);
     expect(text).toMatch(/Do not pass credentials/);
+  });
+
+  it('prefixes a refused connection’s credential-carrying field with its code (legacy 186)', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new ConnectionParamsCarryCredentialsError(
+        'request_connection',
+        'target',
+        'carries what looks like a credential',
+      ),
+    );
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/^credentials_in_connection_params: request_connection: target /);
+    expect(text).toMatch(/never the target/);
   });
 
   it('puts a gate answer’s code in front, so a refusal reads as one (review of #532)', () => {

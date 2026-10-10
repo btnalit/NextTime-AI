@@ -88,7 +88,10 @@ import {
   NotProposerError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
-import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
+import {
+  ConnectionParamsCarryCredentialsError,
+  ConnectionRequestNotFoundError,
+} from '../../governance/connections/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -405,7 +408,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: 'malformed identifier or value' };
   }
   // S2.13 `create_connection` — same additions as capability-route.ts's mapCapabilityError.
-  if (err instanceof ConnectionCredentialRequiredError) {
+  if (
+    err instanceof ConnectionCredentialRequiredError ||
+    err instanceof ConnectionParamsCarryCredentialsError
+  ) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // R-27 / R-01 (D-01) — same additions as capability-route.ts's mapCapabilityError.

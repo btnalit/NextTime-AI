@@ -340,6 +340,43 @@ describe('CompleteConnectionForm', () => {
     expect(fieldError.textContent).toContain('指向平台自身的服务');
   });
 
+  // Legacy 186: a credential in the target or the endpoint is refused on the field the kernel
+  // names in `details.field` — never on Credentials, though the message mentions credentials.
+  it.each([
+    [
+      'target',
+      /目标系统/,
+      'https://ops:pw@grafana.example',
+      'cc-target-error',
+      '目标系统里带了凭据',
+    ],
+    ['endpoint', /门端点/, 'https://gate.example/?token=x', 'cc-endpoint-error', '门端点里不能带'],
+  ])(
+    'shows a credentials_in_connection_params 400 on the %s field',
+    async (field, label, value, errorId, explanation) => {
+      const http = httpWith(async () => {
+        throw new HttpError(
+          'capability_error',
+          `create_connection: ${field} carries what looks like a credential — refused, nothing was stored. Give the gate its credentials (the credentials field, or the gate's own configuration), never the ${field}.`,
+          'credentials_in_connection_params',
+          { field },
+        );
+      });
+      render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText(/门端点/), {
+        target: { value: 'https://gate.example' },
+      });
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      const fieldError = await screen.findByText(/refused, nothing was stored/);
+      expect(fieldError.getAttribute('id')).toBe(errorId);
+      expect(fieldError.textContent).toContain(explanation);
+      expect(document.getElementById('cc-credentials-error')).toBeNull();
+    },
+  );
+
   it('picks "on behalf of" from list_principals (active humans only) and submits the chosen id', async () => {
     const http = httpWith(async (name, params) => {
       if (name === 'list_principals') {

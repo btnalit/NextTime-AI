@@ -8,6 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { getGrant } from '../capability/index.js';
 import { getGatekeeper, getOperation } from '../gatekeepers/index.js';
+import { ConnectionParamsCarryCredentialsError } from './credentials.js';
 import {
   GatekeeperNotFoundError,
   cancelConnectionRequest,
@@ -264,14 +265,15 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
   it('cancelConnectionRequest: the audit copy of a target URL carrying a password has it redacted; the request keeps it as sent', async () => {
     // Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet.
     const target = 'https://ops:abcdefghijklmnopqrstuvwxyz0123@inventory.example.invalid/api';
-    const row = await inTx((client) =>
-      requestConnection(client, workspaceId, {
-        kind: 'http',
-        target,
-        requestedBy: { id: memberId, kind: 'human' },
-      }),
-    );
-    expect(row.target).toBe(target);
+    // A row from before legacy 186, when `requestConnection` still took such a target.
+    const row = await inTx(async (client) => {
+      const inserted = await client.query<{ id: string }>(
+        `insert into connection_requests (workspace_id, kind, target, requested_by)
+         values ($1, 'http', $2, $3) returning id`,
+        [workspaceId, target, memberId],
+      );
+      return { id: inserted.rows[0]?.id as string };
+    });
     await inTx((client) =>
       cancelConnectionRequest(client, workspaceId, {
         connectionRequestId: row.id,
@@ -288,6 +290,50 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
     expect(audit.rows[0]?.payload.target).toBe(
       'https://ops:[redacted]@inventory.example.invalid/api',
     );
+  });
+
+  it.each([
+    ['a URL password', 'https://ops:abcdefghijklmnopqrstuvwxyz0123@refused.example.invalid/api'],
+    [
+      'a secret query parameter',
+      'https://grafana.example.invalid/?api_key=abcdefghijklmnopqrstuvwxyz0123',
+    ],
+    ['a Bearer value', 'grafana, Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123'],
+  ])(
+    'requestConnection refuses a target carrying %s, before anything is written (legacy 186)',
+    async (_name, target) => {
+      const thrown = await inTx((client) =>
+        requestConnection(client, workspaceId, {
+          kind: 'http',
+          target,
+          requestedBy: { id: memberId, kind: 'human' },
+        }),
+      ).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(ConnectionParamsCarryCredentialsError);
+      expect(thrown).toMatchObject({
+        code: 'credentials_in_connection_params',
+        details: { field: 'target' },
+      });
+      expect((thrown as Error).message).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+      const stored = await inTx((client) =>
+        client.query('select 1 from connection_requests where workspace_id = $1 and target = $2', [
+          workspaceId,
+          target,
+        ]),
+      );
+      expect(stored.rowCount).toBe(0);
+    },
+  );
+
+  it('requestConnection keeps a target that names a user but no secret (ssh://deploy@host)', async () => {
+    const row = await inTx((client) =>
+      requestConnection(client, workspaceId, {
+        kind: 'ssh',
+        target: 'ssh://deploy@db-1.example.invalid',
+        requestedBy: { id: memberId, kind: 'human' },
+      }),
+    );
+    expect(row.target).toBe('ssh://deploy@db-1.example.invalid');
   });
 
   it('cancelConnectionRequest: requested → cancelled (I6), audited as connection.request_cancelled; a second cancel and a cancel of a completed row are IllegalTransition; unknown id is not found', async () => {

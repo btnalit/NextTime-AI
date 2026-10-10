@@ -277,6 +277,40 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     expect(fake.targets).toEqual([]);
   });
 
+  it.each([
+    ['target', { target: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@grafana.example.invalid' }],
+    ['endpoint', { endpoint: 'https://gate.owner.example/?token=abcdefghijklmnopqrstuvwxyz0123' }],
+    ['endpoint', { endpoint: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@gate.owner.example' }],
+  ])(
+    'refuses a credential in the %s before contacting anything or writing a row (legacy 186)',
+    async (field, override) => {
+      const { fake, fetchImpl } = wire();
+      const client = stubClient('self_serve');
+      const thrown = await createConnectionHandler(
+        client,
+        WORKSPACE,
+        {
+          kind: 'http',
+          target: 'x',
+          endpoint: 'https://gate.owner.example',
+          credentialKind: 'shared',
+          connectionSecret: secrets.mint(WORKSPACE).secret,
+          manifestSource: 'https://api.owner.example/openapi.json',
+          ...override,
+        },
+        { channel: 'human', principalId: OWNER },
+      ).catch((err: unknown) => err);
+      expect(thrown).toMatchObject({
+        code: 'credentials_in_connection_params',
+        details: { field },
+      });
+      expect((thrown as Error).message).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(fake.targets).toEqual([]);
+      expect(client.sql.filter((sql) => /^\s*insert/i.test(sql))).toEqual([]);
+    },
+  );
+
   it('requires a connectionSecret minted for this workspace, before contacting anything', async () => {
     const { fake } = wire();
     const base = {

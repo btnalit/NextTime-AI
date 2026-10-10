@@ -336,7 +336,8 @@ for s in 3 1 2 4; do
 done
 docker compose --profile test stop fake-llm >/dev/null 2>&1
 
-# 8. backup on the new release, pre-upgrade retention, expired workspaces, observation compaction
+# 8. backup on the new release, pre-upgrade retention, expired workspaces, observation compaction,
+#    raw-secret scrub
 docker compose run --rm -e BACKUP_NOW=1 backup </dev/null >/dev/null 2>&1
 backup_rc=$?
 echo "STEP backup-now exit=$backup_rc last=$(sed -n 's/^db_dump=//p' "$D/backups/last-success" 2>/dev/null)"
@@ -363,6 +364,21 @@ if [ -f packages/kernel/src/cli/compact-observations.ts ]; then
     clog="$LOG_DIR/apply-$TAG-$TS-compaction.log"
     docker compose run --rm --no-deps -T kernel node dist/cli/compact-observations.js --yes >"$clog" 2>&1 </dev/null
     echo "STEP observations-compaction exit=$? $(tail -n 1 "$clog") log=$clog"
+  fi
+fi
+
+# Legacy 183–187: rows stored before those fixes can still hold a credential in plain text. Rewrite
+# the agent-written copies people read (a Turn's report, an agent's Decision, a tool-call record's
+# result) with those values masked; count — never touch — Task inputs, connection addresses and
+# audit rows (packages/kernel/src/application/platform/scrub-raw-secrets.ts). Only on top of the
+# BACKUP_NOW above: that dump is the recovery point. Idempotent; failures are logged, never fatal.
+if [ -f packages/kernel/src/cli/scrub-raw-secrets.ts ]; then
+  if [ "$backup_rc" -ne 0 ]; then
+    echo "STEP raw-secret-scrub skipped — backup-now failed (exit=$backup_rc), no fresh recovery point"
+  else
+    rlog="$LOG_DIR/apply-$TAG-$TS-raw-secret-scrub.log"
+    docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js --yes >"$rlog" 2>&1 </dev/null
+    echo "STEP raw-secret-scrub exit=$? $(tail -n 1 "$rlog") log=$rlog"
   fi
 fi
 

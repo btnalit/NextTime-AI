@@ -8,6 +8,7 @@ import {
   buildToolCallRecord,
   redactMessageContent,
   redactToolArgs,
+  redactToolResult,
 } from './tool-call-record.js';
 
 /** A Handle-shaped compact JWT (header `{"alg":"EdDSA"}`). Synthetic — `.gitleaks.toml` allows
@@ -198,6 +199,74 @@ describe('buildToolCallRecord', () => {
     });
     expect(content).not.toHaveProperty('args');
     expect(content).not.toHaveProperty('result');
+  });
+});
+
+describe('legacy 185 — a result never shows what the same call’s args hid', () => {
+  /** Not a pattern any value scrub knows — only the field rule or the literal can hide it. */
+  const PLAIN_SECRET = 'hunter2-plain-word';
+  const args = { name: 'db-1', credentials: { password: PLAIN_SECRET }, user: 'bob' };
+
+  it('hides a secret-named field in a result that is JSON text, at any depth, as in the args', () => {
+    const echoed = JSON.stringify(
+      { gatekeeper: { name: 'db-1', credentials: { password: PLAIN_SECRET }, apiKey: 12345678 } },
+      null,
+      2,
+    );
+    const content = record({
+      name: 'some_tool',
+      args,
+      hasArgs: true,
+      result: textResult(echoed),
+      hasResult: true,
+    });
+    expect(content.args?.text).not.toContain(PLAIN_SECRET);
+    expect(content.result?.text).not.toContain(PLAIN_SECRET);
+    expect(content.result?.text).not.toContain('12345678');
+    expect(content.result?.text).toContain(`"password": "${REDACTED}"`);
+    expect(content.result?.text).toContain('"name": "db-1"');
+  });
+
+  it('hides an arg’s secret value wherever the result quotes it in prose', () => {
+    const content = record({
+      name: 'some_tool',
+      args,
+      hasArgs: true,
+      result: textResult(`mysql -ubob -p${PLAIN_SECRET} failed: access denied for bob`),
+      hasResult: true,
+    });
+    expect(content.result?.text).toBe(`mysql -ubob -p${REDACTED} failed: access denied for bob`);
+  });
+
+  it('the live stream hides the same values, and counts them the same', () => {
+    const result = textResult(`{"password":"${PLAIN_SECRET}"} and again ${PLAIN_SECRET}`);
+    const live = redactToolResult(result, 'some_tool', args);
+    expect(JSON.stringify(live.value)).not.toContain(PLAIN_SECRET);
+    const stored = record({ name: 'some_tool', args, hasArgs: true, result, hasResult: true });
+    expect(stored.result?.text).not.toContain(PLAIN_SECRET);
+    // args: 1 (credentials.password); result: 2 (the field, then the literal).
+    expect(live.redactedValues).toBe(2);
+    expect(stored.redactedValues).toBe(1 + 2);
+  });
+
+  it('without the args (a call whose start was never seen), still applies the field rule', () => {
+    const content = record({
+      result: textResult(`{"token":"${PLAIN_SECRET}"}`),
+      hasResult: true,
+    });
+    expect(content.result?.text).toBe(`{"token":"${REDACTED}"}`);
+  });
+
+  it('leaves a result that repeats only non-secret args alone', () => {
+    const content = record({
+      name: 'some_tool',
+      args: { name: 'db-1' },
+      hasArgs: true,
+      result: textResult('{"name":"db-1","rows":2}'),
+      hasResult: true,
+    });
+    expect(content.result?.text).toBe('{"name":"db-1","rows":2}');
+    expect(content.redactedValues).toBe(0);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   InvalidCapabilityParamsError,
   dispatchCapability,
 } from '../../application/gateway/index.js';
+import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import type { McpToolCatalog } from './tool-projection.js';
 
@@ -59,7 +60,10 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
   else if (err instanceof ForbiddenError) message = `forbidden: ${err.message}`;
   // Legacy 175: an observe tool's params carrying a literal credential — the message says what to
   // do instead; the code tells it apart from a schema mistake.
-  else if (err instanceof ObserveParamsCarryCredentialsError)
+  else if (
+    err instanceof ObserveParamsCarryCredentialsError ||
+    err instanceof ConnectionParamsCarryCredentialsError
+  )
     message = `${err.code}: ${err.message}`;
   // A gate's own answer (`operation_refused`, `invalid_params`, …): its code tells a refusal the
   // agent should not retry from an upstream failure.
