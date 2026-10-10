@@ -264,8 +264,8 @@ async function auditGateRefusal(
     // One log line whatever the values carry: a line break would let them forge entries.
     console.error(
       `[kernel] audit of a gate refusal failed (capability=${call.name}, code=${refusal.code}): ${detail}`.replace(
-        /[\r\n]+/g,
-        ' ',
+        /\n|\r/g,
+        '',
       ),
     );
   }
