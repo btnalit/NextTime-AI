@@ -482,7 +482,17 @@ export async function reactToSupervisorStatus(
 
   if (status.status === 'exited') {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-      await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'exited');
+      // R-58: only the call that terminated the run decides the Task (see the `failed` branch).
+      // A run another writer terminated meanwhile (a cancel, the reaper) has its Task decided by
+      // that writer; failing it here from the stale `task` read above would overwrite a cancel.
+      const moved = await terminateWorkerRunRow(
+        client,
+        workspaceId,
+        onBehalfOf,
+        workerRunId,
+        'exited',
+      );
+      if (!moved) return;
       // P1-6 fix: `waiting_approval` alongside `running` — a WorkerRun that exits (even code 0,
       // no crash) while its Task is still blocked on an ActionRequest decision leaves that Task
       // with no live WorkerRun to ever resume into; without this, `ActionRequestUpdated` would
@@ -536,23 +546,35 @@ export async function reactToSupervisorStatus(
       }
       return;
     }
+    // Same R-58 rule as the retry branch above: only the call that terminated the run decides the
+    // Task. A concurrent reaction that read the Task after another one claimed the retry (so it
+    // sees `retry_count = 1` and lands here) finds the run already terminated and must leave the
+    // Task alone; failing it would fail a Task whose retry is already running.
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-      await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'failed');
-      await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed');
+      const moved = await terminateWorkerRunRow(
+        client,
+        workspaceId,
+        onBehalfOf,
+        workerRunId,
+        'failed',
+      );
+      if (moved) await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed');
     });
     return;
   }
 
   if (status.status === 'terminated') {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-      await terminateWorkerRunRow(
+      // R-58: same rule as above. A `terminated: requested` the supervisor reports because
+      // `terminateTask` stopped the container is the cancel's to decide, not this reaction's.
+      const moved = await terminateWorkerRunRow(
         client,
         workspaceId,
         onBehalfOf,
         workerRunId,
         status.reason ?? 'terminated',
       );
-      if (task.status === 'running' || task.status === 'waiting_approval') {
+      if (moved && (task.status === 'running' || task.status === 'waiting_approval')) {
         await failTaskRow(
           client,
           workspaceId,
@@ -593,80 +615,89 @@ async function spawnWorkerRunForRetry(
   task: TaskRow,
   failedWorkerRun: WorkerRunRow,
 ): Promise<void> {
-  const handleRow = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: onBehalfOf },
-    async (client) => {
-      if (!failedWorkerRun.sessionId) return null;
-      const result = await client.query<{ jti: string; expires_at: Date; scope: unknown }>(
-        'select jti, expires_at, scope from capability_handles where workspace_id = $1 and session_id = $2 limit 1',
-        [workspaceId, failedWorkerRun.sessionId],
-      );
-      return result.rows[0] ?? null;
-    },
-  );
-  if (!handleRow) return; // nothing to attenuate from — leave the Task failed rather than guess.
+  // Every step after the claim, not only the spawn itself, ends in a decided Task: a throw in the
+  // Handle lookup or in the definition/Skill resolution would otherwise leave the claimed Task
+  // `running` with no live WorkerRun, and later reactions return early on the terminated run.
+  try {
+    const handleRow = await withWorkspace(
+      deps.pool,
+      { workspaceId, principalId: onBehalfOf },
+      async (client) => {
+        if (!failedWorkerRun.sessionId) return null;
+        const result = await client.query<{ jti: string; expires_at: Date; scope: unknown }>(
+          'select jti, expires_at, scope from capability_handles where workspace_id = $1 and session_id = $2 limit 1',
+          [workspaceId, failedWorkerRun.sessionId],
+        );
+        return result.rows[0] ?? null;
+      },
+    );
+    // Nothing to attenuate from: never guess a scope. The retry is already claimed (Task `running`,
+    // `retry_count = 1`, the crashed run terminated), so returning here would leave the Task
+    // `running` with no live WorkerRun forever; fail it through the catch below instead.
+    if (!handleRow) throw new Error('no Handle to attenuate the retry from');
 
-  const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
+    const scope = handleRow.scope as {
+      capabilities: string[];
+      resources: Record<string, string[]>;
+    };
 
-  const { model, skillsInline, loadedSkills, definitionName, egressDeny, systemPrompt, image } =
-    await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-      const definition = await getWorkerDefinition(client, workspaceId, {
-        definitionId: task.workerDefinitionId,
-        version: task.workerDefinitionVersion,
-      });
-      if (!definition) {
-        // No definition row (should not happen — see this function's own doc comment): fall back
-        // to the Task's own pinned id so `ensureWorkerAgentPrincipal` still gets a usable
-        // `display_name`, same "best effort, never blocks the caller" convention `model`/
-        // `skillsInline`/`egressDeny` already use one line above.
+    const { model, skillsInline, loadedSkills, definitionName, egressDeny, systemPrompt, image } =
+      await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
+        const definition = await getWorkerDefinition(client, workspaceId, {
+          definitionId: task.workerDefinitionId,
+          version: task.workerDefinitionVersion,
+        });
+        if (!definition) {
+          // No definition row (should not happen — see this function's own doc comment): fall back
+          // to the Task's own pinned id so `ensureWorkerAgentPrincipal` still gets a usable
+          // `display_name`, same "best effort, never blocks the caller" convention `model`/
+          // `skillsInline`/`egressDeny` already use one line above.
+          return {
+            model: undefined,
+            skillsInline: [],
+            loadedSkills: [],
+            definitionName: task.workerDefinitionId,
+            egressDeny: undefined,
+            systemPrompt: undefined,
+            // S7-E: still resolved even on this fallback path — the retry container must still
+            // pick up the platform's current active runtime image.
+            image: await resolveActiveRuntimeImage(client),
+          };
+        }
+        const content = readDefinitionContent(definition.definition);
+        // S3.13: same fallback `invoke.ts`'s initial spawn applies — only consulted when the
+        // WorkerDefinition itself declares no model, never a widening of what it pinned.
+        // `EffectiveAgentProfile.model` is always a concrete `string` (`''` = "nothing configured
+        // anywhere", `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to
+        // `undefined` here, same as `invoke.ts`'s own identical fallback.
+        const effectiveModel =
+          content.model === undefined
+            ? (await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)).model || undefined
+            : undefined;
+        // S10 E1: re-resolved for the retry — a Skill may have been deprecated or superseded since
+        // the first attempt, and the new WorkerRun records what *it* loads (worker_run_skills).
+        const resolvedSkills = await resolveSkillsInline(client, workspaceId, content.skills ?? []);
         return {
-          model: undefined,
-          skillsInline: [],
-          loadedSkills: [],
-          definitionName: task.workerDefinitionId,
-          egressDeny: undefined,
-          systemPrompt: undefined,
-          // S7-E: still resolved even on this fallback path — the retry container must still
-          // pick up the platform's current active runtime image.
+          model: content.model ?? effectiveModel ?? undefined,
+          skillsInline: resolvedSkills.skillsInline,
+          loadedSkills: resolvedSkills.loadedSkills,
+          definitionName:
+            typeof definition.definition.name === 'string'
+              ? definition.definition.name
+              : definition.id,
+          egressDeny: content.egressDeny,
+          // P-A2: same composition as `invoke.ts`'s initial spawn — the retry container must carry
+          // the same prompt the first attempt did.
+          systemPrompt: composeSystemPrompt({
+            base: content.systemPrompt,
+            instanceInstructions: await readInstanceInstructions(client),
+          }),
+          // S7-E: read fresh alongside systemPrompt above — the retry container must pick up the
+          // platform's current active runtime image, same as the initial spawn (invoke.ts).
           image: await resolveActiveRuntimeImage(client),
         };
-      }
-      const content = readDefinitionContent(definition.definition);
-      // S3.13: same fallback `invoke.ts`'s initial spawn applies — only consulted when the
-      // WorkerDefinition itself declares no model, never a widening of what it pinned.
-      // `EffectiveAgentProfile.model` is always a concrete `string` (`''` = "nothing configured
-      // anywhere", `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to
-      // `undefined` here, same as `invoke.ts`'s own identical fallback.
-      const effectiveModel =
-        content.model === undefined
-          ? (await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)).model || undefined
-          : undefined;
-      // S10 E1: re-resolved for the retry — a Skill may have been deprecated or superseded since
-      // the first attempt, and the new WorkerRun records what *it* loads (worker_run_skills).
-      const resolvedSkills = await resolveSkillsInline(client, workspaceId, content.skills ?? []);
-      return {
-        model: content.model ?? effectiveModel ?? undefined,
-        skillsInline: resolvedSkills.skillsInline,
-        loadedSkills: resolvedSkills.loadedSkills,
-        definitionName:
-          typeof definition.definition.name === 'string'
-            ? definition.definition.name
-            : definition.id,
-        egressDeny: content.egressDeny,
-        // P-A2: same composition as `invoke.ts`'s initial spawn — the retry container must carry
-        // the same prompt the first attempt did.
-        systemPrompt: composeSystemPrompt({
-          base: content.systemPrompt,
-          instanceInstructions: await readInstanceInstructions(client),
-        }),
-        // S7-E: read fresh alongside systemPrompt above — the retry container must pick up the
-        // platform's current active runtime image, same as the initial spawn (invoke.ts).
-        image: await resolveActiveRuntimeImage(client),
-      };
-    });
+      });
 
-  try {
     await spawnWorkerRun(deps, workspaceId, {
       task,
       parentWorkerRunId: failedWorkerRun.parentWorkerRunId,

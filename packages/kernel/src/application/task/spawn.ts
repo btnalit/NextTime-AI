@@ -120,8 +120,13 @@ export async function spawnWorkerRun(
       // `lifecycle.ts`'s crash retry `running`), and a cancel may have landed since. Checked before
       // anything is created or the supervisor is called; both callers handle the throw through
       // `failTaskAndReapWorkerRuns`, which leaves an already-terminal Task as it is.
+      // `for share`: a cancel whose UPDATE is in flight makes this read wait for it, so it sees
+      // `cancelled` rather than the stale `running`; and a cancel that starts after this read
+      // waits for this transaction, so `terminateTask`'s sweep (after its cancel commits) finds
+      // the WorkerRun created below and terminates it. Without the lock a spawn that read
+      // `running` could commit its WorkerRun after that sweep and run under a cancelled Task.
       const taskResult = await client.query<{ status: string }>(
-        'select status from tasks where workspace_id = $1 and id = $2',
+        'select status from tasks where workspace_id = $1 and id = $2 for share',
         [workspaceId, input.task.id],
       );
       const taskStatus = taskResult.rows[0]?.status;

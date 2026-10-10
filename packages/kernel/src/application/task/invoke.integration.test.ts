@@ -7,6 +7,7 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { PoolLike } from '../../adapters/db/pool.js';
 import {
   type TaskSpawnInput,
   type TaskSpawnOutcome,
@@ -41,6 +42,7 @@ import {
   InvokeWorkerDefinitionNotEnabledError,
   QuotaExceededError,
 } from './types.js';
+import type { TaskRow } from './types.js';
 
 /**
  * application/task/invoke.integration.test: DB-gated (real Postgres; auto-skip without
@@ -473,6 +475,53 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       });
     }
 
+    /** Non-terminated WorkerRuns under the Task, with whether each one's Handle is revoked. */
+    async function liveRuns(
+      principalId: string,
+      taskId: string,
+    ): Promise<{ id: string; status: string; handleRevoked: boolean }[]> {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ id: string; status: string; revoked: boolean }>(
+          `select wr.id, wr.status, (h.revoked_at is not null) as revoked
+             from worker_runs wr
+             left join capability_handles h
+               on h.workspace_id = wr.workspace_id and h.session_id = wr.session_id
+            where wr.workspace_id = $1 and wr.task_id = $2 and wr.status <> 'terminated'`,
+          [workspaceId, taskId],
+        );
+        return result.rows.map((row) => ({
+          id: row.id,
+          status: row.status,
+          handleRevoked: row.revoked,
+        }));
+      });
+    }
+
+    /** A supervisor client over `inner` whose `terminate` first runs `hook` once, for `workerRunId`. */
+    function terminateHooked(
+      inner: FakeTaskSupervisorClient,
+      workerRunId: string,
+      hook: () => Promise<void>,
+      order: 'before' | 'after',
+    ): TaskSupervisorClientPort {
+      let fired = false;
+      return {
+        spawn: (input) => inner.spawn(input),
+        status: (id) => inner.status(id),
+        terminate: async (id) => {
+          if (fired || id !== workerRunId) return inner.terminate(id);
+          fired = true;
+          if (order === 'before') {
+            await hook();
+            return inner.terminate(id);
+          }
+          const stopped = await inner.terminate(id);
+          await hook();
+          return stopped;
+        },
+      };
+    }
+
     it('two concurrent reactions to the same crashed WorkerRun spawn exactly one retry', async () => {
       const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
         'r58-concurrent-reactions',
@@ -491,6 +540,243 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(task?.status).toBe('running');
       expect(task?.retryCount).toBe(1);
       expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(2);
+    });
+
+    it('a reaction that reads the Task after another one claimed the retry leaves the retrying Task running', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-late-task-read');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+      // The late reaction reads the crashed run while it is still live, then its supervisor
+      // status call waits until the other reaction has finished, so it reads the Task only after
+      // `retry_count` was bumped and the retry spawned. It takes the no-retry branch and must
+      // leave the Task alone.
+      let lateEntered!: () => void;
+      const lateInStatus = new Promise<void>((resolve) => {
+        lateEntered = resolve;
+      });
+      let releaseLate!: () => void;
+      const firstDone = new Promise<void>((resolve) => {
+        releaseLate = resolve;
+      });
+      const lateDeps = deps(supervisorClient, {
+        supervisorClient: {
+          spawn: (input) => supervisorClient.spawn(input),
+          terminate: (id) => supervisorClient.terminate(id),
+          status: async (id) => {
+            lateEntered();
+            await firstDone;
+            return supervisorClient.status(id);
+          },
+        },
+      });
+
+      const late = reactToSupervisorStatus(
+        lateDeps,
+        workspaceId,
+        principalId,
+        spawnResult.workerRunId,
+      );
+      await lateInStatus;
+      await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId);
+      releaseLate();
+      await late;
+
+      expect(supervisorClient.spawnCalls).toHaveLength(2); // the original + one retry
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+      expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(2);
+    });
+
+    it('the reaper duration-limit sweep leaves a Task alone whose crash retry a poll claimed after the scan', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-reaper-timeout');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      // Past the duration limit, so the reaper's scan picks this run for the timeout path.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update worker_runs set started_at = now() - interval '2 hours'
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, spawnResult.workerRunId],
+        ),
+      );
+      // The reaper stops the container first; a `wait:true` poll reacts to the crash right then,
+      // after the scan and before the reaper's own row writes, and claims the retry.
+      const reaperDeps = deps(supervisorClient, {
+        supervisorClient: terminateHooked(
+          supervisorClient,
+          spawnResult.workerRunId,
+          () =>
+            reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId),
+          'before',
+        ),
+      });
+
+      await runTaskReaper(reaperDeps);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(2); // the original + the poll's retry
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      // Before the fix: failed / timeout, with the retry still running under it on a live Handle.
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+      const live = await liveRuns(principalId, spawnResult.taskId);
+      expect(live).toHaveLength(1);
+      expect(live[0]?.id).not.toBe(spawnResult.workerRunId);
+      expect(live[0]?.handleRevoked).toBe(false);
+    });
+
+    it('a cancel whose sweep meets a crash reaction leaves no retry running under the cancelled Task', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-cancel-vs-retry');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      // The crash reaction runs while `terminateTask` is stopping the crashed run's container.
+      const cancelDeps = deps(supervisorClient, {
+        supervisorClient: terminateHooked(
+          supervisorClient,
+          spawnResult.workerRunId,
+          () =>
+            reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId),
+          'before',
+        ),
+      });
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(cancelDeps);
+      try {
+        const cancelled = await terminateTask(workspaceId, principalId, spawnResult.taskId);
+        expect(cancelled.status).toBe('cancelled');
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('cancelled');
+      // Before the fix: the sweep listed only the crashed run, the reaction claimed the retry and
+      // spawned it, and the retry ran with a live Handle under the cancelled Task.
+      expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+    });
+
+    it("a reaction that sees the supervisor's terminated: requested does not turn the user's cancel into a failure", async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-cancel-not-failed');
+      // The reaction runs right after `terminateTask` stopped the container (the supervisor now
+      // reports `terminated: requested`) and before its row write.
+      const cancelDeps = deps(supervisorClient, {
+        supervisorClient: terminateHooked(
+          supervisorClient,
+          spawnResult.workerRunId,
+          () =>
+            reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId),
+          'after',
+        ),
+      });
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(cancelDeps);
+      let returned: TaskRow;
+      try {
+        returned = await terminateTask(workspaceId, principalId, spawnResult.taskId);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      // Before the fix: failed / terminated, and cancel returned that failure.
+      expect(returned.status).toBe('cancelled');
+      expect(task?.status).toBe('cancelled');
+      expect(task?.failureReason).toBeNull();
+    });
+
+    it('spawnWorkerRun waits for a cancel in flight and refuses the cancelled Task', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-spawn-for-share');
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      if (!task) throw new Error('the spawned Task was not found');
+
+      // A cancel's UPDATE, not yet committed.
+      const cancelClient = await pool.connect();
+      try {
+        await cancelClient.query('begin');
+        await cancelClient.query(
+          `update tasks set status = 'cancelled', cancelled_at = now()
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, spawnResult.taskId],
+        );
+
+        const spawning = spawnWorkerRun(runtimeDeps, workspaceId, {
+          task,
+          parentWorkerRunId: null,
+          depth: 1,
+          attempt: 2,
+          onBehalfOf: principalId,
+          parentAuthority: 'unconstrained',
+          parentClaimsForLineage: undefined,
+          declaredCapabilities: [],
+          declaredGates: [],
+          definitionName: 'r58-spawn-for-share',
+        });
+        const outcome = spawning.then(
+          () => 'spawned' as const,
+          (err: unknown) => err,
+        );
+        // Commit the cancel once the spawn either finished (no lock: it read the stale `running`)
+        // or is waiting on the Task row lock.
+        for (;;) {
+          const waiting = await pool.query<{ n: number }>(
+            `select count(*)::int as n from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'`,
+          );
+          if ((waiting.rows[0]?.n ?? 0) > 0) break;
+          const settled = await Promise.race([
+            outcome.then(() => true),
+            new Promise<false>((resolve) => setTimeout(() => resolve(false), 20)),
+          ]);
+          if (settled) break;
+        }
+        await cancelClient.query('commit');
+
+        // Before the fix: the spawn read `running`, created the WorkerRun and started it under the
+        // Task the cancel was about to commit.
+        expect(await outcome).toBeInstanceOf(IllegalTransition);
+      } finally {
+        cancelClient.release();
+      }
+      expect(supervisorClient.spawnCalls).toHaveLength(1); // only the original
+      expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(1);
+    });
+
+    it('a claimed retry with no Handle to attenuate from fails the Task instead of leaving it running', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-retry-no-handle');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+      await withAdminClient(pool, (client) =>
+        client.query(
+          'update worker_runs set session_id = null where workspace_id = $1 and id = $2',
+          [workspaceId, spawnResult.workerRunId],
+        ),
+      );
+
+      await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId);
+
+      expect(supervisorClient.spawnCalls).toHaveLength(1); // no retry spawned
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      // Before the fix: running, retry_count 1, with no live WorkerRun, forever.
+      expect(task?.status).toBe('failed');
+      expect(task?.failureReason).toBe('worker_failed');
+      expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
     });
 
     it('a crash reaction under a Task cancelled meanwhile spawns no retry', async () => {
@@ -792,26 +1078,56 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         runtimeDeps,
       );
 
-      // Override `.terminate` (called from inside `terminateTask`'s own WorkerRun sweep) to
-      // simulate a Worker's real `report_task_result` landing — via the real, unmodified
-      // `completeTaskWithResult` — exactly while `terminateTask` is still in flight, deterministic
-      // same as `RacingSupervisorClient` above.
-      const originalTerminate = supervisorClient.terminate.bind(supervisorClient);
-      supervisorClient.terminate = async (workerRunId: string) => {
-        await inTx(ownerId, (client) =>
-          completeTaskWithResult(client, workspaceId, ownerId, spawnResult.taskId, workerRunId, {
-            summary: 'completed concurrently with cancellation',
-          }),
-        );
-        return originalTerminate(workerRunId);
+      // Simulate a Worker's real `report_task_result` landing — via the real, unmodified
+      // `completeTaskWithResult` — inside `terminateTask`'s own cancel transaction, after it read
+      // the Task and right before its guarded UPDATE, deterministic same as
+      // `RacingSupervisorClient` above. `terminateTask` decides the Task before it reaps the runs
+      // (#534), so the completion is injected at the cancel UPDATE itself rather than from the
+      // supervisor `.terminate` call, which now runs after the cancel has committed.
+      let completed = false;
+      const pooledCompletingBeforeCancel: PoolLike = {
+        async connect() {
+          const client = await pool.connect();
+          const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+          (client as { query: unknown }).query = async (...args: unknown[]) => {
+            const text = args[0];
+            if (
+              !completed &&
+              typeof text === 'string' &&
+              text.includes("update tasks set status = 'cancelled'")
+            ) {
+              completed = true;
+              await inTx(ownerId, (other) =>
+                completeTaskWithResult(
+                  other,
+                  workspaceId,
+                  ownerId,
+                  spawnResult.taskId,
+                  spawnResult.workerRunId,
+                  { summary: 'completed concurrently with cancellation' },
+                ),
+              );
+            }
+            return query(...args);
+          };
+          const release = client.release.bind(client);
+          client.release = (err?: Error | boolean) => {
+            (client as { query: unknown }).query = query;
+            client.release = release;
+            return release(err);
+          };
+          return client;
+        },
       };
+      const racingDeps = deps(supervisorClient, { pool: pooledCompletingBeforeCancel });
 
       const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
-      configureTaskRuntime(runtimeDeps);
+      configureTaskRuntime(racingDeps);
       try {
         const cancelled = await terminateTask(workspaceId, ownerId, spawnResult.taskId);
         // Before the fix: the unconditional `update tasks set status = 'cancelled' ...` would have
         // silently reverted the just-completed Task back to `cancelled`.
+        expect(completed).toBe(true);
         expect(cancelled.status).toBe('completed');
 
         const task = await inTx(ownerId, (client) =>
