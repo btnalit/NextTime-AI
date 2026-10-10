@@ -25,6 +25,7 @@ import {
 } from './connect/GovernanceChange.js';
 import { Confirm } from './kit/confirm.js';
 import { CredentialReview } from './kit/credential-review.js';
+import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -232,6 +233,7 @@ function OperationReviewRow({
       throw err;
     }
     publishedRef.current = true;
+    announceReadinessChange(http);
     setPendingChange(null);
     setEditing(false);
     onChanged();

@@ -12,6 +12,10 @@ export interface NavItem {
    *  on that allowlist, casts back to `IconName` at the one place it renders `<Icon>`. */
   readonly icon: string;
   readonly href: string;
+  /** The read the page cannot work without. Once the reader's role is known, the item is hidden
+   *  when that role may not use it (`roleMayUseCapability`) — a page that could only say "your role
+   *  cannot" is not offered (#541 acceptance sweep). */
+  readonly capability?: string;
 }
 
 /** A nav entry that opens outside the console's own hash-routed shell — no `section` (it never
@@ -80,7 +84,14 @@ export const WORK_NAV: readonly NavItem[] = [
  *  apiKey session always has one implicitly; a cookie session needs `selectedWorkspaceId`, since a
  *  platform admin with zero memberships has nothing here to configure). */
 export const GOVERN_NAV: readonly NavItem[] = [
-  { section: 'members', label: '成员与授权', sub: 'Members', icon: 'users', href: hrefs.members() },
+  {
+    section: 'members',
+    label: '成员与授权',
+    sub: 'Members',
+    icon: 'users',
+    href: hrefs.members(),
+    capability: 'list_members',
+  },
   // Console redesign P2 (docs/console-redesign-plan-2026-09-25.md §4): 访问's per-member grant
   // half merged into this page (`components/systems/SystemsPage.tsx`) — no separate 访问 nav item
   // any more; `#/govern/access` still works (`lib/router.ts`'s `sectionOf`) for old links/bookmarks.
@@ -93,7 +104,14 @@ export const GOVERN_NAV: readonly NavItem[] = [
   },
   { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'inbox', href: hrefs.catalog() },
   { section: 'models', label: '模型与配额', sub: 'Models', icon: 'sparkle', href: hrefs.models() },
-  { section: 'audit', label: '审计', sub: 'Audit', icon: 'clock', href: hrefs.audit() },
+  {
+    section: 'audit',
+    label: '审计',
+    sub: 'Audit',
+    icon: 'clock',
+    href: hrefs.audit(),
+    capability: 'audit_query',
+  },
 ];
 
 /** 平台 Platform (S6-A0 §5.9) — platform-admin only (`platformRole === 'admin'`), independent of

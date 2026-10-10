@@ -217,15 +217,18 @@ export interface AuditRecordRow {
 }
 
 /** The console route an audit row's `resourceType:resourceId` opens, when the console has a page
- *  for that resource; `undefined` otherwise (the chip stays a plain reference). */
+ *  for that resource and the reader's role may open it (`can`, `hooks/useRoleCan` — an auditor
+ *  may not read an ActionRequest, #541 acceptance); `undefined` otherwise (the chip stays a plain
+ *  reference). */
 export function resourceHref(
   resourceType: string | null,
   resourceId: string | null,
+  can: (capabilityName: string) => boolean = () => true,
 ): string | undefined {
   if (!resourceId) return undefined;
   switch (resourceType) {
     case 'action_request':
-      return hrefs.approval(resourceId);
+      return can('get_action') ? hrefs.approval(resourceId) : undefined;
     case 'task':
       return hrefs.task(resourceId);
     case 'chat':

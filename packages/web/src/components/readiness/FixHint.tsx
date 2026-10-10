@@ -32,7 +32,7 @@ export function FixHint({
 }) {
   if (href !== undefined) {
     return (
-      <a href={href} className="link-inline">
+      <a href={href} className="link-inline" data-testid="execution-readiness-fix">
         {label}
       </a>
     );

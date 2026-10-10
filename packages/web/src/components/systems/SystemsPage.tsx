@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useResource } from '../../hooks/useResource.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -44,7 +45,10 @@ import { PageHeader } from '../kit/page-header.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Tabs } from '../kit/tabs.js';
-import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
+import {
+  announceReadinessChange,
+  useExecutionReadiness,
+} from '../readiness/useExecutionReadiness.js';
 import { SystemAccessCard, type SystemAccessGranteeRow } from './SystemAccessCard.js';
 import { useMemberReachability } from './useMemberReachability.js';
 
@@ -121,12 +125,15 @@ export function SystemsPage({
   const t = useT();
   const permissions = usePermissions();
   const { role, principalId: selfPrincipalId } = useWorkspaceIdentity(http);
+  // #541 acceptance must-fix 2: what this reader's role may do here, by the kernel's predicate.
+  const can = useRoleCan(http);
   const [filter, setFilter] = useState<RequestFilter>('requested');
   const [drawer, setDrawer] = useState<DrawerMode>({ kind: 'closed' });
   const [cancelling, setCancelling] = useState<ConnectionRequestRow | null>(null);
 
   // ---- Primary content: systems -----------------------------------------------------------
-  const readiness = useExecutionReadiness(http);
+  // Held until the reader's role is known: an auditor may not read it (#541 acceptance).
+  const readiness = useExecutionReadiness(http, { enabled: can('execution_readiness') === true });
   const available = useCapabilityList<AvailableGateInstanceWire>(
     http,
     'list_available_gate_instances',
@@ -247,6 +254,7 @@ export function SystemsPage({
   async function handleRevoke(grantId: string): Promise<void> {
     try {
       await http.call('revoke_capability', { grantId });
+      announceReadinessChange(http);
       grantsList.mutate((data) => ({
         ...data,
         items: data.items.map((row) =>
@@ -313,7 +321,10 @@ export function SystemsPage({
   }
 
   const cancelOverrides = cancelConnectionRequestOverrides(t);
-  const canCreate = !permissions.isDenied('create_connection');
+  const canCreate = can('create_connection') !== false;
+  const canRequest = can('request_connection') !== false;
+  // An auditor reads neither its readiness nor the grants: the page says so once, read-only.
+  const readsReadiness = can('execution_readiness') !== false;
   // #541 review: enabling a prepared instance is `enable_gate_instance` (owner) — once the reader's
   // role is known, the kernel's own predicate decides; before that, the 403 still tells.
   const canEnable =
@@ -335,13 +346,15 @@ export function SystemsPage({
         )}
         breadcrumb={breadcrumbFor('systems')}
         primaryAction={
-          <Button
-            variant="primary"
-            onClick={() => setDrawer({ kind: 'launcher' })}
-            data-testid="connect-system-button"
-          >
-            {t('接入一个系统', 'Connect a system')}
-          </Button>
+          canRequest ? (
+            <Button
+              variant="primary"
+              onClick={() => setDrawer({ kind: 'launcher' })}
+              data-testid="connect-system-button"
+            >
+              {t('接入一个系统', 'Connect a system')}
+            </Button>
+          ) : undefined
         }
         actions={
           canCreate ? (
@@ -367,7 +380,14 @@ export function SystemsPage({
         }
       />
 
-      {readiness.state.status === 'loading' ? (
+      {!readsReadiness ? (
+        <Notice testId="systems-read-only">
+          {t(
+            '你的角色是只读的：谁能用哪个系统由工作区所有者管理，这里不显示。下面列出平台为本工作区准备的系统；要查某个系统被谁调用过，到「审计」页按资源筛选。',
+            'Your role is read-only: who may use which system is managed by a workspace owner and is not shown here. The systems the platform prepared for this workspace are listed below; to see who called a system, filter the Audit page by resource.',
+          )}
+        </Notice>
+      ) : readiness.state.status === 'loading' ? (
         <p className="text-3 text-small" data-testid="systems-loading">
           {t('正在加载系统…', 'Loading systems…')}
         </p>
@@ -452,7 +472,7 @@ export function SystemsPage({
                 gate={gate}
                 healthInfo={healthByGate.get(gate.gateId) ?? { linked: false }}
                 draftCount={draftCountByGate.get(gate.gateId) ?? 0}
-                canPublish={!permissions.isDenied('publish_manifest')}
+                canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}
                 rows={rows}
@@ -476,133 +496,135 @@ export function SystemsPage({
       )}
 
       {/* --- 连接申请 Connection requests (owner queue; ported unchanged from ConnectionsPage) --- */}
-      <section className="section" aria-labelledby="connection-requests-title">
-        <div className="section-header">
-          <h2 id="connection-requests-title">
-            {t('连接申请', 'Connection requests')}
-            {requestedCount > 0 ? <span className="nav-badge">{requestedCount}</span> : null}
-          </h2>
-          {!requestsForbidden ? (
-            // Bugfix (PR #324 review): this was a `<fieldset>` of individual `kit/button`
-            // `primary`/`secondary` pairs — a proper segmented control (`kit/tabs`) instead, same
-            // component the rest of the redesign already uses for this exact pattern (e.g.
-            // 能力目录's Skill/Worker tabs).
-            <Tabs
-              ariaLabel={t('筛选连接申请', 'Filter connection requests')}
-              value={filter}
-              onChange={setFilter}
-              options={REQUEST_FILTERS.map((value) => ({
-                value,
-                label:
-                  value === 'all'
-                    ? t('全部', 'All')
-                    : labelText(statusChipStyle('connectionRequest', value), t),
-              }))}
-            />
-          ) : null}
-        </div>
-
-        {requests.state.status === 'loading' ? (
-          <p className="text-3 text-small" data-testid="requests-loading">
-            {t('正在加载连接申请…', 'Loading connection requests')}
-          </p>
-        ) : requests.state.status === 'error' ? (
-          requestsForbidden ? (
-            <Notice testId="requests-forbidden">
-              {t(
-                '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
-                'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
-              )}
-            </Notice>
-          ) : (
-            <ErrorBanner
-              error={requests.state.error}
-              title={t('无法加载连接申请', 'Could not load connection requests')}
-              onRetry={() => void requests.reload()}
-              testId="requests-error"
-            />
-          )
-        ) : requestRows.length === 0 ? (
-          <EmptyState
-            title={
-              filter === 'requested'
-                ? t('没有待处理的连接申请', 'No open connection requests')
-                : t('没有连接申请', 'No connection requests')
-            }
-            body={t(
-              'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
-              'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
-            )}
-            action={
-              <Button variant="secondary" onClick={() => setDrawer({ kind: 'request' })}>
-                {t('申请连接', 'Request connection')}
-              </Button>
-            }
-            testId="requests-empty"
-          />
-        ) : (
-          <div className="stack-s" data-testid="requests-list">
-            {requestRows.map((row) => (
-              <div className="row-wrap" key={row.id} data-testid="request-row">
-                <StatusChip machine="connectionRequest" status={row.status} size="s" />
-                <span className="tag">{row.kind}</span>
-                <span className="mono truncate">{row.target}</span>
-                <span className="text-3 text-small" title={row.requestedBy}>
-                  {t('由', 'by')} {shortId(row.requestedBy)}
-                </span>
-                <time className="text-3 text-small" title={formatDateTime(row.requestedAt)}>
-                  {formatRelative(row.requestedAt)}
-                </time>
-                {row.gatekeeperId ? (
-                  <span className="text-3 text-small" title={row.gatekeeperId}>
-                    {t('门', 'gate')} {shortId(row.gatekeeperId)}
-                  </span>
-                ) : null}
-                {row.status === 'requested' ? (
-                  <span className="row-wrap">
-                    {canCreate ? (
-                      <Button
-                        variant="secondary"
-                        size="s"
-                        onClick={() => setDrawer({ kind: 'complete', request: row })}
-                      >
-                        {t('完成', 'Complete')}
-                      </Button>
-                    ) : null}
-                    <Confirm
-                      tier="medium"
-                      open={cancelling?.id === row.id}
-                      onOpenChange={(open) => setCancelling(open ? row : null)}
-                      anchor={
-                        <Button
-                          variant="ghost"
-                          size="s"
-                          onClick={() => setCancelling(row)}
-                          data-testid={`cancel-request-${row.id}`}
-                        >
-                          {t('取消', 'Cancel')}
-                        </Button>
-                      }
-                      title={t('取消连接申请', 'Cancel this connection request')}
-                      description={t(
-                        '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。',
-                        'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
-                      )}
-                      target={`${row.kind} · ${row.target}`}
-                      confirmLabel={t('取消申请', 'Cancel request')}
-                      cancelLabel={t('保留', 'Keep')}
-                      danger
-                      onConfirm={() => cancelRequest(row)}
-                      errorOverrides={cancelOverrides}
-                      testId="cancel-request-confirm"
-                    />
-                  </span>
-                ) : null}
-              </div>
-            ))}
+      {canRequest || canCreate ? (
+        <section className="section" aria-labelledby="connection-requests-title">
+          <div className="section-header">
+            <h2 id="connection-requests-title">
+              {t('连接申请', 'Connection requests')}
+              {requestedCount > 0 ? <span className="nav-badge">{requestedCount}</span> : null}
+            </h2>
+            {!requestsForbidden ? (
+              // Bugfix (PR #324 review): this was a `<fieldset>` of individual `kit/button`
+              // `primary`/`secondary` pairs — a proper segmented control (`kit/tabs`) instead, same
+              // component the rest of the redesign already uses for this exact pattern (e.g.
+              // 能力目录's Skill/Worker tabs).
+              <Tabs
+                ariaLabel={t('筛选连接申请', 'Filter connection requests')}
+                value={filter}
+                onChange={setFilter}
+                options={REQUEST_FILTERS.map((value) => ({
+                  value,
+                  label:
+                    value === 'all'
+                      ? t('全部', 'All')
+                      : labelText(statusChipStyle('connectionRequest', value), t),
+                }))}
+              />
+            ) : null}
           </div>
-        )}
-      </section>
+
+          {requests.state.status === 'loading' ? (
+            <p className="text-3 text-small" data-testid="requests-loading">
+              {t('正在加载连接申请…', 'Loading connection requests')}
+            </p>
+          ) : requests.state.status === 'error' ? (
+            requestsForbidden ? (
+              <Notice testId="requests-forbidden">
+                {t(
+                  '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
+                  'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
+                )}
+              </Notice>
+            ) : (
+              <ErrorBanner
+                error={requests.state.error}
+                title={t('无法加载连接申请', 'Could not load connection requests')}
+                onRetry={() => void requests.reload()}
+                testId="requests-error"
+              />
+            )
+          ) : requestRows.length === 0 ? (
+            <EmptyState
+              title={
+                filter === 'requested'
+                  ? t('没有待处理的连接申请', 'No open connection requests')
+                  : t('没有连接申请', 'No connection requests')
+              }
+              body={t(
+                'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
+                'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
+              )}
+              action={
+                <Button variant="secondary" onClick={() => setDrawer({ kind: 'request' })}>
+                  {t('申请连接', 'Request connection')}
+                </Button>
+              }
+              testId="requests-empty"
+            />
+          ) : (
+            <div className="stack-s" data-testid="requests-list">
+              {requestRows.map((row) => (
+                <div className="row-wrap" key={row.id} data-testid="request-row">
+                  <StatusChip machine="connectionRequest" status={row.status} size="s" />
+                  <span className="tag">{row.kind}</span>
+                  <span className="mono truncate">{row.target}</span>
+                  <span className="text-3 text-small" title={row.requestedBy}>
+                    {t('由', 'by')} {shortId(row.requestedBy)}
+                  </span>
+                  <time className="text-3 text-small" title={formatDateTime(row.requestedAt)}>
+                    {formatRelative(row.requestedAt)}
+                  </time>
+                  {row.gatekeeperId ? (
+                    <span className="text-3 text-small" title={row.gatekeeperId}>
+                      {t('门', 'gate')} {shortId(row.gatekeeperId)}
+                    </span>
+                  ) : null}
+                  {row.status === 'requested' ? (
+                    <span className="row-wrap">
+                      {canCreate ? (
+                        <Button
+                          variant="secondary"
+                          size="s"
+                          onClick={() => setDrawer({ kind: 'complete', request: row })}
+                        >
+                          {t('完成', 'Complete')}
+                        </Button>
+                      ) : null}
+                      <Confirm
+                        tier="medium"
+                        open={cancelling?.id === row.id}
+                        onOpenChange={(open) => setCancelling(open ? row : null)}
+                        anchor={
+                          <Button
+                            variant="ghost"
+                            size="s"
+                            onClick={() => setCancelling(row)}
+                            data-testid={`cancel-request-${row.id}`}
+                          >
+                            {t('取消', 'Cancel')}
+                          </Button>
+                        }
+                        title={t('取消连接申请', 'Cancel this connection request')}
+                        description={t(
+                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。',
+                          'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
+                        )}
+                        target={`${row.kind} · ${row.target}`}
+                        confirmLabel={t('取消申请', 'Cancel request')}
+                        cancelLabel={t('保留', 'Keep')}
+                        danger
+                        onConfirm={() => cancelRequest(row)}
+                        errorOverrides={cancelOverrides}
+                        testId="cancel-request-confirm"
+                      />
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       {/* --- 待启用的平台实例 (unchanged component) ------------------------------------------- */}
       <section className="section" id={AVAILABLE_SECTION_ID}>
@@ -611,6 +633,7 @@ export function SystemsPage({
           available={available}
           onEnabled={reloadRegistry}
           canEnable={canEnable}
+          canEnterCredential={can('issue_gate_credential_token') !== false}
           platformAdmin={platformAdmin}
         />
       </section>

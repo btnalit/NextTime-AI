@@ -66,6 +66,8 @@ export interface WorkerDefinitionEditorProps {
   readonly skills?: readonly SkillRow[];
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type View = 'form' | 'json';
@@ -341,6 +343,7 @@ export function WorkerDefinitionEditor({
   skills,
   onProposed,
   onDone,
+  onPublished,
 }: WorkerDefinitionEditorProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -439,6 +442,7 @@ export function WorkerDefinitionEditor({
                 })
         }
         onDone={onDone}
+        onPublished={onPublished}
         unpublishedConsequence={t(
           '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它，且 30 天未更新会被自动清理（也可以随时手动丢弃）——确认无误就现在点击「发布」。',
           'Left unpublished, this draft only sits under “My drafts” on the Workers tab — no one ' +

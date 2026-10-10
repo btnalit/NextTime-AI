@@ -217,6 +217,30 @@ describe('AuditPage entry points', () => {
     window.history.replaceState(null, '', '#/');
   });
 
+  it('#541 acceptance: an auditor opening an approval is told who may open it — no get_action, no dead link', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-a', role: 'auditor' } }),
+      list_principals: () => {
+        throw new HttpError('capability_error', 'no', 'forbidden');
+      },
+      list_gatekeepers: () => ({ items: [] }),
+      audit_query: () => ({
+        items: [
+          auditRow({ action: 'approve', resourceType: 'action_request', resourceId: 'ar-1' }),
+        ],
+      }),
+      resolve_refs: () => ({ items: [] }),
+      list_decisions: () => ({ items: [] }),
+      query_decisions: () => ({ items: [] }),
+    });
+    renderPage(http, { actionRequestId: 'ar-1' });
+    const notice = await screen.findByTestId('approval-context-unavailable');
+    expect(notice.textContent).toContain('operator 和工作区所有者');
+    const chip = await screen.findByText((_, el) => el?.getAttribute('data-ref-id') === 'ar-1');
+    expect(chip.querySelector('a')).toBeNull();
+    expect(http.calls.some((c) => c.name === 'get_action')).toBe(false);
+  });
+
   it('?actionRequestId= shows the approval context, explains its decision node and filters the audit log on the request', async () => {
     const http = scriptedHttp({
       get_action: () => ({

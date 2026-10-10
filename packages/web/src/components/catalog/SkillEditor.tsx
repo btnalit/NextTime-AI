@@ -42,6 +42,8 @@ export interface SkillEditorProps {
   readonly copyOf?: SkillRow;
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type BodyView = 'edit' | 'preview';
@@ -58,7 +60,7 @@ const GATE_KINDS: readonly string[] = GateTransportKindWireSchema.options;
  * `propose_skill` handler parses) and calls `propose_skill{skill}`; the pi publish-time name
  * rule is shown as a warning while drafting. The success state offers `publish_skill`.
  */
-export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorProps) {
+export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: SkillEditorProps) {
   const t = useT();
   const permissions = usePermissions();
   const [form, setForm] = useState<SkillForm>(() =>
@@ -193,6 +195,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
                 http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })
         }
         onDone={onDone}
+        onPublished={onPublished}
         reviewersSeeDraft
       />
     );

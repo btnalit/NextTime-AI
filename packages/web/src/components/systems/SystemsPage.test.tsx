@@ -160,6 +160,35 @@ describe('SystemsPage', () => {
     expect(within(empty).getByTestId('systems-empty-see-available')).toBeTruthy();
   });
 
+  it('#541 acceptance: an auditor gets a read-only page — no readiness read, no 接入一个系统, no 录入我的凭证', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('auditor'),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-1',
+            displayName: 'Docker prod',
+            status: 'active',
+            health: 'healthy',
+            operationCount: 3,
+            connector: 'docker',
+            transportKind: 'http',
+            target: 'docker-prod',
+            trust: 'platform',
+            gatekeeperId: 'gk-1',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    expect((await screen.findByTestId('systems-read-only')).textContent).toContain('只读');
+    await waitFor(() => expect(screen.getByText('Docker prod')).toBeTruthy());
+    expect(screen.queryByTestId('connect-system-button')).toBeNull();
+    expect(screen.queryByText('录入我的凭证')).toBeNull();
+    expect(screen.queryByText('连接申请')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'execution_readiness')).toBe(false);
+  });
+
   it('#541 review: a member is told an owner enables the waiting systems, not to enable them', async () => {
     const http = scriptedHttp({
       get_workspace: () => workspace('member'),

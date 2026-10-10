@@ -1,3 +1,4 @@
+import { getCapability, roleMayUseCapability } from '@nexttime/shared';
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -231,7 +232,12 @@ export function SidebarContent({
             scopeEn="This workspace"
             testId="nav-section-govern"
           >
-            {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+            {GOVERN_NAV.filter(
+              (item) =>
+                role.kind !== 'known' ||
+                item.capability === undefined ||
+                roleMayUseCapability(role.role, getCapability(item.capability)),
+            ).map((item) => renderNavItem(item, active, pendingCount, t))}
             {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV, t) : null}
           </NavSectionGroup>
         ) : null}

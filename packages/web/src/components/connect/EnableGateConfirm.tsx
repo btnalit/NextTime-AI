@@ -12,6 +12,7 @@ import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 export interface EnableGateConfirmProps {
   readonly http: CapabilityCaller;
@@ -90,6 +91,7 @@ export function EnableGateConfirm({
       gateId,
       ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
     });
+    announceReadinessChange(http);
     onEnabled(result);
   }
 

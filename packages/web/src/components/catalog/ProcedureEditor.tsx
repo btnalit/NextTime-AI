@@ -41,6 +41,8 @@ export interface ProcedureEditorProps {
   readonly workerDefinitions?: readonly WorkerDefinitionSummary[];
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type View = 'form' | 'json';
@@ -259,6 +261,7 @@ export function ProcedureEditor({
   workerDefinitions,
   onProposed,
   onDone,
+  onPublished,
 }: ProcedureEditorProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -351,6 +354,7 @@ export function ProcedureEditor({
                 })
         }
         onDone={onDone}
+        onPublished={onPublished}
         reviewersSeeDraft
       />
     );

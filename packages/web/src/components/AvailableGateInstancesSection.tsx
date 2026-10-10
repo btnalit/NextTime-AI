@@ -36,6 +36,9 @@ export interface AvailableGateInstancesSectionProps {
   /** Owner-only: shows the 启用 button. Members still see the list and, on linked rows, the
    *  per-member credential entry (P-B2a). */
   readonly canEnable: boolean;
+  /** The reader's role may enter its own credential for an enabled instance
+   *  (`issue_gate_credential_token`) — not an auditor (#541 acceptance must-fix 2). */
+  readonly canEnterCredential?: boolean;
   /** The signed-in user is a platform administrator: the empty state reads the platform's own
    *  instance list to say which step is actually missing, with a direct link to it. */
   readonly platformAdmin?: boolean;
@@ -62,6 +65,7 @@ export function AvailableGateInstancesSection({
   available,
   onEnabled,
   canEnable,
+  canEnterCredential = true,
   platformAdmin = false,
 }: AvailableGateInstancesSectionProps) {
   const t = useT();
@@ -158,6 +162,7 @@ export function AvailableGateInstancesSection({
                   row={row}
                   onEnabled={handleEnabled}
                   canEnable={canEnable}
+                  canEnterCredential={canEnterCredential}
                 />
               ))}
             </tbody>
@@ -173,11 +178,13 @@ function AvailableGateRow({
   row,
   onEnabled,
   canEnable,
+  canEnterCredential,
 }: {
   readonly http: CapabilityCaller;
   readonly row: AvailableGateInstanceWire;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
   readonly canEnable: boolean;
+  readonly canEnterCredential: boolean;
 }) {
   const t = useT();
   const toast = useToast();
@@ -238,14 +245,16 @@ function AvailableGateRow({
         {row.gatekeeperId ? (
           <div className="stack-s">
             <a href={hrefs.gatekeeper(row.gatekeeperId)}>{t('已启用', 'Enabled')}</a>
-            <GateCredentialEntry
-              requestToken={() =>
-                http.call<GateHostTokenWire>('issue_gate_credential_token', {
-                  gateId: row.gateId,
-                })
-              }
-              tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
-            />
+            {canEnterCredential ? (
+              <GateCredentialEntry
+                requestToken={() =>
+                  http.call<GateHostTokenWire>('issue_gate_credential_token', {
+                    gateId: row.gateId,
+                  })
+                }
+                tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
+              />
+            ) : null}
           </div>
         ) : !platformEnabled ? (
           <span className="muted" data-testid={`available-gate-not-enableable-${row.gateId}`}>

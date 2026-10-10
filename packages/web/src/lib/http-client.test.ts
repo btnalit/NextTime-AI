@@ -158,3 +158,56 @@ describe('HttpClient (cookie auth, S4.1)', () => {
     expect(init.credentials).toBe('same-origin');
   });
 });
+
+describe('HttpClient roleGate (#541 acceptance must-fix 2)', () => {
+  function roleClient(role: string | null) {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === '/api/cap/get_workspace') {
+        return role === null
+          ? jsonResponse(403, { ok: false, error: { code: 'workspace_required', message: 'x' } })
+          : jsonResponse(200, { ok: true, result: { id: 'ws-1', caller: { id: 'p-1', role } } });
+      }
+      return jsonResponse(200, { ok: true, result: { items: [] } });
+    });
+    const client = new HttpClient({
+      auth: { kind: 'apiKey', apiKey: 'sk-test' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      roleGate: true,
+    });
+    const sent = () => fetchImpl.mock.calls.map(([url]) => url);
+    return { client, sent };
+  }
+
+  it('refuses locally, without a request, what the role may not use — the kernel predicate', async () => {
+    const { client, sent } = roleClient('auditor');
+    const err = await client.call('execution_readiness', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe('forbidden');
+    expect((err as HttpError).details).toEqual({ checkedLocally: true });
+    expect(sent()).toEqual(['/api/cap/get_workspace']);
+    // An auditor's own reads still go out; the role was read once.
+    await client.call('audit_query', {});
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/audit_query']);
+  });
+
+  it('sends a capability every role may use without reading the role first', async () => {
+    const { client, sent } = roleClient('member');
+    await client.call('list_gatekeepers', {});
+    expect(sent()).toEqual(['/api/cap/list_gatekeepers']);
+  });
+
+  it('sends everything when the role cannot be read (no workspace selected)', async () => {
+    const { client, sent } = roleClient(null);
+    await client.call('list_pending', {});
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/list_pending']);
+  });
+
+  it('a get_workspace made through the client refreshes the role it gates with', async () => {
+    const { client, sent } = roleClient('operator');
+    await client.call('get_workspace', {});
+    await client.call('list_pending', {});
+    const err = await client.call('list_connection_requests', {}).catch((e: unknown) => e);
+    expect((err as HttpError).code).toBe('forbidden');
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/list_pending']);
+  });
+});

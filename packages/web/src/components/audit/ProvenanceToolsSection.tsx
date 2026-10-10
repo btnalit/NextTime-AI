@@ -4,6 +4,7 @@ import type {
   DecisionWire,
 } from '@nexttime/shared';
 import { type FormEvent, useMemo, useState } from 'react';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import {
   SINCE_PRESETS,
@@ -81,6 +82,7 @@ export function ProvenanceToolsSection({ http }: ProvenanceToolsSectionProps) {
 
 function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
+  const can = useRoleCan(http);
   const [kind, setKind] = useState<'fact' | 'decision'>('fact');
   const [nodeId, setNodeId] = useState('');
   const [state, setState] = useState<CausalState>(CAUSAL_IDLE);
@@ -195,7 +197,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
                     kind="actionRequest"
                     id={ar.id}
                     name={ar.actionKindTag}
-                    href={hrefs.approval(ar.id)}
+                    href={can('get_action') !== false ? hrefs.approval(ar.id) : undefined}
                     size="s"
                   />
                 ))}

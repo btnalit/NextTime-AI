@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
 import {
@@ -65,6 +66,7 @@ export function AuditLogSection({
   principalsUnavailable,
 }: AuditLogSectionProps) {
   const t = useT();
+  const can = useRoleCan(http);
   const toast = useToast();
   const [actor, setActor] = useState(requestedFilter?.actorPrincipalId ?? '');
   const [action, setAction] = useState(requestedFilter?.action ?? '');
@@ -342,7 +344,11 @@ export function AuditLogSection({
                                   ? auditResourceTypeLabel(row.resourceType, t)
                                   : undefined
                               }
-                              href={resourceHref(row.resourceType, row.resourceId)}
+                              href={resourceHref(
+                                row.resourceType,
+                                row.resourceId,
+                                (name) => can(name) !== false,
+                              )}
                               size="s"
                             />
                           </>

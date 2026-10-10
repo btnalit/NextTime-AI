@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { AuditIdPicker } from '../lib/audit-id-picker.js';
 import { objectSource } from '../lib/audit-pickers.js';
 import {
@@ -19,6 +20,7 @@ import { ApprovalContext } from './audit/ApprovalContext.js';
 import { AuditLogSection } from './audit/AuditLogSection.js';
 import { ExplainSection } from './audit/ExplainSection.js';
 import { ProvenanceToolsSection } from './audit/ProvenanceToolsSection.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -56,6 +58,7 @@ export interface AuditPageProps {
  */
 export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
   const t = useT();
+  const canOpenApproval = useRoleCan(http)('get_action');
   const entry = useAuditEntry(entryProp);
   const principals = usePrincipalDirectory(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -80,7 +83,17 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
           'Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat.',
         )}
       />
-      {entry.actionRequestId ? (
+      {entry.actionRequestId && canOpenApproval === false ? (
+        // #541 acceptance (coordinator's decision): an auditor may not read an ActionRequest
+        // (`get_action` is operator) — say so instead of a 「无法加载」; the audit log below is
+        // already filtered to this request's rows.
+        <Notice testId="approval-context-unavailable">
+          {t(
+            '审批请求本身只有 operator 和工作区所有者能打开；下面的审计流已按这条请求筛选。',
+            'Only an operator or a workspace owner can open the request itself; the audit log below is already filtered to it.',
+          )}
+        </Notice>
+      ) : entry.actionRequestId && canOpenApproval === true ? (
         <ApprovalContext
           key={entry.actionRequestId}
           http={http}

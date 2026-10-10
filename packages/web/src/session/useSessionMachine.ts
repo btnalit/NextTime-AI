@@ -179,6 +179,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
           http: new HttpClient({
             auth: { kind: 'apiKey', apiKey },
             onUnauthorized: () => sessionInvalid(gen),
+            roleGate: true,
           }),
           generation: gen,
           authMode: 'apiKey',
@@ -231,6 +232,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
           http: new HttpClient({
             auth: { kind: 'cookie', workspaceId },
             onUnauthorized: () => sessionInvalid(gen),
+            roleGate: true,
           }),
           generation: gen,
           authMode: 'cookie',
@@ -285,6 +287,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
         http: new HttpClient({
           auth: { kind: 'cookie', workspaceId: null },
           onUnauthorized: () => sessionInvalid(gen),
+          roleGate: true,
         }),
         generation: gen,
         authMode: 'cookie',

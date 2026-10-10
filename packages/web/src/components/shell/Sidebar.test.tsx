@@ -17,6 +17,37 @@ const KNOWN_OWNER: WorkspaceRole = { kind: 'known', role: 'owner' };
 const KNOWN_MEMBER: WorkspaceRole = { kind: 'known', role: 'member' };
 
 describe('Sidebar', () => {
+  it('#541 acceptance: hides a 治理 page the known role cannot load at all (审计 for an operator)', () => {
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={{ kind: 'known', role: 'operator' }}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-audit')).toBeNull();
+    expect(screen.getByTestId('nav-members')).toBeTruthy();
+    expect(screen.getByTestId('nav-systems')).toBeTruthy();
+    cleanup();
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={{ kind: 'known', role: 'auditor' }}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-audit')).toBeTruthy();
+    expect(screen.queryByTestId('nav-members')).toBeNull();
+  });
+
   it('shows 治理', () => {
     for (const role of [INFERRED_UNKNOWN, INFERRED_OWNER, INFERRED_OPERATOR_PLUS, KNOWN_OWNER]) {
       const { unmount } = render(

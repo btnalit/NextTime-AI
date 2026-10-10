@@ -1259,6 +1259,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           closeEditor();
           refresh();
         }}
+        onPublished={refresh}
       />
     </div>
   ) : null;
@@ -1610,6 +1611,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           closeEditor();
           refresh();
         }}
+        onPublished={refresh}
       />
     </div>
   ) : null;
@@ -2034,7 +2036,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
             : t('新建 Worker 定义草稿', 'New Worker definition draft')}
       </h2>
-      <p className="text-3 text-small">kind + definition（systemPrompt、model、capabilities…）</p>
+      <p className="text-3 text-small">
+        {t(
+          '类型、提示词、模型和它能用的能力',
+          'Kind, prompt, model and the capabilities it may use',
+        )}
+      </p>
       <WorkerEditorHost
         key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
         http={http}
@@ -2056,6 +2063,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           closeEditor();
           refresh();
         }}
+        onPublished={refresh}
       />
     </div>
   ) : null;

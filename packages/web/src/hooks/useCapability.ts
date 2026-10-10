@@ -91,6 +91,9 @@ export interface UseCapabilityOptions<T = unknown> {
    *  push-triggered reload never truncates a paged list back to page one). Read through a ref at
    *  call time — its identity never re-triggers a load. */
   readonly load?: (context: CapabilityLoadContext<T>) => Promise<T>;
+  /** `false` holds the read (no request; the state stays as it is, `loading` on a cold key) until
+   *  it turns `true` — for a read that waits on the reader's role (`hooks/useRoleCan`). */
+  readonly enabled?: boolean;
 }
 
 export function useCapability<T = unknown>(
@@ -100,7 +103,7 @@ export function useCapability<T = unknown>(
   options: UseCapabilityOptions<T> = {},
 ): Resource<T> {
   const permissions = usePermissions();
-  const { pushes, reloadOn, load } = options;
+  const { pushes, reloadOn, load, enabled = true } = options;
   const reloadOnKey = (reloadOn ?? []).join(',');
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -133,6 +136,7 @@ export function useCapability<T = unknown>(
 
   const seq = useRef(0);
   const run = useCallback(async () => {
+    if (!enabled) return;
     const mySeq = ++seq.current;
     // Always keyed off the *current* `key`'s own cache entry, never off `prev` directly: `prev`
     // may belong to a different key (params just changed — a switched catalog tab, a different
@@ -163,7 +167,7 @@ export function useCapability<T = unknown>(
           : { status: 'error', error },
       );
     }
-  }, [caller, name, key]);
+  }, [caller, name, key, enabled]);
 
   useEffect(() => {
     void run();

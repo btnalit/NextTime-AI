@@ -22,6 +22,7 @@ import { Notice } from './kit/notice.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
 import { Textarea } from './kit/textarea.js';
+import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 
 const INHERIT_MODEL = '__inherit__';
 
@@ -163,6 +164,7 @@ export function AgentProfileForm({
     setSubmitting(true);
     try {
       const saved = await http.call<AgentProfile>('set_agent_profile', params);
+      announceReadinessChange(http);
       onSaved(saved);
     } catch (err) {
       const described = describeError(err);

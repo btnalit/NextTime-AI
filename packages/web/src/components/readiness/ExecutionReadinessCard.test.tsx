@@ -327,3 +327,16 @@ describe('ExecutionReadinessCard', () => {
     await waitFor(() => expect(screen.getByTestId('execution-readiness-body')).toBeTruthy());
   });
 });
+
+describe('ExecutionReadinessCard — by role (#541 acceptance must-fix 2)', () => {
+  it('an auditor, who may not read readiness, gets no card and no request', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-a', role: 'auditor' } }),
+      get_agent_policy: () => ({ memberCanEditProfile: true }),
+    });
+    const { container } = render(<ExecutionReadinessCard http={http} />);
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await waitFor(() => expect(container.innerHTML).toBe(''));
+    expect(http.calls.some((c) => c.name === 'execution_readiness')).toBe(false);
+  });
+});

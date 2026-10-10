@@ -17,6 +17,7 @@ import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 export interface GrantGateFormProps {
   readonly http: CapabilityCaller;
@@ -193,6 +194,7 @@ export function GrantGateForm({
           ? [{ member: memberName, gate: null }]
           : doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) }))),
       ]);
+      announceReadinessChange(http);
       onGranted(results);
       // Reset for another grant in the same drawer session — keep the drawer open so multi-gate
       // and repeat grants (a common "add another member" flow) do not each re-open it.
@@ -209,6 +211,7 @@ export function GrantGateForm({
           ...current,
           ...doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) })),
         ]);
+        announceReadinessChange(http);
         onGranted(results);
         setSelectedGateIds(new Set(targetGateIds.filter((id) => !doneGateIds.includes(id))));
       }

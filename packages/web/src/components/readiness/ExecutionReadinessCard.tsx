@@ -1,5 +1,6 @@
 import type { ExecutionReadinessWire } from '@nexttime/shared';
 import { useState } from 'react';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -46,9 +47,22 @@ export interface ExecutionReadinessCardProps {
  * （`execution_readiness` 的 `minRole:'member'`）；operator/owner 才能读别人的，这条状态条不做那件
  * 事（可选的成员切换器留给后续）。
  */
-export function ExecutionReadinessCard({ http, currentHref }: ExecutionReadinessCardProps) {
+export function ExecutionReadinessCard(props: ExecutionReadinessCardProps) {
+  // #541 acceptance must-fix 2: a role that can never read its own readiness (an auditor — not on
+  // the kernel's auditor allowlist) gets no card at all, rather than a 「无法加载」 with a 重试 that
+  // can only fail again; its read-only role is said on the pages it can use.
+  const allowed = useRoleCan(props.http)('execution_readiness');
+  return allowed === false ? null : <ReadinessCardBody {...props} roleChecked={allowed === true} />;
+}
+
+function ReadinessCardBody({
+  http,
+  currentHref,
+  roleChecked,
+}: ExecutionReadinessCardProps & { readonly roleChecked: boolean }) {
   const t = useT();
-  const readiness = useExecutionReadiness(http);
+  // Held until the role is known, so a role that may not read it never asks.
+  const readiness = useExecutionReadiness(http, { enabled: roleChecked });
   const reader = useReadinessReader(http, currentHref);
 
   if (readiness.state.status === 'loading') {
