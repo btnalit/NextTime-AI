@@ -360,13 +360,18 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
         deps.pool,
         { workspaceId: candidate.workspace_id, principalId: candidate.on_behalf_of },
         async (client) => {
-          await terminateWorkerRunRow(
+          // R-58: only the call that terminated the run decides the Task. Between the scan and
+          // this write a `wait:true` poll can react to the same run's crash and claim the retry;
+          // failing the Task then would leave the retry running, with a live Handle, under a
+          // failed Task.
+          const moved = await terminateWorkerRunRow(
             client,
             candidate.workspace_id,
             candidate.on_behalf_of,
             candidate.worker_run_id,
             'timeout',
           );
+          if (!moved) return;
           await failTaskRow(
             client,
             candidate.workspace_id,

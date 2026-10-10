@@ -286,10 +286,20 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
   }
 }
 
-/** `cancel_task`'s service half: terminates every non-terminated WorkerRun under the Task
- *  (revoking their Handles) and transitions the Task itself to `cancelled`. Idempotent — a Task
- *  already in a terminal status is a no-op, not an error (matches `terminateWorkerRunRow`'s own
- *  idempotency contract). */
+/** `cancel_task`'s service half: transitions the Task to `cancelled`, then terminates every
+ *  non-terminated WorkerRun under it (revoking their Handles). Idempotent — a Task already in a
+ *  terminal status is a no-op, not an error (matches `terminateWorkerRunRow`'s own idempotency
+ *  contract).
+ *
+ *  Decide the Task first, then reap its runs — the same order as `failTaskAndReapWorkerRuns`
+ *  (2026-10-10 review of #534). Reaping first left two windows: a crash reaction that saw the
+ *  supervisor's `terminated: requested` failed the Task from a stale read before the cancel
+ *  landed (the user's cancel ended `failed: terminated`), and a crash retry spawned after the run
+ *  list was read ran, with a live Handle, under the cancelled Task. With the cancel committed
+ *  first, a reaction's `failTaskRow` no-ops on the cancelled row, and `spawnWorkerRun`'s
+ *  `for share` read either sees `cancelled` and refuses, or commits its WorkerRun before the
+ *  cancel can, so the sweep below finds and terminates it. The sweep runs even when another
+ *  writer decided the Task first: no live WorkerRun belongs under a terminal Task. */
 export async function terminateTask(
   workspaceId: string,
   actorPrincipalId: string,
@@ -307,30 +317,7 @@ export async function terminateTask(
     return task;
   }
 
-  const workerRuns = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: actorPrincipalId },
-    async (client) => {
-      const result = await client.query<{ id: string }>(
-        `select id from worker_runs
-         where workspace_id = $1 and task_id = $2 and status <> 'terminated'`,
-        [workspaceId, taskId],
-      );
-      return result.rows.map((row) => row.id);
-    },
-  );
-
-  for (const workerRunId of workerRuns) {
-    // Best-effort: a supervisor that is unreachable must not prevent the platform side (Handle
-    // revocation, row transitions) from proceeding — the reaper's own status polling will notice
-    // and finish tidying up the container side once the supervisor is reachable again.
-    await deps.supervisorClient.terminate(workerRunId).catch(() => {});
-    await withWorkspace(deps.pool, { workspaceId, principalId: actorPrincipalId }, (client) =>
-      terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested'),
-    );
-  }
-
-  return withWorkspace(
+  const decided = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: actorPrincipalId },
     async (client) => {
@@ -379,6 +366,31 @@ export async function terminateTask(
       return mapped;
     },
   );
+
+  const workerRuns = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: actorPrincipalId },
+    async (client) => {
+      const result = await client.query<{ id: string }>(
+        `select id from worker_runs
+         where workspace_id = $1 and task_id = $2 and status <> 'terminated'`,
+        [workspaceId, taskId],
+      );
+      return result.rows.map((row) => row.id);
+    },
+  );
+
+  for (const workerRunId of workerRuns) {
+    // Best-effort: a supervisor that is unreachable must not prevent the platform side (Handle
+    // revocation, row transitions) from proceeding — the reaper's own status polling will notice
+    // and finish tidying up the container side once the supervisor is reachable again.
+    await deps.supervisorClient.terminate(workerRunId).catch(() => {});
+    await withWorkspace(deps.pool, { workspaceId, principalId: actorPrincipalId }, (client) =>
+      terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'requested'),
+    );
+  }
+
+  return decided;
 }
 
 // -------------------------------------------------------------------------------------------
