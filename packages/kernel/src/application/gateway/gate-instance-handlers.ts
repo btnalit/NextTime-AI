@@ -9,6 +9,7 @@ import {
   importManifest,
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
+  operationRecordDigestOrNull,
   publishImportedDrafts,
   refreshOperationGovernance,
   registerGatekeeper,
@@ -17,6 +18,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
+  definitionRefusal,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   getConnector,
@@ -25,6 +27,7 @@ import {
   listAvailableGateInstances,
   manifestDigest,
   operationsOf,
+  readGateDefinitions,
 } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -429,6 +432,18 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     resolution.kind === 'link' ? resolution.existing.gatekeeperId : undefined;
 
   const { operations, digest } = await readManifestInEffect(client, gateId, undefined);
+  // Legacy K: what the gate runs right now, to say which listed Operation it refuses until the
+  // platform adopts its held announcement (definition-drift.ts).
+  const definitions = await readGateDefinitions(client, gateId);
+  const awaitingAdoption: string[] = [];
+  const noteAdoption = (name: string, approvedDigest: string | null) => {
+    if (
+      definitions &&
+      definitionRefusal(definitions, name, approvedDigest) === 'platform_adoption'
+    ) {
+      awaitingAdoption.push(name);
+    }
+  };
   const operationsToImport: {
     name: string;
     mode: Operation['mode'];
@@ -459,6 +474,8 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       ? await getOperation(client, workspaceId, targetGatekeeperId, operation.name)
       : null;
     if (existingRecord === null || existingRecord.status === 'draft') {
+      // Importing publishes the manifest in effect's definition.
+      noteAdoption(operation.name, definitions?.adopted.get(operation.name) ?? null);
       operationsToImport.push({
         name: operation.name,
         mode: operation.mode,
@@ -493,6 +510,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       // carrying the announced one is published (`refresh_operation_governance` opens it).
       definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
     });
+    noteAdoption(operation.name, operationRecordDigestOrNull(existingRecord));
   }
 
   return {
@@ -509,6 +527,13 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       operationsToImport,
       operationsAlreadyPresent,
       manifestDigest: digest,
+      awaitingPlatformAdoption:
+        awaitingAdoption.length > 0 && definitions?.pendingAnnouncedAt
+          ? {
+              announcedAt: definitions.pendingAnnouncedAt.toISOString(),
+              operations: awaitingAdoption.sort(),
+            }
+          : null,
     },
     resourceType: 'gate_instance',
     resourceId: gateId,

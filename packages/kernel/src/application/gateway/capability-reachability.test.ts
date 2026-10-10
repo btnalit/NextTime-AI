@@ -26,6 +26,7 @@ function gate(
     observeOperationCount: 1,
     executeOperationCount: 1,
     disabledOperations: [],
+    definitionMismatch: [],
     directOperations: ['op'],
     workerDefinitionIds: [],
     executeWorkerDefinitionIds: [],
@@ -168,5 +169,31 @@ describe('operationReachability', () => {
       status: 'unreachable',
       reason: 'disabled_by_platform',
     });
+  });
+
+  // Legacy K (UX acceptance of #538): the gate refuses a call made under a definition it does not
+  // run, whatever else would allow it — so `find_operations` names that Operation as refused even
+  // while the gate stays direct through another one, and an execute Operation is not via_worker.
+  it('an Operation the gate runs another definition of is unreachable/definition_mismatch, observe or execute', () => {
+    const r = reach([
+      gate({
+        gateId: 'g',
+        directOperations: ['op'],
+        definitionMismatch: [
+          { operation: 'stock.get', awaiting: 'platform_adoption' },
+          { operation: 'stock.set', awaiting: 'workspace_revision' },
+        ],
+        executeWorkerDefinitionIds: ['wd'],
+      }),
+    ]);
+    expect(operationReachability(r, 'g', 'observe', 'stock.get')).toEqual({
+      status: 'unreachable',
+      reason: 'definition_mismatch',
+    });
+    expect(operationReachability(r, 'g', 'execute', 'stock.set')).toEqual({
+      status: 'unreachable',
+      reason: 'definition_mismatch',
+    });
+    expect(operationReachability(r, 'g', 'observe', 'op')).toEqual({ status: 'direct' });
   });
 });

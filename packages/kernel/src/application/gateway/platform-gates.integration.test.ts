@@ -13,10 +13,12 @@ import type {
   AvailableGateInstanceWire,
   ConnectorWire,
   EnableGateInstanceResultWire,
+  ExecutionReadinessWire,
   ExternalRuntimeWire,
   GateInstanceWire,
   ListEnvelope,
   Operation,
+  OperationSummaryWire,
   PreviewGateInstanceEnableResultWire,
   RefreshOperationGovernanceResultWire,
   Role,
@@ -2297,6 +2299,9 @@ describe.runIf(DATABASE_URL !== undefined)(
               otherChangedFields: [],
             },
           ],
+          // A governance-only change (an mcp blast_radius) leaves what the gate runs alone: no call
+          // is refused while it waits.
+          refusedOperations: [],
         });
         expect(after.pendingManifest?.digest).toMatch(/^[0-9a-f]{64}$/);
 
@@ -2467,14 +2472,40 @@ describe.runIf(DATABASE_URL !== undefined)(
             otherChangedFields: ['params_schema'],
           }),
         ]);
+        // UX acceptance of #538: the gate already runs the held manifest, so every surface says
+        // that the call is refused and that adopting it comes first — aligning cannot help yet.
+        const mismatchOf = async () =>
+          (await callAsOwner<ExecutionReadinessWire>('execution_readiness', {})).gates.find(
+            (gate) => gate.gateId === gatekeeperId,
+          )?.definitionMismatch;
+        const present = (name: string, wire: PreviewGateInstanceEnableResultWire) =>
+          wire.operationsAlreadyPresent.find((o) => o.name === name);
+        expect(held.refusedOperations).toEqual([OBSERVE_OP.name]);
+        const beforeAdoption = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(beforeAdoption.awaitingPlatformAdoption).toEqual({
+          announcedAt: held.announcedAt,
+          operations: [OBSERVE_OP.name],
+        });
+        expect(present(OBSERVE_OP.name, beforeAdoption)).toMatchObject({
+          definitionDiffers: false,
+        });
+        expect(await mismatchOf()).toEqual([
+          { operation: OBSERVE_OP.name, awaiting: 'platform_adoption' },
+        ]);
+
         await callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: held.digest });
 
         const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
           'preview_gate_instance_enable',
           { gateId: PENDING_GATE },
         );
-        const present = (name: string, wire: PreviewGateInstanceEnableResultWire) =>
-          wire.operationsAlreadyPresent.find((o) => o.name === name);
+        expect(preview.awaitingPlatformAdoption).toBeNull();
+        expect(await mismatchOf()).toEqual([
+          { operation: OBSERVE_OP.name, awaiting: 'workspace_revision' },
+        ]);
         expect(present(OBSERVE_OP.name, preview)).toMatchObject({
           differs: false,
           definitionDiffers: true,
@@ -2524,7 +2555,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(again.revisionDrafts).toEqual([]);
 
+        // The catalog shows what the revision changes before it is published.
+        const listed = await callAsOwner<ListEnvelope<OperationSummaryWire>>('list_operations', {
+          gatekeeperId,
+        });
+        expect(
+          listed.items.find((op) => op.name === OBSERVE_OP.name && op.status === 'draft')
+            ?.definitionChange,
+        ).toEqual({
+          changedFields: ['params_schema'],
+          paramsAdded: [{ name: 'filter', required: false }],
+          paramsRemoved: [],
+          paramsChanged: [],
+        });
+        expect(
+          listed.items.find((op) => op.name === OBSERVE_OP.name && op.status === 'published')
+            ?.definitionChange,
+        ).toBeUndefined();
+
         await callAsOwner('publish_operation', { gatekeeperId, name: OBSERVE_OP.name });
+        expect(await mismatchOf()).toEqual([]);
         const published = await withWorkspace(
           pool,
           { workspaceId, principalId: ownerPrincipalId },

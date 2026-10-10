@@ -59,6 +59,28 @@ export const GatekeeperSummaryWireSchema = z
   .strict();
 export type GatekeeperSummaryWire = z.infer<typeof GatekeeperSummaryWireSchema>;
 
+/** Legacy K (UX acceptance of #538): one param of an Operation's `params_schema` — where the gate
+ *  sends it (`x-in`, lower-cased; absent = the request body) and whether it is required. */
+export const OperationParamSummaryWireSchema = z
+  .object({ name: z.string(), in: z.string().optional(), required: z.boolean() })
+  .strict();
+export type OperationParamSummaryWire = z.infer<typeof OperationParamSummaryWireSchema>;
+
+/** Legacy K: what publishing a revision draft changes in the definition the gate runs —
+ *  `changedFields` names the differing definition fields (`binding`, `params_schema`,
+ *  `result_mapping`, `mode`, `reversibility`, `blast_radius` for an ssh binding); the params lists
+ *  say which params were added, removed or changed (the draft's side). Governance fields are
+ *  `governanceChange`'s. */
+export const OperationDefinitionChangeWireSchema = z
+  .object({
+    changedFields: z.array(z.string()),
+    paramsAdded: z.array(OperationParamSummaryWireSchema),
+    paramsRemoved: z.array(OperationParamSummaryWireSchema),
+    paramsChanged: z.array(OperationParamSummaryWireSchema),
+  })
+  .strict();
+export type OperationDefinitionChangeWire = z.infer<typeof OperationDefinitionChangeWireSchema>;
+
 export const OperationSummaryWireSchema = z
   .object({
     gatekeeperId: z.string(),
@@ -80,6 +102,10 @@ export const OperationSummaryWireSchema = z
      *  `after` = this draft), with the kernel's direction. The catalog confirms a non-`neutral`
      *  change before it publishes. */
     governanceChange: OperationGovernanceChangeWireSchema.optional(),
+    /** Legacy K (UX acceptance of #538): on the same drafts as `governanceChange` — what
+     *  publishing it changes in the definition the gate runs, so the catalog can show what a
+     *  revision is before it is published. Absent when either version's definition does not parse. */
+    definitionChange: OperationDefinitionChangeWireSchema.optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;

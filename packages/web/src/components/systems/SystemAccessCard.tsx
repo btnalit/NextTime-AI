@@ -14,6 +14,7 @@ import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
 import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
+import { DefinitionMismatchNotice } from '../connect/DefinitionDrift.js';
 import { RefreshOperationGovernanceConfirm } from '../connect/RefreshOperationGovernanceConfirm.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -98,6 +99,9 @@ export interface SystemAccessCardProps {
   readonly onRevoke: (grantId: string) => Promise<void>;
   readonly onGranted: () => void;
   readonly selfPrincipalId: string | null;
+  /** `session.user?.platformRole === 'admin'` — a refused call that waits on the platform adopting
+   *  the gate's new manifest then links to the gate instance (UX acceptance of #538). */
+  readonly platformAdmin?: boolean;
 }
 
 /** Console redesign P3-3 (V5): one line per grantee, up to two names — the full roster (with
@@ -170,6 +174,28 @@ function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire })
   );
 }
 
+/** Legacy K (UX acceptance of #538): the gate refuses calls to some of this system's Operations
+ *  — it runs another definition — while the system itself still reads usable through the others.
+ *  When every one is refused the reachability chip already says so (`definition_mismatch`). The
+ *  drawer's `DefinitionMismatchNotice` says which, and whose step it is. */
+function RefusedOperationsChip({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+  const t = useT();
+  const count = gate.definitionMismatch.length;
+  if (count === 0 || gate.reason === 'definition_mismatch') return null;
+  return (
+    <span
+      className="chip chip-s chip-warn"
+      data-testid="gatekeeper-refused-operations"
+      title={t(
+        `门运行的定义和已发布的不一样：${gate.definitionMismatch.map((entry) => entry.operation).join('、')}`,
+        `The gate runs another definition than the published one: ${gate.definitionMismatch.map((entry) => entry.operation).join(', ')}`,
+      )}
+    >
+      {t(`${count} 个 Operation 调用被拒`, `${count} operation(s) refused`)}
+    </span>
+  );
+}
+
 /** The drawer's own, fuller rendering of the same reachability — full sentence + a fix-it link
  *  when it points somewhere actually useful (see `isSelfPageHref`). */
 function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
@@ -229,6 +255,7 @@ export function SystemAccessCard({
   onRevoke,
   onGranted,
   selfPrincipalId,
+  platformAdmin = false,
 }: SystemAccessCardProps) {
   const t = useT();
   const [grantOpen, setGrantOpen] = useState(false);
@@ -346,6 +373,7 @@ export function SystemAccessCard({
           {whoCanUseSummary(rows, directory, t)}
         </Button>
         <MyReachability gate={gate} />
+        <RefusedOperationsChip gate={gate} />
         {canManage ? (
           <Button
             variant="primary"
@@ -437,6 +465,13 @@ export function SystemAccessCard({
           </SheetHeader>
 
           <div className="stack">
+            <DefinitionMismatchNotice
+              mismatch={gate.definitionMismatch}
+              platformAdmin={platformAdmin}
+              platformGateId={healthInfo.platformGateId}
+              canManage={canManage}
+              testId="system-definition-mismatch"
+            />
             <div className="stack-s">
               <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
               <MyReachabilityDetail gate={gate} />
@@ -515,6 +550,7 @@ export function SystemAccessCard({
                   gatekeeperId={gate.gateId}
                   platformGateId={healthInfo.platformGateId}
                   gateDisplayName={gate.name}
+                  platformAdmin={platformAdmin}
                   onRefreshed={() => onPublished()}
                   testId="system-governance-refresh"
                 />

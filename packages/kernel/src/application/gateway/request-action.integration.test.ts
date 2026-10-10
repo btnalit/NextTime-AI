@@ -2096,6 +2096,34 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         ).rejects.toMatchObject({ code: 'operation_definition_mismatch', status: 409 });
         expect(kTransport.calls[APPROVED_READ.name]).toBeUndefined();
+
+        // UX acceptance of #538: the refusal is in the audit log, with both definitions and no
+        // gate text — the call's own transaction rolled back with it.
+        const refused = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            action: 'observe_operation',
+            resourceType: 'gatekeeper',
+            resourceId: kGatekeeperId,
+          }),
+        );
+        const row = refused.find(
+          (entry) => (entry.payload as { outcome?: string }).outcome === 'refused',
+        );
+        expect(row?.actorPrincipalId).toBe(ownerId);
+        expect(row?.payload).toMatchObject({
+          channel: 'human',
+          onBehalfOf: ownerId,
+          params: { gatekeeperId: kGatekeeperId, operation: APPROVED_READ.name, params: {} },
+          outcome: 'refused',
+          refusal: {
+            code: 'operation_definition_mismatch',
+            status: 409,
+            operation: APPROVED_READ.name,
+            approvedDigest: operationDefinitionDigest(APPROVED_READ),
+            runningDigest: operationDefinitionDigest(RUNNING[2]),
+          },
+        });
+        expect(JSON.stringify(row?.payload)).not.toContain('refused, nothing ran');
       });
 
       it('runs the definition a request was made against, not a revision published before it was approved', async () => {

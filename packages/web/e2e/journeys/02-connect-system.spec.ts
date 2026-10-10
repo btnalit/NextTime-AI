@@ -28,8 +28,8 @@ import {
  *     步骤②本身，见下方说明；`gate-host.spec.ts` 走的是"测试连接"成功的那条真实路径，
  *     ConnectSystemLauncher.test.tsx 与 EnableGateConfirm 自己的失败态由组件测试覆盖）。
  *   - 错（门的定义变了，遗留 K / #538 G1–G2）: 门公告里某个 Operation 的定义变了、治理字段没变时，
- *     "与门公告对齐"不能说"已一致"——确认框要说清在发布修订之前门会拒绝调用，结果要列出打开的修订
- *     草稿并链到能力目录去发布。CI 的 fixture 门每 60 秒按原样重新公告、改不了它的定义，所以这一步
+ *     "与门公告对齐"不能说"已一致"——平台还没采用门的新清单时，要说先由平台管理员采用；采用之后，
+ *     确认框要说清在发布修订之前门会拒绝调用，结果要列出打开的修订草稿并链到能力目录去发布。CI 的 fixture 门每 60 秒按原样重新公告、改不了它的定义，所以这一步
  *     用 `page.route` 改写真实预览的 `definitionDiffers`，并替身 `refresh_operation_governance`
  *     的结果（同旅程 ⑦ 的做法）；内核一侧（修订草稿、发布后 409 消失）由
  *     `platform-gates.integration.test.ts` 覆盖。截图写到 `test-results/review/`，随
@@ -182,17 +182,31 @@ test.describe('Journey ②: 接入一个新系统', () => {
     // --- 错: 门运行的定义变了（治理字段没变）——对齐打开修订草稿，并说清发布前门会拒绝调用 -------
     // The real preview, with EXECUTE_OP's definition flagged as changed; the refresh answers what
     // the kernel answers for that case (see this file's header).
+    // First the platform has not adopted the gate's new manifest yet (UX acceptance of #538): the
+    // gate already runs it, the manifest in effect still holds the old definition, so the preview
+    // names EXECUTE_OP as awaiting adoption and nothing differs yet.
+    let platformAdopted = false;
     let refreshParams: { gatekeeperId?: string; operationNames?: string[] } | undefined;
     await page.route('**/api/cap/preview_gate_instance_enable', async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as {
         ok: boolean;
-        result?: { operationsAlreadyPresent: Array<Record<string, unknown>> };
+        result?: {
+          operationsAlreadyPresent: Array<Record<string, unknown>>;
+          awaitingPlatformAdoption: { announcedAt: string; operations: string[] } | null;
+        };
       };
       if (body.ok && body.result) {
-        body.result.operationsAlreadyPresent = body.result.operationsAlreadyPresent.map((op) =>
-          op.name === EXECUTE_OP ? { ...op, definitionDiffers: true } : op,
-        );
+        if (platformAdopted) {
+          body.result.operationsAlreadyPresent = body.result.operationsAlreadyPresent.map((op) =>
+            op.name === EXECUTE_OP ? { ...op, definitionDiffers: true } : op,
+          );
+        } else {
+          body.result.awaitingPlatformAdoption = {
+            announcedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+            operations: [EXECUTE_OP],
+          };
+        }
       }
       await route.fulfill({ response, json: body });
     });
@@ -218,6 +232,22 @@ test.describe('Journey ②: 接入一个新系统', () => {
     const accessDrawer = page.getByTestId('system-access-drawer');
     const alignButton = accessDrawer.getByTestId('system-governance-refresh');
     await expect(alignButton).toBeVisible({ timeout: 15_000 });
+    await alignButton.click();
+
+    // Never 「已一致」 while the gate refuses the call: it says the platform admin adopts first.
+    const awaitingAdoption = accessDrawer.getByTestId(
+      'system-governance-refresh-awaiting-adoption',
+    );
+    await expect(awaitingAdoption).toBeVisible({ timeout: 15_000 });
+    await expect(awaitingAdoption).toContainText('平台管理员还没采用');
+    await expect(awaitingAdoption).toContainText(EXECUTE_OP);
+    await expect(awaitingAdoption).toContainText('请平台管理员在「集成」里采用门的新清单');
+    await expect(accessDrawer.getByTestId('system-governance-refresh-aligned')).toHaveCount(0);
+    await expect(page.getByTestId('system-governance-refresh-confirm')).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/review/k-awaiting-adoption.png' });
+
+    // Then the platform adopts it: the definition now differs from the deployed one.
+    platformAdopted = true;
     await alignButton.click();
 
     const alignConfirm = page.getByTestId('system-governance-refresh-confirm');

@@ -162,6 +162,7 @@ function readinessGate(overrides: Partial<GateWire> & Pick<GateWire, 'gateId' | 
     observeOperationCount: 1,
     executeOperationCount: 0,
     disabledOperations: [],
+    definitionMismatch: [],
     excludedByPolicy: false,
     excludedByProfile: false,
     inEntryScope: true,

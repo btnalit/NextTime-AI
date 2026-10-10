@@ -468,6 +468,24 @@ describe('HttpGatekeeperClient — a gate’s error text', () => {
     expect(err.message).toBe('bad key [redacted] for /v1');
   });
 
+  // UX acceptance of #538: what the kernel records of a refusal — the call it made, and the
+  // gate's running digest only when it is digest-shaped (a self-connected gate answers anything).
+  it('names the call a gate refused, with its reported running digest when well-formed', async () => {
+    const running = `sha256:${'a'.repeat(64)}`;
+    const err = await refusal(
+      { code: 'operation_definition_mismatch', message: 'x', details: { runningDigest: running } },
+      409,
+    );
+    expect(err.call).toEqual({ operation: 'list', approvedDigest: DIGEST, runningDigest: running });
+    for (const runningDigest of [KEY, `sha256:${'A'.repeat(64)}`, 42, `${running}\n`]) {
+      const odd = await refusal(
+        { code: 'operation_definition_mismatch', message: 'x', details: { runningDigest } },
+        409,
+      );
+      expect(odd.call).toEqual({ operation: 'list', approvedDigest: DIGEST });
+    }
+  });
+
   it('scrubs an upstream failure (the 502 path) too', async () => {
     const err = await refusal(
       { code: 'transport_error', message: `untrusted: {"error":"Authorization: Bearer ${KEY}"}` },

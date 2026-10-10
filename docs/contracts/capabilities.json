@@ -2038,6 +2038,12 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "refusedOperations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "removed": {
                   "items": {
                     "additionalProperties": false,
@@ -2097,7 +2103,8 @@
                 "operationCount",
                 "added",
                 "removed",
-                "changed"
+                "changed",
+                "refusedOperations"
               ],
               "type": "object"
             },
@@ -2733,6 +2740,12 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "refusedOperations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "removed": {
                   "items": {
                     "additionalProperties": false,
@@ -2792,7 +2805,8 @@
                 "operationCount",
                 "added",
                 "removed",
-                "changed"
+                "changed",
+                "refusedOperations"
               ],
               "type": "object"
             },
@@ -4139,6 +4153,29 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "definitionMismatch": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "awaiting": {
+                      "enum": [
+                        "platform_adoption",
+                        "workspace_revision"
+                      ],
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "operation",
+                    "awaiting"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "disabledOperations": {
                 "items": {
                   "type": "string"
@@ -4179,6 +4216,7 @@
                 "enum": [
                   "no_published_operation",
                   "disabled_by_platform",
+                  "definition_mismatch",
                   "not_granted",
                   "excluded_by_policy",
                   "excluded_by_profile",
@@ -4209,6 +4247,7 @@
               "observeOperationCount",
               "executeOperationCount",
               "disabledOperations",
+              "definitionMismatch",
               "excludedByPolicy",
               "excludedByProfile",
               "inEntryScope",
@@ -4231,7 +4270,8 @@
                   "no_worker_gate",
                   "excluded_by_profile",
                   "excluded_by_policy",
-                  "disabled_by_platform"
+                  "disabled_by_platform",
+                  "definition_mismatch"
                 ],
                 "type": "string"
               },
@@ -4271,7 +4311,8 @@
                         "no_worker_gate",
                         "excluded_by_profile",
                         "excluded_by_policy",
-                        "disabled_by_platform"
+                        "disabled_by_platform",
+                        "definition_mismatch"
                       ],
                       "type": "string"
                     },
@@ -5235,6 +5276,7 @@
                     "enum": [
                       "no_published_operation",
                       "disabled_by_platform",
+                      "definition_mismatch",
                       "not_granted",
                       "excluded_by_policy",
                       "excluded_by_profile",
@@ -6601,6 +6643,12 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "refusedOperations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "removed": {
                   "items": {
                     "additionalProperties": false,
@@ -6660,7 +6708,8 @@
                 "operationCount",
                 "added",
                 "removed",
-                "changed"
+                "changed",
+                "refusedOperations"
               ],
               "type": "object"
             },
@@ -6787,6 +6836,90 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "definitionChange": {
+                "additionalProperties": false,
+                "properties": {
+                  "changedFields": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "paramsAdded": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "paramsChanged": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "paramsRemoved": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "changedFields",
+                  "paramsAdded",
+                  "paramsRemoved",
+                  "paramsChanged"
+                ],
+                "type": "object"
               },
               "description": {
                 "type": "string"
@@ -10613,6 +10746,12 @@
                         "minimum": 0,
                         "type": "integer"
                       },
+                      "refusedOperations": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
                       "removed": {
                         "items": {
                           "additionalProperties": false,
@@ -10672,7 +10811,8 @@
                       "operationCount",
                       "added",
                       "removed",
-                      "changed"
+                      "changed",
+                      "refusedOperations"
                     ],
                     "type": "object"
                   },
@@ -11509,6 +11649,90 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "definitionChange": {
+                "additionalProperties": false,
+                "properties": {
+                  "changedFields": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "paramsAdded": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "paramsChanged": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "paramsRemoved": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "in": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "changedFields",
+                  "paramsAdded",
+                  "paramsRemoved",
+                  "paramsChanged"
+                ],
+                "type": "object"
               },
               "description": {
                 "type": "string"
@@ -15408,6 +15632,32 @@
           },
           "type": "array"
         },
+        "awaitingPlatformAdoption": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "announcedAt": {
+                  "type": "string"
+                },
+                "operations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "announcedAt",
+                "operations"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "gateId": {
           "type": "string"
         },
@@ -15636,7 +15886,8 @@
         "ambiguousCandidates",
         "operationsToImport",
         "operationsAlreadyPresent",
-        "manifestDigest"
+        "manifestDigest",
+        "awaitingPlatformAdoption"
       ],
       "type": "object"
     },
@@ -23156,6 +23407,12 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "refusedOperations": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "removed": {
                   "items": {
                     "additionalProperties": false,
@@ -23215,7 +23472,8 @@
                 "operationCount",
                 "added",
                 "removed",
-                "changed"
+                "changed",
+                "refusedOperations"
               ],
               "type": "object"
             },

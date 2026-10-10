@@ -40,8 +40,18 @@ function preview(operationsAlreadyPresent: readonly Record<string, unknown>[] = 
     operationsToImport: [],
     operationsAlreadyPresent,
     manifestDigest: 'digest-1',
+    awaitingPlatformAdoption: null as null | { announcedAt: string; operations: string[] },
   };
 }
+
+const ALIGNED_ROW = {
+  name: 'stock.get',
+  existing: { mode: 'observe', blastRadius: 'low', autoApprovable: true, status: 'published' },
+  announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+  differs: false,
+  definitionDiffers: false,
+  direction: 'neutral',
+};
 
 function renderConfirm(http: CapabilityCaller, onRefreshed = vi.fn()) {
   render(
@@ -98,6 +108,58 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(notice.textContent).toContain('已与门的公告一致');
     expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
     expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
+  });
+
+  it('UX acceptance of #538: while the platform has not adopted the gate’s new manifest, it never says 「已一致」 — it says who has to adopt it first (a platform admin gets the link)', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        awaitingPlatformAdoption: {
+          announcedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+          operations: ['stock.get'],
+        },
+      }),
+    });
+    render(
+      <RefreshOperationGovernanceConfirm
+        http={http}
+        gatekeeperId="gk-1"
+        platformGateId="gate-1"
+        gateDisplayName="库存"
+        onRefreshed={vi.fn()}
+        platformAdmin
+        testId="align-gk-1"
+      />,
+    );
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
+    expect(notice.textContent).toContain('门公布了新清单（');
+    expect(notice.textContent).toContain(
+      '平台管理员还没采用。采用之前这里对齐不了，对 stock.get 的调用会被拒绝。',
+    );
+    expect(
+      screen.getByTestId('align-gk-1-awaiting-adoption-adopt-link').getAttribute('href'),
+    ).toContain('gate-1');
+    expect(screen.queryByTestId('align-gk-1-aligned')).toBeNull();
+    expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
+  });
+
+  it('UX acceptance of #538: anyone but a platform admin is told who to ask, with no link', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-10T04:00:00.000Z',
+          operations: ['stock.get'],
+        },
+      }),
+    });
+    renderConfirm(http);
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
+    expect(notice.textContent).toContain('请平台管理员在「集成」里采用门的新清单。');
+    expect(screen.queryByTestId('align-gk-1-awaiting-adoption-adopt-link')).toBeNull();
+    expect(screen.queryByTestId('align-gk-1-aligned')).toBeNull();
   });
 
   it('shows the drifting operations in a medium confirm; confirming calls refresh_operation_governance with just their names and reports the result', async () => {

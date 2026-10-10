@@ -352,6 +352,9 @@ describe('gatekeeper protocol server', () => {
     });
     expect(other.statusCode).toBe(409);
     expect(other.json().error.code).toBe('operation_definition_mismatch');
+    // The digest this gate runs, beside the message, for the kernel's record of the refusal.
+    expect(other.json().error.details).toEqual({ runningDigest: OBSERVE_DIGEST });
+    expect(missing.json().error.details).toEqual({ runningDigest: EXECUTE_DIGEST });
     expect(invoked).toBe(0);
   });
 

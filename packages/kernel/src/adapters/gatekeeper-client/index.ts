@@ -93,15 +93,27 @@ export function loadGateToken(env: NodeJS.ProcessEnv): string | undefined {
   }
 }
 
+/** Which call a gate answered with an error — set only on an answer the gate actually gave (an
+ *  `ok: false` envelope), for the kernel's own record of a refusal (UX acceptance of #538): the
+ *  Operation, the digest the call said was approved, and — when the gate reported it in a
+ *  well-formed `details.runningDigest` — the digest of the definition it runs. */
+export interface GateCallRefusal {
+  readonly operation: string;
+  readonly approvedDigest: string | null;
+  readonly runningDigest?: string;
+}
+
 export class GatekeeperClientError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly call?: GateCallRefusal;
 
-  constructor(message: string, options: { code: string; status: number }) {
+  constructor(message: string, options: { code: string; status: number; call?: GateCallRefusal }) {
     super(message);
     this.name = 'GatekeeperClientError';
     this.code = options.code;
     this.status = options.status;
+    if (options.call !== undefined) this.call = options.call;
   }
 }
 
@@ -276,6 +288,20 @@ function boundBytes(text: string, maxBytes: number, marked: boolean): string {
  * alike; a message or code that is not what the protocol says it is reads as one the gate did not
  * give.
  */
+/** An Operation digest as `@nexttime/gatekeeper-base`'s `operationDefinitionDigest` writes it — the
+ *  only shape of `details.runningDigest` the kernel repeats (a self-connected gate's response is
+ *  owner-supplied text). */
+const OPERATION_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+/** `details.runningDigest` of a gate's error, when it is a well-formed digest. */
+export function gateRunningDigestOf(error: unknown): string | undefined {
+  if (error === null || typeof error !== 'object') return undefined;
+  const details = (error as { details?: unknown }).details;
+  if (details === null || typeof details !== 'object') return undefined;
+  const digest = (details as { runningDigest?: unknown }).runningDigest;
+  return typeof digest === 'string' && OPERATION_DIGEST.test(digest) ? digest : undefined;
+}
+
 export function gateErrorOf(
   error: unknown,
   path: string,
@@ -388,6 +414,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     method: 'GET' | 'POST' | 'DELETE',
     body?: unknown,
     timeoutMs: number = this.timeoutMs,
+    call?: GatekeeperCallInput,
   ): Promise<unknown> {
     const { endpoint, credential } = target;
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
@@ -484,8 +511,22 @@ export class HttpGatekeeperClient implements GatekeeperClient {
       );
     }
     if (envelope.ok !== true) {
-      const { code, message } = gateErrorOf((envelope as { error?: unknown }).error, path);
-      throw new GatekeeperClientError(message, { code, status: response.status });
+      const error = (envelope as { error?: unknown }).error;
+      const { code, message } = gateErrorOf(error, path);
+      const runningDigest = gateRunningDigestOf(error);
+      throw new GatekeeperClientError(message, {
+        code,
+        status: response.status,
+        ...(call !== undefined
+          ? {
+              call: {
+                operation: call.operation,
+                approvedDigest: call.operationDigest ?? null,
+                ...(runningDigest !== undefined ? { runningDigest } : {}),
+              },
+            }
+          : {}),
+      });
     }
     return envelope.result;
   }
@@ -499,11 +540,25 @@ export class HttpGatekeeperClient implements GatekeeperClient {
   }
 
   async observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse> {
-    return (await this.request(target, 'gate/observe', 'POST', input)) as ObserveResponse;
+    return (await this.request(
+      target,
+      'gate/observe',
+      'POST',
+      input,
+      this.timeoutMs,
+      input,
+    )) as ObserveResponse;
   }
 
   async simulate(target: GateTarget, input: GatekeeperCallInput): Promise<SimulateResponse> {
-    return (await this.request(target, 'gate/simulate', 'POST', input)) as SimulateResponse;
+    return (await this.request(
+      target,
+      'gate/simulate',
+      'POST',
+      input,
+      this.timeoutMs,
+      input,
+    )) as SimulateResponse;
   }
 
   async apply(target: GateTarget, input: GatekeeperApplyInput): Promise<ApplyResponse> {
@@ -513,11 +568,19 @@ export class HttpGatekeeperClient implements GatekeeperClient {
       'POST',
       input,
       this.applyTimeoutMs,
+      input,
     )) as ApplyResponse;
   }
 
   async revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse> {
-    return (await this.request(target, 'gate/revert', 'POST', input)) as RevertResponse;
+    return (await this.request(
+      target,
+      'gate/revert',
+      'POST',
+      input,
+      this.timeoutMs,
+      input,
+    )) as RevertResponse;
   }
 
   async health(target: GateTarget): Promise<HealthResponse> {

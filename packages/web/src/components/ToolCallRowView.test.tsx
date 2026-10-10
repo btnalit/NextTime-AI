@@ -44,6 +44,7 @@ describe('ToolCallRowView', () => {
           toolCallId: 'c1',
           name: 'nexttime_request_action',
           status: 'ended',
+          args: { gatekeeperId: 'gk-1', name: 'db.restart', params: {} },
           result: {
             status: 'failed',
             reason:
@@ -57,6 +58,10 @@ describe('ToolCallRowView', () => {
     expect(note.textContent).toContain('与门公告对齐');
     // The raw result stays as the agent saw it.
     expect(screen.getByText(/is not the one this gate runs/)).toBeTruthy();
+    // UX acceptance of #538: the note links to the system the call went to.
+    expect(screen.getByTestId('tool-call-gate-reason-link').getAttribute('href')).toBe(
+      '#/govern/systems/gk-1',
+    );
   });
 
   it('has nothing to add to a result that names no gate refusal', () => {
@@ -91,5 +96,36 @@ describe('PersistedToolCallRowView', () => {
     const note = screen.getByTestId('tool-call-gate-reason');
     expect(note.textContent).toContain('没有批准过的定义');
     expect(note.textContent).toContain('先在能力目录发布它');
+    // No arguments recorded: nothing to link to.
+    expect(screen.queryByTestId('tool-call-gate-reason-link')).toBeNull();
+  });
+
+  it('links the note to the system its recorded arguments name, and to none when they were cut short', () => {
+    const record = (argsText: string, truncated: boolean) => ({
+      toolCallId: 'c3',
+      name: 'nexttime_request_action',
+      outcome: 'done' as const,
+      args: { text: argsText, truncated, totalChars: argsText.length },
+      result: {
+        text: '{"status":"failed","reason":"operation_definition_mismatch: refused"}',
+        truncated: false,
+        totalChars: 70,
+      },
+      redactedValues: 0,
+      startedAt: null,
+      endedAt: null,
+    });
+    const { unmount } = render(
+      <PersistedToolCallRowView
+        record={record('{"gatekeeperId":"gk 2","name":"stock.get"}', false)}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-gate-reason-link').getAttribute('href')).toBe(
+      '#/govern/systems/gk%202',
+    );
+    unmount();
+    render(<PersistedToolCallRowView record={record('{"gatekeeperId":"gk', true)} />);
+    expect(screen.getByTestId('tool-call-gate-reason')).toBeTruthy();
+    expect(screen.queryByTestId('tool-call-gate-reason-link')).toBeNull();
   });
 });

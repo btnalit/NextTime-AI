@@ -8,10 +8,33 @@ import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record
 import { Notice } from './kit/notice.js';
 import { Icon } from './ui/Icon.js';
 
+/** The `gatekeeperId` a gate call's arguments name — an object, or its JSON text (a persisted
+ *  preview; one cut short does not parse and names none). */
+function gatekeeperIdOf(args: unknown): string | undefined {
+  let value = args;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (value === null || typeof value !== 'object') return undefined;
+  const id = (value as { gatekeeperId?: unknown }).gatekeeperId;
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
+
 /** A gate refusal the result names (`operation_definition_mismatch`, an ActionRequest's
  *  `operation_definition_unavailable:` reason, …), said in the viewer's language with what to do —
- *  above the raw result, which stays as the agent saw it (review of #538, G3). */
-function GateReasonNote({ text }: { readonly text: string }) {
+ *  above the raw result, which stays as the agent saw it (review of #538, G3). With a link to the
+ *  system the call went to when its arguments name it (UX acceptance of #538). */
+function GateReasonNote({
+  text,
+  gatekeeperId,
+}: {
+  readonly text: string;
+  readonly gatekeeperId?: string;
+}) {
   const t = useT();
   const step = gateReasonNextStep(text, t);
   if (!step) return null;
@@ -20,6 +43,11 @@ function GateReasonNote({ text }: { readonly text: string }) {
       <span className="stack-s" data-error-code={step.code}>
         <span className="font-medium">{step.title}</span>
         <span>{step.message}</span>
+        {gatekeeperId !== undefined ? (
+          <a href={hrefs.gatekeeper(gatekeeperId)} data-testid="tool-call-gate-reason-link">
+            {t('打开这个系统', 'Open this system')}
+          </a>
+        ) : null}
       </span>
     </Notice>
   );
@@ -65,7 +93,7 @@ export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
         {row.status === 'ended' && row.result !== undefined ? (
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
-            <GateReasonNote text={prettyJson(row.result)} />
+            <GateReasonNote text={prettyJson(row.result)} gatekeeperId={gatekeeperIdOf(row.args)} />
             <pre className="code-block">{prettyJson(row.result)}</pre>
           </>
         ) : null}
@@ -133,7 +161,10 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
         {record.result ? (
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
-            <GateReasonNote text={record.result.text} />
+            <GateReasonNote
+              text={record.result.text}
+              gatekeeperId={record.args ? gatekeeperIdOf(record.args.text) : undefined}
+            />
             <pre className="code-block">{previewDisplayText(record.result)}</pre>
             {record.result.truncated ? (
               <span className="text-3 text-small">

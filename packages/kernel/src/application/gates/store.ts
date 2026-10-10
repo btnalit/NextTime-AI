@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import { revokeEntrySessionHandles, revokeSession } from '../../governance/capability/index.js';
 import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
+import { gateRunningDefinitions, operationsRefusedUntilAdopted } from './definition-drift.js';
 import {
   type AnnouncedManifestDiff,
   canonicalJson,
@@ -151,6 +152,7 @@ export function pendingManifestOf(row: {
     announcedAt: (row.pending_announced_at ?? row.updated_at).toISOString(),
     operationCount: pending.length,
     ...diffAnnouncedManifest(operationsOf(row.operations), pending),
+    refusedOperations: operationsRefusedUntilAdopted(gateRunningDefinitions(row)),
   };
 }
 

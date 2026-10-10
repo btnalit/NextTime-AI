@@ -23,7 +23,7 @@ import {
   revisionDraftKey,
 } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
-import { workerDefinitionKindLabel } from '../lib/labels.js';
+import { operationFieldLabel, workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
@@ -42,6 +42,7 @@ import {
   GovernanceChangeList,
   governanceChangeSummary,
   governanceConsequences,
+  governanceFieldChanges,
   isLoosening,
 } from './connect/GovernanceChange.js';
 import { Button } from './kit/button.js';
@@ -397,9 +398,105 @@ function PublishCredentialSlot({
 
 /** A catalog row's selection key: `operationKey`, except a draft that revises a published version
  *  (it carries `governanceChange`) — both rows share the identity, and the draft must stay
- *  selectable on its own to be published from here (R-19). */
+ *  selectable on its own to be published from here (R-19) — and a retired (`deprecated`) version,
+ *  which shares it with the version that replaced it (UX acceptance of #538: the two rows had one
+ *  React key), so it is keyed by its version. */
 function catalogOperationKey(row: OperationCatalogRow): string {
-  return row.status === 'draft' && row.governanceChange ? revisionDraftKey(row) : operationKey(row);
+  if (row.status === 'draft' && row.governanceChange) return revisionDraftKey(row);
+  if (row.status === 'deprecated' && row.version !== undefined) {
+    return `${operationKey(row)}@v${row.version}`;
+  }
+  return operationKey(row);
+}
+
+/** One param of a revision, as `+warehouse（query，可选）` reads it. Where it goes is named only
+ *  when the definition says (`x-in`): without it the gate's kind decides (query for an HTTP GET,
+ *  the body otherwise), which this row cannot tell. */
+function paramLine(
+  sign: string,
+  param: { readonly name: string; readonly in?: string; readonly required: boolean },
+  t: Translate,
+): string {
+  const zh = [param.in, param.required ? '必填' : '可选'].filter(Boolean).join('，');
+  const en = [param.in, param.required ? 'required' : 'optional'].filter(Boolean).join(', ');
+  return t(`参数：${sign}${param.name}（${zh}）`, `Param: ${sign}${param.name} (${en})`);
+}
+
+/**
+ * Legacy K (UX acceptance of #538): what publishing this revision draft changes against the version
+ * in effect — governance fields (`governanceChange`) and the definition the gate runs
+ * (`definitionChange`: changed fields, params added / removed / changed). Publishing approves a new
+ * definition, so it is shown before the button, never only after.
+ */
+function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
+  const t = useT();
+  const lines: string[] = [];
+  if (row.governanceChange) {
+    const fields = governanceFieldChanges(
+      row.governanceChange.before,
+      row.governanceChange.after,
+      t,
+    );
+    for (const field of fields) {
+      lines.push(
+        t(
+          `${field.label}：${field.before} → ${field.after}`,
+          `${field.label}: ${field.before} → ${field.after}`,
+        ),
+      );
+    }
+  }
+  // Governance fields the gate also runs are already on a line of their own above.
+  const governanceListed = new Set<string>();
+  if (row.governanceChange) {
+    const { before, after } = row.governanceChange;
+    if (before.mode !== after.mode) governanceListed.add('mode');
+    if (before.blastRadius !== after.blastRadius) governanceListed.add('blast_radius');
+  }
+  const change = row.definitionChange;
+  if (change) {
+    for (const param of change.paramsAdded) lines.push(paramLine('+', param, t));
+    for (const param of change.paramsRemoved) lines.push(paramLine('−', param, t));
+    for (const param of change.paramsChanged) lines.push(paramLine('~', param, t));
+    for (const field of change.changedFields) {
+      // Param changes are listed one by one above; the field itself only when none of them is.
+      if (
+        field === 'params_schema' &&
+        change.paramsAdded.length + change.paramsRemoved.length + change.paramsChanged.length > 0
+      ) {
+        continue;
+      }
+      if (governanceListed.has(field)) continue;
+      lines.push(
+        t(`${operationFieldLabel(field, t)}变了`, `${operationFieldLabel(field, t)} changed`),
+      );
+    }
+  }
+  return (
+    <div className="stack-s" data-testid="operation-revision-diff">
+      <span className="field-label">
+        {t('和已发布版本相比', 'Compared with the published version')}
+      </span>
+      {lines.length === 0 ? (
+        <span className="text-3">
+          {change
+            ? t('和已发布版本没有差异。', 'No difference from the published version.')
+            : t(
+                '读不出这一版的定义，没法和已发布版本比较。',
+                'This version’s definition could not be read, so it cannot be compared.',
+              )}
+        </span>
+      ) : (
+        <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+          {lines.map((line) => (
+            <li key={line} className="text-13" data-testid="operation-revision-diff-line">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** S8 W3 K2 (leftover 82): the caller's own private draft's "丢弃" action — a `kit/confirm`
@@ -634,6 +731,7 @@ function OperationDetailView({
         </div>
       </header>
       <KeyValue items={items} />
+      {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot review={credentialReview} busy={busy} />
       ) : null}
@@ -773,8 +871,18 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_operation' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
+        title:
+          action === 'publish_operation'
+            ? row.version !== undefined
+              ? t(`${row.name} 已发布 v${row.version}`, `${row.name} v${row.version} published`)
+              : t(`${row.name} 已发布`, `${row.name} published`)
+            : t(`${row.name} 已弃用`, `${row.name} deprecated`),
       });
+      // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
+      // 「未找到」 after publishing) — follow it to the version now in effect.
+      if (action === 'publish_operation' && key !== operationKey(row) && itemId === key) {
+        onSelectItem(operationKey(row));
+      }
       refresh();
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.

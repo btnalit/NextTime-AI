@@ -245,8 +245,8 @@ export const ERROR_NEXT_STEPS: Readonly<
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {
-    zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：在「系统与授权」打开它，点「与门公告对齐」，再到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在能力目录发布和门一致的定义，然后重新发起。',
-    en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: open it in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, then request again. For a gate you connected yourself: publish the definition the gate runs in the catalog, then request again.',
+    zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在能力目录发布和门一致的定义，然后重新发起。',
+    en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. For a gate you connected yourself: publish the definition the gate runs in the catalog, then request again.',
   },
   operation_definition_unavailable: {
     zh: '发起请求时这个 Operation 还没有发布，也没有草稿，所以批准时没有对应的定义，调用没有执行。先在能力目录发布它，再重新发起。',

@@ -233,8 +233,8 @@ export function GateInstanceDetailPanel({
           <div className="stack-s">
             <span>
               {t(
-                `已 announce 的 Operation（${instance.operations.length}）`,
-                `Announced operations (${instance.operations.length})`,
+                `生效清单中的 Operation（${instance.operations.length}）`,
+                `Operations in effect (${instance.operations.length})`,
               )}
             </span>
             {instance.operations.length === 0 ? (
@@ -294,6 +294,8 @@ export function GateInstanceDetailPanel({
               gateId={instance.gateId}
               displayName={instance.displayName}
               pending={instance.pendingManifest}
+              enablingWorkspaces={instance.enablingWorkspaces ?? []}
+              enabledWorkspaceCount={instance.enabledWorkspaceCount}
               onConfirmed={onChanged}
             />
           ) : null}
@@ -463,7 +465,7 @@ export function GateInstanceDetailPanel({
                       ? t('共享', 'Shared')
                       : t('按人', 'Connected account')}
                   </dd>
-                  <dt>Manifest source</dt>
+                  <dt>{t('清单来源', 'Manifest source')}</dt>
                   <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
                 </dl>
 

@@ -12,6 +12,7 @@ import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
+import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
 import {
   type GovernanceChangeItem,
   GovernanceChangeList,
@@ -36,6 +37,9 @@ export interface RefreshOperationGovernanceConfirmProps {
    *  reloads whatever it derives from Operation governance fields (readiness's per-mode counts,
    *  the catalog list) — same "full result, caller's own reload" split `EnableGateConfirm` uses. */
   readonly onRefreshed: (result: RefreshOperationGovernanceResultWire) => void;
+  /** `session.user?.platformRole === 'admin'` — when the gate's new manifest still waits for the
+   *  platform, the notice links a platform admin to it (UX acceptance of #538). */
+  readonly platformAdmin?: boolean;
   readonly testId?: string;
 }
 
@@ -68,6 +72,12 @@ export interface RefreshOperationGovernanceConfirmProps {
  * call made under the deployed definition until a revision carrying the announced one is published,
  * and this refresh is what opens that revision (as a draft, never published from here). The confirm
  * says so; the result lists each draft with a link to the catalog row that publishes it.
+ *
+ * **Adopting comes first** (UX acceptance of #538): while the platform has not adopted the gate's
+ * new manifest, the gate already runs it but this preview still reads the manifest in effect, so
+ * there is nothing to align yet — and saying 「已一致」 would leave the reader stuck while every
+ * call is refused. The preview's `awaitingPlatformAdoption` names those Operations; this says the
+ * platform admin has to adopt it first (`AwaitingAdoptionNotice`), never 「已一致」.
  */
 export function RefreshOperationGovernanceConfirm({
   http,
@@ -75,6 +85,7 @@ export function RefreshOperationGovernanceConfirm({
   platformGateId,
   gateDisplayName,
   onRefreshed,
+  platformAdmin = false,
   testId,
 }: RefreshOperationGovernanceConfirmProps) {
   const t = useT();
@@ -85,6 +96,8 @@ export function RefreshOperationGovernanceConfirm({
   >(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [alignedNotice, setAlignedNotice] = useState(false);
+  const [awaitingAdoption, setAwaitingAdoption] =
+    useState<PreviewGateInstanceEnableResultWire['awaitingPlatformAdoption']>(null);
   const [manifestDigest, setManifestDigest] = useState<string | null>(null);
   // Which previewed rows are published — a revision draft of one is its own catalog row.
   const [publishedNames, setPublishedNames] = useState<ReadonlySet<string>>(new Set());
@@ -100,6 +113,7 @@ export function RefreshOperationGovernanceConfirm({
     setChecking(true);
     setCheckError(null);
     setAlignedNotice(false);
+    setAwaitingAdoption(null);
     setLastResult(null);
     try {
       const preview = await http.call<PreviewGateInstanceEnableResultWire>(
@@ -120,8 +134,10 @@ export function RefreshOperationGovernanceConfirm({
         ),
       );
       setManifestDigest(preview.manifestDigest);
-      if (drifting.length === 0) setAlignedNotice(true);
-      else setConfirmOpen(true);
+      const awaiting = preview.awaitingPlatformAdoption ?? null;
+      setAwaitingAdoption(awaiting);
+      if (drifting.length > 0) setConfirmOpen(true);
+      else if (awaiting === null) setAlignedNotice(true);
     } catch (err) {
       setCheckError(err);
     } finally {
@@ -162,6 +178,15 @@ export function RefreshOperationGovernanceConfirm({
           <NoticeErrorBody error={checkError} />
         </Notice>
       ) : null}
+      {awaitingAdoption !== null && !confirmOpen ? (
+        <AwaitingAdoptionNotice
+          operations={awaitingAdoption.operations}
+          announcedAt={awaitingAdoption.announcedAt}
+          platformAdmin={platformAdmin}
+          platformGateId={platformGateId}
+          testId={testId ? `${testId}-awaiting-adoption` : undefined}
+        />
+      ) : null}
       {alignedNotice ? (
         <Notice testId={testId ? `${testId}-aligned` : undefined}>
           {t(
@@ -196,8 +221,8 @@ export function RefreshOperationGovernanceConfirm({
               <div className="stack-s" data-testid={testId ? `${testId}-drafts` : undefined}>
                 <span>
                   {t(
-                    `已为 ${lastResult.revisionDrafts.length} 个 Operation 打开修订草稿。发布之前，门会拒绝对它们的调用——到能力目录核对后发布：`,
-                    `Opened a revision draft for ${lastResult.revisionDrafts.length} operation(s). The gate refuses calls to them until it is published — review and publish it in the catalog:`,
+                    `已为 ${lastResult.revisionDrafts.length} 个 Operation 打开修订草稿。发布之前，门会拒绝对它们的调用——到能力目录核对改了什么，再发布：`,
+                    `Opened a revision draft for ${lastResult.revisionDrafts.length} operation(s). The gate refuses calls to them until it is published — check what changed in the catalog, then publish it:`,
                   )}
                 </span>
                 <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
@@ -232,15 +257,13 @@ export function RefreshOperationGovernanceConfirm({
         anchor={trigger}
         title={t('与门公告对齐', "Align with the gate's announcement")}
         description={
+          // A definition-only change is said once, by the notice below (UX acceptance of #538).
           items.length > 0
             ? t(
                 '按门当前生效清单的模式 / 影响级 / 是否可自动批准，就地修正下列已发布 Operation 的治理字段（不产生新版本）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
                 'Corrects the mode / blast radius / auto-approvable of the published operations below in place, to the manifest in effect (no new Operation version). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
               )
-            : t(
-                '下列已发布 Operation 的治理字段与门的公告一致，但门运行的定义变了，不能就地修改：对齐会为它们各打开一个修订草稿。',
-                'The governance fields of the published operations below match the announcement, but the definition the gate runs has changed and cannot be corrected in place: aligning opens a revision draft for each.',
-              )
+            : undefined
         }
         target={gateDisplayName}
         impact={[
@@ -273,6 +296,15 @@ export function RefreshOperationGovernanceConfirm({
               `The definition the gate runs (binding, params or result mapping) has changed: ${redefined.join(', ')}. Aligning only opens a revision draft for each; the gate refuses calls to them until you publish it in the catalog.`,
             )}
           </Notice>
+        ) : null}
+        {awaitingAdoption !== null ? (
+          <AwaitingAdoptionNotice
+            operations={awaitingAdoption.operations}
+            announcedAt={awaitingAdoption.announcedAt}
+            platformAdmin={platformAdmin}
+            platformGateId={platformGateId}
+            testId={testId ? `${testId}-confirm-awaiting-adoption` : undefined}
+          />
         ) : null}
         {items.length > 0 ? <GovernanceChangeList items={items} /> : null}
       </Confirm>

@@ -58,10 +58,13 @@ export {
   OperationDescriptionInvalidError,
   IllegalTransition,
 } from './manifest.js';
+export type { OperationDefinitionChange, OperationParamSummary } from './definition.js';
 export {
   OperationDefinitionUnreadableError,
+  operationDefinitionChange,
   operationDefinitionDiffers,
   operationRecordDigest,
+  operationRecordDigestOrNull,
 } from './definition.js';
 export {
   OperationDeclaresGateOwnedParamsError,

@@ -62,6 +62,8 @@ interface ErrorMapping {
   readonly status: number;
   readonly code: string;
   readonly message: string;
+  /** Structured facts about the refusal, beside the message — only digests today (legacy K). */
+  readonly details?: { readonly runningDigest: string };
 }
 
 export function mapGatekeeperError(err: unknown): ErrorMapping {
@@ -85,7 +87,12 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
     return { status: 409, code: 'apply_outcome_unknown', message: err.message };
   }
   if (err instanceof OperationDefinitionMismatchError) {
-    return { status: 409, code: 'operation_definition_mismatch', message: err.message };
+    return {
+      status: 409,
+      code: 'operation_definition_mismatch',
+      message: err.message,
+      details: { runningDigest: err.runningDigest },
+    };
   }
   if (err instanceof OperationRefusedError) {
     return { status: 403, code: 'operation_refused', message: err.message };
@@ -236,10 +243,20 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
   function fail(
     reply: { code(status: number): void },
     err: unknown,
-  ): { ok: false; error: { code: string; message: string } } {
+  ): {
+    ok: false;
+    error: { code: string; message: string; details?: { runningDigest: string } };
+  } {
     const mapped = mapGatekeeperError(err);
     reply.code(mapped.status);
-    return { ok: false, error: { code: mapped.code, message: mapped.message } };
+    return {
+      ok: false,
+      error: {
+        code: mapped.code,
+        message: mapped.message,
+        ...(mapped.details !== undefined ? { details: mapped.details } : {}),
+      },
+    };
   }
 
   function notFound(reply: { code(status: number): void }) {

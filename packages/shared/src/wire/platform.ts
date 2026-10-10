@@ -561,6 +561,13 @@ export const PendingGateManifestWireSchema = z
     added: z.array(GateOperationSummaryWireSchema),
     removed: z.array(GateOperationSummaryWireSchema),
     changed: z.array(PendingGateManifestChangeWireSchema),
+    /** Legacy K (UX acceptance of #538): Operations of the manifest in effect that this
+     *  announcement defines differently (binding, params, result mapping, mode, reversibility) or
+     *  drops. The gate already runs the announcement, so it refuses calls to these until the
+     *  announcement is adopted and each enabling workspace publishes the revision it opens
+     *  (`application/gates/definition-drift.ts`). Empty when only governance fields changed:
+     *  those wait for the confirm, and calls keep running meanwhile. */
+    refusedOperations: z.array(z.string()),
   })
   .strict();
 export type PendingGateManifestWire = z.infer<typeof PendingGateManifestWireSchema>;
@@ -787,6 +794,15 @@ export const PreviewGateInstanceEnableResultWireSchema = z
      *  `refresh_operation_governance` requires it back and `enable_gate_instance` accepts it; both
      *  refuse `manifest_changed` when the manifest in effect is no longer the one shown. */
     manifestDigest: z.string(),
+    /** Legacy K (UX acceptance of #538): the gate already runs a manifest the platform has not
+     *  adopted, and it defines these Operations (listed above, to import or already deployed)
+     *  differently from the manifest in effect — so calls to them are refused, and nothing this
+     *  workspace aligns or publishes can fix that until a platform admin adopts it (Integrations).
+     *  `null` when no listed Operation is affected (`application/gates/definition-drift.ts`). */
+    awaitingPlatformAdoption: z
+      .object({ announcedAt: z.string(), operations: z.array(z.string()) })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type PreviewGateInstanceEnableResultWire = z.infer<

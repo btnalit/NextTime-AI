@@ -125,14 +125,21 @@ export class GateOwnedParamRefusedError extends OperationRefusedError {
  *  `server.ts` maps it to 409 `operation_definition_mismatch`. */
 export class OperationDefinitionMismatchError extends Error {
   readonly operationName: string;
+  /** The digest the call said was approved — `null` when it carried none. */
+  readonly approvedDigest: string | null;
+  /** The digest of the definition this gate runs. `server.ts` puts it in the error's `details`,
+   *  so the kernel can record both sides of a refusal (UX acceptance of #538). */
+  readonly runningDigest: string;
   constructor(operationName: string, approved: string | null, running: string) {
     super(
       approved === null
         ? `operation "${operationName}": the call does not say which definition was approved (no operationDigest) — refused, nothing ran. This gate checks it on every call; the kernel calling it is older than the gate. Upgrade the kernel and its gates together.`
-        : `operation "${operationName}": the definition that was approved (${shortOperationDigest(approved)}) is not the one this gate runs (${shortOperationDigest(running)}) — refused, nothing ran. The gate's manifest changed after the Operation was published, or differs from the copy the workspace imported. Publish the definition this gate runs (for a platform gate: confirm its announced manifest, refresh the Operation and publish the revision it opens), then request the action again.`,
+        : `operation "${operationName}": the definition that was approved (${shortOperationDigest(approved)}) is not the one this gate runs (${shortOperationDigest(running)}) — refused, nothing ran. The gate's manifest changed after the Operation was published, or differs from the copy the workspace imported. Publish the definition this gate runs, then call again. For a platform gate: a platform admin first adopts the gate's new manifest (Integrations) if it is still waiting there; then the workspace aligns the Operation (Systems & access) and publishes the revision it opens (Catalog).`,
     );
     this.name = 'OperationDefinitionMismatchError';
     this.operationName = operationName;
+    this.approvedDigest = approved;
+    this.runningDigest = running;
   }
 }
 

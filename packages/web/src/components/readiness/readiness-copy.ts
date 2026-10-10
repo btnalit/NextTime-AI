@@ -92,6 +92,18 @@ export function missingCauseText(
             'A system’s operations were disabled by a platform administrator — a workspace cannot fix this.',
           );
     }
+    case 'definition_mismatch': {
+      const name = item.gateId ? gateNames.get(item.gateId) : undefined;
+      return name
+        ? t(
+            `门「${name}」运行的定义和已发布的不一样，对其中的操作调用正被拒绝。`,
+            `The “${name}” gate runs another definition than the published one, so calls to some of its operations are refused.`,
+          )
+        : t(
+            '有系统运行的定义和已发布的不一样，对它的调用正被拒绝。',
+            'A system runs another definition than the published one, so calls to it are refused.',
+          );
+    }
   }
 }
 
@@ -114,6 +126,9 @@ export function missingLinkHref(item: ExecutionReadinessMissingWire): string | u
       return hrefs.models();
     case 'disabled_by_platform':
       return undefined;
+    // The system's own drawer says which Operations and whose step it is.
+    case 'definition_mismatch':
+      return item.gateId ? hrefs.gatekeeper(item.gateId) : hrefs.systems();
   }
 }
 
@@ -137,6 +152,8 @@ export function missingLinkLabel(
       return t('去模型与配额', 'Go to Models & Quotas');
     case 'disabled_by_platform':
       return undefined;
+    case 'definition_mismatch':
+      return t('看下一步', 'See what to do');
   }
 }
 
@@ -168,6 +185,11 @@ export function gateReasonText(reason: GateUnreachableReason | undefined, t: Tra
         '平台管理员在「平台 · 集成」停用了这个系统的操作，这不是工作区能修复的。',
         'A platform administrator disabled operations on this system under Platform · Integrations — a workspace cannot fix this.',
       );
+    case 'definition_mismatch':
+      return t(
+        '门运行的定义和已发布的不一样，对它的调用正被拒绝。',
+        'The gate runs another definition than the published one, so calls to it are refused.',
+      );
     case undefined:
       return t('暂时用不了。', 'Not usable right now.');
   }
@@ -190,6 +212,9 @@ export function gateReasonHref(reason: GateUnreachableReason): string | undefine
       return hrefs.catalog(CATALOG_WORKERS_TAB);
     case 'disabled_by_platform':
       return undefined;
+    // Said on the system's own row and drawer (`DefinitionMismatchNotice`), not another page.
+    case 'definition_mismatch':
+      return undefined;
   }
 }
 
@@ -206,6 +231,7 @@ export function gateReasonLink(reason: GateUnreachableReason, t: Translate): str
     case 'no_worker':
       return t('去能力目录', 'Go to Catalog');
     case 'disabled_by_platform':
+    case 'definition_mismatch':
       return undefined;
   }
 }
