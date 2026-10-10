@@ -2,8 +2,8 @@
 # host-preflight.sh — read-only target-host preflight check for NextTime-AI.
 #
 # The only exception to "read-only" is one throwaway container run
-# (`docker run --rm --runtime=runsc alpine:3.20 true`), which is the E1
-# gVisor verification itself. Nothing is written to the host filesystem.
+# (`docker run --rm --runtime=runsc <alpine:3.20> true`, the GHCR copy of alpine:3.20 that
+# docker-compose.yml also uses), which is the E1 gVisor verification itself. Nothing is written to the host filesystem.
 #
 # POSIX sh (tested against dash). Usage:
 #   NEXTTIME_DATA=/path/to/data sh host-preflight.sh
@@ -81,11 +81,13 @@ fi
 
 # 3. actual run test (this is the E1 verification) + fallback WORKER_RUNTIME
 worker_runtime=runc
+# alpine:3.20 by digest, from its GHCR copy (deploy/image-mirrors.json), not Docker Hub.
+RUNSC_TEST_IMAGE=ghcr.io/btnalit/nexttime-mirror-alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 if [ "$have_docker" = 1 ]; then
-  runsc_output=$(docker run --rm --runtime=runsc alpine:3.20 true 2>&1)
+  runsc_output=$(docker run --rm --runtime=runsc "$RUNSC_TEST_IMAGE" true 2>&1)
   runsc_ec=$?
   if [ "$runsc_ec" -eq 0 ]; then
-    row PASS "runsc-run-test (E1)" "docker run --rm --runtime=runsc alpine:3.20 true -> exit=0"
+    row PASS "runsc-run-test (E1)" "docker run --rm --runtime=runsc alpine:3.20 (GHCR copy) true -> exit=0"
     worker_runtime=runsc
   else
     detail=$(printf '%s' "$runsc_output" | tr '\n' ' ' | cut -c1-180)

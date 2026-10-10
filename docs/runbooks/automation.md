@@ -20,6 +20,11 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
   大版本内手工升补丁、跑全套 CI。`auto-merge.yml` 保留不动：开关以后若打开，它开出的 PR 直接按下表分流。
 - **常规升级**：按 `docs/convergence-plan-2026-09-25.md` §6 的 W7 波次手动做，分小步、每步跑全套 CI 与截图门槛；
   大版本（TypeScript / React / Biome 等）先出评估报告。
+- **第三方镜像**（基础镜像、BuildKit、Dockerfile 前端、SBOM 扫描器、compose 里的 postgres / socket-proxy 等）：全部按 digest
+  引用它们在 GHCR 的副本，清单是 `deploy/image-mirrors.json`，`.github/workflows/image-mirror.yml` 负责复制，必过检查
+  `quality` 里的 `scripts/guards/image-mirrors.mjs` 保证每处引用与清单同一个 digest、不再出现 Docker Hub 引用（#531）。
+  没有 bot 更新它们（Dependabot 告警也不覆盖镜像）：升级时改清单的 digest 和全部引用，同一个 PR，推送顺序见那个
+  workflow 的头部注释；镜像的安全状况看每周 `image-scan` 的 Trivy 结果。
 - **镜像**：`docker-compose.yml` 里的第三方镜像全部钉 digest（2026-09-25 按主机当时在跑的镜像补齐了 pgvector /
   postgres / alpine）；升级时手动换 tag + digest。
 - **pi**：永远走 `pi.version` + `docs/runbooks/pi-upgrade.md`，不接受任何 bot 版本更新。

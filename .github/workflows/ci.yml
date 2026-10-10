@@ -3,7 +3,7 @@ name: CI
 # R3 CI (docs/development-tasks.md R3; design doc graph-ai-middle-platform-design.md section
 # 7.10 CI purity rule). Three independent jobs: quality (lint/typecheck/build/dependency-cruiser
 # purity), test (workspace tests against a real pgvector/pgvector:pg17 service container, pulled
-# from its GHCR copy, ci-image-mirror.yml), and
+# from its GHCR copy, deploy/image-mirrors.json), and
 # guards (secret scanning, internal-IP literals, kernel purity, shell script hygiene).
 
 on:
@@ -122,6 +122,12 @@ jobs:
       - name: Staging trigger paths cover the release rehearsal's scripts and deploy/ directories (scripts/guards/staging-paths.mjs)
         run: node scripts/guards/staging-paths.mjs
 
+      - name: Image mirror guard unit tests
+        run: node --test scripts/guards/image-mirrors.test.mjs
+
+      - name: Third-party images come from their GHCR copies by the listed digest (scripts/guards/image-mirrors.mjs, deploy/image-mirrors.json)
+        run: node scripts/guards/image-mirrors.mjs
+
       - name: i18n pair guard detector unit tests (S8 W1-A9 / W1-A12)
         run: node --test scripts/guards/i18n-pairs.test.mjs
 
@@ -139,12 +145,12 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    # The GHCR copy of pgvector/pgvector:pg17 by digest (ci-image-mirror.yml), pulled anonymously
-    # (the package is public; the mirror fails if it stops being so), not Docker Hub: an anonymous
-    # Docker Hub pull limit failed this job before any test ran (2026-10-09).
+    # The GHCR copy of pgvector/pgvector:pg17 by digest (deploy/image-mirrors.json, the same image
+    # docker-compose.yml runs), pulled anonymously, not Docker Hub: an anonymous Docker Hub pull
+    # limit failed this job before any test ran (2026-10-09).
     services:
       postgres:
-        image: ghcr.io/btnalit/nexttime-ai-ci-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+        image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
         env:
           POSTGRES_USER: nexttime
           POSTGRES_PASSWORD: nexttime
