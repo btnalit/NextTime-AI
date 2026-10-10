@@ -1,9 +1,7 @@
 import type { PlatformWorkspaceWire, PurgeWorkspaceResultWire } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { HttpError } from '../../lib/http-client.js';
-import { type Translate, useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
+import { useT } from '../../lib/i18n.js';
 import { purgeCountLabel, purgeWorkspaceReasonLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
@@ -27,15 +25,6 @@ type Preview =
   | { readonly status: 'loading' }
   | { readonly status: 'error'; readonly error: unknown }
   | { readonly status: 'ready'; readonly result: PurgeWorkspaceResultWire };
-
-/** The kernel's 409 / 404 with the console's bilingual copy as its message, so `kit/confirm`'s
- *  own inline error banner (message + code) reads the same as `PlatformError` does on the
- *  preview step. Anything unmapped is rethrown as it came. */
-function friendly(err: unknown, t: Translate): unknown {
-  const mapped = platformErrorMessage(err, t);
-  if (mapped === null || !(err instanceof HttpError)) return err;
-  return new HttpError(err.kind, mapped, err.code);
-}
 
 /**
  * components/platform/PurgeWorkspaceDrawer (S6-A A1, docs/console-completion-plan.md §4
@@ -81,15 +70,11 @@ export function PurgeWorkspaceDrawer({
   }, [http, workspace.id]);
 
   async function execute(): Promise<void> {
-    try {
-      const result = await http.call<PurgeWorkspaceResultWire>('purge_workspace', {
-        workspaceId: workspace.id,
-        confirm: true,
-      });
-      onPurged(result);
-    } catch (err) {
-      throw friendly(err, t);
-    }
+    const result = await http.call<PurgeWorkspaceResultWire>('purge_workspace', {
+      workspaceId: workspace.id,
+      confirm: true,
+    });
+    onPurged(result);
   }
 
   if (step === 'confirm' && preview.status === 'ready') {

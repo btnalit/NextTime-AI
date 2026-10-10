@@ -2,10 +2,9 @@ import type { PlatformRoleWire, ResetUserPasswordResultWire, UserWire } from '@n
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
-import { envAdminTitle, platformErrorMessage } from '../../lib/platform-errors.js';
+import { envAdminTitle } from '../../lib/platform-errors.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { sameDisplayName, useUserDirectoryTap } from '../../lib/users-directory.js';
@@ -52,15 +51,6 @@ function budgetRuleError(raw: string, t: Translate): string {
 
 function budgetInput(value: number | null): string {
   return value === null ? '' : String(value);
-}
-
-/** The kernel's platform error with the console's bilingual copy as its message, so `kit/confirm`'s
- *  own inline error banner reads the same as `PlatformError` does (the `PurgeWorkspaceDrawer`
- *  convention). Anything unmapped is rethrown as it came. */
-function friendly(err: unknown, t: Translate): unknown {
-  const mapped = platformErrorMessage(err, t);
-  if (mapped === null || !(err instanceof HttpError)) return err;
-  return new HttpError(err.kind, mapped, err.code);
 }
 
 /**
@@ -216,14 +206,10 @@ export function UserDetailPanel({
    *  inline; closes itself on success. */
   async function merge(): Promise<void> {
     if (!mergeTarget) return;
-    try {
-      await http.call<UserWire>('merge_user', {
-        sourceUserId: user.id,
-        targetUserId: mergeTarget.id,
-      });
-    } catch (err) {
-      throw friendly(err, t);
-    }
+    await http.call<UserWire>('merge_user', {
+      sourceUserId: user.id,
+      targetUserId: mergeTarget.id,
+    });
     onMerged();
   }
 

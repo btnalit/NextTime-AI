@@ -219,7 +219,7 @@ describe('LlmAdminClient', () => {
     expect(llmAdminErrorMessage(new Error('x'), zhT)).toBeNull();
   });
 
-  it('maps a fetch failure to a bilingual "network" error carrying the underlying detail', async () => {
+  it('maps a fetch failure to a bilingual "network" error, the underlying detail kept for the technical details', async () => {
     const http = scriptedHttp(() => tokenWire());
     const fetchImpl: typeof fetch = async () => {
       throw new Error('getaddrinfo ENOTFOUND llm-proxy');
@@ -231,7 +231,9 @@ describe('LlmAdminClient', () => {
     expect(err).toMatchObject({ status: 0, code: 'network' });
     const message = llmAdminErrorMessage(err, zhT);
     expect(message).toContain('无法连接模型代理');
-    expect(message).toContain('getaddrinfo ENOTFOUND llm-proxy');
+    // The browser's own text is for the 「技术细节」 disclosure, not the readable body (P1-1).
+    expect(message).not.toContain('getaddrinfo');
+    expect((err as Error).message).toContain('getaddrinfo ENOTFOUND llm-proxy');
   });
 
   it('maps a non-JSON 200 response to a bilingual "invalid_response" error', async () => {

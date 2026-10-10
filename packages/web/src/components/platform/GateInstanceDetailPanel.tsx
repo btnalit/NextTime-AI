@@ -8,10 +8,8 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { HttpError } from '../../lib/http-client.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { Confirm } from '../kit/confirm.js';
@@ -35,15 +33,6 @@ interface GateInstanceTestResult {
   readonly health: GateInstanceWire['health'];
   readonly describedOperationCount: number | null;
   readonly checkedAt: string;
-}
-
-/** The kernel's platform error with the console's bilingual copy as its message, so `kit/confirm`'s
- *  own inline error banner reads the same as `PlatformError` does (the `PurgeWorkspaceDrawer`
- *  convention). Anything unmapped is rethrown as it came. */
-function friendly(err: unknown, t: Translate): unknown {
-  const mapped = platformErrorMessage(err, t);
-  if (mapped === null || !(err instanceof HttpError)) return err;
-  return new HttpError(err.kind, mapped, err.code);
 }
 
 export interface GateInstanceDetailPanelProps {
@@ -183,11 +172,7 @@ export function GateInstanceDetailPanel({
   /** `kit/confirm`'s `onConfirm`: throws on failure so the tier keeps itself open with the error
    *  inline (`gate_in_use` when a workspace enabled it after this drawer was read). */
   async function deleteInstance(): Promise<void> {
-    try {
-      await http.call('delete_gate_instance', { gateId: instance.gateId });
-    } catch (err) {
-      throw friendly(err, t);
-    }
+    await http.call('delete_gate_instance', { gateId: instance.gateId });
     onDeleted(instance.gateId);
   }
 
@@ -254,7 +239,7 @@ export function GateInstanceDetailPanel({
             </span>
             {instance.operations.length === 0 ? (
               <p className="text-3">
-                {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
+                {t('这个实例还没有公布任何操作（Operation）。', 'No Operations announced.')}
               </p>
             ) : (
               <div className="table-scroll">

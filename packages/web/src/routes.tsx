@@ -6,7 +6,7 @@ import { EmptyState } from './components/ui/EmptyState.js';
 import { useToast } from './components/ui/Toast.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
-import { describeError } from './lib/errors.js';
+import { errorToastText } from './lib/errors.js';
 import { type Translate, useT } from './lib/i18n.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import type { Session } from './session/types.js';
@@ -185,10 +185,7 @@ function useWorkspaceSwitchFailureToast(
       tone: 'danger',
       key: 'workspace-switch-failed',
       title: t(`没能切换到工作区「${name}」`, `Could not switch to workspace "${name}"`),
-      description: t(
-        `仍在当前工作区。${describeError(failure.error).message}`,
-        `You are still in the current workspace. ${describeError(failure.error).message}`,
-      ),
+      description: `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
       durationMs: 10_000,
     });
   }, [failure?.seq]);

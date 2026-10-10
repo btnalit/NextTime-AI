@@ -4,7 +4,7 @@ import type {
   WorkspacePurposeWire,
   WorkspaceStatusWire,
 } from '@nexttime/shared';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -282,7 +282,7 @@ export function PlatformWorkspacesPage({
             }
             data-testid="platform-workspaces-residue-only"
           />
-          <span>只看验收残留 Residue only（已停用或已到期 disabled or expired）</span>
+          <span>{t('只看验收残留（已停用或已到期）', 'Residue only (disabled or expired)')}</span>
         </label>
       </form>
 

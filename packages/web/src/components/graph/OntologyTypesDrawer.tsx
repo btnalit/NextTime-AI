@@ -7,16 +7,14 @@ import {
 } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError, isForbiddenError } from '../../lib/errors.js';
+import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
   type OntologyProposalDiffEntry,
   objectTypeOptions,
   ontologyProposalDiff,
 } from '../../lib/graph-view.js';
-import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
@@ -896,9 +894,9 @@ function PublishProposalButton({
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('publish_ontology_version');
           // R-60 `ontology_base_moved` (and any other mapped code) reads as its own sentence in
-          // the confirm's error banner, with the raw code kept beside it.
-          const mapped = platformErrorMessage(err, t);
-          throw mapped ? new HttpError('capability_error', mapped, describeError(err).code) : err;
+          // the confirm's error box (`lib/errors.ts` `presentError`), the kernel's text under
+          // 「技术细节」.
+          throw err;
         }
         onPublished();
       }}

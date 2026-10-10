@@ -1,5 +1,6 @@
 import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/shared';
 import { PUBLISHABLE_STATUS_VALUES } from '@nexttime/shared';
+import type { ErrorOverrides } from './errors.js';
 import type { Translate } from './i18n.js';
 import { ownEntry } from './own.js';
 
@@ -292,11 +293,11 @@ const CONNECTION_ERROR_MESSAGES: Readonly<
   not_found: { zh: '找不到该连接申请', en: 'No such connection request' },
 };
 
-/** The bilingual one-liner for a `cancel_connection_request` failure, or `null` when the code is
- *  not one of the three it can raise (callers then fall back to `ErrorBanner`). Takes the already
- *  normalized code so it stays transport-agnostic (`describeError(err).code`, HTTP or WS). A pure
- *  helper — takes `t` from its caller. */
-export function cancelConnectionRequestMessage(code: string, t: Translate): string | null {
-  const entry = ownEntry(CONNECTION_ERROR_MESSAGES, code);
-  return entry ? t(entry.zh, entry.en) : null;
+/** The copy for the three codes a `cancel_connection_request` failure can raise, as `kit/confirm`
+ *  `errorOverrides` (`lib/errors.ts` `presentError`): the readable body, with the kernel's own
+ *  text kept for 「技术细节」. A pure helper — takes `t` from its caller. */
+export function cancelConnectionRequestOverrides(t: Translate): ErrorOverrides {
+  return Object.fromEntries(
+    Object.entries(CONNECTION_ERROR_MESSAGES).map(([code, entry]) => [code, t(entry.zh, entry.en)]),
+  );
 }

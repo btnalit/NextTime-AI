@@ -135,7 +135,7 @@ describe('CatalogPage', () => {
     );
   });
 
-  it('C14: a failed Publish toasts the kernel message, not only the generic title', async () => {
+  it('C14: a failed Publish toasts what happened and what to do, not only the generic title', async () => {
     const http = scriptedHttp({
       list_operations: () => ({
         items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }],
@@ -153,7 +153,9 @@ describe('CatalogPage', () => {
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('无法更新');
     expect(toast.textContent).toContain('docker.restart');
-    expect(toast.textContent).toContain('operation docker.restart is not a draft');
+    // P1-1: the readable next step for the code, the code itself in brackets for a report.
+    expect(toast.textContent).toContain('刷新后再试');
+    expect(toast.textContent).toContain('(conflict)');
   });
 
   it('R-19 (D-17): publishing a draft that loosens the published classification asks first, old → new, danger-styled', async () => {
@@ -520,7 +522,7 @@ describe('CatalogPage', () => {
       target: { value: 'new description' },
     });
     fireEvent.click(within(dialog).getByTestId('operation-description-save'));
-    await within(dialog).findByText('not the proposer of this Operation');
+    await within(dialog).findByText(/只有它的提议人或工作区所有者能做这一步/);
     // Not a `forbidden`: the capability is not marked denied for the session.
     expect(
       within(detail).queryByTestId('operation-edit-description-gk-1::docker.restart'),

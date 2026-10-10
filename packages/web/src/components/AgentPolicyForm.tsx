@@ -266,11 +266,17 @@ export function AgentPolicyForm({
       const described = describeError(err);
       const field =
         described.code === 'invalid_params' ? fieldForPolicyError(described.message) : undefined;
+      // P1-1: the field says where, in the viewer's language; the banner below carries the
+      // kernel's own text under 「技术细节」.
       if (field) {
-        setFieldErrors({ [field]: described.message });
-      } else {
-        setSubmitError(err);
+        setFieldErrors({
+          [field]: t(
+            '这一项没有通过校验，原因见下方「技术细节」。',
+            'This field did not pass validation; see the technical details below.',
+          ),
+        });
       }
+      setSubmitError(err);
     } finally {
       setSubmitting(false);
     }

@@ -239,7 +239,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             onChange={(event) => setHideResidual(event.target.checked)}
             data-testid="platform-users-hide-residual"
           />
-          <span>隐藏验收残留 Hide residual（待激活且成员资格全在已停用 / 临时工作区）</span>
+          <span>
+            {t(
+              '隐藏验收残留（待激活，且成员资格全在已停用或临时工作区）',
+              'Hide residue (pending activation, all memberships in disabled or temporary workspaces)',
+            )}
+          </span>
         </label>
       </form>
 

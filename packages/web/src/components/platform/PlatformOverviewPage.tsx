@@ -86,10 +86,16 @@ function checklistDetail(
       }
       // Review M1: no readable health file — unknown, never available; the log says why.
       if (counts.modelsConfigured > 0 && providerHealthFile !== 'ok') {
-        return t(
-          `已配置 ${counts.modelsConfigured} 个模型，但没读到供应商状态（llm-proxy 没写出状态文件，看它的日志）`,
-          `${counts.modelsConfigured} model(s) configured, but the provider status could not be read (llm-proxy has not written its status file; check its log)`,
-        );
+        // #530 audit P2: a file that is there but unreadable is not "not written".
+        return providerHealthFile === 'invalid'
+          ? t(
+              `已配置 ${counts.modelsConfigured} 个模型，但没读到供应商状态（llm-proxy 的状态文件写坏了或读不了，看它的日志）`,
+              `${counts.modelsConfigured} model(s) configured, but the provider status could not be read (llm-proxy's status file is malformed or unreadable; check its log)`,
+            )
+          : t(
+              `已配置 ${counts.modelsConfigured} 个模型，但没读到供应商状态（llm-proxy 没写出状态文件，看它的日志）`,
+              `${counts.modelsConfigured} model(s) configured, but the provider status could not be read (llm-proxy has not written its status file; check its log)`,
+            );
       }
       // Audit P0-2: models configured but none whose provider passed a test is not "no provider".
       return counts.modelsConfigured > 0

@@ -5,11 +5,8 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import {
   GovernanceChangeList,
@@ -59,17 +56,11 @@ export function PendingManifestReview({
   const widens = pending.added.length > 0 || governed.some((c) => isLoosening(c.direction));
 
   async function confirm(): Promise<void> {
-    let instance: GateInstanceWire;
-    try {
-      instance = await http.call<GateInstanceWire>('confirm_gate_manifest', {
-        gateId,
-        digest: pending.digest,
-      });
-    } catch (err) {
-      const mapped = platformErrorMessage(err, t);
-      const described = describeError(err);
-      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
-    }
+    // A refusal propagates as-is: `kit/confirm` renders it through `presentError`.
+    const instance = await http.call<GateInstanceWire>('confirm_gate_manifest', {
+      gateId,
+      digest: pending.digest,
+    });
     onConfirmed(instance);
   }
 

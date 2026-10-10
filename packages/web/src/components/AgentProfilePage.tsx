@@ -11,6 +11,7 @@ import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
+import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
@@ -105,7 +106,9 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     },
   );
 
-  const canPickPrincipal = principals.state.status === 'ready';
+  // Only an owner may read another member's agent (get_agent_profile); offering the picker to
+  // anyone else only leads to a refusal (console audit P1-1).
+  const canPickPrincipal = principals.state.status === 'ready' && role.role === 'owner';
   const humanPrincipals =
     principals.state.status === 'ready'
       ? principals.state.data.items.filter((p) => p.kind === 'human')
@@ -162,8 +165,22 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
       ) : profile.state.status === 'error' ? (
         isForbiddenError(profile.state.error) ? (
           <EmptyState
-            title="无权查看该智能体配置"
-            body="get_agent_profile: member 只能看自己，owner 可看任何人。"
+            title={t('无权查看这个智能体', 'You cannot view this agent')}
+            body={t(
+              '只有工作区所有者能查看其他成员的智能体。你可以查看和修改自己的。',
+              'Only the workspace owner can view other members’ agents. You can view and edit your own.',
+            )}
+            action={
+              selectedPrincipalId !== undefined ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => setSelectedPrincipalId(undefined)}
+                  data-testid="agent-profile-back-to-own"
+                >
+                  {t('查看我自己的', 'View my own')}
+                </Button>
+              ) : undefined
+            }
             testId="agent-profile-forbidden"
           />
         ) : (

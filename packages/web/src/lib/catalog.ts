@@ -400,7 +400,9 @@ export function parseJsonObject(
     }
     return { ok: true, value: value as Record<string, unknown> };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    // The parser's own words name the position; the sentence around them is the viewer's.
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: t(`不是合法的 JSON（${detail}）`, `Not valid JSON (${detail})`) };
   }
 }
 

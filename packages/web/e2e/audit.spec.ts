@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expectReadableErrors } from './lib/ux-lint.js';
 
 /**
  * e2e/audit.spec.ts (S6-A A4 / C27 — console-completion-plan §5.5, §9): the 审计 Audit page
@@ -54,6 +55,7 @@ test.describe('audit page', () => {
     const banner = page.getByTestId('explain-error');
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner).toHaveAttribute('data-error-code', /not_found|invalid_params/);
+    await expectReadableErrors(page);
   });
 
   test('deep link ?resourceType=workspace pre-fills and runs the filter', async ({ page }) => {

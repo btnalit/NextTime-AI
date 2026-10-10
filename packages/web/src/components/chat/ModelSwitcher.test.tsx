@@ -184,6 +184,7 @@ describe('ModelSwitcher', () => {
           provider: 'deepseek',
           health: describeProviderHealth('test_failed'),
           source: 'workspace_default',
+          anyWorking: true,
         }}
       />,
     );
@@ -197,10 +198,29 @@ describe('ModelSwitcher', () => {
           provider: 'deepseek',
           health: describeProviderHealth('ok'),
           source: 'workspace_default',
+          anyWorking: true,
         }}
       />,
     );
     expect(queryByTestId('chat-model-health-notice')).toBeNull();
+  });
+
+  it('an unverified override with no working model anywhere asks the platform administrator (#530 audit P2)', () => {
+    const running = {
+      modelId: 'deepseek/chat',
+      provider: 'deepseek',
+      health: describeProviderHealth('unknown'),
+      source: 'override' as const,
+    };
+    const { getByTestId, rerender } = render(
+      <ChatModelHealthNotice running={{ ...running, anyWorking: false }} />,
+    );
+    expect(getByTestId('chat-model-health-notice').textContent).toContain(
+      '请平台管理员检查供应商状态',
+    );
+    expect(getByTestId('chat-model-health-notice').textContent).not.toContain('状态为可用的模型');
+    rerender(<ChatModelHealthNotice running={{ ...running, anyWorking: true }} />);
+    expect(getByTestId('chat-model-health-notice').textContent).toContain('状态为可用的模型');
   });
 
   it('falls back to the policy allow-list ids when the catalog read fails', async () => {

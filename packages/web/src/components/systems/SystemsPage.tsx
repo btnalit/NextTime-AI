@@ -9,12 +9,11 @@ import {
   type CancelConnectionRequestResult,
   type ConnectionRequestRow,
   type CreateConnectionResult,
-  cancelConnectionRequestMessage,
+  cancelConnectionRequestOverrides,
 } from '../../lib/connections.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
-import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
@@ -298,13 +297,13 @@ export function SystemsPage({
       );
       requests.mutate((rows) => rows.map((item) => (item.id === cancelled.id ? cancelled : item)));
     } catch (err) {
-      const described = describeError(err);
-      const mapped = cancelConnectionRequestMessage(described.code, t);
-      if (described.code === 'illegal_transition') void requests.reload();
-      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
+      if (describeError(err).code === 'illegal_transition') void requests.reload();
+      // Shown by the confirm with `cancelConnectionRequestOverrides`; the kernel's text stays.
+      throw err;
     }
   }
 
+  const cancelOverrides = cancelConnectionRequestOverrides(t);
   const canCreate = !permissions.isDenied('create_connection');
   const gates = readiness.state.status === 'ready' ? readiness.state.data.gates : [];
 
@@ -453,14 +452,8 @@ export function SystemsPage({
           requestsForbidden ? (
             <Notice testId="requests-forbidden">
               {t(
-                <>
-                  连接申请仅 owner 可见（<code>list_connection_requests</code>
-                  ）。你仍可发起申请，由工作区 owner 完成它。
-                </>,
-                <>
-                  Connection requests are owner-only (<code>list_connection_requests</code>). You
-                  can still raise a request; the workspace owner completes it.
-                </>,
+                '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
+                'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
               )}
             </Notice>
           ) : (
@@ -542,6 +535,7 @@ export function SystemsPage({
                       cancelLabel={t('保留', 'Keep')}
                       danger
                       onConfirm={() => cancelRequest(row)}
+                      errorOverrides={cancelOverrides}
                       testId="cancel-request-confirm"
                     />
                   </span>

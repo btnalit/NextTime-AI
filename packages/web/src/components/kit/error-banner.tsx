@@ -1,7 +1,7 @@
-import { describeError, localizedErrorTitle, transportErrorMessage } from '../../lib/errors.js';
+import { type ErrorOverrides, presentError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
-import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { Button } from './button.js';
+import { ErrorDetails } from './error-details.js';
 
 export interface ErrorBannerProps {
   readonly error: unknown;
@@ -11,14 +11,18 @@ export interface ErrorBannerProps {
   readonly retrying?: boolean;
   /** Optional lead-in replacing the code-derived title ("Could not load approvals"). */
   readonly title?: string;
+  /** This page's own body copy for particular codes (P1-1), e.g. `{ forbidden: '只有所有者能…' }`;
+   *  it wins over the shared copy for that code. */
+  readonly overrides?: ErrorOverrides;
   readonly testId?: string;
 }
 
 /**
  * components/kit/error-banner (S8 W3 F1, docs/development-tasks.md §5e F3 / S8 risk ①): the kit
- * replacement for `components/ui/ErrorBanner` — always shows the kernel's stable code
- * (`lib/errors.ts` `describeError`) next to the message so a screenshot is diagnosable, and a
- * `kit/button` Retry when the caller can re-run the load. Over the same `error-banner` /
+ * replacement for `components/ui/ErrorBanner` — a readable title and body with the next step
+ * (`lib/errors.ts` `presentError`), the kernel's stable code and own text in the 「技术细节」
+ * disclosure so a screenshot is still diagnosable, and a `kit/button` Retry when the caller can
+ * re-run the load. Over the same `error-banner` /
  * `error-banner-body` / `error-banner-title` / `error-banner-code` / `error-banner-message` /
  * `error-banner-actions` CSS classes so a page swapping from the legacy component or a local
  * replica renders pixel-identical. No icon here — `kit/*` does not import `components/ui/Icon`
@@ -31,38 +35,19 @@ export function ErrorBanner({
   retryLabel,
   retrying = false,
   title,
+  overrides,
   testId,
 }: ErrorBannerProps) {
   const t = useT();
-  const described = describeError(error);
-  // A kernel capability code `lib/platform-errors.ts` knows reads as its friendly sentence first;
-  // the kernel's own (English) text stays as a muted second line and the raw code stays in the title row.
-  // A transport failure ("Failed to fetch", a proxy's HTML error page) gets the same treatment.
-  const mapped = platformErrorMessage(error, t) ?? transportErrorMessage(error, t);
-  const raw = described.message.trim();
-  const primary = mapped ?? (raw.length > 0 && raw !== described.title ? described.message : null);
-  const secondary = mapped !== null && raw.length > 0 && raw !== mapped ? described.message : null;
+  const shown = presentError(error, t, overrides);
   return (
-    <div
-      className="error-banner"
-      role="alert"
-      data-testid={testId}
-      data-error-code={described.code}
-    >
+    <div className="error-banner" role="alert" data-testid={testId} data-error-code={shown.code}>
       <div className="error-banner-body">
         <div className="error-banner-title">
-          <span>{title ?? localizedErrorTitle(described, t)}</span>
-          <code className="error-banner-code">{described.code}</code>
+          <span>{title ?? shown.title}</span>
         </div>
-        {primary ? <p className="error-banner-message">{primary}</p> : null}
-        {secondary ? (
-          <p
-            className="error-banner-message text-3"
-            data-testid={testId ? `${testId}-detail` : undefined}
-          >
-            {secondary}
-          </p>
-        ) : null}
+        <p className="error-banner-message">{shown.message}</p>
+        <ErrorDetails code={shown.code} raw={shown.raw} testId={testId} />
       </div>
       {onRetry ? (
         <div className="error-banner-actions">

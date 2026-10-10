@@ -2,9 +2,10 @@ import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/cn.js';
-import { describeError } from '../../lib/errors.js';
+import { type ErrorOverrides, errorToastText } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from './button.js';
+import { InlineError } from './inline-error.js';
 
 /** §5.9 principle 4 — confirmation by impact, folded to three renderable tiers (S8 W1-A7, audit
  *  S13/RT2): `low` (直接执行 + Toast 撤销) and `irreversible` (键入目标名称 + 知情勾选) are unchanged
@@ -52,6 +53,9 @@ export interface ConfirmProps {
   /** May be async — the confirm button disables and `aria-busy`s; a thrown error renders inline
    *  and the confirm stays open. */
   readonly onConfirm: () => void | Promise<void>;
+  /** This action's own copy for particular error codes (`lib/errors.ts` `presentError`); throw
+   *  the error as it came and name the copy here, so the kernel's text still reaches 「技术细节」. */
+  readonly errorOverrides?: ErrorOverrides;
   /** Extra body content (parameters, a RefChip, a typed field the caller collects). */
   readonly children?: ReactNode;
   /** `medium`/`irreversible`: keeps the confirm button disabled while a field the caller collects
@@ -97,15 +101,24 @@ export function Confirm(props: ConfirmProps) {
 
 /** Runs the action once, keeping the latest callbacks in refs so a re-render with a fresh closure
  *  never re-fires the effect (which keys on `open` alone). */
-function LowTier({ anchor, open, onOpenChange, onConfirm, notify, undo, title }: ConfirmProps) {
+function LowTier({
+  anchor,
+  open,
+  onOpenChange,
+  onConfirm,
+  notify,
+  undo,
+  title,
+  errorOverrides,
+}: ConfirmProps) {
   const t = useT();
-  const latest = useRef({ onConfirm, onOpenChange, notify, undo, title, t });
-  latest.current = { onConfirm, onOpenChange, notify, undo, title, t };
+  const latest = useRef({ onConfirm, onOpenChange, notify, undo, title, t, errorOverrides });
+  latest.current = { onConfirm, onOpenChange, notify, undo, title, t, errorOverrides };
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     void (async () => {
-      const { onConfirm, onOpenChange, notify, undo, title, t } = latest.current;
+      const { onConfirm, onOpenChange, notify, undo, title, t, errorOverrides } = latest.current;
       try {
         await onConfirm();
         if (cancelled) return;
@@ -122,7 +135,7 @@ function LowTier({ anchor, open, onOpenChange, onConfirm, notify, undo, title }:
         notify?.({
           tone: 'danger',
           title: `${title} — ${t('失败', 'failed')}`,
-          description: error instanceof Error ? error.message : String(error),
+          description: errorToastText(error, t, errorOverrides),
         });
       }
       onOpenChange(false);
@@ -183,21 +196,24 @@ function ImpactList({ impact }: { readonly impact: readonly string[] | undefined
   );
 }
 
-/** Mirrors `components/ui/ErrorBanner`'s `data-error-code` (from `lib/errors.ts`'s
- *  `describeError` — not a `components/ui/*` import, so this is fine per the kit boundary) so a
- *  caller's existing assertions against a confirm's inline error keep working unchanged. */
-function ConfirmErrorBanner({ error }: { readonly error: unknown }) {
+/** The confirm's inline error (`kit/inline-error`, console audit P1-1): the readable body plus
+ *  「技术细节」, with `data-error-code` as `components/ui/ErrorBanner` has it, so a caller's
+ *  assertions against `confirm-error` keep working. */
+function ConfirmErrorBanner({
+  error,
+  overrides,
+}: {
+  readonly error: unknown;
+  readonly overrides: ErrorOverrides | undefined;
+}) {
   if (error === null) return null;
-  const described = describeError(error);
   return (
-    <div
-      role="alert"
-      data-testid="confirm-error"
-      data-error-code={described.code}
+    <InlineError
+      error={error}
+      overrides={overrides}
+      testId="confirm-error"
       className="rounded-s border border-danger bg-danger-soft px-3 py-2 text-13 text-danger"
-    >
-      {described.message}
-    </div>
+    />
   );
 }
 
@@ -235,6 +251,7 @@ function MediumTier({
   children,
   confirmDisabled = false,
   testId,
+  errorOverrides,
 }: ConfirmProps) {
   const t = useT();
   const resolvedConfirmLabel = confirmLabel ?? t('确认', 'Confirm');
@@ -311,7 +328,7 @@ function MediumTier({
             <TargetLine target={target} />
             <ImpactList impact={impact} />
             {children}
-            <ConfirmErrorBanner error={error} />
+            <ConfirmErrorBanner error={error} overrides={errorOverrides} />
             <div className="flex flex-row-reverse flex-wrap items-center gap-2">
               <Button
                 ref={confirmRef}
@@ -355,6 +372,7 @@ function IrreversibleTier({
   children,
   confirmDisabled = false,
   testId,
+  errorOverrides,
 }: ConfirmProps) {
   const t = useT();
   const resolvedConfirmLabel = confirmLabel ?? t('确认', 'Confirm');
@@ -414,7 +432,10 @@ function IrreversibleTier({
               {title}
             </AlertDialogPrimitive.Title>
             <AlertDialogPrimitive.Description id={descriptionId} className="text-13 text-text-2">
-              不可逆 Irreversible — 请键入目标名称并确认知情
+              {t(
+                '不可逆：请键入目标名称并确认知情',
+                'Irreversible: type the target name and confirm you understand',
+              )}
             </AlertDialogPrimitive.Description>
             {description !== undefined ? (
               <div className="text-13 text-text-2">{description}</div>
@@ -454,7 +475,7 @@ function IrreversibleTier({
                 )}
               </span>
             </label>
-            <ConfirmErrorBanner error={error} />
+            <ConfirmErrorBanner error={error} overrides={errorOverrides} />
             <div className="flex flex-row-reverse flex-wrap items-center gap-2">
               <Button
                 variant="danger"

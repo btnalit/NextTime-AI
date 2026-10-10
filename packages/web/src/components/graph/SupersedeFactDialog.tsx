@@ -1,7 +1,6 @@
 import type { FactWire } from '@nexttime/shared';
 import { useEffect, useId, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
 import {
@@ -13,6 +12,7 @@ import {
   DialogTitle,
 } from '../kit/dialog.js';
 import { Field, describedBy } from '../kit/field.js';
+import { InlineError } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { Textarea } from '../kit/textarea.js';
 
@@ -246,16 +246,7 @@ export function SupersedeFactDialog({
                 <li>{t('此操作会写入审计', 'Recorded in the audit log')}</li>
               </ul>
             </div>
-            {error !== null ? (
-              <div
-                role="alert"
-                className="field-error"
-                data-testid="supersede-fact-error"
-                data-error-code={describeError(error).code}
-              >
-                {describeError(error).message}
-              </div>
-            ) : null}
+            <InlineError error={error} testId="supersede-fact-error" />
           </div>
         )}
         <DialogFooter>

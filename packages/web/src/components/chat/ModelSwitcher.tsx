@@ -11,7 +11,7 @@ import {
   narrowByPolicyAllowList,
 } from '../../lib/agent-profile.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { describeError, isForbiddenError } from '../../lib/errors.js';
+import { errorToastText, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
@@ -40,6 +40,9 @@ export interface RunningModelHealth {
   readonly provider: string;
   readonly health: ProviderStatus;
   readonly source: 'override' | 'workspace_default';
+  /** Whether any model this member may pick has a provider that passed its test — when none
+   *  does, "pick a working model" is no advice (#530 audit P2). */
+  readonly anyWorking: boolean;
 }
 
 /** `<option value>` for "inherit the workspace default" — `set_agent_profile{model: null}`. */
@@ -90,6 +93,13 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
   const runningProvider = runningRow?.provider ?? '';
   const runningKind = modelHealth(runningRow)?.kind ?? null;
   const runningSource = profileData?.model == null ? 'workspace_default' : 'override';
+  const policyAllowed =
+    policy.state.status === 'ready' ? policy.state.data.allowedModels : undefined;
+  const anyWorking =
+    catalog.state.status === 'ready' &&
+    narrowByPolicyAllowList(catalog.state.data.items, policyAllowed, (m) => m.id).some(
+      (m) => modelHealth(m)?.usability === 'ok',
+    );
   useEffect(() => {
     if (!onRunningModel) return;
     onRunningModel(
@@ -99,10 +109,11 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
             provider: runningProvider,
             health: describeProviderHealth(runningKind),
             source: runningSource,
+            anyWorking,
           }
         : null,
     );
-  }, [onRunningModel, runningId, runningProvider, runningKind, runningSource]);
+  }, [onRunningModel, runningId, runningProvider, runningKind, runningSource, anyWorking]);
 
   if (profile.state.status === 'loading') {
     return (
@@ -166,7 +177,7 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
       toast.push({
         tone: 'danger',
         title: t('切换模型失败', 'Could not switch the model'),
-        description: describeError(err).message,
+        description: errorToastText(err, t),
         key: 'chat-model-switch',
       });
     } finally {
@@ -259,10 +270,15 @@ export function ChatModelHealthNotice({
             '这个模型现在调不通，发送会失败：在上方「模型」里换一个模型，或选「工作区默认」。',
             'This model fails right now and sending will fail: pick another model above, or choose Workspace default.',
           )
-        : t(
-            '发送可能失败；要稳妥，在上方「模型」里换一个状态为可用的模型。',
-            'Sending may fail; to be safe, pick a working model above.',
-          )
+        : running.anyWorking
+          ? t(
+              '发送可能失败；要稳妥，在上方「模型」里换一个状态为可用的模型。',
+              'Sending may fail; to be safe, pick a working model above.',
+            )
+          : t(
+              '发送可能失败；现在没有哪个模型确认可用，请平台管理员检查供应商状态。',
+              'Sending may fail; no model is confirmed working right now — ask a platform administrator to check the providers.',
+            )
       : fails
         ? t(
             '发送会失败：请工作区管理员换默认模型，或请平台管理员修复这个供应商。',

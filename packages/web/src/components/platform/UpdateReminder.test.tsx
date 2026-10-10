@@ -46,7 +46,7 @@ describe('UpdateReminder', () => {
       'v0.43.0 可用',
     );
     expect(within(notice).getByTestId('update-notice-platform-facts').textContent).toMatch(
-      /^内置 pi 1\.0\.2 · 迁移 core 0041 · 非 breaking$/,
+      /^内置 pi 1\.0\.2 · 迁移 core 0041 · 无不兼容变更$/,
     );
     const link = within(notice).getByTestId('update-notice-platform-link');
     expect(link.getAttribute('href')).toBe('https://github.com/example/repo/releases/tag/v0.43.0');
@@ -114,7 +114,7 @@ describe('UpdateReminder', () => {
       'v0.44.0 可用（跨 2 个发版）',
     );
     expect(within(notice).getByTestId('update-notice-platform-facts').textContent).toBe(
-      '内置 pi 1.0.2 · 无迁移 · 含 breaking 变更',
+      '内置 pi 1.0.2 · 无迁移 · 含不兼容变更',
     );
     expect(notice.className).toContain('notice-warn');
   });
