@@ -787,8 +787,8 @@ export function ProviderForm({
 
         {discoveryError !== null ? (
           <div className="field-error" role="alert" data-testid="provider-discover-error">
-            {discoveryShown?.message}
-            {discoveryExplain ? <div className="text-2">{discoveryExplain}</div> : null}
+            {/* The status-specific reason when there is one; it says more than the code's copy. */}
+            {discoveryExplain ?? discoveryShown?.message}
             {relayMayNotListModels(discoveryError) ? (
               <div className="text-2" data-testid="provider-discover-manual-hint">
                 {t(

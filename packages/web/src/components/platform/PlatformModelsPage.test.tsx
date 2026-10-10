@@ -513,8 +513,9 @@ describe('PlatformModelsPage', () => {
     });
     fireEvent.click(within(form).getByTestId('provider-discover'));
     const error = await within(form).findByTestId('provider-discover-error');
-    expect(error.textContent).toContain('供应商拒绝了请求');
-    expect(error.textContent).toContain('密钥');
+    // The status-specific reason is the body; the upstream's own words sit in 「技术细节」.
+    expect(error.textContent).toContain('供应商拒绝了密钥');
+    expect(error.querySelector('details.error-details')?.textContent).toContain('invalid api key');
   });
 
   it('a relay without a model list: offers the preset’s suggestions and checks each one ticked', async () => {

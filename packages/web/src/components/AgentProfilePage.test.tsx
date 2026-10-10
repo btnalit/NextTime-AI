@@ -457,8 +457,34 @@ describe('AgentProfilePage', () => {
     expect(saveButton.disabled).toBe(true);
   });
 
+  it('a non-owner gets no principal picker: only the owner may read another member’s agent', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 2,
+        gatekeeperCount: 0,
+        caller: { id: 'p-2', role: 'operator', displayName: 'Bob', kind: 'human' },
+      }),
+      list_principals: () => ({ items: [] }),
+      get_agent_profile: () => profile({ principalId: 'p-2' }),
+    });
+    renderPage(http);
+    await screen.findByTestId('agent-profile-form');
+    expect(screen.queryByLabelText(/查看\/编辑/)).toBeNull();
+  });
+
   it('an owner sees a principal picker and can switch to another principal’s profile', async () => {
     const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 2,
+        gatekeeperCount: 0,
+        caller: { id: 'p-1', role: 'owner', displayName: 'Alice', kind: 'human' },
+      }),
       list_principals: () => ({
         items: [
           {

@@ -254,8 +254,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The quota is used up. Ask a workspace owner to raise it, or wait for the period to reset.',
   },
   service_unavailable: {
-    zh: '它依赖的服务暂时不可用。稍后重试；反复出现时，请平台管理员查看平台运行状态。',
-    en: 'A service it depends on is unavailable. Retry later; if it keeps happening, ask a platform administrator to check the platform status.',
+    zh: '它依赖的服务暂时不可用，或者它要读的文件坏了。稍后重试；反复出现时，请平台管理员查看平台运行状态和服务日志。',
+    en: 'A service it depends on is unavailable, or a file it reads is broken. Retry later; if it keeps happening, ask a platform administrator to check the platform status and the service logs.',
   },
   internal_error: {
     zh: '平台内部出错了。稍后重试；反复出现时，把「技术细节」发给平台管理员。',

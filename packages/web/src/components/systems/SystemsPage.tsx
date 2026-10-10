@@ -452,14 +452,8 @@ export function SystemsPage({
           requestsForbidden ? (
             <Notice testId="requests-forbidden">
               {t(
-                <>
-                  连接申请仅 owner 可见（<code>list_connection_requests</code>
-                  ）。你仍可发起申请，由工作区 owner 完成它。
-                </>,
-                <>
-                  Connection requests are owner-only (<code>list_connection_requests</code>). You
-                  can still raise a request; the workspace owner completes it.
-                </>,
+                '只有工作区所有者能看到连接申请列表。你仍可以发起申请，由所有者完成。',
+                'Only the workspace owner can see the connection requests. You can still raise one; the owner completes it.',
               )}
             </Notice>
           ) : (

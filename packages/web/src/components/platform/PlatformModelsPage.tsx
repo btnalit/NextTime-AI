@@ -13,6 +13,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { explainUpstreamError } from '../../lib/provider-form.js';
 import { providerStatus } from '../../lib/provider-status.js';
 import { hrefs, readNewProviderPreset, readProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
@@ -39,6 +40,12 @@ import { ProviderForm } from './providers/ProviderForm.js';
 import { ProviderSecretForm } from './providers/ProviderSecretForm.js';
 import { ProviderTestResult } from './providers/ProviderTestResult.js';
 
+/** The statuses the provider's last test decided (`lib/provider-status`). */
+const TEST_DECIDED_STATUSES: ReadonlySet<string> = new Set([
+  'key_rejected',
+  'test_failed',
+  'tools_failed',
+]);
 export interface PlatformModelsPageProps {
   readonly http: CapabilityCaller;
   /** Test seam: the `fetch` the llm-admin client uses for `/api/llm-admin/*`. */
@@ -177,7 +184,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             title={[
               t(status.detailZh, status.detailEn),
               status.adminNextZh ? t(status.adminNextZh, status.adminNextEn ?? '') : null,
-              lastTest?.error,
+              // Only a status the last test decided gets that test's reason, and in the
+              // viewer's language — "untested" after an edit must not quote an old 401.
+              TEST_DECIDED_STATUSES.has(status.kind)
+                ? explainUpstreamError(lastTest?.error ?? null, t)
+                : null,
             ]
               .filter(Boolean)
               .join(' — ')}
