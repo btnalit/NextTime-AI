@@ -17,6 +17,7 @@ import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 // file's `components/ui/*` imports are unchanged (this file stays on
 // `scripts/guards/legacy-ui-importers.json`; out of this lane's scope to migrate fully).
 import { EmptyState } from './kit/empty-state.js';
+import { RouteLink } from './kit/route-link.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -36,6 +37,9 @@ export interface AvailableGateInstancesSectionProps {
   /** Owner-only: shows the 启用 button. Members still see the list and, on linked rows, the
    *  per-member credential entry (P-B2a). */
   readonly canEnable: boolean;
+  /** The reader's role may enter its own credential for an enabled instance
+   *  (`issue_gate_credential_token`) — not an auditor (#541 acceptance must-fix 2). */
+  readonly canEnterCredential?: boolean;
   /** The signed-in user is a platform administrator: the empty state reads the platform's own
    *  instance list to say which step is actually missing, with a direct link to it. */
   readonly platformAdmin?: boolean;
@@ -62,6 +66,7 @@ export function AvailableGateInstancesSection({
   available,
   onEnabled,
   canEnable,
+  canEnterCredential = true,
   platformAdmin = false,
 }: AvailableGateInstancesSectionProps) {
   const t = useT();
@@ -158,6 +163,7 @@ export function AvailableGateInstancesSection({
                   row={row}
                   onEnabled={handleEnabled}
                   canEnable={canEnable}
+                  canEnterCredential={canEnterCredential}
                   platformAdmin={platformAdmin}
                 />
               ))}
@@ -174,12 +180,14 @@ function AvailableGateRow({
   row,
   onEnabled,
   canEnable,
+  canEnterCredential,
   platformAdmin,
 }: {
   readonly http: CapabilityCaller;
   readonly row: AvailableGateInstanceWire;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
   readonly canEnable: boolean;
+  readonly canEnterCredential: boolean;
   readonly platformAdmin: boolean;
 }) {
   const t = useT();
@@ -241,14 +249,16 @@ function AvailableGateRow({
         {row.gatekeeperId ? (
           <div className="stack-s">
             <a href={hrefs.gatekeeper(row.gatekeeperId)}>{t('已启用', 'Enabled')}</a>
-            <GateCredentialEntry
-              requestToken={() =>
-                http.call<GateHostTokenWire>('issue_gate_credential_token', {
-                  gateId: row.gateId,
-                })
-              }
-              tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
-            />
+            {canEnterCredential ? (
+              <GateCredentialEntry
+                requestToken={() =>
+                  http.call<GateHostTokenWire>('issue_gate_credential_token', {
+                    gateId: row.gateId,
+                  })
+                }
+                tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
+              />
+            ) : null}
           </div>
         ) : !platformEnabled ? (
           <span className="muted" data-testid={`available-gate-not-enableable-${row.gateId}`}>
@@ -333,14 +343,14 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
         action={
           <span className="row row-wrap">
             {notEnabled.slice(0, 3).map((row) => (
-              <a
+              <RouteLink
                 key={row.gateId}
                 href={hrefs.platformGateInstance(row.gateId)}
                 className="inline-flex min-h-9 items-center"
-                data-testid="available-gates-enable-link"
+                testId="available-gates-enable-link"
               >
                 {t(`去启用：${row.displayName}`, `Enable ${row.displayName}`)}
-              </a>
+              </RouteLink>
             ))}
           </span>
         }
@@ -360,13 +370,13 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
           'Set the connector to platform preset under Platform → Integrations and its instances show up here.',
         )}
         action={
-          <a
+          <RouteLink
             href={hrefs.platformIntegrations()}
             className="inline-flex min-h-9 items-center"
-            data-testid="available-gates-integrations-link"
+            testId="available-gates-integrations-link"
           >
             {t('打开平台集成', 'Open platform integrations')}
-          </a>
+          </RouteLink>
         }
         testId="available-gates-empty"
       />

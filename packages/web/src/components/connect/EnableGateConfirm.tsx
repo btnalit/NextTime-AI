@@ -12,6 +12,7 @@ import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
 
 export interface EnableGateConfirmProps {
@@ -95,6 +96,7 @@ export function EnableGateConfirm({
       gateId,
       ...(preview?.manifestDigest ? { manifestDigest: preview.manifestDigest } : {}),
     });
+    announceReadinessChange(http);
     onEnabled(result);
   }
 
@@ -220,11 +222,6 @@ function EnablePreviewBody({
                 <span className="mono">{operation.name}</span>
                 <StatusChip machine="operationMode" status={operation.mode} size="s" />
                 <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
-                {operation.mode === 'execute' || operation.blastRadius === 'high' ? (
-                  <span className="tag" data-testid="enable-preview-high-impact">
-                    {t('高影响', 'High impact')}
-                  </span>
-                ) : null}
               </li>
             ))}
           </ul>

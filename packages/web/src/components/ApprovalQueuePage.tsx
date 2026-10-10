@@ -3,11 +3,13 @@ import type { ActionRequestStatus } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
+import { actorRuntimeLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { ApprovalDetail } from './approvals/ApprovalDetail.js';
@@ -75,6 +77,7 @@ function waitingLabel(iso: string | undefined, t: Translate): string {
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const toast = useToast();
   const principalNames = usePrincipalNames(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -90,7 +93,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       detailError={detailError}
       principalNames={principalNames}
       gatekeeperNames={gatekeeperNames}
-      canAlwaysAllow={!permissions.isDenied('set_auto_approved_action_kind')}
+      canAlwaysAllow={can('set_auto_approved_action_kind') !== false}
       onApprove={queue.handleApprove}
       onReject={queue.handleReject}
       decisionError={selectedRow ? (queue.decision[selectedRow.id]?.error ?? null) : null}
@@ -283,10 +286,13 @@ function PendingList({
     if (forbidden) {
       return (
         <EmptyState
-          title={t('审批需要 operator 角色', 'Approvals need the operator role')}
+          title={t(
+            '审批由 operator 和工作区所有者处理',
+            'Approvals are handled by operators and the workspace owner',
+          )}
           body={t(
-            '当前主体不能调用 list_pending；请工作区 owner 授予 operator 角色。',
-            'Your principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions.',
+            '你的角色看不到审批队列。要参与审批，请工作区所有者把你的角色改为 operator。',
+            'Your role does not see the approval queue. To take part in approvals, ask the workspace owner to make you an operator.',
           )}
           testId="approvals-forbidden"
         />
@@ -367,7 +373,7 @@ function PendingList({
                 {row.actorRuntime ? (
                   <>
                     <span>{t('提出者', 'Proposed by')}</span>
-                    <span className="tag">{row.actorRuntime}</span>
+                    <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
                   </>
                 ) : null}
                 {principalName ? (
@@ -469,10 +475,13 @@ function ApprovalHistoryTab({
       ) : history.state.status === 'error' ? (
         forbidden ? (
           <EmptyState
-            title={t('审批历史需要 operator 角色', 'Approval history needs the operator role')}
+            title={t(
+              '审批历史只有 operator 和工作区所有者能看',
+              'Only operators and the workspace owner see the approval history',
+            )}
             body={t(
-              '当前主体不能调用 list_action_requests。',
-              'Your principal cannot call list_action_requests. Ask the workspace owner for an operator-role principal.',
+              '要查看，请工作区所有者把你的角色改为 operator。',
+              'To see it, ask the workspace owner to make you an operator.',
             )}
             testId="approval-history-forbidden"
           />
@@ -555,7 +564,7 @@ function ApprovalHistoryTab({
                     {row.actorRuntime ? (
                       <>
                         <span>{t('提出者', 'Proposed by')}</span>
-                        <span className="tag">{row.actorRuntime}</span>
+                        <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
                       </>
                     ) : null}
                     {principalName ? (

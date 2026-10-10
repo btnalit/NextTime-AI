@@ -49,6 +49,7 @@ function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
     onApprove: vi.fn(),
     onReject: vi.fn(),
     canAlwaysAllow: true,
+    canDecide: true,
     ...overrides,
   };
   return { ...render(<ActionRequestCard {...props} />), props };
@@ -219,7 +220,9 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-on-behalf-of').getAttribute('data-ref-id')).toBe(
       'principal-9',
     );
-    expect(screen.getByTestId('approval-policy').textContent).toBe('require_approval');
+    // #541 review R3: the chat's inline approval card shows the decision's label, not its raw value.
+    expect(screen.getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
+    expect(screen.getByTestId('approval-policy').textContent).not.toContain('require_approval');
   });
 
   it('a card carrying a suspected-credential count sends the approver to the approvals page (decision 2026-10-09)', () => {
@@ -261,5 +264,16 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-credential-review').textContent).toContain('含 3 处');
     expect(screen.queryByTestId('approval-approve')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('ActionRequestCard for a reader who may not decide (#541 review M3)', () => {
+  it('shows the request and who decides, with no approve/reject button and no approvals-page link', () => {
+    renderCard({ canDecide: false });
+    expect(screen.getByTestId('action-card-awaits-approver').textContent).toContain(
+      'operator 或工作区所有者',
+    );
+    expect(screen.queryByRole('button', { name: /批准|拒绝|总是允许/ })).toBeNull();
+    expect(screen.queryByTestId('approval-open-page')).toBeNull();
   });
 });

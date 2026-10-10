@@ -1,5 +1,6 @@
 import type { ObjectiveOutcomeWire, SkillLoadWire } from '@nexttime/shared';
 import { type ReactNode, useState } from 'react';
+import { useCanOpen } from '../hooks/useCanOpen.js';
 import { auditHref } from '../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import {
@@ -24,6 +25,7 @@ import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { KeyValue, type KeyValueItem } from './kit/key-value.js';
 import { RefChip } from './kit/ref-chip.js';
+import { RouteLink } from './kit/route-link.js';
 import { StatusChip } from './kit/status-chip.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './kit/table.js';
 
@@ -33,10 +35,13 @@ export interface TaskDetailProps {
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
   readonly principalNames?: ReadonlyMap<string, string>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
+  readonly onOpenApproval?: (actionRequestId: string) => void;
   /** The confirmed cancel — throws so the confirm stays open with the kernel's error (`kit/confirm`
    *  renders it inline; there is no separate parent-level error banner any more, S8 W1-A7). */
   readonly onCancel: (task: TaskSummary) => Promise<void>;
+  /** `false` hides 取消任务 for a role that may not `cancel_task` (#541 review M3). */
+  readonly canCancel?: boolean;
 }
 
 /**
@@ -66,6 +71,7 @@ export function TaskDetail({
   principalNames,
   onOpenApproval,
   onCancel,
+  canCancel = true,
 }: TaskDetailProps) {
   const t = useT();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -79,6 +85,7 @@ export function TaskDetail({
   const runningRuns = task.workerRuns.filter((run) => run.terminatedAt === null).length;
   const tokensUsedText = task.tokensUsed.toLocaleString();
   const provenance = auditHref({ resourceType: 'task', resourceId: task.id });
+  const canOpen = useCanOpen();
   const attributionItems = attributionRows(task, principalNames, t);
 
   const overviewItems: KeyValueItem[] = [
@@ -167,7 +174,7 @@ export function TaskDetail({
         <div className="row-wrap">
           <StatusChip machine="task" status={task.status} size="s" />
           <RefChip kind="task" id={task.id} name={null} size="s" />
-          {isCancellable(task.status) ? (
+          {canCancel && isCancellable(task.status) ? (
             <Confirm
               tier="medium"
               open={confirmOpen}
@@ -204,11 +211,13 @@ export function TaskDetail({
         </div>
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
           <h2 className="task-detail-title">{definitionName ?? t('任务', 'Task')}</h2>
-          <Button variant="secondary" size="s" asChild>
-            <a href={provenance} data-testid="task-provenance-link">
-              {t('查看溯源', 'View provenance')}
-            </a>
-          </Button>
+          {canOpen(provenance) !== false ? (
+            <Button variant="secondary" size="s" asChild>
+              <a href={provenance} data-testid="task-provenance-link">
+                {t('查看溯源', 'View provenance')}
+              </a>
+            </Button>
+          ) : null}
         </div>
         {need ? <p className="pre-wrap">{need}</p> : null}
       </header>
@@ -364,12 +373,13 @@ export function TaskDetail({
                     {formatDuration(run.startedAt, run.terminatedAt)}
                   </TableCell>
                   <TableCell>
-                    <a
+                    <RouteLink
                       href={auditHref({ resourceType: 'worker_run', resourceId: run.id })}
-                      data-testid="worker-run-provenance-link"
+                      whenRefused="hide"
+                      testId="worker-run-provenance-link"
                     >
                       {t('查看', 'View')}
-                    </a>
+                    </RouteLink>
                   </TableCell>
                 </TableRow>
               ))}

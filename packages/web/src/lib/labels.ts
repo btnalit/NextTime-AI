@@ -148,6 +148,32 @@ export function auditResourceTypeLabel(resourceType: string, t: Translate): stri
   return entry ? label(entry, t) : resourceType;
 }
 
+/** Console audit P1-13: an ActionRequest's `policyDecision` (`POLICY_DECISION_VALUES`) — what the
+ *  workspace policy decided when it was requested — never shown as the raw value. */
+const POLICY_DECISION_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  allow: { zh: '策略允许直接执行', en: 'Allowed by policy' },
+  require_approval: { zh: '策略要求人工审批', en: 'Policy requires approval' },
+  deny: { zh: '策略拒绝', en: 'Denied by policy' },
+};
+
+export function policyDecisionLabel(decision: string, t: Translate): string {
+  const entry = ownEntry(POLICY_DECISION_LABELS, decision);
+  return entry ? label(entry, t) : decision;
+}
+
+/** Console audit P1-13: who proposed an ActionRequest — the kernel records `human` for a request
+ *  made from the console and `pi` for one an agent made (`request-action-handler.ts`). */
+const ACTOR_RUNTIME_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  human: { zh: '控制台里的人', en: 'A person in the console' },
+  pi: { zh: '智能体', en: 'An agent' },
+  worker: { zh: 'Worker（被委派执行）', en: 'A delegated Worker' },
+};
+
+export function actorRuntimeLabel(runtime: string, t: Translate): string {
+  const entry = ownEntry(ACTOR_RUNTIME_LABELS, runtime);
+  return entry ? label(entry, t) : runtime;
+}
+
 // -------------------------------------------------------------------------------------------
 // Thin wrappers over `lib/status-tone.ts` machines, for a call site that needs a plain string
 // (an `<option>` body, a confirm title's interpolation) rather than a `<StatusChip>` element.
@@ -161,6 +187,39 @@ export function auditResourceTypeLabel(resourceType: string, t: Translate): stri
  *  visibly, via `statusChipStyle`'s own `unknown` fallback (never silently blanked). */
 export function roleLabel(role: string, t: Translate): string {
   return labelText(statusChipStyle('role', role), t);
+}
+
+/** Console audit P1-12: what each workspace `Role` can do, one line, shown next to every role
+ *  picker so choosing one is not a guess. Derived from the registry's `minRole`s (an owner clears
+ *  every one; `approve`/`reject`/`list_grants`/`list_policies` need operator; every `propose_*`/
+ *  `publish_*`/`deprecate_*` needs builder; `audit_query`/`export_prov`/`reconstruct` are the
+ *  auditor's, which may not write anything — kernel `roles.ts` D-07). */
+const ROLE_DESCRIPTIONS: Readonly<Record<string, BilingualLabel>> = {
+  owner: {
+    zh: '管理成员、授权、策略、配额和系统接入，能审批一切动作。',
+    en: 'Manages members, grants, policies, quotas and system connections; can approve every action.',
+  },
+  operator: {
+    zh: '查看授权、策略和配额，处理审批队列（批准或驳回动作请求）。',
+    en: 'Sees grants, policies and quotas; works the approval queue (approves or rejects action requests).',
+  },
+  builder: {
+    zh: '在能力目录里提议、发布和下线 Operation、Skill、流程和 Worker。',
+    en: 'Proposes, publishes and deprecates Operations, Skills, procedures and Workers in the catalog.',
+  },
+  member: {
+    zh: '和自己的智能体对话、用已授权的系统，可以申请接入新系统。',
+    en: 'Chats with their own agent, uses the systems granted to them, and can request a new connection.',
+  },
+  auditor: {
+    zh: '只读：查审计、导出溯源、回放过程，不能改动任何东西。',
+    en: 'Read-only: queries the audit, exports provenance, reconstructs runs; cannot change anything.',
+  },
+};
+
+export function roleDescription(role: string, t: Translate): string | null {
+  const entry = ownEntry(ROLE_DESCRIPTIONS, role);
+  return entry ? label(entry, t) : null;
 }
 
 /** A connector's three-state mode (`disabled`/`self_serve`/`platform_preset`) as plain text — for

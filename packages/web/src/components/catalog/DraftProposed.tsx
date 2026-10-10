@@ -27,6 +27,10 @@ export interface DraftProposedProps {
     readonly credentialsReviewed?: true;
   }) => Promise<{ readonly status: string }>;
   readonly onDone: () => void;
+  /** Called once a publish succeeded, before the reader clicks 完成 — the host refreshes its list
+   *  and announces the readiness change here, so the page around the editor is current at once
+   *  (#541 acceptance must-fix 1; same refresh 完成 does). */
+  readonly onPublished?: () => void;
   /** Extra caveat (e.g. "the Workers tab only lists published versions"). */
   readonly note?: string;
   /** R6: an extra nudge for a draft that is easy to lose track of once this screen closes without
@@ -59,6 +63,7 @@ export function DraftProposed({
   draft,
   onPublish,
   onDone,
+  onPublished,
   note,
   unpublishedConsequence,
   reviewersSeeDraft = false,
@@ -89,6 +94,7 @@ export function DraftProposed({
     try {
       const result = await onPublish(credentialReview.params());
       setStatus(result.status);
+      onPublished?.();
       toast.push({
         tone: 'ok',
         title: t(`已发布 · ${draft.name ?? draft.id}`, `Published · ${draft.name ?? draft.id}`),

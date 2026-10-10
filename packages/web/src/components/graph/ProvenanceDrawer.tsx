@@ -5,6 +5,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { explainToProvenance } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { RouteLink } from '../kit/route-link.js';
 import { Drawer } from '../ui/Drawer.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { ProvenanceChain } from '../ui/ProvenanceChain.js';
@@ -47,13 +48,14 @@ export function ProvenanceDrawer({ http, fact, asOf, conflicts, onClose }: Prove
       testId="graph-provenance-drawer"
       footer={
         fact ? (
-          <a
+          <RouteLink
             className="btn btn-secondary btn-s"
             href={auditHrefForNode(fact.id)}
-            data-testid="graph-open-in-audit"
+            whenRefused="hide"
+            testId="graph-open-in-audit"
           >
             {t('在审计页打开', 'Open in audit')}
-          </a>
+          </RouteLink>
         ) : undefined
       }
     >

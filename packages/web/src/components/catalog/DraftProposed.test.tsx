@@ -80,3 +80,27 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
     expect(screen.queryByTestId('credential-review')).toBeNull();
   });
 });
+
+describe('DraftProposed — the page refreshes on publish (#541 acceptance must-fix 1)', () => {
+  it('calls onPublished once the publish succeeded, not on a refusal', async () => {
+    const onPublished = vi.fn();
+    const onPublish = vi
+      .fn()
+      .mockRejectedValueOnce(new HttpError('capability_error', 'nope', 'illegal_transition'))
+      .mockResolvedValueOnce({ status: 'published' });
+    render(
+      <DraftProposed
+        kindLabel="Worker"
+        draft={{ id: 'wd-1', version: 1, status: 'draft', name: 'ops-runner' }}
+        onPublish={onPublish}
+        onDone={vi.fn()}
+        onPublished={onPublished}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(1));
+    expect(onPublished).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    await waitFor(() => expect(onPublished).toHaveBeenCalledTimes(1));
+  });
+});

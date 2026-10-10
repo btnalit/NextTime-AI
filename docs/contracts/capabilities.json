@@ -14964,6 +14964,13 @@
           },
           "type": "array"
         },
+        "modelsCatalog": {
+          "enum": [
+            "ok",
+            "unreadable"
+          ],
+          "type": "string"
+        },
         "providerHealthFile": {
           "enum": [
             "ok",
@@ -15059,6 +15066,7 @@
         "graphFreshness",
         "health",
         "providerHealthFile",
+        "modelsCatalog",
         "modelProviders",
         "checklist",
         "recentAudit"

@@ -29,14 +29,25 @@ export interface CapabilityGroup<Row> {
 
 /** Rows grouped by `mode` in the registry's own mode order (observe → write → propose → execute;
  *  a mode outside it comes last, by name), names sorted within a group. `filter` keeps rows whose
- *  name contains it (case-insensitive); groups left empty are dropped. */
+ *  name — or, given `labelOf`, whose human label (audit P1-8) — contains it (case-insensitive);
+ *  groups left empty are dropped. */
 export function groupCapabilitiesByMode<
   Row extends { readonly name: string; readonly mode: string },
->(rows: readonly Row[], filter = ''): readonly CapabilityGroup<Row>[] {
+>(
+  rows: readonly Row[],
+  filter = '',
+  labelOf?: (name: string) => string,
+): readonly CapabilityGroup<Row>[] {
   const needle = filter.trim().toLowerCase();
   const byMode = new Map<string, Row[]>();
   for (const row of rows) {
-    if (needle !== '' && !row.name.toLowerCase().includes(needle)) continue;
+    if (
+      needle !== '' &&
+      !row.name.toLowerCase().includes(needle) &&
+      !(labelOf?.(row.name).toLowerCase().includes(needle) ?? false)
+    ) {
+      continue;
+    }
     const list = byMode.get(row.mode) ?? [];
     list.push(row);
     byMode.set(row.mode, list);

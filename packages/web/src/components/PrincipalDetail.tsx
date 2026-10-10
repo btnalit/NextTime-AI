@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -9,7 +10,7 @@ import {
   ownerCredentialConfirmCopy,
 } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { principalKindLabel, roleLabel } from '../lib/labels.js';
+import { principalKindLabel, roleDescription, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
@@ -27,7 +28,7 @@ export interface PrincipalDetailProps {
   readonly principal: PrincipalRow;
   readonly canManage: boolean;
   readonly onChanged: (principal: PrincipalRow) => void;
-  readonly onForbidden: (capabilityName: string) => void;
+  readonly onForbidden: (capabilityName: CapabilityName) => void;
 }
 
 /**
@@ -153,7 +154,7 @@ export function PrincipalDetail({
   const metadataItems: KeyValueItem[] = [
     {
       key: 'id',
-      label: 'Id',
+      label: 'ID',
       value: <RefChip kind="principal" id={principal.id} name={principal.displayName} size="s" />,
     },
     { key: 'kind', label: t('类型', 'Kind'), value: principalKindLabel(principal.kind, t) },
@@ -230,7 +231,11 @@ export function PrincipalDetail({
 
         {canManage && !platformManaged ? (
           <DrawerSection title={t('编辑', 'Edit')}>
-            <Field id="principal-role" label={t('角色', 'Role')}>
+            <Field
+              id="principal-role"
+              label={t('角色', 'Role')}
+              hint={roleDescription(role, t) ?? undefined}
+            >
               <div className="row">
                 <Select
                   id="principal-role"

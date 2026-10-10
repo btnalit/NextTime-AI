@@ -217,7 +217,7 @@ export function ProviderForm({
     ? null
     : (providerIdProblem(idTrimmed, t) ??
       (existingIds.includes(idTrimmed)
-        ? t(`已有 id 为「${idTrimmed}」的供应商，换一个`, `A provider "${idTrimmed}" exists`)
+        ? t(`已有 ID 为「${idTrimmed}」的供应商，换一个`, `A provider "${idTrimmed}" exists`)
         : null));
   const envProblem = envNameProblem(apiKeyEnv, t);
 
@@ -249,7 +249,7 @@ export function ProviderForm({
     hasTypedKey || apiKeyEnv.length > 0 || (storedCredential && !upstreamChanged);
 
   const missing: string[] = [];
-  if (!editing && idProblem) missing.push(t('有效的 id', 'a valid id'));
+  if (!editing && idProblem) missing.push(t('有效的 ID', 'a valid id'));
   if (!urlValid) missing.push('Base URL');
   if (envProblem) missing.push(t('合法的环境变量名', 'a valid env var name'));
   if (keyProblem) missing.push(t('格式正确的密钥', 'a well-formed key'));
@@ -539,7 +539,7 @@ export function ProviderForm({
           required
           hint={
             editing
-              ? t('id 创建后不能改。', 'The id cannot change after creation.')
+              ? t('ID 创建后不能改。', 'The id cannot change after creation.')
               : t(
                   `跟随名称自动生成，也可以自己改；路由为 /${idTrimmed || '<id>'}/v1。`,
                   `Follows the name unless you edit it; routed as /${idTrimmed || '<id>'}/v1.`,
@@ -792,7 +792,7 @@ export function ProviderForm({
             {relayMayNotListModels(discoveryError) ? (
               <div className="text-2" data-testid="provider-discover-manual-hint">
                 {t(
-                  '有些中转不提供模型列表：可以在下面手动填写模型 id。',
+                  '有些中转不提供模型列表：可以在下面手动填写模型 ID。',
                   'Some relays do not list models — type the model ids below instead.',
                 )}
               </div>
@@ -874,7 +874,7 @@ export function ProviderForm({
         ) : discovered && discovered.length === 0 ? (
           <p className="text-small text-3">
             {t(
-              '供应商返回了空的模型列表，请手动填写模型 id。',
+              '供应商返回了空的模型列表，请手动填写模型 ID。',
               'The provider listed no models — type the model ids below.',
             )}
           </p>
@@ -914,7 +914,7 @@ export function ProviderForm({
               <div className="stack-s" key={row.key}>
                 <div className="row provider-model-row" data-testid="provider-model-row">
                   <Input
-                    aria-label={t(`模型 ${index + 1} 的 id`, `Model ${index + 1} id`)}
+                    aria-label={t(`模型 ${index + 1} 的 ID`, `Model ${index + 1} id`)}
                     value={row.id}
                     onChange={(event) => updateModel(row.key, { id: event.target.value })}
                     onBlur={() => {
@@ -924,7 +924,7 @@ export function ProviderForm({
                     }}
                     disabled={submitting}
                     mono
-                    placeholder={t('模型 id，如 deepseek-chat', 'model id, e.g. deepseek-chat')}
+                    placeholder={t('模型 ID，如 deepseek-chat', 'model id, e.g. deepseek-chat')}
                     aria-invalid={duplicate || undefined}
                     data-testid="provider-model-id"
                   />
@@ -947,14 +947,14 @@ export function ProviderForm({
                   />
                 </div>
                 {duplicate ? (
-                  <p className="field-error">{t('这个 id 重复了', 'Duplicate id')}</p>
+                  <p className="field-error">{t('这个 ID 重复了', 'Duplicate id')}</p>
                 ) : unlisted && probeFor(trimmed)?.status !== 'done' ? (
                   <p
                     className="field-hint provider-model-unlisted"
                     data-testid="provider-model-unlisted"
                   >
                     {t(
-                      '供应商的模型列表里没有这个 id——检查拼写；中转的别名可以保留，验证一下就知道能不能用。',
+                      '供应商的模型列表里没有这个 ID——检查拼写；中转的别名可以保留，验证一下就知道能不能用。',
                       'Not in the provider’s list — check the spelling; a relay alias may still work, check it to find out.',
                     )}
                   </p>

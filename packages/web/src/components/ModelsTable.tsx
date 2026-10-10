@@ -29,9 +29,9 @@ export function ModelsTable({ models }: ModelsTableProps) {
     <table className="data-table" data-testid="models-table">
       <thead>
         <tr>
-          <th>Model</th>
-          <th>Provider</th>
-          <th>Id</th>
+          <th>{t('模型', 'Model')}</th>
+          <th>{t('供应商', 'Provider')}</th>
+          <th>{t('模型 ID', 'Model ID')}</th>
           <th>{t('状态', 'Status')}</th>
         </tr>
       </thead>

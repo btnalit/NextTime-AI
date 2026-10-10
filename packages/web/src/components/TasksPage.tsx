@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type Resource, useResource } from '../hooks/useResource.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
@@ -33,7 +34,7 @@ export interface TasksPageProps {
   readonly pushes: PushSource;
   readonly selectedId?: string;
   readonly onSelect: (taskId: string | null) => void;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  readonly onOpenApproval?: (actionRequestId: string) => void;
 }
 
 type Filter = 'active' | 'all' | 'done';
@@ -69,6 +70,7 @@ type Filter = 'active' | 'all' | 'done';
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const t = useT();
   const toast = useToast();
+  const can = useRoleCan(http);
   const load = useCallback(async () => {
     let items: readonly TaskSummary[] = [];
     let cursor: string | undefined;
@@ -165,6 +167,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
       principalNames={principalNames}
       onOpenApproval={onOpenApproval}
       onCancel={performCancel}
+      canCancel={can('cancel_task') !== false}
     />
   );
 
@@ -240,8 +243,9 @@ interface TaskDetailContentProps {
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
   readonly principalNames: ReadonlyMap<string, string>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onCancel: (task: TaskSummary) => Promise<void>;
+  readonly canCancel: boolean;
 }
 
 /** The detail pane's (wide layout) / sheet's (narrow layout) shared content — one selected Task,
@@ -258,6 +262,7 @@ function TaskDetailContent({
   principalNames,
   onOpenApproval,
   onCancel,
+  canCancel,
 }: TaskDetailContentProps) {
   if (selected) {
     return (
@@ -270,6 +275,7 @@ function TaskDetailContent({
         principalNames={principalNames}
         onOpenApproval={onOpenApproval}
         onCancel={onCancel}
+        canCancel={canCancel}
       />
     );
   }
@@ -331,8 +337,8 @@ function TasksList({
             : t('没有符合筛选的任务', 'No tasks match this filter')
         }
         body={t(
-          '入口智能体把工作委派给 Worker（invoke_worker）时会创建任务；它的运行、结果契约与审批都在这里。',
-          'A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here.',
+          '入口智能体把工作委派给 Worker 时会创建任务；它的运行、结果契约与审批都在这里。',
+          'A Task is created when the entry agent delegates work to a Worker. Its runs, result contract and approvals show up here.',
         )}
         testId="tasks-empty"
       />

@@ -1,6 +1,7 @@
 import type { PolicyWire, QuotaListEntryWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -257,6 +258,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
   const t = useT();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
+  const can = useRoleCan(http);
   const isOwner = role.role === 'owner';
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
@@ -267,8 +269,14 @@ export function ModelsPage({ http }: ModelsPageProps) {
   // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
   const gatekeepers = useGatekeeperDirectory(http);
   const agentPolicy = useCapability<AgentPolicy>(http, 'get_agent_policy');
-  const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas');
-  const policies = useCapabilityList<PolicyWire>(http, 'list_policies');
+  // Operator/owner reads, held until the role is known: a role that may not make them is neither
+  // asked nor shown the section.
+  const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas', undefined, {
+    enabled: can('list_quotas') === true,
+  });
+  const policies = useCapabilityList<PolicyWire>(http, 'list_policies', undefined, {
+    enabled: can('list_policies') === true,
+  });
 
   // S8 W4 item 1 (leftover 12 界面缺口 "set_policy/set_quota — 模型页只读，owner 改不了"): both
   // `set_policy`/`set_quota` are owner-only, same gate `AgentPolicyForm` above already uses.
@@ -333,7 +341,11 @@ export function ModelsPage({ http }: ModelsPageProps) {
           />
         ) : agentPolicy.state.status === 'error' ? (
           isForbiddenError(agentPolicy.state.error) ? (
-            <EmptyState icon="shield" title="需要成员权限" testId="agent-policy-forbidden" />
+            <EmptyState
+              icon="shield"
+              title={t('读不到工作区策略', 'Cannot read the workspace policy')}
+              testId="agent-policy-forbidden"
+            />
           ) : (
             <ErrorBanner
               error={agentPolicy.state.error}
@@ -381,104 +393,108 @@ export function ModelsPage({ http }: ModelsPageProps) {
         )}
       </DashboardCard>
 
-      <DashboardCard title={t('配额', 'Quotas')}>
-        {quotas.state.status === 'loading' ? (
-          <SkeletonRows count={2} label="Loading quotas" testId="quotas-loading" />
-        ) : quotas.state.status === 'error' ? (
-          isForbiddenError(quotas.state.error) ? (
+      {can('list_quotas') !== false ? (
+        <DashboardCard title={t('配额', 'Quotas')}>
+          {quotas.state.status === 'loading' ? (
+            <SkeletonRows count={2} label="Loading quotas" testId="quotas-loading" />
+          ) : quotas.state.status === 'error' ? (
+            isForbiddenError(quotas.state.error) ? (
+              <EmptyState
+                icon="shield"
+                title={t('需要所有者或操作员权限', 'Requires the owner or operator role')}
+                body={t(
+                  '配额列表只对工作区所有者和操作员可见。',
+                  'The quota list is visible only to the workspace owner and operators.',
+                )}
+                testId="quotas-forbidden"
+              />
+            ) : (
+              <ErrorBanner
+                error={quotas.state.error}
+                title={t('无法加载配额', 'Could not load quotas')}
+                onRetry={() => void quotas.reload()}
+                testId="quotas-error"
+              />
+            )
+          ) : quotas.state.data.items.length === 0 ? (
             <EmptyState
-              icon="shield"
-              title={t('需要所有者或操作员权限', 'Requires the owner or operator role')}
-              body={t(
-                '配额列表只对工作区所有者和操作员可见。',
-                'The quota list is visible only to the workspace owner and operators.',
-              )}
-              testId="quotas-forbidden"
+              icon="cpu"
+              title={t('还没有配额设置', 'No quotas set')}
+              testId="quotas-empty"
             />
           ) : (
-            <ErrorBanner
-              error={quotas.state.error}
-              title={t('无法加载配额', 'Could not load quotas')}
-              onRetry={() => void quotas.reload()}
-              testId="quotas-error"
+            <DataTable
+              columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor })}
+              data={quotas.state.data.items}
+              getRowId={(row) => row.key}
+              ariaLabel="Quotas"
+              testId="quotas-table"
+              rowTestId={(row) => `quota-row-${row.key}`}
             />
-          )
-        ) : quotas.state.data.items.length === 0 ? (
-          <EmptyState
-            icon="cpu"
-            title={t('还没有配额设置', 'No quotas set')}
-            testId="quotas-empty"
-          />
-        ) : (
-          <DataTable
-            columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor })}
-            data={quotas.state.data.items}
-            getRowId={(row) => row.key}
-            ariaLabel="Quotas"
-            testId="quotas-table"
-            rowTestId={(row) => `quota-row-${row.key}`}
-          />
-        )}
-      </DashboardCard>
+          )}
+        </DashboardCard>
+      ) : null}
 
-      <DashboardCard
-        title={t('策略', 'Policies')}
-        actions={
-          isOwner ? (
-            <Button
-              variant="primary"
-              size="s"
-              onClick={() => setPolicyEditor({ kind: 'new' })}
-              data-testid="policy-new"
-            >
-              {t('新增策略', 'New policy')}
-            </Button>
-          ) : undefined
-        }
-      >
-        {policies.state.status === 'loading' ? (
-          <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />
-        ) : policies.state.status === 'error' ? (
-          isForbiddenError(policies.state.error) ? (
+      {can('list_policies') !== false ? (
+        <DashboardCard
+          title={t('策略', 'Policies')}
+          actions={
+            isOwner ? (
+              <Button
+                variant="primary"
+                size="s"
+                onClick={() => setPolicyEditor({ kind: 'new' })}
+                data-testid="policy-new"
+              >
+                {t('新增策略', 'New policy')}
+              </Button>
+            ) : undefined
+          }
+        >
+          {policies.state.status === 'loading' ? (
+            <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />
+          ) : policies.state.status === 'error' ? (
+            isForbiddenError(policies.state.error) ? (
+              <EmptyState
+                icon="shield"
+                title={t('需要所有者或操作员权限', 'Requires the owner or operator role')}
+                body={t(
+                  '策略列表只对工作区所有者和操作员可见。',
+                  'The policy list is visible only to the workspace owner and operators.',
+                )}
+                testId="policies-forbidden"
+              />
+            ) : (
+              <ErrorBanner
+                error={policies.state.error}
+                title={t('无法加载策略', 'Could not load policies')}
+                onRetry={() => void policies.reload()}
+                testId="policies-error"
+              />
+            )
+          ) : policies.state.data.items.length === 0 ? (
             <EmptyState
-              icon="shield"
-              title={t('需要所有者权限', 'Requires the owner role')}
-              body={t(
-                '策略列表只对工作区所有者可见。',
-                'The policy list is visible only to the workspace owner.',
-              )}
-              testId="policies-forbidden"
+              icon="cpu"
+              title={t('还没有策略规则', 'No policy rules set')}
+              testId="policies-empty"
             />
           ) : (
-            <ErrorBanner
-              error={policies.state.error}
-              title={t('无法加载策略', 'Could not load policies')}
-              onRetry={() => void policies.reload()}
-              testId="policies-error"
+            <DataTable
+              columns={policyColumns(t, {
+                canManage: isOwner,
+                onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
+                gateNames: gatekeepers.names,
+              })}
+              data={policies.state.data.items}
+              getRowId={(policy) => policy.id}
+              ariaLabel="Policies"
+              testId="policies-table"
+              rowTestId={(policy) => `policy-row-${policy.id}`}
+              rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
             />
-          )
-        ) : policies.state.data.items.length === 0 ? (
-          <EmptyState
-            icon="cpu"
-            title={t('还没有策略规则', 'No policy rules set')}
-            testId="policies-empty"
-          />
-        ) : (
-          <DataTable
-            columns={policyColumns(t, {
-              canManage: isOwner,
-              onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
-              gateNames: gatekeepers.names,
-            })}
-            data={policies.state.data.items}
-            getRowId={(policy) => policy.id}
-            ariaLabel="Policies"
-            testId="policies-table"
-            rowTestId={(policy) => `policy-row-${policy.id}`}
-            rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
-          />
-        )}
-      </DashboardCard>
+          )}
+        </DashboardCard>
+      ) : null}
 
       {/* Mounted only while a target is chosen (never kept around with `open=false`) — a fresh
        *  instance per edit means each one's `useState(editing/row)` initializer runs against the

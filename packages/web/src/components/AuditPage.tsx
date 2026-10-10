@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { AuditIdPicker } from '../lib/audit-id-picker.js';
 import { objectSource } from '../lib/audit-pickers.js';
 import {
@@ -19,6 +20,7 @@ import { ApprovalContext } from './audit/ApprovalContext.js';
 import { AuditLogSection } from './audit/AuditLogSection.js';
 import { ExplainSection } from './audit/ExplainSection.js';
 import { ProvenanceToolsSection } from './audit/ProvenanceToolsSection.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -56,6 +58,7 @@ export interface AuditPageProps {
  */
 export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
   const t = useT();
+  const canOpenApproval = useRoleCan(http)('get_action');
   const entry = useAuditEntry(entryProp);
   const principals = usePrincipalDirectory(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -76,11 +79,21 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
         breadcrumb={breadcrumbFor('audit')}
         title={t('审计', 'Audit')}
         description={t(
-          '按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',
+          '按 ID 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',
           'Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat.',
         )}
       />
-      {entry.actionRequestId ? (
+      {entry.actionRequestId && canOpenApproval === false ? (
+        // #541 acceptance (coordinator's decision): an auditor may not read an ActionRequest
+        // (`get_action` is operator) — say so instead of a 「无法加载」; the audit log below is
+        // already filtered to this request's rows.
+        <Notice testId="approval-context-unavailable">
+          {t(
+            '审批请求本身只有 operator 和工作区所有者能打开；下面的审计流已按这条请求筛选。',
+            'Only an operator or a workspace owner can open the request itself; the audit log below is already filtered to it.',
+          )}
+        </Notice>
+      ) : entry.actionRequestId && canOpenApproval === true ? (
         <ApprovalContext
           key={entry.actionRequestId}
           http={http}
@@ -169,15 +182,15 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
         <AuditIdPicker
           http={http}
           id="reconstruct-entity-id"
-          label={t('实体 id', 'Entity id')}
+          label={t('实体 ID', 'Entity id')}
           hint={t(
-            '图对象 id：从审计记录重建其历史。输入名称可搜索对象。',
+            '图对象 ID：从审计记录重建其历史。输入名称可搜索对象。',
             'A graph Object id — its history rebuilt from the audit records. Type a name to search Objects.',
           )}
           value={entityId}
           onChange={setEntityId}
           source={source}
-          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          placeholder={t('粘贴对象 ID，或输入名称搜索', 'Paste an Object id or type a name')}
           disabled={state.busy}
           testId="reconstruct-entity-id"
         />
@@ -188,7 +201,14 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
       {forbidden ? (
         <EmptyState
           icon="shield"
-          title={t('需要 auditor 角色', 'Needs the auditor role')}
+          title={t(
+            '重建只有审计员和工作区所有者能做',
+            'Only auditors and the workspace owner can reconstruct',
+          )}
+          body={t(
+            '要重建，请工作区所有者把你的角色改为 auditor。',
+            'To reconstruct, ask the workspace owner to make you an auditor.',
+          )}
           testId="reconstruct-forbidden"
         />
       ) : state.error !== null ? (

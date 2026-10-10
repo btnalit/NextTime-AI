@@ -1,6 +1,7 @@
 import type { OperationSummaryWire } from '@nexttime/shared';
 import { useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   type GatekeeperListRow,
@@ -17,6 +18,7 @@ import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 export interface GrantGateFormProps {
   readonly http: CapabilityCaller;
@@ -56,7 +58,25 @@ export interface GrantGateFormProps {
  * enforced `capability_grants.scope`, and since 2026-09-25 `grant_capability` no longer accepts it
  * (leftover 80). A grant covers the whole gate, and the Operations list says so.
  */
-export function GrantGateForm({
+/** Granting is the workspace owner's (`grant_capability`): any other role is told so, and the
+ *  form — with its member directory read — is never mounted for it (#541 review N1). */
+export function GrantGateForm(props: GrantGateFormProps) {
+  const t = useT();
+  const can = useRoleCan(props.http);
+  if (can('grant_capability') === false) {
+    return (
+      <Notice testId={props.testId ? `${props.testId}-owner-only` : undefined}>
+        {t(
+          '把系统授权给成员由工作区所有者完成。',
+          'The workspace owner grants systems to members.',
+        )}
+      </Notice>
+    );
+  }
+  return <GrantGateFormBody {...props} />;
+}
+
+function GrantGateFormBody({
   http,
   lockedGatekeeper,
   onGranted,
@@ -65,6 +85,7 @@ export function GrantGateForm({
   testId,
 }: GrantGateFormProps) {
   const t = useT();
+  const can = useRoleCan(http);
 
   // ---- Member picker -----------------------------------------------------------------------
   const [memberQuery, setMemberQuery] = useState('');
@@ -72,7 +93,7 @@ export function GrantGateForm({
     http,
     'list_principals',
     memberQuery.trim() ? { q: memberQuery.trim() } : {},
-    { autoLoadAll: true },
+    { autoLoadAll: true, enabled: can('list_principals') === true },
   );
   const memberOptions =
     principals.state.status === 'ready'
@@ -144,6 +165,13 @@ export function GrantGateForm({
     principalId !== '' &&
     (lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0) &&
     !submitting;
+  // Audit P1-9: a disabled 授予 says what it still waits for.
+  const missing = [
+    principalId === '' ? t('选择成员', 'choose a member') : null,
+    lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0
+      ? null
+      : t('选择门', 'pick a gate'),
+  ].filter((item): item is string => item !== null);
 
   async function submit(): Promise<void> {
     if (!canSubmit) return;
@@ -186,6 +214,7 @@ export function GrantGateForm({
           ? [{ member: memberName, gate: null }]
           : doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) }))),
       ]);
+      announceReadinessChange(http);
       onGranted(results);
       // Reset for another grant in the same drawer session — keep the drawer open so multi-gate
       // and repeat grants (a common "add another member" flow) do not each re-open it.
@@ -202,6 +231,7 @@ export function GrantGateForm({
           ...current,
           ...doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) })),
         ]);
+        announceReadinessChange(http);
         onGranted(results);
         setSelectedGateIds(new Set(targetGateIds.filter((id) => !doneGateIds.includes(id))));
       }
@@ -279,7 +309,7 @@ export function GrantGateForm({
       {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
         <Notice tone="warn" testId="ggf-approver-notice">
           {t(
-            `${selectedPrincipal.displayName} 的角色是${roleLabel(selectedPrincipal.role, t)}：授予门的同时，他也会成为所授予门上所有动作的审批者——能批准或驳回其他成员经 Worker 提出的写操作。撤销授权会同时收回这份审批权。`,
+            `${selectedPrincipal.displayName} 的角色是${roleLabel(selectedPrincipal.role, t)}：授予门的同时，这位成员也会成为所授予门上所有动作的审批者——能批准或驳回其他成员经 Worker 提出的写操作。撤销授权会同时收回这份审批权。`,
             `${selectedPrincipal.displayName} has the ${roleLabel(selectedPrincipal.role, t)} role: a gate grant also makes them an approver of every action on the granted gate(s) — they can approve or reject the writes other members request through a Worker. Revoking the grant removes that approval right too.`,
           )}
         </Notice>
@@ -395,7 +425,7 @@ export function GrantGateForm({
           </span>
           <p className="field-hint">
             {t(
-              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，他同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
+              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，这位成员同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
               'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Granted to an operator, it also makes them an approver of every action on this gate. Read operations need no grant — every member of the workspace can call them.',
             )}
           </p>
@@ -468,6 +498,11 @@ export function GrantGateForm({
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {missing.length > 0 && !submitting ? (
+          <span className="text-small text-3" data-testid="ggf-missing">
+            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+          </span>
+        ) : null}
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>
             {t('取消', 'Cancel')}

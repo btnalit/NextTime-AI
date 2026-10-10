@@ -97,7 +97,10 @@ describe('OnboardingWizardReview', () => {
 
   it('still says so when the gate really has no Operations', async () => {
     const http = {
-      call: vi.fn(async () => ({ items: [] })) as CapabilityCaller['call'],
+      call: vi.fn(async (name: string) => {
+        if (name === 'get_workspace') throw new Error('no role read in this test');
+        return { items: [] };
+      }) as CapabilityCaller['call'],
     } as CapabilityCaller;
     render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
     expect(await screen.findByText('这个门没有导入任何 Operation')).toBeTruthy();

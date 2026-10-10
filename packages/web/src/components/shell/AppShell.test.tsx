@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { WireUser } from '../../lib/auth-api.js';
 import { type CapabilityCaller, SILENT_PUSH_SOURCE } from '../../lib/clients.js';
-import { HttpError } from '../../lib/http-client.js';
+import { HttpClient, HttpError } from '../../lib/http-client.js';
 import { AppShell, type AppShellProps } from './AppShell.js';
 
 afterEach(cleanup);
@@ -240,5 +240,43 @@ describe('AppShell', () => {
       );
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     });
+  });
+});
+
+describe('AppShell follows a role change without a reload (#541 review M2)', () => {
+  it('a member promoted to builder gets 治理 as soon as any get_workspace read sees it', async () => {
+    let role = 'member';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const name = url.replace('/api/cap/', '');
+      const result =
+        name === 'get_workspace'
+          ? workspace(role)
+          : name === 'platform_overview'
+            ? { version: { kernel: '1' } }
+            : { items: [] };
+      return new Response(JSON.stringify({ ok: true, result }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const http = new HttpClient({
+      auth: { kind: 'apiKey', apiKey: 'sk-test' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      roleGate: true,
+    });
+    renderShell(http, { authMode: 'apiKey' });
+    await waitFor(() =>
+      expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('Role: member'),
+    );
+    expect(screen.queryByTestId('nav-section-govern')).toBeNull();
+
+    role = 'builder';
+    // Some page's own read (or the request layer's re-read) — not the shell's.
+    await http.call('get_workspace', {});
+    await waitFor(() => expect(screen.getByTestId('nav-section-govern')).toBeTruthy());
+    expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('Role: builder');
+    expect(screen.getByTestId('nav-catalog')).toBeTruthy();
+    // 成员与授权 reads list_principals: still not a builder's page.
+    expect(screen.queryByTestId('nav-members')).toBeNull();
   });
 });

@@ -228,6 +228,11 @@ export const PlatformOverviewWireSchema = z
      *  written — an older llm-proxy or an unwritable models directory) and `invalid` (a symlink,
      *  not a regular file, too large, malformed) both leave every provider's health unknown. */
     providerHealthFile: z.enum(['ok', 'missing', 'invalid']),
+    /** Whether the kernel could read `models.json` itself: `unreadable` (missing, not JSON, or
+     *  not the models.json shape) is a broken configuration file — distinct from a readable file
+     *  with no provider in it (`modelsConfigured` 0), which is "no provider yet" (console audit,
+     *  acceptance-537). */
+    modelsCatalog: z.enum(['ok', 'unreadable']),
     /** Each model provider in `models.json` with its health (`null` = unknown: the file is not
      *  readable or does not name it) and how many models it serves — the overview's 「需要人处理」
      *  lists every one that is not `ok`. */
@@ -241,6 +246,8 @@ export const PlatformOverviewWireSchema = z
         .strict(),
     ),
     checklist: z.array(ChecklistItemWireSchema),
+    /** The newest platform audit rows that changed something — reads (a registry capability with
+     *  no side effects) are left out, among the latest 1000 rows (console audit P1-14). */
     recentAudit: z.array(PlatformAuditRecordWireSchema),
   })
   .strict();
@@ -1189,6 +1196,7 @@ export const PlatformStatusWireSchema = z
     health: z.array(ServiceHealthWireSchema),
     backup: PlatformStatusBackupWireSchema,
     llmUsage30d: PlatformStatusLlmUsageWireSchema,
+    /** Same meaning as `PlatformOverviewWire.recentAudit`: changes only, no reads. */
     recentAudit: z.array(PlatformAuditRecordWireSchema),
     checkedAt: z.string(),
   })

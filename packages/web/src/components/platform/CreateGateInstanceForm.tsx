@@ -137,7 +137,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         id="cgi-display-name"
         label={t('名称', 'Display name')}
         hint={t(
-          '给人看的名称；下面的 Gate id 会据此自动生成。',
+          '给人看的名称；下面的 Gate ID 会据此自动生成。',
           'A human-readable name — the gate id below is generated from it.',
         )}
       >

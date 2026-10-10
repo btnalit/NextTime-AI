@@ -8,6 +8,7 @@ import type {
 } from '@nexttime/shared';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { normalizeGateIdInput } from '../../lib/gate-input.js';
@@ -24,10 +25,18 @@ import { type CatalogTab, hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
 import { GrantGateForm } from '../access/GrantGateForm.js';
+import { RouteLink } from '../kit/route-link.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
 import { PlatformError } from '../platform/PlatformError.js';
-import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
+import {
+  type ReadinessReader,
+  gateReasonAsk,
+  gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
+} from '../readiness/readiness-copy.js';
 import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -188,6 +197,9 @@ export function ConnectSystemLauncher({
   const toast = useToast();
   const isAdmin = origin === 'platform' || platformAdmin;
   const onWorkspace = origin === 'workspace';
+  // #541 review N1: a member, builder or operator opens this launcher too (SystemsPage's
+  // canRequest) — what each step reads or offers follows the reader's role.
+  const can = useRoleCan(http);
   const [step, setStep] = useState<LauncherStep>(0);
   const [kind, setKind] = useState<LauncherKind | null>(null);
   const [selectedGateId, setSelectedGateId] = useState<string | null>(null);
@@ -269,7 +281,12 @@ export function ConnectSystemLauncher({
   // pre-existing grant on a gate someone re-opens the launcher for. The platform page has no such
   // gate — it never runs the workspace half at all.
   const [grantedThisSession, setGrantedThisSession] = useState(false);
-  const grantsList = useCapabilityList<GrantRow>(http, 'list_grants', {}, { autoLoadAll: true });
+  const grantsList = useCapabilityList<GrantRow>(
+    http,
+    'list_grants',
+    {},
+    { autoLoadAll: true, enabled: onWorkspace && can('list_grants') === true },
+  );
   const hasExistingGrant = useMemo(() => {
     if (linkedGatekeeperId === null || grantsList.state.status !== 'ready') return false;
     return grantsList.state.data.items.some(
@@ -281,7 +298,11 @@ export function ConnectSystemLauncher({
           row.resourceId === undefined),
     );
   }, [grantsList.state, linkedGatekeeperId]);
-  const workspaceReady = linkedGatekeeperId !== null && (grantedThisSession || hasExistingGrant);
+  // Granting is the owner's step: a reader who cannot grant is not held back on it (the checklist
+  // says whose step it is).
+  const grantRequired = can('grant_capability') !== false;
+  const workspaceReady =
+    linkedGatekeeperId !== null && (!grantRequired || grantedThisSession || hasExistingGrant);
 
   function chooseKind(next: LauncherKind): void {
     setKind(next);
@@ -560,13 +581,18 @@ function ConnectionStep({
         <Notice testId="launcher-needs-admin">
           {t(
             <>
-              需要管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
+              需要管理员在平台
+              <RouteLink href={hrefs.platformIntegrations()} whenRefused="plain">
+                集成
+              </RouteLink>
               页创建门宿主实例并启用它；之后它会出现在下面的目录里。
             </>,
             <>
               An administrator creates the gate-host instance on the platform{' '}
-              <a href={hrefs.platformIntegrations()}>Integrations</a> page and enables it; it then
-              shows up in the catalog below.
+              <RouteLink href={hrefs.platformIntegrations()} whenRefused="plain">
+                Integrations
+              </RouteLink>{' '}
+              page and enables it; it then shows up in the catalog below.
             </>,
           )}
         </Notice>
@@ -718,7 +744,7 @@ function SelectedGateSummary({
   return (
     <div className="stack-s" data-testid="launcher-selected-gate">
       <dl className="definition-list">
-        <dt>Gate id</dt>
+        <dt>{t('门 ID', 'Gate id')}</dt>
         <dd className="mono">{gate.gateId}</dd>
         <dt>{t('名称', 'Name')}</dt>
         <dd>{gate.displayName}</dd>
@@ -819,12 +845,18 @@ function PolicyStep({
         <Notice testId="launcher-policy-needs-admin">
           {t(
             <>
-              平台侧的启用与接入包模式由管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
+              平台侧的启用与接入包模式由管理员在平台
+              <RouteLink href={hrefs.platformIntegrations()} whenRefused="plain">
+                集成
+              </RouteLink>
               页设置。
             </>,
             <>
               An administrator sets the platform-side enable and connector mode on the platform{' '}
-              <a href={hrefs.platformIntegrations()}>Integrations</a> page.
+              <RouteLink href={hrefs.platformIntegrations()} whenRefused="plain">
+                Integrations
+              </RouteLink>{' '}
+              page.
             </>,
           )}
         </Notice>
@@ -1068,6 +1100,11 @@ function WorkspaceEnableSection({
   readonly workspaceReady: boolean;
 }) {
   const t = useT();
+  const can = useRoleCan(http);
+  // #541 review N1: reviewing the classification publishes Operations (owner, builder); granting
+  // is the owner's. Neither is offered to a role that cannot make it.
+  const canReview = can('publish_operation') !== false;
+  const canGrant = can('grant_capability') !== false;
   const publishedCount = enabled?.publishedOperationNames.length ?? 0;
   return (
     <div className="stack" data-testid="launcher-workspace-enable">
@@ -1083,7 +1120,12 @@ function WorkspaceEnableSection({
             </li>
             <li data-testid="launcher-checklist-grant">
               <span aria-hidden>{workspaceReady ? '✓' : '○'}</span>{' '}
-              {t('至少授权给一名成员', 'Granted to at least one member')}
+              {canGrant
+                ? t('至少授权给一名成员', 'Granted to at least one member')
+                : t(
+                    '至少授权给一名成员（由工作区所有者完成）',
+                    'Granted to at least one member (the workspace owner does this)',
+                  )}
             </li>
           </ul>
         </Notice>
@@ -1131,27 +1173,38 @@ function WorkspaceEnableSection({
 
       {linkedGatekeeperId !== null ? (
         <>
-          <div className="stack-s">
-            <span className="section-title">
-              {t('审核 Operation 分类', 'Review classification')}
-            </span>
-            <OnboardingWizardReview
-              http={http}
-              gatekeeperId={linkedGatekeeperId}
-              onDone={() => undefined}
-              showDone={false}
-            />
-          </div>
-          <div className="stack-s" data-testid="launcher-grant">
-            <span className="section-title">{t('授予成员', 'Grant to a member')}</span>
-            <GrantGateForm
-              http={http}
-              lockedGatekeeper={{ id: linkedGatekeeperId, name: gate.displayName }}
-              onGranted={onGranted}
-              submitLabel={t('授予', 'Grant')}
-              testId="launcher-grant-form"
-            />
-          </div>
+          {canReview ? (
+            <div className="stack-s">
+              <span className="section-title">
+                {t('审核 Operation 分类', 'Review classification')}
+              </span>
+              <OnboardingWizardReview
+                http={http}
+                gatekeeperId={linkedGatekeeperId}
+                onDone={() => undefined}
+                showDone={false}
+              />
+            </div>
+          ) : null}
+          {canGrant ? (
+            <div className="stack-s" data-testid="launcher-grant">
+              <span className="section-title">{t('授予成员', 'Grant to a member')}</span>
+              <GrantGateForm
+                http={http}
+                lockedGatekeeper={{ id: linkedGatekeeperId, name: gate.displayName }}
+                onGranted={onGranted}
+                submitLabel={t('授予', 'Grant')}
+                testId="launcher-grant-form"
+              />
+            </div>
+          ) : (
+            <Notice testId="launcher-grant-owner-only">
+              {t(
+                '已在本工作区启用。把它授权给成员由工作区所有者完成；授权后它出现在你的「系统与授权」里。',
+                'Enabled in this workspace. The workspace owner grants it to members; once granted it shows up under Systems & access.',
+              )}
+            </Notice>
+          )}
         </>
       ) : null}
     </div>
@@ -1361,7 +1414,11 @@ function AgentUsabilitySection({
   readonly linkedGatekeeperId: string | null;
 }) {
   const t = useT();
-  const readiness = useExecutionReadiness(http);
+  const can = useRoleCan(http);
+  const readiness = useExecutionReadiness(http, {
+    enabled: can('execution_readiness') === true,
+  });
+  const reader = useReadinessReader(http);
 
   // Not enabled in this workspace (shouldn't happen by step 4 on the workspace path — `canNext`
   // already required it — but a direct render of this step in a test, or a future relaxation of
@@ -1390,6 +1447,7 @@ function AgentUsabilitySection({
           data={readiness.state.data}
           gate={gate}
           linkedGatekeeperId={linkedGatekeeperId}
+          reader={reader}
         />
       )}
     </div>
@@ -1400,10 +1458,12 @@ function AgentUsabilityResult({
   data,
   gate,
   linkedGatekeeperId,
+  reader,
 }: {
   readonly data: ExecutionReadinessWire;
   readonly gate: TrackedGate;
   readonly linkedGatekeeperId: string;
+  readonly reader: ReadinessReader;
 }) {
   const t = useT();
   const gateRow = data.gates.find((row) => row.gateId === linkedGatekeeperId);
@@ -1495,8 +1555,12 @@ function AgentUsabilityResult({
       <Notice tone="warn" testId="launcher-agent-usability-blocked">
         <div className="stack-s">
           <span>{gateReasonText(gateRow.reason, t)}</span>
-          {gateRow.reason !== undefined && gateReasonHref(gateRow.reason) !== undefined ? (
-            <a href={gateReasonHref(gateRow.reason)}>{gateReasonLink(gateRow.reason, t)}</a>
+          {gateRow.reason !== undefined ? (
+            <FixHint
+              href={gateReasonHref(gateRow.reason, reader)}
+              label={gateReasonLink(gateRow.reason, t)}
+              ask={gateReasonAsk(gateRow.reason, reader, t)}
+            />
           ) : null}
         </div>
       </Notice>

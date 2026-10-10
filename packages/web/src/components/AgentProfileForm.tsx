@@ -22,6 +22,7 @@ import { Notice } from './kit/notice.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
 import { Textarea } from './kit/textarea.js';
+import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 
 const INHERIT_MODEL = '__inherit__';
 
@@ -44,6 +45,8 @@ export interface AgentProfileFormProps {
    *  can only 403. Owners always may edit (their own or anyone's — the task's fixed contract:
    *  "owner 改任何人"). */
   readonly editForbidden: boolean;
+  /** Why `editForbidden`: the reader's role (read-only) or the workspace policy (the default). */
+  readonly forbiddenBy?: 'role' | 'policy';
   readonly onSaved: (profile: AgentProfile) => void;
 }
 
@@ -97,6 +100,7 @@ export function AgentProfileForm({
   gatekeepers,
   workerDefinitions,
   editForbidden,
+  forbiddenBy = 'policy',
   onSaved,
 }: AgentProfileFormProps) {
   const t = useT();
@@ -163,6 +167,7 @@ export function AgentProfileForm({
     setSubmitting(true);
     try {
       const saved = await http.call<AgentProfile>('set_agent_profile', params);
+      announceReadinessChange(http);
       onSaved(saved);
     } catch (err) {
       const described = describeError(err);
@@ -197,10 +202,15 @@ export function AgentProfileForm({
     >
       {editForbidden ? (
         <Notice tone="warn" testId="agent-profile-edit-forbidden">
-          {t(
-            '工作区策略不允许成员编辑自己的智能体配置，请工作区所有者在「模型与配额」页开放。',
-            'Workspace policy does not allow members to edit their own Agent configuration — ask the workspace owner to allow it on Models & Quotas.',
-          )}
+          {forbiddenBy === 'role'
+            ? t(
+                '你的角色只能查看智能体配置，不能修改。',
+                'Your role can only view the Agent configuration, not change it.',
+              )
+            : t(
+                '工作区策略不允许成员编辑自己的智能体配置，请工作区所有者在「模型与配额」页开放。',
+                'Workspace policy does not allow members to edit their own Agent configuration — ask the workspace owner to allow it on Models & Quotas.',
+              )}
         </Notice>
       ) : null}
 

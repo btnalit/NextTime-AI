@@ -90,3 +90,27 @@ export function watchForbiddenCapabilityCalls(page: Page): () => void {
     expect(forbidden, 'capability calls the signed-in role was refused').toEqual([]);
   };
 }
+
+/**
+ * Collects the calls the console refused on its own (`lib/http-client.ts`'s
+ * `CAPABILITY_REFUSED_LOCALLY_EVENT`): a page asking for something its reader's role cannot have
+ * never reaches the network, so `watchForbiddenCapabilityCalls` cannot see it (#541 review M1).
+ * Install before the first navigation; `take()` returns and clears what was refused since the
+ * last call.
+ */
+export async function watchLocalRefusals(page: Page): Promise<{ take: () => Promise<string[]> }> {
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { __localRefusals: string[] }).__localRefusals = seen;
+    window.addEventListener('nexttime:capability-refused-locally', (event) => {
+      seen.push((event as CustomEvent<{ capability: string }>).detail.capability);
+    });
+  });
+  return {
+    take: () =>
+      page.evaluate(() => {
+        const seen = (window as unknown as { __localRefusals?: string[] }).__localRefusals ?? [];
+        return seen.splice(0, seen.length);
+      }),
+  };
+}

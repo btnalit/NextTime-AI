@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
-import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../../lib/format.js';
@@ -19,10 +19,24 @@ export interface LinkedApprovalsProps {
   readonly pushes: PushSource;
   readonly taskId: string;
   readonly principalNames?: ReadonlyMap<string, string>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
+  readonly onOpenApproval?: (actionRequestId: string) => void;
 }
 
 const PAGE_SIZE = 20;
+
+/** The Task's approvals are an operator/owner read: say whom to ask, never the capability name. */
+function LinkedApprovalsForbidden() {
+  const t = useT();
+  return (
+    <Notice testId="linked-approvals-forbidden">
+      {t(
+        '关联的审批只有 operator 和工作区所有者能看。要查看，请工作区所有者把你的角色改为 operator。',
+        'Only operators and the workspace owner see linked approvals. To see them, ask the workspace owner to make you an operator.',
+      )}
+    </Notice>
+  );
+}
 
 /**
  * components/approvals/LinkedApprovals (console redesign P3-4 part B, on `components/kit/*` only;
@@ -39,14 +53,9 @@ const PAGE_SIZE = 20;
  * of a session is learned here through `useCapabilityList`'s own permission marking.
  */
 export function LinkedApprovals(props: LinkedApprovalsProps) {
-  const permissions = usePermissions();
-  if (permissions.isDenied('list_action_requests')) {
-    return (
-      <Notice testId="linked-approvals-forbidden">
-        查看关联审批需要 operator 角色。 Linked approvals need the operator role
-        (`list_action_requests`).
-      </Notice>
-    );
+  const can = useRoleCan(props.http);
+  if (can('list_action_requests') === false) {
+    return <LinkedApprovalsForbidden />;
   }
   return <LinkedApprovalsList {...props} />;
 }
@@ -78,12 +87,7 @@ function LinkedApprovalsList({
   }
   if (linked.state.status === 'error') {
     if (isForbiddenError(linked.state.error)) {
-      return (
-        <Notice testId="linked-approvals-forbidden">
-          查看关联审批需要 operator 角色。 Linked approvals need the operator role
-          (`list_action_requests`).
-        </Notice>
-      );
+      return <LinkedApprovalsForbidden />;
     }
     return (
       <ErrorBanner
@@ -116,7 +120,7 @@ function LinkedApprovalsList({
             <ListRow
               key={row.id}
               testId="linked-approval-row"
-              onSelect={() => onOpenApproval(row.id)}
+              onSelect={() => onOpenApproval?.(row.id)}
             >
               <span className="row-wrap">
                 <StatusChip machine="actionRequest" status={row.status} size="s" />

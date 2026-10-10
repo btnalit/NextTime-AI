@@ -17,12 +17,14 @@ export interface ChatMessageRowProps {
   readonly latestActionStatus: ReadonlyMap<string, string>;
   readonly cardErrors: Readonly<Record<string, unknown>>;
   readonly canAlwaysAllow: boolean;
+  readonly canDecide: boolean;
   readonly onApprove: (
     id: string,
     options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
   ) => Promise<void>;
   readonly onReject: (id: string, reason: string | undefined) => Promise<void>;
-  readonly onOpenApproval: (actionRequestId: string) => void;
+  /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
+  readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onOpenTask: (taskId: string) => void;
 }
 
@@ -42,6 +44,7 @@ export function ChatMessageRow({
   latestActionStatus,
   cardErrors,
   canAlwaysAllow,
+  canDecide,
   onApprove,
   onReject,
   onOpenApproval,
@@ -63,6 +66,7 @@ export function ChatMessageRow({
           onApprove={onApprove}
           onReject={onReject}
           canAlwaysAllow={canAlwaysAllow}
+          canDecide={canDecide}
         />
       );
     }
@@ -73,10 +77,12 @@ export function ChatMessageRow({
       <SystemStatusLineView
         key={message.sequence}
         line={statusLine}
-        onOpen={() =>
+        onOpen={
           statusLine.variant === 'action_update'
-            ? onOpenApproval(statusLine.actionRequestId)
-            : onOpenTask(statusLine.taskId)
+            ? onOpenApproval
+              ? () => onOpenApproval(statusLine.actionRequestId)
+              : undefined
+            : () => onOpenTask(statusLine.taskId)
         }
       />
     );

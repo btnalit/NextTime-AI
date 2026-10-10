@@ -279,7 +279,7 @@ describe('GrantGateForm', () => {
     );
     // The always-visible hint states the effect for operators too.
     expect((await screen.findByTestId('ggf-operations-scope')).textContent).toContain(
-      '授予 operator 时，他同时成为这个门上所有动作的审批者',
+      '授予 operator 时，这位成员同时成为这个门上所有动作的审批者',
     );
 
     await selectMember('p-1');
@@ -393,5 +393,21 @@ describe('GrantGateForm', () => {
     const summary = await screen.findByTestId('ggf-granted-summary');
     expect(summary.textContent).toContain('Bob → docker-gate');
     expect(screen.getByTestId('ggf-submit').textContent).toBe('授予');
+  });
+});
+
+describe('GrantGateForm: audit P1-9 still-needed line', () => {
+  it('names the member and the gate while 授予 is disabled, and goes away once both are picked', async () => {
+    render(<GrantGateForm http={scriptedHttp({})} onGranted={vi.fn()} />);
+    const submit = screen.getByTestId('ggf-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByTestId('ggf-missing').textContent).toBe('还差：选择成员、选择门');
+
+    await selectMember('p-1');
+    expect(screen.getByTestId('ggf-missing').textContent).toBe('还差：选择门');
+
+    fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
+    expect(submit.disabled).toBe(false);
+    expect(screen.queryByTestId('ggf-missing')).toBeNull();
   });
 });

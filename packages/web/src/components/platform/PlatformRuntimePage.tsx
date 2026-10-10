@@ -288,7 +288,7 @@ function RuntimeBody({
     },
     {
       id: 'id',
-      header: t('镜像 id', 'Id'),
+      header: t('镜像 ID', 'Image ID'),
       cell: (image) => (
         <span className="mono text-small" title={image.id}>
           {shortImageId(image.id)}
@@ -529,45 +529,53 @@ function RuntimeBody({
         actions={
           // S8 W5 (audit L7): moved out of the removed "活动镜像" card — it was never a per-row
           // action, so it belongs at the table's own header, not inside any one row.
-          <Confirm
-            tier="medium"
-            open={rollbackOpen}
-            onOpenChange={setRollbackOpen}
-            anchor={
-              <Button
-                variant="secondary"
-                size="s"
-                onClick={() => setRollbackOpen(true)}
-                disabled={!canRollBack}
-                title={
-                  canRollBack
-                    ? undefined
-                    : t(
-                        '只知道一个（或零个）镜像，没有可回滚到的不同值。',
-                        'Only one (or zero) images are known — nothing different to roll back to.',
-                      )
-                }
-                data-testid="runtime-rollback"
-              >
-                {t('回滚到上一个镜像', 'Roll back')}
-              </Button>
-            }
-            title={t('回滚到上一个镜像', 'Roll back to the previous image')}
-            description={t(
-              <>
-                改回设置历史里最近一个<em>不同</em>
-                的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。
-              </>,
-              <>
-                Switches to the most recent <em>different</em> value in the settings history;
-                calling it again toggles between the last two distinct values. Running entry
-                containers converge the same way — at their own next turn, never forced.
-              </>,
+          <>
+            {/* Audit P1-9: a disabled 回滚 says why — nothing the reader can fill in fixes it. */}
+            {canRollBack ? null : (
+              <span className="text-small text-3" data-testid="runtime-rollback-missing">
+                {t('没有可回滚的上一个镜像', 'No previous image to roll back to')}
+              </span>
             )}
-            confirmLabel={t('回滚', 'Roll back')}
-            onConfirm={onRollback}
-            testId="runtime-rollback-confirm"
-          />
+            <Confirm
+              tier="medium"
+              open={rollbackOpen}
+              onOpenChange={setRollbackOpen}
+              anchor={
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={() => setRollbackOpen(true)}
+                  disabled={!canRollBack}
+                  title={
+                    canRollBack
+                      ? undefined
+                      : t(
+                          '只知道一个（或零个）镜像，没有可回滚到的不同值。',
+                          'Only one (or zero) images are known — nothing different to roll back to.',
+                        )
+                  }
+                  data-testid="runtime-rollback"
+                >
+                  {t('回滚到上一个镜像', 'Roll back')}
+                </Button>
+              }
+              title={t('回滚到上一个镜像', 'Roll back to the previous image')}
+              description={t(
+                <>
+                  改回设置历史里最近一个<em>不同</em>
+                  的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。
+                </>,
+                <>
+                  Switches to the most recent <em>different</em> value in the settings history;
+                  calling it again toggles between the last two distinct values. Running entry
+                  containers converge the same way — at their own next turn, never forced.
+                </>,
+              )}
+              confirmLabel={t('回滚', 'Roll back')}
+              onConfirm={onRollback}
+              testId="runtime-rollback-confirm"
+            />
+          </>
         }
       >
         {data.images.length === 0 ? (

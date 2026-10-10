@@ -5,6 +5,7 @@ import {
 } from '@nexttime/shared';
 import { useCallback, useRef, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GraphObjectRow,
@@ -25,6 +26,7 @@ import {
 } from './connect/GovernanceChange.js';
 import { Confirm } from './kit/confirm.js';
 import { CredentialReview } from './kit/credential-review.js';
+import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -121,7 +123,25 @@ export async function loadGateOperations(
   return rows;
 }
 
-export function OnboardingWizardReview({
+/** Reviewing the classification proposes and publishes Operations (builder, owner): any other
+ *  role is told whose step it is instead (#541 review N1). */
+export function OnboardingWizardReview(props: OnboardingWizardReviewProps) {
+  const t = useT();
+  const can = useRoleCan(props.http);
+  if (can('publish_operation') === false || can('propose_operation') === false) {
+    return (
+      <Notice testId="wizard-review-builder-only">
+        {t(
+          '审核并发布 Operation 由 builder 或工作区所有者完成。',
+          'A builder or the workspace owner reviews and publishes the Operations.',
+        )}
+      </Notice>
+    );
+  }
+  return <OnboardingWizardReviewBody {...props} />;
+}
+
+function OnboardingWizardReviewBody({
   http,
   gatekeeperId,
   onDone,
@@ -232,6 +252,7 @@ function OperationReviewRow({
       throw err;
     }
     publishedRef.current = true;
+    announceReadinessChange(http);
     setPendingChange(null);
     setEditing(false);
     onChanged();
@@ -302,8 +323,8 @@ function OperationReviewRow({
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
               <Notice>
                 {t(
-                  '先创建新草稿（propose_operation），确认分类变化后再发布（publish_operation）——分类变更永远经过这两步，不提供直接改的捷径。',
-                  'First a new draft (propose_operation), then — after you confirm the classification change — the publish (publish_operation). A classification change always takes both steps; there is no direct edit.',
+                  '改分类要走两步：先存成新草稿，确认分类变化后再发布。没有直接修改的捷径。',
+                  'Changing the classification takes two steps: save a new draft, then publish it once you have confirmed the change. There is no direct edit.',
                 )}
               </Notice>
               <div className="row">

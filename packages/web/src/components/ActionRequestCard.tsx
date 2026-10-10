@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useCanOpen } from '../hooks/useCanOpen.js';
 import {
   type ActionCardData,
   DECIDABLE_STATUS,
@@ -8,6 +9,7 @@ import {
 import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
@@ -34,6 +36,10 @@ export interface ActionRequestCardProps {
   /** `false` hides "总是允许 Always allow" — `set_auto_approved_action_kind` is operator+, and
    *  the session has already been told 403 for it (hooks/usePermissions). */
   readonly canAlwaysAllow: boolean;
+  /** `false` when the reader's role may not `approve`/`reject` (operator and owner only): the
+   *  card shows the request and its progress, says who decides, and offers no button the kernel
+   *  must refuse (#541 review M3). */
+  readonly canDecide: boolean;
 }
 
 /**
@@ -55,8 +61,10 @@ export function ActionRequestCard({
   onApprove,
   onReject,
   canAlwaysAllow,
+  canDecide,
 }: ActionRequestCardProps) {
   const t = useT();
+  const canOpen = useCanOpen();
   // The reason typed when "总是允许" was clicked, while its confirm is open (null = closed).
   const [pendingAlwaysAllow, setPendingAlwaysAllow] = useState<{
     readonly reason: string | undefined;
@@ -104,22 +112,40 @@ export function ActionRequestCard({
       target={<span className="mono">{card.resourceScope ?? '—'}</span>}
       gatekeeper={card.gatekeeperId ? { id: card.gatekeeperId } : undefined}
       onBehalfOf={card.onBehalfOf !== undefined ? { id: card.onBehalfOf } : undefined}
-      policySummary={card.policyDecision ? card.policyDecision : undefined}
-      approvalsHref={hrefs.approval(card.actionRequestId)}
-      readOnly={!decidable}
+      policySummary={
+        card.policyDecision ? (
+          <span title={card.policyDecision}>{policyDecisionLabel(card.policyDecision, t)}</span>
+        ) : undefined
+      }
+      approvalsHref={
+        canDecide && canOpen(hrefs.approval(card.actionRequestId)) !== false
+          ? hrefs.approval(card.actionRequestId)
+          : undefined
+      }
+      readOnly={!decidable || !canDecide}
       suspectedSecretValues={suspectedSecretValues}
       onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
       onReject={(reason) => onReject(card.actionRequestId, reason)}
-      onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
+      onAlwaysAllow={
+        offerAlwaysAllow && canDecide ? (reason) => setPendingAlwaysAllow({ reason }) : undefined
+      }
       testId="action-request-card"
     >
+      {decidable && !canDecide ? (
+        <Notice testId="action-card-awaits-approver">
+          {t(
+            '这一步要由 operator 或工作区所有者批准；这里会显示结果。',
+            'An operator or the workspace owner approves this step; the outcome shows here.',
+          )}
+        </Notice>
+      ) : null}
       {card.description && card.description !== card.title ? (
         <p className="pre-wrap text-2">{card.description}</p>
       ) : null}
       {card.actorRuntime ? (
         <div className="row-wrap text-small">
           <span className="text-3">{t('运行时', 'Runtime')}</span>
-          <span className="tag">{card.actorRuntime}</span>
+          <span className="tag">{actorRuntimeLabel(card.actorRuntime, t)}</span>
         </div>
       ) : null}
       {hasParams && card.params ? (

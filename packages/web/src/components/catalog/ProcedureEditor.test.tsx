@@ -42,7 +42,7 @@ function http(handlers: Record<string, (params: unknown) => unknown>) {
   const calls: { name: string; params: unknown }[] = [];
   const caller: CapabilityCaller = {
     call: vi.fn(async (name: string, params?: unknown) => {
-      calls.push({ name, params });
+      if (name !== 'get_workspace') calls.push({ name, params });
       const handler = handlers[name];
       if (!handler) throw new Error(`unscripted ${name}`);
       return handler(params);

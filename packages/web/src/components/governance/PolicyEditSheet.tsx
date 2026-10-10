@@ -512,6 +512,12 @@ export function PolicyEditSheet({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('取消', 'Cancel')}
           </Button>
+          {/* Audit P1-9: a disabled 保存 says what it still waits for. */}
+          {trimmedKind.length === 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="policy-edit-missing">
+              {t('还差：选择动作', 'Still needed: pick an action')}
+            </span>
+          ) : null}
         </SheetFooter>
       </SheetContent>
     </Sheet>

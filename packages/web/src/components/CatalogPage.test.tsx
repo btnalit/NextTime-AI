@@ -993,9 +993,9 @@ describe('CatalogPage', () => {
       'propose_skill',
       'request_action',
     ]) {
-      expect((within(capabilitiesField).getByLabelText(name) as HTMLInputElement).checked).toBe(
-        true,
-      );
+      // Audit P1-8: the checkbox reads "<label> <name>", so match the name at the end.
+      const box = within(capabilitiesField).getByLabelText(new RegExp(`(^|\\s)${name}$`));
+      expect((box as HTMLInputElement).checked).toBe(true);
     }
     fireEvent.click(within(drawer).getByTestId('worker-submit'));
     await within(drawer).findByTestId('draft-proposed');

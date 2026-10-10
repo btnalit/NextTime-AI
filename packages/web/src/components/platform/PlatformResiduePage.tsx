@@ -190,7 +190,7 @@ export function PlatformResiduePage({ http }: PlatformResiduePageProps) {
               <dd className="mono">{drafts.state.data.workerDefinitions}</dd>
               <dt>Skill</dt>
               <dd className="mono">{drafts.state.data.skills}</dd>
-              <dt>Procedure</dt>
+              <dt>{t('流程', 'Procedures')}</dt>
               <dd className="mono">{drafts.state.data.procedures}</dd>
               <dt>{t('合计', 'Total')}</dt>
               <dd className="mono">{drafts.state.data.total}</dd>

@@ -6,6 +6,7 @@ import {
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { finalizeSkillName, slugifySkillNameDraft } from '../../lib/catalog-input.js';
 import {
   EMPTY_SKILL_FORM,
@@ -42,6 +43,8 @@ export interface SkillEditorProps {
   readonly copyOf?: SkillRow;
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type BodyView = 'edit' | 'preview';
@@ -58,9 +61,10 @@ const GATE_KINDS: readonly string[] = GateTransportKindWireSchema.options;
  * `propose_skill` handler parses) and calls `propose_skill{skill}`; the pi publish-time name
  * rule is shown as a warning while drafting. The success state offers `publish_skill`.
  */
-export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorProps) {
+export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: SkillEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<SkillForm>(() =>
     copyOf
       ? {
@@ -149,7 +153,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
     const name = finalizeSkillName(form.name);
     const submitted: SkillForm = { ...form, name };
     if (name !== form.name) setForm(submitted);
-    const validated = validateSkill(submitted);
+    const validated = validateSkill(submitted, t);
     if (!validated.ok || name === '') {
       setErrors({
         ...(validated.ok ? {} : validated.errors),
@@ -187,12 +191,13 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         detailHref={hrefs.catalog('skills', proposed.id)}
         fieldNames={reviewFieldNames('skill', t)}
         onPublish={
-          permissions.isDenied('publish_skill')
+          can('publish_skill') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })
         }
         onDone={onDone}
+        onPublished={onPublished}
         reviewersSeeDraft
       />
     );
@@ -254,13 +259,13 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version}{' '}
-              复制（已预填当前版本的正文）：内核的 propose_skill 不接受 skillId，提交会创建一个
-              <strong>新的</strong> Skill（新 id、v1），不是 同一 Skill 的新版本。
+              复制（已预填当前版本的正文）：提交会创建一个<strong>新的</strong> Skill（从 v1
+              开始），不是这个 Skill 的新版本。
             </>,
             <>
               Copied from {copyOf.name} v{copyOf.version} (the current version’s body is
-              pre-filled): propose_skill takes no skillId, so submitting creates a{' '}
-              <strong>new</strong> Skill (new id, v1), not a new version of this one.
+              pre-filled): submitting creates a <strong>new</strong> Skill (starting at v1), not a
+              new version of this one.
             </>,
           )}
         </Notice>

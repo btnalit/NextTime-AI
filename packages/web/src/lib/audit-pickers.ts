@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import type {
   ActionRequestWire,
   AuditRecordWire,
@@ -244,7 +245,7 @@ export function provenanceNodeSource(kind: ProvenanceNodeKind, t: Translate): Pi
 type SourceFactory = (t: Translate) => PickerSource;
 
 function listSource<T>(
-  name: string,
+  name: CapabilityName,
   params: Record<string, unknown>,
   map: (row: T, t: Translate) => PickerOption,
   searchParam?: string,

@@ -203,7 +203,7 @@ const gateObserveResultSchema = z
 // chat — human channel only ("只走 human 通道")
 // -------------------------------------------------------------------------------------------
 
-const chatCapabilities: readonly Capability[] = [
+const chatCapabilities = [
   {
     name: 'list_chats',
     group: 'chat',
@@ -363,13 +363,13 @@ const chatCapabilities: readonly Capability[] = [
       '(409 after that). Repeating the current value is a no-op. Independent of the Turn’s ' +
       'execution status.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // ontology
 // -------------------------------------------------------------------------------------------
 
-const ontologyCapabilities: readonly Capability[] = [
+const ontologyCapabilities = [
   {
     // S3.1: handled by `application/gateway/ontology-handlers.ts`'s `publishOntologyVersionHandler`
     // (`substrate/ontology/registry.ts`'s `publishOntologyDraft`). `id`/`version` together address
@@ -484,7 +484,7 @@ const ontologyCapabilities: readonly Capability[] = [
     description:
       'List OntologyVersion drafts and published rows visible to the caller (published rows workspace-wide, plus the caller’s own drafts, I16); keyset-paginated (limit, cursor → nextCursor). Each item carries id/version/status/proposedBy/definition so a person can find a draft to review and publish; a draft also carries base — the published version of its own family it was proposed against, with that version’s definition (null: the family had nothing published) — so what the draft changes is the diff between the two.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // graph
@@ -498,7 +498,7 @@ const nodeDetailSchema = z
   .object({ id: z.string(), typeName: z.string(), name: z.string().optional() })
   .strict();
 
-const graphCapabilities: readonly Capability[] = [
+const graphCapabilities = [
   {
     name: 'get_object',
     group: 'graph',
@@ -718,7 +718,7 @@ const graphCapabilities: readonly Capability[] = [
       'Find published Procedures whose name/description matches any keyword in `need` (space/' +
       'punctuation-separated; a blank need lists every candidate).',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // gate — interface-manifest projection. `<gate>.<op>` is a *pattern*: the real, dynamic capability
@@ -730,7 +730,7 @@ const graphCapabilities: readonly Capability[] = [
 // recognizes both `request_action` and this execute-class gate pattern by name.
 // -------------------------------------------------------------------------------------------
 
-const gateCapabilities: readonly Capability[] = [
+const gateCapabilities = [
   {
     // The dispatchable capability behind the `<gate>.<op>` observe projection below (design doc
     // §5.1.4 "门上的 observe 类 Operation" is in the entry ceiling; §11 "观察免审"): runs exactly one
@@ -781,13 +781,13 @@ const gateCapabilities: readonly Capability[] = [
     description:
       'Execute-class Operation projected from a Gatekeeper’s interface manifest; the tool call is intercepted and turned into request_action (§7.4). Only a Worker’s Handle may hold this.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // connection
 // -------------------------------------------------------------------------------------------
 
-const connectionCapabilities: readonly Capability[] = [
+const connectionCapabilities = [
   {
     name: 'request_connection',
     group: 'connection',
@@ -1152,13 +1152,13 @@ const connectionCapabilities: readonly Capability[] = [
     description:
       'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls` — see this entry’s own doc comment for the merge rule and remaining known gap.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // meta
 // -------------------------------------------------------------------------------------------
 
-const metaCapabilities: readonly Capability[] = [
+const metaCapabilities = [
   {
     name: 'propose_operation',
     group: 'meta',
@@ -1431,7 +1431,7 @@ const metaCapabilities: readonly Capability[] = [
     resultSchema: wire.FactWireSchema,
     description: 'Invalidate a Fact.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // epistemic — Semantica tool-name contract preserved (get_provenance=explain,
@@ -1439,7 +1439,7 @@ const metaCapabilities: readonly Capability[] = [
 // every capability in this group to observe or propose (never execute).
 // -------------------------------------------------------------------------------------------
 
-const epistemicCapabilities: readonly Capability[] = [
+const epistemicCapabilities = [
   {
     name: 'explain',
     group: 'epistemic',
@@ -1644,7 +1644,7 @@ const epistemicCapabilities: readonly Capability[] = [
     description:
       'Attach a human attestation to an active Fact: Evidence of kind "human_attestation" recorded as the calling person’s own confirmation (note required, optional http(s) link), under an epistemic.human_attestation Activity, audited. Shown apart from machine evidence by explain (fact.humanAttestations); counts as Evidence for verify_fact. Human channel only.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // governance
@@ -1662,7 +1662,7 @@ const epistemicCapabilities: readonly Capability[] = [
  */
 const ISSUE_HANDLE_MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-const governanceCapabilities: readonly Capability[] = [
+const governanceCapabilities = [
   {
     name: 'request_action',
     group: 'governance',
@@ -2049,7 +2049,7 @@ const governanceCapabilities: readonly Capability[] = [
       'may pass another member’s principalId (same visibility floor as list_grants); any other ' +
       'caller may only check their own.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // task — §9.3 row constrains this group to propose or observe (never execute). `get_entry_context`
@@ -2089,7 +2089,7 @@ export const INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS = 90;
  */
 export const INVOKE_WORKER_SPAWN_BUDGET_SECONDS = 30;
 
-const taskCapabilities: readonly Capability[] = [
+const taskCapabilities = [
   {
     name: 'get_entry_context',
     group: 'task',
@@ -2336,13 +2336,13 @@ const taskCapabilities: readonly Capability[] = [
     resultSchema: wire.CancelTaskResultWireSchema,
     description: 'Request cancellation of a running Task.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // worker
 // -------------------------------------------------------------------------------------------
 
-const workerCapabilities: readonly Capability[] = [
+const workerCapabilities = [
   {
     name: 'propose_worker_definition',
     group: 'worker',
@@ -2456,7 +2456,7 @@ const workerCapabilities: readonly Capability[] = [
       'cursor → nextCursor). With includeOwnDrafts, also includes the caller’s own draft ' +
       'WorkerDefinitions.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // ingest — service principals (collectors, §7.8; docs/development-tasks.md S3.3)
@@ -2488,7 +2488,7 @@ const ingestObservationSchema = z
   })
   .strict();
 
-const ingestCapabilities: readonly Capability[] = [
+const ingestCapabilities = [
   {
     // S3.3: real handler (`application/gateway/ingest-handlers.ts`'s `registerSourceHandler`).
     // `ownerPrincipalId` is deliberately not a caller-supplied param (the pre-existing placeholder
@@ -2552,13 +2552,13 @@ const ingestCapabilities: readonly Capability[] = [
     description:
       'Submit a batch of Observations from one Activity (collectors, §7.8). Every objectType must be declared by the published ontology with its identityKey fields present; every link’s linkType must be declared and accept source -> target (I2) — a violation fails the whole batch with 400 ontology_violation (or is written and audited when the workspace’s ontology enforcement is warn). Re-observing an unchanged Fact advances its lastObservedAt; `window: {complete: true, objectTypes}` declares this submission the Source’s complete view of those ObjectTypes within the Activity and invalidates (not_reobserved) every Fact of this Source starting at such an Object that the Activity did not re-observe — pass it on a run’s last submission (observations may then be empty).',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // audit
 // -------------------------------------------------------------------------------------------
 
-const auditCapabilities: readonly Capability[] = [
+const auditCapabilities = [
   {
     name: 'audit_query',
     group: 'audit',
@@ -2633,7 +2633,7 @@ const auditCapabilities: readonly Capability[] = [
     description:
       'Export a PROV-JSON-style provenance graph around one root — exactly one of nodeId (any of the three, resolved like explain), factId, decisionId or activityId — built from explain(); depth (1-5) bounds the causal walk for a Fact/Decision root.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // members (S3.11, docs/development-tasks.md 2026-09-08 "中台控制面" decision): Principal CRUD
@@ -2651,7 +2651,7 @@ const auditCapabilities: readonly Capability[] = [
 // of this task's scope (S3.7 is where the registry-wide retag lands).
 // -------------------------------------------------------------------------------------------
 
-const membersCapabilities: readonly Capability[] = [
+const membersCapabilities = [
   {
     name: 'list_principals',
     group: 'members',
@@ -2794,7 +2794,7 @@ const membersCapabilities: readonly Capability[] = [
     description:
       'The llm-proxy model whitelist, read from the kernel’s read-only models.json mount (never provider keys).',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // agent_profile (S3.13, docs/development-tasks.md "每用户智能体配置：AgentProfile / AgentPolicy"):
@@ -2810,7 +2810,7 @@ const membersCapabilities: readonly Capability[] = [
 // Gatekeeper call — `write`, never `execute` (S3.13's own spec: "变更是即时的、不走 propose/approve").
 // -------------------------------------------------------------------------------------------
 
-const agentProfileCapabilities: readonly Capability[] = [
+const agentProfileCapabilities = [
   {
     name: 'get_agent_profile',
     group: 'agent_profile',
@@ -2881,7 +2881,7 @@ const agentProfileCapabilities: readonly Capability[] = [
     description:
       'Update the workspace’s AgentPolicy — a partial update, omitted fields are left unchanged. Owner only. allowMemberAutoApproveLow (default true) is enforced: false turns off low-blast-radius auto-approval for every requester, whatever their AgentProfile says (D-16).',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // platform — P-A1 (docs/platform-admin-design.md §5/§6.1/§6.6/§6.7). All `scope: 'platform'`,
@@ -2896,7 +2896,7 @@ const platformCursorParams = {
   limit: z.number().int().min(1).max(200).optional(),
 };
 
-const platformCapabilities: readonly Capability[] = [
+const platformCapabilities = [
   {
     name: 'platform_overview',
     group: 'platform',
@@ -3625,7 +3625,7 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'Set the module family names `create_workspace` installs (each at its own latest indexed version) into every new workspace. Every name must already be in `list_modules`’ own index — an unknown name 400s rather than being silently kept.',
   },
-];
+] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
 // modules, workspace half (P-B2b, docs/platform-admin-design.md §6.4; docs/development-tasks.md
@@ -3637,7 +3637,7 @@ const platformCapabilities: readonly Capability[] = [
 // invariant: every `scope:'platform'` capability must be `group:'platform'`, and vice versa).
 // -------------------------------------------------------------------------------------------
 
-const modulesCapabilities: readonly Capability[] = [
+const modulesCapabilities = [
   {
     name: 'list_workspace_modules',
     group: 'modules',
@@ -3679,10 +3679,10 @@ const modulesCapabilities: readonly Capability[] = [
     description:
       'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
-];
+] as const satisfies readonly Capability[];
 
-/** The complete capability registry (design doc §9.3). */
-export const CAPABILITY_REGISTRY: readonly Capability[] = [
+/** The registry's entries with their literal names kept (`as const`), for `CapabilityName`. */
+const REGISTERED = [
   ...chatCapabilities,
   ...ontologyCapabilities,
   ...graphCapabilities,
@@ -3699,10 +3699,23 @@ export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...agentProfileCapabilities,
   ...platformCapabilities,
   ...modulesCapabilities,
-];
+] as const;
+
+/** The complete capability registry (design doc §9.3). */
+export const CAPABILITY_REGISTRY: readonly Capability[] = REGISTERED;
+
+/** Every registered capability name, as a type: a hand-typed name that is not in the registry
+ *  (a typo, a name that was never registered) fails at compile time wherever one is expected —
+ *  the console's role checks and nav entries first of all (#541 review M1). */
+export type CapabilityName = (typeof REGISTERED)[number]['name'];
+
+/** Narrows a runtime string to `CapabilityName`. */
+export function isCapabilityName(name: string): name is CapabilityName {
+  return getCapability(name) !== undefined;
+}
 
 /** Capability names that must always be on the human channel (I16/I17/§9.3), never handle. */
-const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
+const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>([
   'publish_ontology_version',
   'create_connection',
   'publish_manifest',
@@ -3768,7 +3781,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   // `issue_service_handle`, `issue_gate_credential_token` — are a workspace's own connection and
   // credential management, human-only for the same reason as the S3.11 names above. None is ever a
   // Handle-scope member.
-  ...[
+  ...([
     'platform_overview',
     'list_users',
     'create_user',
@@ -3809,7 +3822,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'issue_gate_host_token',
     'issue_gate_credential_token',
     'issue_llm_admin_token',
-  ],
+  ] as const),
 ]);
 
 /** Every `scope: 'platform'` capability name (P-A1) — for the gateway and the CI guard. */

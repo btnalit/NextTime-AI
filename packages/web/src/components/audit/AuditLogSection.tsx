@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
@@ -13,6 +14,7 @@ import {
   isReadAuditAction,
   resourceHref,
 } from '../../lib/audit.js';
+import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
@@ -64,6 +66,7 @@ export function AuditLogSection({
   principalsUnavailable,
 }: AuditLogSectionProps) {
   const t = useT();
+  const canOpen = useCanOpen(http);
   const toast = useToast();
   const [actor, setActor] = useState(requestedFilter?.actorPrincipalId ?? '');
   const [action, setAction] = useState(requestedFilter?.action ?? '');
@@ -183,17 +186,17 @@ export function AuditLogSection({
             id="audit-actor"
             label={t('操作者', 'Actor')}
             hint={t(
-              '当前角色无权读取成员目录（list_principals 需要 operator），候选取自最近审计记录中的操作者。',
-              'Your role cannot read the member directory (list_principals needs operator); suggestions are the actors of recent audit rows.',
+              '你的角色看不到成员名单，这里的候选取自最近审计记录里的操作者。',
+              'Your role does not see the member list; suggestions are the actors of recent audit rows.',
             )}
             value={actor}
             onChange={setActor}
             source={actorSource}
             refusedNote={t(
-              '也无法读取审计记录，请直接粘贴 principal id。',
+              '也无法读取审计记录，请直接粘贴 principal ID。',
               'The audit log is not readable either — paste a principal id.',
             )}
-            placeholder={t('粘贴 principal id，或从下方选择', 'Paste a principal id or pick below')}
+            placeholder={t('粘贴 principal ID，或从下方选择', 'Paste a principal id or pick below')}
             testId="audit-actor-input"
           />
         )}
@@ -232,7 +235,7 @@ export function AuditLogSection({
         <AuditIdPicker
           http={http}
           id="audit-resource-id"
-          label={t('资源 id', 'Resource id')}
+          label={t('资源 ID', 'Resource id')}
           value={resourceId}
           onChange={setResourceId}
           source={resourceSource}
@@ -257,8 +260,14 @@ export function AuditLogSection({
         forbidden ? (
           <EmptyState
             icon="shield"
-            title={t('审计流需要 auditor 角色', 'The audit log needs the auditor role')}
-            body={t('当前主体不能调用 audit_query。', 'Your principal cannot call audit_query.')}
+            title={t(
+              '审计流只有审计员和工作区所有者能看',
+              'Only auditors and the workspace owner see the audit log',
+            )}
+            body={t(
+              '要查看，请工作区所有者把你的角色改为 auditor。',
+              'To see it, ask the workspace owner to make you an auditor.',
+            )}
             testId="audit-query-forbidden"
           />
         ) : (
@@ -315,7 +324,10 @@ export function AuditLogSection({
                   <li className="data-row" key={row.id} data-testid="audit-row">
                     <div className="data-row-main">
                       <div className="data-row-title">
-                        <span className="mono">{row.action}</span>
+                        {/* P1-14: what happened first; the action name stays as the secondary
+                         *  text an auditor filters by. */}
+                        <span>{actionLabel(row.action, t)}</span>
+                        <span className="mono text-3 text-small">{row.action}</span>
                         <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
                           {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
                         </time>
@@ -338,7 +350,7 @@ export function AuditLogSection({
                                   ? auditResourceTypeLabel(row.resourceType, t)
                                   : undefined
                               }
-                              href={resourceHref(row.resourceType, row.resourceId)}
+                              href={resourceHref(row.resourceType, row.resourceId, canOpen)}
                               size="s"
                             />
                           </>

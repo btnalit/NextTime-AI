@@ -12,6 +12,7 @@ import type {
   UserWire,
   WorkspaceOwnerWire,
 } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, capabilityHasSideEffects } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
@@ -1574,6 +1575,35 @@ const PLATFORM_AUDIT_SELECT = `
     left join users u on u.id = a.actor_user_id
    where a.workspace_id is null`;
 
+/** Registry capabilities with no side effects (`capabilityHasSideEffects`): a dispatched call is
+ *  audited under its own name, so these are the pure-read audit rows — the same test the console's
+ *  audit view uses for its "writes and decisions" default (`web/src/lib/audit.ts`
+ *  `isReadAuditAction`). An action the registry does not know is never a read. */
+const READ_AUDIT_ACTIONS: readonly string[] = CAPABILITY_REGISTRY.filter(
+  (capability) => !capabilityHasSideEffects(capability),
+).map((capability) => capability.name);
+
+/** How many of the newest platform audit rows a `recentWrites` query looks through: the overview
+ *  and status cards show the latest changes among them, and a console polling reads can never make
+ *  that query scan the whole table. */
+const RECENT_WRITES_SCAN_ROWS = 1000;
+
+/** The newest platform audit rows that changed something (console audit P1-14: the overview's and
+ *  status page's 「最近平台审计」 show changes, never the reads the console's own polling makes),
+ *  looked for among the latest `RECENT_WRITES_SCAN_ROWS` rows. */
+export async function queryRecentPlatformWrites(
+  client: PoolClient,
+  limit: number,
+): Promise<PlatformAuditRecordWire[]> {
+  const result = await client.query<AuditDbRow>(
+    `select * from (${PLATFORM_AUDIT_SELECT} order by a.created_at desc, a.id desc limit $1) recent
+      where recent.action <> all($2::text[])
+      order by recent.created_at desc, recent.id desc limit $3`,
+    [RECENT_WRITES_SCAN_ROWS, READ_AUDIT_ACTIONS, limit],
+  );
+  return result.rows.map(toWireAudit);
+}
+
 // Exported for application/platform/runtime.ts's own `platform_status` handler (S7-E) — one
 // pagination/audit-query implementation, not a second copy.
 export async function queryPlatformAudit(
@@ -1799,7 +1829,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
     staleSourceCount,
     affectedWorkspaceCount,
   } = await computeCrossWorkspaceOverview(client, nonResidueWorkspaces);
-  const recent = await queryPlatformAudit(client, { limit: 20 });
+  const recent = await queryRecentPlatformWrites(client, 20);
 
   const activeWorkspaces = workspaces.rows.filter((w) => w.status === 'active');
   const defaultWorkspace = settings.defaultWorkspaceId
@@ -1844,6 +1874,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
       },
     ],
     providerHealthFile,
+    modelsCatalog: modelsStatus === 'ok' ? 'ok' : 'unreadable',
     modelProviders: [...modelProviders.values()],
     checklist: [
       {
@@ -1856,7 +1887,9 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
               ? `${modelsConfigured} model(s) configured; provider health unknown — llm-proxy's provider-health.json ${providerHealthFile === 'missing' ? 'is not written' : 'is malformed or unreadable'} (check its log)`
               : modelsConfigured > 0
                 ? `${modelsConfigured} model(s) configured, none whose provider passed a test — test the provider in the console`
-                : 'no model provider yet — add one in the console',
+                : modelsStatus !== 'ok'
+                  ? 'models.json unreadable — fix or re-save the provider configuration'
+                  : 'no model provider yet — add one in the console',
       },
       {
         key: 'defaultWorkspace',
@@ -1888,7 +1921,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
           'pi / runtime image consistency is enforced by CI (check-pi-version-consistency); the runtime page lands in P-C',
       },
     ],
-    recentAudit: recent.items,
+    recentAudit: recent,
   };
   return { result: overview };
 };

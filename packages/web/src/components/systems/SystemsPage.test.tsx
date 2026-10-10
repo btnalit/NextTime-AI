@@ -132,16 +132,114 @@ function openConnectMoreMenu(): void {
 }
 
 describe('SystemsPage', () => {
-  it('empty state: no system yet offers the one "接入一个系统" action', async () => {
+  it('empty state: no system yet points at the one "接入一个系统" action in the header', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
     });
     renderPage(http);
     const empty = await screen.findByTestId('systems-empty');
-    fireEvent.click(within(empty).getByRole('button', { name: '接入一个系统' }));
+    expect(empty.textContent).toContain('还没有接入任何系统');
+    // Audit P1-16: one primary button on the page, not a second copy inside the empty state.
+    expect(within(empty).queryByRole('button')).toBeNull();
+    fireEvent.click(screen.getByTestId('connect-system-button'));
     const drawer = await screen.findByTestId('connect-system-drawer');
     expect(within(drawer).getByTestId('connect-system-launcher')).toBeTruthy();
+  });
+
+  it('P1-16: with instances waiting to be enabled, the empty state says so instead of "nothing connected"', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'docker',
+            displayName: 'Docker',
+            connector: 'docker',
+            transportKind: 'cli',
+            status: 'available',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const empty = await screen.findByTestId('systems-empty');
+    await waitFor(() => expect(empty.textContent).toContain('有 1 个系统已就绪，等待启用'));
+    expect(empty.textContent).not.toContain('还没有接入任何系统');
+    expect(within(empty).getByTestId('systems-empty-see-available')).toBeTruthy();
+  });
+
+  it('#541 acceptance: an auditor gets a read-only page — no readiness read, no 接入一个系统, no 录入我的凭证', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('auditor'),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-1',
+            displayName: 'Docker prod',
+            status: 'active',
+            health: 'healthy',
+            operationCount: 3,
+            connector: 'docker',
+            transportKind: 'http',
+            target: 'docker-prod',
+            trust: 'platform',
+            gatekeeperId: 'gk-1',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    expect((await screen.findByTestId('systems-read-only')).textContent).toContain('只读');
+    await waitFor(() => expect(screen.getByText('Docker prod')).toBeTruthy());
+    expect(screen.queryByTestId('connect-system-button')).toBeNull();
+    expect(screen.queryByText('录入我的凭证')).toBeNull();
+    expect(screen.queryByText('连接申请')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'execution_readiness')).toBe(false);
+  });
+
+  it('#541 review: a member is told an owner enables the waiting systems, not to enable them', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'docker',
+            displayName: 'Docker',
+            connector: 'docker',
+            transportKind: 'cli',
+            status: 'available',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: null,
+          },
+          {
+            gateId: 'ragflow',
+            displayName: 'RagFlow',
+            connector: 'ragflow',
+            transportKind: 'http',
+            status: 'available',
+            health: 'ok',
+            operationCount: 2,
+            gatekeeperId: 'gk-already-enabled',
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const empty = await screen.findByTestId('systems-empty');
+    // Only the instance not enabled yet counts.
+    await waitFor(() =>
+      expect(empty.textContent).toContain('有 1 个系统已就绪，等工作区所有者启用'),
+    );
+    expect(empty.textContent).toContain('请联系工作区所有者');
+    expect(empty.textContent).not.toContain('等待启用');
   });
 
   it('P0-4: an admin with a discovered but not enabled instance is told so and linked to enable it', async () => {

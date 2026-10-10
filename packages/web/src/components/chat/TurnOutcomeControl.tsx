@@ -1,6 +1,7 @@
 import type { ObjectiveOutcome, TurnAttributionWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { errorToastText, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -44,10 +45,11 @@ export function TurnOutcomeControl({
 }: TurnOutcomeControlProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [busy, setBusy] = useState<ObjectiveOutcome | null>(null);
   const [correcting, setCorrecting] = useState(false);
   const isRequester =
-    viewerId !== null && turn.startedBy === viewerId && !permissions.isDenied('mark_turn_outcome');
+    viewerId !== null && turn.startedBy === viewerId && can('mark_turn_outcome') !== false;
   const outcome = turn.outcome;
 
   if (turn.status === 'running') return null;

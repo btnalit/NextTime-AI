@@ -92,7 +92,7 @@ export function WorkspacePicker({
     );
   } else if (needle !== '' && visible.every((ws) => ws.id === value)) {
     shownHint = t(
-      `没有名称或 id 含“${filter.trim()}”的工作区。`,
+      `没有名称或 ID 含“${filter.trim()}”的工作区。`,
       `No workspace matches “${filter.trim()}”.`,
     );
   }
@@ -103,7 +103,7 @@ export function WorkspacePicker({
         <input
           className="input"
           aria-label={t('筛选工作区', 'Filter workspaces')}
-          placeholder={t('按名称或 id 筛选', 'Filter by name or id')}
+          placeholder={t('按名称或 ID 筛选', 'Filter by name or id')}
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           disabled={disabled}
