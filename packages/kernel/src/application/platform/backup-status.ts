@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import type { PlatformStatusBackupWire } from '@nexttime/shared';
+import { UnsafeFileError, readSmallRegularFile } from '../safe-file-read.js';
 
 /**
  * application/platform/backup-status: `platform_status.backup` (review 2026-10-02 D-28, L10-2).
@@ -54,6 +54,10 @@ function readErrorDetail(file: string, err: unknown): string {
       return `backup marker ${file} is not readable by the kernel (uid 10001) — the host file must be mode 0644 (docs/runbooks/backup-restore.md)`;
     case 'EISDIR':
       return `backup marker path ${file} is a directory — the host file was missing when the kernel started, so the container runtime created a directory there (docs/runbooks/backup-restore.md)`;
+    case 'ELOOP':
+      return `backup marker ${file} is a symlink — the kernel does not follow it; the host file must be a regular file (docs/runbooks/backup-restore.md)`;
+    case 'ENOTREG':
+      return `backup marker ${file} is not a regular file (docs/runbooks/backup-restore.md)`;
     default:
       return `backup marker ${file} could not be read (${code ?? 'error'})`;
   }
@@ -88,19 +92,19 @@ export function backupStatusFromMarker(text: string, now: Date): PlatformStatusB
   };
 }
 
-/** Reads the mounted marker and derives the status. Never throws. */
+/** Reads the mounted marker and derives the status. Never throws. The size is checked before
+ *  the read and bounds it (`readSmallRegularFile`), and a symlink or FIFO is refused unread. */
 export async function readBackupStatus(
   file: string,
   now: Date = new Date(),
 ): Promise<PlatformStatusBackupWire> {
   let text: string;
   try {
-    const buffer = await readFile(file);
-    if (buffer.length > MAX_MARKER_BYTES) {
-      return unknown(`backup marker ${file} is ${buffer.length} bytes — not a backup marker`);
-    }
-    text = buffer.toString('utf8');
+    text = (await readSmallRegularFile(file, MAX_MARKER_BYTES)).text;
   } catch (err) {
+    if (err instanceof UnsafeFileError && err.reason === 'too_large') {
+      return unknown(`backup marker ${file} is ${err.size} bytes — not a backup marker`);
+    }
     return unknown(readErrorDetail(file, err));
   }
   return backupStatusFromMarker(text, now);

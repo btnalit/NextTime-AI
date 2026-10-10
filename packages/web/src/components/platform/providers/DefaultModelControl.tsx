@@ -8,6 +8,7 @@ import {
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import type { ModelRow } from '../../../lib/governance.js';
 import { useT } from '../../../lib/i18n.js';
+import { ModelHealthNote, ModelOption } from '../../kit/model-health.js';
 import { Select } from '../../kit/select.js';
 import { Card } from '../../ui/Card.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
@@ -63,6 +64,8 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
   }
 
   const catalog = models.state.status === 'ready' ? models.state.data.items : [];
+  const currentDefault =
+    settings.state.status === 'ready' ? settings.state.data.defaultEntryModel : null;
 
   return (
     <Card title={t('平台默认入口模型', 'Platform default entry model')}>
@@ -97,12 +100,18 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
           >
             <option value={PI_DEFAULT}>{t('pi 自己的默认值', "pi's own default")}</option>
             {catalog.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
+              <ModelOption key={model.id} model={model} selected={model.id === currentDefault} />
             ))}
           </Select>
         )}
+        {settings.state.status === 'ready' ? (
+          <ModelHealthNote
+            models={catalog}
+            selectedId={currentDefault}
+            canFix
+            testId="platform-default-model-health"
+          />
+        ) : null}
         {saved ? (
           <Notice testId="platform-default-model-saved">{t('已保存', 'Saved')}</Notice>
         ) : null}

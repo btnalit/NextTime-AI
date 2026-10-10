@@ -335,6 +335,7 @@ export function WorkspaceDetailPanel({
           <EntryModelSelect
             id="wd-entry-model"
             options={entryModelOptions}
+            models={models}
             value={entryModelDraft}
             allowPlatformDefault={false}
             onChange={(next) => {

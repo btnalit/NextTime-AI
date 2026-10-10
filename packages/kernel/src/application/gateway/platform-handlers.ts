@@ -3,6 +3,7 @@ import type {
   PlatformAuditRecordWire,
   PlatformOverviewWire,
   PlatformWorkspaceWire,
+  ProviderHealthWire,
   PurgeUserOutcomeWire,
   PurgeUsersResultWire,
   PurgeWorkspaceResultWire,
@@ -42,7 +43,7 @@ import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
 import { isLastActiveHumanOwner } from './auth.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
-import { readModelCatalog } from './models-catalog-handler.js';
+import { readModelCatalog, readModelCatalogWithHealth } from './models-catalog-handler.js';
 import { publishSessionKick } from './session-revocation.js';
 
 /**
@@ -932,7 +933,9 @@ async function loadPlatformWorkspace(
 /** Every model id must be in the llm-proxy catalog (the same rule `set_agent_profile` applies). */
 async function assertModelsInCatalog(models: readonly string[]): Promise<void> {
   if (models.length === 0) return;
-  const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+  const known = new Set(
+    (await readModelCatalog(process.env, { withHealth: false })).map((entry) => entry.id),
+  );
   const unknown = models.filter((model) => !known.has(model));
   if (unknown.length > 0) {
     throw new PlatformAdminError(
@@ -1755,12 +1758,34 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
        from schema_migrations where module = 'core'`,
     );
   let modelsAvailable = 0;
+  let modelsConfigured = 0;
   let modelsStatus: 'ok' | 'down' = 'ok';
+  let providerHealthFile: PlatformOverviewWire['providerHealthFile'] = 'missing';
+  const modelProviders = new Map<
+    string,
+    { id: string; health: ProviderHealthWire | null; models: number }
+  >();
   try {
-    modelsAvailable = (await readModelCatalog()).length;
+    const catalog = await readModelCatalogWithHealth();
+    providerHealthFile = catalog.healthFile;
+    // Console audit P0-2 / review M1: "available" means a model whose provider's last applicable
+    // test passed — only an explicit success counts. Unknown health (no readable health file, or
+    // a provider it does not name) is not available.
+    modelsConfigured = catalog.items.length;
+    for (const entry of catalog.items) {
+      if (entry.health?.status === 'ok') modelsAvailable += 1;
+      const provider = modelProviders.get(entry.provider) ?? {
+        id: entry.provider,
+        health: entry.health ?? null,
+        models: 0,
+      };
+      provider.models += 1;
+      modelProviders.set(entry.provider, provider);
+    }
   } catch {
     modelsStatus = 'down';
   }
+  const healthUnknown = modelsStatus === 'ok' && providerHealthFile !== 'ok';
   // S8 W4-C (ui-audit O3 "计数与列表同口径"): the cross-workspace counts below (gatekeepers,
   // pending ActionRequests, running Tasks, graph freshness) are computed only over non-residue
   // workspaces — an accept-* workspace disabled or past its ephemeral expiry never inflates them.
@@ -1795,6 +1820,7 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
       activeWorkspaces: activeWorkspaces.length,
       gatekeepers,
       modelsAvailable,
+      modelsConfigured,
       pendingActionRequests,
       runningTasks,
     },
@@ -1808,13 +1834,17 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
       { service: 'postgres', status: 'ok' },
       {
         service: 'llm-proxy',
-        status: modelsStatus === 'ok' ? 'ok' : 'degraded',
+        status: modelsStatus === 'ok' && !healthUnknown ? 'ok' : 'degraded',
         detail:
-          modelsStatus === 'ok'
-            ? `${modelsAvailable} model(s) in models.json`
-            : 'models.json unreadable — provider configuration missing?',
+          modelsStatus !== 'ok'
+            ? 'models.json unreadable — provider configuration missing?'
+            : healthUnknown
+              ? `${modelsConfigured} model(s) in models.json; provider health unknown — provider-health.json ${providerHealthFile === 'missing' ? 'not written' : 'unreadable or malformed'} (check the llm-proxy log)`
+              : `${modelsConfigured} model(s) in models.json`,
       },
     ],
+    providerHealthFile,
+    modelProviders: [...modelProviders.values()],
     checklist: [
       {
         key: 'providers',
@@ -1822,7 +1852,11 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
         detail:
           modelsAvailable > 0
             ? `${modelsAvailable} model(s) available; default ${settings.defaultEntryModel ?? DEFAULT_PLATFORM_SETTINGS.defaultEntryModel ?? 'pi default'}`
-            : 'no model available — configure a provider on the host (llm-providers.yaml)',
+            : modelsConfigured > 0 && healthUnknown
+              ? `${modelsConfigured} model(s) configured; provider health unknown — llm-proxy has not written provider-health.json (check its log)`
+              : modelsConfigured > 0
+                ? `${modelsConfigured} model(s) configured, none whose provider passed a test — test the provider in the console`
+                : 'no model provider yet — add one in the console',
       },
       {
         key: 'defaultWorkspace',

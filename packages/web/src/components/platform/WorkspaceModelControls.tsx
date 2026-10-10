@@ -1,5 +1,6 @@
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { ModelHealthNote, ModelHealthTag, ModelOption } from '../kit/model-health.js';
 import { Field, Select } from '../ui/Field.js';
 
 /** The 入口模型 select's "no model of its own" choice — `entryModel: null` on the wire (pi's own
@@ -11,6 +12,8 @@ export interface EntryModelSelectProps {
   /** The models this workspace may take as its entry model: its own non-empty allowed list, or
    *  the whole catalog when it does not restrict. */
   readonly options: readonly string[];
+  /** The catalog rows, for each option's provider health (console audit P0-2). */
+  readonly models: readonly ModelRow[];
   readonly value: string | null;
   readonly onChange: (entryModel: string | null) => void;
   readonly disabled?: boolean;
@@ -31,6 +34,7 @@ export interface EntryModelSelectProps {
 export function EntryModelSelect({
   id,
   options,
+  models,
   value,
   onChange,
   disabled = false,
@@ -60,12 +64,20 @@ export function EntryModelSelect({
             {t('未设置', 'Not set — pick a model')}
           </option>
         )}
-        {options.map((model) => (
-          <option key={model} value={model}>
-            {model}
-          </option>
+        {options.map((id) => (
+          <ModelOption
+            key={id}
+            model={models.find((model) => model.id === id) ?? { id, provider: '' }}
+            selected={id === value}
+          />
         ))}
       </Select>
+      <ModelHealthNote
+        models={models.filter((model) => options.includes(model.id))}
+        selectedId={value}
+        canFix
+        testId={testId ? `${testId}-health` : undefined}
+      />
     </Field>
   );
 }
@@ -112,8 +124,11 @@ export function AllowedModelsChecklist({
                 checked={selected.includes(model.id)}
                 onChange={() => toggle(model.id)}
                 disabled={disabled}
+                // The status tag stays out of the checkbox's name: the name is the model id.
+                aria-label={model.id}
               />
               <span className="mono">{model.id}</span>
+              <ModelHealthTag model={model} />
             </label>
           ))
         )}

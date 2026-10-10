@@ -147,7 +147,7 @@ export async function resolveAvailableResources(
 // -------------------------------------------------------------------------------------------
 
 async function assertModelAllowed(model: string, policy: AgentPolicyRow): Promise<void> {
-  const catalog = await readModelCatalog();
+  const catalog = await readModelCatalog(process.env, { withHealth: false });
   const known = new Set(catalog.map((entry) => entry.id));
   if (!known.has(model)) {
     throw new AgentProfileValidationError(
@@ -427,7 +427,9 @@ export const setAgentPolicyHandler: CapabilityHandler = async (
     params.defaultModel !== undefined ? params.defaultModel : current.defaultModel;
   const toCheck = [...nextAllowed, ...(nextDefault ? [nextDefault] : [])];
   if (toCheck.length > 0) {
-    const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+    const known = new Set(
+      (await readModelCatalog(process.env, { withHealth: false })).map((entry) => entry.id),
+    );
     const unknown = toCheck.filter((model) => !known.has(model));
     if (unknown.length > 0) {
       throw new AgentProfileValidationError(

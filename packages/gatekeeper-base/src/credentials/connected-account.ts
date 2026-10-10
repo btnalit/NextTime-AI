@@ -1,6 +1,7 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { removeStaleTempFiles, writeFileAtomic } from '../atomic-file.js';
 import { CredentialResolutionError } from '../errors.js';
 import type { CredentialResolver, ResolvedCredential } from './types.js';
 
@@ -100,10 +101,8 @@ async function writeRecordsMap(
   records: Map<string, EncryptedRecord>,
 ): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${randomUUID()}.tmp`;
   const shape: StoreFileShape = { records: Object.fromEntries(records) };
-  await writeFile(tmpPath, JSON.stringify(shape, null, 2), 'utf8');
-  await rename(tmpPath, filePath);
+  await writeFileAtomic(filePath, JSON.stringify(shape, null, 2));
 }
 
 export class ConnectedAccountStore {
@@ -114,6 +113,9 @@ export class ConnectedAccountStore {
    *  write is chained onto this promise so at most one read-modify-write is in flight at a time;
    *  a failed write does not poison the queue for the next, unrelated write. */
   private writeQueue: Promise<void> = Promise.resolve();
+  /** Set once this process's first write has swept the temp files an interrupted earlier
+   *  process left next to the records file (#530 review; atomic-file.ts). */
+  private swept = false;
 
   constructor(
     options: { readonly dataDir: string; readonly keyFilePath: string },
@@ -129,7 +131,16 @@ export class ConnectedAccountStore {
   }
 
   private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.writeQueue.then(task, task);
+    // The sweep runs inside the queue, before this process has created a temp file of its own,
+    // so every temp file it finds is an interrupted earlier process's.
+    const run = async () => {
+      if (!this.swept) {
+        this.swept = true;
+        await removeStaleTempFiles(this.filePath);
+      }
+      return task();
+    };
+    const result = this.writeQueue.then(run, run);
     this.writeQueue = result.then(
       () => undefined,
       () => undefined,

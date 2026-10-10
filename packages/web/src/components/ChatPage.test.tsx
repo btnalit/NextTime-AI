@@ -591,7 +591,13 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     ]);
     // Labels read provider/model; the default option names the workspace default.
     expect(select.options[0]?.textContent).toContain('openai/gpt-4o');
-    expect(select.options[2]?.textContent).toBe('anthropic/claude-sonnet');
+    // No provider health from the kernel reads 状态未知 (review M1), never as working.
+    expect(select.options[2]?.textContent).toBe('anthropic/claude-sonnet · 状态未知');
+    // #530 必修 3: the model the next Turn runs is not known to work — the composer says so and
+    // names who can act (the workspace default here).
+    const notice = await screen.findByTestId('chat-model-health-notice');
+    expect(notice.textContent).toContain('状态未知');
+    expect(notice.textContent).toContain('请平台管理员测试这个供应商');
 
     fireEvent.change(select, { target: { value: 'anthropic/claude-sonnet' } });
     await waitFor(() =>

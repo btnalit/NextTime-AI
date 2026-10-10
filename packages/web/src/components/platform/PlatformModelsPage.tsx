@@ -15,10 +15,11 @@ import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { providerStatus } from '../../lib/provider-status.js';
-import { hrefs, readNewProviderPreset } from '../../lib/router.js';
+import { hrefs, readNewProviderPreset, readProviderPreset } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { ModelHealthTag } from '../kit/model-health.js';
 import { PageHeader } from '../kit/page-header.js';
 import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
@@ -99,8 +100,19 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   // Audit P0-3: the overview's first-run step links straight to 新增供应商. The query is dropped
   // once read, so closing the drawer and reloading does not open it again; a link followed while
   // this page is already mounted opens it too.
+  // A model picker's next step (kit/model-health) links here with `?provider=<id>`: that
+  // provider's drawer opens once the list has loaded, on its 连通性测试 and 密钥 sections.
+  const [providerPreset, setProviderPreset] = useState<string | null>(() =>
+    readProviderPreset(window.location.hash),
+  );
   useEffect(() => {
     function consume(): void {
+      const presetProvider = readProviderPreset(window.location.hash);
+      if (presetProvider) {
+        setProviderPreset(presetProvider);
+        window.history.replaceState(null, '', hrefs.platformModels());
+        return;
+      }
       if (!readNewProviderPreset(window.location.hash)) return;
       setDrawer({ kind: 'create' });
       window.history.replaceState(null, '', hrefs.platformModels());
@@ -115,6 +127,12 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
 
   const providers = list.state.status === 'ready' ? list.state.data.items : [];
   const meta = list.state.status === 'ready' ? list.state.data : null;
+  useEffect(() => {
+    if (providerPreset === null || list.state.status !== 'ready') return;
+    const target = list.state.data.items.find((row) => row.id === providerPreset);
+    if (target) setDrawer({ kind: 'detail', provider: target });
+    setProviderPreset(null);
+  }, [providerPreset, list.state]);
 
   const drawerProvider =
     drawer.kind === 'edit' || drawer.kind === 'detail'
@@ -795,7 +813,12 @@ function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
     for (const model of modelRows) {
       base.push({
         id: `model:${model.id}`,
-        header: model.id,
+        // Audit P0-2: a column whose provider fails says so in its header.
+        header: (
+          <>
+            {model.id} <ModelHealthTag model={model} />
+          </>
+        ),
         headerClassName: 'mono',
         cell: (workspace) =>
           workspace.allowedModels.length === 0 || workspace.allowedModels.includes(model.id) ? (

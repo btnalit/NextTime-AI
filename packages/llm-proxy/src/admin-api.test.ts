@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LlmProviderInputWire, LlmProviderListWire, LlmProviderWire } from '@nexttime/shared';
+import type {
+  LlmProviderInputWire,
+  LlmProviderListWire,
+  LlmProviderWire,
+  ProviderHealthFile,
+} from '@nexttime/shared';
 import { HANDLE_SIGNING_ALG, mintLlmAdminToken } from '@nexttime/shared';
 import { SignJWT, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -15,6 +20,8 @@ import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
 import { KeyStore, KeyStoreError } from './key-store.js';
+import { buildProviderHealthFile, refreshProviderHealthFile } from './provider-health-file.js';
+import { providerCredentialFacts } from './provider-keys.js';
 import type { ListUpstreamModelsResult } from './provider-models.js';
 import { ProviderStore } from './provider-store.js';
 import type { StoreTestResult } from './provider-store.js';
@@ -109,6 +116,8 @@ interface Harness {
   privateKey: CryptoKey;
   dir: string;
   modelsJsonFile: string;
+  /** `provider-health.json` as the admin API last wrote it (console audit P0-2). */
+  readHealth: () => ProviderHealthFile;
   logLines: string[];
   kernelEvents: KernelAuditEvent[];
   testRuns: Array<{ providerApi: string; model: string; realKey: string }>;
@@ -123,6 +132,8 @@ async function harness(
   options: {
     env?: Record<string, string>;
     testResult?: StoreTestResult;
+    /** `tested_at` of the default (passing) test result; a store provider ignores a test older than its `updatedAt`. */
+    testedAt?: string;
     /** Put models.json under a directory that does not exist (the rewrite must fail). */
     modelsJsonUnwritable?: boolean;
     listResult?: ListUpstreamModelsResult;
@@ -148,6 +159,7 @@ async function harness(
   const testRuns: Harness['testRuns'] = [];
   const listRuns: Harness['listRuns'] = [];
   const env = options.env ?? { FILE_KEY: 'sk-file' };
+  const healthFile = join(dir, 'provider-health.json');
   const resolveApiKey = (name: string) => env[name];
 
   const adminHandler = createAdminApi({
@@ -161,6 +173,17 @@ async function harness(
         modelsJsonFile,
         buildModelsJsonFromCatalog(catalog, { llmProxyPort: 8082 }),
       ),
+    writeProviderHealth: () =>
+      refreshProviderHealthFile(healthFile, () =>
+        buildProviderHealthFile(catalog, (provider) =>
+          providerCredentialFacts(
+            provider.id,
+            provider.config.api_key_env,
+            (id) => keyStore.get(id),
+            resolveApiKey,
+          ),
+        ),
+      ),
     kernelAudit: async (event) => {
       kernelEvents.push(event);
     },
@@ -173,7 +196,7 @@ async function harness(
           tool_call: 'ok',
           latency_ms: 42,
           error: null,
-          tested_at: '2026-09-19T00:00:00.000Z',
+          tested_at: options.testedAt ?? '2026-09-19T00:00:00.000Z',
         }
       );
     },
@@ -221,6 +244,7 @@ async function harness(
     privateKey,
     dir,
     modelsJsonFile,
+    readHealth: () => JSON.parse(readFileSync(healthFile, 'utf8')) as ProviderHealthFile,
     logLines,
     kernelEvents,
     testRuns,
@@ -686,6 +710,120 @@ describe('admin API — provider secrets (S7-A)', () => {
     expect(clearedEvent).toMatchObject({ providerId: 'openai', actorUserId: 'admin-user' });
     expect(h.logLines.join('\n')).not.toContain('sk-console-secret');
     expect(JSON.stringify(h.kernelEvents)).not.toContain('sk-console-secret');
+  });
+
+  // Console audit P0-2: every change the health depends on rewrites provider-health.json, which
+  // the kernel's model projection reads — a status kind and a time, never a key or an error text.
+  it('rewrites provider-health.json after a test, a key set and a key clear — never with the key or the error text', async () => {
+    const h = await harness({
+      env: {},
+      testResult: {
+        model: 'file-model',
+        completion: 'error',
+        tool_call: 'skipped',
+        latency_ms: 10,
+        error: 'HTTP 401 Unauthorized: sk-console-secret is not valid',
+        tested_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    const admin = await h.adminHeaders();
+
+    await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-console-secret' },
+    });
+    expect(h.readHealth().providers.openai).toEqual({ status: 'untested', testedAt: null });
+
+    await request(h.port, 'POST', '/admin/providers/openai/test', { headers: admin, body: {} });
+    expect(h.readHealth().providers.openai).toEqual({
+      status: 'key_rejected',
+      testedAt: '2099-01-01T00:00:00.000Z',
+    });
+
+    await request(h.port, 'DELETE', '/admin/providers/openai/secret', { headers: admin });
+    const health = h.readHealth();
+    expect(health.version).toBe(1);
+    expect(health.providers.openai).toEqual({ status: 'key_missing', testedAt: null });
+
+    const raw = readFileSync(join(h.dir, 'provider-health.json'), 'utf8');
+    expect(raw).not.toContain('sk-console-secret');
+    expect(raw).not.toContain('Unauthorized');
+  });
+
+  // Review S1: a test says nothing about a key set or cleared after it — both drop it.
+  it('a key set or clear drops the last test: the provider reads untested until it is tested again', async () => {
+    const h = await harness({ testedAt: '2099-01-01T00:00:00.000Z' });
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    for (const id of ['openai', 'acme']) {
+      await request(h.port, 'PUT', `/admin/providers/${id}/secret`, {
+        headers: admin,
+        body: { key: 'sk-first' },
+      });
+      const tested = await request(h.port, 'POST', `/admin/providers/${id}/test`, {
+        headers: admin,
+        body: {},
+      });
+      expect(tested.status).toBe(200);
+      expect(h.readHealth().providers[id]?.status).toBe('ok');
+
+      const set = await request(h.port, 'PUT', `/admin/providers/${id}/secret`, {
+        headers: admin,
+        body: { key: 'sk-second' },
+      });
+      expect(set.body).toMatchObject({ lastTest: null });
+      expect(h.readHealth().providers[id]).toEqual({ status: 'untested', testedAt: null });
+
+      await request(h.port, 'POST', `/admin/providers/${id}/test`, { headers: admin, body: {} });
+      expect(h.readHealth().providers[id]?.status).toBe('ok');
+      const cleared = await request(h.port, 'DELETE', `/admin/providers/${id}/secret`, {
+        headers: admin,
+      });
+      expect(cleared.body).toMatchObject({ lastTest: null });
+    }
+    // openai falls back to its env key (untested with it); acme has no key left.
+    expect(h.readHealth().providers.openai).toEqual({ status: 'untested', testedAt: null });
+    expect(h.readHealth().providers.acme).toEqual({ status: 'key_missing', testedAt: null });
+  });
+
+  // Review M2: concurrent mutations write the health file and models.json one at a time, each
+  // through a fresh temp file — the files always parse and no temp file is left behind.
+  it('concurrent key changes leave a valid provider-health.json and models.json and no temp files', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    await Promise.all(
+      Array.from({ length: 30 }, (_, i) =>
+        i % 3 === 0
+          ? request(h.port, 'DELETE', '/admin/providers/acme/secret', { headers: admin })
+          : i % 3 === 1
+            ? request(h.port, 'PUT', '/admin/providers/acme/secret', {
+                headers: admin,
+                body: { key: `sk-${i}` },
+              })
+            : request(h.port, 'PUT', '/admin/providers/acme', {
+                headers: admin,
+                body: { ...NEW_PROVIDER, displayName: `Acme ${i}` },
+              }),
+      ),
+    );
+    // The last write is the newest state: one more change and its result is what the file says.
+    await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-final' },
+    });
+    expect(h.readHealth().providers.acme).toEqual({ status: 'untested', testedAt: null });
+    expect(() => JSON.parse(readFileSync(h.modelsJsonFile, 'utf8'))).not.toThrow();
+    expect(readdirSync(h.dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('a provider created through the API appears in provider-health.json', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER });
+    expect(Object.keys(h.readHealth().providers).sort()).toEqual(['acme', 'openai']);
+    expect(h.readHealth().providers.acme?.status).toBe('key_missing');
+    expect(h.readHealth().providers.openai?.status).toBe('untested');
   });
 
   it('POST is accepted as an alias for PUT (the original design route)', async () => {

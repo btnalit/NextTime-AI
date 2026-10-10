@@ -1,5 +1,6 @@
 import type { ModelRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { ModelHealthTag } from './kit/model-health.js';
 import { EmptyState } from './ui/EmptyState.js';
 
 export interface ModelsTableProps {
@@ -31,6 +32,7 @@ export function ModelsTable({ models }: ModelsTableProps) {
           <th>Model</th>
           <th>Provider</th>
           <th>Id</th>
+          <th>{t('状态', 'Status')}</th>
         </tr>
       </thead>
       <tbody>
@@ -41,6 +43,10 @@ export function ModelsTable({ models }: ModelsTableProps) {
               <span className="tag">{row.provider}</span>
             </td>
             <td className="mono text-3">{row.id}</td>
+            <td>
+              {/* No health from the kernel reads 状态未知 (review M1), never a blank. */}
+              <ModelHealthTag model={row} showOk testId={`model-health-${row.id}`} />
+            </td>
           </tr>
         ))}
       </tbody>

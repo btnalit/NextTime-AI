@@ -145,3 +145,34 @@ export function createProviderKeyResolver(options: {
     return fromEnv;
   };
 }
+
+/** What the platform can say about a provider's credential without exposing it: where it would
+ *  come from (S7-A order — a console key, then the env var / key file named by `apiKeyEnv`, else
+ *  none) and whether it can go in a header at all. Shared by the admin API's provider rows and the
+ *  provider-health file (provider-health-file.ts), so both say the same thing. */
+export interface ProviderCredentialFacts {
+  readonly source: 'console' | 'env' | 'none';
+  readonly present: boolean;
+  readonly invalid: boolean;
+}
+
+export function providerCredentialFacts(
+  providerId: string,
+  apiKeyEnv: string | undefined,
+  consoleKey: (id: string) => string | undefined,
+  resolveApiKey: (name: string) => string | undefined,
+): ProviderCredentialFacts {
+  const fromConsole = consoleKey(providerId);
+  const fromEnv = fromConsole === undefined && apiKeyEnv ? resolveApiKey(apiKeyEnv) : undefined;
+  const source =
+    fromConsole !== undefined
+      ? 'console'
+      : typeof fromEnv === 'string' && fromEnv.length > 0
+        ? 'env'
+        : 'none';
+  return {
+    source,
+    present: source !== 'none',
+    invalid: checkProviderKey(fromConsole ?? fromEnv).kind === 'invalid',
+  };
+}

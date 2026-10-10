@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -113,6 +113,15 @@ describe('JsonFileIdempotencyStore', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('the first load sweeps temp files an interrupted earlier process left (#530 review)', async () => {
+    const uuid = '0b9e4f8a-1c2d-4e5f-8a9b-0c1d2e3f4a5b';
+    await writeFile(join(dir, `.idempotency-store.json.${uuid}.tmp`), 'leftover');
+    await writeFile(join(dir, `idempotency-store.json.${uuid}.tmp`), 'leftover');
+    const store = new JsonFileIdempotencyStore(dir);
+    await store.reserve('k1', descriptorA);
+    expect(await readdir(dir)).toEqual(['idempotency-store.json']);
   });
 
   it('persists a completed entry across store instances (same file)', async () => {

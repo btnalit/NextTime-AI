@@ -11,6 +11,7 @@ import { ChatHeader } from './chat/ChatHeader.js';
 import { ChatListPane } from './chat/ChatListPane.js';
 import { ChatMessageRow } from './chat/ChatMessageRow.js';
 import { MessageBody } from './chat/MessageBody.js';
+import { ChatModelHealthNotice, type RunningModelHealth } from './chat/ModelSwitcher.js';
 import { TurnOutcomeControl } from './chat/TurnOutcomeControl.js';
 import { useActionCards } from './chat/useActionCards.js';
 import { useAutoFollow } from './chat/useAutoFollow.js';
@@ -116,6 +117,8 @@ export function ChatPage({
   const liveToolCalls = turn.toolCalls.filter((row) => !persistedIds.has(row.toolCallId));
 
   const canAlwaysAllow = !permissions.isDenied('set_auto_approved_action_kind');
+  // #530 必修 3: the model the next Turn runs, when its provider is not known to work.
+  const [runningModel, setRunningModel] = useState<RunningModelHealth | null>(null);
   const { chat, archived } = chatSummary;
 
   return (
@@ -134,6 +137,7 @@ export function ChatPage({
             onStop={() => void composer.handleStop()}
             onChatChanged={chatSummary.onChatChanged}
             toolCallCount={turn.toolCalls.length}
+            onRunningModel={setRunningModel}
           />
 
           <div className="chat-scroll" ref={follow.scrollRef} onScroll={follow.onScroll}>
@@ -242,6 +246,7 @@ export function ChatPage({
           </div>
 
           <div className="composer-wrap">
+            <ChatModelHealthNotice running={runningModel} />
             <form className="composer" onSubmit={composer.handleSubmit}>
               {archived && chat ? (
                 <Notice tone="info" testId="chat-archived-notice">
