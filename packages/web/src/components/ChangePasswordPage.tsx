@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react';
 import { type WireUser, changePassword } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
+import { passwordLengthHint, passwordLengthProblem } from '../lib/password-rule.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -36,8 +37,19 @@ export function ChangePasswordPage({
   const [error, setError] = useState<unknown | null>(null);
 
   const passwordsMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
+  const lengthProblem = passwordLengthProblem(newPassword, t);
+  // Audit P1-2: what still blocks 更改密码, said next to it instead of a silently grey button.
+  const missing = [
+    currentPassword ? null : t('当前密码', 'current password'),
+    newPassword ? null : t('新密码', 'new password'),
+    confirmPassword ? null : t('确认新密码', 'password confirmation'),
+  ].filter((item): item is string => item !== null);
   const canSubmit =
-    currentPassword && newPassword && newPassword === confirmPassword && !submitting;
+    currentPassword &&
+    newPassword &&
+    lengthProblem === null &&
+    newPassword === confirmPassword &&
+    !submitting;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -108,7 +120,8 @@ export function ChangePasswordPage({
             id="cp-new-password"
             label={t('新密码', 'New password')}
             required
-            hint={t('至少 8 位', 'At least 8 characters')}
+            hint={passwordLengthHint(t)}
+            error={lengthProblem}
           >
             <Input
               id="cp-new-password"
@@ -117,6 +130,7 @@ export function ChangePasswordPage({
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               disabled={submitting}
+              invalid={lengthProblem !== null}
             />
           </Field>
 
@@ -150,6 +164,11 @@ export function ChangePasswordPage({
           >
             {t('更改密码', 'Change password')}
           </Button>
+          {missing.length > 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="change-password-missing">
+              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+            </span>
+          ) : null}
 
           <div className="row" style={{ justifyContent: 'center' }}>
             <Button

@@ -144,6 +144,13 @@ export function GrantGateForm({
     principalId !== '' &&
     (lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0) &&
     !submitting;
+  // Audit P1-9: a disabled 授予 says what it still waits for.
+  const missing = [
+    principalId === '' ? t('选择成员', 'choose a member') : null,
+    lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0
+      ? null
+      : t('选择门', 'pick a gate'),
+  ].filter((item): item is string => item !== null);
 
   async function submit(): Promise<void> {
     if (!canSubmit) return;
@@ -468,6 +475,11 @@ export function GrantGateForm({
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {missing.length > 0 && !submitting ? (
+          <span className="text-small text-3" data-testid="ggf-missing">
+            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+          </span>
+        ) : null}
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>
             {t('取消', 'Cancel')}

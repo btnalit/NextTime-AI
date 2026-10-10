@@ -69,6 +69,10 @@ import { StatusChip } from './kit/status-chip.js';
 import { Tabs } from './kit/tabs.js';
 import { Textarea } from './kit/textarea.js';
 import { ExecutionReadinessCard } from './readiness/ExecutionReadinessCard.js';
+import {
+  announceReadinessChange,
+  useExecutionReadiness,
+} from './readiness/useExecutionReadiness.js';
 // `useToast` stays on `components/ui/Toast` — `App.tsx` mounts that provider (not `kit/toast`'s
 // own, separate context), so `kit/toast`'s hook would make this page's publish/deprecate/discard
 // toasts a silent no-op (same reason `ApprovalQueuePage.tsx`/`TasksPage.tsx` keep it).
@@ -145,7 +149,7 @@ export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: Ca
           'Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts.',
         )}
       />
-      <ExecutionReadinessCard http={http} />
+      <ExecutionReadinessCard http={http} currentHref={hrefs.catalog(tab)} />
       <div className="page-toolbar">
         <Tabs<CatalogTab>
           ariaLabel="Catalog section"
@@ -752,6 +756,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
     void operations.reload();
+    announceReadinessChange(http);
   }
 
   function statsFor(row: OperationCatalogRow): OperationStatsRow | undefined {
@@ -1900,6 +1905,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // then, so an incomplete list is never submitted as the template's `capabilities`); passed down
   // into `WorkerEditorHost` as a prop instead of that component loading its own second copy.
   const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
+  // Audit P1-7: the same readiness read the card above the tabs makes (one cached call) — the
+  // gates granted to the reader start ticked in the ops-runner template.
+  const readiness = useExecutionReadiness(http);
+  const grantedGateIds =
+    readiness.state.status === 'ready'
+      ? readiness.state.data.gates.filter((gate) => gate.granted).map((gate) => gate.gateId)
+      : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
 
@@ -1907,6 +1919,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     invalidateCapability(http, 'list_worker_definitions');
     void workers.reload();
     void myDrafts.reload();
+    announceReadinessChange(http);
   }
 
   function openEditor(next: WorkerEditorState): void {
@@ -2028,7 +2041,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
         initialForm={
           editor.kind === 'template' && capabilityNames.state.status === 'ready'
-            ? opsRunnerTemplateForm(capabilityNames.state.data.items)
+            ? opsRunnerTemplateForm(capabilityNames.state.data.items, grantedGateIds)
             : undefined
         }
         capabilityNames={
@@ -2037,6 +2050,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         onProposed={() => {
           void workers.reload();
           void myDrafts.reload();
+          announceReadinessChange(http);
         }}
         onDone={() => {
           closeEditor();

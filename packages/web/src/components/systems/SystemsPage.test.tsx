@@ -119,16 +119,45 @@ function openConnectMoreMenu(): void {
 }
 
 describe('SystemsPage', () => {
-  it('empty state: no system yet offers the one "接入一个系统" action', async () => {
+  it('empty state: no system yet points at the one "接入一个系统" action in the header', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
     });
     renderPage(http);
     const empty = await screen.findByTestId('systems-empty');
-    fireEvent.click(within(empty).getByRole('button', { name: '接入一个系统' }));
+    expect(empty.textContent).toContain('还没有接入任何系统');
+    // Audit P1-16: one primary button on the page, not a second copy inside the empty state.
+    expect(within(empty).queryByRole('button')).toBeNull();
+    fireEvent.click(screen.getByTestId('connect-system-button'));
     const drawer = await screen.findByTestId('connect-system-drawer');
     expect(within(drawer).getByTestId('connect-system-launcher')).toBeTruthy();
+  });
+
+  it('P1-16: with instances waiting to be enabled, the empty state says so instead of "nothing connected"', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', missing: [{ code: 'no_enabled_gate' }] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'docker',
+            displayName: 'Docker',
+            connector: 'docker',
+            transportKind: 'cli',
+            status: 'available',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const empty = await screen.findByTestId('systems-empty');
+    await waitFor(() => expect(empty.textContent).toContain('有 1 个系统已就绪，等待启用'));
+    expect(empty.textContent).not.toContain('还没有接入任何系统');
+    expect(within(empty).getByTestId('systems-empty-see-available')).toBeTruthy();
   });
 
   it('P0-4: an admin with a discovered but not enabled instance is told so and linked to enable it', async () => {

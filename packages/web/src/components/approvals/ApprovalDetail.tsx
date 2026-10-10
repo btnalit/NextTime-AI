@@ -11,6 +11,7 @@ import {
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { actorRuntimeLabel, policyDecisionLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -238,8 +239,8 @@ export function ApprovalDetail({
       key: 'policy',
       label: t('策略', 'Policy'),
       value: (
-        <span className="mono" data-testid="approval-policy">
-          {row.policyDecision}
+        <span data-testid="approval-policy" title={row.policyDecision}>
+          {policyDecisionLabel(row.policyDecision, t)}
         </span>
       ),
     });
@@ -285,7 +286,9 @@ export function ApprovalDetail({
             size="s"
             testId="approval-status"
           />
-          <RefChip kind="actionRequest" id={row.id} name={null} size="s" />
+          {/* Audit P1-13: this request's own reference, named as such — `name={null}` read as
+           *  「未知 / 已删除」 about the very request on screen. */}
+          <RefChip kind="actionRequest" id={row.id} name={t('本请求', 'This request')} size="s" />
         </div>
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
           <h2 className="approval-detail-title">
@@ -301,7 +304,7 @@ export function ApprovalDetail({
         <div className="row-wrap text-3">
           <span>{t('由', 'Proposed by')}</span>
           {row.actorRuntime ? (
-            <span className="tag">{row.actorRuntime}</span>
+            <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
           ) : (
             <span>{t('未知来源', 'an unknown source')}</span>
           )}

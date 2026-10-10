@@ -149,7 +149,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
     const name = finalizeSkillName(form.name);
     const submitted: SkillForm = { ...form, name };
     if (name !== form.name) setForm(submitted);
-    const validated = validateSkill(submitted);
+    const validated = validateSkill(submitted, t);
     if (!validated.ok || name === '') {
       setErrors({
         ...(validated.ok ? {} : validated.errors),

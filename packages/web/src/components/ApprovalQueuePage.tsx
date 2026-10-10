@@ -8,6 +8,7 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
+import { actorRuntimeLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { ApprovalDetail } from './approvals/ApprovalDetail.js';
@@ -367,7 +368,7 @@ function PendingList({
                 {row.actorRuntime ? (
                   <>
                     <span>{t('提出者', 'Proposed by')}</span>
-                    <span className="tag">{row.actorRuntime}</span>
+                    <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
                   </>
                 ) : null}
                 {principalName ? (
@@ -555,7 +556,7 @@ function ApprovalHistoryTab({
                     {row.actorRuntime ? (
                       <>
                         <span>{t('提出者', 'Proposed by')}</span>
-                        <span className="tag">{row.actorRuntime}</span>
+                        <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
                       </>
                     ) : null}
                     {principalName ? (

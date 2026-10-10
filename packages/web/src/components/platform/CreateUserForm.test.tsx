@@ -84,6 +84,19 @@ describe('CreateUserForm', () => {
     expect(createParams(http).login).toBe('alice');
   });
 
+  it('P1-12: the login follows the display name until it is typed in, and the role says what it can do', () => {
+    renderForm();
+    const login = screen.getByLabelText(/登录名/) as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Ada Lovelace' } });
+    expect(login.value).toBe('ada.lovelace');
+    fireEvent.change(login, { target: { value: 'ada' } });
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Ada L.' } });
+    expect(login.value).toBe('ada');
+    expect(screen.getByTestId('create-user-form').textContent).toContain(
+      '和自己的智能体对话、用已授权的系统',
+    );
+  });
+
   it('keeps the rule visible and names the problem when the login is invalid', () => {
     renderForm();
     fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'a b' } });

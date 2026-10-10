@@ -118,6 +118,10 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const ttlValid =
     /^\d+$/.test(ttlHours.trim()) && Number(ttlHours) >= 1 && Number(ttlHours) <= maxTtlHours;
   const canSubmit = ttlValid && !submitting;
+  // Audit P1-9: a disabled 签发 says what it still waits for.
+  const missing = ttlValid
+    ? []
+    : [t(`填写 1 到 ${maxTtlHours} 的有效期（小时）`, `enter a TTL of 1 to ${maxTtlHours} hours`)];
 
   function toggleCapability(name: string): void {
     setPickedCapabilities((current) => {
@@ -282,6 +286,11 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {missing.length > 0 && !submitting ? (
+          <span className="text-small text-3" data-testid="ioh-missing">
+            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+          </span>
+        ) : null}
         <Button
           variant="primary"
           onClick={() => void submit()}

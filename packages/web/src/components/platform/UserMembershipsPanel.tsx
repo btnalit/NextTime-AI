@@ -2,7 +2,7 @@ import { ROLE_VALUES, type Role, type UserMembershipWire, type UserWire } from '
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleDescription, roleLabel } from '../../lib/labels.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -104,7 +104,12 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
         testId="user-memberships-workspace"
       />
 
-      <Field id="um-role" label={t('角色', 'Role')} required>
+      <Field
+        id="um-role"
+        label={t('角色', 'Role')}
+        required
+        hint={roleDescription(role, t) ?? undefined}
+      >
         <LegacySelect
           id="um-role"
           value={role}
@@ -211,6 +216,7 @@ function MembershipRow({
           </label>
           <LegacySelect
             id={roleFieldId}
+            title={roleDescription(role, t) ?? undefined}
             value={role}
             onChange={(event) => void saveRole(event.target.value as Role)}
             disabled={saving || removing}

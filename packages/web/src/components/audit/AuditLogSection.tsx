@@ -13,6 +13,7 @@ import {
   isReadAuditAction,
   resourceHref,
 } from '../../lib/audit.js';
+import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
@@ -315,7 +316,10 @@ export function AuditLogSection({
                   <li className="data-row" key={row.id} data-testid="audit-row">
                     <div className="data-row-main">
                       <div className="data-row-title">
-                        <span className="mono">{row.action}</span>
+                        {/* P1-14: what happened first; the action name stays as the secondary
+                         *  text an auditor filters by. */}
+                        <span>{actionLabel(row.action, t)}</span>
+                        <span className="mono text-3 text-small">{row.action}</span>
                         <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
                           {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
                         </time>

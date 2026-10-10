@@ -73,7 +73,13 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-params').textContent).toContain('[redacted]');
     expect(screen.getByTestId('approval-params').textContent).not.toContain('sk-secret');
     expect(screen.getByTestId('approval-blocking')).toBeTruthy();
-    expect(screen.getByTestId('approval-policy').textContent).toContain('require_approval');
+    // Audit P1-13: the policy decision reads as words, the raw value only as a tooltip.
+    expect(screen.getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
+    const whole = screen.getByTestId('approval-detail');
+    expect(whole.textContent).toContain('Worker（被委派执行）');
+    const self = whole.querySelector('[data-ref-kind="actionRequest"]');
+    expect(self?.textContent).toContain('本请求');
+    expect(self?.textContent).not.toContain('未知 / 已删除');
   });
 
   it('L8a-10: a gate-scoped request (scope = the gate’s own id) reads as the whole gate, never the raw id', () => {

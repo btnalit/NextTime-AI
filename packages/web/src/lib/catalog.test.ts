@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_STEP,
+  issueMessage,
   opsRunnerTemplateForm,
   parseJsonObject,
   parseMarkdownBlocks,
@@ -43,24 +44,32 @@ describe('skill form → propose_skill{skill}', () => {
   });
 
   it('validates against ProposeSkillContentSchema with field-level errors', () => {
-    const invalid = validateSkill({
-      name: '',
-      description: 'd',
-      markdown: '',
-      gateKinds: '',
-      objectTypes: '',
-    });
+    const invalid = validateSkill(
+      {
+        name: '',
+        description: 'd',
+        markdown: '',
+        gateKinds: '',
+        objectTypes: '',
+      },
+      zhT,
+    );
     expect(invalid.ok).toBe(false);
     if (!invalid.ok) {
       expect(Object.keys(invalid.errors).sort()).toEqual(['markdown', 'name']);
+      // zod's default English never reaches the field (console audit P1-1 follow-up).
+      expect(invalid.errors.name).toBe('必填');
     }
-    const valid = validateSkill({
-      name: 'a',
-      description: 'b',
-      markdown: 'c',
-      gateKinds: '',
-      objectTypes: '',
-    });
+    const valid = validateSkill(
+      {
+        name: 'a',
+        description: 'b',
+        markdown: 'c',
+        gateKinds: '',
+        objectTypes: '',
+      },
+      zhT,
+    );
     expect(valid.ok).toBe(true);
   });
 
@@ -104,11 +113,14 @@ describe('procedure form → propose_procedure{procedure}', () => {
         { kind: 'verify', description: 'health ok' },
       ],
     });
-    expect(validateProcedure(form).ok).toBe(true);
-    const invalid = validateProcedure({
-      ...form,
-      steps: [{ ...EMPTY_STEP, kind: 'approval', description: '' }],
-    });
+    expect(validateProcedure(form, zhT).ok).toBe(true);
+    const invalid = validateProcedure(
+      {
+        ...form,
+        steps: [{ ...EMPTY_STEP, kind: 'approval', description: '' }],
+      },
+      zhT,
+    );
     expect(invalid.ok).toBe(false);
     if (!invalid.ok) expect(Object.keys(invalid.errors)).toEqual(['steps.0.description']);
   });
@@ -171,8 +183,8 @@ describe('worker definition form → propose_worker_definition{definition}', () 
       bogus: 1,
     });
     expect(form).toMatchObject({ kind: 'worker', systemPrompt: 'p', name: 'n', skills: 'a\nb' });
-    expect(validateWorkerDefinition(form).ok).toBe(true);
-    const invalid = validateWorkerDefinition({ ...form, systemPrompt: '' });
+    expect(validateWorkerDefinition(form, zhT).ok).toBe(true);
+    const invalid = validateWorkerDefinition({ ...form, systemPrompt: '' }, zhT);
     expect(invalid.ok).toBe(false);
     if (!invalid.ok) expect(Object.keys(invalid.errors)).toEqual(['systemPrompt']);
   });
@@ -245,5 +257,59 @@ describe('opsRunnerTemplateForm (leftover 84 — capabilities prefill)', () => {
     const capabilities = splitList(form.capabilities);
     expect(capabilities).not.toContain('publish_skill');
     expect(capabilities.filter((name) => name === 'request_action')).toHaveLength(1);
+  });
+
+  it('audit P1-7: the gates granted to the reader start ticked; none granted leaves none', () => {
+    expect(splitList(opsRunnerTemplateForm([], ['g-1', 'g-2']).gates)).toEqual(['g-1', 'g-2']);
+    expect(splitList(opsRunnerTemplateForm([]).gates)).toEqual([]);
+  });
+});
+
+describe('issueMessage', () => {
+  it('turns zod default issues into the viewer’s language', () => {
+    expect(
+      issueMessage(
+        {
+          path: ['x'],
+          message: 'String must contain at most 64 character(s)',
+          code: 'too_big',
+          type: 'string',
+          maximum: 64,
+        },
+        zhT,
+      ),
+    ).toBe('最多 64 个字符');
+    expect(
+      issueMessage(
+        { path: ['x'], message: 'Required', code: 'invalid_type', received: 'undefined' },
+        zhT,
+      ),
+    ).toBe('必填');
+    expect(
+      issueMessage(
+        {
+          path: ['x'],
+          message: 'Invalid enum value',
+          code: 'invalid_enum_value',
+          options: ['只读', '读写'],
+        },
+        zhT,
+      ),
+    ).toBe('只能是：只读、读写');
+    expect(
+      issueMessage(
+        { path: ['x'], message: 'egressDeny entry "1.2.3.4" is an IP address', code: 'custom' },
+        zhT,
+      ),
+    ).toBe('「1.2.3.4」是 IP 地址：这里只填主机名（私有网段已经按地址拦截）');
+    expect(
+      issueMessage(
+        { path: ['x'], message: 'egressDeny entry "a b" is not a host name (…)', code: 'custom' },
+        zhT,
+      ),
+    ).toContain('不是合法的主机名');
+    expect(issueMessage({ path: ['x'], message: 'something else', code: 'custom' }, zhT)).toBe(
+      '这一项的值不被接受',
+    );
   });
 });

@@ -8,6 +8,7 @@ import {
 import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { actorRuntimeLabel } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
@@ -119,7 +120,7 @@ export function ActionRequestCard({
       {card.actorRuntime ? (
         <div className="row-wrap text-small">
           <span className="text-3">{t('运行时', 'Runtime')}</span>
-          <span className="tag">{card.actorRuntime}</span>
+          <span className="tag">{actorRuntimeLabel(card.actorRuntime, t)}</span>
         </div>
       ) : null}
       {hasParams && card.params ? (

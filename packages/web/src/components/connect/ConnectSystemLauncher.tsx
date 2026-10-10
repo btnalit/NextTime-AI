@@ -27,7 +27,14 @@ import { GrantGateForm } from '../access/GrantGateForm.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
 import { PlatformError } from '../platform/PlatformError.js';
-import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
+import {
+  type ReadinessReader,
+  gateReasonAsk,
+  gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
+} from '../readiness/readiness-copy.js';
 import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -718,7 +725,7 @@ function SelectedGateSummary({
   return (
     <div className="stack-s" data-testid="launcher-selected-gate">
       <dl className="definition-list">
-        <dt>Gate id</dt>
+        <dt>{t('门 ID', 'Gate id')}</dt>
         <dd className="mono">{gate.gateId}</dd>
         <dt>{t('名称', 'Name')}</dt>
         <dd>{gate.displayName}</dd>
@@ -1362,6 +1369,7 @@ function AgentUsabilitySection({
 }) {
   const t = useT();
   const readiness = useExecutionReadiness(http);
+  const reader = useReadinessReader(http);
 
   // Not enabled in this workspace (shouldn't happen by step 4 on the workspace path — `canNext`
   // already required it — but a direct render of this step in a test, or a future relaxation of
@@ -1390,6 +1398,7 @@ function AgentUsabilitySection({
           data={readiness.state.data}
           gate={gate}
           linkedGatekeeperId={linkedGatekeeperId}
+          reader={reader}
         />
       )}
     </div>
@@ -1400,10 +1409,12 @@ function AgentUsabilityResult({
   data,
   gate,
   linkedGatekeeperId,
+  reader,
 }: {
   readonly data: ExecutionReadinessWire;
   readonly gate: TrackedGate;
   readonly linkedGatekeeperId: string;
+  readonly reader: ReadinessReader;
 }) {
   const t = useT();
   const gateRow = data.gates.find((row) => row.gateId === linkedGatekeeperId);
@@ -1495,8 +1506,12 @@ function AgentUsabilityResult({
       <Notice tone="warn" testId="launcher-agent-usability-blocked">
         <div className="stack-s">
           <span>{gateReasonText(gateRow.reason, t)}</span>
-          {gateRow.reason !== undefined && gateReasonHref(gateRow.reason) !== undefined ? (
-            <a href={gateReasonHref(gateRow.reason)}>{gateReasonLink(gateRow.reason, t)}</a>
+          {gateRow.reason !== undefined ? (
+            <FixHint
+              href={gateReasonHref(gateRow.reason, reader)}
+              label={gateReasonLink(gateRow.reason, t)}
+              ask={gateReasonAsk(gateRow.reason, reader, t)}
+            />
           ) : null}
         </div>
       </Notice>

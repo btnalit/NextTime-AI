@@ -7,6 +7,7 @@ import type {
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { Resource } from '../../hooks/useResource.js';
 import type { MeResult } from '../../lib/auth-api.js';
+import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -72,6 +73,7 @@ function checklistDetail(
   item: ChecklistItem,
   counts: PlatformOverviewWire['counts'],
   providerHealthFile: PlatformOverviewWire['providerHealthFile'],
+  modelsCatalog: PlatformOverviewWire['modelsCatalog'],
   defaultWorkspaceRow: PlatformWorkspaceWire | undefined,
   defaultWorkspaceRowsReady: boolean,
   t: Translate,
@@ -96,6 +98,14 @@ function checklistDetail(
               `已配置 ${counts.modelsConfigured} 个模型，但没读到供应商状态（llm-proxy 没写出状态文件，看它的日志）`,
               `${counts.modelsConfigured} model(s) configured, but the provider status could not be read (llm-proxy has not written its status file; check its log)`,
             );
+      }
+      // Audit acceptance-537: a models.json the kernel cannot read is a broken file, not "no
+      // provider yet" — adding a provider would not be the fix.
+      if (modelsCatalog === 'unreadable') {
+        return t(
+          '模型配置文件读不了（缺失、写坏了或格式不对）——到「模型供应商」页重新保存一次供应商，或检查 llm-proxy 的日志',
+          'The model configuration file cannot be read (missing, corrupt, or malformed) — re-save a provider on the model providers page, or check the llm-proxy log',
+        );
       }
       // Audit P0-2: models configured but none whose provider passed a test is not "no provider".
       return counts.modelsConfigured > 0
@@ -409,22 +419,26 @@ function PlatformOverviewBody({
               label={t('可用模型', 'Models available')}
               value={
                 // Review M1: with no readable health file nothing is known to work — not "0".
-                data.providerHealthFile !== 'ok' && data.counts.modelsConfigured > 0
+                // Acceptance-537: nor with no readable models.json.
+                data.modelsCatalog === 'unreadable' ||
+                (data.providerHealthFile !== 'ok' && data.counts.modelsConfigured > 0)
                   ? '—'
                   : data.counts.modelsAvailable
               }
               sub={
-                data.providerHealthFile !== 'ok' && data.counts.modelsConfigured > 0
-                  ? t(
-                      `已配置 ${data.counts.modelsConfigured} 个，状态未知`,
-                      `${data.counts.modelsConfigured} configured; status unknown`,
-                    )
-                  : data.counts.modelsConfigured > data.counts.modelsAvailable
+                data.modelsCatalog === 'unreadable'
+                  ? t('模型配置文件读不了', 'Model configuration unreadable')
+                  : data.providerHealthFile !== 'ok' && data.counts.modelsConfigured > 0
                     ? t(
-                        `已配置 ${data.counts.modelsConfigured} 个，只计测试通过的`,
-                        `${data.counts.modelsConfigured} configured; only tested ones count`,
+                        `已配置 ${data.counts.modelsConfigured} 个，状态未知`,
+                        `${data.counts.modelsConfigured} configured; status unknown`,
                       )
-                    : undefined
+                    : data.counts.modelsConfigured > data.counts.modelsAvailable
+                      ? t(
+                          `已配置 ${data.counts.modelsConfigured} 个，只计测试通过的`,
+                          `${data.counts.modelsConfigured} configured; only tested ones count`,
+                        )
+                      : undefined
               }
             />
           </div>
@@ -478,34 +492,38 @@ function PlatformOverviewBody({
                 item,
                 data.counts,
                 data.providerHealthFile,
+                data.modelsCatalog,
                 defaultWorkspaceRow,
                 defaultWorkspaceRowsReady,
                 t,
               )}
-              trailing={checklistTrailing(item, data.counts, t)}
+              trailing={checklistTrailing(item, data.counts, data.modelsCatalog, t)}
             />
           ))}
         </DataList>
       </DashboardCard>
 
       <DashboardCard
-        title={t('最近平台审计', 'Recent platform audit')}
+        title={t('最近平台改动', 'Recent platform changes')}
         actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
       >
         {recentAudit.length === 0 ? (
           <EmptyState
             icon="search"
-            title={t('暂无平台审计', 'No platform audit rows yet')}
+            title={t('最近没有平台改动', 'No recent platform changes')}
             testId="platform-overview-audit-empty"
           />
         ) : (
-          <DataList ariaLabel="Recent platform audit" testId="platform-overview-audit">
+          <DataList
+            ariaLabel={t('最近平台改动', 'Recent platform changes')}
+            testId="platform-overview-audit"
+          >
             {recentAudit.map((row) => (
               <DataRow
                 key={row.id}
                 testId="platform-overview-audit-row"
-                title={row.action}
+                title={actionLabel(row.action, t)}
                 meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}
@@ -582,9 +600,17 @@ function buildAttentionItems(
   // Review M1: models.json was read but provider-health.json was not — every provider's status is
   // unknown. One item says so; the llm-proxy health row it degrades is the same fact.
   const healthUnreadable = data.providerHealthFile !== 'ok' && data.counts.modelsConfigured > 0;
+  const catalogUnreadable = data.modelsCatalog === 'unreadable';
   for (const entry of data.health) {
     if (entry.status !== 'degraded' && entry.status !== 'down') continue;
-    if (healthUnreadable && entry.service === 'llm-proxy' && entry.status === 'degraded') continue;
+    // The llm-proxy row degrades for exactly these two facts; their own items below say which.
+    if (
+      (healthUnreadable || catalogUnreadable) &&
+      entry.service === 'llm-proxy' &&
+      entry.status === 'degraded'
+    ) {
+      continue;
+    }
     items.push({
       key: `health-${entry.service}`,
       title:
@@ -594,7 +620,16 @@ function buildAttentionItems(
       href: hrefs.platformStatus(),
     });
   }
-  if (healthUnreadable) {
+  if (catalogUnreadable) {
+    items.push({
+      key: 'models-catalog-unreadable',
+      title: t(
+        '模型配置文件读不了，模型都用不了',
+        'The model configuration file cannot be read; no model is usable',
+      ),
+      href: hrefs.platformModels(),
+    });
+  } else if (healthUnreadable) {
     items.push({
       key: 'model-provider-health-unreadable',
       title: t(
@@ -726,8 +761,22 @@ function CostCard({ status }: { readonly status: Resource<PlatformStatusWire> })
 function checklistTrailing(
   item: ChecklistItem,
   counts: PlatformOverviewWire['counts'],
+  modelsCatalog: PlatformOverviewWire['modelsCatalog'],
   t: Translate,
 ) {
+  // Audit acceptance-537: a broken models.json is fixed on the providers page (its error banner
+  // says how), not by adding a provider.
+  if (item.key === 'providers' && !item.done && modelsCatalog === 'unreadable') {
+    return (
+      <a
+        href={hrefs.platformModels()}
+        className="inline-flex min-h-9 items-center"
+        data-testid="checklist-fix-models"
+      >
+        {t('去修复', 'Fix it')}
+      </a>
+    );
+  }
   // Audit P0-2: models configured but none whose provider passed a test — the providers table,
   // where 测试 is, not a new provider.
   if (item.key === 'providers' && !item.done && counts.modelsConfigured > 0) {

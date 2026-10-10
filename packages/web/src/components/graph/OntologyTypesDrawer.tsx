@@ -474,6 +474,11 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
 
   const canSubmit =
     sourceType.trim() !== '' && targetType.trim() !== '' && result.status !== 'checking';
+  // Audit P1-9: a disabled 校验 says which end is still empty.
+  const missing = [
+    sourceType.trim() === '' ? t('选择来源类型', 'pick a source type') : null,
+    targetType.trim() === '' ? t('选择目标类型', 'pick a target type') : null,
+  ].filter((item): item is string => item !== null);
 
   return (
     <div className="stack-s" data-testid="graph-type-validate-tool">
@@ -522,6 +527,11 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
         >
           {t('校验', 'Validate')}
         </Button>
+        {missing.length > 0 && result.status !== 'checking' ? (
+          <span className="text-small text-3" data-testid="graph-type-validate-missing">
+            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+          </span>
+        ) : null}
       </form>
       {signatures.length > 1 ? (
         <div className="row-wrap" data-testid="graph-type-validate-signatures">

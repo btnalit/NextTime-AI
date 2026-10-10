@@ -87,6 +87,7 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       { service: 'llm-proxy', status: 'degraded', detail: 'slow' },
     ],
     providerHealthFile: 'ok',
+    modelsCatalog: 'ok',
     modelProviders: [],
     checklist: [
       { key: 'providers', done: true, detail: 'anthropic configured' },
@@ -173,7 +174,9 @@ describe('PlatformOverviewPage', () => {
     expect(health.textContent).toContain('degraded');
 
     const audit = screen.getByTestId('platform-overview-audit');
-    expect(audit.textContent).toContain('create_user');
+    // P1-14: a row is named for what happened, never by its interface name.
+    expect(audit.textContent).toContain('创建用户');
+    expect(audit.textContent).not.toContain('create_user');
     expect(audit.textContent).toContain('admin');
   });
 
@@ -196,6 +199,36 @@ describe('PlatformOverviewPage', () => {
     expect(screen.getByTestId('checklist-add-provider').getAttribute('href')).toBe(
       '#/platform/models?new=provider',
     );
+  });
+
+  it('acceptance-537: an unreadable models.json says the file is broken, never 「还没有模型供应商」, and links to the providers page', async () => {
+    const base = overview();
+    const http = scriptedHttp({
+      platform_overview: () => ({
+        ...base,
+        modelsCatalog: 'unreadable',
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 0 },
+        health: [
+          { service: 'kernel', status: 'ok' },
+          { service: 'llm-proxy', status: 'degraded', detail: 'models.json unreadable' },
+        ],
+        checklist: base.checklist.map((item) =>
+          item.key === 'providers' ? { ...item, done: false } : item,
+        ),
+      }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+    });
+    renderPage(http);
+    const checklist = await screen.findByTestId('platform-checklist');
+    expect(checklist.textContent).toContain('模型配置文件读不了');
+    expect(checklist.textContent).not.toContain('还没有模型供应商');
+    expect(screen.queryByTestId('checklist-add-provider')).toBeNull();
+    expect(screen.getByTestId('checklist-fix-models').getAttribute('href')).toBe(
+      '#/platform/models',
+    );
+    expect(screen.getByTestId('platform-count-models').textContent).toContain('—');
+    expect(document.body.textContent).toContain('模型配置文件读不了，模型都用不了');
+    expect(document.body.textContent).not.toContain('llm-proxy 服务异常');
   });
 
   it('P0-2: models configured but no provider tested — the step says so and links to the providers table, the tile qualifies its count, 需要人处理 groups the providers that are not ok by status', async () => {
@@ -669,7 +702,7 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
     expect(tile.textContent).not.toContain('3');
   });
 
-  it('最近平台审计 caps at 5 rows even when the kernel returns more', async () => {
+  it('最近平台改动 caps at 5 rows even when the kernel returns more', async () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({
       id: `audit-${i}`,
       action: `action_${i}`,

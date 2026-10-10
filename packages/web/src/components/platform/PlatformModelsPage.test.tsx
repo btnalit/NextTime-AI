@@ -805,6 +805,65 @@ describe('PlatformModelsPage', () => {
     );
   });
 
+  it('P1-3: the workspace × model matrix reloads its catalog after a provider changes, and with no model offers to add a provider', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [] }),
+    });
+    let items = [provider({ id: 'acme', displayName: 'Acme', source: 'store' })];
+    const proxy = scriptedProxy({
+      'GET /providers': () => ({ status: 200, body: listWire(items) }),
+      'PUT /providers/acme': (body) => {
+        const input = body as { enabled: boolean };
+        items = items.map((p) => (p.id === 'acme' ? { ...p, enabled: input.enabled } : p));
+        return { status: 200, body: items[0] };
+      },
+    });
+    renderPage(http, proxy.fetchImpl);
+    const table = await screen.findByTestId('providers-table');
+    const catalogReads = () =>
+      vi.mocked(http.call).mock.calls.filter(([name]) => name === 'list_platform_models').length;
+    await waitFor(() => expect(catalogReads()).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const before = catalogReads();
+
+    fireEvent.click(within(table).getByTestId('provider-disable'));
+    fireEvent.click(
+      within(await screen.findByTestId('provider-disable-confirm')).getByTestId('confirm-button'),
+    );
+    await waitFor(() => expect(catalogReads()).toBeGreaterThan(before));
+  });
+
+  it('P1-3: an empty catalog says there is no model yet and opens 新增供应商', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({
+        items: [
+          {
+            id: 'ws-1',
+            name: 'Acme',
+            status: 'active',
+            entryModel: null,
+            allowedModels: [],
+            ontologyEnforcement: 'reject',
+            purpose: 'standard',
+            expiresAt: null,
+            disabledAt: null,
+            purgeable: false,
+            isDefault: true,
+            memberCount: 1,
+            owners: [],
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    const proxy = scriptedProxy({ 'GET /providers': () => ({ status: 200, body: listWire([]) }) });
+    renderPage(http, proxy.fetchImpl);
+    const empty = await screen.findByTestId('workspace-model-matrix-no-models');
+    expect(empty.textContent).toContain('还没有模型');
+    fireEvent.click(within(empty).getByTestId('workspace-model-matrix-add-provider'));
+    expect(await screen.findByTestId('provider-form')).toBeTruthy();
+  });
+
   it('shows the operator notices for an unwritable store and a failed models.json rewrite, and blocks writes', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({

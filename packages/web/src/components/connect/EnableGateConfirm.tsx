@@ -192,11 +192,6 @@ function EnablePreviewBody({
                 <span className="mono">{operation.name}</span>
                 <StatusChip machine="operationMode" status={operation.mode} size="s" />
                 <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
-                {operation.mode === 'execute' || operation.blastRadius === 'high' ? (
-                  <span className="tag" data-testid="enable-preview-high-impact">
-                    {t('高影响', 'High impact')}
-                  </span>
-                ) : null}
               </li>
             ))}
           </ul>

@@ -138,6 +138,21 @@ export function IssueServiceHandleSection({
     /^\d+$/.test(ttlDays.trim()) && Number(ttlDays) >= 1 && Number(ttlDays) <= maxTtlDays;
   const canSubmit =
     principalId !== '' && scope.length > 0 && unknownPasted.length === 0 && ttlValid && !submitting;
+  // Audit P1-9: a disabled 签发 says what it still waits for (the form's own label words).
+  const missing = [
+    principalId !== ''
+      ? null
+      : servicePrincipals.length === 0
+        ? t('先创建服务主体', 'create a service principal first')
+        : t('选择服务主体', 'pick a service principal'),
+    ttlValid
+      ? null
+      : t(`填写 1 到 ${maxTtlDays} 的有效期（天）`, `enter a TTL of 1 to ${maxTtlDays} days`),
+    scope.length > 0 ? null : t('勾选能力', 'tick at least one capability'),
+    unknownPasted.length === 0
+      ? null
+      : t('去掉不可签发的能力名', 'remove the names that cannot be issued'),
+  ].filter((item): item is string => item !== null);
 
   function add(names: readonly string[]): void {
     if (names.length === 0) return;
@@ -397,6 +412,11 @@ export function IssueServiceHandleSection({
         <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
+          {missing.length > 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="ish-missing">
+              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+            </span>
+          ) : null}
           <Button type="submit" variant="primary" aria-busy={submitting} disabled={!canSubmit}>
             {t('签发', 'Issue')}
           </Button>

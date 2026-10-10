@@ -60,7 +60,7 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
         </dd>
         <dt>{t('清单版本', 'Manifest version')}</dt>
         <dd>{gate.manifestVersion ?? '—'}</dd>
-        <dt>Operation</dt>
+        <dt>{t('操作', 'Operation')}</dt>
         <dd>{gate.operationCount}</dd>
         <dt>{t('创建于', 'Created')}</dt>
         <dd>

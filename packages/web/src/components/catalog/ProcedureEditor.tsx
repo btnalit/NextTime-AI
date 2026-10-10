@@ -311,7 +311,7 @@ export function ProcedureEditor({
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
-    const validated = validateProcedure(form);
+    const validated = validateProcedure(form, t);
     if (!validated.ok) {
       setErrors(validated.errors);
       setView('form');

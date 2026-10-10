@@ -6,6 +6,7 @@ import {
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import { type EgressDenyNormalization, normalizeEgressDenyText } from '../../lib/catalog-input.js';
 import {
   capabilityModeLabel,
@@ -181,7 +182,9 @@ function CapabilityPickerField({
   const extraRows = selected
     .filter((name) => !known.has(name))
     .map((name) => ({ name, mode: '__unlisted__' }));
-  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter);
+  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter, (name) =>
+    actionLabel(name, t),
+  );
   const filtering = filter.trim() !== '';
 
   function setGroup(names: readonly string[], on: boolean): void {
@@ -282,7 +285,12 @@ function CapabilityPickerField({
                           onChange={() => setGroup([row.name], !selected.includes(row.name))}
                           disabled={disabled}
                         />
-                        <span className="mono">{row.name}</span>
+                        {/* Audit P1-8: what it does first, the registry name as the secondary
+                         *  text a builder recognizes from docs and errors. */}
+                        <span title={actionHint(row.name, t) ?? undefined}>
+                          {actionLabel(row.name, t)}{' '}
+                          <span className="mono text-3 text-small">{row.name}</span>
+                        </span>
                       </label>
                     ))
                   : null}
@@ -389,7 +397,7 @@ export function WorkerDefinitionEditor({
     if (busy) return;
     const normalizedForm = normalizeEgressDeny(form);
     if (normalizedForm !== form) setForm(normalizedForm);
-    const validated = validateWorkerDefinition(normalizedForm);
+    const validated = validateWorkerDefinition(normalizedForm, t);
     if (!validated.ok) {
       setErrors(validated.errors);
       setView('form');
@@ -766,6 +774,16 @@ export function WorkerDefinitionEditor({
                   'No systems registered in this workspace yet.',
                 )}
               />
+              {/* Audit P1-7: an empty gate list is legal but almost never meant — say what it
+               *  means before the draft is proposed, not after the Worker fails to reach anything. */}
+              {(gatekeepers ?? []).length > 0 && splitList(form.gates).length === 0 ? (
+                <Notice tone="warn" testId="wd-gates-none-warning">
+                  {t(
+                    '没有勾选门：这个 Worker 碰不到任何系统，委派给它的任务只能做不需要系统的事。',
+                    'No gate ticked: this Worker reaches no system, so delegated tasks can only do work that needs none.',
+                  )}
+                </Notice>
+              ) : null}
               <CheckboxListField
                 legend={t('使用的 Skill', 'skills')}
                 hint={t(

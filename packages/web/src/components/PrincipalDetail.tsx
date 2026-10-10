@@ -9,7 +9,7 @@ import {
   ownerCredentialConfirmCopy,
 } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { principalKindLabel, roleLabel } from '../lib/labels.js';
+import { principalKindLabel, roleDescription, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
@@ -230,7 +230,11 @@ export function PrincipalDetail({
 
         {canManage && !platformManaged ? (
           <DrawerSection title={t('编辑', 'Edit')}>
-            <Field id="principal-role" label={t('角色', 'Role')}>
+            <Field
+              id="principal-role"
+              label={t('角色', 'Role')}
+              hint={roleDescription(role, t) ?? undefined}
+            >
               <div className="row">
                 <Select
                   id="principal-role"

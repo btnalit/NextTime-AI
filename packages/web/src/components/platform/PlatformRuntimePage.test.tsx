@@ -398,6 +398,7 @@ describe('PlatformRuntimePage', () => {
     renderPage(http);
 
     fireEvent.click(await screen.findByTestId('runtime-rollback'));
+    expect(screen.queryByTestId('runtime-rollback-missing')).toBeNull();
     const confirm = await screen.findByTestId('runtime-rollback-confirm');
     // RT2: the copy renders the emphasis, not a literal `*different*` — and only in the current
     // language (it used to render the Chinese sentence with the English one appended).
@@ -423,6 +424,10 @@ describe('PlatformRuntimePage', () => {
     const button = (await screen.findByTestId('runtime-rollback')) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.title).toContain('没有可回滚到的不同值');
+    // Audit P1-9: the reason is visible next to the button, not only in a hover title.
+    expect(screen.getByTestId('runtime-rollback-missing').textContent).toBe(
+      '没有可回滚的上一个镜像',
+    );
 
     fireEvent.click(button);
     expect(screen.queryByTestId('runtime-rollback-confirm')).toBeNull();

@@ -238,6 +238,26 @@ function ClaimPasswordCard({
     displayName.trim().length > 0 &&
     password.length >= 8 &&
     password === confirmPassword;
+  // Audit P1-9: a disabled 设置密码 says what it still waits for (field labels' own words).
+  const missing = [
+    apiKey ? null : t('先用 API key 登录', 'sign in with an API key first'),
+    normalizedLogin === ''
+      ? t('填写登录名', 'enter a login')
+      : LOGIN_PATTERN.test(normalizedLogin)
+        ? null
+        : t('改正登录名', 'fix the login'),
+    displayName.trim() === '' ? t('填写显示名', 'enter a display name') : null,
+    password === ''
+      ? t('填写密码', 'enter a password')
+      : password.length < 8
+        ? t('密码至少 8 位', 'make the password at least 8 characters')
+        : null,
+    confirmPassword === ''
+      ? t('确认密码', 'confirm the password')
+      : password !== confirmPassword
+        ? t('让两次输入的密码一致', 'make the passwords match')
+        : null,
+  ].filter((item): item is string => item !== null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -352,6 +372,11 @@ function ClaimPasswordCard({
         ) : null}
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
+          {missing.length > 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="account-claim-missing">
+              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+            </span>
+          ) : null}
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
             {t('设置密码', 'Set password')}
           </Button>
@@ -440,6 +465,20 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
   const passwordsMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
   const newPasswordTooShort = newPassword.length > 0 && newPassword.length < 8;
   const canSubmit = currentPassword && newPassword.length >= 8 && newPassword === confirmPassword;
+  // Audit P1-9: a disabled 更改密码 says what it still waits for (field labels' own words).
+  const missing = [
+    currentPassword === '' ? t('填写当前密码', 'enter the current password') : null,
+    newPassword === ''
+      ? t('填写新密码', 'enter the new password')
+      : newPassword.length < 8
+        ? t('新密码至少 8 位', 'make the new password at least 8 characters')
+        : null,
+    confirmPassword === ''
+      ? t('确认新密码', 'confirm the new password')
+      : newPassword !== confirmPassword
+        ? t('让两次输入的密码一致', 'make the passwords match')
+        : null,
+  ].filter((item): item is string => item !== null);
   const newPasswordWeak =
     error instanceof HttpError &&
     error.kind === 'capability_error' &&
@@ -541,6 +580,11 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           {/* S8 W1-A11 (audit L2): secondary — the page's three independent forms each had their
            *  own ink primary button; `DisplayNameCard`'s "保存" (the most frequent, top-of-page
            *  action) stays the one primary for this view. */}
+          {missing.length > 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="account-password-missing">
+              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+            </span>
+          ) : null}
           <Button type="submit" variant="secondary" loading={submitting} disabled={!canSubmit}>
             {t('更改密码', 'Change password')}
           </Button>

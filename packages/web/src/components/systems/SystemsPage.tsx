@@ -72,6 +72,9 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 
+/** The 待启用的平台实例 section, scrolled to from the empty state when it has rows (audit P1-16). */
+const AVAILABLE_SECTION_ID = 'systems-available-instances';
+
 /**
  * components/systems/SystemsPage: 系统与授权 Systems & access (`#/govern/systems`, also rendered
  * for `#/govern/access` — routes.tsx). Console redesign P2 (docs/console-redesign-plan-
@@ -360,18 +363,41 @@ export function SystemsPage({
           onRetry={() => void readiness.reload()}
           testId="systems-error"
         />
+      ) : gates.length === 0 && availableRows.length > 0 ? (
+        // Audit P1-16: systems the platform already prepared are one click away below — "nothing
+        // connected yet" next to them read as a contradiction. The header's 接入一个系统 stays the
+        // one primary button on the page.
+        <EmptyState
+          title={t(
+            `有 ${availableRows.length} 个系统已就绪，等待启用`,
+            `${availableRows.length} system(s) ready to enable`,
+          )}
+          body={t(
+            '平台已经准备好了下面这些系统，启用后就能在这里授权成员使用。',
+            'The platform has prepared the systems below; enable one, then grant members access to it here.',
+          )}
+          action={
+            <Button
+              variant="secondary"
+              onClick={() =>
+                document
+                  .getElementById(AVAILABLE_SECTION_ID)
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }
+              data-testid="systems-empty-see-available"
+            >
+              {t('查看待启用的系统', 'See the systems to enable')}
+            </Button>
+          }
+          testId="systems-empty"
+        />
       ) : gates.length === 0 ? (
         <EmptyState
           title={t('还没有接入任何系统', 'No system connected yet')}
           body={t(
-            '点击"接入一个系统"，把第一个系统接到门后面——之后就能在这里授权成员使用它。',
-            'Click "Connect a system" to bring the first one in behind a gate — you can then grant members access to it here.',
+            '点上方的「接入一个系统」，把第一个系统接到门后面，之后就能在这里授权成员使用它。',
+            'Use "Connect a system" above to bring the first one in behind a gate; you can then grant members access to it here.',
           )}
-          action={
-            <Button variant="primary" onClick={() => setDrawer({ kind: 'launcher' })}>
-              {t('接入一个系统', 'Connect a system')}
-            </Button>
-          }
           testId="systems-empty"
         />
       ) : (
@@ -547,7 +573,7 @@ export function SystemsPage({
       </section>
 
       {/* --- 待启用的平台实例 (unchanged component) ------------------------------------------- */}
-      <section className="section">
+      <section className="section" id={AVAILABLE_SECTION_ID}>
         <AvailableGateInstancesSection
           http={http}
           available={available}

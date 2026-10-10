@@ -5,7 +5,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { roleLabel } from '../lib/labels.js';
+import { roleDescription, roleLabel } from '../lib/labels.js';
 import {
   loginError,
   loginNormalizedNote,
@@ -243,7 +243,7 @@ export function AddMemberForm({ http, onDone, onCancel, platformAdmin }: AddMemb
         id="am-role"
         label={t('角色', 'Role')}
         required
-        hint={t('之后可在成员行里修改。', "Can be changed later from the member's row.")}
+        hint={`${roleDescription(role, t) ?? ''}${t('之后可在成员行里修改。', " Can be changed later from the member's row.")}`}
       >
         <Select
           id="am-role"

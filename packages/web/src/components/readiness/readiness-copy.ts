@@ -1,4 +1,4 @@
-import type { ExecutionReadinessMissingWire, GateUnreachableReason } from '@nexttime/shared';
+import type { ExecutionReadinessMissingWire, GateUnreachableReason, Role } from '@nexttime/shared';
 import type { Translate } from '../../lib/i18n.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
 
@@ -21,6 +21,104 @@ export type GateNameLookup = ReadonlyMap<string, string>;
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
 
+/**
+ * Console audit P1-4 / P1-5: who is reading a fix, so a fix link is offered only to someone who
+ * can act on it, and never points at the page the reader is already on.
+ */
+export interface ReadinessReader {
+  /** The reader's workspace role once `get_workspace` said it; `null` while unknown — the link is
+   *  then shown, and the page it opens says itself what this role cannot do. */
+  readonly role: Role | null;
+  /** The page the card sits on (`hrefs.*`): a fix link to it would only reload the same page. */
+  readonly currentHref?: string;
+}
+
+/** Who can make a fix: the registry `minRole` of the capability behind it (`grant_capability`,
+ *  `set_agent_policy`: owner; `publish_worker_definition`, `publish_operation`: builder), `anyone`
+ *  for the reader's own settings and the systems page (a member requests a connection there),
+ *  `platform` for what only a platform administrator can change. */
+type FixOwner = 'anyone' | 'owner' | 'builder' | 'platform';
+
+function readerCanFix(owner: FixOwner, reader: ReadinessReader | undefined): boolean {
+  if (owner === 'platform') return false;
+  const role = reader?.role ?? null;
+  if (role === null || owner === 'anyone' || role === 'owner') return true;
+  return role === owner;
+}
+
+function linkFor(
+  href: string | undefined,
+  owner: FixOwner,
+  reader: ReadinessReader | undefined,
+): string | undefined {
+  if (href === undefined || !readerCanFix(owner, reader)) return undefined;
+  return href === reader?.currentHref ? undefined : href;
+}
+
+/** What a reader who cannot make the fix themselves does instead — ask the role that can. */
+function askFor(owner: FixOwner, reader: ReadinessReader, t: Translate): string | undefined {
+  if (owner === 'anyone' || owner === 'platform' || readerCanFix(owner, reader)) return undefined;
+  return owner === 'owner'
+    ? t(
+        '这一步要工作区所有者来做，请联系他们。',
+        'A workspace owner has to do this; ask one of them.',
+      )
+    : t(
+        '这一步要构建者或工作区所有者来做，请联系他们。',
+        'A builder or a workspace owner has to do this; ask one of them.',
+      );
+}
+
+function missingFixOwner(code: ExecutionReadinessMissingWire['code']): FixOwner {
+  switch (code) {
+    case 'no_enabled_gate':
+    case 'excluded_by_profile':
+      return 'anyone';
+    case 'no_grant':
+    case 'excluded_by_policy':
+      return 'owner';
+    case 'no_published_worker':
+    case 'no_worker_gate':
+      return 'builder';
+    case 'disabled_by_platform':
+      return 'platform';
+  }
+}
+
+function gateReasonFixOwner(reason: GateUnreachableReason): FixOwner {
+  switch (reason) {
+    case 'excluded_by_profile':
+      return 'anyone';
+    case 'not_granted':
+    case 'excluded_by_policy':
+      return 'owner';
+    case 'no_published_operation':
+    case 'no_worker':
+      return 'builder';
+    case 'disabled_by_platform':
+      return 'platform';
+  }
+}
+
+/** For a reader who cannot fix `item` themselves: who to ask. `undefined` when they can (the link
+ *  says where) or when nobody in the workspace can (`disabled_by_platform`'s own text says so). */
+export function missingAsk(
+  item: ExecutionReadinessMissingWire,
+  reader: ReadinessReader,
+  t: Translate,
+): string | undefined {
+  return askFor(missingFixOwner(item.code), reader, t);
+}
+
+/** `missingAsk` for one gate's `reason`. */
+export function gateReasonAsk(
+  reason: GateUnreachableReason,
+  reader: ReadinessReader,
+  t: Translate,
+): string | undefined {
+  return askFor(gateReasonFixOwner(reason), reader, t);
+}
+
 /** One line explaining *why* this item is missing — never the raw `code`, never a bare id. */
 export function missingCauseText(
   item: ExecutionReadinessMissingWire,
@@ -41,9 +139,11 @@ export function missingCauseText(
           `Your entry agent has not been granted the “${name}” gate yet.`,
         );
       }
+      // Audit P1-4: reads need no grant, so "no grant at all" next to a 可直接调用 chip read as a
+      // contradiction — it is the write operations that are not granted.
       return t(
-        '你的入口 agent 还没有获得任何门的授权。',
-        'Your entry agent has not been granted any gate yet.',
+        '你的入口 agent 还没有任何门的写操作授权（只读操作不需要授权，可以直接用）。',
+        'Your entry agent has no write grant on any gate yet (read operations need no grant and work already).',
       );
     }
     case 'no_published_worker':
@@ -99,7 +199,14 @@ export function missingCauseText(
  *  member or workspace owner can usefully go (`disabled_by_platform`: the only page that acts on it,
  *  平台 · 集成, refuses anyone who is not a platform admin outright — `routes.tsx`'s own
  *  `requireAdmin` — so this is text-only rather than a link most readers cannot open). */
-export function missingLinkHref(item: ExecutionReadinessMissingWire): string | undefined {
+export function missingLinkHref(
+  item: ExecutionReadinessMissingWire,
+  reader?: ReadinessReader,
+): string | undefined {
+  return linkFor(missingDestination(item), missingFixOwner(item.code), reader);
+}
+
+function missingDestination(item: ExecutionReadinessMissingWire): string | undefined {
   switch (item.code) {
     case 'no_enabled_gate':
       return hrefs.systems();
@@ -141,8 +248,28 @@ export function missingLinkLabel(
 }
 
 /** Console redesign M2: why one system is not usable by the entry agent (`gates[].reason`) — the
- *  same reason code `find_operations` hands the agent, so both say the same thing. */
-export function gateReasonText(reason: GateUnreachableReason | undefined, t: Translate): string {
+ *  same reason code `find_operations` hands the agent, so both say the same thing. `about` is whose
+ *  entry agent: the reader's own (`me`, the default) or another member's row on 系统与授权's
+ *  「谁能用」 (`them`), which must not say "you". */
+export function gateReasonText(
+  reason: GateUnreachableReason | undefined,
+  t: Translate,
+  about: 'me' | 'them' = 'me',
+): string {
+  if (about === 'them') {
+    if (reason === 'not_granted') {
+      return t(
+        '写操作还没有授权给这位成员——需要工作区所有者授权（只读操作不需要授权）。',
+        'Its write operations are not granted to this member yet — a workspace owner has to grant them (read operations need no grant).',
+      );
+    }
+    if (reason === 'excluded_by_profile') {
+      return t(
+        '这位成员在自己的「我的智能体」里取消了勾选。',
+        'This member unticked it on their own My Agent page.',
+      );
+    }
+  }
   switch (reason) {
     case 'no_published_operation':
       return t('这个系统还没有已发布的操作。', 'This system has no published operation yet.');
@@ -176,7 +303,14 @@ export function gateReasonText(reason: GateUnreachableReason | undefined, t: Tra
 /** `undefined` for `disabled_by_platform` — see `missingLinkHref`'s own doc comment: 平台 · 集成
  *  refuses anyone who is not a platform admin, so a member or workspace owner reading this has
  *  nowhere useful to click through to. */
-export function gateReasonHref(reason: GateUnreachableReason): string | undefined {
+export function gateReasonHref(
+  reason: GateUnreachableReason,
+  reader?: ReadinessReader,
+): string | undefined {
+  return linkFor(gateReasonDestination(reason), gateReasonFixOwner(reason), reader);
+}
+
+function gateReasonDestination(reason: GateUnreachableReason): string | undefined {
   switch (reason) {
     case 'no_published_operation':
       return hrefs.systems();

@@ -7,10 +7,14 @@ import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Notice } from '../kit/notice.js';
+import { FixHint, useReadinessReader } from './FixHint.js';
 import {
+  type ReadinessReader,
+  gateReasonAsk,
   gateReasonHref,
   gateReasonLink,
   gateReasonText,
+  missingAsk,
   missingCauseText,
   missingKey,
   missingLinkHref,
@@ -20,6 +24,8 @@ import { useExecutionReadiness } from './useExecutionReadiness.js';
 
 export interface ExecutionReadinessCardProps {
   readonly http: CapabilityCaller;
+  /** The page the card is mounted on (`hrefs.*`); a fix link to it is not offered (audit P1-4). */
+  readonly currentHref?: string;
 }
 
 /**
@@ -40,9 +46,10 @@ export interface ExecutionReadinessCardProps {
  * （`execution_readiness` 的 `minRole:'member'`）；operator/owner 才能读别人的，这条状态条不做那件
  * 事（可选的成员切换器留给后续）。
  */
-export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
+export function ExecutionReadinessCard({ http, currentHref }: ExecutionReadinessCardProps) {
   const t = useT();
   const readiness = useExecutionReadiness(http);
+  const reader = useReadinessReader(http, currentHref);
 
   if (readiness.state.status === 'loading') {
     return (
@@ -62,7 +69,7 @@ export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
       />
     );
   }
-  return <ExecutionReadinessStrip data={readiness.state.data} />;
+  return <ExecutionReadinessStrip data={readiness.state.data} reader={reader} />;
 }
 
 type GateWire = ExecutionReadinessWire['gates'][number];
@@ -101,7 +108,13 @@ function gateDisplayNames(gates: readonly GateWire[]): ReadonlyMap<string, strin
   return names;
 }
 
-function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWire }) {
+function ExecutionReadinessStrip({
+  data,
+  reader,
+}: {
+  readonly data: ExecutionReadinessWire;
+  readonly reader: ReadinessReader;
+}) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
@@ -125,11 +138,11 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
           {first ? (
             <li className="row-wrap" data-testid="execution-readiness-missing-item">
               <span>{missingCauseText(first, gateNames, t)}</span>
-              {missingLinkHref(first) !== undefined ? (
-                <a href={missingLinkHref(first)} className="link-inline">
-                  {missingLinkLabel(first, t)}
-                </a>
-              ) : null}
+              <FixHint
+                href={missingLinkHref(first, reader)}
+                label={missingLinkLabel(first, t)}
+                ask={missingAsk(first, reader, t)}
+              />
             </li>
           ) : null}
         </ul>
@@ -208,6 +221,7 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
                 gate={gate}
                 displayName={displayNames.get(gate.gateId) ?? gate.name}
                 workerNames={workerNames}
+                reader={reader}
               />
             ))}
           </ul>
@@ -239,11 +253,11 @@ function ExecutionReadinessStrip({ data }: { readonly data: ExecutionReadinessWi
                   {executionReadinessMissingCodeLabel(item.code, t)}
                 </span>
                 <span>{missingCauseText(item, gateNames, t)}</span>
-                {missingLinkHref(item) !== undefined ? (
-                  <a href={missingLinkHref(item)} className="link-inline">
-                    {missingLinkLabel(item, t)}
-                  </a>
-                ) : null}
+                <FixHint
+                  href={missingLinkHref(item, reader)}
+                  label={missingLinkLabel(item, t)}
+                  ask={missingAsk(item, reader, t)}
+                />
               </li>
             ))}
           </ul>
@@ -257,10 +271,12 @@ function GateRow({
   gate,
   displayName,
   workerNames,
+  reader,
 }: {
   readonly gate: GateWire;
   readonly displayName: string;
   readonly workerNames: ReadonlyMap<string, string>;
+  readonly reader: ReadinessReader;
 }) {
   const t = useT();
   const workers = gate.workerDefinitionIds.map((id) => workerNames.get(id) ?? id).join('、');
@@ -300,10 +316,12 @@ function GateRow({
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
           <span>{gateReasonText(gate.reason, t)}</span>
-          {gate.reason !== undefined && gateReasonHref(gate.reason) !== undefined ? (
-            <a href={gateReasonHref(gate.reason)} className="link-inline">
-              {gateReasonLink(gate.reason, t)}
-            </a>
+          {gate.reason !== undefined ? (
+            <FixHint
+              href={gateReasonHref(gate.reason, reader)}
+              label={gateReasonLink(gate.reason, t)}
+              ask={gateReasonAsk(gate.reason, reader, t)}
+            />
           ) : null}
         </>
       )}

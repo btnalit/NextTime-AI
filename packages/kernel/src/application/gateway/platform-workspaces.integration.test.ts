@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -478,6 +478,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Review M1: no health file means unknown, and unknown is never available — only an
         // explicit successful test counts. The llm-proxy row and the checklist say why.
         expect(before.providerHealthFile).toBe('missing');
+        expect(before.modelsCatalog).toBe('ok');
         expect(before.counts.modelsAvailable).toBe(0);
         expect(before.counts.modelsConfigured).toBe(2);
         expect(before.modelProviders).toEqual([{ id: 'anthropic', health: null, models: 2 }]);
@@ -548,6 +549,32 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(tested.checklist.find((item) => item.key === 'providers')?.done).toBe(true);
         } finally {
           await rm(healthFile, { force: true });
+        }
+      });
+
+      // Audit acceptance-537: an unreadable models.json is a broken file, not "no provider yet";
+      // the `{}` placeholder host-env-init.sh seeds is the empty case (P1-3).
+      it('platform_overview tells an unreadable models.json from an empty one', async () => {
+        const modelsFile = path.join(modelsJsonDir as string, 'models.json');
+        const original = await readFile(modelsFile, 'utf8');
+        try {
+          await writeFile(modelsFile, '{ not json');
+          const broken = await callAsAdmin<PlatformOverviewWire>('platform_overview');
+          expect(broken.modelsCatalog).toBe('unreadable');
+          expect(broken.counts.modelsConfigured).toBe(0);
+          expect(broken.checklist.find((item) => item.key === 'providers')?.detail).toContain(
+            'models.json unreadable',
+          );
+
+          await writeFile(modelsFile, '{}');
+          const empty = await callAsAdmin<PlatformOverviewWire>('platform_overview');
+          expect(empty.modelsCatalog).toBe('ok');
+          expect(empty.counts.modelsConfigured).toBe(0);
+          expect(empty.checklist.find((item) => item.key === 'providers')?.detail).toBe(
+            'no model provider yet — add one in the console',
+          );
+        } finally {
+          await writeFile(modelsFile, original);
         }
       });
     });

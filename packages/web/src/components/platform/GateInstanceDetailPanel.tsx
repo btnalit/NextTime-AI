@@ -190,7 +190,7 @@ export function GateInstanceDetailPanel({
       <DrawerSections>
         <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
-            <dt>Gate id</dt>
+            <dt>{t('门 ID', 'Gate id')}</dt>
             <dd>
               {/* S8 W1-A6 (audit S10): gate ids are short human-readable slugs
                   (`gatekeeper-quickbooks`, …), not UUIDs — CopyId's default 8-char truncation
@@ -463,7 +463,7 @@ export function GateInstanceDetailPanel({
                       ? t('共享', 'Shared')
                       : t('按人', 'Connected account')}
                   </dd>
-                  <dt>Manifest source</dt>
+                  <dt>{t('清单来源', 'Manifest source')}</dt>
                   <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
                 </dl>
 

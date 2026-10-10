@@ -28,7 +28,14 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
+import {
+  type ReadinessReader,
+  gateReasonAsk,
+  gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
+} from '../readiness/readiness-copy.js';
 
 /** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
  *  trigger only needs `kit/button`'s bare label slot, not `components/ui/Icon` (which would add a
@@ -171,10 +178,17 @@ function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire })
 }
 
 /** The drawer's own, fuller rendering of the same reachability — full sentence + a fix-it link
- *  when it points somewhere actually useful (see `isSelfPageHref`). */
-function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+ *  when it points somewhere actually useful (see `isSelfPageHref`) and the reader can make the
+ *  fix, else who to ask (audit P1-5). */
+function MyReachabilityDetail({
+  gate,
+  reader,
+}: {
+  readonly gate: ExecutionReadinessGateWire;
+  readonly reader: ReadinessReader;
+}) {
   const t = useT();
-  const href = gate.reason !== undefined ? gateReasonHref(gate.reason) : undefined;
+  const href = gate.reason !== undefined ? gateReasonHref(gate.reason, reader) : undefined;
   return (
     <div className="row-wrap" data-testid="system-access-my-reachability">
       <span className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}>
@@ -183,10 +197,12 @@ function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateW
       {gate.status === 'unreachable' ? (
         <>
           <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
-          {gate.reason !== undefined && href !== undefined && !isSelfPageHref(href) ? (
-            <a href={href} className="link-inline">
-              {gateReasonLink(gate.reason, t)}
-            </a>
+          {gate.reason !== undefined ? (
+            <FixHint
+              href={isSelfPageHref(href) ? undefined : href}
+              label={gateReasonLink(gate.reason, t)}
+              ask={gateReasonAsk(gate.reason, reader, t)}
+            />
           ) : null}
         </>
       ) : null}
@@ -231,6 +247,7 @@ export function SystemAccessCard({
   selfPrincipalId,
 }: SystemAccessCardProps) {
   const t = useT();
+  const reader = useReadinessReader(http);
   const [grantOpen, setGrantOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -439,7 +456,7 @@ export function SystemAccessCard({
           <div className="stack">
             <div className="stack-s">
               <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
-              <MyReachabilityDetail gate={gate} />
+              <MyReachabilityDetail gate={gate} reader={reader} />
             </div>
 
             <div className="stack-s" data-testid="system-access-list">
@@ -547,6 +564,7 @@ function GranteeRow({
   readonly onRevoke: (grantId: string) => Promise<void>;
 }) {
   const t = useT();
+  const reader = useReadinessReader(http);
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const gateStatus = readiness?.gates.find((entry) => entry.gateId === gateId);
   const approver = row.principalRole !== undefined && gateGrantMakesApprover(row.principalRole);
@@ -565,7 +583,7 @@ function GranteeRow({
         <span
           className="tag"
           title={t(
-            '这份授权也让他成为这个门上所有动作的审批者',
+            '这份授权也让这位成员成为这个门上所有动作的审批者',
             'This grant also makes them an approver of every action on this gate',
           )}
           data-testid="system-access-approver-tag"
@@ -588,13 +606,19 @@ function GranteeRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
-          {gateStatus.reason !== undefined &&
-          gateReasonHref(gateStatus.reason) !== undefined &&
-          !isSelfPageHref(gateReasonHref(gateStatus.reason)) ? (
-            <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
-              {gateReasonLink(gateStatus.reason, t)}
-            </a>
+          <span className="text-3 text-small">
+            {gateReasonText(gateStatus.reason, t, isSelf ? 'me' : 'them')}
+          </span>
+          {gateStatus.reason !== undefined ? (
+            <FixHint
+              href={
+                isSelfPageHref(gateReasonHref(gateStatus.reason, reader))
+                  ? undefined
+                  : gateReasonHref(gateStatus.reason, reader)
+              }
+              label={gateReasonLink(gateStatus.reason, t)}
+              ask={gateReasonAsk(gateStatus.reason, reader, t)}
+            />
           ) : null}
         </>
       )}

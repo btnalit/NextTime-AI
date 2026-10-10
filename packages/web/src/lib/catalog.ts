@@ -47,13 +47,99 @@ export type FieldErrors = Readonly<Record<string, string>>;
 interface IssueLike {
   readonly path: readonly (string | number)[];
   readonly message: string;
+  readonly code?: string;
+  readonly type?: string;
+  readonly minimum?: unknown;
+  readonly maximum?: unknown;
+  readonly received?: unknown;
+  readonly validation?: unknown;
+  readonly options?: readonly unknown[];
 }
 
-export function fieldErrorsFromIssues(issues: readonly IssueLike[]): FieldErrors {
+/** The shared schemas' only `custom` issues are a Worker definition's `egressDeny` entries
+ *  (`EgressDenyListSchema`, English by design: the kernel and CLI read it too). Each problem it
+ *  can name gets its own sentence here, so the editor never shows that English (audit P3). */
+const EGRESS_DENY_ISSUE = /^egressDeny entry "(.*)" (.*)$/s;
+
+function customIssueMessage(message: string, t: Translate): string {
+  const match = EGRESS_DENY_ISSUE.exec(message);
+  if (!match) return t('这一项的值不被接受', 'This value is not accepted');
+  const entry = match[1] ?? '';
+  const problem = match[2] ?? '';
+  if (problem.startsWith('is an IP address')) {
+    return t(
+      `「${entry}」是 IP 地址：这里只填主机名（私有网段已经按地址拦截）`,
+      `"${entry}" is an IP address: list host names only (private ranges are already denied by address)`,
+    );
+  }
+  if (problem.startsWith('starts with')) {
+    return t(
+      `「${entry}」不要以 *. 或 . 开头：直接写域名，它已包含所有子域名`,
+      `"${entry}" must not start with *. or .: write the bare domain, which covers every subdomain`,
+    );
+  }
+  if (problem.startsWith('contains "*"')) {
+    return t(`「${entry}」里不支持通配符 *`, `"${entry}" contains *; wildcards are not supported`);
+  }
+  if (problem === 'is empty') return t('不能留空', 'Must not be empty');
+  return t(
+    `「${entry}」不是合法的主机名：不要带协议、端口、路径、网段或空格`,
+    `"${entry}" is not a host name: no scheme, port, path, CIDR or spaces`,
+  );
+}
+
+/** One schema issue as a sentence in the viewer's language (console audit P1-1 follow-up): the
+ *  shared schemas carry zod's default English ("String must contain at least 1 character(s)"),
+ *  which an editor field must not show as is. A rule-specific refinement keeps its own words
+ *  after a Chinese lead, since they name what exactly was refused. */
+export function issueMessage(issue: IssueLike, t: Translate): string {
+  const min =
+    typeof issue.minimum === 'number' || typeof issue.minimum === 'bigint'
+      ? Number(issue.minimum)
+      : null;
+  const max =
+    typeof issue.maximum === 'number' || typeof issue.maximum === 'bigint'
+      ? Number(issue.maximum)
+      : null;
+  switch (issue.code) {
+    case 'invalid_type':
+      return issue.received === 'undefined' || issue.received === 'null'
+        ? t('必填', 'Required')
+        : t('格式不对', 'Wrong format');
+    case 'too_small':
+      if (issue.type === 'string') {
+        return min !== null && min <= 1
+          ? t('必填', 'Required')
+          : t(`至少 ${min} 个字符`, `At least ${min} characters`);
+      }
+      if (issue.type === 'array') {
+        return t(`至少 ${min} 项`, `At least ${min} items`);
+      }
+      return t(`不能小于 ${min}`, `Must be at least ${min}`);
+    case 'too_big':
+      if (issue.type === 'string') return t(`最多 ${max} 个字符`, `At most ${max} characters`);
+      if (issue.type === 'array') return t(`最多 ${max} 项`, `At most ${max} items`);
+      return t(`不能大于 ${max}`, `Must be at most ${max}`);
+    case 'invalid_enum_value': {
+      const options = (issue.options ?? []).map(String).join('、');
+      return t(`只能是：${options}`, `Must be one of: ${options}`);
+    }
+    case 'invalid_string':
+      return issue.validation === 'url'
+        ? t('不是合法的网址', 'Not a valid URL')
+        : t('格式不对', 'Wrong format');
+    case 'custom':
+      return customIssueMessage(issue.message, t);
+    default:
+      return t('这一项的值不被接受', 'This value is not accepted');
+  }
+}
+
+export function fieldErrorsFromIssues(issues: readonly IssueLike[], t: Translate): FieldErrors {
   const errors: Record<string, string> = {};
   for (const issue of issues) {
     const key = issue.path.length === 0 ? '_' : issue.path.map(String).join('.');
-    if (!(key in errors)) errors[key] = issue.message;
+    if (!(key in errors)) errors[key] = issueMessage(issue, t);
   }
   return errors;
 }
@@ -113,11 +199,14 @@ export type ValidationResult<T> =
   | { readonly ok: false; readonly errors: FieldErrors };
 
 /** Propose-time validation (`ProposeSkillContentSchema` — permissive, see skill.ts). */
-export function validateSkill(form: SkillForm): ValidationResult<ProposeSkillContent> {
+export function validateSkill(
+  form: SkillForm,
+  t: Translate,
+): ValidationResult<ProposeSkillContent> {
   const parsed = ProposeSkillContentSchema.safeParse(skillContentFromForm(form));
   return parsed.success
     ? { ok: true, value: parsed.data }
-    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues) };
+    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues, t) };
 }
 
 /** Publish-time name rule (pi Agent Skills: 1-64 lowercase letters / digits / single hyphens) —
@@ -238,11 +327,14 @@ export function procedureContentFromForm(form: ProcedureForm): Record<string, un
   };
 }
 
-export function validateProcedure(form: ProcedureForm): ValidationResult<ProposeProcedureContent> {
+export function validateProcedure(
+  form: ProcedureForm,
+  t: Translate,
+): ValidationResult<ProposeProcedureContent> {
   const parsed = ProposeProcedureContentSchema.safeParse(procedureContentFromForm(form));
   return parsed.success
     ? { ok: true, value: parsed.data }
-    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues) };
+    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues, t) };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -330,6 +422,10 @@ export function workerDefinitionFormFromWire(
  * or hardcodes. */
 export function opsRunnerTemplateForm(
   capabilityNames: readonly Pick<CapabilityNameRow, 'name' | 'mode'>[],
+  /** Audit P1-7: the gates already granted to the reader (`execution_readiness.gates[].granted`)
+   *  start ticked, so the template's Worker reaches the systems its author can use instead of
+   *  none. */
+  grantedGateIds: readonly string[] = [],
 ): WorkerDefinitionForm {
   const { kind, ...definition } = OPS_RUNNER_WORKER_TEMPLATE;
   const capabilities = capabilityNames
@@ -340,6 +436,7 @@ export function opsRunnerTemplateForm(
     ...workerDefinitionFormFromWire(kind, definition),
     name: 'ops-runner',
     capabilities: joinList(capabilities),
+    gates: joinList(grantedGateIds),
   };
 }
 
@@ -374,13 +471,14 @@ export function workerDefinitionContentFromForm(
 
 export function validateWorkerDefinition(
   form: WorkerDefinitionForm,
+  t: Translate,
 ): ValidationResult<Record<string, unknown>> {
   const parsed = workerDefinitionContentSchemaFor(form.kind).safeParse(
     workerDefinitionContentFromForm(form),
   );
   return parsed.success
     ? { ok: true, value: parsed.data as Record<string, unknown> }
-    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues) };
+    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues, t) };
 }
 
 // -------------------------------------------------------------------------------------------

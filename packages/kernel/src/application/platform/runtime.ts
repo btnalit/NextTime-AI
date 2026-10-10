@@ -25,7 +25,7 @@ import type {
 import { listGateInstances } from '../gates/store.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from '../gateway/capability-handler.js';
 import { readModelCatalog } from '../gateway/models-catalog-handler.js';
-import { PlatformAdminError, queryPlatformAudit } from '../gateway/platform-handlers.js';
+import { PlatformAdminError, queryRecentPlatformWrites } from '../gateway/platform-handlers.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { readBackupStatus, resolveBackupLastSuccessFile } from './backup-status.js';
 import {
@@ -752,7 +752,7 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
   ]);
   const gateInstances = await listGateInstances(client);
   const llmUsage30d = await sumLlmUsage30Days(client);
-  const recentAudit = await queryPlatformAudit(client, { limit: 50 });
+  const recentAudit = await queryRecentPlatformWrites(client, 50);
   // D-28: the backup service's mounted `last-success` marker — never throws (backup-status.ts).
   const backup = await readBackupStatus(resolveBackupLastSuccessFile(process.env));
 
@@ -782,7 +782,7 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
     health,
     backup,
     llmUsage30d,
-    recentAudit: recentAudit.items,
+    recentAudit,
     checkedAt: new Date().toISOString(),
   };
   return { result };

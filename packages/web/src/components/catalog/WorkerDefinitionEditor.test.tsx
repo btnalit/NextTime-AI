@@ -6,6 +6,11 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { WorkerDefinitionEditor } from './WorkerDefinitionEditor.js';
 
+/** A capability checkbox's accessible name is its label then its registry name (audit P1-8). */
+function capabilityName(name: string): RegExp {
+  return new RegExp(`(^|\\s)${name}$`);
+}
+
 afterEach(cleanup);
 
 /** Scripted caller; `list_available_gate_instances` (the egress-host suggestions) answers empty
@@ -74,8 +79,8 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Fixer' } });
     fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Fix things.' } });
     fireEvent.change(screen.getByLabelText(/^模型/), { target: { value: 'p/m' } });
-    fireEvent.click(screen.getByLabelText('search'));
-    fireEvent.click(screen.getByLabelText('traverse'));
+    fireEvent.click(screen.getByLabelText(capabilityName('search')));
+    fireEvent.click(screen.getByLabelText(capabilityName('traverse')));
     fireEvent.click(screen.getByLabelText('Docker'));
     fireEvent.click(screen.getByLabelText('restart-web'));
     // A draft (unpublished) Skill must never appear as a pickable option.
@@ -145,7 +150,7 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     // `capabilityNames` was not passed at all — the pre-selected 'search' still renders (as a
     // fallback option outside the loaded directory) and stays checked, so it is not silently
     // dropped from the submitted payload.
-    const searchCheckbox = screen.getByLabelText('search') as HTMLInputElement;
+    const searchCheckbox = screen.getByLabelText(capabilityName('search')) as HTMLInputElement;
     expect(searchCheckbox.checked).toBe(true);
     fireEvent.click(screen.getByTestId('worker-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
@@ -311,20 +316,24 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     );
     // Registry mode order, then the selected name the directory does not list.
     expect(groupOrder).toEqual(['观察（只读）', '写入', '执行', '目录外（已选）']);
-    expect((within(field).getByLabelText('legacy_cap') as HTMLInputElement).checked).toBe(true);
+    expect(
+      (within(field).getByLabelText(capabilityName('legacy_cap')) as HTMLInputElement).checked,
+    ).toBe(true);
 
     fireEvent.click(screen.getByTestId('wd-capabilities-group-toggle-observe'));
     for (const name of ['search', 'traverse', 'get_object']) {
-      expect((within(field).getByLabelText(name) as HTMLInputElement).checked).toBe(true);
+      expect((within(field).getByLabelText(capabilityName(name)) as HTMLInputElement).checked).toBe(
+        true,
+      );
     }
     expect(screen.getByTestId('wd-capabilities-group-toggle-observe').textContent).toBe('取消本组');
     expect(screen.getByTestId('wd-capabilities-count').textContent).toContain('4');
 
     // The filter narrows every group; "select" then acts on the visible rows only.
     fireEvent.change(screen.getByTestId('wd-capabilities-filter'), { target: { value: 'act' } });
-    expect(within(field).queryByLabelText('search')).toBeNull();
-    expect(within(field).getByLabelText('request_action')).toBeTruthy();
-    expect(within(field).getByLabelText('assert_fact')).toBeTruthy();
+    expect(within(field).queryByLabelText(capabilityName('search'))).toBeNull();
+    expect(within(field).getByLabelText(capabilityName('request_action'))).toBeTruthy();
+    expect(within(field).getByLabelText(capabilityName('assert_fact'))).toBeTruthy();
     fireEvent.click(screen.getByTestId('wd-capabilities-group-toggle-execute'));
     fireEvent.change(screen.getByTestId('wd-capabilities-filter'), { target: { value: 'zzz' } });
     expect(screen.getByTestId('wd-capabilities-no-match')).toBeTruthy();
@@ -332,7 +341,7 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
 
     // A group can be folded away.
     fireEvent.click(within(field).getByRole('button', { name: /写入/ }));
-    expect(within(field).queryByLabelText('assert_fact')).toBeNull();
+    expect(within(field).queryByLabelText(capabilityName('assert_fact'))).toBeNull();
 
     fireEvent.click(screen.getByTestId('worker-submit'));
     await screen.findByTestId('draft-proposed');
