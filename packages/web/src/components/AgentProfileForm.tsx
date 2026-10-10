@@ -17,6 +17,7 @@ import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
+import { ModelHealthNote, ModelOption } from './kit/model-health.js';
 import { Notice } from './kit/notice.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
@@ -231,11 +232,17 @@ export function AgentProfileForm({
               </option>
             ) : null}
             {allowedModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-              </option>
+              <ModelOption key={m.id} model={m} selected={m.id === state.model} />
             ))}
           </Select>
+          {/* Audit P0-2: "inherit" runs the workspace default, so its provider is the one that
+           *  matters then. */}
+          <ModelHealthNote
+            models={allowedModels}
+            selectedId={state.model === INHERIT_MODEL ? policy?.defaultModel : state.model}
+            canFix={false}
+            testId="ap-model-health"
+          />
         </Field>
       </DashboardCard>
 

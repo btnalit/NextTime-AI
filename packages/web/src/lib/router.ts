@@ -225,6 +225,9 @@ export const hrefs = {
   platformModels: () => '#/platform/models',
   /** 模型与供应商 with the 新增供应商 drawer already open (the overview's first-run step). */
   platformModelsNewProvider: () => '#/platform/models?new=provider',
+  /** 模型与供应商 with that provider's drawer open on its 连通性测试 (a model picker's next step). */
+  platformModelsProvider: (providerId: string) =>
+    `#/platform/models?provider=${encodeURIComponent(providerId)}`,
   platformSettings: () => '#/platform/settings',
   platformRuntime: () => '#/platform/runtime',
   platformStatus: () => '#/platform/status',
@@ -241,4 +244,12 @@ export function readNewProviderPreset(hash: string): boolean {
   const query = hash.indexOf('?');
   if (query === -1) return false;
   return new URLSearchParams(hash.slice(query + 1)).get('new') === 'provider';
+}
+
+/** The provider id `hrefs.platformModelsProvider` asks 模型与供应商 to open, else `null`. */
+export function readProviderPreset(hash: string): string | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  const id = new URLSearchParams(hash.slice(query + 1)).get('provider');
+  return id ? id : null;
 }

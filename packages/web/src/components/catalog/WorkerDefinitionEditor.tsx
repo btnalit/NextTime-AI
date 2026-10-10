@@ -35,6 +35,7 @@ import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
+import { ModelHealthNote, ModelOption } from '../kit/model-health.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -583,11 +584,15 @@ export function WorkerDefinitionEditor({
                 </option>
                 {!modelValueKnown ? <option value={form.model}>{form.model}</option> : null}
                 {modelOptions.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.id}
-                  </option>
+                  <ModelOption key={model.id} model={model} selected={model.id === form.model} />
                 ))}
               </Select>
+              <ModelHealthNote
+                models={modelOptions}
+                selectedId={form.model}
+                canFix={false}
+                testId="wd-model-health"
+              />
             </Field>
           </div>
           <Field

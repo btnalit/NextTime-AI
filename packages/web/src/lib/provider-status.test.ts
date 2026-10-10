@@ -37,7 +37,8 @@ function test(overrides: Partial<LlmProviderTestResultWire> = {}): LlmProviderTe
   };
 }
 
-/** The 状态 column is never a green 活跃 for a provider that fails every call (review of #521). */
+/** The 状态 column is never a green 可用 for a provider that fails every call (review of #521), and
+ *  never green for one nobody has tested (audit P0-2). */
 describe('providerStatus', () => {
   it.each([
     ['disabled', provider({ enabled: false, credentialInvalid: true }), null],
@@ -55,12 +56,13 @@ describe('providerStatus', () => {
       test({ completion: 'error', toolCall: 'skipped', error: 'HTTP 500' }),
     ],
     ['tools_failed', provider(), test({ toolCall: 'error', error: 'HTTP 400: no tools' })],
-    ['active', provider(), test()],
-    ['active', provider(), null],
+    ['ok', provider(), test()],
+    ['untested', provider(), null],
   ] as const)('%s', (kind, p, lastTest) => {
     const status = providerStatus(p, lastTest);
     expect(status.kind).toBe(kind);
-    expect(status.tone === 'ok').toBe(kind === 'active');
+    expect(status.tone === 'ok').toBe(kind === 'ok');
+    expect(status.usability === 'blocked').toBe(!['ok', 'untested', 'tools_failed'].includes(kind));
     // The pinned column is 140 px: the short labels stay short in both languages.
     expect(status.zh.length).toBeLessThanOrEqual(6);
     expect(status.en.length).toBeLessThanOrEqual(12);
@@ -69,8 +71,8 @@ describe('providerStatus', () => {
   it('ignores a test the provider has changed since, or for a model no longer listed', () => {
     const failed = test({ completion: 'error', toolCall: 'skipped', error: 'HTTP 401' });
     expect(providerStatus(provider({ updatedAt: '2026-10-03T00:00:00.000Z' }), failed).kind).toBe(
-      'active',
+      'untested',
     );
-    expect(providerStatus(provider(), { ...failed, model: 'gone' }).kind).toBe('active');
+    expect(providerStatus(provider(), { ...failed, model: 'gone' }).kind).toBe('untested');
   });
 });

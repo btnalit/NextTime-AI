@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RELEASE_CHANNEL_MAX_BYTES, type ReleaseChannel } from '@nexttime/shared';
@@ -384,6 +385,24 @@ describe('readReleaseChannel', () => {
     expect((await readReleaseChannel(file, NOW, FEED_REPO)).feed.status).toBe('missing');
   });
 
+  it('a symlink at the path is refused, not followed (#530 review)', async () => {
+    const real = path.join(dir, 'elsewhere.json');
+    await writeFile(real, JSON.stringify(channel()));
+    const file = path.join(dir, 'channel.json');
+    await symlink(real, file);
+    const read = await readReleaseChannel(file, NOW, FEED_REPO);
+    expect(read).toMatchObject({ channel: null, feed: { status: 'missing' } });
+    expect(read.feed.detail).toContain('symlink');
+  });
+
+  it('a FIFO at the path is refused without blocking the read (#530 review)', async () => {
+    const file = path.join(dir, 'channel.json');
+    execFileSync('mkfifo', [file]);
+    const read = await readReleaseChannel(file, NOW, FEED_REPO);
+    expect(read).toMatchObject({ channel: null, feed: { status: 'missing' } });
+    expect(read.feed.detail).toContain('not a regular file');
+  });
+
   it('reads the file and takes the download time from its modification time', async () => {
     const file = path.join(dir, 'channel.json');
     await writeFile(file, JSON.stringify(channel()));
@@ -400,6 +419,7 @@ describe('readReleaseChannel', () => {
     const read = await readReleaseChannel(file, NOW, FEED_REPO);
     expect(read).toMatchObject({ channel: null, feed: { status: 'invalid' } });
     expect(read.feed.detail).toContain(`> ${RELEASE_CHANNEL_MAX_BYTES}`);
+    expect(read.feed.fetchedAt).not.toBeNull();
   });
 
   it('resolves the file from UPDATE_FEED_FILE, defaulting to the config mount', () => {

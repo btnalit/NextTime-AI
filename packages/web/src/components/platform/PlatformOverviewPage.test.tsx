@@ -77,6 +77,7 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       activeWorkspaces: 1,
       gatekeepers: 2,
       modelsAvailable: 5,
+      modelsConfigured: 5,
       pendingActionRequests: 0,
       runningTasks: 0,
     },
@@ -85,6 +86,8 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
       { service: 'kernel', status: 'ok' },
       { service: 'llm-proxy', status: 'degraded', detail: 'slow' },
     ],
+    providerHealthFile: 'ok',
+    modelProviders: [],
     checklist: [
       { key: 'providers', done: true, detail: 'anthropic configured' },
       { key: 'defaultWorkspace', done: true, detail: 'Acme' },
@@ -179,6 +182,7 @@ describe('PlatformOverviewPage', () => {
     const http = scriptedHttp({
       platform_overview: () => ({
         ...base,
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 0 },
         checklist: base.checklist.map((item) =>
           item.key === 'providers' ? { ...item, done: false } : item,
         ),
@@ -192,6 +196,103 @@ describe('PlatformOverviewPage', () => {
     expect(screen.getByTestId('checklist-add-provider').getAttribute('href')).toBe(
       '#/platform/models?new=provider',
     );
+  });
+
+  it('P0-2: models configured but no provider tested — the step says so and links to the providers table, the tile qualifies its count, 需要人处理 groups the providers that are not ok by status', async () => {
+    const base = overview();
+    const http = scriptedHttp({
+      platform_overview: () => ({
+        ...base,
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 9 },
+        modelProviders: [
+          {
+            id: 'deepseek',
+            health: { status: 'key_rejected', testedAt: '2026-10-09T00:00:00.000Z' },
+            models: 2,
+          },
+          {
+            id: 'moonshot',
+            health: { status: 'key_rejected', testedAt: '2026-10-09T00:00:00.000Z' },
+            models: 1,
+          },
+          { id: 'anthropic', health: { status: 'untested', testedAt: null }, models: 1 },
+          { id: 'legacy', health: null, models: 4 },
+          { id: 'off', health: { status: 'disabled', testedAt: null }, models: 1 },
+        ],
+        checklist: base.checklist.map((item) =>
+          item.key === 'providers' ? { ...item, done: false } : item,
+        ),
+      }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+    });
+    renderPage(http);
+    const checklist = await screen.findByTestId('platform-checklist');
+    expect(checklist.textContent).toContain('已配置 9 个模型，但没有一个供应商测试通过');
+    expect(screen.getByTestId('checklist-test-provider').getAttribute('href')).toBe(
+      '#/platform/models',
+    );
+    expect(screen.queryByTestId('checklist-add-provider')).toBeNull();
+    expect(screen.getByTestId('platform-count-models').textContent).toContain('0');
+    expect(screen.getByTestId('platform-count-models-sub').textContent).toContain('已配置 9 个');
+    const links = screen.getAllByTestId('platform-attention-item');
+    const items = links.map((item) => item.textContent ?? '');
+    // #530 P2: one row per status, naming the providers.
+    expect(
+      items.some((text) =>
+        text.includes('密钥被拒：2 个模型供应商（deepseek、moonshot），共 3 个模型'),
+      ),
+    ).toBe(true);
+    expect(items.some((text) => text.includes('「anthropic」未测试（1 个模型）'))).toBe(true);
+    // Review M1: a provider the health file does not name is unknown, and listed.
+    expect(items.some((text) => text.includes('「legacy」状态未知（4 个模型）'))).toBe(true);
+    // #530 P2: a disabled provider is an administrator's choice, not a to-do.
+    expect(items.some((text) => text.includes('off'))).toBe(false);
+    // A single provider links straight to its drawer.
+    const anthropic = links.find((item) => item.textContent?.includes('anthropic'));
+    const href =
+      anthropic?.getAttribute('href') ?? anthropic?.querySelector('a')?.getAttribute('href');
+    expect(href).toBe('#/platform/models?provider=anthropic');
+  });
+
+  // Review M1 / #530 必修 1: no readable provider-health.json — nothing reads as available.
+  it('M1: an unreadable provider health file — the tile says 状态未知, the step is not done, 需要人处理 says so once', async () => {
+    const base = overview();
+    const http = scriptedHttp({
+      platform_overview: () => ({
+        ...base,
+        counts: { ...base.counts, modelsAvailable: 0, modelsConfigured: 14 },
+        providerHealthFile: 'missing',
+        health: [
+          { service: 'kernel', status: 'ok' },
+          { service: 'llm-proxy', status: 'degraded', detail: 'provider health unknown' },
+        ],
+        modelProviders: [
+          { id: 'deepseek', health: null, models: 10 },
+          { id: 'anthropic', health: null, models: 4 },
+        ],
+        checklist: base.checklist.map((item) =>
+          item.key === 'providers' ? { ...item, done: false } : item,
+        ),
+      }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+    });
+    renderPage(http);
+    const checklist = await screen.findByTestId('platform-checklist');
+    expect(checklist.textContent).toContain('已配置 14 个模型，但没读到供应商状态');
+    expect(screen.getByTestId('checklist-test-provider')).toBeTruthy();
+    expect(
+      screen.getByTestId('platform-count-models').querySelector('.platform-tile-value')
+        ?.textContent,
+    ).toBe('—');
+    expect(screen.getByTestId('platform-count-models-sub').textContent).toBe(
+      '已配置 14 个，状态未知',
+    );
+    const items = screen
+      .getAllByTestId('platform-attention-item')
+      .map((item) => item.textContent ?? '');
+    expect(items.filter((text) => text.includes('读不到模型供应商状态'))).toHaveLength(1);
+    expect(items.some((text) => text.includes('llm-proxy'))).toBe(false);
+    expect(items.some((text) => text.includes('deepseek'))).toBe(false);
   });
 
   it('P0-4: a discovered, never-enabled gate instance is listed under 需要人处理 with a link to it', async () => {

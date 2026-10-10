@@ -33,7 +33,8 @@ import type { ProviderConfig } from './config.js';
 import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { KeyStore } from './key-store.js';
 import { KeyStoreError } from './key-store.js';
-import { checkProviderKey } from './provider-keys.js';
+import { Mutex } from './mutex.js';
+import { type ProviderCredentialFacts, providerCredentialFacts } from './provider-keys.js';
 import type { ListUpstreamModelsOptions, ListUpstreamModelsResult } from './provider-models.js';
 import type { ProviderStore, StoreProvider, StoreTestResult } from './provider-store.js';
 import { ProviderStoreError } from './provider-store.js';
@@ -150,6 +151,9 @@ export interface AdminApiOptions {
   readonly resolveApiKey?: (envVarName: string) => string | undefined;
   /** Rewrites `models.json` from the catalog. Throws on failure (recorded, not fatal). */
   readonly writeModelsJson: () => Promise<void>;
+  /** Rewrites `provider-health.json` (provider-health-file.ts) — after every catalog rewrite,
+   *  test and key change. Throws on failure (logged, not fatal). Absent = not written. */
+  readonly writeProviderHealth?: () => Promise<void>;
   /** Posts one platform audit row to the kernel. Absent (no kernel configured) = skipped. */
   readonly kernelAudit?: (event: KernelAuditEvent) => Promise<void>;
   /** provider-test.ts's `runProviderTest`, injectable for tests. */
@@ -336,38 +340,75 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
   const now = options.now ?? (() => new Date());
   const resolveApiKey = options.resolveApiKey ?? ((name: string) => process.env[name]);
+  /** One writer at a time per file (review M2): each write builds its snapshot from the live
+   *  catalog when it runs, inside its lock, so the last write to land is the newest state. */
+  const modelsJsonWrites = new Mutex();
+  const healthWrites = new Mutex();
   let modelsJsonWrittenAt: string | null = null;
   let modelsJsonError: string | null = null;
 
-  /** S7-A resolution order: a console key for this provider id, then the env var named by
-   *  `apiKeyEnv` (now optional), else none. Mirrors proxy.ts's own `resolveConsoleKey` ??
-   *  `resolveApiKey` order exactly — the page must never show a source the proxy would not
-   *  actually use to forward a request. */
-  function credentialSource(provider: ResolvedProvider): LlmProviderCredentialSourceWire {
-    if (options.keyStore.get(provider.id) !== undefined) return 'console';
-    const envKey = provider.config.api_key_env
-      ? resolveApiKey(provider.config.api_key_env)
-      : undefined;
-    if (typeof envKey === 'string' && envKey.length > 0) return 'env';
-    return 'none';
+  /** S7-A resolution order (provider-keys.ts `providerCredentialFacts`): a console key for this
+   *  provider id, then the env var named by `apiKeyEnv` (now optional), else none. Mirrors
+   *  proxy.ts's own `resolveConsoleKey` ?? `resolveApiKey` order exactly — the page must never
+   *  show a source the proxy would not actually use to forward a request. `invalid`: the resolved
+   *  credential cannot go in a header (provider-keys.ts `checkProviderKey`), so every call with it
+   *  fails and the provider card says to re-enter it. */
+  function credentialFacts(provider: ResolvedProvider): ProviderCredentialFacts {
+    return providerCredentialFacts(
+      provider.id,
+      provider.config.api_key_env,
+      (id) => options.keyStore.get(id),
+      resolveApiKey,
+    );
   }
 
-  function credentialPresent(provider: ResolvedProvider): boolean {
-    return credentialSource(provider) !== 'none';
+  /** Rewrites the provider-health file (best effort: a failure is logged, never fatal). A failed
+   *  rewrite removes or empties the previous file (provider-health-file.ts
+   *  `refreshProviderHealthFile`), so the pickers show 状态未知 — never the health from before
+   *  this change — until the next change or restart writes it again. */
+  async function refreshProviderHealth(): Promise<void> {
+    const write = options.writeProviderHealth;
+    if (!write) return;
+    try {
+      // Serialized: the snapshot is built inside the lock (index.ts builds it when `write` runs),
+      // so a later write never lands before an earlier one with an older snapshot.
+      await healthWrites.runExclusive(write);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const invalidation = (err as { invalidation?: unknown } | undefined)?.invalidation;
+      const stale = invalidation === 'stale';
+      log(
+        JSON.stringify({
+          level: stale ? 'error' : 'warn',
+          msg: stale
+            ? 'llm-proxy: provider-health.json rewrite failed and the previous file could not be removed or emptied — model pickers may show stale provider health until the next change or restart'
+            : 'llm-proxy: provider-health.json rewrite failed — model pickers show every provider as status unknown until the next change or restart',
+          error: code ?? String(err).slice(0, 200),
+          previousFile: invalidation,
+        }),
+      );
+    }
   }
 
-  /** The resolved credential cannot go in a header (provider-keys.ts `checkProviderKey`): every
-   *  call with it fails, so the provider card says to re-enter it. Same order as `credentialSource`. */
-  function credentialInvalid(provider: ResolvedProvider): boolean {
-    const key =
-      options.keyStore.get(provider.id) ??
-      (provider.config.api_key_env ? resolveApiKey(provider.config.api_key_env) : undefined);
-    return checkProviderKey(key).kind === 'invalid';
+  /** A key set or cleared makes the last test say nothing about the key now in use (review S1):
+   *  drop it so the provider reads 未测试 until it is tested again. Best effort like the test
+   *  write itself — a failure is logged and the stale result stays until the next test. */
+  async function forgetTest(id: string): Promise<void> {
+    await options.catalog.clearTest(id).catch((err: unknown) => {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: could not clear the provider test result after a key change',
+          providerId: id,
+          error: String(err).slice(0, 200),
+        }),
+      );
+    });
   }
 
   async function rewriteModelsJson(): Promise<void> {
     try {
-      await options.writeModelsJson();
+      await modelsJsonWrites.runExclusive(options.writeModelsJson);
       modelsJsonWrittenAt = now().toISOString();
       modelsJsonError = null;
     } catch (err) {
@@ -381,6 +422,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         }),
       );
     }
+    // The catalog changed whether or not models.json could be written.
+    await refreshProviderHealth();
   }
 
   function audit(
@@ -709,12 +752,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
 
   function toWire(provider: ResolvedProvider): LlmProviderWire {
-    return toWireProvider(
-      provider,
-      credentialPresent(provider),
-      credentialSource(provider),
-      credentialInvalid(provider),
-    );
+    const facts = credentialFacts(provider);
+    return toWireProvider(provider, facts.present, facts.source, facts.invalid);
   }
 
   function listResult(storeWritable: boolean): LlmProviderListWire {
@@ -791,6 +830,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           modelsJsonError,
           ...(secretCleared ? { secretCleared } : {}),
         });
+        // A key cleared after the catalog rewrite changes the health that rewrite wrote.
+        if (secretCleared) await refreshProviderHealth();
         if (secretCleared) {
           audit(claims, 'provider_secret_cleared', input.id, { reason: 'new_provider' });
         }
@@ -841,6 +882,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
               }
             : {}),
         });
+        // A key cleared after the catalog rewrite changes the health that rewrite wrote.
+        if (secretCleared) await refreshProviderHealth();
         if (secretCleared) {
           audit(claims, 'provider_secret_cleared', id, { reason: 'upstream_changed' });
         }
@@ -882,6 +925,11 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           modelsJsonError,
           secretCleared,
         });
+        // A yaml entry the deleted override restores starts untested: no test said anything
+        // about it under this id's current credential.
+        await forgetTest(id);
+        // A key cleared after the catalog rewrite changes the health that rewrite wrote.
+        await refreshProviderHealth();
         if (secretCleared) {
           audit(claims, 'provider_secret_cleared', id, {});
         }
@@ -944,6 +992,7 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
             }),
           );
         });
+        await refreshProviderHealth();
         audit(claims, 'provider_tested', id, {
           model,
           completion: result.completion,
@@ -965,6 +1014,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
             throw new AdminApiError(400, 'invalid_body', 'invalid key', parsed.error.issues);
           }
           await options.keyStore.set(id, parsed.data.key);
+          await forgetTest(id);
+          await refreshProviderHealth();
           const updated = requireProvider(id);
           audit(claims, 'provider_secret_set', id, {});
           return { status: 200, body: toWire(updated) };
@@ -973,6 +1024,8 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
           await requireWritableKeyStore();
           requireProvider(id);
           await options.keyStore.remove(id);
+          await forgetTest(id);
+          await refreshProviderHealth();
           const updated = requireProvider(id);
           audit(claims, 'provider_secret_cleared', id, {});
           return { status: 200, body: toWire(updated) };

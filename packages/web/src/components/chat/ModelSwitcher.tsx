@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   invalidateCapability,
   useCapability,
@@ -14,6 +14,9 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
+import { ModelHealthTag, ModelOption, modelHealth } from '../kit/model-health.js';
+import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { useToast } from '../ui/Toast.js';
 
@@ -25,6 +28,18 @@ export interface ModelSwitcherProps {
    *  "切换只能在没有进行中 Turn 时允许", §10: leftover 44 binds a Turn to its container, so a
    *  change mid-Turn cannot land on it — the rule stays). */
   readonly turnRunning: boolean;
+  /** The model the next Turn runs and its provider's health, whenever either changes — `null`
+   *  while unknown (loading, or the catalog does not list it). `ChatPage` shows
+   *  `ChatModelHealthNotice` above the composer with it (console audit #530 必修 3). */
+  readonly onRunningModel?: (running: RunningModelHealth | null) => void;
+}
+
+/** The model the next Turn runs, its provider's health and where the choice comes from. */
+export interface RunningModelHealth {
+  readonly modelId: string;
+  readonly provider: string;
+  readonly health: ProviderStatus;
+  readonly source: 'override' | 'workspace_default';
 }
 
 /** `<option value>` for "inherit the workspace default" — `set_agent_profile{model: null}`. */
@@ -55,7 +70,7 @@ function modelLabel(id: string, models: readonly ModelRow[]): string {
  * into the same literal (`t('来源：', 'Source: ')`, not the old bare "来源 Source：" — V8's own
  * finding). `data-testid="chat-model-line"` stays on this pill (existing tests key off it).
  */
-export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
+export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitcherProps) {
   const t = useT();
   const toast = useToast();
   const permissions = usePermissions();
@@ -64,6 +79,30 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const catalog = useCapabilityList<ModelRow>(http, 'list_models');
   const [saving, setSaving] = useState(false);
+
+  // The model the next Turn runs (`effective.model`: the override, else the workspace default).
+  const profileData = profile.state.status === 'ready' ? profile.state.data : undefined;
+  const runningRow =
+    profileData && catalog.state.status === 'ready'
+      ? catalog.state.data.items.find((m) => m.id === profileData.effective.model)
+      : undefined;
+  const runningId = runningRow?.id ?? null;
+  const runningProvider = runningRow?.provider ?? '';
+  const runningKind = modelHealth(runningRow)?.kind ?? null;
+  const runningSource = profileData?.model == null ? 'workspace_default' : 'override';
+  useEffect(() => {
+    if (!onRunningModel) return;
+    onRunningModel(
+      runningId !== null && runningKind !== null
+        ? {
+            modelId: runningId,
+            provider: runningProvider,
+            health: describeProviderHealth(runningKind),
+            source: runningSource,
+          }
+        : null,
+    );
+  }, [onRunningModel, runningId, runningProvider, runningKind, runningSource]);
 
   if (profile.state.status === 'loading') {
     return (
@@ -161,9 +200,12 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           {policyData?.defaultModel ? ` · ${modelLabel(policyData.defaultModel, models)}` : ''}
         </option>
         {allowed.map((m) => (
-          <option key={m.id} value={m.id}>
-            {modelLabel(m.id, models)}
-          </option>
+          <ModelOption
+            key={m.id}
+            model={m}
+            label={modelLabel(m.id, models)}
+            selected={m.id === override}
+          />
         ))}
         {overrideOutsideAllowList && override !== null ? (
           <option value={override} data-testid="chat-model-outside">
@@ -176,6 +218,10 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           {t('不在允许范围', 'Not in the allow-list')}
         </span>
       ) : null}
+      {/* Audit P0-2: the provider of the model this chat runs when it is not known to work. Only
+       *  for the workspace default — an override's option already carries the status (#530 P2:
+       *  never twice); the reason and next step are ChatModelHealthNotice's, above the composer. */}
+      {override === null ? <ModelHealthTag model={runningRow} testId="chat-model-health" /> : null}
       <span className="chat-model-source text-3 text-small" data-testid="chat-model-source">
         {t('来源：', 'Source: ')}
         {override === null ? t('工作区默认', 'Workspace default') : t('我的覆盖', 'My override')}
@@ -186,5 +232,51 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
         </span>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The line above the composer when the model the next Turn runs is not known to work (console
+ * audit #530 必修 3): the provider's status and why, and the next step for this member — switch
+ * away from their own override, or ask whoever owns the workspace default and the provider.
+ * Sending stays possible (health is the last test, not a live probe), but never silently.
+ */
+export function ChatModelHealthNotice({
+  running,
+}: { readonly running: RunningModelHealth | null }) {
+  const t = useT();
+  if (!running || running.health.usability === 'ok') return null;
+  const { health, provider, modelId } = running;
+  const fails = health.usability === 'blocked';
+  const status = t(
+    `模型 ${modelId} 的供应商「${provider}」：${health.zh}（${health.detailZh}）。`,
+    `Model ${modelId}, provider "${provider}": ${health.en} (${health.detailEn}).`,
+  );
+  const next =
+    running.source === 'override'
+      ? fails
+        ? t(
+            '这个模型现在调不通，发送会失败：在上方「模型」里换一个模型，或选「工作区默认」。',
+            'This model fails right now and sending will fail: pick another model above, or choose Workspace default.',
+          )
+        : t(
+            '发送可能失败；要稳妥，在上方「模型」里换一个状态为可用的模型。',
+            'Sending may fail; to be safe, pick a working model above.',
+          )
+      : fails
+        ? t(
+            '发送会失败：请工作区管理员换默认模型，或请平台管理员修复这个供应商。',
+            'Sending will fail: ask a workspace administrator to change the default model, or a platform administrator to fix the provider.',
+          )
+        : t(
+            '发送可能失败：请平台管理员测试这个供应商，或请工作区管理员换默认模型。',
+            'Sending may fail: ask a platform administrator to test the provider, or a workspace administrator to change the default model.',
+          );
+  return (
+    <Notice tone="warn" testId="chat-model-health-notice">
+      <span data-health={health.kind} data-source={running.source}>
+        {status} {next}
+      </span>
+    </Notice>
   );
 }

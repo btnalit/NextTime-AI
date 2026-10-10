@@ -5,6 +5,7 @@ import {
   PublishableStatusSchema,
   RoleSchema,
 } from '../enums.js';
+import { ProviderHealthWireSchema } from '../provider-health.js';
 import {
   MigrationRefSchema,
   PiReleaseVersionSchema,
@@ -189,7 +190,12 @@ export const PlatformOverviewWireSchema = z
         workspaces: z.number().int().nonnegative(),
         activeWorkspaces: z.number().int().nonnegative(),
         gatekeepers: z.number().int().nonnegative(),
+        /** Models whose provider's last applicable test passed (`provider-health.ts` `ok`) — what
+         *  can be picked with confidence (console audit P0-2). Only a successful test counts: with
+         *  no readable health file (`providerHealthFile` not `ok`) this is 0 (review M1). */
         modelsAvailable: z.number().int().nonnegative(),
+        /** Every model in `models.json`, whatever its provider's health. */
+        modelsConfigured: z.number().int().nonnegative(),
         /** S8 W4-C (ui-audit O1/L1, convergence-plan-2026-09-25.md §6 W4): a cross-workspace
          *  `action_requests` count (`status = 'pending_approval'`), scoped to the same
          *  non-residue workspace set `gatekeepers` already counts over (§ this schema's own
@@ -218,6 +224,22 @@ export const PlatformOverviewWireSchema = z
       })
       .strict(),
     health: z.array(ServiceHealthWireSchema),
+    /** Whether the kernel could read llm-proxy's `provider-health.json`: `missing` (never
+     *  written — an older llm-proxy or an unwritable models directory) and `invalid` (a symlink,
+     *  not a regular file, too large, malformed) both leave every provider's health unknown. */
+    providerHealthFile: z.enum(['ok', 'missing', 'invalid']),
+    /** Each model provider in `models.json` with its health (`null` = unknown: the file is not
+     *  readable or does not name it) and how many models it serves — the overview's 「需要人处理」
+     *  lists every one that is not `ok`. */
+    modelProviders: z.array(
+      z
+        .object({
+          id: z.string(),
+          health: ProviderHealthWireSchema.nullable(),
+          models: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
     checklist: z.array(ChecklistItemWireSchema),
     recentAudit: z.array(PlatformAuditRecordWireSchema),
   })

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHandleBindingReader, internalAuthorizationHeader } from '@nexttime/shared';
 import type { KernelAuditEvent } from './admin-api.js';
 import { createAdminApi } from './admin-api.js';
+import { removeStaleTempFiles } from './atomic-file.js';
 import type { BudgetSync } from './budget-sync.js';
 import { startBudgetSync } from './budget-sync.js';
 import { ProviderCatalog } from './catalog.js';
@@ -17,8 +18,15 @@ import {
 import { loadHandlePublicKey } from './handle-auth.js';
 import { KeyStore } from './key-store.js';
 import {
+  ProviderHealthWriteError,
+  buildProviderHealthFile,
+  providerHealthOutFile,
+  refreshProviderHealthFile,
+} from './provider-health-file.js';
+import {
   createProviderKeyResolver,
   loadProviderKeyFiles,
+  providerCredentialFacts,
   reportUnusableProviderKeys,
 } from './provider-keys.js';
 import { listUpstreamModels } from './provider-models.js';
@@ -153,6 +161,28 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     ? internalAuthorizationHeader(await loadInternalToken())
     : undefined;
 
+  // #530 review: a crash between creating a temp file and renaming it leaves the temp file in the
+  // state or models directory — for keys.json, a copy of every console-set key. This process
+  // has written nothing yet, so every leftover is a crashed writer's (atomic-file.ts).
+  for (const file of [
+    config.providerStoreFile,
+    config.keyStoreFile,
+    config.modelsJsonOutFile,
+    providerHealthOutFile(config.modelsJsonOutFile),
+  ]) {
+    const removed = await removeStaleTempFiles(file);
+    if (removed.length > 0) {
+      console.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: removed temp files an interrupted write left behind',
+          file,
+          removed,
+        }),
+      );
+    }
+  }
+
   const store = new ProviderStore(config.providerStoreFile);
   await store.load();
   // S7-A: the console-written provider secrets — same read-write state mount as `store` above,
@@ -194,6 +224,38 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     resolveApiKey,
     log,
   );
+
+  // Provider health (provider-health-file.ts): written now — the env / key-file credentials are
+  // only known to this process — and after every admin change. Best effort: a failure is logged.
+  const providerHealthFile = providerHealthOutFile(config.modelsJsonOutFile);
+  const writeProviderHealth = () =>
+    refreshProviderHealthFile(providerHealthFile, () =>
+      buildProviderHealthFile(catalog, (provider) =>
+        providerCredentialFacts(
+          provider.id,
+          provider.config.api_key_env,
+          (id) => keyStore.get(id),
+          resolveApiKey,
+        ),
+      ),
+    );
+  await writeProviderHealth().catch((err: unknown) => {
+    const stale = err instanceof ProviderHealthWriteError && err.invalidation === 'stale';
+    log(
+      JSON.stringify({
+        level: stale ? 'error' : 'warn',
+        msg: stale
+          ? 'llm-proxy: provider-health.json not writable at startup and the previous file could not be removed or emptied — the console may show stale provider health; the models directory must be writable by the llm-proxy user (uid 10001)'
+          : 'llm-proxy: provider-health.json not writable at startup — the console shows every model provider as status unknown until it is; the models directory must be writable by the llm-proxy user (uid 10001)',
+        providerHealthFile,
+        error:
+          err instanceof ProviderHealthWriteError
+            ? err.code
+            : ((err as NodeJS.ErrnoException | undefined)?.code ?? String(err).slice(0, 200)),
+        previousFile: err instanceof ProviderHealthWriteError ? err.invalidation : undefined,
+      }),
+    );
+  });
 
   // Report (never fix) a stale models.json at startup — see the module doc comment.
   const desired = serializeModelsJson(
@@ -240,6 +302,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     store,
     keyStore,
     publicKey,
+    writeProviderHealth,
     writeModelsJson: () =>
       writeModelsJsonAtomic(
         config.modelsJsonOutFile,

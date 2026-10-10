@@ -1,4 +1,3 @@
-import { open } from 'node:fs/promises';
 import {
   type PiUpdateWire,
   type PlatformUpdateFeedWire,
@@ -13,6 +12,7 @@ import {
   platformVersionFromKernelVersion,
 } from '@nexttime/shared';
 import type { CapabilityHandler } from '../gateway/capability-handler.js';
+import { UnsafeFileError, readSmallRegularFile } from '../safe-file-read.js';
 import { readPiVersions } from './runtime.js';
 
 /**
@@ -195,6 +195,10 @@ function readErrorDetail(file: string, err: unknown): string {
       return `update feed ${file} is not readable by the kernel (uid 10001) — re-run scripts/host-env-init.sh`;
     case 'EISDIR':
       return `update feed path ${file} is a directory`;
+    case 'ELOOP':
+      return `update feed ${file} is a symlink — the kernel does not follow links in the update-feed directory`;
+    case 'ENOTREG':
+      return `update feed ${file} is not a regular file`;
     default:
       return `update feed ${file} could not be read (${code ?? 'error'})`;
   }
@@ -202,42 +206,29 @@ function readErrorDetail(file: string, err: unknown): string {
 
 /** Reads the downloaded record. Never throws.
  *
- *  One file handle for both the stat and the read, so the size and mtime checked are the
- *  file's that is read (update-feed replaces it by rename at any time), and the read itself is
- *  bounded: at most one byte past the cap is ever buffered. */
+ *  `readSmallRegularFile` stats and reads one handle, so the size and mtime checked are the
+ *  file's that is read (update-feed replaces it by rename at any time); it refuses a symlink or a
+ *  FIFO without blocking, and buffers at most one byte past the cap. */
 export async function readReleaseChannel(
   file: string,
   now: Date,
   repo: string | null,
 ): Promise<ReleaseChannelRead> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(file, 'r');
-    const info = await handle.stat();
-    if (info.isDirectory())
-      return { feed: feedOf('missing', readErrorDetail(file, { code: 'EISDIR' })), channel: null };
-    const tooLarge = (size: number): ReleaseChannelRead => ({
-      feed: feedOf(
-        'invalid',
-        `update feed ${file} is ${size} bytes (> ${RELEASE_CHANNEL_MAX_BYTES}) — the record was rejected`,
-        info.mtime.toISOString(),
-      ),
-      channel: null,
-    });
-    if (info.size > RELEASE_CHANNEL_MAX_BYTES) return tooLarge(info.size);
-    const buffer = Buffer.alloc(RELEASE_CHANNEL_MAX_BYTES + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
-      if (bytesRead === 0) break;
-      length += bytesRead;
-    }
-    if (length > RELEASE_CHANNEL_MAX_BYTES) return tooLarge(length);
-    return releaseChannelFromFile(file, buffer.toString('utf8', 0, length), info.mtime, now, repo);
+    const { text, mtime } = await readSmallRegularFile(file, RELEASE_CHANNEL_MAX_BYTES);
+    return releaseChannelFromFile(file, text, mtime, now, repo);
   } catch (err) {
+    if (err instanceof UnsafeFileError && err.reason === 'too_large') {
+      return {
+        feed: feedOf(
+          'invalid',
+          `update feed ${file} is ${err.size} bytes (> ${RELEASE_CHANNEL_MAX_BYTES}) — the record was rejected`,
+          err.mtime?.toISOString(),
+        ),
+        channel: null,
+      };
+    }
     return { feed: feedOf('missing', readErrorDetail(file, err)), channel: null };
-  } finally {
-    await handle?.close().catch(() => undefined);
   }
 }
 
