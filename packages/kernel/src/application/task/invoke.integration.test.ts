@@ -493,6 +493,55 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(2);
     });
 
+    it('a reaction that reads the Task after another one claimed the retry leaves the retrying Task running', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await spawnRunningTask('r58-late-task-read');
+      supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+      // The late reaction reads the crashed run while it is still live, then its supervisor
+      // status call waits until the other reaction has finished, so it reads the Task only after
+      // `retry_count` was bumped and the retry spawned. It takes the no-retry branch and must
+      // leave the Task alone.
+      let lateEntered!: () => void;
+      const lateInStatus = new Promise<void>((resolve) => {
+        lateEntered = resolve;
+      });
+      let releaseLate!: () => void;
+      const firstDone = new Promise<void>((resolve) => {
+        releaseLate = resolve;
+      });
+      const lateDeps = deps(supervisorClient, {
+        supervisorClient: {
+          spawn: (input) => supervisorClient.spawn(input),
+          terminate: (id) => supervisorClient.terminate(id),
+          status: async (id) => {
+            lateEntered();
+            await firstDone;
+            return supervisorClient.status(id);
+          },
+        },
+      });
+
+      const late = reactToSupervisorStatus(
+        lateDeps,
+        workspaceId,
+        principalId,
+        spawnResult.workerRunId,
+      );
+      await lateInStatus;
+      await reactToSupervisorStatus(runtimeDeps, workspaceId, principalId, spawnResult.workerRunId);
+      releaseLate();
+      await late;
+
+      expect(supervisorClient.spawnCalls).toHaveLength(2); // the original + one retry
+      const task = await inTx(principalId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('running');
+      expect(task?.retryCount).toBe(1);
+      expect(await workerRunCount(principalId, spawnResult.taskId)).toBe(2);
+    });
+
     it('a crash reaction under a Task cancelled meanwhile spawns no retry', async () => {
       const { principalId, supervisorClient, runtimeDeps, spawnResult } =
         await spawnRunningTask('r58-cancelled-meanwhile');

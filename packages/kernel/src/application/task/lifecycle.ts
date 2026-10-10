@@ -536,9 +536,19 @@ export async function reactToSupervisorStatus(
       }
       return;
     }
+    // Same R-58 rule as the retry branch above: only the call that terminated the run decides the
+    // Task. A concurrent reaction that read the Task after another one claimed the retry (so it
+    // sees `retry_count = 1` and lands here) finds the run already terminated and must leave the
+    // Task alone; failing it would fail a Task whose retry is already running.
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
-      await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'failed');
-      await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed');
+      const moved = await terminateWorkerRunRow(
+        client,
+        workspaceId,
+        onBehalfOf,
+        workerRunId,
+        'failed',
+      );
+      if (moved) await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'worker_failed');
     });
     return;
   }
