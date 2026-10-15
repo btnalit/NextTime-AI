@@ -137,6 +137,7 @@ export function PurgeWorkspaceDrawer({
           <Button variant="ghost" onClick={onClose} data-testid="purge-workspace-cancel">
             {t('取消', 'Cancel')}
           </Button>
+          {/* ux-lint-allow-disabled: the drawer body shows the preview loading, or why it failed. */}
           <Button
             variant="danger"
             disabled={preview.status !== 'ready'}

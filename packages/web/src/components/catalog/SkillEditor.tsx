@@ -272,7 +272,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
       ) : (
         <Notice testId="skill-private-notice">
           {t(
-            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见。',
+            '草稿只有你（提议者）、工作区所有者和构建者可见，发布后所有成员可见。',
             'Until published, the draft is visible only to you, the workspace owner and builders.',
           )}
         </Notice>

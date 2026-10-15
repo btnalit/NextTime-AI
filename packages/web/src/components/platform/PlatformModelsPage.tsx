@@ -23,6 +23,7 @@ import { InlineError } from '../kit/inline-error.js';
 import { ModelHealthTag } from '../kit/model-health.js';
 import { PageHeader } from '../kit/page-header.js';
 import { DashboardCard } from '../kit/section.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -133,6 +134,12 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
 
   const providers = list.state.status === 'ready' ? list.state.data.items : [];
   const meta = list.state.status === 'ready' ? list.state.data : null;
+  // DoD item 4: every write button greyed by a read-only store says why on hover; the Notice
+  // below the header says what the operator has to run.
+  const readOnlyTitle =
+    meta?.storeWritable === false
+      ? t('模型代理的状态目录不可写，暂时不能修改', 'The proxy state directory is read-only')
+      : undefined;
   useEffect(() => {
     if (providerPreset === null || list.state.status !== 'ready') return;
     const target = list.state.data.items.find((row) => row.id === providerPreset);
@@ -242,6 +249,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               size="s"
               onClick={() => setDrawer({ kind: 'edit', provider })}
               disabled={meta?.storeWritable === false}
+              title={readOnlyTitle}
               data-testid="provider-edit"
             >
               {t('编辑', 'Edit')}
@@ -259,6 +267,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     size="s"
                     onClick={() => setConfirm({ kind: 'disable', provider })}
                     disabled={meta?.storeWritable === false}
+                    title={readOnlyTitle}
                     data-testid="provider-disable"
                   >
                     {t('停用', 'Disable')}
@@ -300,6 +309,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     size="s"
                     onClick={() => setConfirm({ kind: 'enable', provider })}
                     disabled={meta?.storeWritable === false}
+                    title={readOnlyTitle}
                     data-testid="provider-enable"
                   >
                     {t('启用', 'Enable')}
@@ -325,6 +335,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     size="s"
                     onClick={() => setConfirm({ kind: 'delete', provider })}
                     disabled={meta?.storeWritable === false}
+                    title={readOnlyTitle}
                     data-testid="provider-delete"
                   >
                     {provider.overridesFile ? t('删除覆盖', 'Drop override') : t('删除', 'Delete')}
@@ -442,6 +453,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             icon="plus"
             onClick={() => setDrawer({ kind: 'create' })}
             disabled={meta?.storeWritable === false}
+            title={readOnlyTitle}
             data-testid="provider-create"
           >
             {t('新增供应商', 'Add provider')}
@@ -739,7 +751,7 @@ function ProviderTestPanel({
         >
           {result ? t('重新测试', 'Test again') : t('测试', 'Test')}
         </Button>
-        {blocked ? <span className="text-small text-3">{blocked}</span> : null}
+        <StillNeeded reason={blocked} testId="provider-detail-test-blocked" />
       </div>
       {testing ? (
         <p className="text-small text-2" aria-live="polite">

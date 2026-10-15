@@ -6,6 +6,7 @@ import {
   roleMayUseCapability,
 } from '@nexttime/shared';
 import type { Translate } from '../../lib/i18n.js';
+import { capabilityHolders } from '../../lib/role-holders.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
 
 /**
@@ -115,15 +116,11 @@ function askFor(fix: Fix, reader: ReadinessReader, t: Translate): string | undef
       'The workspace policy does not let members edit My Agent themselves; ask a workspace owner.',
     );
   }
-  return getCapability(fix.name)?.minRole === 'builder'
-    ? t(
-        '这一步要构建者或工作区所有者来做，请联系他们。',
-        'A builder or a workspace owner has to do this; ask one of them.',
-      )
-    : t(
-        '这一步要工作区所有者来做，请联系他们。',
-        'A workspace owner has to do this; ask one of them.',
-      );
+  // Who may, read from the registry (`lib/role-holders`), named with the console's role labels.
+  return t(
+    `这一步要${capabilityHolders(fix.name, t, 'or')}来做，请联系他们。`,
+    `${capabilityHolders(fix.name, t, 'or')} has to do this; ask one of them.`,
+  );
 }
 
 function missingFix(code: ExecutionReadinessMissingWire['code']): Fix {

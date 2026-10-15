@@ -123,6 +123,7 @@ export function LoginPage({
             <ErrorBanner error={error} title={t('无法登录', 'Could not sign in')} />
           ) : null}
 
+          {/* ux-lint-allow-disabled: the two fields of a sign-in form; their emptiness is the reason. */}
           <Button
             type="submit"
             variant="primary"

@@ -15,8 +15,9 @@ import {
   normalizeLoginInput,
   suggestLoginFromDisplayName,
 } from '../../lib/login-input.js';
-import { passwordLengthProblem } from '../../lib/password-rule.js';
+import { passwordLengthNeed, passwordLengthProblem } from '../../lib/password-rule.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -94,6 +95,22 @@ export function CreateUserForm({
     !loginInvalid &&
     displayName.trim().length > 0 &&
     (passwordMode === 'auto' || (password.length > 0 && passwordProblem === null));
+  // DoD item 4: a disabled 创建 says what it still waits for (the field labels' own words).
+  const missing = [
+    displayName.trim().length > 0 ? null : t('填写显示名', 'enter a display name'),
+    trimmedLogin.length === 0
+      ? t('填写登录名', 'enter a login')
+      : loginInvalid
+        ? t('改正登录名', 'fix the login')
+        : null,
+    passwordMode === 'auto'
+      ? null
+      : password.length === 0
+        ? t('填写密码', 'enter a password')
+        : passwordProblem !== null
+          ? passwordLengthNeed(password, t)
+          : null,
+  ].filter((item): item is string => item !== null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -301,6 +318,7 @@ export function CreateUserForm({
         >
           {t('创建', 'Create')}
         </Button>
+        <StillNeeded items={missing} hidden={submitting} testId="create-user-missing" />
       </div>
     </form>
   );

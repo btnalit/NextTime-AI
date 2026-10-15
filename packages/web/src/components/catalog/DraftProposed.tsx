@@ -130,7 +130,7 @@ export function DraftProposed({
       >
         {status === 'draft' && reviewersSeeDraft
           ? t(
-              '草稿只有你（提议者）和工作区的 owner、builder 可见；发布后工作区所有成员可见、可选用。',
+              '草稿只有你（提议者）、工作区所有者和构建者可见；发布后工作区所有成员可见、可选用。',
               'Drafts are visible only to you, the proposer, and the workspace owner and builders; publishing makes it visible and selectable for every member.',
             )
           : status === 'draft'

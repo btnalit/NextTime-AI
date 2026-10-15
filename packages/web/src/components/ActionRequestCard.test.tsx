@@ -271,7 +271,7 @@ describe('ActionRequestCard for a reader who may not decide (#541 review M3)', (
   it('shows the request and who decides, with no approve/reject button and no approvals-page link', () => {
     renderCard({ canDecide: false });
     expect(screen.getByTestId('action-card-awaits-approver').textContent).toContain(
-      'operator 或工作区所有者',
+      '操作员或工作区所有者',
     );
     expect(screen.queryByRole('button', { name: /批准|拒绝|总是允许/ })).toBeNull();
     expect(screen.queryByTestId('approval-open-page')).toBeNull();

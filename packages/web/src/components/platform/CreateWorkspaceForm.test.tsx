@@ -58,7 +58,7 @@ describe('CreateWorkspaceForm', () => {
     expect((screen.getByTestId('create-workspace-owner') as HTMLSelectElement).value).toBe('');
     const hint = document.getElementById('cw-owner-hint');
     expect(hint?.textContent).toBe(
-      '这个用户会成为该工作区的 owner，并在「管理 → 工作区配置」里看到它。',
+      '这个用户会成为该工作区的所有者，并在「管理 → 工作区配置」里看到它。',
     );
   });
 });

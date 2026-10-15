@@ -7,6 +7,7 @@ import { useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
 import { purgeUserSkipReasonLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -180,6 +181,10 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
       testId="purge-users-dialog"
       footer={
         <>
+          <StillNeeded
+            items={chosen.length === 0 ? [t('勾选要清理的用户', 'tick the users to purge')] : []}
+            testId="purge-users-missing"
+          />
           <Button variant="ghost" onClick={onClose} data-testid="purge-users-cancel">
             {t('取消', 'Cancel')}
           </Button>

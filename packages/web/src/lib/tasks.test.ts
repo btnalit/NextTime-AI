@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { taskNeed } from './tasks.js';
+import { type WorkerDefinitionSummary, taskNeed, workerDefinitionChoices } from './tasks.js';
 
 /**
  * lib/tasks.test: `taskNeed` (S8 W4, audit R7 "行副标题直接显示原始 JSON 输入") — the conventional
@@ -29,5 +29,34 @@ describe('taskNeed', () => {
     expect(taskNeed({ intent: 42 })).toBeUndefined();
     expect(taskNeed(null)).toBeUndefined();
     expect(taskNeed(undefined)).toBeUndefined();
+  });
+});
+
+describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
+  const row = (id: string, name: string | undefined, version = 1): WorkerDefinitionSummary => ({
+    id,
+    version,
+    kind: 'pi',
+    status: 'published',
+    definition: name === undefined ? {} : { name },
+  });
+
+  it('tells same-name definitions apart by short id, and leaves unique names alone', () => {
+    const choices = workerDefinitionChoices([
+      row('aaaaaaaa-1111-4111-8111-111111111111', 'ops-runner'),
+      row('bbbbbbbb-2222-4222-8222-222222222222', 'ops-runner'),
+      row('cccccccc-3333-4333-8333-333333333333', 'reporter', 2),
+    ]);
+    expect(choices.map((choice) => [choice.label, choice.version, choice.distinguisher])).toEqual([
+      ['ops-runner', 'v1', 'aaaaaaaa'],
+      ['ops-runner', 'v1', 'bbbbbbbb'],
+      ['reporter', 'v2', undefined],
+    ]);
+  });
+
+  it('falls back to the id for an unnamed definition', () => {
+    expect(workerDefinitionChoices([row('dddddddd-4444', undefined)])[0]?.label).toBe(
+      'dddddddd-4444',
+    );
   });
 });

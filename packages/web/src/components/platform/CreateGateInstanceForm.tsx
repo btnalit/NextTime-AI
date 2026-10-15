@@ -14,6 +14,7 @@ import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { ErrorDetails } from '../kit/error-details.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -96,6 +97,24 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
     transportKind !== 'http' || (manifestValue.length > 0 && isAbsoluteUrl(manifestValue));
   const suggestedManifest = targetValid ? suggestedManifestSource(targetValue) : '';
   const ready = gateIdValid && targetValid && manifestSourceValid && !submitting;
+  // DoD item 4: a disabled 创建 says what it still waits for (the field labels' own words).
+  const missing = [
+    gateIdValid
+      ? null
+      : gateId.length === 0
+        ? t('填写名称或门 ID', 'enter a name or gate ID')
+        : t('改正门 ID', 'fix the gate ID'),
+    targetValid
+      ? null
+      : target.length === 0
+        ? t('填写目标', 'enter the target')
+        : t('改正目标地址', 'fix the target URL'),
+    manifestSourceValid
+      ? null
+      : manifestSource.length === 0
+        ? t('填写清单来源', 'enter the manifest source')
+        : t('改正清单来源', 'fix the manifest source'),
+  ].filter((item): item is string => item !== null);
 
   function changeGateId(raw: string): void {
     const normalized = normalizeGateIdInput(raw);
@@ -188,7 +207,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         id="cgi-display-name"
         label={t('名称', 'Display name')}
         hint={t(
-          '给人看的名称；下面的 Gate ID 会据此自动生成。',
+          '给人看的名称；下面的门 ID 会据此自动生成。',
           'A human-readable name — the gate id below is generated from it.',
         )}
       >
@@ -204,7 +223,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
 
       <Field
         id="cgi-gate-id"
-        label="Gate id"
+        label={t('门 ID', 'Gate ID')}
         required
         hint={
           <>
@@ -449,6 +468,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         >
           {t('创建', 'Create')}
         </Button>
+        <StillNeeded items={missing} hidden={submitting} testId="create-gate-instance-missing" />
       </div>
     </form>
   );

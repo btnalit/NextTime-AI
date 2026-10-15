@@ -90,7 +90,7 @@ describe('usePushToasts (#541 review N2)', () => {
     await renderFor('member');
     expect(pushed).toHaveLength(1);
     expect(pushed[0]?.title).toMatch(/^已提交审批：restart$/);
-    expect(pushed[0]?.description).toMatch(/等待 operator 或工作区所有者处理/);
+    expect(pushed[0]?.description).toMatch(/等待操作员或工作区所有者处理/);
     expect(pushed[0]?.action).toBeUndefined();
   });
 });

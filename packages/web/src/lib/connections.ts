@@ -149,6 +149,9 @@ export interface OperationDetailView {
   readonly blastRadius: string;
   readonly autoApprovable: boolean;
   readonly paramsSchema: Readonly<Record<string, unknown>>;
+  /** The identity key's `version` (an Operation is `(gatekeeperId, name, version)`); `null` for
+   *  an object written before revisions existed. */
+  readonly version: number | null;
   /** The raw `properties` bag, verbatim — everything `propose_operation`'s `operation` param
    *  needs beyond what this view already surfaces (`binding`/`reversibility`/`await_decision`/
    *  `reads`/`writes`/`result_mapping`), plus the Object's own bookkeeping fields that
@@ -175,6 +178,7 @@ export function operationDetailFromObject(object: GraphObjectRow): OperationDeta
     blastRadius: typeof props.blast_radius === 'string' ? props.blast_radius : 'low',
     autoApprovable: props.auto_approvable === true,
     paramsSchema,
+    version: typeof identity.version === 'number' ? identity.version : null,
     raw: props,
   };
 }

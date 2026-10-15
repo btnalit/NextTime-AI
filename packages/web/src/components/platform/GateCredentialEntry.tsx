@@ -2,6 +2,7 @@ import type { GateHostTokenWire } from '@nexttime/shared';
 import { type ReactNode, useEffect, useId, useState } from 'react';
 import { postGateCredential } from '../../lib/gate-host.js';
 import { useT } from '../../lib/i18n.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Textarea } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
@@ -272,6 +273,15 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
             testId="gate-credential-submit-error"
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <StillNeeded
+              items={
+                !advanced && stripBearerPrefix(bearerToken).value.trim().length === 0
+                  ? [t('填写 Bearer token', 'enter the bearer token')]
+                  : []
+              }
+              hidden={submitting}
+              testId="gate-credential-missing"
+            />
             <Button
               variant="primary"
               size="s"

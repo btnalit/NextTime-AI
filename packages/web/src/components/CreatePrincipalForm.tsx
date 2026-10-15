@@ -11,6 +11,7 @@ import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
 import { Notice } from './kit/notice.js';
 import { Select } from './kit/select.js';
+import { StillNeeded } from './kit/still-needed.js';
 
 export interface CreatePrincipalFormProps {
   readonly http: CapabilityCaller;
@@ -91,6 +92,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
           <CopyButton value={created.apiKey} label={t('API 密钥', 'API key')} />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
+          {/* ux-lint-allow-disabled: already acknowledged — the key is no longer shown. */}
           <Button
             variant="primary"
             onClick={() => {
@@ -166,6 +168,11 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <StillNeeded
+          items={displayName.trim() ? [] : [t('填写显示名', 'enter a display name')]}
+          hidden={submitting}
+          testId="create-principal-missing"
+        />
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
@@ -183,7 +190,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
               {t('创建', 'Create')}
             </Button>
           }
-          title={t('创建 owner 级服务凭证', 'Create an owner-level service credential')}
+          title={t('创建所有者级服务凭证', 'Create an owner-level service credential')}
           description={ownerCopy.description}
           target={displayName.trim()}
           impact={ownerCopy.impact}

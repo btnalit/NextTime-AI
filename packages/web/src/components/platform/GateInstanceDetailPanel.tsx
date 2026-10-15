@@ -319,6 +319,7 @@ export function GateInstanceDetailPanel({
             title={t('无法重命名', 'Could not rename this instance')}
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
+            {/* ux-lint-allow-disabled: nothing changed yet — the field shows the saved name. */}
             <Button
               variant="secondary"
               onClick={() => void saveName()}
@@ -500,6 +501,7 @@ export function GateInstanceDetailPanel({
                   onOpenChange={setConfirmingDelete}
                   anchor={
                     <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      {/* ux-lint-allow-disabled: the paragraph above says which workspaces still enable it. */}
                       <Button
                         variant="danger"
                         size="s"

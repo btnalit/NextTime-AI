@@ -477,7 +477,7 @@ describe('PlatformWorkspacesPage', () => {
     fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
     let detail = await screen.findByTestId('workspace-detail');
     expect(within(detail).getByTestId('workspace-no-membership').textContent).toContain(
-      '把自己加为 owner 后即可进入该工作区的配置页',
+      '把自己加为所有者后即可进入该工作区的配置页',
     );
     expect(within(detail).queryByTestId('open-workspace-config')).toBeNull();
     // The close button is the Drawer's own header control, outside the panel body.

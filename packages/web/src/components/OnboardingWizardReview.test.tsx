@@ -3,8 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { GraphObjectRow } from '../lib/connections.js';
+import { operationDetailFromObject } from '../lib/connections.js';
 import { HttpError } from '../lib/http-client.js';
-import { OnboardingWizardReview, loadGateOperations } from './OnboardingWizardReview.js';
+import {
+  OnboardingWizardReview,
+  currentRevisions,
+  loadGateOperations,
+} from './OnboardingWizardReview.js';
 
 afterEach(cleanup);
 
@@ -81,6 +86,35 @@ describe('loadGateOperations', () => {
       call: vi.fn(async () => [operationObject('gk-1', 'op')]) as CapabilityCaller['call'],
     } as CapabilityCaller;
     expect((await loadGateOperations(http, 'gk-1')).map((row) => row.name)).toEqual(['op']);
+  });
+});
+
+describe('currentRevisions (#541 acceptance P3 ③)', () => {
+  function revision(name: string, version: number, status: string) {
+    const object = operationObject('gk-1', name);
+    const row = operationDetailFromObject({
+      ...object,
+      id: `${object.id}-v${version}`,
+      identityKey: { gatekeeperId: 'gk-1', name, version },
+      properties: { ...object.properties, status },
+    });
+    if (row === undefined) throw new Error('not an Operation');
+    return row;
+  }
+
+  it('keeps one row per name: the draft under review, else the published one, newest first', () => {
+    const rows = [
+      revision('stock.get', 1, 'deprecated'),
+      revision('stock.get', 2, 'published'),
+      revision('stock.get', 3, 'draft'),
+      revision('stock.put', 1, 'published'),
+      revision('stock.put', 2, 'published'),
+      revision('stock.old', 1, 'deprecated'),
+      revision('stock.old', 2, 'deprecated'),
+    ];
+    expect(currentRevisions(rows).map((row) => `${row.name}@${row.version}:${row.status}`)).toEqual(
+      ['stock.get@3:draft', 'stock.put@2:published', 'stock.old@2:deprecated'],
+    );
   });
 });
 

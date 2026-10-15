@@ -12,6 +12,7 @@ import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -278,9 +279,9 @@ export function WorkspaceDetailPanel({
           </dl>
 
           <div className="stack-s">
-            <span>{t('负责人（owner）', 'Owners')}</span>
+            <span>{t('负责人（所有者）', 'Owners')}</span>
             {workspace.owners.length === 0 ? (
-              <span className="text-3">{t('还没有 owner', 'No owner yet')}</span>
+              <span className="text-3">{t('还没有所有者', 'No owner yet')}</span>
             ) : (
               <div className="row-wrap" data-testid="workspace-owners">
                 {workspace.owners.map((owner) => (
@@ -289,6 +290,7 @@ export function WorkspaceDetailPanel({
                     className="chip chip-s chip-info"
                     title={owner.displayName}
                     data-testid="workspace-owner-chip"
+                    data-volatile=""
                   >
                     {owner.login}
                   </span>
@@ -312,7 +314,7 @@ export function WorkspaceDetailPanel({
           ) : (
             <Notice testId="workspace-no-membership">
               {t(
-                '把自己加为 owner 后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。',
+                '把自己加为所有者后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。',
                 "Add yourself as an owner to reach this workspace's own configuration pages.",
               )}
             </Notice>
@@ -376,6 +378,7 @@ export function WorkspaceDetailPanel({
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             {basicsSaved ? <SavedNote testId="workspace-basics-saved" /> : null}
+            {/* ux-lint-allow-disabled: nothing changed yet — the fields above show the saved values. */}
             <Button
               variant="secondary"
               onClick={() => void saveBasics()}
@@ -406,6 +409,7 @@ export function WorkspaceDetailPanel({
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             {allowedSaved ? <SavedNote testId="workspace-allowed-models-saved" /> : null}
+            {/* ux-lint-allow-disabled: unchanged, or the model list above is still loading. */}
             <Button
               variant="secondary"
               onClick={() => void saveAllowedModels()}
@@ -421,9 +425,9 @@ export function WorkspaceDetailPanel({
           <UserPicker
             http={http}
             id="wd-delegate-owner"
-            label={t('委托 owner', 'Delegate an owner')}
+            label={t('委托所有者', 'Delegate an owner')}
             hint={t(
-              '该用户将以 owner 身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为 owner。',
+              '该用户将以所有者身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为所有者。',
               'The user joins this workspace as an owner; an existing member is promoted in place.',
             )}
             value={ownerUserId}
@@ -437,14 +441,21 @@ export function WorkspaceDetailPanel({
           />
           <PlatformError
             error={delegateError}
-            title={t('无法委托 owner', 'Could not delegate an owner')}
+            title={t('无法委托所有者', 'Could not delegate an owner')}
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             {delegated ? (
               <output className="text-3" data-testid="delegate-owner-done">
-                {t('已委托为 owner', 'Delegated as owner')}
+                {t('已委托为所有者', 'Delegated as owner')}
               </output>
             ) : null}
+            <StillNeeded
+              items={
+                ownerUserId === '' ? [t('选择要委托的所有者', 'pick the owner to delegate')] : []
+              }
+              hidden={delegating}
+              testId="delegate-owner-missing"
+            />
             <Button
               variant="primary"
               icon="plus"
@@ -505,6 +516,7 @@ export function WorkspaceDetailPanel({
                 </Notice>
               ) : null}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
+                {/* ux-lint-allow-disabled: the Notice right above says the default workspace cannot be disabled. */}
                 <Button
                   variant="danger"
                   onClick={() => setConfirmingDisable(true)}

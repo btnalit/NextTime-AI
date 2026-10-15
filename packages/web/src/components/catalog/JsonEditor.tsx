@@ -50,6 +50,7 @@ export function JsonEditor({ label, value, onApply, disabled, testId }: JsonEdit
         />
       </Field>
       <div className="row">
+        {/* ux-lint-allow-disabled: nothing changed yet, or the caller made the editor read-only. */}
         <Button
           variant="secondary"
           size="s"

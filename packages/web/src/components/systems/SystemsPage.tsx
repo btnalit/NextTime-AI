@@ -610,7 +610,7 @@ export function SystemsPage({
                         }
                         title={t('取消连接申请', 'Cancel this connection request')}
                         description={t(
-                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。',
+                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
                         target={`${row.kind} · ${row.target}`}
@@ -651,7 +651,7 @@ export function SystemsPage({
             <SheetTitle>{t('申请连接', 'Request a connection')}</SheetTitle>
             <SheetDescription>
               {t(
-                '为工作区 owner 创建一张连接申请卡，由 owner 完成它。',
+                '为工作区所有者创建一张连接申请卡，由所有者完成它。',
                 'Creates a connection-request card for the workspace owner to complete.',
               )}
             </SheetDescription>

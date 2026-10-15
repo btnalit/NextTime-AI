@@ -31,6 +31,7 @@ import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { LangSwitch } from './LangSwitch.js';
 import { IssueOwnHandleSection } from './account/IssueOwnHandleSection.js';
 import { PageHeader } from './kit/page-header.js';
+import { StillNeeded } from './kit/still-needed.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -369,11 +370,7 @@ function ClaimPasswordCard({
         ) : null}
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          {missing.length > 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="account-claim-missing">
-              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-            </span>
-          ) : null}
+          <StillNeeded items={missing} hidden={submitting} testId="account-claim-missing" />
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
             {t('设置密码', 'Set password')}
           </Button>
@@ -436,6 +433,7 @@ function DisplayNameCard({
           <Notice tone="info">{t('已保存', 'Saved')}</Notice>
         ) : null}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
+          {/* ux-lint-allow-disabled: one field — empty, or unchanged from the saved display name. */}
           <Button
             type="submit"
             variant="primary"
@@ -578,11 +576,7 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           {/* S8 W1-A11 (audit L2): secondary — the page's three independent forms each had their
            *  own ink primary button; `DisplayNameCard`'s "保存" (the most frequent, top-of-page
            *  action) stays the one primary for this view. */}
-          {missing.length > 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="account-password-missing">
-              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-            </span>
-          ) : null}
+          <StillNeeded items={missing} hidden={submitting} testId="account-password-missing" />
           <Button type="submit" variant="secondary" loading={submitting} disabled={!canSubmit}>
             {t('更改密码', 'Change password')}
           </Button>

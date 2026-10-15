@@ -198,7 +198,7 @@ export function ApprovalDetail({
       key: 'target',
       label: t('目标', 'Target'),
       value: scopeLabel ? (
-        <span className="mono" data-testid="approval-target">
+        <span className="mono" data-testid="approval-target" data-volatile="">
           {scopeLabel}
         </span>
       ) : row.resourceScope ? (
@@ -254,7 +254,10 @@ export function ApprovalDetail({
     value: (
       <>
         <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
-        <span className="text-3"> · {formatDateTime(row.requestedAt)}</span>
+        <span className="text-3">
+          {' · '}
+          <time>{formatDateTime(row.requestedAt)}</time>
+        </span>
       </>
     ),
   });

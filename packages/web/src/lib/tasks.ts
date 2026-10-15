@@ -5,6 +5,7 @@ import type {
   TurnAttributionWire,
 } from '@nexttime/shared';
 import { TASK_EDGES, TASK_TRANSITIONS, canTransition } from '@nexttime/shared';
+import { shortId } from './format.js';
 
 /**
  * lib/tasks: the wire shapes `list_tasks`/`get_task` return (`toWireTask`/`toWireWorkerRun`,
@@ -140,6 +141,45 @@ export function asResultContract(result: unknown): ResultContractView | undefine
     proposedOperations: arr(record.proposedOperations),
     proposedSkill: record.proposedSkill,
   };
+}
+
+/** One Worker definition as a choice: its name, its version, and — only when another listed
+ *  definition has the same name — its short id, so same-name Workers (a template instantiated
+ *  twice gives two `ops-runner v1`) can be told apart (#541 acceptance P2, legacy 245). */
+export interface WorkerDefinitionChoice {
+  readonly id: string;
+  readonly label: string;
+  readonly version: string;
+  readonly distinguisher?: string;
+}
+
+const workerLabelOf = (row: WorkerDefinitionSummary) =>
+  typeof row.definition.name === 'string' && row.definition.name !== ''
+    ? row.definition.name
+    : row.id;
+
+/** Ids of the definitions whose name another listed definition (a different id) also has. */
+export function sameNameDefinitionIds(
+  definitions: readonly WorkerDefinitionSummary[],
+): ReadonlySet<string> {
+  const idsByLabel = new Map<string, Set<string>>();
+  for (const row of definitions) {
+    const label = workerLabelOf(row);
+    idsByLabel.set(label, (idsByLabel.get(label) ?? new Set()).add(row.id));
+  }
+  return new Set([...idsByLabel.values()].filter((ids) => ids.size > 1).flatMap((ids) => [...ids]));
+}
+
+export function workerDefinitionChoices(
+  definitions: readonly WorkerDefinitionSummary[],
+): WorkerDefinitionChoice[] {
+  const sameName = sameNameDefinitionIds(definitions);
+  return definitions.map((row) => ({
+    id: row.id,
+    label: workerLabelOf(row),
+    version: `v${row.version}`,
+    ...(sameName.has(row.id) ? { distinguisher: shortId(row.id) } : {}),
+  }));
 }
 
 export function definitionName(

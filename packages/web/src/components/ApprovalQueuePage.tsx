@@ -1,6 +1,7 @@
 import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import type { ActionRequestStatus } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
+import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -11,6 +12,7 @@ import type { ActionRequestRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { actorRuntimeLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { ApprovalDetail } from './approvals/ApprovalDetail.js';
 import { useApprovalQueue } from './approvals/useApprovalQueue.js';
@@ -78,6 +80,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
+  const ask = useAskForAccess(http);
   const toast = useToast();
   const principalNames = usePrincipalNames(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -142,6 +145,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           filter === 'pending' ? (
             <PendingList
               t={t}
+              ask={ask}
               pending={pending}
               rows={rows}
               forbidden={forbidden}
@@ -260,6 +264,7 @@ function ApprovalDetailContent({
 
 interface PendingListProps {
   readonly t: Translate;
+  readonly ask: ReturnType<typeof useAskForAccess>;
   readonly pending: ReturnType<typeof useApprovalQueue>['pending'];
   readonly rows: readonly ActionRequestRow[];
   readonly forbidden: boolean;
@@ -271,6 +276,7 @@ interface PendingListProps {
 
 function PendingList({
   t,
+  ask,
   pending,
   rows,
   forbidden,
@@ -287,13 +293,13 @@ function PendingList({
       return (
         <EmptyState
           title={t(
-            '审批由 operator 和工作区所有者处理',
-            'Approvals are handled by operators and the workspace owner',
+            `审批由${capabilityHolders('list_pending', t)}处理`,
+            `Approvals are handled by ${capabilityHolders('list_pending', t)}`,
           )}
-          body={t(
-            '你的角色看不到审批队列。要参与审批，请工作区所有者把你的角色改为 operator。',
-            'Your role does not see the approval queue. To take part in approvals, ask the workspace owner to make you an operator.',
-          )}
+          body={`${t('你的角色看不到审批队列。', 'Your role does not see the approval queue. ')}${ask(
+            'operator',
+            'approve',
+          )}`}
           testId="approvals-forbidden"
         />
       );
@@ -428,6 +434,7 @@ function ApprovalHistoryTab({
   gatekeeperNames,
 }: ApprovalHistoryTabProps) {
   const t = useT();
+  const ask = useAskForAccess(http);
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all');
   const params = useMemo(() => {
     const next: Record<string, unknown> = { limit: HISTORY_PAGE_SIZE };
@@ -476,13 +483,10 @@ function ApprovalHistoryTab({
         forbidden ? (
           <EmptyState
             title={t(
-              '审批历史只有 operator 和工作区所有者能看',
-              'Only operators and the workspace owner see the approval history',
+              `审批历史只有${capabilityHolders('list_action_requests', t)}能看`,
+              `Only ${capabilityHolders('list_action_requests', t)} see the approval history`,
             )}
-            body={t(
-              '要查看，请工作区所有者把你的角色改为 operator。',
-              'To see it, ask the workspace owner to make you an operator.',
-            )}
+            body={ask('operator', 'see')}
             testId="approval-history-forbidden"
           />
         ) : (

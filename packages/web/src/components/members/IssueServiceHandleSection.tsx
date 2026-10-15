@@ -9,6 +9,7 @@ import { CopyButton } from '../kit/copy-button.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { PlatformError } from '../platform/PlatformError.js';
 
 const SECONDS_PER_DAY = 86400;
@@ -412,11 +413,7 @@ export function IssueServiceHandleSection({
         <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          {missing.length > 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="ish-missing">
-              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-            </span>
-          ) : null}
+          <StillNeeded items={missing} hidden={submitting} testId="ish-missing" />
           <Button type="submit" variant="primary" aria-busy={submitting} disabled={!canSubmit}>
             {t('签发', 'Issue')}
           </Button>

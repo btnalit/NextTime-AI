@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { roleDescription, roleLabel } from '../../lib/labels.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Field, Select as LegacySelect } from '../ui/Field.js';
@@ -130,6 +131,11 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
       />
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <StillNeeded
+          items={workspaceId === '' ? [t('选择工作区', 'pick a workspace')] : []}
+          hidden={adding}
+          testId="user-membership-missing"
+        />
         <Button
           variant="primary"
           icon="plus"

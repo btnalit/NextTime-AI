@@ -12,7 +12,7 @@ import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
-import { definitionName } from '../lib/tasks.js';
+import { workerDefinitionChoices } from '../lib/tasks.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
@@ -329,9 +329,11 @@ export function AgentProfileForm({
         <ChecklistField
           title={t('Worker 定义', 'Worker definitions')}
           subtitle={t('已发布、可被委派的 Worker', 'Published Workers your agent can delegate to')}
-          options={workerDefinitions.map((w) => ({
-            id: w.id,
-            label: definitionName([w], w.id, w.version) ?? w.id,
+          options={workerDefinitionChoices(workerDefinitions).map((choice) => ({
+            id: choice.id,
+            label: choice.label,
+            note: choice.version,
+            ...(choice.distinguisher !== undefined ? { detail: choice.distinguisher } : {}),
           }))}
           excluded={state.excludedWorkerDefs}
           onToggle={(id) => update('excludedWorkerDefs', toggleItem(state.excludedWorkerDefs, id))}
@@ -461,6 +463,8 @@ function ChecklistField({
     readonly id: string;
     readonly label: string;
     readonly note?: string;
+    /** Tells an option apart from a same-named one (a Worker definition's short id). */
+    readonly detail?: string;
   }[];
   readonly excluded: readonly string[];
   readonly onToggle: (id: string) => void;
@@ -492,6 +496,11 @@ function ChecklistField({
               />
               <span>{option.label}</span>
               {option.note !== undefined ? <span className="tag">{option.note}</span> : null}
+              {option.detail !== undefined ? (
+                <span className="mono text-3" title={option.id} data-volatile="">
+                  {option.detail}
+                </span>
+              ) : null}
             </label>
           ))}
         </fieldset>

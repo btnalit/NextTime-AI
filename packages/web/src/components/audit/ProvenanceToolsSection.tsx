@@ -17,6 +17,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
 import { useLang, useT } from '../../lib/i18n.js';
+import { capabilityHolders } from '../../lib/role-holders.js';
 import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -134,12 +135,13 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改选“决定”。',
-            'Fact suggestions come from the audit log (auditor role) — paste an id, or switch to Decision.',
+            `事实的候选来自审计记录（只有${capabilityHolders('audit_query', t)}能读）；请粘贴 ID，或改选“决定”。`,
+            `Fact suggestions come from the audit log (only ${capabilityHolders('audit_query', t)} can read it) — paste an id, or switch to Decision.`,
           )}
           disabled={state.busy}
           testId="causal-chain-node-id"
         />
+        {/* ux-lint-allow-disabled: one field — nothing typed or picked yet. */}
         <Button type="submit" variant="primary" disabled={!nodeId.trim() || state.busy}>
           {t('追溯', 'Trace')}
         </Button>

@@ -1,6 +1,7 @@
 import { type Page, type Route, expect, test } from '@playwright/test';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
 import {
+  expectDisabledExplained,
   expectNoHalfEnglish,
   expectReadableErrors,
   watchForbiddenCapabilityCalls,
@@ -163,6 +164,8 @@ async function openNewProviderForm(page: Page) {
   await page.getByTestId('provider-create').click();
   const form = page.getByTestId('provider-form');
   await expect(form).toBeVisible();
+  // An empty form's grey 保存 says what it still wants (DoD item 4).
+  await expectDisabledExplained(form);
   return form;
 }
 

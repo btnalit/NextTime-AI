@@ -256,7 +256,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     expect(screen.queryByTestId('create-gate-instance-form')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /新建实例/ }));
     const form = await screen.findByTestId('create-gate-instance-form');
-    fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'billing' } });
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing' } });
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
@@ -494,6 +494,55 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
   });
 
+  // #541 review (legacy 243 ①): the workspace step, per role, on a gate already enabled here.
+  // Review is builder/owner (`publish_operation`), granting is the owner's (`grant_capability`);
+  // a role that cannot grant is never held at "至少授权给一名成员".
+  it.each([
+    { role: 'owner', review: true, grant: true },
+    { role: 'builder', review: true, grant: false },
+    { role: 'operator', review: false, grant: false },
+    { role: 'member', review: false, grant: false },
+  ] as const)(
+    'workspace step for $role: review $review, grant $grant',
+    async ({ role, review, grant }) => {
+      const linked = availableRow({ gatekeeperId: 'gk-9' });
+      const http = scriptedHttp({
+        get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-1', role } }),
+        list_available_gate_instances: () => ({ items: [linked] }),
+      });
+      renderLauncher({
+        http,
+        origin: 'workspace',
+        canEnable: role === 'owner',
+        available: [linked],
+      });
+      fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
+      next();
+      fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+      next();
+      const side = screen.getByTestId('launcher-workspace-enable');
+      await within(side).findByTestId('launcher-workspace-linked');
+      await waitFor(() =>
+        expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+      );
+      await waitFor(() =>
+        expect(within(side).queryByTestId('wizard-review') !== null).toBe(review),
+      );
+      expect(within(side).queryByTestId('launcher-grant') !== null).toBe(grant);
+      expect(within(side).queryByTestId('launcher-grant-owner-only') !== null).toBe(!grant);
+      if (!grant) {
+        // Nothing left for this role to do here: 下一步 is open, and the checklist names who grants.
+        await waitFor(() =>
+          expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(false),
+        );
+      }
+      // A role that cannot read grants never asks for them (#541 review N1).
+      expect(http.calls.some((call) => call.name === 'list_grants')).toBe(
+        role === 'owner' || role === 'operator',
+      );
+    },
+  );
+
   it('shows the kernel refusal inline when enable_gate_instance rejects (connector_not_preset)', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),
@@ -642,11 +691,12 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
    *  each `execution_readiness` state below. */
   async function reachHandshake(
     executionReadiness: () => ExecutionReadinessWire,
+    row: AvailableGateInstanceWire = availableRow(),
   ): Promise<
     CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] }
   > {
     const http = scriptedHttp({
-      list_available_gate_instances: () => ({ items: [availableRow()] }),
+      list_available_gate_instances: () => ({ items: [row] }),
       preview_gate_instance_enable: () => ({
         gateId: 'docker-prod',
         wouldLink: null,
@@ -687,7 +737,7 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
       origin: 'workspace',
       platformAdmin: false,
       canEnable: true,
-      available: [availableRow()],
+      available: [row],
     });
     fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
     next();
@@ -736,6 +786,28 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
     expect(screen.getByTestId('launcher-try-in-chat-suggestion').textContent).toContain(
       'Docker prod',
     );
+  });
+
+  it('an unreachable gate is said to be down, not "your agent can already call it" (#541 acceptance P3 ④)', async () => {
+    await reachHandshake(
+      () =>
+        readiness({
+          ready: true,
+          gates: [
+            readinessGate({
+              gateId: 'gk-9',
+              name: 'Docker prod',
+              observeOperationCount: 2,
+              publishedOperationCount: 2,
+            }),
+          ],
+        }),
+      availableRow({ health: 'unreachable' }),
+    );
+    const down = await screen.findByTestId('launcher-agent-usability-down');
+    expect(down.textContent).toContain('不可达');
+    expect(down.textContent).not.toContain('已经可以直接调用');
+    expect(screen.queryByTestId('launcher-agent-usability-direct')).toBeNull();
   });
 
   it('via_worker: names the Worker(s) that cover it', async () => {

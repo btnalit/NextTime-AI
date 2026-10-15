@@ -30,7 +30,11 @@ import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
-import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
+import {
+  type WorkerDefinitionSummary,
+  definitionName,
+  sameNameDefinitionIds,
+} from '../lib/tasks.js';
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
@@ -340,6 +344,7 @@ function PublishGovernanceConfirm({
       open={open}
       onOpenChange={setOpen}
       anchor={
+        // ux-lint-allow-disabled: the 「已核对凭据」 checkbox (CredentialReview) right above says why.
         <Button
           variant="primary"
           size="s"
@@ -1065,6 +1070,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             />
           </Field>
           <DialogFooter>
+            {/* ux-lint-allow-disabled: one field — the description box is empty. */}
             <Button
               variant="primary"
               size="s"
@@ -2213,6 +2219,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       ? myDrafts.state.data.items.filter((row) => row.status === 'draft')
       : [];
   const allRows = [...myDraftRows, ...entryRows, ...workerRows];
+  // Same-name definitions (a template instantiated twice) differ only by id: show it on those.
+  const sameName = sameNameDefinitionIds(allRows);
   const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
 
   const list = (
@@ -2261,7 +2269,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
-                <span className="truncate text-3">v{row.version}</span>
+                <span className="truncate text-3">
+                  v{row.version}
+                  {sameName.has(row.id) ? (
+                    <>
+                      {' · '}
+                      <span className="mono" title={row.id} data-volatile="">
+                        {shortId(row.id)}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
               </ListRow>
             ))}
           </List>
@@ -2293,7 +2311,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
-                <span className="truncate text-3">v{row.version}</span>
+                <span className="truncate text-3">
+                  v{row.version}
+                  {sameName.has(row.id) ? (
+                    <>
+                      {' · '}
+                      <span className="mono" title={row.id} data-volatile="">
+                        {shortId(row.id)}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
               </ListRow>
             ))}
           </List>
@@ -2327,7 +2355,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
-                <span className="truncate text-3">v{row.version}</span>
+                <span className="truncate text-3">
+                  v{row.version}
+                  {sameName.has(row.id) ? (
+                    <>
+                      {' · '}
+                      <span className="mono" title={row.id} data-volatile="">
+                        {shortId(row.id)}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
               </ListRow>
             ))}
           </List>

@@ -92,6 +92,7 @@ export function ApiKeyLoginDetails({
           <ErrorBanner error={error} title={t('无法登录', 'Could not sign in')} />
         ) : null}
 
+        {/* ux-lint-allow-disabled: one field — the API key box is empty. */}
         <Button
           type="submit"
           variant="primary"
