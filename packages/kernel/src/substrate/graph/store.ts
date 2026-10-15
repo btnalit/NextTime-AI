@@ -120,7 +120,14 @@ export interface CallerPrincipal {
 
 export interface UpsertObjectInput {
   readonly objectType: string;
+  /** Stored scrubbed (`scrubGraphProperties`, review of #549) unless `kernelAuthored`. */
   readonly properties?: Record<string, unknown>;
+  /** The kernel composed `properties` itself — mechanism state (a Gatekeeper's
+   *  `connectionSecretSalt`, an Operation's `status`) or a published definition's name and
+   *  description, which the publish review already counted suspected credentials in — so they are
+   *  stored as given. Absent: they came from outside the kernel (an agent, a Worker, a gate's
+   *  output, an ingest) and are scrubbed. */
+  readonly kernelAuthored?: true;
   /** Object identity: object_type (above) + these key/value pairs (design doc §16). Upserts by
    *  this key when non-empty; otherwise always inserts a new Object. */
   readonly identity?: Record<string, unknown>;
@@ -147,6 +154,8 @@ export interface AssertFactInput {
   readonly sourceObjectId: string;
   readonly targetObjectId: string;
   readonly activityId: string;
+  /** Always stored scrubbed (`scrubGraphProperties`, review of #549): a Fact's properties come from
+   *  whoever asserts it — an agent's `assert_fact`, a Worker's result — and every reader sees them. */
   readonly properties?: Record<string, unknown>;
   readonly validFrom?: Date;
   readonly validUntil?: Date | null;

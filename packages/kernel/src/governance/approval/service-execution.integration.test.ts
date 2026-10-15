@@ -8,6 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { grantCapability } from '../capability/index.js';
 import { SetPolicyValidationError, setPolicy } from '../policy/index.js';
+import { approveActionRequest } from './decide.js';
 import {
   compensateActionRequest,
   expireActionRequest,
@@ -266,6 +267,93 @@ describe.runIf(DATABASE_URL !== undefined)(
           (client) => compensateActionRequest(client, workspaceId, autoApproved2.id),
         );
         expect(compensated.status).toBe('compensated');
+      });
+
+      it('audits a gate’s output and a failure reason without the secrets they carry or quote (legacy 187)', async () => {
+        // Synthetic values: one no value pattern knows (only its field, or the request's own
+        // param, can hide it), and one shaped like an issued token.
+        const PLAIN = 'hunter2-plain-word';
+        const ISSUED = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+        async function runToTerminal(
+          actionKind: string,
+          finish: (
+            client: Parameters<typeof markActionRequestFailed>[0],
+            id: string,
+          ) => Promise<unknown>,
+        ): Promise<Record<string, unknown>> {
+          const request = await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              requestAction(client, workspaceId, {
+                gatekeeperId,
+                actionKind,
+                blastRadius: 'low',
+                operationAutoApprovable: true,
+                awaitDecision: false,
+                onBehalfOf: ownerId,
+                actorRuntime: 'pi',
+                requesterScope: scopeCovering(gatekeeperId),
+                params: { user: 'bob', password: PLAIN },
+              }),
+          );
+          // A password in the params keeps it from auto-approval: a person approves it, having
+          // reviewed the credential (#526).
+          expect(request.status).toBe('pending_approval');
+          await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            await approveActionRequest(client, workspaceId, {
+              actionRequestId: request.id,
+              approverPrincipalId: ownerId,
+              approverRole: 'owner',
+              credentialsReviewed: true,
+            });
+            await startActionRequestExecution(client, workspaceId, request.id);
+            await finish(client, request.id);
+          });
+          return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            const { rows } = await client.query<{ payload: Record<string, unknown> }>(
+              `select payload from audit_records
+                where workspace_id = $1 and resource_id = $2 and action in ('action_request.complete', 'action_request.fail')`,
+              [workspaceId, request.id],
+            );
+            expect(rows).toHaveLength(1);
+            return rows[0]?.payload as Record<string, unknown>;
+          });
+        }
+
+        const completed = await runToTerminal('test.exec.secret-output', (client, id) =>
+          markActionRequestExecuted(client, workspaceId, id, {
+            resultMetadata: {
+              stdout: `created bob with password ${PLAIN}`,
+              issued: { token: 'plain-issued-value', note: `use ${ISSUED}` },
+              rows: 1,
+            },
+          }),
+        );
+        expect(JSON.stringify(completed)).not.toContain(PLAIN);
+        expect(JSON.stringify(completed)).not.toContain(ISSUED);
+        expect(JSON.stringify(completed)).not.toContain('plain-issued-value');
+        expect(completed.resultMetadata).toEqual({
+          stdout: 'created bob with password [redacted]',
+          issued: { token: '[redacted]', note: 'use [redacted]' },
+          rows: 1,
+        });
+        expect(completed.resultRedaction).toMatchObject({ redactedValues: 3 });
+        expect(JSON.stringify(completed.resultRedaction)).toContain('token');
+
+        const plainOutput = await runToTerminal('test.exec.plain-output', (client, id) =>
+          markActionRequestExecuted(client, workspaceId, id, { resultMetadata: { ok: true } }),
+        );
+        expect(plainOutput).toEqual({ resultingStatus: 'executed', resultMetadata: { ok: true } });
+
+        const failed = await runToTerminal('test.exec.secret-reason', (client, id) =>
+          markActionRequestFailed(client, workspaceId, id, {
+            reason: `Command failed: mysql -ubob -p${PLAIN} (token=${ISSUED})`,
+          }),
+        );
+        expect(JSON.stringify(failed)).not.toContain(PLAIN);
+        expect(JSON.stringify(failed)).not.toContain(ISSUED);
+        expect(failed.reason).toContain('mysql -ubob -p[redacted]');
       });
 
       it('getActionRequest returns null / ActionRequestNotFoundError paths behave as documented', async () => {

@@ -25,6 +25,18 @@ import { SqlGraphStore } from '../graph/index.js';
 
 const graphStore = new SqlGraphStore();
 
+/** The Object types this module writes, all `kernelAuthored` (review of #549): their properties are
+ *  mechanism state or a published definition's text, stored as given — a Gatekeeper's
+ *  `connectionSecretSalt` is named like a secret and must stay what it is. The raw-secret scrub
+ *  leaves them out of its count of observed Objects. */
+export const KERNEL_AUTHORED_OBJECT_TYPES = [
+  'WorkerDefinition',
+  'Gatekeeper',
+  'Skill',
+  'Procedure',
+  'Operation',
+] as const;
+
 // -------------------------------------------------------------------------------------------
 // WorkerDefinition (application/worker/definitions.ts calls this from `publish()` — publish-time
 // only, never for a draft: every WorkerDefinition Object in `objects` is therefore non-draft by
@@ -57,6 +69,7 @@ export async function projectWorkerDefinitionObject(
   if (input.description !== undefined) properties.description = input.description;
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'WorkerDefinition',
+    kernelAuthored: true,
     identity: { definitionId: input.definitionId, version: input.version },
     properties,
   });
@@ -113,6 +126,7 @@ export async function registerGatekeeperObject(
 ): Promise<RegisterGatekeeperObjectResult> {
   const gatekeeperObject = await graphStore.upsertObject(client, workspaceId, {
     objectType: 'Gatekeeper',
+    kernelAuthored: true,
     identity: input.gatekeeperId ? { gatekeeperId: input.gatekeeperId } : undefined,
     properties: {
       transportKind: input.transportKind,
@@ -354,6 +368,7 @@ export async function projectSkillObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Skill',
+    kernelAuthored: true,
     identity: { skillId: input.skillId, version: input.version },
     properties: { name: input.name, description: input.description },
   });
@@ -379,6 +394,7 @@ export async function projectProcedureObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Procedure',
+    kernelAuthored: true,
     identity: { procedureId: input.procedureId, version: input.version },
     properties: { name: input.name, description: input.description },
   });
@@ -403,6 +419,7 @@ export async function setOperationStatusObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',
+    kernelAuthored: true,
     identity: {
       gatekeeperId: identity.gatekeeperId,
       name: identity.name,
@@ -464,6 +481,7 @@ export async function setOperationGovernanceFieldsObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',
+    kernelAuthored: true,
     identity: {
       gatekeeperId: identity.gatekeeperId,
       name: identity.name,
@@ -489,6 +507,7 @@ export async function setOperationDescriptionObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',
+    kernelAuthored: true,
     identity: {
       gatekeeperId: identity.gatekeeperId,
       name: identity.name,

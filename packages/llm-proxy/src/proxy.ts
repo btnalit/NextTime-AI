@@ -23,6 +23,11 @@ import { checkProviderKey } from './provider-keys.js';
 import type { LlmUsageRecord, LlmUsageRecordContext } from './report.js';
 import { type ProxySourceBinding, socketPeerAddress } from './source-binding.js';
 import {
+  UPSTREAM_ERROR_BODY_MAX_BYTES,
+  oversizedUpstreamErrorBody,
+  scrubUpstreamErrorBody,
+} from './upstream-error-body.js';
+import {
   MAX_USAGE_SCAN_CHARS,
   computeCostUsd,
   createStreamUsageAccumulator,
@@ -55,11 +60,13 @@ import {
  * so a Handle cannot reach the provider through either name, and no other agent-chosen header) and
  * set the provider's configured header to the real key (console key, else
  * `process.env[api_key_env]`) → forward to `upstream_base_url`, redirects refused (R-23) → stream
- * the response back **byte-for-byte untouched** while a parallel, non-mutating read extracts
- * usage (usage.ts) → report the parsed usage (report.ts).
+ * a successful response back **byte-for-byte untouched** while a parallel, non-mutating read
+ * extracts usage (usage.ts) → report the parsed usage (report.ts).
  *
- * Response bytes are never altered, streaming or not — only the outbound *request* is ever
- * narrowed or mutated, and only as above.
+ * A successful response's bytes are never altered, streaming or not. The one exception is an
+ * error response (4xx / 5xx), which can quote the request and so the real key: it is read whole
+ * (bounded) and forwarded as a scrubbed copy with its JSON structure kept (upstream-error-body.ts,
+ * review of #549). Otherwise only the outbound *request* is ever narrowed or mutated, as above.
  *
  * Leftover 87: every request gets a correlation id — the caller's `x-correlation-id` when valid
  * (the platform extension sends the Turn id / the Worker's inherited id on every model call), else
@@ -86,6 +93,36 @@ const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
 };
 
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
+
+/** `response`'s body as text, read until it ends or passes `maxBytes` (then `tooLarge`, the rest
+ *  cancelled unread). `onChunk` runs per chunk (the idle timeout); a read error ends it early. */
+async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+  onChunk: () => void,
+): Promise<{ text: string; tooLarge: boolean; error: unknown }> {
+  if (!response.body) return { text: '', tooLarge: false, error: undefined };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      onChunk();
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { text: '', tooLarge: true, error: undefined };
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return { text: text + decoder.decode(), tooLarge: false, error: undefined };
+  } catch (err) {
+    return { text: text + decoder.decode(), tooLarge: false, error: err };
+  }
+}
 
 function upstreamHeadersToNodeHeaders(headers: Headers): http.OutgoingHttpHeaders {
   const result: http.OutgoingHttpHeaders = {};
@@ -600,17 +637,35 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     }
 
     armTimeout(options.upstreamIdleTimeoutMs);
-    res.writeHead(upstreamRes.status, upstreamHeadersToNodeHeaders(upstreamRes.headers));
 
     const contentType = upstreamRes.headers.get('content-type') ?? '';
-    const isSse = contentType.includes('text/event-stream');
+    const isSse = upstreamRes.ok && contentType.includes('text/event-stream');
     const usageAccumulator = isSse ? createStreamUsageAccumulator(provider.api) : undefined;
     const decoder = new TextDecoder();
     let nonSseText = '';
     let nonSseTooLarge = false;
     let streamError: unknown;
 
-    if (upstreamRes.body) {
+    if (!upstreamRes.ok) {
+      // Review of #549 (B5): an error body can quote the request, the real key included — read it
+      // whole (bounded) and forward the scrubbed copy, its structure kept (upstream-error-body.ts).
+      const read = await readBoundedBody(upstreamRes, UPSTREAM_ERROR_BODY_MAX_BYTES, () =>
+        armTimeout(options.upstreamIdleTimeoutMs),
+      );
+      streamError = read.error;
+      const body = read.tooLarge
+        ? oversizedUpstreamErrorBody()
+        : scrubUpstreamErrorBody(read.text, keyCheck.key);
+      const headers = upstreamHeadersToNodeHeaders(upstreamRes.headers);
+      headers['content-length'] = Buffer.byteLength(body);
+      if (read.tooLarge) headers['content-type'] = 'application/json';
+      res.writeHead(upstreamRes.status, headers);
+      res.end(body);
+    } else {
+      res.writeHead(upstreamRes.status, upstreamHeadersToNodeHeaders(upstreamRes.headers));
+    }
+
+    if (upstreamRes.ok && upstreamRes.body) {
       const reader = upstreamRes.body.getReader();
       try {
         while (true) {
@@ -633,7 +688,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       }
     }
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    res.end();
+    if (upstreamRes.ok) res.end();
 
     let parsedUsage = isSse ? usageAccumulator?.result() : undefined;
     if (nonSseTooLarge) {

@@ -366,40 +366,47 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(/audit_records_actor_shape/);
       });
 
-      // Leftover 103 (migration core 0040): an unattended `compact-observations --yes` run (the
-      // apply-release hook) records itself under the same marker.
-      it('accepts an actor-less cli.observations_compacted row with attributedActor: false; rejects it without the marker', async () => {
-        const row = await withWorkspace(
-          pool,
-          { workspaceId, principalId: ownerId },
-          (client) =>
-            writeAudit(client, {
-              workspaceId: null,
-              actorPrincipalId: null,
-              action: 'cli.observations_compacted',
-              resourceType: 'observations',
-              payload: { attributedActor: false, totals: { deleted: 0 } },
-            }),
-          { skipRoleSwitch: true },
-        );
-        expect(row.actorUserId).toBeNull();
-
-        await expect(
-          withWorkspace(
+      // Leftover 103 (migration core 0040) and legacy 183–187 (core 0043): an unattended
+      // `compact-observations --yes` / `scrub-raw-secrets --yes` run (the apply-release hooks)
+      // records itself under the same marker.
+      it.each([
+        ['cli.observations_compacted', 'observations'],
+        ['cli.raw_secrets_scrubbed', 'platform'],
+      ])(
+        'accepts an actor-less %s row with attributedActor: false; rejects it without the marker',
+        async (action, resourceType) => {
+          const row = await withWorkspace(
             pool,
             { workspaceId, principalId: ownerId },
             (client) =>
               writeAudit(client, {
                 workspaceId: null,
                 actorPrincipalId: null,
-                action: 'cli.observations_compacted',
-                resourceType: 'observations',
-                payload: { attributedActor: true },
+                action,
+                resourceType,
+                payload: { attributedActor: false, totals: { deleted: 0 } },
               }),
             { skipRoleSwitch: true },
-          ),
-        ).rejects.toThrow(/audit_records_actor_shape/);
-      });
+          );
+          expect(row.actorUserId).toBeNull();
+
+          await expect(
+            withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                writeAudit(client, {
+                  workspaceId: null,
+                  actorPrincipalId: null,
+                  action,
+                  resourceType,
+                  payload: { attributedActor: true },
+                }),
+              { skipRoleSwitch: true },
+            ),
+          ).rejects.toThrow(/audit_records_actor_shape/);
+        },
+      );
     });
 
     it('a failing audit write rolls back a prior write in the same transaction (S1.3 acceptance)', async () => {

@@ -49,6 +49,20 @@ export {
   ObservationCompactionRefusedError,
   compactObservations,
 } from './compact-observations.js';
+export type {
+  RawSecretCategory,
+  RawSecretCategoryCounts,
+  ScrubRawSecretsInput,
+  ScrubRawSecretsResult,
+} from './scrub-raw-secrets.js';
+export {
+  COUNTED_CATEGORIES,
+  RAW_SECRET_SCRUB_AUDIT_ACTION,
+  RAW_SECRET_SCRUB_BATCH_SIZE,
+  REWRITTEN_CATEGORIES,
+  RawSecretScrubFailedError,
+  scrubRawSecrets,
+} from './scrub-raw-secrets.js';
 export type { SystemPromptParts } from './instance-instructions.js';
 export {
   INSTANCE_INSTRUCTIONS_MARKER,

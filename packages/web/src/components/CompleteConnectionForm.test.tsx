@@ -166,9 +166,28 @@ describe('CompleteConnectionForm', () => {
     // A target that is not a host gives no suggestion either.
     fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: '://bad url' } });
     expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+    // Review of #549: never with the target's query, and never from a target carrying a credential
+    // (one click would copy it into the manifest source).
+    fireEvent.change(manifest, { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/目标系统/), {
+      target: { value: 'erp.example.com/api?version=3' },
+    });
+    expect(screen.getByTestId('cc-manifest-suggest').textContent).toBe(
+      '使用 https://erp.example.com/api/openapi.json',
+    );
+    for (const carrying of [
+      'https://ops:Synth-Pw-4417@erp.example.com/api',
+      'erp.example.com/api?token=abcdefghijklmnopqrstuvwxyz0123',
+    ]) {
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: carrying } });
+      expect(screen.queryByTestId('cc-manifest-suggest')).toBeNull();
+      expect(manifest.placeholder).not.toContain('Synth-Pw-4417');
+      expect(manifest.placeholder).not.toContain('token=');
+    }
     fireEvent.change(screen.getByLabelText(/目标系统/), {
       target: { value: 'erp.example.com/api/' },
     });
+    fireEvent.click(screen.getByTestId('cc-manifest-suggest'));
 
     fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
@@ -253,11 +272,13 @@ describe('CompleteConnectionForm', () => {
     fireEvent.click(screen.getByLabelText(/已连接账户/));
     fireEvent.change(screen.getByLabelText(/^凭证(?!类型)/), { target: { value: 'tok' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    const fieldError = await screen.findByText(/no `credentials` was given/);
-    expect(fieldError.getAttribute('id')).toBe('cc-credentials-error');
-    // A Chinese explanation leads; the kernel's raw English text is kept as the secondary detail.
-    expect(fieldError.textContent?.startsWith('门没有接受这份凭证')).toBe(true);
-    expect(fieldError.textContent).toContain('服务端原文：');
+    // Review of #549 (#537 convention): the field says what is wrong in the viewer's language; the
+    // kernel's raw English text sits in the field's collapsed 「技术细节」, never in the line itself.
+    const raw = await screen.findByTestId('cc-credentials-error-detail');
+    const fieldError = document.getElementById('cc-credentials-error');
+    expect(fieldError?.textContent).toBe('门没有接受这份凭证：请填一个 token，或一个 JSON 对象。');
+    expect(raw.textContent).toContain('no `credentials` was given');
+    expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
   });
 
   it('hideKindField hides the Kind select and initialKind still drives the submitted kind', async () => {
@@ -335,9 +356,87 @@ describe('CompleteConnectionForm', () => {
       target: { value: 'http://worker-supervisor:8081' },
     });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    const fieldError = await screen.findByText(/is refused/);
-    expect(fieldError.getAttribute('id')).toBe('cc-endpoint-error');
-    expect(fieldError.textContent).toContain('指向平台自身的服务');
+    const raw = await screen.findByTestId('cc-endpoint-error-detail');
+    expect(raw.textContent).toContain('is refused');
+    const fieldError = document.getElementById('cc-endpoint-error');
+    expect(fieldError?.textContent).toContain('指向平台自身的服务');
+    expect(fieldError?.textContent).not.toContain('is refused');
+  });
+
+  // Legacy 186: a credential in the target, the endpoint or the manifest source is refused on the
+  // field the kernel names in `details.field` — never on Credentials, though the message mentions
+  // credentials. Review of #549: the kernel's English stays in the field's 「技术细节」, and the
+  // line says where the credential goes in this form's terms.
+  it.each([
+    [
+      'target',
+      /目标系统/,
+      'https://ops:pw@grafana.example',
+      'cc-target-error',
+      '目标系统里带了凭据',
+    ],
+    ['endpoint', /门端点/, 'https://gate.example/?token=x', 'cc-endpoint-error', '门端点里不能带'],
+    [
+      'manifestSource',
+      /清单来源/,
+      'https://grafana.example/openapi.json?token=x',
+      'cc-manifest-error',
+      '清单来源里带了凭据',
+    ],
+  ])(
+    'shows a credentials_in_connection_params 400 on the %s field',
+    async (field, label, value, errorId, explanation) => {
+      const kernelText = `create_connection: ${field} carries what looks like a credential — refused, nothing was stored. A credential goes to the gate (its credential entry, or the gate's own configuration), never into the ${field}.`;
+      const http = httpWith(async () => {
+        throw new HttpError('capability_error', kernelText, 'credentials_in_connection_params', {
+          field,
+        });
+      });
+      render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText(/门端点/), {
+        target: { value: 'https://gate.example' },
+      });
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      const raw = await screen.findByTestId(`${errorId}-detail`);
+      expect(raw.textContent).toBe(kernelText);
+      expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
+      const fieldError = document.getElementById(errorId);
+      expect(fieldError?.textContent).toContain(explanation);
+      expect(fieldError?.textContent).not.toContain('refused, nothing was stored');
+      // Shared mode has no credential box: the line never sends the user to one.
+      expect(fieldError?.textContent).not.toContain('「凭证」');
+      expect(document.getElementById('cc-credentials-error')).toBeNull();
+      expect(screen.queryByText(/门未接受这次连接/)).toBeNull();
+    },
+  );
+
+  it('points a refused target at the 凭证 box only once a per-member credential is chosen', async () => {
+    const http = httpWith(async () => {
+      throw new HttpError(
+        'capability_error',
+        'create_connection: target carries what looks like a credential',
+        'credentials_in_connection_params',
+        { field: 'target' },
+      );
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/目标系统/), {
+      target: { value: 'https://ops:pw@grafana.example' },
+    });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
+      target: { value: 'https://gate.example' },
+    });
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    fireEvent.change(screen.getByLabelText(/^凭证(?!类型)/), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await screen.findByTestId('cc-target-error-detail');
+    expect(document.getElementById('cc-target-error')?.textContent).toContain(
+      '凭据填到下面的「凭证」里',
+    );
   });
 
   it('picks "on behalf of" from list_principals (active humans only) and submits the chosen id', async () => {

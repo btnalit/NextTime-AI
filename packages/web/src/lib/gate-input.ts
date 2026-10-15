@@ -1,3 +1,4 @@
+import { addressCredential } from '@nexttime/shared';
 import { GATE_ID_PATTERN } from './platform-errors.js';
 
 /** `GATE_ID_PATTERN`'s length cap (`^[a-z0-9][a-z0-9-]{1,63}$` → 2–64 characters). */
@@ -75,4 +76,34 @@ export function isAbsoluteUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whether a typed address visibly carries a credential: a user name or password in the URL, or a
+ *  query / fragment parameter named like one (`?token=`, `?api_key=`, `?sig=`,
+ *  `?X-Amz-Signature=`) — `@nexttime/shared`'s `addressCredential`, the rule the kernel refuses
+ *  by (it also refuses a JWT, a vendor key or a `Bearer` value anywhere). This only keeps the
+ *  console from copying such an address into another field. Accepts a value without a scheme. */
+export function addressCarriesCredential(value: string): boolean {
+  const withScheme = withDefaultScheme(value, 'https');
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return false;
+  }
+  if (url.username !== '' || url.password !== '') return true;
+  return addressCredential(withScheme) !== null;
+}
+
+/** The OpenAPI document an http target usually serves, `<target>/openapi.json`, offered as a
+ *  one-click fill: built from the target's origin and path only (never its user name, password,
+ *  query or fragment), and not offered at all while the target carries a credential — a
+ *  suggestion must never copy one into the manifest source (review of #549). `''` when the target
+ *  is not an http(s) URL or host. */
+export function suggestedManifestSource(target: string): string {
+  const value = withDefaultScheme(target, 'https');
+  if (value === '' || !isAbsoluteUrl(value) || addressCarriesCredential(value)) return '';
+  const url = new URL(value);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}/openapi.json`;
 }

@@ -246,12 +246,14 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
         endpoint: 'https://gate.owner.example',
         credentialKind: 'shared',
         connectionSecret: secrets.mint(WORKSPACE).secret,
-        manifestSource: `https://owner:pa55word@${base.slice('https://'.length)}?api_key=k3y#frag`,
+        // A user name, a password or a secret query parameter is refused before any fetch
+        // (legacy 186); a plain query and a fragment still never reach the message.
+        manifestSource: `${base}?ref=k3y#frag`,
       }).catch((err: unknown) => err);
       expect(thrown).toBeInstanceOf(ConnectionManifestFetchError);
       const message = (thrown as Error).message;
       expect(message).toContain(`failed to fetch manifestSource "${base}"`);
-      for (const leak of ['pa55word', 'owner:', 'k3y', 'frag', key]) {
+      for (const leak of ['k3y', 'frag', key]) {
         expect(message).not.toContain(leak);
       }
     },
@@ -276,6 +278,51 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(fake.targets).toEqual([]);
   });
+
+  it.each([
+    ['target', { target: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@grafana.example.invalid' }],
+    ['endpoint', { endpoint: 'https://gate.owner.example/?token=abcdefghijklmnopqrstuvwxyz0123' }],
+    ['endpoint', { endpoint: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@gate.owner.example' }],
+    [
+      'manifestSource',
+      {
+        manifestSource:
+          'https://api.owner.example/openapi.json?access_token=abcdefghijklmnopqrstuvwxyz0123',
+      },
+    ],
+    [
+      'manifestSource',
+      { manifestSource: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@api.owner.example/mcp' },
+    ],
+  ])(
+    'refuses a credential in the %s before contacting anything or writing a row (legacy 186)',
+    async (field, override) => {
+      const { fake, fetchImpl } = wire();
+      const client = stubClient('self_serve');
+      const thrown = await createConnectionHandler(
+        client,
+        WORKSPACE,
+        {
+          kind: 'http',
+          target: 'x',
+          endpoint: 'https://gate.owner.example',
+          credentialKind: 'shared',
+          connectionSecret: secrets.mint(WORKSPACE).secret,
+          manifestSource: 'https://api.owner.example/openapi.json',
+          ...override,
+        },
+        { channel: 'human', principalId: OWNER },
+      ).catch((err: unknown) => err);
+      expect(thrown).toMatchObject({
+        code: 'credentials_in_connection_params',
+        details: { field },
+      });
+      expect((thrown as Error).message).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(fake.targets).toEqual([]);
+      expect(client.sql.filter((sql) => /^\s*insert/i.test(sql))).toEqual([]);
+    },
+  );
 
   it('requires a connectionSecret minted for this workspace, before contacting anything', async () => {
     const { fake } = wire();

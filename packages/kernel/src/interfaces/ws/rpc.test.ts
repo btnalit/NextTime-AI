@@ -19,6 +19,7 @@ import {
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
+import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -102,6 +103,18 @@ describe('mapDispatchError — legacy 175 observe params', () => {
       count: 1,
       paths: ['q'],
     });
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('ConnectionParamsCarryCredentialsError (legacy 186) maps to INVALID_PARAMS with its message', () => {
+    const err = new ConnectionParamsCarryCredentialsError(
+      'request_connection',
+      'target',
+      'carries what looks like a credential',
+    );
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

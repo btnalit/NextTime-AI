@@ -189,6 +189,30 @@ describe('createChatEventSink — a Turn’s tool calls are stored, redacted (to
     });
   });
 
+  it('a result that repeats a secret its args hid shows it neither live nor stored (legacy 185)', async () => {
+    const { pool, rows } = toolRecordPool([]);
+    const received: ChatPushEvent[] = [];
+    subscribeToChatPushEvents('chat1', (e) => received.push(e));
+    const sink = createChatEventSink({ pool, log: () => {} });
+
+    await sink.handle(started('tc1', 'some_tool', { user: 'bob', password: 'hunter2-plain-word' }));
+    await sink.handle(
+      ended('tc1', text('{"user":"bob","password":"hunter2-plain-word"} via -phunter2-plain-word')),
+    );
+
+    expect(JSON.stringify(received)).not.toContain('hunter2');
+    expect(JSON.stringify(rows)).not.toContain('hunter2');
+    expect(received[1]).toMatchObject({
+      payload: {
+        result: {
+          content: [
+            { type: 'text', text: '{"user":"bob","password":"[redacted]"} via -p[redacted]' },
+          ],
+        },
+      },
+    });
+  });
+
   it('a call whose start it never saw is recorded under the name its end carries, without args', async () => {
     const { pool, rows } = toolRecordPool([]);
     const sink = createChatEventSink({ pool, log: () => {} });

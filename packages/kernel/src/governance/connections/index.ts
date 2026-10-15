@@ -34,4 +34,10 @@ export type {
 } from './service.js';
 
 export { ConnectionRequestNotFoundError } from './types.js';
+export {
+  ConnectionParamsCarryCredentialsError,
+  assertConnectionParamsCarryNoCredentials,
+  findConnectionParamsCredential,
+} from './credentials.js';
+export type { ConnectionCredentialField } from './credentials.js';
 export type { ConnectionRequestKind, ConnectionRequestRow } from './types.js';

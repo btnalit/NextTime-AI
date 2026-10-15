@@ -141,14 +141,29 @@ const defaultSshExec: SshExecFn = async (target, command, { signal }) => {
  *  KEY FILE"). Folded into the error message so an ActionRequest's failure reason is diagnosable.
  *  `stderr` is target-controlled and, per `execFileAsync`'s own `maxBuffer: 10 * 1024 * 1024`, can
  *  be up to 10MB — `boundUntrustedText` (review lane 5, P3 batch) bounds it to 2KB and marks it
- *  untrusted before it becomes part of a failure reason / audit trail; `err.message` (this
- *  package's own, used only when there is no stderr at all) is left as-is. */
+ *  untrusted before it becomes part of a failure reason / audit trail.
+ *
+ *  Never `err.message` of a command that ran (`execFile`'s carries `cmd`): Node's is `Command
+ *  failed: ssh -n -i <identity file> -p <port> … <user>@<host> -- <rendered command>` — the gate's
+ *  key path and target, and every param the template put in the command (`mysql -p{password}`),
+ *  which then lands in the ActionRequest's failure reason, its audit row and the agent's result.
+ *  A command that exits non-zero with no stderr (`grep` with no match) said nothing else. */
 function describeExecFailure(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  const withIo = err as Error & { stderr?: unknown; code?: unknown };
+  if (!(err instanceof Error)) return 'the command failed';
+  const withIo = err as Error & {
+    stderr?: unknown;
+    code?: unknown;
+    signal?: unknown;
+    cmd?: unknown;
+  };
   const stderr = typeof withIo.stderr === 'string' ? withIo.stderr.trim() : '';
   const code = withIo.code !== undefined ? ` (exit ${String(withIo.code)})` : '';
-  return `${stderr ? boundUntrustedText(stderr) : err.message}${code}`;
+  const signal = typeof withIo.signal === 'string' ? ` (signal ${withIo.signal})` : '';
+  if (stderr) return `${boundUntrustedText(stderr)}${code}${signal}`;
+  if (withIo.cmd !== undefined || typeof withIo.code === 'number' || signal !== '') {
+    return `the command failed with no output on stderr${code}${signal}`;
+  }
+  return `${err.message}${code}`;
 }
 
 export interface SshTransportOptions {
