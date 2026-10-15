@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.0](https://github.com/btnalit/NextTime-AI/compare/v0.48.0...v0.49.0) (2026-10-15)
+
+
+### Features
+
+* **console:** tell same-name members and gates apart, fix the audit P2 leftovers, and check role gating per call site ([#561](https://github.com/btnalit/NextTime-AI/issues/561)) ([1ec2d92](https://github.com/btnalit/NextTime-AI/commit/1ec2d92421199e4ac7c183d271b6d54a4fa0bc72))
+
 ## [0.48.0](https://github.com/btnalit/NextTime-AI/compare/v0.47.0...v0.48.0) (2026-10-15)
 
 
