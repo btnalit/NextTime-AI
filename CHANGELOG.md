@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.47.0](https://github.com/btnalit/NextTime-AI/compare/v0.46.0...v0.47.0) (2026-10-15)
+
+
+### Features
+
+* **console:** finish the audit P1 batch — readable audit names, role-aware next steps ([#541](https://github.com/btnalit/NextTime-AI/issues/541)) ([6a0c1e4](https://github.com/btnalit/NextTime-AI/commit/6a0c1e4fff5bc5cfc11770cfbce32c80b08c932c))
+
+
+### Bug Fixes
+
+* **kernel:** stop storing and showing raw secrets from agent text, tool results, connection addresses and gate output (legacy 183–187) ([#549](https://github.com/btnalit/NextTime-AI/issues/549)) ([9c7f8bf](https://github.com/btnalit/NextTime-AI/commit/9c7f8bfd30b13688ce1689ce19b0211ee54c6a56))
+
 ## [0.46.0](https://github.com/btnalit/NextTime-AI/compare/v0.45.0...v0.46.0) (2026-10-10)
 
 
