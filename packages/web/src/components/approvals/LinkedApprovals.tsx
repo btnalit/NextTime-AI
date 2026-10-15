@@ -58,8 +58,10 @@ function LinkedApprovalsForbidden({ http }: { readonly http: CapabilityCaller })
  */
 export function LinkedApprovals(props: LinkedApprovalsProps) {
   const can = useRoleCan(props.http);
-  if (can('list_action_requests') === false) {
-    return <LinkedApprovalsForbidden http={props.http} />;
+  const reads = can('list_action_requests');
+  // A read waits for the role (#541 review M3, review of #561 G1): nothing until it is known.
+  if (reads !== true) {
+    return reads === false ? <LinkedApprovalsForbidden http={props.http} /> : null;
   }
   return <LinkedApprovalsList {...props} />;
 }

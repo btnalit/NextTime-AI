@@ -22,6 +22,7 @@ import type { GrantRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
+import { sameNameIds } from '../../lib/same-name.js';
 import { deriveGateInstanceStatus, labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
 import { GrantGateForm } from '../access/GrantGateForm.js';
@@ -360,6 +361,13 @@ export function ConnectSystemLauncher({
         : step === 2 && onWorkspace
           ? workspaceReady
           : true;
+  // Review of #561 B1: two platform instances of one connector may share a display name — the
+  // gate id tells them apart, as the admin list and the available-instances table already show it.
+  const availableSame = sameNameIds(
+    available,
+    (row) => row.gateId,
+    (row) => row.displayName,
+  );
   // DoD item 4: what 下一步 still waits for, in the step's own words.
   const nextMissing =
     step === 0
@@ -405,6 +413,11 @@ export function ConnectSystemLauncher({
                 />
                 <span className="row-wrap">
                   <span>{row.displayName}</span>
+                  {availableSame.has(row.gateId) ? (
+                    <span className="mono text-3" data-volatile="" data-testid="same-name-id">
+                      {row.gateId}
+                    </span>
+                  ) : null}
                   <span className="tag">{row.connector}</span>
                   <StatusChip
                     machine="gateInstance"

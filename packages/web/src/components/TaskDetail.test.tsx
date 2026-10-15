@@ -69,6 +69,7 @@ function renderDetail(
         principalNames={new Map([['p-1', 'Alice']])}
         onOpenApproval={onOpenApproval}
         onCancel={onCancel}
+        canCancel
       />
     </PermissionsProvider>,
   );

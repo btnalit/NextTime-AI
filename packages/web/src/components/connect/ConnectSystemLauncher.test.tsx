@@ -481,6 +481,20 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(onFinished).toHaveBeenCalledWith({ gateId: 'docker-prod', gatekeeperId: 'gk-9' });
   });
 
+  it('two already-connected systems with one name each show their gate id (review of #561 B1)', () => {
+    const rows = [
+      availableRow({ gateId: 'docker-a' }),
+      availableRow({ gateId: 'docker-b' }),
+      availableRow({ gateId: 'redis-1', connector: 'redis', displayName: 'Redis' }),
+    ];
+    const http = scriptedHttp({ list_available_gate_instances: () => ({ items: rows }) });
+    renderLauncher({ http, origin: 'workspace', canEnable: true, available: rows });
+    const list = screen.getByTestId('launcher-available-instances');
+    const ids = within(list).getAllByTestId('same-name-id');
+    expect(ids.map((element) => element.textContent)).toEqual(['docker-a', 'docker-b']);
+    expect(ids.every((element) => element.hasAttribute('data-volatile'))).toBe(true);
+  });
+
   it('a workspace member who is not an owner sees the owner-only notice instead of the enable button', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),

@@ -56,8 +56,9 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
   const reads = can('list_principals');
   const markDenied = permissions.markDenied;
   const load = useCallback(async (): Promise<PrincipalLoad> => {
-    if (reads === null) return new Promise<never>(() => undefined);
-    if (reads === false) return { items: [], failed: true };
+    if (reads !== true) {
+      return reads === null ? new Promise<never>(() => undefined) : { items: [], failed: true };
+    }
     try {
       let items: readonly PrincipalRow[] = [];
       let cursor: string | undefined;

@@ -117,14 +117,8 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
     >
       <Notice>
         {t(
-          <>
-            创建的是 <code className="mono">kind: 'service'</code> Principal —— 脚本与验收工具用的
-            自动化凭证，不是人；添加人请用「添加成员」。
-          </>,
-          <>
-            Creates a <code className="mono">kind: 'service'</code> Principal — an automation
-            credential for scripts and harnesses, never a person. Add a person with Add member.
-          </>,
+          '创建的是服务账号——脚本与验收工具用的自动化凭证，不是人；添加人请用「添加成员」。',
+          'Creates a service account — an automation credential for scripts and harnesses, never a person. Add a person with Add member.',
         )}
       </Notice>
 

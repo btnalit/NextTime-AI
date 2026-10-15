@@ -78,8 +78,11 @@ interface Site {
   readonly held: boolean;
 }
 
-/** Whether a call is a check that, when it returns true, allows what is being guarded. */
-type IsCheck = (call: ts.CallExpression) => boolean;
+/** Whether a call is a check that, when it returns true, allows what is being guarded. `strict`:
+ *  the check is tri-state (`useRoleCan` returns `null` while the role is unknown) and only a
+ *  definite `true` counts — a read waits for the role (#541), so `!== false` or an early return on
+ *  `=== false` lets it through while the role is unknown and is no hold (review of #561, G1). */
+type IsCheck = ((call: ts.CallExpression) => boolean) & { readonly strict?: boolean };
 
 /** The route table's checks: `useCanOpen()`'s function and the sidebar's predicate. */
 const ASKS = new Set(['canOpen', 'roleMayOpen']);
@@ -227,7 +230,10 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
       const value = bool(right) ?? bool(left);
       const other = bool(right) !== undefined ? left : bool(left) !== undefined ? right : undefined;
       if (value === undefined || other === undefined) return false;
-      return implies(other, equal === value ? want : !want, isCheck, depth);
+      const operandWant = equal === value ? want : !want;
+      // Against `false`, a tri-state check only learns "not false" — `true` or `null`.
+      if (isCheck.strict && value === false && operandWant) return false;
+      return implies(other, operandWant, isCheck, depth);
     }
     if (ts.isCallExpression(expr)) return want && isCheck(expr);
     if (ts.isIdentifier(expr)) {
@@ -465,12 +471,19 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     return ts.isParameter(declaration) && /\buseRoleCan\b/.test(declaration.type?.getText() ?? '');
   };
   /** A `can('<name>')` (or `useRoleCan(http)('<name>')`) from the reader's role. */
-  const checksCapability =
-    (name: string): IsCheck =>
-    (call) =>
-      literalText(call.arguments[0]) === name &&
-      (calleeName(call) === 'can' || ts.isCallExpression(call.expression)) &&
-      isRoleCheck(call.expression);
+  const isRead = (name: string) => {
+    const capability = getCapability(name);
+    return capability !== undefined && !capabilityHasSideEffects(capability);
+  };
+  /** A role check on `name`; strict for a read (it must wait for the role, review of #561 G1). */
+  const checksCapability = (name: string): IsCheck =>
+    Object.assign(
+      (call: ts.CallExpression) =>
+        literalText(call.arguments[0]) === name &&
+        (calleeName(call) === 'can' || ts.isCallExpression(call.expression)) &&
+        isRoleCheck(call.expression),
+      { strict: isRead(name) },
+    );
 
   /** Which gate an href expression leads to — the route table's requirement for its route, so a
    *  check and a link agree when they lead to the same gate (`canOpen(hrefs.audit())` covers
@@ -1231,7 +1244,8 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
   });
 
   // Review of #559 (the 501 reviewer's probes): each of these got a call past the guard.
-  const limited = new Set(['audit_query']);
+  // `set_quota` is a write (held by `!== false`), `audit_query` a read (held only by `=== true`).
+  const limited = new Set(['set_quota', 'audit_query']);
   const unheld = (text: string) => unpaired(scan(text), limited);
   const inComponent = (body: string) =>
     `export function A({ http }) {\n  const can = useRoleCan(http);\n${body}\n}`;
@@ -1240,14 +1254,14 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
     expect(
       unheld(
         inComponent(
-          "  can('audit_query');\n  useEffect(() => { void http.call('audit_query'); }, []);\n  return null;",
+          "  can('set_quota');\n  useEffect(() => { void http.call('set_quota'); }, []);\n  return null;",
         ),
       ),
-    ).toEqual(['audit_query']);
+    ).toEqual(['set_quota']);
     expect(
       unheld(
         inComponent(
-          "  return can('audit_query') !== false ? <button onClick={() => http.call('audit_query')} /> : null;",
+          "  return can('set_quota') !== false ? <button onClick={() => http.call('set_quota')} /> : null;",
         ),
       ),
     ).toEqual([]);
@@ -1257,38 +1271,64 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
     expect(
       unheld(
         inComponent(
-          "  return can('audit_query') === false ? <button onClick={() => http.call('audit_query')} /> : null;",
+          "  return can('set_quota') === false ? <button onClick={() => http.call('set_quota')} /> : null;",
         ),
       ),
-    ).toEqual(['audit_query']);
+    ).toEqual(['set_quota']);
     expect(
       unheld(
         inComponent(
-          "  return can('audit_query') !== false ? null : <button onClick={() => http.call('audit_query')} />;",
+          "  return can('set_quota') !== false ? null : <button onClick={() => http.call('set_quota')} />;",
         ),
       ),
-    ).toEqual(['audit_query']);
+    ).toEqual(['set_quota']);
     expect(
       unheld(
         inComponent(
-          "  if (can('audit_query') !== false) return null;\n  return <button onClick={() => http.call('audit_query')} />;",
+          "  if (can('set_quota') !== false) return null;\n  return <button onClick={() => http.call('set_quota')} />;",
         ),
       ),
-    ).toEqual(['audit_query']);
+    ).toEqual(['set_quota']);
     expect(
       unheld(
         inComponent(
-          "  if (can('audit_query') === false) return null;\n  return <button onClick={() => http.call('audit_query')} />;",
+          "  if (can('set_quota') === false) return null;\n  return <button onClick={() => http.call('set_quota')} />;",
         ),
       ),
     ).toEqual([]);
     expect(
       unheld(
         inComponent(
-          "  return <button disabled={can('audit_query') !== false} onClick={() => http.call('audit_query')} />;",
+          "  return <button disabled={can('set_quota') !== false} onClick={() => http.call('set_quota')} />;",
+        ),
+      ),
+    ).toEqual(['set_quota']);
+  });
+
+  it('a read is held only once the role is known: `=== true`, never `!== false` (review of #561, G1)', () => {
+    const read = (enabled: string) =>
+      unheld(
+        inComponent(
+          `  const rows = useCapabilityList(http, 'audit_query', {}, { enabled: ${enabled} });\n  return null;`,
+        ),
+      );
+    expect(read("can('audit_query') === true")).toEqual([]);
+    expect(read("can('audit_query') !== false")).toEqual(['audit_query']);
+    expect(read("!(can('audit_query') === false)")).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  if (can('audit_query') === false) return null;\n  useEffect(() => { void http.call('audit_query'); }, []);\n  return null;",
         ),
       ),
     ).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  if (can('audit_query') !== true) return null;\n  useEffect(() => { void http.call('audit_query'); }, []);\n  return null;",
+        ),
+      ),
+    ).toEqual([]);
   });
 
   it('a `can` the file defines itself holds nothing, and is reported', () => {
