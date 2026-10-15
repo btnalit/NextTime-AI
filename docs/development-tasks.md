@@ -3915,6 +3915,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 测试：`invoke.integration.test.ts` R-58 区块 6 个确定性屏障测试（迟到的反应、reaper 的 `terminate` 钩子里先跑轮询、取消清扫中跑崩溃反应、取消中看到 `terminated: requested`、取消 UPDATE 未提交时 spawn 等锁（`pg_stat_activity` 判定）、认领后无 Handle），各自去掉修复即红；原「与取消并发完成」用例改在取消的 UPDATE 前注入完成。
 - 剩余崩溃窗口（bump 提交后进程崩溃、取消两个事务之间崩溃）与增量审查的三条（`exited` / `terminated` 守卫无测试、取消后回收前崩溃、终态 Task 不清扫）并进遗留 206；纵深防御见 207。历史影响统计见 `release.md` §3.22。
 
+**caddy 日志不记凭据；apply 不再把没做完的事报成 ok（#556，2026-10-15 合入，无迁移；遗留 236、252 关闭）**
+
+- caddy：`deploy/caddy/Caddyfile` 只有一个站点。两个日志出口都加 `request>headers delete` 与 `request>uri regexp "=[^&#]*" "=REDACTED"`：站点 `log`（`http.log.access.log0`）与全局 `log default`（错误条目 `http.log.error.log0`、DEBUG 下 reverse_proxy 带 `request` 的条目都落在这里）。删全部请求头是 fail-closed，以后新增的凭据头不用改配置。
+- 检查：`scripts/check-caddy-log-redaction.sh <base-url>` 经真实入口发合成探针（带 `X-Api-Key` 与 `?caddyprobe=…&token=…&format=…`），再数 `LOGS_SINCE` 以来 caddy 日志里禁用值的出现次数；`logged` 一项要求探针确实进了日志，所以检查不会空跑通过；`EXPECT_ERROR_ENTRY=1` 时要求 default logger 也被实测到。接入点：e2e（禁用值来自 `GITHUB_ENV`）、云端预演、`apply-release.sh` 第 7 步之后（`STEP caddy-log-redaction`，日志 `-caddy-log.log`）。
+- 单文件挂载过期（一类问题）：从检出目录单文件 bind mount 进容器的配置，文件被换掉后旧容器仍读旧内容，`up -d` 只在定义或镜像变了时重建——caddy 因此一直读旧 Caddyfile，按 digest 固定的 backup / update-feed 一直读旧脚本。`apply-release.sh` 第 6 步之后按 `MOUNT_REFRESH`（`<service>:<检出文件>:<容器路径>`）逐个比较、不同或读不到就 `--force-recreate`；`scripts/validate-compose.mjs` 在 compose 新增未登记的单文件挂载时失败。
+- RESULT：新增 `RESULT degraded=<step>[,…]`（与 `acceptance-failures=<n>` 可并存），只有 `failed-at` 退出 1；降级项为 backup-now、raw-secret-scrub（跳过或中途失败）、observations-compaction、backup-marker、update-feed-dir、egress-sources、mount-refresh、acceptance-fixtures（第 7 步后按 profile 差集找残留的测试容器）、caddy-log-redaction，每项打印补做命令。唯一按结果分支的调用方 `staging-rehearsal.sh` 解析 RESULT 行，degraded 判失败。
+- 测试：`scripts/apply-release-result.test.mjs` 用桩 docker / git / chown / timeout / sleep 跑真实的 `apply-release.sh`，断言 RESULT 行、退出码、补做命令原文，以及备份失败时两个改数据的 CLI 都没被调用；接入 quality。
+- 清洗 CLI（接 #549）：扫描时把每条只计数的行打印成 `counted <category> <workspace>/<id>`，不截断；报告行与审计仍只列前 20 个。llm-proxy 改写非 2xx 错误体时去掉 `content-encoding`。
+- 遗留：257（2xx 透传的压缩头）、258（`?<token>` 查询串）。
+
 **敏感值不再原样落库与回显（#549，2026-10-15 合入，core 0043；遗留 183–187、238 关闭）**
 
 - 规则同源：地址规则是 `@nexttime/shared` 的 `addressCredential`（userinfo 里的密码；查询或片段参数带值且名字命中 `namesASecretField` 或 `ADDRESS_SECRET_QUERY_NAMES`：`sig`、`signature`、`x-amz-signature`、`x-goog-signature`、`key`、`pwd`、`pass`、`auth`），内核 `governance/connections/credentials.ts` 与控制台 `lib/gate-input.ts` 都调用它；预检 SQL `packages/kernel/src/cli/scrub-raw-secrets.preflight.sql` 逐字取 `ADDRESS_CREDENTIAL_SQL`，`scrub-raw-secrets.preflight.integration.test.ts` 在 PG 里对拍（SQL 是 TS 规则的上界）。
