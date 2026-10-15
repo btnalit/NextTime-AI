@@ -5,7 +5,7 @@ import { CopyId } from './CopyId.js';
 export type RefKind = 'principal' | 'gatekeeper' | 'workerDefinition' | 'object' | 'actionRequest';
 
 const KIND_LABEL: Readonly<Record<RefKind, { readonly zh: string; readonly en: string }>> = {
-  principal: { zh: '主体', en: 'Principal' },
+  principal: { zh: '成员', en: 'Member' },
   gatekeeper: { zh: '门', en: 'Gatekeeper' },
   workerDefinition: { zh: 'Worker', en: 'Worker definition' },
   object: { zh: '对象', en: 'Object' },

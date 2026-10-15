@@ -44,6 +44,24 @@ describe('resourceIdSource', () => {
     expect(fact?.fallback).toBeUndefined();
   });
 
+  it('tells two same-name Worker definitions apart by short id (#554 acceptance P2)', async () => {
+    const http = caller({
+      list_worker_definitions: () => ({
+        items: [
+          { id: 'aaaaaaaa-1111', version: 1, kind: 'pi', definition: { name: 'ops-runner' } },
+          { id: 'bbbbbbbb-2222', version: 1, kind: 'pi', definition: { name: 'ops-runner' } },
+          { id: 'cccccccc-3333', version: 1, kind: 'pi', definition: { name: 'collector' } },
+        ],
+      }),
+    });
+    const options = await resourceIdSource('worker_definition', t)?.load(http, '');
+    expect(options?.map((option) => option.label)).toEqual([
+      'ops-runner · aaaaaaaa',
+      'ops-runner · bbbbbbbb',
+      'collector',
+    ]);
+  });
+
   it('maps an Operation to the `${gatekeeperId}:${name}` id the kernel audits it under, named by its gate', async () => {
     const http = caller({
       list_operations: (params) => {

@@ -11,6 +11,18 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
  *  wide layout. */
 export const NARROW_MASTER_DETAIL_QUERY = '(max-width: 1179px)';
 
+/** Whether the detail pane would only say "pick one on the left" while the left side offers nothing
+ *  to pick — still loading, refused for this role, failed, or empty. Such a pane renders nothing
+ *  instead (an auditor on 审批 used to read 「选择左侧一条审批请求」 next to "your role does not see
+ *  the queue", #554 acceptance P3). */
+export function nothingToPick(
+  listStatus: 'loading' | 'ready' | 'error',
+  rowCount: number,
+  selectedId: string | undefined,
+): boolean {
+  return selectedId === undefined && !(listStatus === 'ready' && rowCount > 0);
+}
+
 export interface MasterDetailProps {
   /** The list pane's own content — a page decides what renders there (rows, tabs, its own
    *  loading/empty/error states); this component only supplies the pane shell. */

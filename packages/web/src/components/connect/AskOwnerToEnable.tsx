@@ -12,10 +12,13 @@ import { Notice } from '../kit/notice.js';
 export function AskOwnerToEnable({
   gateName,
   testId,
+  compact = false,
 }: {
   /** The instance in question; omitted for the catalog as a whole. */
   readonly gateName?: string;
   readonly testId?: string;
+  /** One line for a table cell: who enables it, and the request to copy (the catalog row). */
+  readonly compact?: boolean;
 }) {
   const t = useT();
   const request = gateName
@@ -27,6 +30,14 @@ export function AskOwnerToEnable({
         '请在 NextTime 控制台「系统与授权 → 待启用的平台实例」里启用我需要的系统，并授权给我。',
         'Please enable the system I need in this workspace (NextTime console, Systems & access → Platform instances to enable) and grant it to me.',
       );
+  if (compact) {
+    return (
+      <span className="row" style={{ alignItems: 'center' }} data-testid={testId}>
+        <span className="text-2">{t('由工作区所有者启用', 'The workspace owner enables it')}</span>
+        <CopyButton value={request} label={t('给所有者的请求', 'the request')} />
+      </span>
+    );
+  }
   return (
     <Notice testId={testId}>
       <span className="stack-s">

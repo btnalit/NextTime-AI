@@ -458,6 +458,44 @@ describe('PlatformIntegrationsPage', () => {
     );
   });
 
+  it('field-inventory #10: the filter narrows the checklist and "停用筛出的" refuses only what it shows, behind the same confirm', async () => {
+    const c = connector({ disabledOperations: ['old_op'] });
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [c] }),
+      list_gate_instances: () => ({ items: [gateInstance()] }),
+      set_connector_mode: (params) => {
+        expect(params).toEqual({
+          name: 'docker',
+          disabledOperations: ['old_op', 'container_restart'],
+        });
+        return connector({ disabledOperations: ['old_op', 'container_restart'] });
+      },
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    fireEvent.click(within(table).getByRole('button', { name: /展开/ }));
+    const denyList = await screen.findByTestId('connector-disabled-ops-docker');
+    expect(within(denyList).getByTestId('connector-ops-count-docker').textContent).toContain(
+      '允许 1 / 2',
+    );
+
+    fireEvent.change(within(denyList).getByTestId('connector-ops-filter-docker'), {
+      target: { value: 'RESTART' },
+    });
+    expect(within(denyList).queryByLabelText('old_op')).toBeNull();
+    fireEvent.click(within(denyList).getByTestId('connector-ops-deny-all-docker'));
+    expect((within(denyList).getByLabelText('container_restart') as HTMLInputElement).checked).toBe(
+      false,
+    );
+    fireEvent.click(within(denyList).getByRole('button', { name: '保存' }));
+    const confirm = await screen.findByTestId('connector-deny-list-confirm-docker');
+    fireEvent.click(within(confirm).getByRole('button', { name: '停用' }));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
+    );
+  });
+
   it('re-checking an already-disabled operation (re-enabling it) saves directly, no confirm needed', async () => {
     const c = connector({ disabledOperations: ['container_restart'] });
     const updated = connector({ disabledOperations: [] });

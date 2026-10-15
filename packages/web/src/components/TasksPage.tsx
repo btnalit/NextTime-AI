@@ -8,7 +8,7 @@ import { breadcrumbFor } from '../lib/nav.js';
 import {
   type TaskSummary,
   type WorkerDefinitionSummary,
-  definitionName,
+  distinctDefinitionName,
   isTerminalTaskStatus,
   taskFinishedAt,
   taskNeed,
@@ -19,7 +19,7 @@ import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
-import { MasterDetail } from './kit/master-detail.js';
+import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { PageHeader } from './kit/page-header.js';
 import { SkeletonRows } from './kit/skeleton.js';
 import { StatusChip } from './kit/status-chip.js';
@@ -153,7 +153,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   }
 
   const selectedDefinitionName = selected
-    ? definitionName(definitionRows, selected.workerDefinitionId, selected.workerDefinitionVersion)
+    ? distinctDefinitionName(
+        definitionRows,
+        selected.workerDefinitionId,
+        selected.workerDefinitionVersion,
+      )
     : undefined;
 
   const detailContent = (
@@ -218,11 +222,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             onSelect={onSelect}
           />
         }
-        detail={
-          tasks.state.status === 'ready' && rows.length === 0 && selectedId === undefined
-            ? null
-            : detailContent
-        }
+        detail={nothingToPick(tasks.state.status, rows.length, selectedId) ? null : detailContent}
         open={selectedId !== undefined}
         onClose={() => onSelect(null)}
         // Generic on purpose (P3-4 screenshot review precedent, ApprovalQueuePage): the detail's
@@ -352,7 +352,7 @@ function TasksList({
       <List ariaLabel="Tasks" testId="tasks-list">
         {rows.map((task) => {
           const finished = taskFinishedAt(task);
-          const name = definitionName(
+          const name = distinctDefinitionName(
             definitionRows,
             task.workerDefinitionId,
             task.workerDefinitionVersion,

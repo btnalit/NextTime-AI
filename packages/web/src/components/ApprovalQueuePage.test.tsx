@@ -188,6 +188,8 @@ describe('ApprovalQueuePage state machine', () => {
     render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
     await screen.findByTestId('approvals-forbidden');
     expect(screen.queryByTestId('approvals-error')).toBeNull();
+    // #554 acceptance P3: nothing on the left to pick → no "选择左侧一条" beside the refusal.
+    expect(screen.queryByTestId('approval-drawer-empty')).toBeNull();
   });
 
   it('approving from the drawer is optimistic: the row leaves Pending, appears in History (server-backed) as approved, and reverts on failure', async () => {
@@ -374,6 +376,7 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     await screen.findByTestId('approvals-empty');
     fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     await screen.findByTestId('approval-history-forbidden');
+    expect(screen.queryByTestId('approval-drawer-empty')).toBeNull();
     forbiddenView.unmount();
 
     let page = 0;

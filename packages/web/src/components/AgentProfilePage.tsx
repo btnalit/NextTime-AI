@@ -9,7 +9,7 @@ import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
-import type { WorkerDefinitionSummary } from '../lib/tasks.js';
+import { type WorkerDefinitionSummary, distinctDefinitionName } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
@@ -102,12 +102,11 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     (s) => s.name,
   );
   const gatekeeperNames = gatekeepers.names;
-  const workerDefinitionNames = nameMap(
-    workerDefinitions.state.status === 'ready' ? workerDefinitions.state.data.items : undefined,
-    (w) => {
-      const name = w.definition.name;
-      return typeof name === 'string' ? name : undefined;
-    },
+  const workerDefinitionRows =
+    workerDefinitions.state.status === 'ready' ? workerDefinitions.state.data.items : undefined;
+  // Same-name definitions carry their short id here too, as in the checklist (#554 acceptance P2).
+  const workerDefinitionNames = nameMap(workerDefinitionRows, (w) =>
+    distinctDefinitionName(workerDefinitionRows, w.id, w.version),
   );
 
   // Only an owner may read another member's agent (get_agent_profile); offering the picker to

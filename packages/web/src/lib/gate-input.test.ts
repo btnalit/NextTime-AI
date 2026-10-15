@@ -6,6 +6,7 @@ import {
   hasUrlScheme,
   isAbsoluteUrl,
   normalizeGateIdInput,
+  suggestedGateId,
   suggestedManifestSource,
   withDefaultScheme,
 } from './gate-input.js';
@@ -97,5 +98,13 @@ describe('addressCarriesCredential / suggestedManifestSource (review of #549)', 
     ['is not http(s)', 'ssh://deploy@db-1'],
   ])('offers nothing when the target %s', (_name, value) => {
     expect(suggestedManifestSource(value)).toBe('');
+  });
+});
+
+describe('suggestedGateId (field-inventory #9)', () => {
+  it('suggests gatekeeper-<kind>, numbered past ids already in use', () => {
+    expect(suggestedGateId('ssh', [])).toBe('gatekeeper-ssh');
+    expect(suggestedGateId('ssh', ['gatekeeper-ssh', 'gatekeeper-ssh-2'])).toBe('gatekeeper-ssh-3');
+    expect(suggestedGateId('cli', ['gatekeeper-ssh'])).toBe('gatekeeper-cli');
   });
 });

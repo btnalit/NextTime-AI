@@ -19,6 +19,7 @@ import { prettyJson } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
+import { BLAST_RADIUS_TONES, OPERATION_MODE_TONES, labelText } from '../lib/status-tone.js';
 import {
   GovernanceChangeList,
   governanceChangeSummary,
@@ -373,7 +374,7 @@ function OperationReviewRow({
                   >
                     {OPERATION_MODE_VALUES.map((m) => (
                       <option key={m} value={m}>
-                        {m}
+                        {labelText(OPERATION_MODE_TONES[m], t)}
                       </option>
                     ))}
                   </Select>
@@ -390,7 +391,7 @@ function OperationReviewRow({
                   >
                     {BLAST_RADIUS_VALUES.map((b) => (
                       <option key={b} value={b}>
-                        {b}
+                        {labelText(BLAST_RADIUS_TONES[b], t)}
                       </option>
                     ))}
                   </Select>

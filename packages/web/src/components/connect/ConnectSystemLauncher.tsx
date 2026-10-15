@@ -11,7 +11,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { normalizeGateIdInput } from '../../lib/gate-input.js';
+import { normalizeGateIdInput, suggestedGateId } from '../../lib/gate-input.js';
 import {
   type GatePath,
   gateInstanceAnnounced,
@@ -449,6 +449,7 @@ export function ConnectSystemLauncher({
           onCreated={handleCreated}
           intendedGateId={intendedGateId}
           onIntendedGateId={setIntendedGateId}
+          knownGateIds={tracked.map((row) => row.gateId)}
           onBack={() => setStep(0)}
         />
       ) : null}
@@ -512,6 +513,7 @@ function ConnectionStep({
   onCreated,
   intendedGateId,
   onIntendedGateId,
+  knownGateIds,
   onBack,
 }: {
   readonly http: CapabilityCaller;
@@ -527,9 +529,11 @@ function ConnectionStep({
   readonly onCreated: (instance: GateInstanceWire) => void;
   readonly intendedGateId: string;
   readonly onIntendedGateId: (value: string) => void;
+  readonly knownGateIds: readonly string[];
   readonly onBack: () => void;
 }) {
   const t = useT();
+  const suggestedId = suggestedGateId(kind, knownGateIds);
   // S8 W2-U1 (audit J5 "第 2 步默认展开管理员专用的新建表单"): collapsed until an administrator
   // explicitly asks for it — "选择已有实例" below is the default view, not folded under an
   // auto-opened form. `ownInstance` no longer forces it open either; a freshly created instance is
@@ -586,6 +590,23 @@ function ConnectionStep({
               mono
               placeholder="gatekeeper-<system>"
             />
+            {/* field-inventory #9: offered, not prefilled — a filled id auto-selects whichever
+             *  gate announces with it, so the reader opts in with one click. */}
+            {suggestedId !== '' && intendedGateId === '' ? (
+              <div className="row">
+                <Button
+                  variant="ghost"
+                  size="s"
+                  onClick={() => {
+                    setGateIdAdjusted(false);
+                    onIntendedGateId(suggestedId);
+                  }}
+                  data-testid="launcher-intended-gate-id-suggest"
+                >
+                  {t(`使用 ${suggestedId}`, `Use ${suggestedId}`)}
+                </Button>
+              </div>
+            ) : null}
           </Field>
         </>
       ) : !isAdmin ? (

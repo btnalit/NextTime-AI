@@ -107,3 +107,16 @@ export function suggestedManifestSource(target: string): string {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}/openapi.json`;
 }
+
+/** A packaged gate's `GATE_ID` suggestion: `gatekeeper-<kind>`, or `gatekeeper-<kind>-2`, `-3`, …
+ *  when an id the console can see already has it (field-inventory #9). Best effort: `known` is only
+ *  what this reader's poll lists, so the field stays editable. */
+export function suggestedGateId(kind: string, known: Iterable<string>): string {
+  const taken = new Set(known);
+  const base = deriveGateId(`gatekeeper-${kind}`);
+  if (base === '' || !taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}

@@ -1,5 +1,6 @@
 import { type Capability, getCapability, listByChannel } from '@nexttime/shared';
 import { useMemo, useState } from 'react';
+import { capabilityModeLabel } from '../../lib/catalog-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
@@ -144,8 +145,8 @@ export function IssueServiceHandleSection({
     principalId !== ''
       ? null
       : servicePrincipals.length === 0
-        ? t('先创建服务主体', 'create a service principal first')
-        : t('选择服务主体', 'pick a service principal'),
+        ? t('先创建服务账号', 'create a service account first')
+        : t('选择服务账号', 'pick a service account'),
     ttlValid
       ? null
       : t(`填写 1 到 ${maxTtlDays} 的有效期（天）`, `enter a TTL of 1 to ${maxTtlDays} days`),
@@ -154,6 +155,10 @@ export function IssueServiceHandleSection({
       ? null
       : t('去掉不可签发的能力名', 'remove the names that cannot be issued'),
   ].filter((item): item is string => item !== null);
+
+  const readOnlyNames = catalog
+    .filter((capability) => capability.mode === 'observe')
+    .map((capability) => capability.name);
 
   function add(names: readonly string[]): void {
     if (names.length === 0) return;
@@ -256,12 +261,12 @@ export function IssueServiceHandleSection({
       >
         <Field
           id="ish-principal"
-          label={t('服务主体', 'Service principal')}
+          label={t('服务账号', 'Service account')}
           required
           hint={
             onlyPrincipal
               ? t(
-                  '工作区只有这一个服务主体，已自动选中。',
+                  '工作区只有这一个服务账号，已自动选中。',
                   'The only service principal in this workspace — selected for you.',
                 )
               : undefined
@@ -269,7 +274,7 @@ export function IssueServiceHandleSection({
         >
           <Select
             id="ish-principal"
-            aria-label={t('服务主体', 'Service principal')}
+            aria-label={t('服务账号', 'Service account')}
             className="select-fit"
             value={principalId}
             onChange={(event) => setPrincipalId(event.target.value)}
@@ -328,6 +333,34 @@ export function IssueServiceHandleSection({
           </legend>
           {/* AX1 "能力勾选是页内嵌套滚动框": grouped `<details>` instead of a fixed-height scroll
            *  box — a reader opens the group they need rather than scrolling a tiny inner viewport. */}
+          {/* field-inventory #4: the common starting point — every read-only capability — in one
+           *  click. Write / execute ones are always ticked one by one: a long-lived Handle should
+           *  not gain a mutation by a bulk button. */}
+          <div className="row-wrap" data-testid="ish-scope-presets">
+            {/* ux-lint-allow-disabled: grey only once every read-only box is already ticked. */}
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => add(readOnlyNames)}
+              disabled={submitting || readOnlyNames.every((name) => picked.has(name))}
+              data-testid="ish-preset-observe"
+            >
+              {t(
+                `勾选全部只读能力（${readOnlyNames.length}）`,
+                `Tick every read-only capability (${readOnlyNames.length})`,
+              )}
+            </Button>
+            {/* ux-lint-allow-disabled: grey only while nothing is ticked. */}
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => setPicked(new Set())}
+              disabled={submitting || picked.size === 0}
+              data-testid="ish-preset-clear"
+            >
+              {t('全部取消', 'Clear all')}
+            </Button>
+          </div>
           <div className="stack-s" data-testid="ish-scope-checklist">
             {groups.map(([group, capabilities]) => (
               <details key={group}>
@@ -349,7 +382,9 @@ export function IssueServiceHandleSection({
                         data-capability={capability.name}
                       />
                       <span className="mono">{capability.name}</span>
-                      <span className="text-3 text-small">{capability.mode}</span>
+                      <span className="text-3 text-small">
+                        {capabilityModeLabel(capability.mode, t)}
+                      </span>
                     </label>
                   ))}
                 </div>
@@ -381,7 +416,7 @@ export function IssueServiceHandleSection({
               .map((capability) => ({
                 value: capability.name,
                 label: capability.name,
-                secondary: `${capability.group} · ${capability.mode}`,
+                secondary: `${capability.group} · ${capabilityModeLabel(capability.mode, t)}`,
               }))}
             value=""
             onChange={(name) => {

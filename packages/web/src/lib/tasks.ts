@@ -182,6 +182,40 @@ export function workerDefinitionChoices(
   }));
 }
 
+/** Every listed version of one definition, newest first (`list_worker_definitions` returns each
+ *  published version as its own row). */
+export function definitionVersions(
+  definitions: readonly WorkerDefinitionSummary[],
+  id: string,
+): WorkerDefinitionSummary[] {
+  return definitions.filter((row) => row.id === id).sort((a, b) => b.version - a.version);
+}
+
+/** One row per definition id — its newest listed version — so a picker offers each Worker once
+ *  and the version is chosen separately (field-inventory #26). */
+export function latestPerDefinition(
+  definitions: readonly WorkerDefinitionSummary[],
+): WorkerDefinitionSummary[] {
+  const latest = new Map<string, WorkerDefinitionSummary>();
+  for (const row of definitions) {
+    const seen = latest.get(row.id);
+    if (seen === undefined || row.version > seen.version) latest.set(row.id, row);
+  }
+  return [...latest.values()];
+}
+
+/** `definitionName`, plus the short id when another listed definition (a different id) has the
+ *  same name, so two `ops-runner` read apart wherever a Worker is named (#554 acceptance P2). */
+export function distinctDefinitionName(
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+  id: string,
+  version: number,
+): string | undefined {
+  const name = definitionName(definitions, id, version);
+  if (name === undefined || definitions === undefined) return name;
+  return sameNameDefinitionIds(definitions).has(id) ? `${name} · ${shortId(id)}` : name;
+}
+
 export function definitionName(
   definitions: readonly WorkerDefinitionSummary[] | undefined,
   id: string,

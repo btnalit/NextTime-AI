@@ -38,14 +38,30 @@ function nameBox(): HTMLInputElement {
 describe('IssueServiceHandleSection — picked, not typed', () => {
   it('auto-selects the only service principal and says so', () => {
     renderSection([service('p-svc', 'CI runner')]);
-    expect((screen.getByLabelText(/服务主体/) as HTMLSelectElement).value).toBe('p-svc');
+    expect((screen.getByLabelText(/服务账号/) as HTMLSelectElement).value).toBe('p-svc');
     expect(screen.getByText(/已自动选中/)).toBeTruthy();
   });
 
   it('leaves the choice to the person when there are several service principals', () => {
     renderSection([service('p-a', 'A'), service('p-b', 'B')]);
-    expect((screen.getByLabelText(/服务主体/) as HTMLSelectElement).value).toBe('');
+    expect((screen.getByLabelText(/服务账号/) as HTMLSelectElement).value).toBe('');
     expect(screen.queryByText(/已自动选中/)).toBeNull();
+  });
+
+  it('field-inventory #4: "勾选全部只读能力" ticks every observe-mode one and nothing that writes', () => {
+    renderSection([service('p-svc', 'CI runner')]);
+    fireEvent.click(screen.getByTestId('ish-preset-observe'));
+    const boxes = [
+      ...screen.getByTestId('ish-scope-checklist').querySelectorAll('input[type="checkbox"]'),
+    ] as HTMLInputElement[];
+    const ticked = boxes.filter((box) => box.checked);
+    expect(ticked.length).toBeGreaterThan(0);
+    for (const box of boxes) {
+      const mode = box.closest('label')?.textContent ?? '';
+      expect(box.checked).toBe(mode.includes('观察'));
+    }
+    fireEvent.click(screen.getByTestId('ish-preset-clear'));
+    expect(boxes.some((box) => box.checked)).toBe(false);
   });
 
   it('the name box searches the handle-channel names and Enter ticks the match', async () => {
@@ -112,9 +128,9 @@ describe('IssueServiceHandleSection: audit P1-9 still-needed line', () => {
   it('names each unmet condition next to a disabled 签发, in the form labels’ words', () => {
     renderSection([service('p-a', 'A'), service('p-b', 'B')]);
     expect(screen.getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByTestId('ish-missing').textContent).toBe('还差：选择服务主体、勾选能力');
+    expect(screen.getByTestId('ish-missing').textContent).toBe('还差：选择服务账号、勾选能力');
 
-    fireEvent.change(screen.getByLabelText(/服务主体/), { target: { value: 'p-a' } });
+    fireEvent.change(screen.getByLabelText(/服务账号/), { target: { value: 'p-a' } });
     fireEvent.change(screen.getByLabelText(/有效期/), { target: { value: '0' } });
     expect(screen.getByTestId('ish-missing').textContent).toMatch(
       /^还差：填写 1 到 \d+ 的有效期（天）、勾选能力$/,
@@ -131,6 +147,6 @@ describe('IssueServiceHandleSection: audit P1-9 still-needed line', () => {
 
   it('says to create a service principal first when there is none', () => {
     renderSection([]);
-    expect(screen.getByTestId('ish-missing').textContent).toContain('先创建服务主体');
+    expect(screen.getByTestId('ish-missing').textContent).toContain('先创建服务账号');
   });
 });

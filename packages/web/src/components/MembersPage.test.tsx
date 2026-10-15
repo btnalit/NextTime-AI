@@ -154,7 +154,7 @@ describe('MembersPage', () => {
     openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/服务主体/), {
+    fireEvent.change(within(form).getByLabelText(/服务账号/), {
       target: { value: 'p-svc' },
     });
     expect((within(form).getByLabelText(/有效期（天）/) as HTMLInputElement).value).toBe('30');

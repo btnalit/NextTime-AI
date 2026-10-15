@@ -82,6 +82,13 @@ describe('ProcedureEditor (S6-A A2)', () => {
         workerDefinitions={[
           {
             id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+          {
+            id: 'wd-1',
             version: 2,
             kind: 'worker',
             status: 'published',
@@ -122,7 +129,14 @@ describe('ProcedureEditor (S6-A A2)', () => {
       target: { value: 'worker' },
     });
     fireEvent.change(within(second).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
-    expect((within(second).getByLabelText(/版本/) as HTMLInputElement).value).toBe('2');
+    // field-inventory #26: one option per definition, the version picked from its own list
+    // (newest first, newest preselected) — never typed.
+    const definitionSelect = within(second).getByLabelText(/Worker 定义/) as HTMLSelectElement;
+    expect([...definitionSelect.options].filter((o) => o.value === 'wd-1')).toHaveLength(1);
+    const versionSelect = within(second).getByLabelText(/版本/) as HTMLSelectElement;
+    expect(versionSelect.tagName).toBe('SELECT');
+    expect([...versionSelect.options].map((o) => o.textContent)).toEqual(['v2', 'v1']);
+    expect(versionSelect.value).toBe('2');
 
     fireEvent.change(within(third).getByLabelText(/说明/), {
       target: { value: 'ops signs off' },

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { type WorkerDefinitionSummary, taskNeed, workerDefinitionChoices } from './tasks.js';
+import {
+  type WorkerDefinitionSummary,
+  definitionVersions,
+  distinctDefinitionName,
+  latestPerDefinition,
+  taskNeed,
+  workerDefinitionChoices,
+} from './tasks.js';
 
 /**
  * lib/tasks.test: `taskNeed` (S8 W4, audit R7 "行副标题直接显示原始 JSON 输入") — the conventional
@@ -58,5 +65,39 @@ describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
     expect(workerDefinitionChoices([row('dddddddd-4444', undefined)])[0]?.label).toBe(
       'dddddddd-4444',
     );
+  });
+});
+
+describe('per-definition versions and same-name names (#554 acceptance, field-inventory #26)', () => {
+  const row = (id: string, name: string, version: number): WorkerDefinitionSummary => ({
+    id,
+    version,
+    kind: 'pi',
+    status: 'published',
+    definition: { name },
+  });
+  const rows = [
+    row('aaaaaaaa-1111', 'ops-runner', 1),
+    row('aaaaaaaa-1111', 'ops-runner', 3),
+    row('bbbbbbbb-2222', 'ops-runner', 1),
+    row('cccccccc-3333', 'collector', 2),
+  ];
+
+  it('offers each definition once, at its newest version', () => {
+    expect(latestPerDefinition(rows).map((r) => `${r.id}@${r.version}`)).toEqual([
+      'aaaaaaaa-1111@3',
+      'bbbbbbbb-2222@1',
+      'cccccccc-3333@2',
+    ]);
+  });
+
+  it('lists one definition’s versions newest first', () => {
+    expect(definitionVersions(rows, 'aaaaaaaa-1111').map((r) => r.version)).toEqual([3, 1]);
+    expect(definitionVersions(rows, 'missing')).toEqual([]);
+  });
+
+  it('names a same-name definition with its short id, a unique one plainly', () => {
+    expect(distinctDefinitionName(rows, 'aaaaaaaa-1111', 3)).toBe('ops-runner · aaaaaaaa');
+    expect(distinctDefinitionName(rows, 'cccccccc-3333', 2)).toBe('collector');
   });
 });
