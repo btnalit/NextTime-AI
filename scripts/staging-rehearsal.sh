@@ -53,7 +53,8 @@
 #
 # Output follows apply-release.sh: one "STEP <name> …" line per step, "FAIL <name>" on a stop, and
 # a last line "RESULT ok" or "RESULT failed-at=<step>" / "RESULT acceptance-failures=<n>" /
-# "RESULT real-model-failures=<n>". Exit status 0 only for "RESULT ok".
+# "RESULT degraded=<step>[,…]" (apply-release.sh's, passed on) / "RESULT real-model-failures=<n>".
+# Exit status 0 only for "RESULT ok".
 #
 # What it does NOT reproduce (and why, see the runbook): the production database's own data, the
 # RagFlow upstream (gatekeeper-ragflow is moved to an unused compose profile by the staging overlay,
@@ -407,7 +408,7 @@ if [ -n "$pull_flag" ]; then
 fi
 case "$apply_result" in
   ok) step "apply ok $(git describe --tags --always HEAD)" ;;
-  acceptance-failures=*) echo "RESULT $apply_result"; exit 1 ;;
+  acceptance-failures=* | degraded=*) echo "RESULT $apply_result"; exit 1 ;;
   *) fail apply "${apply_result:-no RESULT line} — see $apply_log" ;;
 esac
 

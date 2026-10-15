@@ -156,8 +156,10 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 
 与 `apply-release.sh` 同格式：每步一行 `STEP …`，停止时 `FAIL <step>`，最后一行
 `RESULT ok` / `RESULT failed-at=<step>` / `RESULT acceptance-failures=<n>` /
-`RESULT real-model-failures=<n>`，只有 `RESULT ok` 退出 0。`STEP apply | …` 是
-`apply-release.sh` 自己日志里的行。完整日志在 artifact `staging-logs`（保留 7 天）：
+`RESULT degraded=<step>[,…]` / `RESULT real-model-failures=<n>`，只有 `RESULT ok` 退出 0。
+`degraded` 是 `apply-release.sh` 的结果原样转出：版本已应用并在运行，但某个不致命的步骤没做完（如
+BACKUP_NOW 失败导致 raw-secret-scrub 跳过、scrub 中途失败），该步骤的 `STEP` 行写了要重跑的命令；预演里出现
+它同样算失败。`STEP apply | …` 是 `apply-release.sh` 自己日志里的行。完整日志在 artifact `staging-logs`（保留 7 天）：
 `baseline-<from>-s{1..4}.log`、`prefetch-probe-<from>.log`、`prefetch-<tag>-<ts>[-pull].log`（tag 目标）、`apply-<tag>-<ts>[-sN].log`、`compose-logs.txt` 等。
 
 ## 7. 常见问题

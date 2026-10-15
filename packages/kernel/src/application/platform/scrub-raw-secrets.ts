@@ -42,7 +42,9 @@ import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
  *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself.
- * A counted row is listed by id (`examples`, at most `MAX_EXAMPLES` per category) — never a value.
+ * A counted row is named by id, never by value: every one goes to `onCounted` (the CLI prints them
+ * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
+ * kept as `examples` — the sample the audit row carries, which must stay bounded.
  *
  * **How.** Per table, windows of `batchSize` rows in primary-key order, each one short transaction
  * on the login role (`skipRoleSwitch`, RLS-bypassing like compact-observations: `nexttime_app` has
@@ -58,7 +60,7 @@ import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
 
 export const RAW_SECRET_SCRUB_BATCH_SIZE = 500;
 export const RAW_SECRET_SCRUB_AUDIT_ACTION = 'cli.raw_secrets_scrubbed';
-/** Ids listed per counted category. */
+/** Ids kept per counted category in the result and on the audit row (`onCounted` gets all). */
 export const MAX_EXAMPLES = 20;
 
 export const REWRITTEN_CATEGORIES = ['turnReports', 'decisions', 'toolCallRecords'] as const;
@@ -71,9 +73,14 @@ export const COUNTED_CATEGORIES = [
   'objectProperties',
   'auditResults',
 ] as const;
-export type RawSecretCategory =
-  | (typeof REWRITTEN_CATEGORIES)[number]
-  | (typeof COUNTED_CATEGORIES)[number];
+export type CountedRawSecretCategory = (typeof COUNTED_CATEGORIES)[number];
+export type RawSecretCategory = (typeof REWRITTEN_CATEGORIES)[number] | CountedRawSecretCategory;
+
+/** A counted row, by id only. */
+export interface CountedRawSecretRow {
+  readonly workspaceId: string | null;
+  readonly id: string;
+}
 
 export interface RawSecretCategoryCounts {
   /** Rows read. */
@@ -84,8 +91,8 @@ export interface RawSecretCategoryCounts {
   skipped: number;
   /** Values hidden (or that would be) — rewritten categories only. */
   values: number;
-  /** Up to `MAX_EXAMPLES` affected rows — counted categories only. */
-  examples: { readonly workspaceId: string | null; readonly id: string }[];
+  /** The first `MAX_EXAMPLES` affected rows — counted categories only. */
+  examples: CountedRawSecretRow[];
 }
 
 export interface ScrubRawSecretsInput {
@@ -93,6 +100,8 @@ export interface ScrubRawSecretsInput {
   readonly batchSize?: number;
   /** The operator, when one resolves; else the audit row is unattributed. */
   readonly actorUserId?: string;
+  /** Called with every counted row, uncapped, once its window is read. */
+  readonly onCounted?: (category: CountedRawSecretCategory, row: CountedRawSecretRow) => void;
 }
 
 export interface ScrubRawSecretsResult {
@@ -458,6 +467,7 @@ export async function scrubRawSecrets(
         counts.skipped += outcome.window.skipped;
         counts.values += outcome.window.values;
         for (const example of outcome.window.examples) {
+          input.onCounted?.(scan.category as CountedRawSecretCategory, example);
           if (counts.examples.length < MAX_EXAMPLES) counts.examples.push(example);
         }
         if (outcome.done) break;
