@@ -102,7 +102,7 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 
 上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
 
-跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走；v0.46.0 → v0.47.0 按 §3.26。
+跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走；v0.46.0 → v0.48.0 按 §3.27（v0.47.0 不单独上主机）。
 
 **本节命令的执行方式**：所有命令都在主机检出目录下执行。SQL 一律经
 `docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1` 交给 psql，并包在
@@ -119,7 +119,11 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 或由他自己加允许规则；不换个写法重新发起，也不自己加允许规则。下发窗口操作之前先把这一点告诉维护者，让他在场批准或提前加好规则。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
-`STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
+`STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出。最后一行是 `RESULT ok`、`RESULT failed-at=<step>`、`RESULT acceptance-failures=<n>`
+或 `RESULT degraded=<step>[,<step>…]`，两者都有时是 `RESULT acceptance-failures=<n> degraded=…`（v0.48.0 起有 degraded，§3.26）。
+**退出码 0 不等于成功，看最后一行 RESULT**：只有 `failed-at` 退出 1，`acceptance-failures` 与 `degraded` 都退出 0；只有 `RESULT ok`
+表示没有剩下要做的事。远程 CLI 会话同样按 RESULT 行判断，不按退出码。`degraded` 表示新版本已在运行，但某个不致命的步骤没做完：
+按 apply 日志里对应 `STEP <step> …` 行打印的命令补做（§3.26 的表），补做结果记 `docs/private/`。
 它按顺序做完本节下面分散描述的全部手续：备份新鲜度 → 发版前 dump（`backups/pre-upgrade/`）→ 切 tag →
 派生 internal-plane 凭证（新 tag 自己的 `scripts/derive-internal-tokens.sh`，只写
 `secrets/internal-*-to-*.token`，R-03）→ 拉取或构建镜像 → 迁移 dry-run 与应用 → `up -d` → S3 → S1 → S2 →
@@ -1079,11 +1083,13 @@ SQL 列出的自连门清单就是要逐个确认的范围。
   备份里。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
 - 要逐行读 `audit_records` 等表，表大时会拉长窗口。
-- 只计数的类别在报告里每类最多列 20 个行 id（超出时以 `,…` 结尾），dry run 也一样；超过 20 条时按预检 SQL 把对应的 `count(*)` 改成
-  `select id`（只读，同样包在只读事务里）列出全部。
+- 只计数的类别在报告行与审计里每类最多列 20 个行 id（超出时以 `,…` 结尾），dry run 也一样。v0.48.0 起（#556）清洗日志在扫描时把每一条
+  只计数的行打印成一行 `counted <category> <workspace>/<id>`（平台级行只有 `<id>`），不截断，就是逐行核对清单；v0.47.0 的 CLI 没有这些行，
+  超过 20 条时按预检 SQL 把对应的 `count(*)` 改成 `select id`（只读，同样包在只读事务里）列出全部。
 
 **清洗没跑成时补跑**：apply 日志里是 `STEP raw-secret-scrub skipped`（`backup-now` 失败）或 `exit` 不为 0（清洗中途失败，失败之前的批次
-已提交）时，`RESULT ok` 照样会出现（遗留 252），要人看这一行。补跑前先要一次新的、成功的备份，再带 `--yes` 跑清洗；经 SSH 时两条都用
+已提交）时，v0.48.0 起最后一行是 `RESULT degraded=…`，其中有 `backup-now` 或 `raw-secret-scrub`，日志里紧跟着打印补跑命令（v0.47.0 的
+apply-release 在这两种情况下仍打印 `RESULT ok`，遗留 252）。补跑前先要一次新的、成功的备份，再带 `--yes` 跑清洗；经 SSH 时两条都用
 `ssh -n`，补跑结果同样记 `docs/private/`：
 
 ```sh
@@ -1095,7 +1101,7 @@ docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js -
 预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag：
 
 ```sh
-ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.47.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
+ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.48.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
 ```
 
 ```sh
@@ -1121,29 +1127,69 @@ SQL
 
 **回滚**（§5）：代码切回 v0.46.0 即可，core 0043 只放宽约束（§6）。回滚后：
 - 已遮蔽的行**保持遮蔽**：清洗是单向的，旧代码读到的是 `[redacted]` 文本，无害。
-- 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。在 v0.47.0 上恢复备份之后，按上面「补跑」
+- 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。在 v0.47.0 及以后的版本上恢复备份之后，按上面「补跑」
   的命令再跑一次清洗。
 - 升级前后的这两份 dump 里都有原文，保留期内按凭据材料对待，不拷离主机。
 - v0.46.0 的入口重新接受带凭据的地址（即遗留 186 本身），回滚期间不要新建带凭据的连接或门实例。
 
-### 3.26 升级窗口总清单：v0.46.0 → v0.47.0
+### 3.26 caddy 日志不记凭据；apply 不再把没做完的事报成 ok（#556，遗留 236、252，v0.47.0 之后的下一版起）
 
-v0.47.0 收齐 #541（只改控制台渲染与两个只读查询，无主机步骤）与 #549（§3.25）。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，
-不需要排空 Worker。先确认起点：`git describe --tags --exact-match </dev/null` 应输出 `v0.46.0`；上主机前按 §1 第 5 步对同一个 tag 跑一次
-`staging` 预演。
+行为变化（没有迁移）：
+- caddy 的两处日志（站点访问日志与全局 `log default`，后者含错误条目和 DEBUG 下 reverse_proxy 的条目）删掉全部请求头，查询串里
+  `=` 之后的值改成 `REDACTED`。以前用 `X-API-Key` 经 caddy 调接口时 key 会以原文进日志。代价：User-Agent、X-Forwarded-For 等诊断字段
+  也不再记录，`remote_ip` 保留。没有键名、只有值的查询串（`?<token>`）遮不到，目前没有调用方这样用（遗留 258）。
+- llm-proxy 改写非 2xx 错误体时去掉上游的 `content-encoding`；2xx 透传不变（遗留 257）。
+- 清洗日志逐行列出只计数的行（§3.25）。
+- `apply-release.sh`：
+  - **第 6 步之后的单文件挂载刷新**：`up -d` 只在定义或镜像变了时重建容器，从检出目录单文件挂进去的配置换了内容，旧容器仍读旧文件
+    （caddy 就因此一直读旧 Caddyfile）。现在对 caddy、backup、update-feed 逐个比较容器里的文件与检出目录，不同就重建，日志一行
+    `STEP mount-refresh <service> recreated — …`。**第一次带这项改动的 apply 预期会看到 caddy 被重建**（Caddyfile 变了），**也可能看到
+    backup 与 update-feed 被重建**：两者镜像按 digest 固定、容器很久没重建，一直读着启动时的旧脚本，属正常。
+  - **第 7 步之后两项检查**：`STEP acceptance-fixtures`（验收用的测试容器不许残留，正常是 `none left running`）；`STEP caddy-log-redaction`
+    （经真实入口发合成探针，再数本次 apply 以来 caddy 日志里的凭据，各项应为 PASS；需要 `.env` 里的 `KERNEL_BIND_ADDR`，日志
+    `drills/apply-<tag>-<ts>-caddy-log.log`）。这两项和下表其余步骤一样，没做完都体现在最后的 RESULT 行。
+  - caddy 重建时 docker 删掉旧容器的 json 日志，里面以前的 key 原文随之消失；被复制到别处的副本不受影响。
+
+**`RESULT degraded=…` 的各项**（每项在日志里对应的 `STEP <step> …` 行带现成命令；补做后再看一遍对应检查，结果记 `docs/private/`）：
+
+| 项 | 意思 | 怎么补 |
+|---|---|---|
+| `backup-now` | 新版本上的备份没成功，压缩与清洗都被跳过（压缩下次 apply 再跑） | 按打印的命令重新备份，再按 §3.25「补跑」清洗 |
+| `raw-secret-scrub` | 清洗跳过或中途失败（失败前的批次已提交） | §3.25「补跑」：先备份，再 `--yes` |
+| `observations-compaction` | Observation 压缩失败 | 按打印的命令重跑 |
+| `backup-marker` | `backups/last-success` 不是普通文件或建不出来 | 按打印的 `mv` / `: >` 命令修 |
+| `update-feed-dir` | `config/update-feed` 属主或权限设不上 | 按打印的 `chown` / `chmod` 命令修 |
+| `egress-sources` | `config/egress-sources.json` 属主或权限设不上 | 按打印的 `chown` / `chmod` 命令修 |
+| `mount-refresh` | 某个服务没能重建，可能仍读旧文件 | `docker compose up -d --no-deps --no-build --force-recreate <service>`；是 caddy 时再跑一次 caddy 日志检查 |
+| `acceptance-fixtures` | 有测试容器残留（无鉴权的测试端点留在 control 网络上） | 按打印的 `docker compose … rm -sf …` 移除 |
+| `caddy-log-redaction` | caddy 日志检查没过或没跑成 | 按打印的命令重建 caddy 并再检查一次；仍不过就停下报告 |
+
+**应用后，由 victor 决定**（主机与凭据操作）：
+- 曾经用 `X-API-Key` 经 caddy 调 Explorer 或 curl 的 owner API key，在此前的 caddy 日志里是原文，而 docker 门能读这些日志：是否轮换。
+- 旧 caddy 日志被复制到别处的副本（例如私有记录里贴过的 `docker compose logs` 输出）：是否清理。
+
+**回滚**（§5）：没有迁移。回滚到 v0.46.0 后 caddy 回到旧 Caddyfile，日志重新记录请求头与查询串原文，要重建 caddy 才生效
+（旧版 apply-release 不做挂载刷新）：`docker compose up -d --no-deps --no-build --force-recreate caddy`。回滚期间不要用 API key 经 caddy 调接口。
+
+### 3.27 升级窗口总清单：v0.46.0 → v0.48.0
+
+v0.47.0 不单独上主机（#554 不在里面），一次窗口直接到 v0.48.0。v0.48.0 收齐：#541（只改控制台渲染与两个只读查询）、#549（§3.25）、
+#554 与 #559（只改控制台与 CI 守卫，无主机步骤）、#556（§3.26）。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，不需要排空 Worker。
+先确认起点：`git describe --tags --exact-match </dev/null` 应输出 `v0.46.0`；上主机前按 §1 第 5 步对同一个 tag 跑一次 `staging` 预演。
 
 窗口开始前告诉维护者：执行会话被本地权限检查拦下时会停下等他批准（§3 开头，遗留 231），请他在场或提前加好允许规则。
 
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
-| 1 | 窗口前 | `--prefetch v0.47.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
+| 1 | 窗口前 | `--prefetch v0.48.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
 | 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
-| 3 | 窗口内 | `--pull v0.47.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；日志里 `STEP backup-now exit=0` 在前，`STEP raw-secret-scrub exit=0` 在后；是 `skipped` 或 `exit` 不为 0 时按 §3.25「补跑」，补跑结果同样记 `docs/private/` | 主机 |
-| 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id，记 `docs/private/` | 主机 |
-| 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时逐条决定（超过 20 条按 §3.25 列全） | victor 决定 |
-| 6 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应是一句说明、能退回，没有死路（#541 验收盲区）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名 | **victor 手动** |
+| 3 | 窗口内 | `--pull v0.48.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP mount-refresh caddy recreated`（backup、update-feed 也可能 recreated，属预期，§3.26）；`STEP acceptance-fixtures none left running`；`STEP caddy-log-redaction` 各项 PASS；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
+| 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
+| 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
+| 6 | 应用后 | §3.26「应用后」：owner API key 是否轮换、旧 caddy 日志副本是否清理 | victor 决定 |
+| 7 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应说明由谁启用、给出一句可复制发给所有者的申请、能退回，没有死路（#541 验收盲区，#554）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名；(d) 打开任一新建 / 添加表单先不填，提交按钮灰掉时旁边写着「还差：…」（#554） | **victor 手动** |
 
-**回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 的回滚说明；不需要排空 Worker。
+**回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
 ## 4. Hotfix 流程
 
