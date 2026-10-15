@@ -44,6 +44,7 @@ import {
 import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import {
+  redactSuspectedSecrets,
   reviewObserveParams,
   scrubSecretLiteralsIn,
   secretFieldLiterals,
@@ -405,8 +406,9 @@ async function resolveSystemActor(
  *  `markActionRequestExecuted`/`markActionRequestFailed` (governance/approval/execution.ts) each
  *  write their `resultMetadata`/`reason` into the same transaction as the status transition
  *  itself, so by the time a caller observes the row's status as `executed`/`verified`/`failed`,
- *  the corresponding audit row is already committed too — no separate race to worry about here. */
-async function readTerminalOutcome(
+ *  the corresponding audit row is already committed too — no separate race to worry about here.
+ *  Exported for its unit test. */
+export async function readTerminalOutcome(
   withTransaction: WithTransactionFn,
   workspaceId: string,
   systemActorId: string,
@@ -423,7 +425,20 @@ async function readTerminalOutcome(
   const payload = terminalRow?.payload as
     | { resultMetadata?: { data?: unknown }; reason?: string }
     | undefined;
-  return { data: payload?.resultMetadata?.data, reason: payload?.reason };
+  // Review of #549 (B4): a row written before legacy 187 was fixed holds the gate's output and
+  // error text as given, and audit rows are never rewritten (I11) — so the read-back applies the
+  // audit copy's rule again (`resultAuditFields` / `reasonAuditFields`, governance/approval). A row
+  // written since is already in that form, and the rule replaces nothing twice.
+  const data = payload?.resultMetadata?.data;
+  const reason = payload?.reason;
+  return {
+    data:
+      data === undefined ? undefined : redactSuspectedSecrets(data, { secretFields: true }).value,
+    reason:
+      typeof reason === 'string'
+        ? (redactSuspectedSecrets(reason, { secretFields: true }).value as string)
+        : reason,
+  };
 }
 
 /** Waits (short polling transactions, never one held open) for a *concurrently* executing row —

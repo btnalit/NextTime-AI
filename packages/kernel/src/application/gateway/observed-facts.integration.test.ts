@@ -183,6 +183,47 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.last_observed_at?.getTime()).toBeGreaterThan(firstObservedAt?.getTime() ?? 0);
     });
 
+    it("a gate's observed Object is stored scrubbed; a kernel-authored Object as given (review of #549, B2)", async () => {
+      // Synthetic: a plain word only the field name gives away, and an alphabet-spelled key.
+      const plain = 'hunter2-plain-word';
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+      const activityId = await newActivity();
+      const written = await inTx((client) =>
+        writeObservedFacts(
+          client,
+          workspaceId,
+          gatekeeperObjectId,
+          [
+            {
+              objectType: 'Container',
+              identity: { id: 'c-secret' },
+              properties: {
+                image: 'app:1',
+                env: { DB_PASSWORD: plain, LOG_LEVEL: 'info' },
+                command: `serve --api-key ${fake}`,
+              },
+            },
+          ],
+          activityId,
+        ),
+      );
+      expect(written[0]?.object.properties).toEqual({
+        image: 'app:1',
+        env: { DB_PASSWORD: '[redacted]', LOG_LEVEL: 'info' },
+        command: 'serve --api-key [redacted]',
+      });
+
+      const salted = await inTx((client) =>
+        graphStore.upsertObject(client, workspaceId, {
+          objectType: 'Gatekeeper',
+          identity: { gatekeeperId: randomUUID() },
+          properties: { transportKind: 'http', connectionSecretSalt: 'salt-value-kept' },
+          kernelAuthored: true,
+        }),
+      );
+      expect(salted.properties).toMatchObject({ connectionSecretSalt: 'salt-value-kept' });
+    });
+
     it('a pre-S5.2 observed Fact (no Observation) is corroborated, not touched — and is what I-S5-2 counts', async () => {
       const baseline = await runInvariantChecks(pool);
       const baselineIS52 = baseline.find((result) => result.invariant === 'I-S5-2');

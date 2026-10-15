@@ -43,6 +43,7 @@ export type {
 } from './loader.js';
 
 export {
+  KERNEL_AUTHORED_OBJECT_TYPES,
   deprecatePublishedOperationObjects,
   projectProcedureObject,
   projectSkillObject,

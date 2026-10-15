@@ -7,7 +7,7 @@ import {
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 
-function refusal(params: { target: string; endpoint?: string }): unknown {
+function refusal(params: { target: string; endpoint?: string; manifestSource?: string }): unknown {
   try {
     assertConnectionParamsCarryNoCredentials('create_connection', params);
     return undefined;
@@ -32,6 +32,12 @@ describe('assertConnectionParamsCarryNoCredentials (legacy 186)', () => {
     ['a secret query parameter', `https://grafana.example.invalid/?token=${FAKE}`],
     ['an api_key pair', `grafana api_key=${FAKE}`],
     ['a Bearer value', `Bearer ${FAKE}`],
+    ['an Azure SAS signature', `https://store.blob.example.invalid/c?sv=2022-11-02&sig=${FAKE}`],
+    ['a key in the query', `https://maps.example.invalid/api?key=${FAKE}`],
+    ['an AWS SigV4 signature', `https://b.s3.example.invalid/o?X-Amz-Signature=${FAKE}`],
+    ['an AWS credential scope', `https://b.s3.example.invalid/o?X-Amz-Credential=${FAKE}`],
+    ['a Google V4 signature', `https://s.example.invalid/o?X-Goog-Signature=${FAKE}`],
+    ['a token in the fragment', `https://app.example.invalid/cb#access_token=${FAKE}`],
   ])('refuses a target carrying %s, naming the field and never the value', (_name, target) => {
     const err = refusal({ target });
     expect(err).toBeInstanceOf(ConnectionParamsCarryCredentialsError);
@@ -65,4 +71,37 @@ describe('assertConnectionParamsCarryNoCredentials (legacy 186)', () => {
     expect((err as Error).message).toContain(problem);
     expect((err as Error).message).not.toContain(FAKE);
   });
+
+  it.each([
+    ['an OpenAPI URL', 'https://api.owner.example/openapi.json'],
+    ['a plain query', 'https://api.owner.example/openapi.json?version=3'],
+    ['a format query', 'https://api.owner.example/openapi?format=json'],
+    ['an MCP endpoint', 'http://mcp-host:8080/mcp'],
+  ])('keeps a manifest source that is %s', (_name, manifestSource) => {
+    expect(refusal({ target: 'x', manifestSource })).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'a user name and password',
+      `https://ops:${FAKE}@api.owner.example/openapi.json`,
+      'user name or password',
+    ],
+    ['a user name alone', 'https://ops@api.owner.example/openapi.json', 'user name or password'],
+    ['a token in the query', `https://api.owner.example/openapi.json?token=${FAKE}`, 'credential'],
+    ['an access_token pair', `https://api.owner.example/mcp?access_token=${FAKE}`, 'credential'],
+    ['an api_key pair', `https://api.owner.example/openapi.json?v=3&api_key=${FAKE}`, 'credential'],
+    ['a key pair', `https://api.owner.example/openapi.json?key=${FAKE}`, 'credential'],
+    ['a signed URL', `https://b.s3.example/spec.json?X-Amz-Signature=${FAKE}`, 'credential'],
+    ['a SAS signature', `https://s.blob.example/spec.json?sp=r&sig=${FAKE}`, 'credential'],
+  ])(
+    'refuses a manifest source with %s, naming the field and never the value',
+    (_name, manifestSource, problem) => {
+      const err = refusal({ target: 'x', manifestSource });
+      expect(err).toBeInstanceOf(ConnectionParamsCarryCredentialsError);
+      expect(err).toMatchObject({ details: { field: 'manifestSource' } });
+      expect((err as Error).message).toContain(problem);
+      expect((err as Error).message).not.toContain(FAKE);
+    },
+  );
 });

@@ -6,6 +6,8 @@ import { reasonAuditFields, resultAuditFields } from '../../governance/approval/
 import { findConnectionParamsCredential } from '../../governance/connections/index.js';
 import { redactSuspectedSecrets, scrubSecretValues } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { scrubGraphProperties } from '../../substrate/graph/index.js';
+import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
 import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
 
 /**
@@ -28,6 +30,15 @@ import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
  *   - `connectionTargets` / `gatekeeperAddresses`: a connection request's `target`, a Gatekeeper's
  *     `target` / `endpoint`, carrying a credential (legacy 186) — it is where the gate is called;
  *     its owner fixes it (cancel the request, re-register the gate);
+ *   - `gateInstanceAddresses`: a platform gate instance's `target` / `endpoint`, or its gate-host
+ *     definition's `target` / `manifestSource`, carrying a credential (review of #549) — the gate
+ *     host calls the definition as stored; an administrator recreates the instance without it;
+ *   - `factProperties` / `objectProperties`: a Fact's (`links.properties`) or an Object's
+ *     properties the graph store would now scrub (`scrubGraphProperties`, review of #549) — an
+ *     agent's `assert_fact` / `supersede_fact`, a gate's observed Objects, an ingest. A Fact is an
+ *     append-only epistemic record and an observed Object is the next observation's to refresh, so
+ *     neither is rewritten here; the Object types the kernel writes itself
+ *     (`KERNEL_AUTHORED_OBJECT_TYPES`) are not counted;
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
  *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself.
@@ -55,6 +66,9 @@ export const COUNTED_CATEGORIES = [
   'taskInputs',
   'connectionTargets',
   'gatekeeperAddresses',
+  'gateInstanceAddresses',
+  'factProperties',
+  'objectProperties',
   'auditResults',
 ] as const;
 export type RawSecretCategory =
@@ -120,6 +134,8 @@ interface Finding {
 
 interface Scan {
   readonly category: RawSecretCategory;
+  /** Where the keyset starts; the nil `(workspace_id, id)` when omitted. */
+  readonly start?: Cursor;
   /** Rows after `after` in key order, at most `limit`. */
   readonly window: (client: PoolClient, after: Cursor, limit: number) => Promise<ScannedRow[]>;
   readonly inspect: (row: ScannedRow) => Finding | null;
@@ -277,6 +293,60 @@ const SCANS: readonly Scan[] = [
         : null,
   },
   {
+    category: 'gateInstanceAddresses',
+    // The platform catalog, keyed on `gate_id` (text, `^[a-z0-9]…`): every id sorts after ''.
+    start: { workspaceId: NIL_UUID, id: '' },
+    window: async (client, after, limit) =>
+      (
+        await client.query<ScannedRow>(
+          `select null::uuid as workspace_id, gate_id as id, target, endpoint,
+                  definition ->> 'target' as definition_target,
+                  definition ->> 'manifestSource' as manifest_source
+             from gate_instances
+            where gate_id > $1 collate "C"
+            order by gate_id collate "C" limit $2`,
+          [after.id, limit],
+        )
+      ).rows,
+    inspect: (row) => {
+      const instance = row as ScannedRow & {
+        target: string;
+        endpoint: string;
+        definition_target: string | null;
+        manifest_source: string | null;
+      };
+      return findConnectionParamsCredential({
+        target: instance.target,
+        endpoint: instance.endpoint,
+        manifestSource: instance.manifest_source,
+      }) !== null || findConnectionParamsCredential({ target: instance.definition_target }) !== null
+        ? { values: 1 }
+        : null;
+    },
+  },
+  {
+    category: 'factProperties',
+    window: workspaceKeyset('links', 'workspace_id, id, properties', `properties <> '{}'::jsonb`),
+    inspect: (row) => {
+      const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
+      const { redactedValues } = scrubGraphProperties(properties);
+      return redactedValues > 0 ? { values: redactedValues } : null;
+    },
+  },
+  {
+    category: 'objectProperties',
+    window: workspaceKeyset(
+      'objects',
+      'workspace_id, id, properties',
+      `properties <> '{}'::jsonb and object_type not in (${KERNEL_AUTHORED_OBJECT_TYPES.map((type) => `'${type}'`).join(', ')})`,
+    ),
+    inspect: (row) => {
+      const properties = (row as ScannedRow & { properties: Record<string, unknown> }).properties;
+      const { redactedValues } = scrubGraphProperties(properties);
+      return redactedValues > 0 ? { values: redactedValues } : null;
+    },
+  },
+  {
     category: 'auditResults',
     // `audit_records` is keyed on `id` alone (core 0019: platform rows have no workspace).
     window: async (client, after, limit) =>
@@ -352,7 +422,7 @@ export async function scrubRawSecrets(
   try {
     for (const scan of SCANS) {
       const counts = categories[scan.category];
-      let cursor: Cursor = { workspaceId: NIL_UUID, id: NIL_UUID };
+      let cursor: Cursor = scan.start ?? { workspaceId: NIL_UUID, id: NIL_UUID };
       for (;;) {
         const outcome = await onLoginRole(pool, async (client) => {
           const rows = await scan.window(client, cursor, batchSize);

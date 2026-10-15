@@ -111,6 +111,54 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool.end();
     });
 
+    it('assert_fact / supersede_fact store properties scrubbed, and an unchanged re-assertion stays unchanged (review of #549, B2)', async () => {
+      // Synthetic — spelled out from the alphabet (`.gitleaks.toml`), and a plain word only a
+      // field name gives away.
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+      const plain = 'hunter2-plain-word';
+      const sourceObjectId = await makeObject('test.fact-handlers-secret-source');
+      const targetObjectId = await makeObject('test.fact-handlers-secret-target');
+      const caller = handleCaller(workspaceId, memberId, ['assert_fact', 'supersede_fact']);
+      const params = {
+        sourceObjectId,
+        targetObjectId,
+        linkType: 'has_note',
+        properties: { note: `login with token=${fake}`, db: { password: plain }, port: 5432 },
+      };
+
+      const asserted = (await dispatchCapability({ pool }, caller, 'assert_fact', params)) as {
+        id: string;
+        properties: Record<string, unknown>;
+      };
+      const masked = {
+        note: 'login with token=[redacted]',
+        db: { password: '[redacted]' },
+        port: 5432,
+      };
+      expect(asserted.properties).toEqual(masked);
+      const stored = await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
+        client.query('select properties from links where workspace_id = $1 and id = $2', [
+          workspaceId,
+          asserted.id,
+        ]),
+      );
+      expect(stored.rows[0]?.properties).toEqual(masked);
+
+      // The same raw content again compares equal to what was stored: no new Fact.
+      const again = (await dispatchCapability({ pool }, caller, 'assert_fact', params)) as {
+        id: string;
+      };
+      expect(again.id).toBe(asserted.id);
+
+      const superseded = (await dispatchCapability({ pool }, caller, 'supersede_fact', {
+        ...params,
+        factId: asserted.id,
+        properties: { note: 'rotated', apiKey: fake },
+      })) as { properties: Record<string, unknown> };
+      expect(superseded.properties).toEqual({ note: 'rotated', apiKey: '[redacted]' });
+      expect(JSON.stringify(superseded)).not.toContain(fake);
+    });
+
     it('supersede_fact replaces content, keeps identity, and marks the prior Fact superseded', async () => {
       const sourceObjectId = await makeObject('test.fact-handlers-source');
       const targetObjectId = await makeObject('test.fact-handlers-target');

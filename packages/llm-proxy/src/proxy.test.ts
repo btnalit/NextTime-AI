@@ -1643,3 +1643,84 @@ describe('createProxyServer — R-30 outbound narrowing per provider kind', () =
     expect(elsewhere).toEqual([]);
   });
 });
+
+describe('createProxyServer — upstream error bodies (review of #549, B5)', () => {
+  async function proxyTo(upstream: http.Server): Promise<number> {
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: { p: anthropicProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    handleToken = await signHandle(privateKey);
+    return proxyPort;
+  }
+  let handleToken = '';
+
+  function call(port: number): Promise<RawResponse> {
+    return rawRequest({
+      port,
+      method: 'POST',
+      path: '/p/v1/messages',
+      headers: {
+        'x-api-key': handleToken,
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({ model: 'claude-example', max_tokens: 8, messages: [] }),
+    });
+  }
+
+  it('forwards a 4xx JSON body with the real key replaced and its structure kept', async () => {
+    const port = await proxyTo(
+      http.createServer((req, res) => {
+        const body = JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'authentication_error',
+            message: `invalid x-api-key: ${String(req.headers['x-api-key'])}`,
+          },
+        });
+        res.writeHead(401, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      }),
+    );
+    const res = await call(port);
+    expect(res.status).toBe(401);
+    const text = res.body.toString('utf8');
+    expect(text).not.toContain(REAL_ANTHROPIC_KEY);
+    expect(JSON.parse(text)).toEqual({
+      type: 'error',
+      error: { type: 'authentication_error', message: 'invalid x-api-key: ***' },
+    });
+    expect(Number(res.headers['content-length'])).toBe(res.body.byteLength);
+  });
+
+  it('does not forward an error body past the bound', async () => {
+    const port = await proxyTo(
+      http.createServer((_req, res) => {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        res.end(`${REAL_ANTHROPIC_KEY} ${'x'.repeat(70 * 1024)}`);
+      }),
+    );
+    const res = await call(port);
+    expect(res.status).toBe(500);
+    expect(res.headers['content-type']).toBe('application/json');
+    const text = res.body.toString('utf8');
+    expect(text).not.toContain(REAL_ANTHROPIC_KEY);
+    expect(JSON.parse(text).error.type).toBe('upstream_error');
+  });
+});

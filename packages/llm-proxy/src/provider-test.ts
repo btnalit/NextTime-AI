@@ -210,17 +210,22 @@ const TOKEN_LIKE_PREFIX_PATTERN = /(sk|key|tok)[-_A-Za-z0-9]{8,}/gi;
 const LONG_BASE64ISH_PATTERN = /[A-Za-z0-9+/_-]{24,}/g;
 const ERROR_TEXT_MAX_LENGTH = 200;
 
-/** Scrubs `realKey` verbatim, then every token-like run (see the two patterns above), then
+/** `realKey` replaced verbatim (when there is one), then every token-like run (the two patterns
+ *  above) — no truncation. Also what the proxy applies to each string of a provider's error body
+ *  (`upstream-error-body.ts`). */
+export function scrubTokenLikeRuns(text: string, realKey: string): string {
+  const withoutKey = realKey === '' ? text : text.split(realKey).join('***');
+  return withoutKey
+    .replace(TOKEN_LIKE_PREFIX_PATTERN, '***')
+    .replace(LONG_BASE64ISH_PATTERN, '***');
+}
+
+/** Scrubs `realKey` verbatim, then every token-like run (`scrubTokenLikeRuns`), then
  *  truncates — truncation runs last so a redaction is never cut in half. Shared by
  *  `describeFailure` (a structured upstream error body) and `runProviderTest`'s own two
  *  `catch (err)` blocks (a thrown `Error`'s `String(err)`, which can embed the request URL/body). */
 export function scrubUpstreamText(text: string, realKey: string): string {
-  const scrubbed = text
-    .split(realKey)
-    .join('***')
-    .replace(TOKEN_LIKE_PREFIX_PATTERN, '***')
-    .replace(LONG_BASE64ISH_PATTERN, '***');
-  return scrubbed.slice(0, ERROR_TEXT_MAX_LENGTH);
+  return scrubTokenLikeRuns(text, realKey).slice(0, ERROR_TEXT_MAX_LENGTH);
 }
 
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */

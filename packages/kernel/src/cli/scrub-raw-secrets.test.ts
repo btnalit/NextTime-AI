@@ -57,6 +57,9 @@ describe('formatScrubReport', () => {
       taskInputs: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'task-1' }] },
       connectionTargets: counts(0),
       gatekeeperAddresses: counts(0),
+      gateInstanceAddresses: { ...counts(1), examples: [{ workspaceId: null, id: 'billing-api' }] },
+      factProperties: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'fact-1' }] },
+      objectProperties: counts(0),
       auditResults: { ...counts(2), examples: [{ workspaceId: null, id: 'audit-1' }] },
     },
     auditRecordId: executed ? 'audit-row' : null,
@@ -65,13 +68,19 @@ describe('formatScrubReport', () => {
   it('ends a dry run with the one-line summary apply-release echoes, naming rows by id only', () => {
     const lines = formatScrubReport(result(false), undefined);
     expect(lines.at(-1)).toBe(
-      'scrub-raw-secrets: dry-run would-rewrite=6 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 auditResults=2 batches=7',
+      'scrub-raw-secrets: dry-run would-rewrite=6 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 batches=7',
     );
     expect(lines).toContain(
       'toolCallRecords: examined=10 would-rewrite=3 values=5 skipped-changed-meanwhile=1',
     );
     expect(lines).toContain(
       'taskInputs (counted, not rewritten): examined=10 carrying=1 ids=ws-1/task-1',
+    );
+    expect(lines).toContain(
+      'gateInstanceAddresses (counted, not rewritten): examined=10 carrying=1 ids=billing-api',
+    );
+    expect(lines).toContain(
+      'factProperties (counted, not rewritten): examined=10 carrying=1 ids=ws-1/fact-1',
     );
     expect(lines).toContain(
       'auditResults (counted, not rewritten): examined=10 carrying=2 ids=audit-1,…',

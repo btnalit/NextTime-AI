@@ -1,6 +1,7 @@
 import type { GateInstanceWire, Operation, PublishableStatus } from '@nexttime/shared';
 import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
 import {
   type GatekeeperByEndpointEntry,
   diffOperationGovernanceFields,
@@ -326,6 +327,10 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     };
   }
   const instance = await requireAvailable(client, gateId);
+  // Review of #549 (legacy 186, gate-instance half): an instance created or announced before the
+  // address rule carries its target into this workspace's Gatekeeper, ConnectedSystem, Activity and
+  // `ConnectionCreated` — refused until an administrator recreates it without the credential.
+  assertConnectionParamsCarryNoCredentials('enable_gate_instance', { target: instance.target });
   // Checked before anything is written; the same read supplies what is imported below.
   const { operations } = await readManifestInEffect(client, gateId, expectedDigest);
   const actor = { id: ctx.principal.id, kind: ctx.principal.kind };

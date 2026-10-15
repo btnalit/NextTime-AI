@@ -10,13 +10,14 @@ import {
   type CreateConnectionResult,
   supportsManifestSource,
 } from '../lib/connections.js';
-import { describeError } from '../lib/errors.js';
-import { isAbsoluteUrl, withDefaultScheme } from '../lib/gate-input.js';
+import { describeError, presentError } from '../lib/errors.js';
+import { isAbsoluteUrl, suggestedManifestSource, withDefaultScheme } from '../lib/gate-input.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
+import { ErrorDetails } from './kit/error-details.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from './ui/Field.js';
@@ -65,29 +66,50 @@ export function parseCredentials(text: string): unknown {
 }
 
 /** The 400 codes whose message names the field it is about: `invalid_params`, and R-27's
- *  `connection_target_refused` (an `endpoint` / `manifestSource` aimed at the platform). */
+ *  `connection_target_refused` (an `endpoint` / `manifestSource` aimed at the platform). Legacy
+ *  186's `credentials_in_connection_params` names its field in `details.field` instead. */
 const FIELD_ERROR_CODES: ReadonlySet<string> = new Set([
   'invalid_params',
   'connection_target_refused',
 ]);
 
-/** The Chinese-first explanation shown on a field a kernel 400 named, ahead of the kernel's own
- *  (English) text — which stays visible as the secondary "server message" so nothing is lost. */
+/** Where the credential goes instead, as this form offers it: the 凭证 box once a per-member
+ *  credential is chosen, the gate's own configuration otherwise (shared mode has no box). */
+function credentialPlace(credentialKind: CredentialKind, t: Translate): string {
+  return credentialKind === 'connected_account'
+    ? t('凭据填到下面的「凭证」里。', 'Put the credential in Credentials below.')
+    : t(
+        '凭据配置在门上（共享方式下由门自己持有）。',
+        'Configure the credential on the gate (in shared mode the gate holds it).',
+      );
+}
+
+/** The explanation shown on a field a kernel 400 named, in the viewer's language; the kernel's own
+ *  (English) text goes under the field's collapsed 「技术细节」 (console audit P1-1, #537), never
+ *  into this line. */
 export function fieldErrorExplanation(
   field: keyof FieldErrors,
   code: string,
   t: Translate,
+  credentialKind: CredentialKind = 'shared',
 ): string {
   if (code === 'credentials_in_connection_params') {
-    return field === 'endpoint'
-      ? t(
-          '门端点里不能带用户名、密码、查询参数（?）或片段（#），已拒绝，什么也没保存：只填门自己的地址，凭据填到「凭证」里或配置在门上。',
-          'The Gatekeeper endpoint cannot carry a user name, password, query string (?) or fragment (#) — refused, nothing was saved. Enter only the gate’s own address; put the credential in Credentials or in the gate’s configuration.',
-        )
-      : t(
-          '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称，凭据填到「凭证」里或配置在门上。',
-          'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name; put the credential in Credentials or in the gate’s configuration.',
-        );
+    if (field === 'endpoint') {
+      return `${t(
+        '门端点里不能带用户名、密码、查询参数（?）或片段（#），已拒绝，什么也没保存：只填门自己的地址。',
+        'The Gatekeeper endpoint cannot carry a user name, password, query string (?) or fragment (#) — refused, nothing was saved. Enter only the gate’s own address.',
+      )}${credentialPlace(credentialKind, t)}`;
+    }
+    if (field === 'manifestSource') {
+      return t(
+        '清单来源里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没保存：只填文档地址。需要登录才能读的文档请留空，由门自己导入。',
+        'The manifest source carries a credential (a user name and password in the URL, or a token or key in its query) — refused, nothing was saved. Enter only the document’s address; leave it empty when the document needs a login, and the gate imports its own.',
+      );
+    }
+    return `${t(
+      '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称。',
+      'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name.',
+    )}${credentialPlace(credentialKind, t)}`;
   }
   if (code === 'connection_target_refused') {
     return t(
@@ -123,7 +145,16 @@ export function fieldErrorExplanation(
  *  kernel's message mentions "credentials" too, so it is never guessed from the text. */
 function connectionCredentialField(err: unknown): keyof FieldErrors | undefined {
   const field = err instanceof HttpError ? err.details?.field : undefined;
-  return field === 'target' || field === 'endpoint' ? field : undefined;
+  return field === 'target' || field === 'endpoint' || field === 'manifestSource'
+    ? field
+    : undefined;
+}
+
+/** A kernel 400 shown on a field: which one, and what goes in its 「技术细节」. */
+interface ServerFieldError {
+  readonly field: keyof FieldErrors;
+  readonly code: string;
+  readonly raw: string | null;
 }
 
 /** Maps a kernel `invalid_params` (400) to the field it is most likely about. */
@@ -141,8 +172,8 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  * request (or a blank) into a registered Gatekeeper via `create_connection`
  * (`packages/shared/src/capabilities.ts`). Credentials go straight to the gate and are cleared
  * from this form the moment the call returns; they are never echoed, logged or kept in state after
- * submit. 400 highlights the field it names (a Chinese explanation first, the kernel's own text
- * second); 502/504 show the gate's own message verbatim. `aria-describedby` follows what `Field`
+ * submit. 400 highlights the field it names (the explanation on the field, the kernel's own text
+ * in that field's collapsed 「技术细节」); 502/504 show the gate's own message verbatim. `aria-describedby` follows what `Field`
  * actually renders (C16): the hint always, plus the error while there is one.
  *
  * Fills instead of refusing (console UX pass): an endpoint typed as `gate-host:8080` gets
@@ -173,6 +204,7 @@ export function CompleteConnectionForm({
   const [endpointSchemeAdded, setEndpointSchemeAdded] = useState(false);
   const [manifestSource, setManifestSource] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [serverFieldError, setServerFieldError] = useState<ServerFieldError | null>(null);
   const [submitError, setSubmitError] = useState<unknown | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
@@ -239,6 +271,7 @@ export function CompleteConnectionForm({
     event.preventDefault();
     const errors = validate();
     setFieldErrors(errors);
+    setServerFieldError(null);
     setSubmitError(null);
     if (Object.keys(errors).length > 0) return;
     if (connectionSecret === null) return;
@@ -277,11 +310,13 @@ export function CompleteConnectionForm({
             ? fieldForInvalidParams(described.message)
             : undefined;
       if (field) {
-        // A Chinese-first explanation of the field, with the kernel's own (English) text kept as
-        // the secondary detail rather than shown alone.
+        // The field says what is wrong in the viewer's language; the kernel's own (English) text
+        // sits in the field's collapsed 「技术细节」 (#537 convention), never in the line itself.
         setFieldErrors({
-          [field]: `${fieldErrorExplanation(field, described.code, t)} ${t('服务端原文：', 'Server message: ')}${described.message}`,
+          [field]: fieldErrorExplanation(field, described.code, t, credentialKind),
         });
+        const shown = presentError(err, t);
+        setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
       } else {
         setSubmitError(err);
       }
@@ -290,15 +325,23 @@ export function CompleteConnectionForm({
     }
   }
 
+  /** The 「技术细节」 under `field` while a kernel 400 is shown on it. */
+  function serverDetails(field: keyof FieldErrors) {
+    return serverFieldError?.field === field ? (
+      <ErrorDetails
+        code={serverFieldError.code}
+        raw={serverFieldError.raw}
+        testId={`cc-${field === 'manifestSource' ? 'manifest' : field}-error`}
+      />
+    ) : null;
+  }
+
   const showManifest = supportsManifestSource(kind);
   // console-ux-3: for an http gate the OpenAPI document usually sits at `<target>/openapi.json` —
   // offered as a one-click fill (never set silently), the same pattern as the platform's
-  // `CreateGateInstanceForm`. A target that is not a URL or host yields no suggestion.
-  const targetUrl = withDefaultScheme(target, 'https');
-  const suggestedManifest =
-    kind === 'http' && targetUrl !== '' && isAbsoluteUrl(targetUrl)
-      ? `${targetUrl.replace(/\/+$/, '')}/openapi.json`
-      : '';
+  // `CreateGateInstanceForm`. A target that is not a URL or host yields no suggestion, and one that
+  // carries a credential yields none either (review of #549: never copied into another field).
+  const suggestedManifest = kind === 'http' ? suggestedManifestSource(target) : '';
 
   return (
     <form
@@ -344,6 +387,7 @@ export function CompleteConnectionForm({
         label={t('目标系统', 'Target system')}
         required
         error={fieldErrors.target}
+        errorDetails={serverDetails('target')}
         hint={t(
           '门前面对接的是什么——一个 base URL、host 或服务名。',
           'What the Gatekeeper fronts — a base URL, host, or service name.',
@@ -365,6 +409,7 @@ export function CompleteConnectionForm({
         label={t('门端点', 'Gatekeeper endpoint')}
         required
         error={fieldErrors.endpoint}
+        errorDetails={serverDetails('endpoint')}
         hint={
           <>
             {t(
@@ -458,6 +503,7 @@ export function CompleteConnectionForm({
             label={t('凭证', 'Credentials')}
             required
             error={fieldErrors.credentials}
+            errorDetails={serverDetails('credentials')}
             hint={t(
               '一个 token，或一个 JSON 对象。只送到门的 ConnectedAccount 存储——内核不会持久化它，提交后这个字段会被清空。',
               "A token, or a JSON object. Sent to the Gatekeeper's ConnectedAccount store only — the kernel never persists it and this field is cleared on submit.",
@@ -491,6 +537,7 @@ export function CompleteConnectionForm({
           id="cc-manifest"
           label={t('清单来源', 'Manifest source')}
           error={fieldErrors.manifestSource}
+          errorDetails={serverDetails('manifestSource')}
           hint={
             kind === 'http'
               ? t(

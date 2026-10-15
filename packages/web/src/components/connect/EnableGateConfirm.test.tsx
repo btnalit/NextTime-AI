@@ -237,6 +237,36 @@ describe('EnableGateConfirm', () => {
     expect(error.textContent).toContain('不是平台预置模式');
   });
 
+  it('review of #549: an instance refused for a credential in its target says only an administrator can fix it, the kernel text in 「技术细节」', async () => {
+    const kernelText =
+      'enable_gate_instance: target carries what looks like a credential — refused, nothing was stored.';
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => emptyPreview(),
+      enable_gate_instance: () => {
+        throw new HttpError('capability_error', kernelText, 'credentials_in_connection_params', {
+          field: 'target',
+        });
+      },
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Docker prod"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.querySelector('p')?.textContent).toContain('请平台管理员在「集成」里');
+    expect(error.querySelector('p')?.textContent).not.toContain('「凭证」');
+    expect(within(error).getByTestId('confirm-error-detail').textContent).toBe(kernelText);
+  });
+
   it('L4-13: a preview refused as gatekeeper_already_linked explains why and opens no confirm', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () => {

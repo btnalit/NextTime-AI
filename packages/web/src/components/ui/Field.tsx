@@ -12,6 +12,9 @@ export interface FieldProps {
   readonly label: ReactNode;
   readonly hint?: ReactNode;
   readonly error?: string | null;
+  /** Under the error, while there is one: the 「技术细节」 disclosure (`kit/error-details`) with the
+   *  kernel's own text, so the error itself stays in the viewer's language (console audit P1-1). */
+  readonly errorDetails?: ReactNode;
   readonly required?: boolean;
   readonly children: ReactNode;
 }
@@ -27,7 +30,15 @@ export function describedBy(id: string, hasHint: boolean, hasError: boolean): st
  * given `id` (and `aria-invalid`/`aria-describedby`, via `describedBy`) by the caller — keeps the
  * primitive dumb and the form code explicit about which control it is validating.
  */
-export function Field({ id, label, hint, error, required = false, children }: FieldProps) {
+export function Field({
+  id,
+  label,
+  hint,
+  error,
+  errorDetails,
+  required = false,
+  children,
+}: FieldProps) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>
@@ -49,6 +60,7 @@ export function Field({ id, label, hint, error, required = false, children }: Fi
           {error}
         </p>
       ) : null}
+      {error && errorDetails ? errorDetails : null}
     </div>
   );
 }

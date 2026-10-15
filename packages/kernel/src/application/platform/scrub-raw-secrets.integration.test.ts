@@ -48,9 +48,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       task: randomUUID(),
       connectionRequest: randomUUID(),
       gatekeeper: randomUUID(),
+      observed: randomUUID(),
+      fact: randomUUID(),
       completeAudit: randomUUID(),
       failAudit: randomUUID(),
       scrubbedAudit: randomUUID(),
+      // Platform catalog rows, keyed on a gate id rather than a uuid.
+      gateWithTarget: `scrub-target-${randomUUID().slice(0, 8)}`,
+      gateWithManifest: `scrub-manifest-${randomUUID().slice(0, 8)}`,
     };
     const turnMetadata = {
       summary: `ran env: CAPABILITY_HANDLE=${HANDLE}`,
@@ -139,6 +144,24 @@ describe.runIf(DATABASE_URL !== undefined)(
               ids.gatekeeper,
             ])
           )?.properties,
+          observed: (
+            await one('select properties from objects where workspace_id = $1 and id = $2', [
+              workspaceId,
+              ids.observed,
+            ])
+          )?.properties,
+          fact: (
+            await one('select properties from links where workspace_id = $1 and id = $2', [
+              workspaceId,
+              ids.fact,
+            ])
+          )?.properties,
+          gates: (
+            await client.query(
+              'select gate_id, target, definition from gate_instances where gate_id = any($1::text[]) order by gate_id',
+              [[ids.gateWithTarget, ids.gateWithManifest]],
+            )
+          ).rows,
           audits: (
             await client.query(
               'select id, payload from audit_records where workspace_id = $1 and id = any($2::uuid[]) order by id',
@@ -228,6 +251,58 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           ],
         );
+        // Review of #549 (B2): what the graph store now scrubs, written raw before it did — a gate's
+        // observed Object and an agent-asserted Fact between it and the Gatekeeper.
+        await client.query(
+          `insert into objects (workspace_id, id, object_type, properties) values ($1, $2, 'Container', $3::jsonb)`,
+          [
+            workspaceId,
+            ids.observed,
+            JSON.stringify({ image: 'app:1', env: { DB_PASSWORD: PLAIN, LOG_LEVEL: 'info' } }),
+          ],
+        );
+        await client.query(
+          `insert into links (workspace_id, id, link_type, source_object_id, target_object_id, properties,
+                              epistemic_status, activity_id, asserted_by)
+           values ($1, $2, 'runs_on', $3, $4, $5::jsonb, 'asserted', $6, $7)`,
+          [
+            workspaceId,
+            ids.fact,
+            ids.observed,
+            ids.gatekeeper,
+            JSON.stringify({ note: `login with token=${FAKE}`, since: '2026-10-01' }),
+            ids.turn,
+            ownerId,
+          ],
+        );
+        for (const [gateId, definition] of [
+          [
+            ids.gateWithTarget,
+            {
+              transportKind: 'mcp',
+              target: `https://ops:${FAKE}@mcp.example.invalid/mcp`,
+              credentialMode: 'shared',
+              manifestSource: null,
+            },
+          ],
+          [
+            ids.gateWithManifest,
+            {
+              transportKind: 'http',
+              target: 'https://billing.example.invalid',
+              credentialMode: 'shared',
+              manifestSource: `https://billing.example.invalid/openapi.json?api_key=${FAKE}`,
+            },
+          ],
+        ] as const) {
+          await client.query(
+            `insert into gate_instances
+               (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
+                operations, status, health, hosted, definition, updated_at)
+             values ($1, $2, $1, $2, $3, '', null, '[]'::jsonb, 'discovered', 'unknown', true, $4::jsonb, now())`,
+            [gateId, definition.transportKind, definition.target, JSON.stringify(definition)],
+          );
+        }
         await client.query(
           `insert into audit_records (workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload) values
              ($1, $2, $3, 'action_request.complete', 'action_request', $4, $5::jsonb),
@@ -261,6 +336,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     afterAll(async () => {
+      // The platform catalog is shared by every test; the workspace rows are not.
+      await admin((client) =>
+        client.query('delete from gate_instances where gate_id = any($1::text[])', [
+          [ids.gateWithTarget, ids.gateWithManifest],
+        ]),
+      );
       await pool.end();
     });
 
@@ -281,6 +362,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['taskInputs', ids.task],
         ['connectionTargets', ids.connectionRequest],
         ['gatekeeperAddresses', ids.gatekeeper],
+        ['gateInstanceAddresses', ids.gateWithTarget],
+        ['gateInstanceAddresses', ids.gateWithManifest],
+        ['factProperties', ids.fact],
+        ['objectProperties', ids.observed],
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         if (result.categories[name].affected <= 20) expect(listed(name)).toContain(id);
@@ -317,7 +402,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(after.gatekeeper).toMatchObject({
         endpoint: `https://gate.example.invalid/?token=${FAKE}`,
       });
+      expect(after.gates.map((row: { target: string }) => row.target)).toContain(
+        `https://ops:${FAKE}@mcp.example.invalid/mcp`,
+      );
+      expect(JSON.stringify(after.gates)).toContain(`api_key=${FAKE}`);
       expect(JSON.stringify(after.audits)).toContain('issued-plain-value');
+      expect(after.observed).toMatchObject({ env: { DB_PASSWORD: PLAIN } });
+      expect(after.fact).toMatchObject({ note: `login with token=${FAKE}` });
 
       const audit = await admin(
         async (client) =>

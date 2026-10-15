@@ -155,6 +155,14 @@ export function EnableGateConfirm({
             : t('注册并启用', 'Register and enable')
         }
         onConfirm={confirmEnable}
+        errorOverrides={{
+          // Review of #549: an instance stored with a credential in its target is not copied into
+          // this workspace; only a platform administrator can recreate it.
+          credentials_in_connection_params: t(
+            '这个平台门实例的目标地址里带了凭据，没有启用，本工作区也没有写入任何东西。请平台管理员在「集成」里按不带凭据的地址重新创建这个实例。',
+            'This platform gate instance’s target carries a credential, so it was not enabled and nothing was written to this workspace. Ask a platform administrator to recreate the instance under Integrations with an address that carries no credential.',
+          ),
+        }}
         testId={testId ? `${testId}-confirm` : undefined}
       >
         {preview ? (

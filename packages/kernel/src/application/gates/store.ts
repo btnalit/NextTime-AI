@@ -12,6 +12,10 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import { revokeEntrySessionHandles, revokeSession } from '../../governance/capability/index.js';
+import {
+  type ConnectionCredentialField,
+  findConnectionParamsCredential,
+} from '../../governance/connections/index.js';
 import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
 import { gateRunningDefinitions, operationsRefusedUntilAdopted } from './definition-drift.js';
 import {
@@ -297,6 +301,10 @@ export interface AnnounceOutcome {
    *  was stored as `pending_operations` (newly, or replacing a different pending one) and the
    *  manifest in effect was kept. Not set when the same pending manifest was simply re-announced. */
   readonly manifestHeld?: boolean;
+  /** Review of #549 (legacy 186, gate-instance half): the announced `target` or `endpoint` carries
+   *  a credential (`findConnectionParamsCredential`) that this instance was not already stored
+   *  with — nothing was written. Names the field, never the value. */
+  readonly credentialRefused?: { readonly field: ConnectionCredentialField };
 }
 
 /**
@@ -337,14 +345,15 @@ export async function upsertAnnouncement(
     status_before_lost: GateInstanceStatus | null;
     connector: string;
     transport_kind: GateTransportKind;
+    target: string;
     endpoint: string;
     hosted: boolean;
     last_seen_at: Date | null;
     operations: unknown;
     pending_operations: unknown;
   }>(
-    `select status, status_before_lost, connector, transport_kind, endpoint, hosted, last_seen_at,
-            operations, pending_operations
+    `select status, status_before_lost, connector, transport_kind, target, endpoint, hosted,
+            last_seen_at, operations, pending_operations
        from gate_instances where gate_id = $1 for update`,
     [body.gateId],
   );
@@ -356,6 +365,28 @@ export async function upsertAnnouncement(
       identityMismatch: false,
       status: before?.status ?? 'discovered',
       announcerMismatch: true,
+    };
+  }
+  // Review of #549 (legacy 186, gate-instance half): an address carrying a credential is never
+  // written — unless the instance already holds exactly that value (created or announced before the
+  // rule), so a running gate keeps its heartbeat on upgrade; `cli/scrub-raw-secrets` counts those
+  // rows for the administrator to recreate.
+  const announcedTarget = body.target ?? '';
+  const refusedField: ConnectionCredentialField | null =
+    announcedTarget !== before?.target &&
+    findConnectionParamsCredential({ target: announcedTarget }) !== null
+      ? 'target'
+      : body.endpoint !== before?.endpoint &&
+          findConnectionParamsCredential({ endpoint: body.endpoint }) !== null
+        ? 'endpoint'
+        : null;
+  if (refusedField !== null) {
+    return {
+      gateId: body.gateId,
+      created: false,
+      identityMismatch: false,
+      status: before?.status ?? 'discovered',
+      credentialRefused: { field: refusedField },
     };
   }
   const decided =

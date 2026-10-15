@@ -245,9 +245,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
     en: 'The parameters carry a credential, so nothing was sent. Do not pass credentials as parameters; the gate authenticates with its own.',
   },
+  // The fallback when no form shows it on its own field (each form says where the credential goes
+  // in its own terms): no field name here, since not every place that refuses it has one.
   credentials_in_connection_params: {
-    zh: '目标系统或门端点里带了凭据（URL 里的用户名密码、token、key 或查询参数），已拒绝，什么也没保存。地址里只写地址，凭据填到「凭证」里，或配置在门上。',
-    en: 'The target or the gate endpoint carries a credential (a user name and password, a token, a key or a query string in the URL), so it was refused and nothing was saved. Keep the address to the address; put the credential in the Credentials field or in the gate’s own configuration.',
+    zh: '地址里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没保存。地址里只写地址；凭据交给门保管，不要写进任何地址。',
+    en: 'An address carries a credential (a user name and password in the URL, or a token or key in its query), so it was refused and nothing was saved. Keep addresses to the address; the credential belongs to the gate, never in an address.',
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {

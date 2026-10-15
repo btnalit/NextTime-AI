@@ -1,15 +1,19 @@
 import type { GateInstanceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { presentError } from '../../lib/errors.js';
 import {
   deriveGateId,
   gateIdFromTarget,
   isAbsoluteUrl,
   normalizeGateIdInput,
+  suggestedManifestSource,
   withDefaultScheme,
 } from '../../lib/gate-input.js';
+import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
+import { ErrorDetails } from '../kit/error-details.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -22,6 +26,19 @@ export interface CreateGateInstanceFormProps {
 
 type TransportKind = 'http' | 'mcp';
 type CredentialMode = 'shared' | 'connected_account';
+
+/** A `credentials_in_connection_params` refusal (review of #549): the field `details.field` names,
+ *  shown on that field rather than in the banner. */
+interface AddressRefusal {
+  readonly field: 'target' | 'manifestSource';
+  readonly error: unknown;
+}
+
+function addressRefusalOf(err: unknown): AddressRefusal | null {
+  if (!(err instanceof HttpError) || err.code !== 'credentials_in_connection_params') return null;
+  const field = err.details?.field;
+  return field === 'target' || field === 'manifestSource' ? { field, error: err } : null;
+}
 
 /**
  * components/platform/CreateGateInstanceForm: `create_gate_instance` (P-B2a 决定 ⑥–⑬) — the
@@ -36,7 +53,10 @@ type CredentialMode = 'shared' | 'connected_account';
  * display name (or, failing that, the target's host) until the administrator edits it, and typed
  * input is normalized live (`lib/gate-input.ts` — lowercase, `_`/space/`.` → `-`); a target or
  * manifest URL without a scheme gets `https://` on blur, with a one-line note; for http the
- * manifest field offers `<target>/openapi.json` as a one-click fill (never set silently).
+ * manifest field offers `<target>/openapi.json` as a one-click fill (never set silently) — never
+ * for a target carrying a credential, and never with its query (review of #549). A target or
+ * manifest source the kernel refuses for carrying a credential is said on that field, with the
+ * kernel's own text in the field's collapsed 「技术细节」.
  */
 export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGateInstanceFormProps) {
   const t = useT();
@@ -55,6 +75,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
   const [manifestSchemeAdded, setManifestSchemeAdded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  const [refusal, setRefusal] = useState<AddressRefusal | null>(null);
 
   const idFromName = deriveGateId(displayName);
   const derivedGateId = idFromName || gateIdFromTarget(target);
@@ -73,7 +94,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
   // ignored it, so a blank one was a guaranteed 400. Not consulted for mcp (field hidden).
   const manifestSourceValid =
     transportKind !== 'http' || (manifestValue.length > 0 && isAbsoluteUrl(manifestValue));
-  const suggestedManifest = targetValid ? `${targetValue.replace(/\/+$/, '')}/openapi.json` : '';
+  const suggestedManifest = targetValid ? suggestedManifestSource(targetValue) : '';
   const ready = gateIdValid && targetValid && manifestSourceValid && !submitting;
 
   function changeGateId(raw: string): void {
@@ -112,14 +133,44 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
     if (transportKind === 'http') setManifestSource(manifestValue);
     setSubmitting(true);
     setError(null);
+    setRefusal(null);
     try {
       onCreated(await http.call<GateInstanceWire>('create_gate_instance', params));
     } catch (err) {
-      setError(err);
+      const refused = addressRefusalOf(err);
+      if (refused) setRefusal(refused);
+      else setError(err);
     } finally {
       setSubmitting(false);
     }
   }
+
+  /** The refusal's explanation and 「技术细节」 when it is about `field`. */
+  function refusalOn(field: AddressRefusal['field']) {
+    if (refusal?.field !== field) return null;
+    const shown = presentError(refusal.error, t);
+    return {
+      message:
+        field === 'target'
+          ? t(
+              '目标地址里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没创建：只写目标地址。共享凭证在实例创建后从实例详情里录入；按人方式由成员在工作区各自录入。',
+              'The target carries a credential (a user name and password in the URL, or a token or key in its query) — refused, nothing was created. Enter only the address. A shared credential is entered from the instance’s details once it exists; per-member credentials are entered by each member in their workspace.',
+            )
+          : t(
+              '清单来源里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没创建：只写文档地址。门宿主读取清单时不带凭据，文档需要能直接访问。',
+              'The manifest source carries a credential (a user name and password in the URL, or a token or key in its query) — refused, nothing was created. Enter only the document’s address; the gate host reads it without a credential, so it must be reachable as is.',
+            ),
+      details: (
+        <ErrorDetails
+          code={shown.code}
+          raw={shown.raw}
+          testId={field === 'target' ? 'cgi-target-error' : 'cgi-manifest-source-error'}
+        />
+      ),
+    };
+  }
+  const targetRefusal = refusalOn('target');
+  const manifestRefusal = refusalOn('manifestSource');
 
   const schemeNote = t(
     '已自动补上 https://；如果目标只走 http，请改成 http://。',
@@ -252,13 +303,15 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           </>
         }
         error={
-          target.length > 0 && !targetValid
+          targetRefusal?.message ??
+          (target.length > 0 && !targetValid
             ? t(
                 '需要一个完整的地址，例如 https://billing.example.com 或 https://billing.example.com:8443/api。',
                 'Needs a full address, e.g. https://billing.example.com or https://billing.example.com:8443/api.',
               )
-            : undefined
+            : undefined)
         }
+        errorDetails={targetRefusal?.details}
       >
         <Input
           id="cgi-target"
@@ -266,10 +319,11 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           onChange={(event) => {
             setTarget(event.target.value);
             setTargetSchemeAdded(false);
+            if (refusal?.field === 'target') setRefusal(null);
           }}
           onBlur={completeTarget}
           disabled={submitting}
-          invalid={target.length > 0 && !targetValid}
+          invalid={targetRefusal !== null || (target.length > 0 && !targetValid)}
           mono
           placeholder="https://billing.example.com"
         />
@@ -330,13 +384,15 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             </>
           }
           error={
-            manifestSource.length > 0 && !manifestSourceValid
+            manifestRefusal?.message ??
+            (manifestSource.length > 0 && !manifestSourceValid
               ? t(
                   '需要一个完整的地址，例如 https://billing.example.com/openapi.json。',
                   'Needs a full address, e.g. https://billing.example.com/openapi.json.',
                 )
-              : undefined
+              : undefined)
           }
+          errorDetails={manifestRefusal?.details}
         >
           <Input
             id="cgi-manifest-source"
@@ -344,12 +400,15 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             onChange={(event) => {
               setManifestSource(event.target.value);
               setManifestSchemeAdded(false);
+              if (refusal?.field === 'manifestSource') setRefusal(null);
             }}
             onBlur={completeManifest}
             disabled={submitting}
             mono
             required
-            invalid={manifestSource.length > 0 && !manifestSourceValid}
+            invalid={
+              manifestRefusal !== null || (manifestSource.length > 0 && !manifestSourceValid)
+            }
             placeholder={suggestedManifest || 'https://billing.example.com/openapi.json'}
           />
           {suggestedManifest && manifestSource.trim() !== suggestedManifest ? (

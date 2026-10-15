@@ -246,12 +246,14 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
         endpoint: 'https://gate.owner.example',
         credentialKind: 'shared',
         connectionSecret: secrets.mint(WORKSPACE).secret,
-        manifestSource: `https://owner:pa55word@${base.slice('https://'.length)}?api_key=k3y#frag`,
+        // A user name, a password or a secret query parameter is refused before any fetch
+        // (legacy 186); a plain query and a fragment still never reach the message.
+        manifestSource: `${base}?ref=k3y#frag`,
       }).catch((err: unknown) => err);
       expect(thrown).toBeInstanceOf(ConnectionManifestFetchError);
       const message = (thrown as Error).message;
       expect(message).toContain(`failed to fetch manifestSource "${base}"`);
-      for (const leak of ['pa55word', 'owner:', 'k3y', 'frag', key]) {
+      for (const leak of ['k3y', 'frag', key]) {
         expect(message).not.toContain(leak);
       }
     },
@@ -281,6 +283,17 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     ['target', { target: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@grafana.example.invalid' }],
     ['endpoint', { endpoint: 'https://gate.owner.example/?token=abcdefghijklmnopqrstuvwxyz0123' }],
     ['endpoint', { endpoint: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@gate.owner.example' }],
+    [
+      'manifestSource',
+      {
+        manifestSource:
+          'https://api.owner.example/openapi.json?access_token=abcdefghijklmnopqrstuvwxyz0123',
+      },
+    ],
+    [
+      'manifestSource',
+      { manifestSource: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@api.owner.example/mcp' },
+    ],
   ])(
     'refuses a credential in the %s before contacting anything or writing a row (legacy 186)',
     async (field, override) => {

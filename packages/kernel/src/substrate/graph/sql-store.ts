@@ -33,6 +33,7 @@ import {
   encodeFactsCursor,
   encodeSearchCursor,
 } from './queries.js';
+import { scrubGraphProperties } from './scrub-properties.js';
 import {
   type AssertFactInput,
   type AssertFactResult,
@@ -224,13 +225,25 @@ async function resolveCallerKind(
   return row.kind;
 }
 
+/** `input` with its properties as the graph stores them (`scrubGraphProperties`). */
+function withScrubbedProperties<T extends { readonly properties?: Record<string, unknown> }>(
+  input: T,
+): T {
+  if (input.properties === undefined) return input;
+  return { ...input, properties: scrubGraphProperties(input.properties).properties };
+}
+
 export class SqlGraphStore implements GraphStore {
   async upsertObject(
     client: PoolClient,
     workspaceId: string,
     input: UpsertObjectInput,
   ): Promise<GraphObject> {
-    const query = buildUpsertObjectQuery(workspaceId, input);
+    const { kernelAuthored, ...rest } = input;
+    const query = buildUpsertObjectQuery(
+      workspaceId,
+      kernelAuthored === true ? rest : withScrubbedProperties(rest),
+    );
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     return mapObjectRow(
       firstRowOrThrow(
@@ -308,9 +321,12 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     caller: CallerPrincipal,
-    input: AssertFactInput,
+    rawInput: AssertFactInput,
   ): Promise<AssertFactResult> {
-    assertNoCallerSuppliedEpistemicStatus(input);
+    assertNoCallerSuppliedEpistemicStatus(rawInput);
+    // Review of #549 (B2): scrubbed before anything reads them, so the same-origin "unchanged"
+    // comparison below compares stored form with stored form.
+    const input = withScrubbedProperties(rawInput);
     // S5.1 (ontology-guard.ts): I2 at the write point, before the identity lookup below takes
     // any lock and before any of the three write paths this method can end in.
     await enforceOntologyOnLinkWrite(client, workspaceId, caller, input);
@@ -541,9 +557,10 @@ export class SqlGraphStore implements GraphStore {
     client: PoolClient,
     workspaceId: string,
     caller: CallerPrincipal,
-    input: SupersedeFactInput,
+    rawInput: SupersedeFactInput,
   ): Promise<Fact> {
-    assertNoCallerSuppliedEpistemicStatus(input);
+    assertNoCallerSuppliedEpistemicStatus(rawInput);
+    const input = withScrubbedProperties(rawInput);
     // S5.1 (ontology-guard.ts): the replacement Fact's LinkType / endpoints are checked exactly
     // like a fresh assertion's — a supersede keeps the identity, so this is the same check the
     // prior Fact passed (or, for a row written before S5.1, never had).

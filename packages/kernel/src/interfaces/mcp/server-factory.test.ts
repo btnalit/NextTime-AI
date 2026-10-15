@@ -143,7 +143,7 @@ describe('mapCapabilityErrorToToolResult', () => {
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^credentials_in_connection_params: request_connection: target /);
-    expect(text).toMatch(/never the target/);
+    expect(text).toMatch(/never into the target/);
   });
 
   it('puts a gate answer’s code in front, so a refusal reads as one (review of #532)', () => {

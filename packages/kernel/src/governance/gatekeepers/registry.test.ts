@@ -108,6 +108,38 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/registry (int
     });
   });
 
+  it.each([
+    ['target', { target: 'https://ops:abcdefghijklmnopqrstuvwxyz0123@system.example.invalid' }],
+    [
+      'endpoint',
+      { endpoint: 'https://gate.example.invalid/?token=abcdefghijklmnopqrstuvwxyz0123' },
+    ],
+  ])(
+    'refuses a credential in the %s whatever the caller, writing nothing (legacy 186, defense in depth)',
+    async (field, override) => {
+      const act = await activityId();
+      const gatekeeperId = randomUUID();
+      const thrown = await inTx((client) =>
+        registerGatekeeper(client, workspaceId, {
+          gatekeeperId,
+          name: 'refused-system',
+          transportKind: 'http',
+          target: 'refused-system',
+          endpoint: 'https://gate.example.invalid',
+          activityId: act,
+          registeredBy: { id: ownerId, kind: 'human' },
+          ...override,
+        }),
+      ).catch((err: unknown) => err);
+      expect(thrown).toMatchObject({
+        code: 'credentials_in_connection_params',
+        details: { field },
+      });
+      expect((thrown as Error).message).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+      expect(await inTx((client) => getGatekeeper(client, workspaceId, gatekeeperId))).toBeNull();
+    },
+  );
+
   it('is idempotent by gatekeeperId — re-registering upserts the same instance', async () => {
     const act = await activityId();
     const gatekeeperId = randomUUID();

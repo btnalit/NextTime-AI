@@ -2,6 +2,7 @@ import type { GateHostedDefinitionWire, GateInstanceWire } from '@nexttime/share
 import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
+import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   confirmPendingManifest,
@@ -297,6 +298,14 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     credentialMode: 'shared' | 'connected_account';
     manifestSource?: string | null;
   };
+  // Review of #549 (the gate-instance half of legacy 186): the definition is stored as given, sent
+  // to the gate host, and shown to every platform administrator and enabling workspace — a
+  // credential in its target or manifest source is refused before anything is written. The gate
+  // host takes the credential through its own entry (`issue_gate_host_token`), never the kernel.
+  assertConnectionParamsCarryNoCredentials('create_gate_instance', {
+    target: input.target,
+    manifestSource: input.transportKind === 'http' ? input.manifestSource : null,
+  });
   const definition: GateHostedDefinitionWire = {
     transportKind: input.transportKind,
     target: input.target,
