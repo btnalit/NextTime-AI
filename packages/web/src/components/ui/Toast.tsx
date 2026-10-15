@@ -3,6 +3,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -46,6 +47,16 @@ export function ToastProvider({ children }: { readonly children: ReactNode }) {
   const [toasts, setToasts] = useState<readonly ToastRecord[]>([]);
   const nextId = useRef(1);
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  // A toast's dismiss timer must not outlive the provider: firing after unmount sets state on a
+  // gone tree (and, in tests, after the DOM environment is torn down).
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
 
   const dismiss = useCallback((id: number) => {
     const timer = timers.current.get(id);
