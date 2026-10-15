@@ -1143,8 +1143,10 @@ SQL
 - `apply-release.sh`：
   - **第 6 步之后的单文件挂载刷新**：`up -d` 只在定义或镜像变了时重建容器，从检出目录单文件挂进去的配置换了内容，旧容器仍读旧文件
     （caddy 就因此一直读旧 Caddyfile）。现在对 caddy、backup、update-feed 逐个比较容器里的文件与检出目录，不同就重建，日志一行
-    `STEP mount-refresh <service> recreated — …`。**第一次带这项改动的 apply 预期会看到 caddy 被重建**（Caddyfile 变了），**也可能看到
-    backup 与 update-feed 被重建**：两者镜像按 digest 固定、容器很久没重建，一直读着启动时的旧脚本，属正常。
+    `STEP mount-refresh <service> recreated — …`。`--pull` 换了 caddy 镜像时 `up -d` 已经重建 caddy、新容器直接读新 Caddyfile，比较一致，
+    **不会再打印 caddy recreated，这不算异常**；只有 caddy 镜像没变（例如源码构建）时才由这一步重建。caddy 是否读到新配置以
+    `STEP caddy-log-redaction` 各项 PASS 为准。**也可能看到 backup 与 update-feed 被重建**：两者镜像按 digest 固定，是否重建只取决于容器
+    有多老（容器很久没重建就一直读着启动时的旧脚本），属正常。
   - **第 7 步之后两项检查**：`STEP acceptance-fixtures`（验收用的测试容器不许残留，正常是 `none left running`）；`STEP caddy-log-redaction`
     （经真实入口发合成探针，再数本次 apply 以来 caddy 日志里的凭据，各项应为 PASS；需要 `.env` 里的 `KERNEL_BIND_ADDR`，日志
     `drills/apply-<tag>-<ts>-caddy-log.log`）。这两项和下表其余步骤一样，没做完都体现在最后的 RESULT 行。
@@ -1168,8 +1170,9 @@ SQL
 - 曾经用 `X-API-Key` 经 caddy 调 Explorer 或 curl 的 owner API key，在此前的 caddy 日志里是原文，而 docker 门能读这些日志：是否轮换。
 - 旧 caddy 日志被复制到别处的副本（例如私有记录里贴过的 `docker compose logs` 输出）：是否清理。
 
-**回滚**（§5）：没有迁移。回滚到 v0.46.0 后 caddy 回到旧 Caddyfile，日志重新记录请求头与查询串原文，要重建 caddy 才生效
-（旧版 apply-release 不做挂载刷新）：`docker compose up -d --no-deps --no-build --force-recreate caddy`。回滚期间不要用 API key 经 caddy 调接口。
+**回滚**（§5）：没有迁移，v0.48.0 的 Caddyfile 相对 v0.46.0 只改了日志块，compose 不变。换回 v0.46.0 镜像时 caddy 随 `up -d` 重建、读回旧
+Caddyfile，日志重新记录请求头与查询串原文；不要为了「生效」去主动重建 caddy（没被重建的 caddy 继续遮蔽，更安全）。回滚期间不要用
+API key 经 caddy 调接口。
 
 ### 3.27 升级窗口总清单：v0.46.0 → v0.48.0
 
@@ -1179,11 +1182,14 @@ v0.47.0 不单独上主机（#554 不在里面），一次窗口直接到 v0.48.
 
 窗口开始前告诉维护者：执行会话被本地权限检查拦下时会停下等他批准（§3 开头，遗留 231），请他在场或提前加好允许规则。
 
+主机直连 GitHub 不稳定：`git fetch` 拿不到 tag 时，从维护者电脑用 git bundle 导入 tag（bundle 的具体路径记在 `docs/private/`，不入库），
+导入后核对 `git rev-parse 'v0.48.0^{commit}'` 等于发版 commit，再做第 1 步。
+
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
-| 1 | 窗口前 | `--prefetch v0.48.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
+| 1 | 窗口前 | `--prefetch v0.48.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
 | 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
-| 3 | 窗口内 | `--pull v0.48.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP mount-refresh caddy recreated`（backup、update-feed 也可能 recreated，属预期，§3.26）；`STEP acceptance-fixtures none left running`；`STEP caddy-log-redaction` 各项 PASS；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
+| 3 | 窗口内 | `--pull v0.48.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
 | 6 | 应用后 | §3.26「应用后」：owner API key 是否轮换、旧 caddy 日志副本是否清理 | victor 决定 |
