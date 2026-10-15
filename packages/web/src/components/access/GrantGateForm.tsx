@@ -190,7 +190,10 @@ function GrantGateFormBody({
 
   async function submit(): Promise<void> {
     if (!canSubmit) return;
-    const memberName = selectedPrincipal?.displayName ?? principalId;
+    // The receipt tells same-name members and gates apart too (#561 acceptance P3).
+    const memberName = selectedPrincipal
+      ? withSameNameId(selectedPrincipal.displayName, selectedPrincipal.id, memberSame)
+      : principalId;
     setSubmitting(true);
     setError(null);
     // Grants that already landed stay in the summary (and are reported to the caller) even if a
@@ -227,7 +230,10 @@ function GrantGateFormBody({
         ...current,
         ...(allGates
           ? [{ member: memberName, gate: null }]
-          : doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) }))),
+          : doneGateIds.map((id) => ({
+              member: memberName,
+              gate: withSameNameId(gateName(id), id, gateSame),
+            }))),
       ]);
       announceReadinessChange(http);
       onGranted(results);
@@ -244,7 +250,10 @@ function GrantGateFormBody({
         // not (the failed one and any not yet tried) selected so a retry does not re-grant.
         setGrantedLog((current) => [
           ...current,
-          ...doneGateIds.map((id) => ({ member: memberName, gate: gateName(id) })),
+          ...doneGateIds.map((id) => ({
+            member: memberName,
+            gate: withSameNameId(gateName(id), id, gateSame),
+          })),
         ]);
         announceReadinessChange(http);
         onGranted(results);

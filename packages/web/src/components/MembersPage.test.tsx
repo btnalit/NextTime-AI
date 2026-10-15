@@ -221,6 +221,29 @@ describe('MembersPage', () => {
     expect(await screen.findByTestId('create-principal-form')).toBeTruthy();
   });
 
+  it('D3: after creating the service account from there, it is back on the service Handle form', async () => {
+    const created = principal({ id: 'p-svc', displayName: 'CI runner', role: 'member' });
+    let listed: readonly ReturnType<typeof principal>[] = [];
+    const http = scriptedHttp({
+      list_principals: () => ({ items: listed }),
+      create_principal: () => {
+        listed = [created];
+        return { principal: created, apiKey: 'sk-once-fixture-value' };
+      },
+    });
+    renderPage(http);
+    openMembersHeaderMenu();
+    fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
+    const notice = await screen.findByTestId('issue-service-handle-no-principal');
+    fireEvent.click(within(notice).getByTestId('issue-service-handle-create-account'));
+    const form = await screen.findByTestId('create-principal-form');
+    fireEvent.change(within(form).getByLabelText(/显示名/), { target: { value: 'CI runner' } });
+    fireEvent.click(within(form).getByRole('button', { name: '创建' }));
+    await screen.findByTestId('create-principal-key');
+    fireEvent.click(screen.getByRole('button', { name: /我已复制/ }));
+    expect(await screen.findByTestId('issue-service-handle-drawer')).toBeTruthy();
+  });
+
   it('C9: an owner session (authoritative role) keeps the owner-only buttons', async () => {
     const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
     renderPage(http);

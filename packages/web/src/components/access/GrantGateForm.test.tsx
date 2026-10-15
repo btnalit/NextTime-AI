@@ -435,6 +435,7 @@ describe('GrantGateForm: audit P1-9 still-needed line', () => {
           human('cccccccc-3333', '李四'),
         ],
       }),
+      grant_capability: () => ({ id: 'grant-1' }),
       list_gatekeepers: () => ({
         items: [
           gate('11111111-gate', 'orders'),
@@ -455,5 +456,12 @@ describe('GrantGateForm: audit P1-9 still-needed line', () => {
     expect(ids.map((el) => el.textContent)).toEqual([' · 11111111', ' · 22222222']);
     // Masked by the screenshot gate: the id differs per run.
     for (const el of ids) expect(el.hasAttribute('data-volatile')).toBe(true);
+
+    // The 「本次已授予」 receipt tells them apart too (#561 acceptance P3).
+    await selectMember('aaaaaaaa-1111');
+    fireEvent.click(screen.getByTestId('ggf-gate-11111111-gate'));
+    fireEvent.click(screen.getByTestId('ggf-submit'));
+    const entry = await screen.findByTestId('ggf-granted-entry');
+    expect(entry.textContent).toBe('张三 · aaaaaaaa → orders · 11111111');
   });
 });

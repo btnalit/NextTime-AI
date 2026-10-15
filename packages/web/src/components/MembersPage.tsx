@@ -47,7 +47,8 @@ export interface MembersPageProps {
 type DrawerState =
   | { readonly kind: 'closed' }
   | { readonly kind: 'addMember' }
-  | { readonly kind: 'create' }
+  /** `returnTo`: opened from the service-Handle form's "create one first" — go back there after. */
+  | { readonly kind: 'create'; readonly returnTo?: 'issueHandle' }
   | { readonly kind: 'issueHandle' }
   | { readonly kind: 'detail'; readonly principal: PrincipalRow };
 
@@ -360,7 +361,9 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               http={http}
               onCancel={() => setDrawer({ kind: 'closed' })}
               onDone={(principal) => {
-                setDrawer({ kind: 'closed' });
+                setDrawer(
+                  drawer.returnTo === 'issueHandle' ? { kind: 'issueHandle' } : { kind: 'closed' },
+                );
                 toast.push({
                   tone: 'ok',
                   title: t(`已创建 ${principal.displayName}`, `${principal.displayName} created`),
@@ -389,7 +392,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               http={http}
               principals={allPrincipals}
               onDone={() => setDrawer({ kind: 'closed' })}
-              onCreateServiceAccount={() => setDrawer({ kind: 'create' })}
+              onCreateServiceAccount={() => setDrawer({ kind: 'create', returnTo: 'issueHandle' })}
             />
           ) : null}
         </SheetContent>
