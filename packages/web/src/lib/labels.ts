@@ -128,7 +128,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   ontology_version: { zh: '本体版本', en: 'Ontology version' },
   operation: { zh: 'Operation', en: 'Operation' },
   policy: { zh: '策略', en: 'Policy' },
-  principal: { zh: '主体', en: 'Principal' },
+  principal: { zh: '成员', en: 'Member' },
   procedure: { zh: '流程', en: 'Procedure' },
   quota: { zh: '配额', en: 'Quota' },
   session: { zh: '会话', en: 'Session' },

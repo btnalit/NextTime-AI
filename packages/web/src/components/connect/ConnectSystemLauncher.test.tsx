@@ -652,6 +652,11 @@ describe('ConnectSystemLauncher — packaged path (ssh / cli)', () => {
     expect(steps).not.toContain('^[a-z0-9]');
 
     const input = screen.getByLabelText(/它的/) as HTMLInputElement;
+    // field-inventory #9: an empty field offers a ready id, filled only on a click.
+    expect(input.value).toBe('');
+    fireEvent.click(screen.getByTestId('launcher-intended-gate-id-suggest'));
+    expect(input.value).toBe('gatekeeper-cli');
+    expect(screen.queryByTestId('launcher-intended-gate-id-suggest')).toBeNull();
     fireEvent.change(input, { target: { value: 'Gatekeeper_Ops Host' } });
     expect(input.value).toBe('gatekeeper-ops-host');
     expect(screen.getByTestId('launcher-intended-gate-id-adjusted').textContent).toContain(

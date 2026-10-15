@@ -15,6 +15,9 @@ export interface ConnectorDenyListState {
   readonly saving: boolean;
   readonly error: unknown | null;
   readonly toggle: (name: string) => void;
+  /** Allows (or refuses) every name in `names` at once — the checklist's "全部允许 / 全部停用",
+   *  applied to whatever the filter currently shows (field-inventory #10). */
+  readonly setAllowed: (names: readonly string[], allowed: boolean) => void;
   /** Saves immediately, no confirm — used by `requestSave` itself when nothing would be newly
    *  disabled, and kept exported for anything that wants the un-gated save directly. */
   readonly save: () => Promise<void>;
@@ -93,6 +96,14 @@ export function useConnectorDenyList(
     );
   }
 
+  function setAllowed(names: readonly string[], allowed: boolean): void {
+    setDisabled((prev) =>
+      allowed
+        ? prev.filter((existing) => !names.includes(existing))
+        : [...prev, ...names.filter((name) => !prev.includes(name))],
+    );
+  }
+
   /** Throws on failure — the shared body for both `save` (catches, for the un-gated direct path)
    *  and `confirmSave` (left to throw, for `Confirm`'s own error banner). */
   async function commitSave(): Promise<void> {
@@ -143,6 +154,7 @@ export function useConnectorDenyList(
     saving,
     error,
     toggle,
+    setAllowed,
     save,
     newlyDisabled,
     confirmOpen,

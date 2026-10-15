@@ -84,7 +84,7 @@ describe('ActionRequestDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onApprove).toHaveBeenLastCalledWith('ar-1', { alwaysAllow: false });
 
-    fireEvent.change(screen.getByLabelText('Decision reason'), {
+    fireEvent.change(screen.getByLabelText('决定理由'), {
       target: { value: '  change window  ' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
@@ -99,12 +99,12 @@ describe('ActionRequestDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onApprove).not.toHaveBeenCalled();
     expect(screen.getByRole('alert').textContent).toContain('必须填写批准理由');
-    expect(screen.getByLabelText('Decision reason').getAttribute('aria-required')).toBe('true');
+    expect(screen.getByLabelText('决定理由').getAttribute('aria-required')).toBe('true');
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
     expect(onReject).toHaveBeenCalledWith('ar-1', undefined);
 
-    fireEvent.change(screen.getByLabelText('Decision reason'), { target: { value: 'ok' } });
+    fireEvent.change(screen.getByLabelText('决定理由'), { target: { value: 'ok' } });
     expect(screen.queryByRole('alert')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onApprove).toHaveBeenCalledWith('ar-1', { alwaysAllow: false, reason: 'ok' });

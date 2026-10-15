@@ -145,7 +145,7 @@ export function auditActorSource(t: Translate): PickerSource {
       return dedupe(
         page.items.map((row) => ({
           id: row.actorPrincipalId,
-          label: names.get(row.actorPrincipalId) ?? t('未知主体', 'Unknown principal'),
+          label: names.get(row.actorPrincipalId) ?? t('未知成员', 'Unknown member'),
           detail: t(
             `最近：${formatRelative(row.createdAt)}`,
             `Last seen ${formatRelative(row.createdAt)}`,
@@ -244,11 +244,24 @@ export function provenanceNodeSource(kind: ProvenanceNodeKind, t: Translate): Pi
 
 type SourceFactory = (t: Translate) => PickerSource;
 
+/** Two options that read the same (two Workers both named `ops-runner`) carry their short id in
+ *  the label, so the picker never offers indistinguishable rows (#554 acceptance P2). */
+function withSameNameIds(options: readonly PickerOption[]): PickerOption[] {
+  const counts = new Map<string, number>();
+  for (const option of options) counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
+  return options.map((option) =>
+    (counts.get(option.label) ?? 0) > 1
+      ? { ...option, label: `${option.label} · ${option.id.slice(0, 8)}` }
+      : option,
+  );
+}
+
 function listSource<T>(
   name: CapabilityName,
   params: Record<string, unknown>,
   map: (row: T, t: Translate) => PickerOption,
   searchParam?: string,
+  finish: (options: readonly PickerOption[]) => readonly PickerOption[] = (options) => options,
 ): SourceFactory {
   return (t) => ({
     key: `${name}:${JSON.stringify(params)}`,
@@ -258,7 +271,7 @@ function listSource<T>(
         name,
         searchParam ? withQuery(params, searchParam, query) : params,
       );
-      return dedupe(page.items.map((row) => map(row, t)));
+      return finish(dedupe(page.items.map((row) => map(row, t))));
     },
   });
 }
@@ -321,6 +334,8 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
         detail: definition.kind,
       };
     },
+    undefined,
+    withSameNameIds,
   ),
   action_request: listSource<ActionRequestWire>(
     'list_action_requests',

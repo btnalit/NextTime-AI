@@ -22,7 +22,11 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
-import { workerDefinitionChoices } from '../../lib/tasks.js';
+import {
+  definitionVersions,
+  latestPerDefinition,
+  workerDefinitionChoices,
+} from '../../lib/tasks.js';
 import { Combobox } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -556,9 +560,10 @@ export function ProcedureEditor({
                             id={`${prefix}-definition`}
                             value={step.definitionId}
                             onChange={(event) => {
-                              const picked = workerDefinitions.find(
-                                (row) => row.id === event.target.value,
-                              );
+                              const picked = definitionVersions(
+                                workerDefinitions,
+                                event.target.value,
+                              )[0];
                               updateStep(index, {
                                 definitionId: event.target.value,
                                 ...(picked ? { version: String(picked.version) } : {}),
@@ -569,13 +574,15 @@ export function ProcedureEditor({
                             <option value="">
                               {t('选择一个 Worker 定义…', 'Choose a Worker definition…')}
                             </option>
-                            {workerDefinitionChoices(workerDefinitions).map((choice) => (
-                              <option key={`${choice.id}@${choice.version}`} value={choice.id}>
-                                {[choice.label, choice.version, choice.distinguisher]
-                                  .filter((part) => part !== undefined)
-                                  .join(' · ')}
-                              </option>
-                            ))}
+                            {workerDefinitionChoices(latestPerDefinition(workerDefinitions)).map(
+                              (choice) => (
+                                <option key={choice.id} value={choice.id}>
+                                  {[choice.label, choice.distinguisher]
+                                    .filter((part) => part !== undefined)
+                                    .join(' · ')}
+                                </option>
+                              ),
+                            )}
                           </Select>
                         ) : (
                           <Input
@@ -595,14 +602,50 @@ export function ProcedureEditor({
                         required
                         error={fieldError('version')}
                       >
-                        <Input
-                          id={`${prefix}-version`}
-                          type="number"
-                          min={1}
-                          value={step.version}
-                          onChange={(event) => updateStep(index, { version: event.target.value })}
-                          disabled={busy}
-                        />
+                        {/* field-inventory #26: the published versions of the picked definition
+                         *  are already loaded, so the version is chosen, not typed. A typed
+                         *  number remains only when the definition list could not be read. */}
+                        {workerDefinitions && workerDefinitions.length > 0 ? (
+                          <Select
+                            id={`${prefix}-version`}
+                            value={step.version}
+                            onChange={(event) => updateStep(index, { version: event.target.value })}
+                            disabled={busy}
+                            data-testid={`${prefix}-version`}
+                          >
+                            {step.definitionId === '' ? (
+                              <option value="">
+                                {t('先选 Worker 定义', 'Pick a definition first')}
+                              </option>
+                            ) : null}
+                            {step.definitionId !== '' &&
+                            step.version !== '' &&
+                            !definitionVersions(workerDefinitions, step.definitionId).some(
+                              (row) => String(row.version) === step.version,
+                            ) ? (
+                              <option value={step.version}>
+                                {t(
+                                  `v${step.version}（不在列表里）`,
+                                  `v${step.version} (not listed)`,
+                                )}
+                              </option>
+                            ) : null}
+                            {definitionVersions(workerDefinitions, step.definitionId).map((row) => (
+                              <option key={row.version} value={String(row.version)}>
+                                {`v${row.version}`}
+                              </option>
+                            ))}
+                          </Select>
+                        ) : (
+                          <Input
+                            id={`${prefix}-version`}
+                            type="number"
+                            min={1}
+                            value={step.version}
+                            onChange={(event) => updateStep(index, { version: event.target.value })}
+                            disabled={busy}
+                          />
+                        )}
                       </Field>
                     </div>
                   ) : null}

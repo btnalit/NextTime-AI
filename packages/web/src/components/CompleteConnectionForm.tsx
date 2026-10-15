@@ -354,12 +354,12 @@ export function CompleteConnectionForm({
         <Notice>
           {t(
             <>
-              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自主体{' '}
+              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自成员{' '}
               <span className="mono">{request.requestedBy.slice(0, 8)}</span>。
             </>,
             <>
-              Completing request <span className="mono">{request.id.slice(0, 8)}</span> from
-              principal <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
+              Completing request <span className="mono">{request.id.slice(0, 8)}</span> from member{' '}
+              <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
             </>,
           )}
         </Notice>

@@ -1,6 +1,6 @@
 import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import type { ActionRequestStatus } from '@nexttime/shared';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -26,7 +26,7 @@ import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
-import { MasterDetail } from './kit/master-detail.js';
+import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { PageHeader } from './kit/page-header.js';
 import { Select } from './kit/select.js';
 import { SkeletonRows } from './kit/skeleton.js';
@@ -85,6 +85,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const principalNames = usePrincipalNames(http);
   const gatekeeperNames = useGatekeeperNames(http);
   const [filter, setFilter] = useState<Filter>('pending');
+  const [historyList, setHistoryList] = useState<HistoryListShape>({
+    status: 'loading',
+    rowCount: 0,
+  });
   const queue = useApprovalQueue({ http, pushes, selectedId, permissions, toast, t });
   const { pending, rows, pendingCount, forbidden, selectedRow, detailError } = queue;
 
@@ -157,6 +161,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           ) : (
             <ApprovalHistoryTab
               http={http}
+              onListChange={setHistoryList}
               selectedId={selectedId}
               onSelect={onSelect}
               principalNames={principalNames}
@@ -175,10 +180,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           ) : undefined
         }
         detail={
-          filter === 'pending' &&
-          pending.state.status === 'ready' &&
-          rows.length === 0 &&
-          selectedId === undefined
+          (
+            filter === 'pending'
+              ? nothingToPick(pending.state.status, rows.length, selectedId)
+              : nothingToPick(historyList.status, historyList.rowCount, selectedId)
+          )
             ? null
             : detailContent
         }
@@ -414,6 +420,7 @@ function PendingList({
 
 interface ApprovalHistoryTabProps {
   readonly http: CapabilityCaller;
+  readonly onListChange: (shape: HistoryListShape) => void;
   readonly selectedId?: string;
   readonly onSelect: (actionRequestId: string | null) => void;
   readonly principalNames: ReadonlyMap<string, string>;
@@ -426,8 +433,16 @@ interface ApprovalHistoryTabProps {
  * `useCapabilityList`'s `loadMore`. Its own component so the capability call only fires while this
  * tab is actually selected.
  */
+/** What the history list currently offers, reported up so the page can drop the "pick one"
+ *  placeholder when there is nothing to pick. */
+interface HistoryListShape {
+  readonly status: 'loading' | 'ready' | 'error';
+  readonly rowCount: number;
+}
+
 function ApprovalHistoryTab({
   http,
+  onListChange,
   selectedId,
   onSelect,
   principalNames,
@@ -445,6 +460,10 @@ function ApprovalHistoryTab({
   const forbidden = history.state.status === 'error' && isForbiddenError(history.state.error);
   const rows = history.state.status === 'ready' ? history.state.data.items : [];
   const nextCursor = history.state.status === 'ready' ? history.state.data.nextCursor : undefined;
+  const listStatus = history.state.status;
+  useEffect(() => {
+    onListChange({ status: listStatus, rowCount: rows.length });
+  }, [onListChange, listStatus, rows.length]);
 
   return (
     <div className="stack">

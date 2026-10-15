@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  distinctNames,
   excerpt,
   formatAuditActor,
   formatDateTime,
@@ -210,5 +211,22 @@ describe('format — time zone label and calendar boundary across real zones', (
     expect(formatDateTime('2026-09-03T12:00:00.000Z', now)).toBe('09-03 17:30 (UTC+5:30)');
     // A day earlier at the same UTC instant is exactly one IST calendar day back.
     expect(formatRelative('2026-09-02T12:00:00.000Z', now)).toBe('昨天 17:30');
+  });
+});
+
+describe('distinctNames (#554 acceptance P2)', () => {
+  it('adds the short id only to names two ids share, and returns the same map when none do', () => {
+    const shared = new Map([
+      ['aaaaaaaa-1111', 'ops-runner'],
+      ['bbbbbbbb-2222', 'ops-runner'],
+      ['cccccccc-3333', 'collector'],
+    ]);
+    expect([...distinctNames(shared).values()]).toEqual([
+      'ops-runner · aaaaaaaa',
+      'ops-runner · bbbbbbbb',
+      'collector',
+    ]);
+    const unique = new Map([['aaaaaaaa-1111', 'ops-runner']]);
+    expect(distinctNames(unique)).toBe(unique);
   });
 });

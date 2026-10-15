@@ -13,7 +13,7 @@ import { ownEntry } from './own.js';
  *
  * Capabilities read as commands ("批准动作请求"); audit events that are not capability names read
  * as things that happened ("动作请求已批准"). Terminology follows the console: 门 / 门实例, 接入包,
- * 动作请求, 流程, Skill, 事实, 主体, 授权, 审批, 供应商, 外部运行时, 智能体.
+ * 动作请求, 流程, Skill, 事实, 成员, 授权, 审批, 供应商, 外部运行时, 智能体.
  *
  * Pure data plus two lookups; the active language is picked by the caller's `t`, same as
  * `lib/labels.ts`. An unknown name (a capability added to the registry before its copy, an audit
@@ -288,7 +288,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   issue_service_handle: {
     zh: '签发外部运行时凭证',
     en: 'Issue service Handle',
-    zhHint: '为服务主体签发长期有效的 Handle 凭证。',
+    zhHint: '为服务账号签发长期有效的 Handle 凭证。',
     enHint: 'Issues a long-lived Handle for a service principal.',
   },
   list_available_gate_instances: {
@@ -552,7 +552,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   grant_capability: {
     zh: '授予门的使用权',
     en: 'Grant gate access',
-    zhHint: '授权某个主体使用一个门。',
+    zhHint: '授权某个成员使用一个门。',
     enHint: 'Grants a principal access to one gate.',
   },
   revoke_capability: {
@@ -582,7 +582,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   list_grants: {
     zh: '查看授权',
     en: 'List grants',
-    zhHint: '列出能力授权，可按主体筛选。',
+    zhHint: '列出能力授权，可按成员筛选。',
     enHint: 'Lists capability grants, optionally for one principal.',
   },
   list_policies: {
@@ -730,7 +730,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   audit_query: {
     zh: '查询审计记录',
     en: 'Query audit log',
-    zhHint: '按主体、动作或资源查询本工作区的审计。',
+    zhHint: '按成员、动作或资源查询本工作区的审计。',
     enHint: "Queries this workspace's audit log by actor, action or resource.",
   },
   reconstruct: {
@@ -752,13 +752,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   list_principals: {
     zh: '查看成员',
     en: 'List members',
-    zhHint: '列出工作区里的全部主体。',
+    zhHint: '列出工作区里的全部成员和服务账号。',
     enHint: 'Lists every principal in the workspace.',
   },
   create_principal: {
-    zh: '创建服务主体',
+    zh: '创建服务账号',
     en: 'Create service principal',
-    zhHint: '创建自动化用的服务主体及其 API 密钥。',
+    zhHint: '创建自动化用的服务账号及其 API 密钥。',
     enHint: 'Creates a service principal for automation, with its API key.',
   },
   add_member: {
@@ -770,19 +770,19 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   set_principal_role: {
     zh: '修改成员角色',
     en: 'Change member role',
-    zhHint: '修改成员或服务主体在本工作区的角色。',
+    zhHint: '修改成员或服务账号在本工作区的角色。',
     enHint: "Changes a member's or service principal's role here.",
   },
   rotate_api_key: {
     zh: '轮换 API 密钥',
     en: 'Rotate API key',
-    zhHint: '为服务主体换新密钥，旧密钥立即失效。',
+    zhHint: '为服务账号换新密钥，旧密钥立即失效。',
     enHint: "Rotates a service principal's key; the old one stops working at once.",
   },
   disable_principal: {
     zh: '停用成员',
     en: 'Disable member',
-    zhHint: '停用主体，它的密钥和凭证立即失效。',
+    zhHint: '停用成员或服务账号，它的密钥和凭证立即失效。',
     enHint: 'Disables a principal; its key and Handles stop working at once.',
   },
   get_workspace: {
@@ -1476,15 +1476,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint: 'The host CLI created a workspace.',
   },
   'cli.principal_added': {
-    zh: '命令行添加主体',
+    zh: '命令行添加成员',
     en: 'Principal added via CLI',
-    zhHint: '主机命令行向工作区添加了一个主体。',
+    zhHint: '主机命令行向工作区添加了一个成员或服务账号。',
     enHint: 'The host CLI added a principal to a workspace.',
   },
   'cli.service_handle_issued': {
     zh: '命令行签发服务凭证',
     en: 'Service Handle issued via CLI',
-    zhHint: '主机命令行为服务主体签发了凭证。',
+    zhHint: '主机命令行为服务账号签发了凭证。',
     enHint: 'The host CLI issued a Handle for a service principal.',
   },
   'cli.platform_admin_created': {

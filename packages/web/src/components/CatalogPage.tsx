@@ -67,7 +67,7 @@ import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
 import { KeyValue, type KeyValueItem } from './kit/key-value.js';
 import { List, ListRow } from './kit/list-row.js';
-import { MasterDetail } from './kit/master-detail.js';
+import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { RefChip } from './kit/ref-chip.js';
@@ -1027,11 +1027,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     <>
       <MasterDetail
         list={list}
-        detail={
-          operations.state.status === 'ready' && rows.length === 0 && itemId === undefined
-            ? null
-            : detailContent
-        }
+        detail={nothingToPick(operations.state.status, rows.length, itemId) ? null : detailContent}
         open={itemId !== undefined}
         onClose={() => onSelectItem(null)}
         sheetTitle={t('Operation 详情', 'Operation detail')}
@@ -1489,7 +1485,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     <MasterDetail
       list={list}
       detail={
-        skills.state.status === 'ready' && rows.length === 0 && itemId === undefined
+        !showEditor && nothingToPick(skills.state.status, rows.length, itemId)
           ? null
           : detailContent
       }
@@ -1849,7 +1845,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     <MasterDetail
       list={list}
       detail={
-        procedures.state.status === 'ready' && rows.length === 0 && itemId === undefined
+        !showEditor && nothingToPick(procedures.state.status, rows.length, itemId)
           ? null
           : detailContent
       }

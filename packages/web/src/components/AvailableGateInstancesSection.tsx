@@ -271,9 +271,12 @@ function AvailableGateRow({
             testId={`enable-gate-${row.gateId}`}
           />
         ) : (
-          <span className="muted">
-            {t('未启用（由所有者启用）', 'Not enabled (owner enables)')}
-          </span>
+          // #554 acceptance (242① class): not a bare "owner enables" — the request to send them.
+          <AskOwnerToEnable
+            compact
+            gateName={row.displayName}
+            testId={`available-gate-ask-owner-${row.gateId}`}
+          />
         )}
         {publishedCount !== null ? (
           <Notice>

@@ -196,3 +196,18 @@ export function excerpt(value: unknown, max = 120): string | undefined {
 export function redactSensitive(value: unknown): unknown {
   return maskSecretFields(value);
 }
+
+/** Two different ids that share a name (two Workers both called `ops-runner`, two gates both
+ *  called `prod-db`) would render as identical chips; each such name gains its short id, so the
+ *  reader can tell them apart without hovering (#554 acceptance P2). */
+export function distinctNames(names: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  const counts = new Map<string, number>();
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  if ([...counts.values()].every((count) => count === 1)) return names;
+  return new Map(
+    [...names].map(([id, name]) => [
+      id,
+      (counts.get(name) ?? 0) > 1 ? `${name} · ${shortId(id)}` : name,
+    ]),
+  );
+}

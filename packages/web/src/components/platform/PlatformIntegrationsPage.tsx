@@ -14,7 +14,7 @@ import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Select } from '../ui/Field.js';
+import { Input, Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
@@ -395,6 +395,13 @@ function ConnectorDenyList({
   const t = useT();
   const denyList = useConnectorDenyList(http, connector, onChanged);
   const { instances } = denyList;
+  const [filter, setFilter] = useState('');
+  const needle = filter.trim().toLowerCase();
+  const shown =
+    needle === ''
+      ? denyList.names
+      : denyList.names.filter((name) => name.toLowerCase().includes(needle));
+  const allowedCount = denyList.names.filter((name) => !denyList.disabled.includes(name)).length;
 
   return (
     <div
@@ -420,17 +427,64 @@ function ConnectorDenyList({
       ) : denyList.names.length === 0 ? (
         <p className="text-3">{t('还没有已知的 Operation', 'No known Operations yet')}</p>
       ) : (
-        denyList.names.map((name) => (
-          <label className="checkbox" key={name}>
-            <input
-              type="checkbox"
-              checked={!denyList.disabled.includes(name)}
-              onChange={() => denyList.toggle(name)}
-              disabled={denyList.saving}
+        <>
+          {/* field-inventory #10: a connector can announce dozens of Operations — find one by
+           *  name, and allow / refuse everything the filter shows in one click. */}
+          <div className="row-wrap">
+            <Input
+              aria-label={t('筛选操作', 'Filter operations')}
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder={t('按名称筛选…', 'Filter by name…')}
+              mono
+              data-testid={`connector-ops-filter-${connector.name}`}
             />
-            <span className="mono">{name}</span>
-          </label>
-        ))
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => denyList.setAllowed(shown, true)}
+              loading={denyList.saving}
+              data-testid={`connector-ops-allow-all-${connector.name}`}
+            >
+              {needle === '' ? t('全部允许', 'Allow all') : t('允许筛出的', 'Allow shown')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => denyList.setAllowed(shown, false)}
+              loading={denyList.saving}
+              data-testid={`connector-ops-deny-all-${connector.name}`}
+            >
+              {needle === '' ? t('全部停用', 'Disable all') : t('停用筛出的', 'Disable shown')}
+            </Button>
+            <span
+              className="text-3 text-small"
+              data-testid={`connector-ops-count-${connector.name}`}
+            >
+              {t(
+                `允许 ${allowedCount} / ${denyList.names.length} 个`,
+                `${allowedCount} of ${denyList.names.length} allowed`,
+              )}
+            </span>
+          </div>
+          {shown.length === 0 ? (
+            <p className="text-3 text-small">
+              {t('没有名称匹配的操作。', 'No operation name matches.')}
+            </p>
+          ) : (
+            shown.map((name) => (
+              <label className="checkbox" key={name}>
+                <input
+                  type="checkbox"
+                  checked={!denyList.disabled.includes(name)}
+                  onChange={() => denyList.toggle(name)}
+                  disabled={denyList.saving}
+                />
+                <span className="mono">{name}</span>
+              </label>
+            ))
+          )}
+        </>
       )}
       <PlatformError error={denyList.error} title={t('无法保存', 'Could not save')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -745,7 +799,7 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
             <thead>
               <tr>
                 <th>{t('工作区', 'Workspace')}</th>
-                <th>{t('主体', 'Principal')}</th>
+                <th>{t('所属成员', 'Member')}</th>
                 <th>{t('会话种类', 'Session kind')}</th>
                 <th>{t('创建时间', 'Created')}</th>
                 <th>{t('过期', 'Expires')}</th>

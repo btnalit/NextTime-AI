@@ -27,7 +27,7 @@ describe('kit/RefChip', () => {
     const http = scriptedCaller(() => []);
     render(<RefChip kind="principal" id="p-1" name="Ada" http={http} testId="chip" />);
     expect(screen.getByText('Ada')).toBeTruthy();
-    expect(screen.getByText('主体')).toBeTruthy();
+    expect(screen.getByText('成员')).toBeTruthy();
     expect(http.call).not.toHaveBeenCalled();
   });
 

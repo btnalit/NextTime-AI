@@ -180,7 +180,7 @@ export function ActionRequestDetail({
                   )
                 : t('理由（可选，随决定记入审计）', 'Reason (optional, recorded with the decision)')
             }
-            aria-label="Decision reason"
+            aria-label={t('决定理由', 'Decision reason')}
             aria-required={reasonRequired || undefined}
             aria-describedby={reasonError ? `${reasonId}-error` : undefined}
             rows={2}
