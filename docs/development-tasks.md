@@ -3915,6 +3915,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 测试：`invoke.integration.test.ts` R-58 区块 6 个确定性屏障测试（迟到的反应、reaper 的 `terminate` 钩子里先跑轮询、取消清扫中跑崩溃反应、取消中看到 `terminated: requested`、取消 UPDATE 未提交时 spawn 等锁（`pg_stat_activity` 判定）、认领后无 Handle），各自去掉修复即红；原「与取消并发完成」用例改在取消的 UPDATE 前注入完成。
 - 剩余崩溃窗口（bump 提交后进程崩溃、取消两个事务之间崩溃）与增量审查的三条（`exited` / `terminated` 守卫无测试、取消后回收前崩溃、终态 Task 不清扫）并进遗留 206；纵深防御见 207。历史影响统计见 `release.md` §3.22。
 
+**控制台审计剩余 P1：可读的名称与按角色的下一步（#541，2026-10-15 合入，无迁移；审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16）**
+
+- 内核：`models.json` 的 `providers` 缺省为空（`{}` 是空目录，不再 503）；`platform_overview` 新增 `modelsCatalog: 'ok' | 'unreadable'`；`queryRecentPlatformWrites` 在最新 1000 条平台审计里取改动（读操作 = 注册表里 `capabilityHasSideEffects` 为假的能力，与控制台审计页默认过滤同一判定），概览与 `platform_status` 共用。契约快照只多了 `modelsCatalog`。
+- 名称：`packages/web/src/lib/capability-labels.ts` 给全部能力、生命周期动作和其他审计动作配中文名与一句话说明，测试保证注册表每个能力都有、标签互不重复；审批详情、动作卡把 `policyDecision`、`actorRuntime` 原值换成中文。
+- 角色判定：`roleSatisfiesMinRole` / `roleMayUseCapability` 与 auditor 白名单移到 `@nexttime/shared`（内核 re-export，行为不变），并新增 `CapabilityName`（注册表能力名的联合类型）与 `isCapabilityName`；控制台所有接收能力名的入口只收 `CapabilityName`。`HttpClient.roleGate` 发请求前按本工作区角色（来自 `get_workspace`，60 秒内复用）预检，内核一定会拒的本地直接返回 `forbidden` 并广播 `nexttime:capability-refused-locally`；角色读不到时照常发，平台级能力不检查。403 或旧角色被拦时立即重读角色，角色变了广播 `nexttime:caller-role-changed`。
+- 路由：`lib/route-access.ts` 的 `ROUTE_REQUIRES` 给受限路由（审批、成员、审计、`platform*`）声明所需能力；侧栏 `roleMayOpen`、组件 `useCanOpen` / `RouteLink`（`components/kit/route-link.tsx`）、推送提示都问这张表，打不开时显示纯文字并写明谁能打开。
+- 守卫：`packages/web/src/role-gating.guard.test.ts`：能力名字面量都已注册；角色受限的读写要么同文件 `can('<name>')`，要么在 `WRITE_GATED_AT_ENTRY` / `READ_GATED_AT_ENTRY` 里写明入口（白名单只能缩小）；用到受限路由 href 生成器的文件必须问路由表。正则实现的局限见遗留 235 / 243。
+- 旅程：`packages/web/e2e/journeys/08-least-privilege.spec.ts` 用 operator / builder / member / auditor 四个账户打开侧栏可见的每一页并跟过所有站内链接，断言零 403、零本地拦截、没有只写着「你的角色不能看」的页；系统卡 gate 短 id 加 `data-volatile` 后截图时遮掉。
+- 未改与后续：13 个多字段表单的灰按钮（遗留 244）；验收与审查的 P2 / P3 见遗留 242、243、245、246。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
