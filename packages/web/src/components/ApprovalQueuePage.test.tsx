@@ -377,6 +377,8 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     await screen.findByTestId('approval-history-forbidden');
     expect(screen.queryByTestId('approval-drawer-empty')).toBeNull();
+    // No status filters for a history the role cannot read (#559 acceptance P3).
+    expect(screen.queryByTestId('approval-history-toolbar')).toBeNull();
     forbiddenView.unmount();
 
     let page = 0;

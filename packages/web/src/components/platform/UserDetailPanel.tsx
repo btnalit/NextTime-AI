@@ -420,7 +420,7 @@ export function UserDetailPanel({
         <div className="stack-s" data-testid="user-disable-confirm">
           <Notice tone="warn">
             {t(
-              '停用会立即吊销该用户的全部控制台会话与各 Principal 的工作区会话；对话与上下文保留。',
+              '停用会立即吊销该用户的全部控制台会话和各工作区会话；对话与上下文保留。',
               'Disabling revokes every console and workspace session immediately; conversations and context are kept.',
             )}
           </Notice>

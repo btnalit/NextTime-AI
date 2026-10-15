@@ -256,7 +256,7 @@ src/
                           read-only membership list) BindApiKeyForm (P-A1: bind an existing API
                           key's membership to the current admin, from the overview page)
                           ChatListPage ChatPage ApprovalQueuePage
-                          ActionRequestDetail ActionRequestCard TasksPage TaskDetail
+                          ActionRequestCard TasksPage TaskDetail
                           ConnectionsPage (now at /govern/systems) CompleteConnectionForm
                           RequestConnectionForm RegisteredSystemsSection GatekeeperDetailDrawer
                           ToolCallRowView TurnStatusBadge SystemStatusLineView

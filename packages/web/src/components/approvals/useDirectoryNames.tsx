@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useResource } from '../../hooks/useResource.js';
@@ -6,6 +6,7 @@ import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, PrincipalRow } from '../../lib/governance.js';
+import { sameNameIds } from '../../lib/same-name.js';
 import { useRefNames } from '../ui/RefChip.js';
 
 /**
@@ -35,6 +36,8 @@ export interface PrincipalDirectory {
    *  failed (`failed` tells the two apart from a genuinely empty workspace). */
   readonly rows: readonly PrincipalRow[] | undefined;
   readonly names: ReadonlyMap<string, string>;
+  /** Ids whose display name another member also has — show `SameNameId` after those names. */
+  readonly same: ReadonlySet<string>;
   readonly failed: boolean;
 }
 
@@ -53,8 +56,9 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
   const reads = can('list_principals');
   const markDenied = permissions.markDenied;
   const load = useCallback(async (): Promise<PrincipalLoad> => {
-    if (reads === null) return new Promise<never>(() => undefined);
-    if (reads === false) return { items: [], failed: true };
+    if (reads !== true) {
+      return reads === null ? new Promise<never>(() => undefined) : { items: [], failed: true };
+    }
     try {
       let items: readonly PrincipalRow[] = [];
       let cursor: string | undefined;
@@ -75,7 +79,16 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
   const principals = useResource(load);
   const loaded = principals.state.status === 'ready' ? principals.state.data : undefined;
   const names = useRefNames(loaded?.items);
-  return { rows: loaded?.items, names, failed: loaded?.failed ?? false };
+  const same = useMemo(
+    () =>
+      sameNameIds(
+        loaded?.items,
+        (row) => row.id,
+        (row) => row.displayName,
+      ),
+    [loaded?.items],
+  );
+  return { rows: loaded?.items, names, same, failed: loaded?.failed ?? false };
 }
 
 export function usePrincipalNames(http: CapabilityCaller): ReadonlyMap<string, string> {
@@ -91,6 +104,8 @@ export interface GatekeeperDirectory {
    *  treatment (it is member-readable and small enough not to paginate past page one in practice). */
   readonly rows: readonly GatekeeperListRow[] | undefined;
   readonly names: ReadonlyMap<string, string>;
+  /** Ids whose name another gate also has — show `SameNameId` after those names. */
+  readonly same: ReadonlySet<string>;
 }
 
 /**
@@ -109,7 +124,16 @@ export interface GatekeeperDirectory {
 export function useGatekeeperDirectory(http: CapabilityCaller): GatekeeperDirectory {
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const rows = gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined;
-  return { rows, names: useRefNames(rows) };
+  const same = useMemo(
+    () =>
+      sameNameIds(
+        rows,
+        (row) => row.id,
+        (row) => row.name,
+      ),
+    [rows],
+  );
+  return { rows, names: useRefNames(rows), same };
 }
 
 export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, string> {

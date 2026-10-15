@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
@@ -75,6 +76,11 @@ export function PolicyEditSheet({
   onSaved,
 }: PolicyEditSheetProps) {
   const t = useT();
+  const gateSame = sameNameIds(
+    gatekeepers,
+    (gate) => gate.id,
+    (gate) => gate.name,
+  );
   const isEdit = editing !== undefined;
 
   const [gateScope, setGateScope] = useState<string>(editing?.gatekeeperId ?? ALL_GATES);
@@ -238,7 +244,7 @@ export function PolicyEditSheet({
               ) : null}
               {gatekeepers.map((gate) => (
                 <option key={gate.id} value={gate.id}>
-                  {gate.name}
+                  {withSameNameId(gate.name, gate.id, gateSame)}
                 </option>
               ))}
             </Select>

@@ -71,7 +71,7 @@ export function TaskDetail({
   principalNames,
   onOpenApproval,
   onCancel,
-  canCancel = true,
+  canCancel = false,
 }: TaskDetailProps) {
   const t = useT();
   const [confirmOpen, setConfirmOpen] = useState(false);

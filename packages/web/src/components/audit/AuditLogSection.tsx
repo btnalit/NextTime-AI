@@ -22,6 +22,7 @@ import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel, roleLabel } from '../../lib/labels.js';
+import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -143,6 +144,11 @@ export function AuditLogSection({
   }
 
   const actorSelect = !principalsUnavailable;
+  const actorSame = sameNameIds(
+    principals,
+    (p) => p.id,
+    (p) => p.displayName,
+  );
 
   return (
     <section className="section" aria-labelledby="audit-query-title" data-testid="audit-log">
@@ -174,7 +180,8 @@ export function AuditLogSection({
               <option value="">{t('任意', 'Any')}</option>
               {(principals ?? []).map((principal) => (
                 <option key={principal.id} value={principal.id}>
-                  {principal.displayName} · {roleLabel(principal.role, t)}
+                  {withSameNameId(principal.displayName, principal.id, actorSame)} ·{' '}
+                  {roleLabel(principal.role, t)}
                 </option>
               ))}
               {actor !== '' && !(principals ?? []).some((p) => p.id === actor) ? (
@@ -195,10 +202,10 @@ export function AuditLogSection({
             onChange={setActor}
             source={actorSource}
             refusedNote={t(
-              '也无法读取审计记录，请直接粘贴 principal ID。',
-              'The audit log is not readable either — paste a principal id.',
+              '也无法读取审计记录，请直接粘贴成员 id。',
+              'The audit log is not readable either — paste a member id.',
             )}
-            placeholder={t('粘贴 principal ID，或从下方选择', 'Paste a principal id or pick below')}
+            placeholder={t('粘贴成员 id，或从下方选择', 'Paste a member id or pick below')}
             testId="audit-actor-input"
           />
         )}

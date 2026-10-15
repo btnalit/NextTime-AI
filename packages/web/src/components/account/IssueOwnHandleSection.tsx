@@ -16,6 +16,7 @@ import {
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
+import { SameNameId } from '../kit/same-name-id.js';
 import { StillNeeded } from '../kit/still-needed.js';
 
 const SECONDS_PER_HOUR = 3600;
@@ -105,7 +106,9 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const entryCeiling = entryCeilingCapabilities();
   // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
   // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
-  const gatekeeperOptions = useGatekeeperDirectory(http).rows ?? [];
+  const gatekeeperDirectory = useGatekeeperDirectory(http);
+  const gatekeeperOptions = gatekeeperDirectory.rows ?? [];
+  const gateSame = gatekeeperDirectory.same;
 
   const [ttlHours, setTtlHours] = useState(String(DEFAULT_TTL_HOURS));
   const [capabilitiesUnrestricted, setCapabilitiesUnrestricted] = useState(true);
@@ -274,7 +277,10 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
                     onChange={() => toggleGatekeeper(row.id)}
                     disabled={submitting}
                   />
-                  <span>{row.name}</span>
+                  <span>
+                    {row.name}
+                    <SameNameId id={row.id} same={gateSame} />
+                  </span>
                 </label>
               ))
             )}

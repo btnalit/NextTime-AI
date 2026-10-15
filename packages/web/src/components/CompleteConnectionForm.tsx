@@ -16,6 +16,7 @@ import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
+import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { ErrorDetails } from './kit/error-details.js';
 import { Button } from './ui/Button.js';
@@ -642,6 +643,12 @@ function OnBehalfOfField({
       : [];
   const failed = principals.state.status === 'error';
   const requester = request ? options.find((row) => row.id === request.requestedBy) : undefined;
+  const same = sameNameIds(
+    options,
+    (row) => row.id,
+    (row) => row.displayName,
+  );
+  const requesterName = requester ? withSameNameId(requester.displayName, requester.id, same) : '';
 
   return (
     <Field
@@ -650,8 +657,8 @@ function OnBehalfOfField({
       hint={
         failed
           ? t(
-              '读不到成员列表，可以直接填对方的 principal id；留空则默认是申请人，或你自己。',
-              'Could not read the member list — enter their principal id directly, or leave it empty for the requester (or you).',
+              '读不到成员列表，可以直接填对方的成员 id；留空则默认是申请人，或你自己。',
+              'Could not read the member list — enter their member id directly, or leave it empty for the requester (or you).',
             )
           : t(
               '这份凭证归属于谁的账户。默认是申请人，或你自己。',
@@ -665,7 +672,7 @@ function OnBehalfOfField({
           value={value}
           onChange={(event) => onChange(event.target.value.trim())}
           disabled={disabled}
-          placeholder={t('principal ID（可选）', 'principal id (optional)')}
+          placeholder={t('成员 id（可选）', 'Member id (optional)')}
           data-testid="cc-obo-manual"
           mono
         />
@@ -681,17 +688,14 @@ function OnBehalfOfField({
             {principals.state.status === 'loading'
               ? t('正在加载成员…', 'Loading members…')
               : requester
-                ? t(
-                    `默认：申请人 ${requester.displayName}`,
-                    `Default: the requester, ${requester.displayName}`,
-                  )
+                ? t(`默认：申请人 ${requesterName}`, `Default: the requester, ${requesterName}`)
                 : request
                   ? t('默认：申请人', 'Default: the requester')
                   : t('默认：你自己', 'Default: you')}
           </option>
           {options.map((row) => (
             <option key={row.id} value={row.id}>
-              {row.displayName} ({roleLabel(row.role, t)})
+              {withSameNameId(row.displayName, row.id, same)} ({roleLabel(row.role, t)})
             </option>
           ))}
         </Select>

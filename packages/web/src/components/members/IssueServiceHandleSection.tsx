@@ -4,6 +4,7 @@ import { capabilityModeLabel } from '../../lib/catalog-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { CopyButton } from '../kit/copy-button.js';
@@ -64,6 +65,9 @@ export interface IssueServiceHandleSectionProps {
   /** Fires once the reader has acknowledged the one-time Handle (`CreatePrincipalForm`'s own
    *  `onDone` precedent) — `MembersPage` closes the drawer this renders inside. */
   readonly onDone: () => void;
+  /** Opens the "create a service account" flow — offered right in the notice when there is no
+   *  service account yet, instead of pointing at a menu elsewhere on the page (#559 acceptance). */
+  readonly onCreateServiceAccount?: () => void;
 }
 
 function parseNames(raw: string): readonly string[] {
@@ -100,6 +104,7 @@ export function IssueServiceHandleSection({
   http,
   principals,
   onDone,
+  onCreateServiceAccount,
 }: IssueServiceHandleSectionProps) {
   const t = useT();
   // S8 W4 (leftover 88 "内部服务主体...会列出它们，可以给内部主体签 Handle"): the platform's own
@@ -107,6 +112,11 @@ export function IssueServiceHandleSection({
   // as an external runtime — they never appear in this picker.
   const servicePrincipals = principals.filter(
     (principal) => principal.kind === 'service' && !principal.disabledAt && !principal.internal,
+  );
+  const serviceSame = sameNameIds(
+    servicePrincipals,
+    (p) => p.id,
+    (p) => p.displayName,
   );
   const maxTtlDays = Math.floor(serviceHandleMaxTtlSeconds() / SECONDS_PER_DAY);
   const catalog = useMemo(() => handleScopeCapabilities(), []);
@@ -244,10 +254,29 @@ export function IssueServiceHandleSection({
     <div className="stack" data-testid="issue-service-handle-section">
       {servicePrincipals.length === 0 ? (
         <Notice testId="issue-service-handle-no-principal">
-          {t(
-            '还没有 service Principal — 先点上面的「服务凭证」按钮创建一个。',
-            'No service Principal yet — use the "Service credential" button above to create one first.',
-          )}
+          <span className="row-wrap">
+            <span>
+              {onCreateServiceAccount
+                ? t(
+                    '还没有服务账号。先创建一个，再回来签发。',
+                    'No service account yet. Create one first, then come back to issue.',
+                  )
+                : t(
+                    '还没有服务账号。先在「成员与授权」页右上角的「更多操作 → 服务凭证」里创建一个。',
+                    'No service account yet. Create one first under Members → More actions → Service credential.',
+                  )}
+            </span>
+            {onCreateServiceAccount ? (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={onCreateServiceAccount}
+                data-testid="issue-service-handle-create-account"
+              >
+                {t('创建服务账号', 'Create a service account')}
+              </Button>
+            ) : null}
+          </span>
         </Notice>
       ) : null}
 
@@ -267,7 +296,7 @@ export function IssueServiceHandleSection({
             onlyPrincipal
               ? t(
                   '工作区只有这一个服务账号，已自动选中。',
-                  'The only service principal in this workspace — selected for you.',
+                  'The only service account in this workspace — selected for you.',
                 )
               : undefined
           }
@@ -283,7 +312,7 @@ export function IssueServiceHandleSection({
             <option value="">{t('选择', 'Pick one')}</option>
             {servicePrincipals.map((principal) => (
               <option key={principal.id} value={principal.id}>
-                {principal.displayName}
+                {withSameNameId(principal.displayName, principal.id, serviceSame)}
               </option>
             ))}
           </Select>
@@ -326,8 +355,8 @@ export function IssueServiceHandleSection({
             </span>
             <span className="field-hint" style={{ margin: 0 }}>
               {t(
-                '只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。',
-                'Only handle-channel capabilities; member-management and platform ones are never offered.',
+                '这里只列出允许服务 Handle 使用的能力；成员管理与平台能力永远不在此列。',
+                'Only capabilities a service Handle may hold are listed; member-management and platform ones are never offered.',
               )}
             </span>
           </legend>

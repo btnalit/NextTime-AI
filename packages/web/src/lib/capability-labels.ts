@@ -289,7 +289,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '签发外部运行时凭证',
     en: 'Issue service Handle',
     zhHint: '为服务账号签发长期有效的 Handle 凭证。',
-    enHint: 'Issues a long-lived Handle for a service principal.',
+    enHint: 'Issues a long-lived Handle for a service account.',
   },
   list_available_gate_instances: {
     zh: '查看可启用门实例',
@@ -757,9 +757,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   },
   create_principal: {
     zh: '创建服务账号',
-    en: 'Create service principal',
+    en: 'Create service account',
     zhHint: '创建自动化用的服务账号及其 API 密钥。',
-    enHint: 'Creates a service principal for automation, with its API key.',
+    enHint: 'Creates a service account for automation, with its API key.',
   },
   add_member: {
     zh: '添加成员',
@@ -1485,7 +1485,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '命令行签发服务凭证',
     en: 'Service Handle issued via CLI',
     zhHint: '主机命令行为服务账号签发了凭证。',
-    enHint: 'The host CLI issued a Handle for a service principal.',
+    enHint: 'The host CLI issued a Handle for a service account.',
   },
   'cli.platform_admin_created': {
     zh: '命令行创建管理员',
