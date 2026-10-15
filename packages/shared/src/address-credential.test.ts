@@ -49,7 +49,7 @@ describe('addressCredential', () => {
     'ssh://deploy@db-1.example',
     'https://deploy@grafana.example',
     'deploy@db-1',
-    '10.0.0.0/24',
+    '198.51.100.0/24',
     '',
   ])('%s carries none', (address) => {
     expect(addressCredential(address)).toBeNull();
