@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.48.0](https://github.com/btnalit/NextTime-AI/compare/v0.47.0...v0.48.0) (2026-10-15)
+
+
+### Features
+
+* **console:** close the 234 field gaps, same-name and wording leftovers, and tighten the role-gating guard ([#559](https://github.com/btnalit/NextTime-AI/issues/559)) ([b6f936e](https://github.com/btnalit/NextTime-AI/commit/b6f936e6674d8d9a9a95dec2868db2fe4c7870b6))
+* **console:** close the console stage's DoD, ux-lint and role-gating gaps ([#554](https://github.com/btnalit/NextTime-AI/issues/554)) ([60f9e37](https://github.com/btnalit/NextTime-AI/commit/60f9e370b16ab677dbf40c1de5e36b5ceadba71e))
+
+
+### Bug Fixes
+
+* **deploy:** keep credentials out of caddy's logs, and never end a host apply with RESULT ok when work is left ([#556](https://github.com/btnalit/NextTime-AI/issues/556)) ([e526314](https://github.com/btnalit/NextTime-AI/commit/e5263147104aa8e603dd02c7a1d01cba9bd68418))
+
 ## [0.47.0](https://github.com/btnalit/NextTime-AI/compare/v0.46.0...v0.47.0) (2026-10-15)
 
 
