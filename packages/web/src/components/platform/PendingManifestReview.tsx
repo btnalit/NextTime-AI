@@ -133,7 +133,7 @@ export function PendingManifestReview({
           }
           title={t('采用门的新清单', "Adopt the gate's new manifest")}
           description={t(
-            '采用后，之后在工作区启用这个门会导入这份清单，工作区 owner 也可以按它对齐已部署的 Operation；已部署的不会自动改变。',
+            '采用后，之后在工作区启用这个门会导入这份清单，工作区所有者也可以按它对齐已部署的 Operation；已部署的不会自动改变。',
             'Once adopted, later workspace enables import this manifest and workspace owners can align their deployed operations to it; nothing deployed changes on its own.',
           )}
           target={displayName}

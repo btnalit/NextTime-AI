@@ -1,5 +1,6 @@
 import type { ExplainResultWire, ExportProvResult } from '@nexttime/shared';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { type ProvenanceNodeKind, provenanceNodeSource } from '../../lib/audit-pickers.js';
@@ -13,6 +14,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
+import { capabilityHolders } from '../../lib/role-holders.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Select } from '../kit/select.js';
@@ -54,6 +56,7 @@ const IDLE: ExplainState = { busy: false, error: null, nodeId: null, result: nul
 export function ExplainSection({ http, requestedNodeId, principalNames }: ExplainSectionProps) {
   const t = useT();
   const canOpen = useCanOpen(http);
+  const ask = useAskForAccess(http);
   const toast = useToast();
   const [nodeId, setNodeId] = useState(requestedNodeId ?? '');
   // Which recent nodes the picker offers — `explain` itself takes any of the three untyped.
@@ -152,12 +155,13 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改为从最近的决定中选择。',
-            'Fact and activity suggestions come from the audit log (auditor role) — paste an id, or suggest from recent decisions.',
+            `事实与活动的候选来自审计记录（只有${capabilityHolders('audit_query', t)}能读）；请粘贴 ID，或改为从最近的决定中选择。`,
+            `Fact and activity suggestions come from the audit log (only ${capabilityHolders('audit_query', t)} can read it) — paste an id, or suggest from recent decisions.`,
           )}
           disabled={state.busy}
           testId="explain-node-id"
         />
+        {/* ux-lint-allow-disabled: one field — nothing typed or picked yet. */}
         <Button type="submit" variant="primary" loading={state.busy} disabled={!nodeId.trim()}>
           {t('解释', 'Explain')}
         </Button>
@@ -173,9 +177,10 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         isForbiddenError(exportError) ? (
           <Notice tone="warn" testId="explain-export-forbidden">
             {t(
-              '导出溯源只有审计员和工作区所有者能做；要导出，请工作区所有者把你的角色改为 auditor。',
-              'Only auditors and the workspace owner can export provenance; to export, ask the workspace owner to make you an auditor.',
+              '导出溯源只有审计员和工作区所有者能做。',
+              'Only auditors and the workspace owner can export provenance. ',
             )}
+            {ask('auditor', 'export')}
           </Notice>
         ) : (
           <ErrorBanner

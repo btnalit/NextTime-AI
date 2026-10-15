@@ -22,7 +22,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
-import { definitionName } from '../../lib/tasks.js';
+import { workerDefinitionChoices } from '../../lib/tasks.js';
 import { Combobox } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -384,7 +384,7 @@ export function ProcedureEditor({
       ) : (
         <Notice testId="procedure-private-notice">
           {t(
-            '草稿只有你（提议者）和工作区的 owner、builder 可见，发布后所有成员可见；发布时每个 Operation / Worker 步骤引用的对象必须已发布。',
+            '草稿只有你（提议者）、工作区所有者和构建者可见，发布后所有成员可见；发布时每个 Operation / Worker 步骤引用的对象必须已发布。',
             'Until published, the draft is visible only to you, the workspace owner and builders; publishing resolves every Operation / Worker step against published objects.',
           )}
         </Notice>
@@ -496,6 +496,7 @@ export function ProcedureEditor({
                       </Select>
                     </Field>
                     <span className="grow" />
+                    {/* ux-lint-allow-disabled: the first step cannot move up. */}
                     <Button
                       variant="ghost"
                       size="s"
@@ -505,6 +506,7 @@ export function ProcedureEditor({
                     >
                       {t('上移', 'Up')}
                     </Button>
+                    {/* ux-lint-allow-disabled: the last step cannot move down. */}
                     <Button
                       variant="ghost"
                       size="s"
@@ -567,10 +569,11 @@ export function ProcedureEditor({
                             <option value="">
                               {t('选择一个 Worker 定义…', 'Choose a Worker definition…')}
                             </option>
-                            {workerDefinitions.map((row) => (
-                              <option key={`${row.id}@${row.version}`} value={row.id}>
-                                {definitionName([row], row.id, row.version) ?? row.id} v
-                                {row.version}
+                            {workerDefinitionChoices(workerDefinitions).map((choice) => (
+                              <option key={`${choice.id}@${choice.version}`} value={choice.id}>
+                                {[choice.label, choice.version, choice.distinguisher]
+                                  .filter((part) => part !== undefined)
+                                  .join(' · ')}
                               </option>
                             ))}
                           </Select>

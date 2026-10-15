@@ -20,6 +20,7 @@ import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { RefChip as KitRefChip } from '../kit/ref-chip.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -531,11 +532,14 @@ function RuntimeBody({
           // action, so it belongs at the table's own header, not inside any one row.
           <>
             {/* Audit P1-9: a disabled 回滚 says why — nothing the reader can fill in fixes it. */}
-            {canRollBack ? null : (
-              <span className="text-small text-3" data-testid="runtime-rollback-missing">
-                {t('没有可回滚的上一个镜像', 'No previous image to roll back to')}
-              </span>
-            )}
+            <StillNeeded
+              reason={
+                canRollBack
+                  ? null
+                  : t('没有可回滚的上一个镜像', 'No previous image to roll back to')
+              }
+              testId="runtime-rollback-missing"
+            />
             <Confirm
               tier="medium"
               open={rollbackOpen}
@@ -624,6 +628,11 @@ function RuntimeBody({
                 onClick={() => setRollOpen(true)}
                 loading={rolling}
                 disabled={needsRebuildCount === 0}
+                title={
+                  needsRebuildCount === 0
+                    ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
+                    : undefined
+                }
                 data-testid="runtime-roll-entry-containers"
               >
                 {selected.size > 0

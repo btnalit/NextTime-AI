@@ -36,7 +36,7 @@ import { OWNER_API_KEY, asAdmin, asOwner, createPlatformUser, goToByLabel } from
 const ROLES = ['operator', 'builder', 'member', 'auditor'] as const;
 
 /** Who a hint without a link must name (`components/readiness/readiness-copy.ts`'s `askFor`). */
-const NAMES_WHOM_TO_ASK = /工作区所有者|平台管理员|这位成员自己|builder/;
+const NAMES_WHOM_TO_ASK = /工作区所有者|平台管理员|这位成员自己|构建者/;
 
 /** Resolves once no `/api/cap/*` request is still in flight — the page's own reads are what the
  *  403 watcher judges, so they must have answered before the next page is opened. */

@@ -3,6 +3,7 @@ import { type WireUser, changePassword } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
 import { passwordLengthHint, passwordLengthProblem } from '../lib/password-rule.js';
+import { StillNeeded } from './kit/still-needed.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -164,11 +165,7 @@ export function ChangePasswordPage({
           >
             {t('更改密码', 'Change password')}
           </Button>
-          {missing.length > 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="change-password-missing">
-              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-            </span>
-          ) : null}
+          <StillNeeded items={missing} hidden={submitting} testId="change-password-missing" />
 
           <div className="row" style={{ justifyContent: 'center' }}>
             <Button

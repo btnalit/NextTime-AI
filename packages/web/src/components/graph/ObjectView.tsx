@@ -208,6 +208,7 @@ export function ObjectView({
                       data-testid="graph-as-of-input"
                     />
                   </Field>
+                  {/* ux-lint-allow-disabled: one field — no time picked yet. */}
                   <Button type="submit" size="s" variant="secondary" disabled={draftAt === ''}>
                     {t('应用', 'Apply')}
                   </Button>

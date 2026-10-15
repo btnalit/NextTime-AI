@@ -18,6 +18,7 @@ import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 export interface GrantGateFormProps {
@@ -425,7 +426,7 @@ function GrantGateFormBody({
           </span>
           <p className="field-hint">
             {t(
-              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予 operator 时，这位成员同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
+              '授权针对整个门的执行类 Operation：成员的入口 agent 可以经 Worker 请求这个门的全部已发布执行类 Operation（包括以后新发布的），仍按审批规则处理。授予操作员时，这位成员同时成为这个门上所有动作的审批者。只读 Operation 不需要授权，工作区里每个成员都能调用。',
               'A grant covers the gate’s execute-class operations: the member’s entry agent may request every published one through a Worker, including ones published later, still following the approval rules. Granted to an operator, it also makes them an approver of every action on this gate. Read operations need no grant — every member of the workspace can call them.',
             )}
           </p>
@@ -498,11 +499,7 @@ function GrantGateFormBody({
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        {missing.length > 0 && !submitting ? (
-          <span className="text-small text-3" data-testid="ggf-missing">
-            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-          </span>
-        ) : null}
+        <StillNeeded items={missing} hidden={submitting} testId="ggf-missing" />
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>
             {t('取消', 'Cancel')}

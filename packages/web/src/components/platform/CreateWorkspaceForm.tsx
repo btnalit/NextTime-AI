@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -55,6 +56,11 @@ export function CreateWorkspaceForm({
   const entryModelValue =
     entryModel !== null && entryModelOptions.includes(entryModel) ? entryModel : null;
   const ready = name.trim().length > 0 && ownerUserId !== '';
+  // DoD item 4: a disabled 新建 says what it still waits for (the field labels' own words).
+  const missing = [
+    name.trim().length > 0 ? null : t('填写名称', 'enter a name'),
+    ownerUserId !== '' ? null : t('选择首位所有者', 'pick the first owner'),
+  ].filter((item): item is string => item !== null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -93,9 +99,9 @@ export function CreateWorkspaceForm({
       <UserPicker
         http={http}
         id="cw-owner"
-        label={t('首位 owner', 'First owner')}
+        label={t('首位所有者', 'First owner')}
         hint={t(
-          '这个用户会成为该工作区的 owner，并在「管理 → 工作区配置」里看到它。',
+          '这个用户会成为该工作区的所有者，并在「管理 → 工作区配置」里看到它。',
           "This user becomes the workspace's owner and sees it under Manage → Workspace config.",
         )}
         value={ownerUserId}
@@ -141,6 +147,7 @@ export function CreateWorkspaceForm({
         >
           {t('创建', 'Create')}
         </Button>
+        <StillNeeded items={missing} hidden={submitting} testId="create-workspace-missing" />
       </div>
     </form>
   );

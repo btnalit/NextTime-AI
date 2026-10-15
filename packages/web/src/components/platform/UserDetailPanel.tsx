@@ -10,6 +10,7 @@ import { SavedNote } from '../../lib/saved-note.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { sameDisplayName, useUserDirectoryTap } from '../../lib/users-directory.js';
 import { Confirm } from '../kit/confirm.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -289,6 +290,7 @@ export function UserDetailPanel({
       <PlatformError error={profileError} title={t('无法保存', 'Could not update this user')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         {profileSaved ? <SavedNote testId="user-profile-saved" /> : null}
+        {/* ux-lint-allow-disabled: nothing changed yet — the fields above show the saved values. */}
         <Button
           variant="secondary"
           onClick={() => void saveProfile()}
@@ -344,6 +346,7 @@ export function UserDetailPanel({
       <PlatformError error={budgetError} title={t('无法保存预算', 'Could not set the budget')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         {budgetSaved ? <SavedNote testId="user-budget-saved" /> : null}
+        {/* ux-lint-allow-disabled: unchanged, or a field above shows its own rule error. */}
         <Button
           variant="secondary"
           onClick={() => void saveBudget()}
@@ -388,6 +391,7 @@ export function UserDetailPanel({
       </Field>
       <PlatformError error={resetError} title={t('无法重置密码', 'Could not reset the password')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {/* ux-lint-allow-disabled: the password field above shows its length problem. */}
         <Button
           variant="secondary"
           icon="key"
@@ -436,6 +440,7 @@ export function UserDetailPanel({
       ) : (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <span title={protectedAdmin ? envAdminTitle(t) : undefined}>
+            {/* ux-lint-allow-disabled: the wrapping span's title says the environment-configured admin cannot be disabled here. */}
             <Button
               variant="danger"
               onClick={() => setConfirmingDisable(true)}
@@ -484,6 +489,14 @@ export function UserDetailPanel({
             onOpenChange={setConfirmingMerge}
             anchor={
               <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <StillNeeded
+                  items={
+                    mergeTarget === undefined
+                      ? [t('选择要合并到的账户', 'pick the account to merge into')]
+                      : []
+                  }
+                  testId="user-merge-missing"
+                />
                 <Button
                   variant="secondary"
                   onClick={() => setConfirmingMerge(true)}

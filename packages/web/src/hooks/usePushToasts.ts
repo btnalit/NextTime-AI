@@ -3,6 +3,7 @@ import { useToast } from '../components/ui/Toast.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { shortId } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { type NavSection, hrefs, navigate } from '../lib/router.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { useCanOpen } from './useCanOpen.js';
@@ -56,9 +57,10 @@ export function usePushToasts(
                   `已提交审批：${event.actionKind.label}`,
                   `Sent for approval: ${event.actionKind.label}`,
                 ),
+              // Who decides, read from the registry (#541 review, legacy 243 ③).
               description: t(
-                '等待 operator 或工作区所有者处理；结果会显示在对话里。',
-                'Waiting for an operator or the workspace owner; the result shows up in the chat.',
+                `等待${capabilityHolders('approve', t, 'or')}处理；结果会显示在对话里。`,
+                `Waiting for ${capabilityHolders('approve', t, 'or')}; the result shows up in the chat.`,
               ),
               durationMs: 8000,
             },

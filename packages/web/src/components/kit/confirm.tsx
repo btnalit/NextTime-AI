@@ -330,6 +330,7 @@ function MediumTier({
             {children}
             <ConfirmErrorBanner error={error} overrides={errorOverrides} />
             <div className="flex flex-row-reverse flex-wrap items-center gap-2">
+              {/* ux-lint-allow-disabled: `confirmDisabled` is the caller's; its body says why (credential review, typed name). */}
               <Button
                 ref={confirmRef}
                 variant={danger ? 'danger' : 'primary'}
@@ -477,6 +478,7 @@ function IrreversibleTier({
             </label>
             <ConfirmErrorBanner error={error} overrides={errorOverrides} />
             <div className="flex flex-row-reverse flex-wrap items-center gap-2">
+              {/* ux-lint-allow-disabled: the confirm asks to type the name right above; until it matches, that line says so. */}
               <Button
                 variant="danger"
                 size="s"

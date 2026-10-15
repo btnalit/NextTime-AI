@@ -648,7 +648,7 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.click(await screen.findByTestId('new-gate-instance'));
 
     const form = await screen.findByTestId('create-gate-instance-form');
-    fireEvent.change(within(form).getByLabelText(/Gate id/), {
+    fireEvent.change(within(form).getByLabelText(/门 ID/), {
       target: { value: 'gate-new' },
     });
     fireEvent.click(within(form).getByLabelText(/mcp/));

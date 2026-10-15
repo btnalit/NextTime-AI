@@ -12,6 +12,7 @@ import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../kit/sheet.js';
+import { StillNeeded } from '../kit/still-needed.js';
 
 const UNSET = '__unset__';
 const REQUESTER_INHERIT = '__inherit__';
@@ -513,11 +514,11 @@ export function PolicyEditSheet({
             {t('取消', 'Cancel')}
           </Button>
           {/* Audit P1-9: a disabled 保存 says what it still waits for. */}
-          {trimmedKind.length === 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="policy-edit-missing">
-              {t('还差：选择动作', 'Still needed: pick an action')}
-            </span>
-          ) : null}
+          <StillNeeded
+            items={trimmedKind.length === 0 ? [t('选择动作', 'pick an action')] : []}
+            hidden={submitting}
+            testId="policy-edit-missing"
+          />
         </SheetFooter>
       </SheetContent>
     </Sheet>

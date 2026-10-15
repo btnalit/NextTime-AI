@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
@@ -67,6 +68,7 @@ export function AuditLogSection({
 }: AuditLogSectionProps) {
   const t = useT();
   const canOpen = useCanOpen(http);
+  const ask = useAskForAccess(http);
   const toast = useToast();
   const [actor, setActor] = useState(requestedFilter?.actorPrincipalId ?? '');
   const [action, setAction] = useState(requestedFilter?.action ?? '');
@@ -264,10 +266,7 @@ export function AuditLogSection({
               '审计流只有审计员和工作区所有者能看',
               'Only auditors and the workspace owner see the audit log',
             )}
-            body={t(
-              '要查看，请工作区所有者把你的角色改为 auditor。',
-              'To see it, ask the workspace owner to make you an auditor.',
-            )}
+            body={ask('auditor', 'see')}
             testId="audit-query-forbidden"
           />
         ) : (

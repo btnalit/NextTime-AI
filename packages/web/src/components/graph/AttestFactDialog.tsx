@@ -20,6 +20,7 @@ import {
 import { Field, describedBy } from '../kit/field.js';
 import { InlineError } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Textarea } from '../kit/textarea.js';
 
 export interface AttestFactDialogProps {
@@ -180,6 +181,14 @@ export function AttestFactDialog({
           <InlineError error={error} testId="attest-fact-error" />
         </div>
         <DialogFooter>
+          <StillNeeded
+            items={[
+              noteMissing ? t('填写确认说明', 'say what you confirmed') : null,
+              linkProblem !== null ? t('改正参考链接', 'fix the reference link') : null,
+            ].filter((item): item is string => item !== null)}
+            hidden={busy}
+            testId="attest-fact-missing"
+          />
           <Button
             variant="primary"
             size="s"

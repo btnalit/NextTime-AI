@@ -28,6 +28,7 @@ import { RefChip } from '../kit/ref-chip.js';
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Tabs } from '../kit/tabs.js';
 
 type OntologyDrawerTab = 'types' | 'proposals';
@@ -528,11 +529,11 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
         >
           {t('校验', 'Validate')}
         </Button>
-        {missing.length > 0 && result.status !== 'checking' ? (
-          <span className="text-small text-3" data-testid="graph-type-validate-missing">
-            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-          </span>
-        ) : null}
+        <StillNeeded
+          items={missing}
+          hidden={result.status === 'checking'}
+          testId="graph-type-validate-missing"
+        />
       </form>
       {signatures.length > 1 ? (
         <div className="row-wrap" data-testid="graph-type-validate-signatures">
@@ -665,7 +666,7 @@ function ProposalsListView({ http, onSelect }: ProposalsListViewProps) {
                 <StatusChip machine="publishable" status={row.status} size="s" />
               </span>
               <span className="text-3">
-                v{row.version} · {formatRelative(row.createdAt)}
+                v{row.version} · <time data-volatile="">{formatRelative(row.createdAt)}</time>
               </span>
             </ListRow>
           ))}
@@ -797,7 +798,7 @@ function ProposalDetailBody({
           {
             key: 'createdAt',
             label: t('提出时间', 'Proposed at'),
-            value: formatDateTime(row.createdAt),
+            value: <time>{formatDateTime(row.createdAt)}</time>,
           },
         ]}
       />

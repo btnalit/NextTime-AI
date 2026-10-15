@@ -349,7 +349,7 @@ export function PlatformWorkspacesPage({
         onClose={() => setPanel({ kind: 'closed' })}
         title={t('新建工作区', 'Create workspace')}
         subtitle={t(
-          '再建一张共享图，并指定它的第一个 owner。',
+          '再建一张共享图，并指定它的第一个所有者。',
           'A second shared graph, with its first owner.',
         )}
         testId="create-workspace-drawer"
@@ -529,6 +529,7 @@ function workspaceColumns(
                 className="chip chip-s chip-info"
                 title={owner.displayName}
                 data-testid="workspace-owner-chip"
+                data-volatile=""
               >
                 {owner.login}
               </span>

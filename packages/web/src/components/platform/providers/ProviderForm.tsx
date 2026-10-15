@@ -33,6 +33,7 @@ import {
 } from '../../../lib/provider-form.js';
 import { ErrorDetails } from '../../kit/error-details.js';
 import { InlineError } from '../../kit/inline-error.js';
+import { StillNeeded } from '../../kit/still-needed.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../../ui/Field.js';
@@ -235,6 +236,13 @@ export function ProviderForm({
     (hasTypedKey ||
       (apiKeyEnv.length > 0 && !envProblem) ||
       (storedCredential && !upstreamChanged));
+  // DoD item 4: why 获取模型列表 / 验证所选模型 are grey, on hover.
+  const discoverBlockedTitle = canDiscover
+    ? undefined
+    : t(
+        '先填好接口地址和 API key（或环境变量）',
+        'Fill in the API address and an API key (or environment variable) first',
+      );
   const fingerprint = `${api}|${normalizedBase}|${authHeader}|${credentialMarker(key, apiKeyEnv)}`;
   const discovered = discovery.status === 'ready' ? discovery.result.models : null;
   const discoveredIds = useMemo(() => new Set((discovered ?? []).map((m) => m.id)), [discovered]);
@@ -757,6 +765,7 @@ export function ProviderForm({
             onClick={() => void discover()}
             loading={discovery.status === 'loading'}
             disabled={!canDiscover || discovery.status === 'loading'}
+            title={discoverBlockedTitle}
             data-testid="provider-discover"
           >
             {discovery.status === 'ready'
@@ -891,6 +900,7 @@ export function ProviderForm({
                 size="s"
                 onClick={() => void probe(modelIds)}
                 disabled={!canDiscover || modelIds.some((m) => probeFor(m)?.status === 'loading')}
+                title={discoverBlockedTitle}
                 data-testid="provider-probe-selected"
               >
                 {t('验证所选模型', 'Check the picked models')}
@@ -1069,11 +1079,7 @@ export function ProviderForm({
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
-        {missing.length > 0 && !submitting ? (
-          <span className="text-small text-3" data-testid="provider-form-missing">
-            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-          </span>
-        ) : null}
+        <StillNeeded items={missing} hidden={submitting} testId="provider-form-missing" />
       </div>
     </form>
   );

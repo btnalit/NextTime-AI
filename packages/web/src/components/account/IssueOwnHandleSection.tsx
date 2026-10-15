@@ -16,6 +16,7 @@ import {
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
+import { StillNeeded } from '../kit/still-needed.js';
 
 const SECONDS_PER_HOUR = 3600;
 /** Kernel default (`issue-handle-handler.ts`'s `DEFAULT_TTL_SECONDS`) — a short-lived dev-tool
@@ -286,11 +287,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        {missing.length > 0 && !submitting ? (
-          <span className="text-small text-3" data-testid="ioh-missing">
-            {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-          </span>
-        ) : null}
+        <StillNeeded items={missing} hidden={submitting} testId="ioh-missing" />
         <Button
           variant="primary"
           onClick={() => void submit()}
