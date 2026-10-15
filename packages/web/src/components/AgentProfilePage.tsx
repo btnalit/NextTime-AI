@@ -5,7 +5,6 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { distinctNames } from '../lib/format.js';
 import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -264,7 +263,7 @@ function nameMap<T extends { readonly id: string }>(
     const name = pick(row);
     if (name !== undefined && !map.has(row.id)) map.set(row.id, name);
   }
-  return distinctNames(map);
+  return map;
 }
 
 /** Console redesign P3-3 (V4): an empty ref list reads "跟随授权" (this field tracks grants /

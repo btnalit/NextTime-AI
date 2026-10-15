@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { distinctNames } from '../../lib/format.js';
 import { CopyId } from './CopyId.js';
 
 /** The five reference kinds of docs/console-completion-plan.md §5.9 "RefChip". */
@@ -107,6 +106,6 @@ export function useRefNames<T extends { readonly id: string }>(
       const name = pick(row);
       if (name !== undefined && !map.has(row.id)) map.set(row.id, name);
     }
-    return distinctNames(map);
+    return map;
   }, [source, pick]);
 }
