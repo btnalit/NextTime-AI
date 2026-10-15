@@ -59,10 +59,13 @@
 #      lists the migrations that did commit (each file is its own transaction) — R-71.
 #   6. docker compose up -d                                                       FAIL → stop
 #      (the checkout stays on $TAG here: some containers may already run the new release; decide
-#      the rollback by hand — release.md §5 — the log names the previous ref)
+#      the rollback by hand — release.md §5 — the log names the previous ref); then recreate any
+#      always-on service whose single-file bind mount from the checkout no longer matches it
+#      (MOUNT_REFRESH below)
 #   7. acceptance S3 → S1 → S2 → S4 (failures are counted and reported, not fatal: the stack is
 #      already on the new release; read the per-suite logs and decide whether to roll back —
-#      release.md §5)
+#      release.md §5); then no acceptance fixture may be left running, and caddy's logs must carry
+#      no credential (scripts/check-caddy-log-redaction.sh, legacy 236)
 #   8. BACKUP_NOW on the new release; keep the newest 3 pre-upgrade dumps (maintainer
 #      2026-10-01) — reached only after 2–6 succeeded, so a failed apply never prunes a rollback
 #      point; keep this project's images of the newest 2 releases (scripts/prune-images.sh);
@@ -72,13 +75,15 @@
 #      failed BACKUP_NOW, compaction or scrub (or a skipped scrub) makes the RESULT "degraded"
 #
 # "Degraded" also covers the data-directory steps before the dump whose failure breaks a service
-# later (backups/last-success, config/update-feed, config/egress-sources.json) and a fake-llm
-# acceptance fixture that would not stop — each prints a WARNING. Not fatal and not "degraded", by
+# later (backups/last-success, config/update-feed, config/egress-sources.json), a stale mount that
+# could not be refreshed (step 6), an acceptance fixture still running and a failed caddy log check
+# (step 7) — each prints a WARNING and the command to fix it. Not fatal and not "degraded", by
 # design: backup freshness (step 1, reported before this run's own dump), a failed `git fetch` when
 # the tag is already here, the migration dry-run listing (the real apply is checked), the BuildKit
 # frontend pre-pull (acceptance shows its effect), and the housekeeping in step 8 — pre-upgrade
 # dump retention, image retention, expired workspaces — whose failure only leaves extra files,
-# images or workspaces behind for the next apply. Exit status: 1 for "RESULT failed-at=…", else 0.
+# images or workspaces behind for the next apply. Exit status: 1 for "RESULT failed-at=…", else 0 —
+# so exit 0 is not success: read the RESULT line.
 set -u
 
 # Step 3 checks out another tag, which can rewrite this very file while sh is still reading it.
@@ -114,6 +119,7 @@ D=$(sed -n 's/^NEXTTIME_DATA=//p' .env | tail -n 1)
 [ -n "$D" ] && [ -d "$D" ] || { echo "apply-release: NEXTTIME_DATA in .env is unset or not a directory" >&2; exit 2; }
 export NEXTTIME_DATA="$D"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
+START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 LOG_DIR=${APPLY_LOG_DIR:-$D/drills}
 mkdir -p "$LOG_DIR"
 if [ "$prefetch" -eq 1 ]; then LOG="$LOG_DIR/prefetch-$TAG-$TS.log"; else LOG="$LOG_DIR/apply-$TAG-$TS.log"; fi
@@ -211,12 +217,12 @@ mkdir -p "$D/backups/pre-upgrade"
 if [ -d "$D/backups/last-success" ]; then
   rmdir "$D/backups/last-success" 2>/dev/null &&
     echo "STEP backup-marker removed an empty directory in place of backups/last-success" ||
-    { echo "STEP backup-marker WARNING backups/last-success is a non-empty directory — move it aside by hand; until then no backup can record its success"; degrade backup-marker; }
+    { echo "STEP backup-marker WARNING backups/last-success is a non-empty directory — no backup can record its success until it is moved aside: mv $D/backups/last-success $D/backups/last-success.moved-$TS && : >$D/backups/last-success && chmod 644 $D/backups/last-success"; degrade backup-marker; }
 fi
 if [ ! -e "$D/backups/last-success" ]; then
   : >"$D/backups/last-success" && chmod 644 "$D/backups/last-success" &&
     echo "STEP backup-marker created an empty backups/last-success (0644)" ||
-    { echo "STEP backup-marker WARNING could not create backups/last-success — Docker will mount a directory there and the nightly backup can no longer record success"; degrade backup-marker; }
+    { echo "STEP backup-marker WARNING could not create backups/last-success — Docker will mount a directory there and the nightly backup can no longer record success; create it: : >$D/backups/last-success && chmod 644 $D/backups/last-success"; degrade backup-marker; }
 fi
 # S10 U1: the update-feed service (uid 10002) writes into config/update-feed/. Docker creates a
 # missing bind source root-owned, after which the service can never write, so the owner is set on
@@ -225,7 +231,7 @@ fi
 mkdir -p "$D/config/update-feed" && chown 10002:10002 "$D/config/update-feed" &&
   chmod 755 "$D/config/update-feed" &&
   echo "STEP update-feed-dir config/update-feed is 10002:10002 0755" ||
-  { echo "STEP update-feed-dir WARNING could not set config/update-feed to 10002:10002 0755 — the update-feed service cannot write the update notice"; degrade update-feed-dir; }
+  { echo "STEP update-feed-dir WARNING could not set config/update-feed to 10002:10002 0755 — the update-feed service cannot write the update notice; fix: mkdir -p $D/config/update-feed && chown 10002:10002 $D/config/update-feed && chmod 755 $D/config/update-feed"; degrade update-feed-dir; }
 # worker-supervisor (uid 10001) rewrites config/egress-sources.json in place on every spawn / stop;
 # a root-owned file makes every write fail, and egress-proxy then refuses those containers'
 # traffic as unknown sources. Older hosts have it root-owned (host-env-init.sh only set the owner
@@ -244,7 +250,7 @@ if [ ! -e "$D/config/egress-sources.json" ]; then
 fi
 chown 10001:10001 "$D/config/egress-sources.json" && chmod 644 "$D/config/egress-sources.json" &&
   echo "STEP egress-sources config/egress-sources.json is 10001:10001 0644" ||
-  { echo "STEP egress-sources WARNING could not set config/egress-sources.json to 10001:10001 0644 — worker egress will be refused as unknown-source"; degrade egress-sources; }
+  { echo "STEP egress-sources WARNING could not set config/egress-sources.json to 10001:10001 0644 — worker egress will be refused as unknown-source; fix: chown 10001:10001 $D/config/egress-sources.json && chmod 644 $D/config/egress-sources.json"; degrade egress-sources; }
 FROM=$(git describe --tags --always HEAD 2>/dev/null || echo unknown)
 if [ "$FROM" = "$TAG" ]; then
   echo "STEP dump WARNING checkout already on $TAG (re-run) — this dump is not a pre-$TAG rollback point"
@@ -330,6 +336,28 @@ if [ "$images_from" = pull ]; then
 else
   docker compose up -d </dev/null || fail up
 fi
+# 6b. A single-file bind mount keeps the inode the container started with: once `git checkout`
+#     replaced the file, the container still reads the old one, and `up -d` recreates a service only
+#     when its definition or image changed — caddy kept the old Caddyfile (legacy 236), and the
+#     digest-pinned backup / update-feed services keep their old scripts for good. So every
+#     always-on service with such a mount is compared with the checkout and recreated when it
+#     differs. scripts/validate-compose.mjs fails when docker-compose.yml gains a mount not listed
+#     here. Entries: <service>:<file in the checkout>:<path in the container>.
+MOUNT_REFRESH="caddy:deploy/caddy/Caddyfile:/etc/caddy/Caddyfile backup:deploy/backup/backup.sh:/backup.sh update-feed:deploy/update-feed/update-feed.sh:/update-feed.sh"
+for m in $MOUNT_REFRESH; do
+  svc=${m%%:*}
+  rest=${m#*:}
+  src=${rest%%:*}
+  dst=${rest#*:}
+  [ -f "$src" ] || continue
+  docker compose exec -T "$svc" cat "$dst" </dev/null 2>/dev/null | cmp -s - "$src" && continue
+  if docker compose up -d --no-deps --no-build --force-recreate "$svc" </dev/null; then
+    echo "STEP mount-refresh $svc recreated — it was not reading this checkout's $src"
+  else
+    echo "STEP mount-refresh WARNING could not recreate $svc — it still reads an old $src; run: docker compose up -d --no-deps --no-build --force-recreate $svc"
+    degrade mount-refresh
+  fi
+done
 sleep 30
 echo "STEP up"
 docker compose ps --format '{{.Service}} {{.Status}}'
@@ -355,10 +383,51 @@ for s in 3 1 2 4; do
   grep -E '^FAIL|^S4 (gate|NOTE|OK|FAIL)' "$slog" | sort -u | head -n 8
   if [ "$rc" -ne 0 ] || [ "$nfail" -gt 0 ]; then failures=$((failures + 1)); fi
 done
-# The fixture is an unauthenticated model endpoint on the control network (restart: unless-stopped):
-# left running, it is something to finish by hand.
 docker compose --profile test stop fake-llm >/dev/null 2>&1 ||
-  { echo "STEP fake-llm WARNING could not stop the acceptance fixture — stop it by hand: docker compose --profile test stop fake-llm"; degrade fake-llm; }
+  echo "STEP fake-llm WARNING could not stop it (the fixture check below says whether it still runs)"
+
+# 7b. No acceptance fixture may outlive the apply: they are unauthenticated test endpoints (fake-llm,
+#     an sshd, an OpenAPI and an MCP server, two test gates) on the control network, and a suite
+#     that failed or aborted part-way — or accept_s2.sh's cleanup, which only warns when `rm -sf`
+#     fails — leaves them up. Fixtures are the services only these profiles enable; the build-only
+#     profile (an image, never a running service) is not one.
+FIXTURE_PROFILES="--profile test --profile accept-s2 --profile accept-s3"
+# shellcheck disable=SC2086 # FIXTURE_PROFILES is a list of flags on purpose
+if base=$(docker compose config --services </dev/null 2>/dev/null) &&
+  all=$(docker compose $FIXTURE_PROFILES config --services </dev/null 2>/dev/null) &&
+  running=$(docker compose $FIXTURE_PROFILES ps --status running --services </dev/null 2>/dev/null); then
+  fixtures=$(printf '%s\n%s\n' "$base" "$all" | sort | uniq -u)
+  left=
+  [ -z "$fixtures" ] || left=$(printf '%s\n' "$running" | grep -xF "$fixtures" | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$left" ]; then
+    echo "STEP acceptance-fixtures WARNING still running: $left — remove them: docker compose $FIXTURE_PROFILES rm -sf $left"
+    degrade acceptance-fixtures
+  else
+    echo "STEP acceptance-fixtures none left running"
+  fi
+else
+  echo "STEP acceptance-fixtures WARNING could not list them — check by hand: docker compose $FIXTURE_PROFILES ps"
+  degrade acceptance-fixtures
+fi
+
+# 7c. caddy's logs carry no credential (legacy 236): synthetic probes through the real entrypoint,
+#     then a count over caddy's log lines since this apply started — which include the acceptance
+#     suites' own API-key traffic. Read-only apart from the probes (401 / 404 answers).
+if [ -f scripts/check-caddy-log-redaction.sh ]; then
+  bind=$(sed -n 's/^KERNEL_BIND_ADDR=//p' .env | tail -n 1)
+  if [ -z "$bind" ]; then
+    echo "STEP caddy-log-redaction WARNING KERNEL_BIND_ADDR is not set in .env — could not check"
+    degrade caddy-log-redaction
+  else
+    LOGS_SINCE="$START" sh scripts/check-caddy-log-redaction.sh "https://$bind:8443" </dev/null >"$LOG_DIR/apply-$TAG-$TS-caddy-log.log" 2>&1
+    caddy_rc=$?
+    sed 's/^/STEP caddy-log-redaction /' "$LOG_DIR/apply-$TAG-$TS-caddy-log.log"
+    if [ "$caddy_rc" -ne 0 ]; then
+      echo "STEP caddy-log-redaction WARNING caddy may be reading an old Caddyfile — recreate it and check again: docker compose up -d --no-deps --no-build --force-recreate caddy && sh scripts/check-caddy-log-redaction.sh https://$bind:8443"
+      degrade caddy-log-redaction
+    fi
+  fi
+fi
 
 # 8. backup on the new release, pre-upgrade retention, expired workspaces, observation compaction,
 #    raw-secret scrub

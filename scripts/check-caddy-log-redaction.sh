@@ -14,7 +14,11 @@
 #                           `docker compose`; CI passes its `sudo docker compose -f … -f …`)
 #   FORBIDDEN_VALUES_FILE   optional file, one value per line, that must not appear in the logs
 #                           either (e.g. the run's own owner API key) — a file, so no real value
-#                           is ever on a command line
+#                           is ever on a command line; a file without a single value fails the
+#                           check (whatever was meant to fill it did not)
+#   LOGS_SINCE              optional: read only caddy's log lines since this time (RFC 3339, as
+#                           `docker compose logs --since` takes it); default: the container's whole
+#                           log
 #   EXPECT_ERROR_ENTRY      1 = also require at least one caddy error entry for the probes (CI,
 #                           where llm-proxy is not running and /api/llm-admin/* answers 502)
 #
@@ -24,7 +28,7 @@
 #   PASS/FAIL logged      the probe requests are in the access log (else the check is vacuous)
 #   PASS/FAIL probe       the synthetic value appears nowhere in caddy's output
 #   PASS/FAIL headers     no entry carries a request header map with X-Api-Key in it
-#   PASS/FAIL forbidden   no value from FORBIDDEN_VALUES_FILE appears (when given)
+#   PASS/FAIL forbidden   the file holds at least one value and none of them appears (when given)
 #   PASS/FAIL error-entry an error entry was written and is redacted too (EXPECT_ERROR_ENTRY=1)
 # Exit 0 only when every check passes. Read-only apart from the probe requests themselves, which
 # all fail authentication or answer 404/502.
@@ -57,7 +61,7 @@ sleep 2
 logs=$(mktemp) || { echo "FAIL setup mktemp"; exit 1; }
 trap 'rm -f "$logs"' EXIT
 # shellcheck disable=SC2086 # COMPOSE is a command line on purpose
-if ! $COMPOSE logs --no-color caddy >"$logs" 2>&1 </dev/null; then
+if ! $COMPOSE logs --no-color ${LOGS_SINCE:+--since "$LOGS_SINCE"} caddy >"$logs" 2>&1 </dev/null; then
 	echo "FAIL setup could not read caddy's logs with: $COMPOSE logs caddy"
 	exit 1
 fi
@@ -77,12 +81,20 @@ headers=$(grep -ciE '"x-api-key":\[' "$logs")
 if [ -n "${FORBIDDEN_VALUES_FILE:-}" ]; then
 	n=0
 	hits=0
-	while IFS= read -r value || [ -n "$value" ]; do
-		[ -n "$value" ] || continue
-		n=$((n + 1))
-		grep -qF -- "$value" "$logs" && hits=$((hits + 1))
-	done <"$FORBIDDEN_VALUES_FILE"
-	[ "$hits" -eq 0 ] && pass forbidden "values=$n found=0" || fail forbidden "values=$n found=$hits"
+	if [ -r "$FORBIDDEN_VALUES_FILE" ]; then
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			n=$((n + 1))
+			grep -qF -- "$value" "$logs" && hits=$((hits + 1))
+		done <"$FORBIDDEN_VALUES_FILE"
+	fi
+	if [ "$n" -eq 0 ]; then
+		fail forbidden "values=0 — FORBIDDEN_VALUES_FILE is missing or holds no value, so nothing was checked"
+	elif [ "$hits" -eq 0 ]; then
+		pass forbidden "values=$n found=0"
+	else
+		fail forbidden "values=$n found=$hits"
+	fi
 fi
 
 if [ "${EXPECT_ERROR_ENTRY:-0}" = 1 ]; then
