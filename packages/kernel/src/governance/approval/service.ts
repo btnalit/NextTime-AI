@@ -112,7 +112,9 @@ export {
   listStaleExecutingActionRequests,
   markActionRequestExecuted,
   markActionRequestFailed,
+  reasonAuditFields,
   recordActionRequestReplayAttempt,
+  resultAuditFields,
   startActionRequestExecution,
 } from './execution.js';
 

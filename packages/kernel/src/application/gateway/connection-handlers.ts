@@ -21,6 +21,7 @@ import {
 import type { ConnectionRequestKind } from '../../governance/connections/index.js';
 import {
   ConnectionRequestNotFoundError,
+  assertConnectionParamsCarryNoCredentials,
   cancelConnectionRequest,
   completeConnection,
   connectGatekeeper,
@@ -421,6 +422,13 @@ export const createConnectionHandler: CapabilityHandler = async (
   const { gatekeeperClient, connectionSecrets, fetchImpl } = current;
   // R-40 (D-19): first — whether this workspace may self-connect this kind at all.
   await assertConnectorSelfServe(client, params.kind);
+  // Legacy 186: before the endpoint or the manifest source is checked, fetched, echoed in an error
+  // or stored.
+  assertConnectionParamsCarryNoCredentials('create_connection', {
+    target: params.target,
+    endpoint: params.endpoint,
+    manifestSource: params.manifestSource,
+  });
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const effectiveCredentialKind: 'shared' | 'connected_account' =

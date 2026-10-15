@@ -107,7 +107,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           ws: workspaceId,
           sid,
           obo: principalId,
-          scope: { capabilities: ['get_entry_context', 'report_turn'], resources: {} },
+          scope: {
+            capabilities: ['get_entry_context', 'report_turn', 'record_decision'],
+            resources: {},
+          },
           jti: randomUUID(),
           iat: Math.floor(Date.now() / 1000),
           exp: Math.floor(Date.now() / 1000) + 3600,
@@ -194,6 +197,45 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(taskIds(await getEntryContext(entry, { turnId }))).toEqual([]);
       const nextTurnId = await startTurn(principalId, chatId);
       expect(taskIds(await getEntryContext(entry, { turnId: nextTurnId }))).toEqual([]);
+    });
+
+    it('stores what the agent reports — Turn summary, decisions, a recorded Decision — with secret-looking values scrubbed (legacy 183)', async () => {
+      // Synthetic, Handle-shaped (`.gitleaks.toml` allows this signature segment).
+      const handle =
+        'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+      const principalId = await adminInsertPrincipal();
+      const entry = await handleCaller(principalId, 'entry');
+      const chatId = await newChatFor(principalId);
+      const turnId = await startTurn(principalId, chatId);
+
+      const decision = (await dispatchCapability({ pool }, entry, 'record_decision', {
+        summary: `rotate the key; old one was PGPASSWORD=${fake}`,
+      })) as { id: string };
+      await dispatchCapability({ pool }, entry, 'report_turn', {
+        turnId,
+        summary: `ran env: CAPABILITY_HANDLE=${handle}`,
+        decisions: [`call it with Authorization: Bearer ${handle}`, 'keep the plain one'],
+      });
+
+      const stored = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+        const turn = await client.query<{ metadata: Record<string, unknown> }>(
+          'select metadata from activities where workspace_id = $1 and id = $2',
+          [workspaceId, turnId],
+        );
+        const decisionRow = await client.query<{ summary: string }>(
+          'select summary from decisions where workspace_id = $1 and id = $2',
+          [workspaceId, decision.id],
+        );
+        return { turn: turn.rows[0]?.metadata, decision: decisionRow.rows[0]?.summary };
+      });
+      expect(JSON.stringify(stored)).not.toContain('eyJhbGci');
+      expect(JSON.stringify(stored)).not.toContain(fake);
+      expect(stored.turn).toMatchObject({
+        summary: 'ran env: CAPABILITY_HANDLE=[redacted]',
+        decisions: ['call it with Authorization: [redacted]', 'keep the plain one'],
+      });
+      expect(stored.decision).toBe('rotate the key; old one was PGPASSWORD=[redacted]');
     });
 
     it('an interactive (peek) read does not consume the entry agent’s items', async () => {

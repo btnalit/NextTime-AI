@@ -697,6 +697,12 @@ export function assertScopeIsSubset(
  *   - `ttl`: the child's expiry must not exceed the parent's remaining ttl (see `ttlSeconds` doc).
  *
  * Any violation throws `AttenuationError`, never a partially-narrowed Handle.
+ *
+ * **The session is an authority.** `get_task` returns a Task's raw input only to a Handle whose
+ * `sid` is that Task's WorkerRun session (legacy 184, application/gateway's `getTaskHandler`), so
+ * a child of a Worker's Handle reads it too. No production caller attenuates a Worker Handle
+ * today; one that hands the child to anything but that Worker must mint a new session instead
+ * (review of #549).
  */
 export async function attenuate(
   client: PoolClient,

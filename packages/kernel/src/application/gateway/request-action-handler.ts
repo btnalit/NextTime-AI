@@ -1,4 +1,4 @@
-import { IllegalTransition, getCapability } from '@nexttime/shared';
+import { IllegalTransition, getCapability, namesASecretField } from '@nexttime/shared';
 import type {
   ActionRequestStatus,
   CapabilityChannel,
@@ -43,7 +43,12 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
-import { reviewObserveParams } from '../../governance/redaction/index.js';
+import {
+  redactSuspectedSecrets,
+  reviewObserveParams,
+  scrubSecretLiteralsIn,
+  secretFieldLiterals,
+} from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
@@ -401,8 +406,9 @@ async function resolveSystemActor(
  *  `markActionRequestExecuted`/`markActionRequestFailed` (governance/approval/execution.ts) each
  *  write their `resultMetadata`/`reason` into the same transaction as the status transition
  *  itself, so by the time a caller observes the row's status as `executed`/`verified`/`failed`,
- *  the corresponding audit row is already committed too — no separate race to worry about here. */
-async function readTerminalOutcome(
+ *  the corresponding audit row is already committed too — no separate race to worry about here.
+ *  Exported for its unit test. */
+export async function readTerminalOutcome(
   withTransaction: WithTransactionFn,
   workspaceId: string,
   systemActorId: string,
@@ -419,7 +425,20 @@ async function readTerminalOutcome(
   const payload = terminalRow?.payload as
     | { resultMetadata?: { data?: unknown }; reason?: string }
     | undefined;
-  return { data: payload?.resultMetadata?.data, reason: payload?.reason };
+  // Review of #549 (B4): a row written before legacy 187 was fixed holds the gate's output and
+  // error text as given, and audit rows are never rewritten (I11) — so the read-back applies the
+  // audit copy's rule again (`resultAuditFields` / `reasonAuditFields`, governance/approval). A row
+  // written since is already in that form, and the rule replaces nothing twice.
+  const data = payload?.resultMetadata?.data;
+  const reason = payload?.reason;
+  return {
+    data:
+      data === undefined ? undefined : redactSuspectedSecrets(data, { secretFields: true }).value,
+    reason:
+      typeof reason === 'string'
+        ? (redactSuspectedSecrets(reason, { secretFields: true }).value as string)
+        : reason,
+  };
 }
 
 /** Waits (short polling transactions, never one held open) for a *concurrently* executing row —
@@ -918,6 +937,13 @@ async function runGovernedRequest(
             reason: err instanceof Error ? err.message : String(err),
           };
         }
+        // The gate renders the params into a URL, a command or a request body; a secret param's
+        // value would be repeated there as plain text, where no key rule can find it — hidden as a
+        // literal (legacy 185), as the call's own audit copy hides it.
+        simulate = scrubSecretLiteralsIn(
+          simulate,
+          secretFieldLiterals(args.operationParams, namesASecretField),
+        ).value;
         return {
           result: { ...toWireActionRequest(actionRequest), simulate },
           resourceType: 'action_request',

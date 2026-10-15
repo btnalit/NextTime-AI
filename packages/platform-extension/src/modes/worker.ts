@@ -3,7 +3,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { WorkerResultContractSchema } from '@nexttime/shared';
+import { WorkerResultContractSchema, namesASecretField } from '@nexttime/shared';
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
@@ -136,8 +136,27 @@ function renderTaskInput(input: unknown): string {
   }
 }
 
-function toSearchQuery(input: unknown): string {
-  const text = typeof input === 'string' ? input : JSON.stringify(input ?? '');
+/** `value` without any field whose name names a secret (`@nexttime/shared`'s `namesASecretField`),
+ *  at any depth. */
+function withoutSecretFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSecretFields);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !namesASecretField(key))
+        .map(([key, inner]) => [key, withoutSecretFields(inner)]),
+    );
+  }
+  return value;
+}
+
+/** The `search` query a Worker's context is looked up by: the first 200 characters of its Task
+ *  input, with every secret-named field dropped first (review of #549, B3) — the query is a
+ *  capability param, kept in the audit trail and shown in the console's audit feed, and a
+ *  credential's value is no search term anyway. A string input is used as it is; the kernel's
+ *  audit copy of the params scrubs a secret-looking value in it. */
+export function toSearchQuery(input: unknown): string {
+  const text = typeof input === 'string' ? input : JSON.stringify(withoutSecretFields(input ?? ''));
   return text.slice(0, 200);
 }
 

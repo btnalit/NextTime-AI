@@ -18,7 +18,9 @@ import {
  * (`hosted`) instance, the gate host never anything else — refused 403, nothing written.
  *
  * Never a credential: the body schema is `.strict()` and has no field for one; what a gate needs
- * to reach its system stays in the gate (design §7). The route runs on the admin client because a
+ * to reach its system stays in the gate (design §7). A `target` or `endpoint` carrying one is
+ * refused 400 `credentials_in_connection_params` with nothing written, unless the instance already
+ * holds exactly that value (review of #549 — `upsertAnnouncement`). The route runs on the admin client because a
  * gate is neither a user nor a Principal — the same shape `/internal/egress` uses; there is no
  * audit row (0019's actor-shape constraint needs a user for a platform row), the instance row's
  * `last_seen_at` / `updated_at` and the kernel log are the record.
@@ -72,6 +74,21 @@ export async function registerGatesRoutes(
             announcer === 'gate'
               ? 'a packaged gate cannot announce a gate-host instance'
               : 'the gate host announces only the instances an administrator created for it',
+        },
+      });
+    }
+    if (outcome.credentialRefused) {
+      // Review of #549 (legacy 186): the field only — the value is a credential.
+      request.log?.warn?.(
+        { gateId: outcome.gateId, caller: announcer, field: outcome.credentialRefused.field },
+        'gates/announce: the announced address carries a credential — refused, nothing written; give the gate its credential through its own configuration and announce the plain address',
+      );
+      return reply.status(400).send({
+        ok: false,
+        error: {
+          code: 'credentials_in_connection_params',
+          message: `the announced ${outcome.credentialRefused.field} carries a credential — refused, nothing was stored; announce the plain address and keep the credential in the gate's own configuration`,
+          details: { field: outcome.credentialRefused.field },
         },
       });
     }

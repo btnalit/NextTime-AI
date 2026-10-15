@@ -86,6 +86,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   gate_host_error: 'Gate host error',
   connection_target_refused: 'Address not allowed',
   credentials_in_observe_params: 'Credentials in the parameters',
+  credentials_in_connection_params: 'Credentials in the address',
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
@@ -132,6 +133,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   gate_host_error: '门宿主没有完成这次写入',
   connection_target_refused: '这个地址不允许接入',
   credentials_in_observe_params: '参数里带了凭据',
+  credentials_in_connection_params: '地址里带了凭据',
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
@@ -242,6 +244,12 @@ export const ERROR_NEXT_STEPS: Readonly<
   credentials_in_observe_params: {
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
     en: 'The parameters carry a credential, so nothing was sent. Do not pass credentials as parameters; the gate authenticates with its own.',
+  },
+  // The fallback when no form shows it on its own field (each form says where the credential goes
+  // in its own terms): no field name here, since not every place that refuses it has one.
+  credentials_in_connection_params: {
+    zh: '地址里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没保存。地址里只写地址；凭据交给门保管，不要写进任何地址。',
+    en: 'An address carries a credential (a user name and password in the URL, or a token or key in its query), so it was refused and nothing was saved. Keep addresses to the address; the credential belongs to the gate, never in an address.',
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {

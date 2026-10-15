@@ -102,7 +102,7 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 
 上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
 
-跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走。
+跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走；v0.46.0 → v0.47.0 按 §3.26。
 
 **本节命令的执行方式**：所有命令都在主机检出目录下执行。SQL 一律经
 `docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1` 交给 psql，并包在
@@ -114,6 +114,9 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 
 标「**victor 手动**」的步骤要登录控制台，由维护者本人做，远程 CLI 会话不做、也不要索取管理员凭据；控制台路径写成
 「分组 → 页面 → 按钮」，分组是侧栏的「使用 / 治理 / 平台」。
+
+**执行会话被拦下时（遗留 231）**：远程 CLI 会话的某条主机命令被本地权限检查拦下时，停在这一步，等维护者在**该会话里**批准，
+或由他自己加允许规则；不换个写法重新发起，也不自己加允许规则。下发窗口操作之前先把这一点告诉维护者，让他在场批准或提前加好规则。
 
 经 SSH 时作为后台任务运行并跟日志（脚本先打印日志路径，`${NEXTTIME_DATA}/drills/apply-<tag>-<ts>.log`）：每步一行
 `STEP …`，致命步骤打印 `FAIL <step>` 并以非 0 退出，最后一行 `RESULT ok` 或 `RESULT acceptance-failures=<n>`。
@@ -1055,6 +1058,93 @@ Operation 一律 409，不执行任何东西（fail closed）。
 对它的每次调用都返回 409 `operation_definition_mismatch`。处理：owner 用旧版本 gatekeeper-base 重建这个门。§3.24 窗口前第 2 条
 SQL 列出的自连门清单就是要逐个确认的范围。
 
+### 3.25 敏感值不再原样落库与回显；升级时清洗存量（#549，core 0043，v0.46.0 之后的下一版起）
+
+行为变化：
+- 智能体写的 Turn 报告与 Decision、`get_task` / `list_tasks` 返回的 `tasks.input`、工具调用记录的结果、门输出与失败原因的审计副本及其读回、
+  Fact 与观察对象的属性、Worker `search` 查询、llm-proxy 转给智能体的非 2xx 上游错误体，都在系统边界按同一套规则遮蔽，存和返回的都是
+  遮蔽副本，控制台显示 `[redacted]`。
+- 带凭据的地址（URL 里的密码；名字像秘密的查询参数，以及 `sig`、`signature`、`key`、`X-Amz-Signature` 等）在所有写入入口直接 400，
+  什么都不存、不发请求：申请连接、建连接（含清单来源）、建平台门实例、启用平台门实例、Gatekeeper 登记、门公告。门公告里**与库中旧值
+  相同**的地址放行，升级后正在运行的门心跳不断；新值或变了的值带凭据时门日志记 `credentials_in_connection_params`。
+- 签发凭据的 Operation：结果里的凭据智能体和控制台都只看到 `[redacted]`，这类场景应由目标系统直接交给人。发起方入口智能体
+  `get_task` 拿到遮蔽副本，只有执行该 Task 的 Worker 拿到原文。
+- llm-proxy 的错误体是重新序列化的 JSON（空白可能变化，真 key 与类 token 串变成 `***`），2xx 不受影响。
+
+**存量清洗 `STEP raw-secret-scrub`**：`--pull` 在 `BACKUP_NOW` 之后自动跑 `node dist/cli/scrub-raw-secrets.js --yes`（备份失败就跳过；
+失败不致命；可重复执行；日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log`，apply 日志里一行 `STEP raw-secret-scrub exit=…` 带摘要）。
+- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。
+- 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
+  `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
+  备份里。
+- 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
+- 要逐行读 `audit_records` 等表，表大时会拉长窗口。
+- 只计数的类别在报告里每类最多列 20 个行 id（超出时以 `,…` 结尾），dry run 也一样；超过 20 条时按预检 SQL 把对应的 `count(*)` 改成
+  `select id`（只读，同样包在只读事务里）列出全部。
+
+**清洗没跑成时补跑**：apply 日志里是 `STEP raw-secret-scrub skipped`（`backup-now` 失败）或 `exit` 不为 0（清洗中途失败，失败之前的批次
+已提交）时，`RESULT ok` 照样会出现（遗留 252），要人看这一行。补跑前先要一次新的、成功的备份，再带 `--yes` 跑清洗；经 SSH 时两条都用
+`ssh -n`，补跑结果同样记 `docs/private/`：
+
+```sh
+docker compose run --rm -e BACKUP_NOW=1 backup </dev/null        # 确认 backups/last-success 已更新
+docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js --yes </dev/null
+```
+
+**维护窗口前**（在当前版本上跑，只读，主机执行）：用目标 tag 里的预检 SQL 估上限，再记下相关表的行数用来估耗时，结果记 `docs/private/`。
+预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag：
+
+```sh
+ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.47.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
+```
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+select relname, n_live_tup, pg_size_pretty(pg_total_relation_size(relid)) as size
+  from pg_stat_user_tables
+ where relname in ('audit_records', 'activities', 'decisions', 'chat_messages', 'tasks', 'links', 'objects',
+                   'connection_requests', 'gate_instances')
+ order by relname;
+rollback;
+SQL
+```
+
+预检是文本匹配的上界；精确计数要新 kernel 镜像（`scrub-raw-secrets.js` 不带 `--yes` 就是 dry run），v0.46.0 的镜像里没有，所以窗口前
+不跑 dry run，以 `--pull` 里那次 `--yes` 的报告为准。
+
+**应用后**（主机读日志，结果记 `docs/private/`；处置项由 victor 决定）：
+- `connectionTargets` > 0：这些旧申请在取消之前仍显示原 target（遗留 247 ①）。由申请人或工作区所有者取消，需要的话用不带凭据的地址重新申请。
+- `gateInstanceAddresses` 或 `gatekeeperAddresses` > 0：这些门实例与 Gatekeeper 的地址带凭据，它们的门公告照旧放行，但这些实例不能再
+  启用到新的工作区。由平台管理员用不带凭据的地址重建实例（凭据经门宿主的凭据录入），旧实例的停用或删除是写操作，victor 决定。
+- 其余只计数的类别不需要处置；要真正删掉库里与备份里的原文，属破坏性操作，另行决定。
+
+**回滚**（§5）：代码切回 v0.46.0 即可，core 0043 只放宽约束（§6）。回滚后：
+- 已遮蔽的行**保持遮蔽**：清洗是单向的，旧代码读到的是 `[redacted]` 文本，无害。
+- 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。在 v0.47.0 上恢复备份之后，按上面「补跑」
+  的命令再跑一次清洗。
+- 升级前后的这两份 dump 里都有原文，保留期内按凭据材料对待，不拷离主机。
+- v0.46.0 的入口重新接受带凭据的地址（即遗留 186 本身），回滚期间不要新建带凭据的连接或门实例。
+
+### 3.26 升级窗口总清单：v0.46.0 → v0.47.0
+
+v0.47.0 收齐 #541（只改控制台渲染与两个只读查询，无主机步骤）与 #549（§3.25）。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，
+不需要排空 Worker。先确认起点：`git describe --tags --exact-match </dev/null` 应输出 `v0.46.0`；上主机前按 §1 第 5 步对同一个 tag 跑一次
+`staging` 预演。
+
+窗口开始前告诉维护者：执行会话被本地权限检查拦下时会停下等他批准（§3 开头，遗留 231），请他在场或提前加好允许规则。
+
+| # | 时机 | 步骤 | 谁 |
+|---|---|---|---|
+| 1 | 窗口前 | `--prefetch v0.47.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
+| 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
+| 3 | 窗口内 | `--pull v0.47.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；日志里 `STEP backup-now exit=0` 在前，`STEP raw-secret-scrub exit=0` 在后；是 `skipped` 或 `exit` 不为 0 时按 §3.25「补跑」，补跑结果同样记 `docs/private/` | 主机 |
+| 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id，记 `docs/private/` | 主机 |
+| 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时逐条决定（超过 20 条按 §3.25 列全） | victor 决定 |
+| 6 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应是一句说明、能退回，没有死路（#541 验收盲区）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名 | **victor 手动** |
+
+**回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 的回滚说明；不需要排空 Worker。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1161,6 +1251,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.42.0 之后的下一版 | task `0006_objective_outcome` + worker `0004_skill_procedure_attribution`（S10 E1 结果归因）：`tasks` 加五个可空的目标结果列（CHECK `tasks_objective_outcome_check`：全空，或第 1 版无前值，或第 2 版前值是另一值），`worker_runs.skills_recorded boolean not null default false`（PG 11+ 常量默认值不重写表），新表 `turn_outcomes`、`worker_run_skills`、`turn_procedure_claims`（工作区 RLS；后两张只授 `select, insert`）。不改既有数据 | 可逆 | 只加可空列、带常量默认值的列与新表：v0.42.0 的写入不碰新列（`skills_recorded` 取默认 false，读作"未记录"），也不知道新表；迁移可逆性探针用 v0.42.0 的测试在新 schema 上跑过（#480，2116 例通过，首跑唯一失败是遗留 123 已记的 `turn-terminal` 偶发超时，下一次提交上全过；合入头 `11252f3` 上探针也是绿的，那次 HEAD 已同时带 core 0041 / 0042 与 #482 的声明式判定） | 只需回退代码；若要连 schema 一起撤：`drop table turn_procedure_claims, worker_run_skills, turn_outcomes; alter table worker_runs drop column skills_recorded; alter table tasks drop constraint tasks_objective_outcome_check, drop column objective_outcome, drop column outcome_given_by, drop column outcome_given_at, drop column outcome_revision, drop column outcome_previous`（并从 `schema_migrations` 删掉这两条；不撤也无害——已记录的归因随之丢失） |
 | v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
 | v0.45.0 之后的下一版 | governance `0019_action_request_operation_digest`（#538，遗留 189）：`action_requests` 加一列可空的 `operation_digest`（text，检查约束 `action_requests_operation_digest_shape`：为空、`none` 或 `sha256:<64 hex>`），不回填 | 可逆 | 只加一列可空列和只约束这一列的检查。读了 v0.44.0 的 `governance/approval`：`action_requests` 的读写都用显式列清单（`ACTION_REQUEST_ROW_COLUMNS`），不读不写新列，旧代码插入的行恒为空，约束天然满足。回退后旧代码回到执行时不带摘要（即遗留 189 本身），新代码期间写下的摘要留在列里、旧代码看不见；重新升级后这些行照常按记下的摘要执行，回退期间写入的空值行按执行时已发布的版本执行 | 只需回退代码；若要连 schema 一起撤：`alter table action_requests drop column operation_digest`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 19`（不撤也无害） |
+| v0.46.0 之后的下一版 | core `0043_audit_unattributed_raw_secret_scrub`（#549，遗留 183–187）：`audit_records_actor_shape` 在 0040 的未署名主机操作名单里加上 `cli.raw_secrets_scrubbed`，其余不变；不改数据、不加列 | 可逆 | 只放宽：满足 0040 约束的行都满足新约束，重建约束不需要回填；v0.46.0 的代码从不写这个动作，回退后约束只是多允许一种它不会写的行。`scrub-raw-secrets` 改写的 3 类数据是另一回事：遮蔽是单向的，回退代码不会恢复原文，旧代码照常读遮蔽后的文本（§3.25） | 只需回退代码；恢复备份会把原文带回来，只用于灾备 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

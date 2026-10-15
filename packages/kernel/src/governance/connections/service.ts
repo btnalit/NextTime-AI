@@ -14,6 +14,7 @@ import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js'
 import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import { assertConnectionParamsCarryNoCredentials } from './credentials.js';
 import {
   CONNECTION_REQUEST_ROW_COLUMNS,
   type ConnectionRequestKind,
@@ -75,6 +76,8 @@ export async function requestConnection(
   workspaceId: string,
   input: RequestConnectionInput,
 ): Promise<ConnectionRequestRow> {
+  // Legacy 186: the target is stored, pushed and shown as given — never with a credential in it.
+  assertConnectionParamsCarryNoCredentials('request_connection', { target: input.target });
   const result = await client.query(
     `insert into connection_requests (workspace_id, kind, target, requested_by)
      values ($1, $2, $3, $4)

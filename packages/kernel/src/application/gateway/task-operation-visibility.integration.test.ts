@@ -117,6 +117,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function seedTask(
       onBehalfOf: string,
       sessionOnBehalfOf: string = onBehalfOf,
+      input: unknown = { text: 'private chat content' },
     ): Promise<{ taskId: string; sessionId: string }> {
       return admin(async (client) => {
         const session = await client.query<{ id: string }>(
@@ -129,7 +130,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
                               worker_definition_version, input)
            values ($1, 'running', $2, $3, 1, $4::jsonb) returning id`,
-          [workspaceId, onBehalfOf, randomUUID(), JSON.stringify({ text: 'private chat content' })],
+          [workspaceId, onBehalfOf, randomUUID(), JSON.stringify(input)],
         );
         const taskId = task.rows[0]?.id as string;
         await client.query(
@@ -255,6 +256,42 @@ describe.runIf(DATABASE_URL !== undefined)(
           { taskId },
         )) as { id: string };
         expect(asRequesterHandle.id).toBe(taskId);
+      });
+
+      it('shows a Task’s input masked to everyone but its own Worker, which reads it as stored (legacy 184)', async () => {
+        // Synthetic: one value only its field name gives away, one a value pattern finds.
+        const input = {
+          text: 'deploy it',
+          db: { password: 'hunter2-plain-word' },
+          note: 'PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123',
+        };
+        const masked = {
+          text: 'deploy it',
+          db: { password: '[redacted]' },
+          note: 'PGPASSWORD=[redacted]',
+        };
+        const { taskId, sessionId } = await seedTask(requesterId, requesterId, input);
+        const scope: CapabilityScope = { capabilities: ['get_task'], resources: {} };
+        const read = async (caller: ResolvedCaller, capability = 'get_task') =>
+          (await dispatchCapability(
+            { pool },
+            caller,
+            capability,
+            capability === 'get_task' ? { taskId } : {},
+          )) as {
+            input?: unknown;
+            items?: readonly { id: string; input: unknown }[];
+          };
+
+        expect((await read(humanCaller(requesterId, 'member'))).input).toEqual(masked);
+        expect((await read(humanCaller(ownerId, 'owner'))).input).toEqual(masked);
+        // The requester's entry agent — the one that wrote the input — gets the masked copy too.
+        expect((await read(handleCaller(requesterId, randomUUID(), scope))).input).toEqual(masked);
+        const listed = await read(humanCaller(requesterId, 'member'), 'list_tasks');
+        expect(listed.items?.find((task) => task.id === taskId)?.input).toEqual(masked);
+
+        // The Worker runs on the input as written.
+        expect((await read(handleCaller(requesterId, sessionId, scope))).input).toEqual(input);
       });
 
       it('list_tasks still lists only the caller’s own Tasks, for the owner too', async () => {

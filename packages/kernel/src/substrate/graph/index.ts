@@ -17,6 +17,7 @@
  * `epistemic/conflicts.ts`'s own module doc comment for the full reasoning.
  */
 
+export { scrubGraphProperties } from './scrub-properties.js';
 export {
   DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_RECENT_FACTS_LIMIT,

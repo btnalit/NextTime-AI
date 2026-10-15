@@ -3,6 +3,7 @@ import type { GateInstanceWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 
 afterEach(cleanup);
@@ -260,4 +261,68 @@ describe('CreateGateInstanceForm', () => {
     expect(within(form).queryByTestId('cgi-manifest-suggest')).toBeNull();
     expect(submit.disabled).toBe(false);
   });
+
+  // Review of #549: a suggestion never copies a credential, nor the target's query.
+  it.each([
+    ['a password', 'https://ops:Synth-Pw-4417@billing.example.com'],
+    ['a token query', 'https://billing.example.com/?token=abcdefghijklmnopqrstuvwxyz0123'],
+  ])('offers no manifest suggestion for a target carrying %s', (_name, value) => {
+    const http = scriptedHttp({});
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = screen.getByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/^目标/), { target: { value } });
+    const manifest = within(form).getByLabelText(/清单来源/) as HTMLInputElement;
+    expect(within(form).queryByTestId('cgi-manifest-suggest')).toBeNull();
+    expect(manifest.placeholder).toBe('https://billing.example.com/openapi.json');
+  });
+
+  it('drops the target query from the manifest suggestion', () => {
+    const http = scriptedHttp({});
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = screen.getByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'https://billing.example.com/api?version=3' },
+    });
+    expect(within(form).getByTestId('cgi-manifest-suggest').textContent).toBe(
+      '使用 https://billing.example.com/api/openapi.json',
+    );
+  });
+
+  it.each([
+    ['target', /^目标/, 'cgi-target-error', '目标地址里带了凭据'],
+    ['manifestSource', /清单来源/, 'cgi-manifest-source-error', '清单来源里带了凭据'],
+  ])(
+    'shows a credentials_in_connection_params refusal of the %s on that field, the kernel text in 「技术细节」',
+    async (field, _label, errorId, explanation) => {
+      const kernelText = `create_gate_instance: ${field} carries what looks like a credential — refused, nothing was stored.`;
+      const http = scriptedHttp({
+        create_gate_instance: () => {
+          throw new HttpError('capability_error', kernelText, 'credentials_in_connection_params', {
+            field,
+          });
+        },
+      });
+      render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+      const form = screen.getByTestId('create-gate-instance-form');
+      fireEvent.change(within(form).getByLabelText(/门 ID/), {
+        target: { value: 'billing-api' },
+      });
+      fireEvent.change(within(form).getByLabelText(/^目标/), {
+        target: { value: 'https://billing.internal' },
+      });
+      fireEvent.change(within(form).getByLabelText(/清单来源/), {
+        target: { value: 'https://billing.internal/openapi.json' },
+      });
+      fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
+
+      const raw = await screen.findByTestId(`${errorId}-detail`);
+      expect(raw.textContent).toBe(kernelText);
+      expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
+      const fieldId = field === 'target' ? 'cgi-target-error' : 'cgi-manifest-source-error';
+      const line = document.getElementById(fieldId);
+      expect(line?.textContent).toContain(explanation);
+      expect(line?.textContent).not.toContain('refused, nothing was stored');
+      expect(screen.queryByTestId('create-gate-instance-error')).toBeNull();
+    },
+  );
 });

@@ -6,7 +6,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KernelClient } from '../kernel-client.js';
 import { type FakeKernel, startFakeKernel } from '../test-support/fake-kernel.js';
-import { registerWorkerMode } from './worker.js';
+import { registerWorkerMode, toSearchQuery } from './worker.js';
 
 /**
  * Contract tests against a minimal `ExtensionAPI` stub (same style `modes/entry.test.ts`
@@ -683,6 +683,25 @@ describe('registerWorkerMode', () => {
 
     const getTaskCall = kernel.requests.find((r) => r.capability === 'get_task');
     expect(getTaskCall?.params).toEqual({ taskId: 'task-1' });
+  });
+
+  it('the search query drops secret-named fields of the Task input before it is cut to 200 characters (review of #549, B3)', async () => {
+    // Synthetic: a plain word only the field name gives away.
+    const plain = 'hunter2-plain-word';
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: { input: { job: 'migrate', db: { host: 'db-1', password: plain }, apiKey: plain } },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    await contextHandler({ messages: [] }, fakeCtx());
+
+    const searchCall = kernel.requests.find((r) => r.capability === 'search');
+    expect(searchCall?.params).toEqual({ query: '{"job":"migrate","db":{"host":"db-1"}}' });
+    expect(toSearchQuery('restart the flaky pod')).toBe('restart the flaky pod');
+    expect(toSearchQuery({ text: 'x'.repeat(300) })).toHaveLength(200);
   });
 
   it('the context handler caches Task input across calls (one get_task round trip)', async () => {

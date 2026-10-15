@@ -5,6 +5,8 @@ import {
   registerGatekeeperObject,
   setGatekeeperConnectionSecretSaltObject,
 } from '../../substrate/ontology/index.js';
+// The rule module itself, not `../connections/index.js`: `connections/service.ts` calls this module.
+import { assertConnectionParamsCarryNoCredentials } from '../connections/credentials.js';
 
 /**
  * governance/gatekeepers/registry: Gatekeeper instance registration + lookup (design doc §5.1.4
@@ -62,6 +64,13 @@ export async function registerGatekeeper(
   workspaceId: string,
   input: RegisterGatekeeperInput,
 ): Promise<RegisterGatekeeperResult> {
+  // Legacy 186, defense in depth: every caller (`create_connection`, `enable_gate_instance`, the
+  // operator's `register-gatekeeper` CLI) checks first; whatever the caller, no Gatekeeper or
+  // ConnectedSystem is written with a credential in its address.
+  assertConnectionParamsCarryNoCredentials('register_gatekeeper', {
+    target: input.target,
+    endpoint: input.endpoint,
+  });
   const systemObjectId =
     input.systemObjectId ??
     (

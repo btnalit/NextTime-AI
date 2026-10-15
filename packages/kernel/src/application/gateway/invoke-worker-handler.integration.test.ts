@@ -346,6 +346,58 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('audits how many suspected credentials an input carries, and where, never their values (legacy 184)', async () => {
+      configureTaskRuntime({
+        pool,
+        privateKey,
+        supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
+      });
+      const principalId = await adminInsertPrincipal('owner', 'legacy-184-owner');
+      const caller = await entryHandleCallerFor(principalId);
+      const invoke = (input: unknown) =>
+        dispatchCapability({ pool }, caller, 'invoke_worker', {
+          definitionId: workerDefinitionId,
+          version: 1,
+          input,
+        }) as Promise<{ id: string }>;
+      const auditOf = async (taskId: string) =>
+        inTx(principalId, async (client) => {
+          const { rows } = await client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where workspace_id = $1 and action = 'invoke_worker' and resource_id = $2`,
+            [workspaceId, taskId],
+          );
+          expect(rows).toHaveLength(1);
+          return rows[0]?.payload as Record<string, unknown>;
+        });
+
+      // Synthetic: one value only its field name gives away, one a value pattern finds.
+      const withSecrets = await invoke({
+        job: 'migrate',
+        db: { password: 'hunter2-plain-word' },
+        note: 'PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123',
+      });
+      const audited = await auditOf(withSecrets.id);
+      expect(JSON.stringify(audited)).not.toContain('hunter2-plain-word');
+      expect(JSON.stringify(audited)).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+      expect(audited.credentialReview).toEqual({
+        suspectedSecretValues: 2,
+        suspectedSecretPaths: expect.arrayContaining(['db.password', 'note']),
+      });
+      // The Task keeps the input as given: it is what the Worker runs on.
+      const stored = await inTx(principalId, async (client) => {
+        const { rows } = await client.query<{ input: unknown }>(
+          'select input from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, withSecrets.id],
+        );
+        return rows[0]?.input;
+      });
+      expect(stored).toMatchObject({ db: { password: 'hunter2-plain-word' } });
+
+      const plain = await invoke({ job: 'plain' });
+      expect(await auditOf(plain.id)).not.toHaveProperty('credentialReview');
+    });
+
     describe('S3.13 runtime consumer — AgentProfile.excludedWorkerDefinitions', () => {
       it('a profile excluding B narrows find_workers to A and refuses invoke_worker(B) with 403', async () => {
         configureTaskRuntime({

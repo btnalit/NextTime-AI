@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { createServer } from '../../index.js';
 import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
@@ -42,6 +43,8 @@ const REPO_ROOT = path.resolve(KERNEL_ROOT, '..', '..');
 const ONTOLOGY_DIR = path.join(REPO_ROOT, 'ontology');
 const INTERNAL_TOKEN = 'p-b2a-internal-token-0123456789abcdef0123456789abcdef';
 const PASSWORD = 'correct horse battery staple';
+/** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 
 const HOSTED_OBSERVE_OP: Operation = {
   name: 'list_widgets',
@@ -620,6 +623,174 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The packaged gate's own heartbeat still lands.
       const own = await announce(packagedAnnounceBody, 'gate');
       expect(own.statusCode).toBe(200);
+    });
+
+    // Review of #549 (legacy 186, gate-instance half): no address of a gate instance is written
+    // with a credential in it — create, announce, and the copy enable makes into a workspace.
+    it.each([
+      [
+        'a password in the target',
+        { transportKind: 'mcp', target: `https://ops:${FAKE}@mcp.example.invalid/mcp` },
+        'target',
+      ],
+      [
+        'a token in the target',
+        { transportKind: 'mcp', target: `https://mcp.example.invalid/mcp?token=${FAKE}` },
+        'target',
+      ],
+      [
+        'a key in the manifest source',
+        {
+          transportKind: 'http',
+          target: 'https://billing.example.invalid',
+          manifestSource: `https://billing.example.invalid/openapi.json?api_key=${FAKE}`,
+        },
+        'manifestSource',
+      ],
+      [
+        'a password in the manifest source',
+        {
+          transportKind: 'http',
+          target: 'https://billing.example.invalid',
+          manifestSource: `https://ops:${FAKE}@billing.example.invalid/openapi.json`,
+        },
+        'manifestSource',
+      ],
+    ])(
+      'k. create_gate_instance refuses %s, naming the field, and stores nothing',
+      async (_name, params, field) => {
+        const gateId = `refused-${randomUUID().slice(0, 8)}`;
+        const thrown = await callAsAdmin('create_gate_instance', {
+          gateId,
+          credentialMode: 'shared',
+          ...params,
+        }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        expect(thrown).toBeInstanceOf(ConnectionParamsCarryCredentialsError);
+        expect(thrown).toMatchObject({
+          code: 'credentials_in_connection_params',
+          details: { field },
+        });
+        expect((thrown as Error).message).not.toContain(FAKE);
+        await expectPlatformError(
+          () => callAsAdmin('get_gate_instance', { gateId }),
+          'gate_not_found',
+        );
+      },
+    );
+
+    it('k2. create_gate_instance keeps a manifest source with a plain query', async () => {
+      const created = await callAsAdmin<GateInstanceWire>('create_gate_instance', {
+        gateId: 'plain-query-manifest',
+        transportKind: 'http',
+        target: 'https://billing.example.invalid',
+        manifestSource: 'https://billing.example.invalid/openapi.json?version=3',
+        credentialMode: 'shared',
+      });
+      expect(created.definition?.manifestSource).toBe(
+        'https://billing.example.invalid/openapi.json?version=3',
+      );
+    });
+
+    it('l. an announced target or endpoint carrying a credential is refused, unless the instance already holds exactly that value', async () => {
+      const refusedNew = await announce(
+        {
+          ...packagedAnnounceBody,
+          gateId: 'fixture-cred-target',
+          target: `https://ops:${FAKE}@fixture-b2a:9000`,
+        },
+        'gate',
+      );
+      expect(refusedNew.statusCode).toBe(400);
+      expect(refusedNew.json().error).toMatchObject({
+        code: 'credentials_in_connection_params',
+        details: { field: 'target' },
+      });
+      expect(refusedNew.body).not.toContain(FAKE);
+      await expectPlatformError(
+        () => callAsAdmin('get_gate_instance', { gateId: 'fixture-cred-target' }),
+        'gate_not_found',
+      );
+
+      const refusedEndpoint = await announce(
+        {
+          ...packagedAnnounceBody,
+          gateId: 'fixture-cred-endpoint',
+          endpoint: `http://fixture-b2a:9000/?token=${FAKE}`,
+        },
+        'gate',
+      );
+      expect(refusedEndpoint.statusCode).toBe(400);
+      expect(refusedEndpoint.json().error.details).toEqual({ field: 'endpoint' });
+
+      // A running gate whose announced target changes to one carrying a credential: refused, the
+      // row (and its heartbeat) untouched.
+      const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: PACKAGED_GATE_ID,
+      });
+      const changed = await announce(
+        { ...packagedAnnounceBody, target: `http://fixture-b2a:9000/?token=${FAKE}` },
+        'gate',
+      );
+      expect(changed.statusCode).toBe(400);
+      const unchanged = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: PACKAGED_GATE_ID,
+      });
+      expect(unchanged.target).toBe(before.target);
+      expect(unchanged.lastSeenAt).toBe(before.lastSeenAt);
+
+      // Stored before the rule: the same value keeps announcing (counted by scrub-raw-secrets).
+      const legacyTarget = `https://ops:${FAKE}@fixture-b2a:9000`;
+      await pool.query('update gate_instances set target = $2 where gate_id = $1', [
+        PACKAGED_GATE_ID,
+        legacyTarget,
+      ]);
+      try {
+        const heartbeat = await announce({ ...packagedAnnounceBody, target: legacyTarget }, 'gate');
+        expect(heartbeat.statusCode).toBe(200);
+      } finally {
+        await pool.query('update gate_instances set target = $2 where gate_id = $1', [
+          PACKAGED_GATE_ID,
+          packagedAnnounceBody.target,
+        ]);
+      }
+    });
+
+    it('m. enable_gate_instance refuses an instance stored with a credential in its target, writing nothing into the workspace', async () => {
+      const gateId = 'fixture-legacy-cred';
+      const endpoint = 'http://127.0.0.1:2';
+      await pool.query(
+        `insert into gate_instances
+           (gate_id, connector, display_name, transport_kind, target, endpoint, operations, status,
+            health, last_seen_at, updated_at)
+         values ($1, 'mcp', $1, 'mcp', $2, $3, $4::jsonb, 'enabled', 'ok', now(), now())`,
+        [
+          gateId,
+          `https://mcp.example.invalid/mcp?token=${FAKE}`,
+          endpoint,
+          JSON.stringify([HOSTED_OBSERVE_OP]),
+        ],
+      );
+      const thrown = await callAsOwner('enable_gate_instance', { gateId }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(thrown).toBeInstanceOf(ConnectionParamsCarryCredentialsError);
+      expect(thrown).toMatchObject({ details: { field: 'target' } });
+      expect((thrown as Error).message).not.toContain(FAKE);
+      const links = await pool.query(
+        'select count(*)::int as n from workspace_gate_links where gate_id = $1',
+        [gateId],
+      );
+      expect(links.rows[0].n).toBe(0);
+      const gatekeepers = await pool.query(
+        `select count(*)::int as n from objects
+          where workspace_id = $1 and object_type = 'Gatekeeper' and properties ->> 'endpoint' = $2`,
+        [workspaceId, endpoint],
+      );
+      expect(gatekeepers.rows[0].n).toBe(0);
     });
   },
 );
