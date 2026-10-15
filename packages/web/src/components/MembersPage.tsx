@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -10,6 +11,7 @@ import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
@@ -111,6 +113,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   const can = useRoleCan(http);
   const toast = useToast();
   const { principalId: ownPrincipalId } = useWorkspaceIdentity(http);
+  const ask = useAskForAccess(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
 
@@ -196,13 +199,10 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
         forbidden ? (
           <EmptyState
             title={t(
-              '成员名单只有 operator 和工作区所有者能看',
-              'Only operators and the workspace owner see the member list',
+              `成员名单只有${capabilityHolders('list_principals', t)}能看`,
+              `Only ${capabilityHolders('list_principals', t)} see the member list`,
             )}
-            body={t(
-              '要查看，请工作区所有者把你的角色改为 operator。',
-              'To see it, ask the workspace owner to make you an operator.',
-            )}
+            body={ask('operator', 'see')}
             testId="members-forbidden"
           />
         ) : (

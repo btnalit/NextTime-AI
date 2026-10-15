@@ -1,8 +1,7 @@
-import { ROLE_VALUES, getCapability, roleMayUseCapability } from '@nexttime/shared';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { capabilityHolders } from '../../lib/role-holders.js';
 import { type RouteRequirement, routeRequirement } from '../../lib/route-access.js';
 
 export interface RouteLinkProps
@@ -14,6 +13,10 @@ export interface RouteLinkProps
    *  and who can open it; `'plain'` — the label alone (the sentence around it already says who);
    *  `'hide'` — nothing. */
   readonly whenRefused?: 'text' | 'plain' | 'hide';
+  /** What stands in, as plain text, when the reader cannot open it and the label is an action
+   *  only someone else can take (「去启用：X」 → 「请平台管理员启用：X」, #541 acceptance P3 ②).
+   *  Takes precedence over `whenRefused`. */
+  readonly refused?: ReactNode;
   readonly testId?: string;
 }
 
@@ -27,12 +30,20 @@ export function RouteLink({
   href,
   children,
   whenRefused = 'text',
+  refused,
   testId,
   ...anchor
 }: RouteLinkProps) {
   const t = useT();
   const canOpen = useCanOpen();
   if (canOpen(href) === false) {
+    if (refused !== undefined) {
+      return (
+        <span className={anchor.className} data-testid={testId} data-route-refused="true">
+          {refused}
+        </span>
+      );
+    }
     if (whenRefused === 'hide') return null;
     return (
       <span className={anchor.className} data-testid={testId} data-route-refused="true">
@@ -57,14 +68,8 @@ export function whoCanOpen(requirement: RouteRequirement | undefined, t: Transla
   if (!('capability' in requirement)) {
     return t('（只有平台管理员能打开）', '(platform administrators only)');
   }
-  const capability = getCapability(requirement.capability);
-  const holders = ROLE_VALUES.filter(
-    (role) => role !== 'owner' && roleMayUseCapability(role, capability),
-  ).map((role) => roleLabel(role, t));
-  return holders.length === 0
-    ? t('（只有工作区所有者能打开）', '(workspace owner only)')
-    : t(
-        `（只有${holders.join('、')}和工作区所有者能打开）`,
-        `(only ${holders.join(', ')} and the workspace owner can open it)`,
-      );
+  return t(
+    `（只有${capabilityHolders(requirement.capability, t)}能打开）`,
+    `(only ${capabilityHolders(requirement.capability, t)} can open it)`,
+  );
 }

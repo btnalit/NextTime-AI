@@ -18,6 +18,7 @@ import { Button } from './kit/button.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field } from './kit/field.js';
 import { Select } from './kit/select.js';
+import { StillNeeded } from './kit/still-needed.js';
 import { UserPicker } from './platform/UserPicker.js';
 
 export interface AddMemberFormProps {
@@ -124,6 +125,17 @@ export function AddMemberForm({ http, onDone, onCancel, platformAdmin }: AddMemb
   const typedLoginNote = mode === 'typed' ? loginNormalizedNote(login, t) : null;
   const submitLogin = mode === 'directory' ? (picked?.login ?? '') : normalizedLogin;
   const ready = submitLogin !== '' && typedLoginError === null;
+  // DoD item 4: a disabled 添加 says what it still waits for (the field labels' own words).
+  const missing =
+    submitLogin === ''
+      ? [
+          mode === 'directory'
+            ? t('选择平台用户', 'pick a platform user')
+            : t('填写登录名', 'enter a login'),
+        ]
+      : typedLoginError !== null
+        ? [t('改正登录名', 'fix the login')]
+        : [];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -280,6 +292,7 @@ export function AddMemberForm({ http, onDone, onCancel, platformAdmin }: AddMemb
         <Button type="submit" variant="primary" aria-busy={submitting} disabled={!ready}>
           {t('添加', 'Add')}
         </Button>
+        <StillNeeded items={missing} hidden={submitting} testId="add-member-missing" />
       </div>
     </form>
   );

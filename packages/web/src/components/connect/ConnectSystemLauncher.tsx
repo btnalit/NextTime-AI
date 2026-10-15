@@ -22,7 +22,7 @@ import type { GrantRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
-import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { deriveGateInstanceStatus, labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
 import { GrantGateForm } from '../access/GrantGateForm.js';
 import { RouteLink } from '../kit/route-link.js';
@@ -47,6 +47,7 @@ import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
+import { AskOwnerToEnable } from './AskOwnerToEnable.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
 
@@ -359,6 +360,15 @@ export function ConnectSystemLauncher({
         : step === 2 && onWorkspace
           ? workspaceReady
           : true;
+  // DoD item 4: what 下一步 still waits for, in the step's own words.
+  const nextMissing =
+    step === 0
+      ? [t('选择系统类型', 'pick a system kind')]
+      : step === 1
+        ? [t('选择一个系统', 'pick a system')]
+        : linkedGatekeeperId === null
+          ? [t('在本工作区启用', 'enable it in this workspace')]
+          : [t('至少授权给一名成员', 'grant it to at least one member')];
 
   return (
     <Launcher
@@ -371,6 +381,7 @@ export function ConnectSystemLauncher({
       }}
       onBack={() => setStep((step - 1) as LauncherStep)}
       canNext={canNext}
+      nextMissing={nextMissing}
       testId="connect-system-launcher"
     >
       {step === 0 && onWorkspace && available.length > 0 ? (
@@ -1148,9 +1159,10 @@ function WorkspaceEnableSection({
             />
           </div>
         ) : (
-          <Notice testId="launcher-workspace-enable-owner-only">
-            {t('在本工作区启用是 owner 专属操作。', 'Enabling it in this workspace is owner-only.')}
-          </Notice>
+          <AskOwnerToEnable
+            gateName={gate.displayName}
+            testId="launcher-workspace-enable-owner-only"
+          />
         )
       ) : (
         <div className="row-wrap" data-testid="launcher-workspace-linked">
@@ -1494,7 +1506,25 @@ function AgentUsabilityResult({
   // to a Worker that cannot reach it — a true "does this actually work now" check, not a false
   // promise.
   let outcome: ReactNode;
-  if (gateRow.status === 'direct') {
+  // #541 acceptance P3 ④: readiness is about grants and Workers, not whether the gate answers. A
+  // lost or unreachable instance is said first — never "your agent can already call it" while the
+  // same drawer shows 失联 / 不可达.
+  const down =
+    gate.status === 'lost' || gate.health === 'unreachable' || gate.health === 'unauthorized';
+  if (down && (gateRow.status === 'direct' || gateRow.status === 'via_worker')) {
+    const state =
+      gate.status === 'lost'
+        ? labelText(statusChipStyle('gateInstance', 'lost'), t)
+        : labelText(statusChipStyle('gateHealth', gate.health), t);
+    outcome = (
+      <Notice tone="warn" testId="launcher-agent-usability-down">
+        {t(
+          `接入与授权已经就绪，但 ${gate.displayName} 现在${state}：恢复连接之前，你的智能体调用它会失败。请平台管理员检查这个门实例。`,
+          `Access and grants are in place, but ${gate.displayName} is ${state.toLowerCase()} right now: until it is back, your agent's calls to it fail. Ask a platform administrator to check the gate instance.`,
+        )}
+      </Notice>
+    );
+  } else if (gateRow.status === 'direct') {
     outcome = (
       <Notice testId="launcher-agent-usability-direct">
         <span className="row-wrap">

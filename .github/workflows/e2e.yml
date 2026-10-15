@@ -507,10 +507,13 @@ jobs:
       # of options" and `--update-snapshots` never took effect — a changed screenshot failed
       # instead of being rewritten. `pnpm --filter <pkg> exec <bin> <args>` runs the binary
       # directly (no script-level `--` passthrough), so the flag reaches Playwright unmangled.
-      # `=all` rewrites every snapshot, not only those over the diff threshold — otherwise a
-      # sub-threshold change (e.g. a 40 px breadcrumb shift at 1440) keeps the stale PNG and the
-      # drift accumulates until an unrelated PR trips it. Identical renders rewrite byte-identical
-      # files, so unchanged surfaces produce no git diff.
+      # `=changed` (legacy 154) rewrites only the snapshots that fail the comparison. `=all` used to
+      # rewrite every one, and no two renders are byte-identical: #517's regeneration rewrote 56
+      # PNGs, 30 of them noise inside the tolerance. The cost is that a change under
+      # `maxDiffPixelRatio` keeps the old PNG. Such drift is bounded: the next regeneration, run by
+      # whichever PR trips it, rewrites exactly that family. Per-run values (logins, ids, times) are
+      # masked (`e2e/lib/determinism.ts` `MASK_SELECTORS`, `[data-volatile]`) so they do not eat
+      # the tolerance.
       - name: Run web e2e (regenerate gate baselines)
         if: ${{ github.event.inputs.update_baselines == 'true' }}
         timeout-minutes: 14
@@ -519,7 +522,7 @@ jobs:
           # Design system v2: 00-gates/review-capture.spec.ts writes dark-theme and 390px review
           # captures under test-results/review/ (uploaded with the playwright-report artifact).
           E2E_REVIEW_CAPTURE: '1'
-        run: pnpm --filter @nexttime/web exec playwright test --update-snapshots=all
+        run: pnpm --filter @nexttime/web exec playwright test --update-snapshots=changed
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
       # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
@@ -533,6 +536,14 @@ jobs:
       # `always()`, not `failure()`: a retried-then-passed ("flaky") test only shows up in the
       # report, never in the job's conclusion — uploading it every time is how a flake stays
       # visible now that this workflow is meant to become a required check.
+      # Legacy 154: the seeded gate's re-announce loop (see "Seed a discovered gate instance (announce)") logs here;
+      # a gate that went `lost` mid-run is otherwise invisible in the report.
+      - name: Copy the gate heartbeat log into the report
+        if: always()
+        run: |
+          mkdir -p packages/web/test-results
+          cp "$RUNNER_TEMP/gate-heartbeat.log" packages/web/test-results/gate-heartbeat.log 2>/dev/null || true
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

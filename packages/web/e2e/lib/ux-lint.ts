@@ -13,6 +13,8 @@ import { type Locator, type Page, expect } from '@playwright/test';
  * - `watchForbiddenCapabilityCalls`: a page the signed-in role is meant to use never asks the
  *   kernel for something that role cannot do (a 403 on `/api/cap/*` means the page offered a
  *   control or prefetched data it should have known was out of reach).
+ * - `expectDisabledExplained`: a grey button says why (DoD item 4, `docs/console-usability-dod.md`)
+ *   — the rendered-page half of `scripts/guards/disabled-reason.mjs`, which checks the source.
  *
  * The page-wide "implementation detail leaking into copy" patterns (UUIDs, raw enums, env vars)
  * stay in `00-gates/content.spec.ts`, which scans every surface against a ratchet baseline.
@@ -113,4 +115,29 @@ export async function watchLocalRefusals(page: Page): Promise<{ take: () => Prom
         return seen.splice(0, seen.length);
       }),
   };
+}
+
+/** Asserts every visible disabled button under `scope` is explained: it carries a `title` or
+ *  `aria-describedby`, it is busy (`aria-busy`, its own spinner says what is happening), or the
+ *  scope shows a 「还差：…」 line (`components/kit/still-needed`, `[data-still-needed]`). Call it on
+ *  a form right after opening it, before anything is filled in — the state a reader first sees. */
+export async function expectDisabledExplained(scope: Locator): Promise<void> {
+  const unexplained = await scope.evaluate((root) => {
+    const visible = (element: Element) => {
+      const box = (element as HTMLElement).getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    };
+    const stillNeeded = [...root.querySelectorAll('[data-still-needed]')].some(visible);
+    if (stillNeeded) return [];
+    return [...root.querySelectorAll('button:disabled')]
+      .filter(visible)
+      .filter(
+        (button) =>
+          !button.getAttribute('title') &&
+          !button.getAttribute('aria-describedby') &&
+          button.getAttribute('aria-busy') !== 'true',
+      )
+      .map((button) => (button.textContent ?? '').replace(/\s+/g, ' ').trim() || '(no text)');
+  });
+  expect(unexplained, 'disabled buttons with no 「还差：…」 line or title nearby').toEqual([]);
 }

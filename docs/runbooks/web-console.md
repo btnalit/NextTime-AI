@@ -266,8 +266,10 @@ pnpm setup（本地已有）。
 # 1. 在要出基线的分支上手动触发一次 workflow_dispatch，update_baselines=true：
 gh workflow run e2e.yml --ref <branch> -f update_baselines=true
 
-# 2. 等它跑完（这一步等价于正常跑一遍 web-e2e，只是 Run web e2e 换成 --update-snapshots
-#    且 axe/copy-guard 换成"写基线"模式——其余 15+ 个 spec 的断言不受影响，仍然是一次完整验证）：
+# 2. 等它跑完（这一步等价于正常跑一遍 web-e2e，只是 Run web e2e 换成 --update-snapshots=changed
+#    且 axe/copy-guard 换成"写基线"模式——其余 15+ 个 spec 的断言不受影响，仍然是一次完整验证）。
+#    =changed 只重写比对失败的截图，其余 PNG 与检出的一模一样，所以第 3 步整目录覆盖后，
+#    git diff 里只有真正变了的那几张（遗留 154；以前用 =all，每次都把容差内的噪声一起重写）：
 gh run watch <run-id>
 
 # 3. 下载 gate-baselines 产物（screenshot PNG + 两个 *-baseline.json），解压覆盖到本地：

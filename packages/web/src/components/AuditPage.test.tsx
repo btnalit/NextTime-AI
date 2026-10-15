@@ -235,7 +235,7 @@ describe('AuditPage entry points', () => {
     });
     renderPage(http, { actionRequestId: 'ar-1' });
     const notice = await screen.findByTestId('approval-context-unavailable');
-    expect(notice.textContent).toContain('operator 和工作区所有者');
+    expect(notice.textContent).toContain('操作员和工作区所有者');
     const chip = await screen.findByText((_, el) => el?.getAttribute('data-ref-id') === 'ar-1');
     expect(chip.querySelector('a')).toBeNull();
     expect(http.calls.some((c) => c.name === 'get_action')).toBe(false);

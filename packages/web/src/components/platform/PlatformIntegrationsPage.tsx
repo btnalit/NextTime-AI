@@ -439,6 +439,7 @@ function ConnectorDenyList({
           open={denyList.confirmOpen}
           onOpenChange={denyList.onConfirmOpenChange}
           anchor={
+            // ux-lint-allow-disabled: nothing changed yet — the list shows the saved entries.
             <Button
               variant="secondary"
               onClick={() => denyList.requestSave()}

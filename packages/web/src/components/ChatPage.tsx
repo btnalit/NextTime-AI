@@ -288,6 +288,7 @@ export function ChatPage({
                   disabled={composer.composerDisabled}
                   aria-label="Message"
                 />
+                {/* ux-lint-allow-disabled: the composer is empty, or the banner above it says why it is closed. */}
                 <Button
                   type="submit"
                   variant="primary"

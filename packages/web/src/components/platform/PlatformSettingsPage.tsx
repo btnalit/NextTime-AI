@@ -16,6 +16,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { PageHeader } from '../kit/page-header.js';
 import { FormCard, FormCardSection } from '../kit/section.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea } from '../ui/Field.js';
@@ -189,6 +190,15 @@ function PlatformSettingsForm({
     passwordMinLengthValid &&
     dailyLimit !== undefined &&
     monthlyBudget !== undefined;
+  // DoD item 4: a disabled 保存 says which field still needs fixing (the field labels' own words).
+  const missing = [
+    siteNameValid ? null : t('填写站点名', 'enter a site name'),
+    dailyLimit !== undefined ? null : t('改正默认每日调用上限', 'fix the default daily call limit'),
+    monthlyBudget !== undefined
+      ? null
+      : t('改正默认每月 token 预算', 'fix the default monthly token budget'),
+    passwordMinLengthValid ? null : t('密码最短长度填 8–128', 'set the password minimum to 8–128'),
+  ].filter((item): item is string => item !== null);
 
   /** Only the keys whose value actually differs from the loaded row — `update_platform_settings`
    *  leaves everything omitted untouched. */
@@ -496,9 +506,12 @@ function PlatformSettingsForm({
                 ? t('从未修改', 'Never updated')
                 : formatDateTime(initial.updatedAt)}
             </span>
-            <Button type="submit" variant="primary" loading={submitting} disabled={!valid}>
-              {t('保存', 'Save')}
-            </Button>
+            <div className="row">
+              <StillNeeded items={missing} hidden={submitting} testId="platform-settings-missing" />
+              <Button type="submit" variant="primary" loading={submitting} disabled={!valid}>
+                {t('保存', 'Save')}
+              </Button>
+            </div>
           </div>
         </FormCardSection>
       </FormCard>

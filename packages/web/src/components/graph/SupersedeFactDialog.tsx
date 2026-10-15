@@ -252,6 +252,7 @@ export function SupersedeFactDialog({
         <DialogFooter>
           {step === 'edit' ? (
             <>
+              {/* ux-lint-allow-disabled: the new-value field above shows its own JSON error. */}
               <Button
                 variant="primary"
                 size="s"

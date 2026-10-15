@@ -88,6 +88,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           mono
           data-testid="provider-secret-input"
         />
+        {/* ux-lint-allow-disabled: one field — empty, or its problem is shown under the form. */}
         <Button
           type="submit"
           variant="secondary"

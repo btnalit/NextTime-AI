@@ -11,6 +11,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 // Bugfix (PR #324 review): "待启用的平台实例" was still the legacy dashed-border EmptyState —
 // `kit/empty-state` (block variant, no dashed border) instead, matching V9. The rest of this
@@ -116,12 +117,7 @@ export function AvailableGateInstancesSection({
           testId="available-gates-loading"
         />
       ) : forbidden ? (
-        <Notice testId="available-gates-forbidden">
-          {t(
-            '从平台目录启用是 owner 专属操作',
-            'Enabling from the platform catalog is owner-only.',
-          )}
-        </Notice>
+        <AskOwnerToEnable testId="available-gates-forbidden" />
       ) : available.state.status === 'error' ? (
         <ErrorBanner
           error={available.state.error}
@@ -276,7 +272,7 @@ function AvailableGateRow({
           />
         ) : (
           <span className="muted">
-            {t('未启用（由 owner 启用）', 'Not enabled (owner enables)')}
+            {t('未启用（由所有者启用）', 'Not enabled (owner enables)')}
           </span>
         )}
         {publishedCount !== null ? (
@@ -348,6 +344,10 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
                 href={hrefs.platformGateInstance(row.gateId)}
                 className="inline-flex min-h-9 items-center"
                 testId="available-gates-enable-link"
+                refused={t(
+                  `请平台管理员启用：${row.displayName}`,
+                  `Ask a platform administrator to enable ${row.displayName}`,
+                )}
               >
                 {t(`去启用：${row.displayName}`, `Enable ${row.displayName}`)}
               </RouteLink>
@@ -374,6 +374,7 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
             href={hrefs.platformIntegrations()}
             className="inline-flex min-h-9 items-center"
             testId="available-gates-integrations-link"
+            whenRefused="hide"
           >
             {t('打开平台集成', 'Open platform integrations')}
           </RouteLink>

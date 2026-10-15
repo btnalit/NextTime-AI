@@ -7,6 +7,7 @@ import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { Field } from '../kit/field.js';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../kit/sheet.js';
+import { StillNeeded } from '../kit/still-needed.js';
 
 export interface QuotaEditSheetProps {
   readonly http: CapabilityCaller;
@@ -212,11 +213,7 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('取消', 'Cancel')}
           </Button>
-          {missing.length > 0 && !submitting ? (
-            <span className="text-small text-3" data-testid="quota-edit-missing">
-              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
-            </span>
-          ) : null}
+          <StillNeeded items={missing} hidden={submitting} testId="quota-edit-missing" />
         </SheetFooter>
       </SheetContent>
     </Sheet>

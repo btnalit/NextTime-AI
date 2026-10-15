@@ -83,7 +83,7 @@ describe('CreateGateInstanceForm', () => {
     render(<CreateGateInstanceForm http={http} onCreated={onCreated} onCancel={vi.fn()} />);
 
     const form = screen.getByTestId('create-gate-instance-form');
-    fireEvent.change(within(form).getByLabelText(/Gate id/), {
+    fireEvent.change(within(form).getByLabelText(/门 ID/), {
       target: { value: 'billing-api' },
     });
     fireEvent.click(within(form).getByLabelText(/mcp/));
@@ -116,7 +116,7 @@ describe('CreateGateInstanceForm', () => {
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
 
     const form = screen.getByTestId('create-gate-instance-form');
-    fireEvent.change(within(form).getByLabelText(/Gate id/), {
+    fireEvent.change(within(form).getByLabelText(/门 ID/), {
       target: { value: 'billing-api' },
     });
     fireEvent.change(within(form).getByLabelText(/^目标/), {
@@ -141,14 +141,14 @@ describe('CreateGateInstanceForm', () => {
     expect(submit.disabled).toBe(true);
 
     // Normalization turns most input into a valid id; a single character is still too short.
-    fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'x' } });
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'x' } });
     expect(within(form).getByText(/至少需要 2 个字符/)).toBeTruthy();
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://target.internal' },
     });
     expect(submit.disabled).toBe(true);
 
-    fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'valid-id' } });
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'valid-id' } });
     // http with a blank manifest source: the kernel would 400 — still disabled.
     expect(submit.disabled).toBe(true);
 
@@ -179,7 +179,7 @@ describe('CreateGateInstanceForm', () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
     const form = screen.getByTestId('create-gate-instance-form');
-    const gateId = within(form).getByLabelText(/Gate id/) as HTMLInputElement;
+    const gateId = within(form).getByLabelText(/门 ID/) as HTMLInputElement;
 
     // From the target host when there is no usable name.
     fireEvent.change(within(form).getByLabelText(/^目标/), {

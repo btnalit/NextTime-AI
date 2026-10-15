@@ -508,7 +508,7 @@ export function SystemAccessCard({
               </span>
               <p className="field-hint" data-testid="system-access-approver-hint">
                 {t(
-                  '授权给 operator 时，这位成员同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
+                  '授权给操作员时，这位成员同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；所有者本来就能审批一切。',
                   'A grant to an operator also makes them an approver of every action on this gate — they can approve or reject other members’ writes. Owners can approve everything anyway.',
                 )}
               </p>

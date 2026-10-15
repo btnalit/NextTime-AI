@@ -421,7 +421,8 @@ function userColumns(
       header: t('登录名', 'Login'),
       priority: 'high',
       cellClassName: 'mono',
-      cell: (user) => user.login,
+      // Per-run in CI (`owner-<random>`): masked in the screenshot gate (legacy 154).
+      cell: (user) => <span data-volatile="">{user.login}</span>,
     },
     {
       id: 'status',

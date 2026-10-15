@@ -10,6 +10,7 @@ import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
 import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
@@ -134,8 +135,8 @@ export function ActionRequestCard({
       {decidable && !canDecide ? (
         <Notice testId="action-card-awaits-approver">
           {t(
-            '这一步要由 operator 或工作区所有者批准；这里会显示结果。',
-            'An operator or the workspace owner approves this step; the outcome shows here.',
+            `这一步要由${capabilityHolders('approve', t, 'or')}批准；这里会显示结果。`,
+            `${capabilityHolders('approve', t, 'or')} approves this step; the outcome shows here.`,
           )}
         </Notice>
       ) : null}

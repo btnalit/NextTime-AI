@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { AuditIdPicker } from '../lib/audit-id-picker.js';
 import { objectSource } from '../lib/audit-pickers.js';
@@ -15,6 +16,7 @@ import { prettyJson, redactSensitive } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { useGatekeeperNames, usePrincipalDirectory } from './approvals/useDirectoryNames.js';
 import { ApprovalContext } from './audit/ApprovalContext.js';
 import { AuditLogSection } from './audit/AuditLogSection.js';
@@ -89,8 +91,8 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
         // already filtered to this request's rows.
         <Notice testId="approval-context-unavailable">
           {t(
-            '审批请求本身只有 operator 和工作区所有者能打开；下面的审计流已按这条请求筛选。',
-            'Only an operator or a workspace owner can open the request itself; the audit log below is already filtered to it.',
+            `审批请求本身只有${capabilityHolders('get_action', t)}能打开；下面的审计流已按这条请求筛选。`,
+            `Only ${capabilityHolders('get_action', t, 'or')} can open the request itself; the audit log below is already filtered to it.`,
           )}
         </Notice>
       ) : entry.actionRequestId && canOpenApproval === true ? (
@@ -149,6 +151,7 @@ const IDLE: LookupState = { busy: false, error: null, result: null };
 
 function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
+  const ask = useAskForAccess(http);
   const [entityId, setEntityId] = useState('');
   // Graph Objects to pick from (`search`, member + auditor): the most recently updated ones, or
   // the ones matching what the reader types.
@@ -194,6 +197,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
           disabled={state.busy}
           testId="reconstruct-entity-id"
         />
+        {/* ux-lint-allow-disabled: one field — nothing typed or picked yet. */}
         <Button type="submit" variant="secondary" loading={state.busy} disabled={!entityId.trim()}>
           {t('重建', 'Reconstruct')}
         </Button>
@@ -205,10 +209,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
             '重建只有审计员和工作区所有者能做',
             'Only auditors and the workspace owner can reconstruct',
           )}
-          body={t(
-            '要重建，请工作区所有者把你的角色改为 auditor。',
-            'To reconstruct, ask the workspace owner to make you an auditor.',
-          )}
+          body={ask('auditor', 'reconstruct')}
           testId="reconstruct-forbidden"
         />
       ) : state.error !== null ? (

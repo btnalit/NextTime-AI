@@ -17,6 +17,7 @@ import {
 import { usePublishCredentialReview } from '../lib/credential-review.js';
 import { prettyJson } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
 import {
   GovernanceChangeList,
@@ -123,6 +124,41 @@ export async function loadGateOperations(
   return rows;
 }
 
+/** Draft first (the revision waiting for review), then published, then anything else. */
+const REVIEW_STATUS_ORDER: readonly string[] = ['draft', 'published'];
+
+function revisionOf(row: OperationDetailView): number {
+  return row.version ?? 0;
+}
+
+/**
+ * One row per Operation name (#541 acceptance P3 ③): an Operation's identity is `(gatekeeperId,
+ * name, version)` (`substrate/ontology/meta-objects.ts`), so `search` returns every revision — a
+ * published v1, its draft v2, a deprecated v0 — and the review table showed the same name once
+ * per revision. Kept: the draft under review if there is one, else the published revision, else
+ * the newest; the highest version wins within a status.
+ */
+export function currentRevisions(
+  rows: readonly OperationDetailView[],
+): readonly OperationDetailView[] {
+  const rank = (row: OperationDetailView) => {
+    const index = REVIEW_STATUS_ORDER.indexOf(row.status);
+    return index === -1 ? REVIEW_STATUS_ORDER.length : index;
+  };
+  const byName = new Map<string, OperationDetailView>();
+  for (const row of rows) {
+    const kept = byName.get(row.name);
+    if (
+      kept === undefined ||
+      rank(row) < rank(kept) ||
+      (rank(row) === rank(kept) && revisionOf(row) > revisionOf(kept))
+    ) {
+      byName.set(row.name, row);
+    }
+  }
+  return rows.filter((row) => byName.get(row.name) === row);
+}
+
 /** Reviewing the classification proposes and publishes Operations (builder, owner): any other
  *  role is told whose step it is instead (#541 review N1). */
 export function OnboardingWizardReview(props: OnboardingWizardReviewProps) {
@@ -132,8 +168,8 @@ export function OnboardingWizardReview(props: OnboardingWizardReviewProps) {
     return (
       <Notice testId="wizard-review-builder-only">
         {t(
-          '审核并发布 Operation 由 builder 或工作区所有者完成。',
-          'A builder or the workspace owner reviews and publishes the Operations.',
+          `审核并发布 Operation 由${capabilityHolders('publish_operation', t, 'or')}完成。`,
+          `${capabilityHolders('publish_operation', t, 'or')} reviews and publishes the Operations.`,
         )}
       </Notice>
     );
@@ -149,7 +185,7 @@ function OnboardingWizardReviewBody({
 }: OnboardingWizardReviewProps) {
   const t = useT();
   const loadOperations = useCallback(
-    () => loadGateOperations(http, gatekeeperId),
+    async () => currentRevisions(await loadGateOperations(http, gatekeeperId)),
     [http, gatekeeperId],
   );
   const operations = useResource(loadOperations);

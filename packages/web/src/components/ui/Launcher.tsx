@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useT } from '../../lib/i18n.js';
+import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from './Button.js';
 
 /** The four transport kinds a system can be reached through (`GateTransportKindWireSchema`). */
@@ -62,6 +63,9 @@ export interface LauncherProps {
   readonly onBack: () => void;
   /** Gate for 下一步; defaults to "a kind is chosen" on step 0 and `true` afterwards. */
   readonly canNext?: boolean;
+  /** What 下一步 still waits for, shown next to it while it is grey (DoD item 4). Defaults to
+   *  「选择系统类型」 on step 0 with no kind chosen. */
+  readonly nextMissing?: readonly string[];
   /** Label of the forward button on the last step (defaults to the translated 完成 / Finish). */
   readonly finishLabel?: string;
   readonly busy?: boolean;
@@ -86,6 +90,7 @@ export function Launcher({
   onNext,
   onBack,
   canNext,
+  nextMissing,
   finishLabel,
   busy = false,
   kinds = LAUNCHER_KINDS,
@@ -96,6 +101,10 @@ export function Launcher({
   const effectiveFinishLabel = finishLabel ?? t('完成', 'Finish');
   const last = step === LAUNCHER_STEPS.length - 1;
   const forwardEnabled = canNext ?? (step === 0 ? kind !== null : true);
+  const missing = forwardEnabled
+    ? []
+    : (nextMissing ??
+      (step === 0 && kind === null ? [t('选择系统类型', 'pick a system kind')] : []));
   return (
     <section
       className="launcher"
@@ -161,6 +170,7 @@ export function Launcher({
         >
           {t('上一步', 'Back')}
         </Button>
+        <StillNeeded items={missing} hidden={busy} testId="launcher-missing" />
         <Button
           variant="primary"
           onClick={onNext}

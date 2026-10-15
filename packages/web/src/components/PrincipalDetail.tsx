@@ -256,6 +256,7 @@ export function PrincipalDetail({
                   open={confirmingOwner}
                   onOpenChange={setConfirmingOwner}
                   anchor={
+                    // ux-lint-allow-disabled: the picked role is the current one.
                     <Button
                       variant="secondary"
                       onClick={() => void saveRole()}
@@ -265,11 +266,11 @@ export function PrincipalDetail({
                       {t('保存', 'Save')}
                     </Button>
                   }
-                  title={t('把服务凭证提升为 owner', 'Promote a service credential to owner')}
+                  title={t('把服务凭证提升为所有者', 'Promote a service credential to owner')}
                   description={ownerCopy.description}
                   target={principal.displayName}
                   impact={ownerCopy.impact}
-                  confirmLabel={t('提升为 owner', 'Promote to owner')}
+                  confirmLabel={t('提升为所有者', 'Promote to owner')}
                   onConfirm={promoteServiceToOwner}
                   testId="principal-owner-confirm"
                 />

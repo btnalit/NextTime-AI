@@ -71,6 +71,7 @@ export function ListRow({
   const interactive = onSelect !== undefined;
   return (
     <li className="border-b border-border last:border-b-0">
+      {/* ux-lint-allow-disabled: a read-only row, not an action. */}
       <button
         type="button"
         disabled={!interactive}

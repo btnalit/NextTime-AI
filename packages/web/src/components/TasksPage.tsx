@@ -376,7 +376,9 @@ function TasksList({
                 {need ? excerpt(need, 90) : t('（无目标描述）', '(no objective given)')}
               </span>
               <span className="row-wrap text-3">
-                <span className="truncate">{name ?? shortId(task.workerDefinitionId)}</span>
+                <span className="truncate">
+                  {name ?? <span data-volatile="">{shortId(task.workerDefinitionId)}</span>}
+                </span>
                 <span className="text-3 text-small">v{task.workerDefinitionVersion}</span>
                 <span className="meta-sep" />
                 <span>{t('代表', 'on behalf of')}</span>

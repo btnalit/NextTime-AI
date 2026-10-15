@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
@@ -6,6 +7,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind, shortId } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { capabilityHolders } from '../../lib/role-holders.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { List, ListRow } from '../kit/list-row.js';
@@ -26,14 +28,16 @@ export interface LinkedApprovalsProps {
 const PAGE_SIZE = 20;
 
 /** The Task's approvals are an operator/owner read: say whom to ask, never the capability name. */
-function LinkedApprovalsForbidden() {
+function LinkedApprovalsForbidden({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
+  const ask = useAskForAccess(http);
   return (
     <Notice testId="linked-approvals-forbidden">
       {t(
-        '关联的审批只有 operator 和工作区所有者能看。要查看，请工作区所有者把你的角色改为 operator。',
-        'Only operators and the workspace owner see linked approvals. To see them, ask the workspace owner to make you an operator.',
+        `关联的审批只有${capabilityHolders('list_action_requests', t)}能看。`,
+        `Only ${capabilityHolders('list_action_requests', t)} see linked approvals. `,
       )}
+      {ask('operator', 'see')}
     </Notice>
   );
 }
@@ -55,7 +59,7 @@ function LinkedApprovalsForbidden() {
 export function LinkedApprovals(props: LinkedApprovalsProps) {
   const can = useRoleCan(props.http);
   if (can('list_action_requests') === false) {
-    return <LinkedApprovalsForbidden />;
+    return <LinkedApprovalsForbidden http={props.http} />;
   }
   return <LinkedApprovalsList {...props} />;
 }
@@ -87,7 +91,7 @@ function LinkedApprovalsList({
   }
   if (linked.state.status === 'error') {
     if (isForbiddenError(linked.state.error)) {
-      return <LinkedApprovalsForbidden />;
+      return <LinkedApprovalsForbidden http={http} />;
     }
     return (
       <ErrorBanner

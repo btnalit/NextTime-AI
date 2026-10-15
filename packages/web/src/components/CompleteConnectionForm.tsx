@@ -522,6 +522,7 @@ export function CompleteConnectionForm({
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
+        {/* ux-lint-allow-disabled: the 门的连接密钥 field above shows it generating, or why it failed. */}
         <Button
           type="submit"
           variant="primary"

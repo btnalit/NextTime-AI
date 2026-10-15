@@ -76,7 +76,7 @@ export function ownerCredentialConfirmCopy(t: Translate): {
 } {
   return {
     description: t(
-      '这把 API key 能做 owner 在本工作区能做的一切，包括管理成员和审批。',
+      '这把 API key 能做所有者在本工作区能做的一切，包括管理成员和审批。',
       'This API key can do everything an owner can do in this workspace, including managing members and approving requests.',
     ),
     impact: [

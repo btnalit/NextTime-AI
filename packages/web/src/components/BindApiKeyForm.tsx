@@ -107,6 +107,7 @@ export function BindApiKeyForm({ onBound, fetchImpl }: BindApiKeyFormProps) {
           {/* S8 W1-A11 (audit L2): secondary — on 我的账户 this is the third of three independent
            *  forms sharing one view (`DisplayNameCard`'s "保存" stays the one ink primary there);
            *  on 概览 it renders standalone with no competing primary either way. */}
+          {/* ux-lint-allow-disabled: one field — the API key box is empty. */}
           <Button type="submit" variant="secondary" loading={submitting} disabled={!apiKey.trim()}>
             {t('绑定', 'Bind')}
           </Button>
