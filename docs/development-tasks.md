@@ -3915,6 +3915,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 测试：`invoke.integration.test.ts` R-58 区块 6 个确定性屏障测试（迟到的反应、reaper 的 `terminate` 钩子里先跑轮询、取消清扫中跑崩溃反应、取消中看到 `terminated: requested`、取消 UPDATE 未提交时 spawn 等锁（`pg_stat_activity` 判定）、认领后无 Handle），各自去掉修复即红；原「与取消并发完成」用例改在取消的 UPDATE 前注入完成。
 - 剩余崩溃窗口（bump 提交后进程崩溃、取消两个事务之间崩溃）与增量审查的三条（`exited` / `terminated` 守卫无测试、取消后回收前崩溃、终态 Task 不清扫）并进遗留 206；纵深防御见 207。历史影响统计见 `release.md` §3.22。
 
+**敏感值不再原样落库与回显（#549，2026-10-15 合入，core 0043；遗留 183–187、238 关闭）**
+
+- 规则同源：地址规则是 `@nexttime/shared` 的 `addressCredential`（userinfo 里的密码；查询或片段参数带值且名字命中 `namesASecretField` 或 `ADDRESS_SECRET_QUERY_NAMES`：`sig`、`signature`、`x-amz-signature`、`x-goog-signature`、`key`、`pwd`、`pass`、`auth`），内核 `governance/connections/credentials.ts` 与控制台 `lib/gate-input.ts` 都调用它；预检 SQL `packages/kernel/src/cli/scrub-raw-secrets.preflight.sql` 逐字取 `ADDRESS_CREDENTIAL_SQL`，`scrub-raw-secrets.preflight.integration.test.ts` 在 PG 里对拍（SQL 是 TS 规则的上界）。
+- 地址入口：`request_connection`、`create_connection`（target、endpoint、manifestSource）、`create_gate_instance`、`enable_gate_instance`（拒绝启用 target 带凭据的旧实例）、门公告 `/internal/gates/announce`（与库中旧值相同放行）、`registerGatekeeper`（Gatekeeper 对象唯一写入者，纵深防御）。带凭据一律 400，不写库、不抓取。
+- 图写入收口：`substrate/graph/scrub-properties.ts` 的 `scrubGraphProperties` 用于 `SqlGraphStore.assertFact`（在同源比较之前遮蔽，同一段原文再断言仍判为 unchanged）、`supersedeFact`、`upsertObject`；`upsertObject({kernelAuthored: true})` 豁免 `meta-objects.ts` 的 7 处内核自写投影（Gatekeeper 的 `connectionSecretSalt`、已过「已核对凭据」的 Skill / Procedure / WorkerDefinition / Operation）。纯内容原语 `secret-values.ts` 移到 `substrate/redaction/`（depcruise 不许 substrate 依赖 governance），`governance/redaction/secret-values.ts` 只留 re-export。
+- 读回与审计：`readTerminalOutcome` 读回时对 `data` / `reason` 再遮蔽一次（审计行不改，I11）；`platform-extension` 的 `toSearchQuery` 先递归删掉秘密字段再截 200 字；llm-proxy `upstream-error-body.ts` 对非 2xx 体按 64 KiB 上界读、替换真 key 字面量与 token 模式后重新序列化（`type` / `code` / `request_id` 只替换真 key），超界换成 provider 形状的错误，重算 `content-length`。
+- 存量：CLI `packages/kernel/src/cli/scrub-raw-secrets.ts`（机制在 `application/platform/scrub-raw-secrets.ts`），默认 dry run，`--yes` 按批短事务改写 `turnReports` / `decisions` / `toolCallRecords`，其余 7 类只计数并列 id，写一条 `cli.raw_secrets_scrubbed`；`apply-release.sh` 在 `BACKUP_NOW` 之后跑（`release.md` §3.25）。core 0043 只放宽 `audit_records_actor_shape`。
+- 控制台：`ui/Field.tsx` 的 `errorDetails`（服务端原文收进「技术细节」）；清单来源建议只取 origin + path；`RequestConnectionForm` / `CreateGateInstanceForm` / `EnableGateConfirm` 按字段与场景给说明。
+- 遗留：236（C1，另开 PR，带 llm-proxy `content-encoding` 修复）、237、239–241、247–251。
+
 **控制台审计剩余 P1：可读的名称与按角色的下一步（#541，2026-10-15 合入，无迁移；审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16）**
 
 - 内核：`models.json` 的 `providers` 缺省为空（`{}` 是空目录，不再 503）；`platform_overview` 新增 `modelsCatalog: 'ok' | 'unreadable'`；`queryRecentPlatformWrites` 在最新 1000 条平台审计里取改动（读操作 = 注册表里 `capabilityHasSideEffects` 为假的能力，与控制台审计页默认过滤同一判定），概览与 `platform_status` 共用。契约快照只多了 `modelsCatalog`。
