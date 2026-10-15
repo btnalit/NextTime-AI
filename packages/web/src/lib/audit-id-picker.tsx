@@ -238,7 +238,7 @@ export function AuditIdPicker({
           onChange(event.target.value);
           setTyped(event.target.value);
         }}
-        placeholder={placeholder ?? t('粘贴 id，或输入关键字筛选', 'Paste an id or type to filter')}
+        placeholder={placeholder ?? t('粘贴 ID，或输入关键字筛选', 'Paste an id or type to filter')}
         disabled={disabled}
         autoComplete="off"
         spellCheck={false}
@@ -277,7 +277,7 @@ export function AuditIdPicker({
         <p className="field-hint" data-testid={`${testId}-degraded`}>
           {degradedNote ??
             t(
-              '无权读取完整列表；候选来自审计记录中最近出现的 id。',
+              '无权读取完整列表；候选来自审计记录中最近出现的 ID。',
               'The full list is not readable for your role; suggestions come from recent audit rows.',
             )}
         </p>
@@ -289,14 +289,14 @@ export function AuditIdPicker({
                 '没有匹配的候选；将按输入的值查询。',
                 'No matching suggestions — the typed value is used as is.',
               )
-            : t('还没有可选的记录；可直接粘贴 id。', 'Nothing to pick yet — paste an id instead.')}
+            : t('还没有可选的记录；可直接粘贴 ID。', 'Nothing to pick yet — paste an id instead.')}
         </p>
       ) : null}
       {state.status === 'forbidden' ? (
         <p className="field-hint" data-testid={`${testId}-refused`}>
           {refusedNote ??
             t(
-              '当前角色无权读取候选列表，请直接粘贴 id。',
+              '当前角色无权读取候选列表，请直接粘贴 ID。',
               'Your role cannot read the suggestion list — paste an id instead.',
             )}
         </p>

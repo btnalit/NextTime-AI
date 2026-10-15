@@ -64,19 +64,18 @@ describe('ActionRequestDetail', () => {
     expect(screen.getByText('docker container restart')).toBeTruthy();
     expect(screen.getByText('Restart the web-1 container.')).toBeTruthy();
     expect(screen.getByText('web-1')).toBeTruthy();
-    expect(screen.getByText('require_approval')).toBeTruthy();
+    expect(screen.getByText('策略要求人工审批')).toBeTruthy();
     const params = document.querySelector('.params-block');
     expect(params?.textContent).toContain('[redacted]');
     expect(params?.textContent).not.toContain('hunter2');
-    expect(screen.queryByText('Requested')).toBeNull();
+    expect(screen.queryByText('请求于')).toBeNull();
   });
 
   it('shows the requested / executed timestamps in the full variant', () => {
     renderDetail({ status: 'executed', executedAt: '2026-09-03T00:01:00.000Z' });
-    expect(screen.getByText('Requested')).toBeTruthy();
-    // Before S8 W1-A10 'Executed' was both the status chip's label and the timestamp's <dt>; the
-    // chip is bilingual now (default zh-CN renders '已执行'), so only the <dt> matches.
-    expect(screen.getAllByText('Executed')).toHaveLength(1);
+    expect(screen.getByText('请求于')).toBeTruthy();
+    // The status chip reads '已执行' and the timestamp's <dt> '执行于' — both Chinese now.
+    expect(screen.getAllByText('执行于')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
 

@@ -6,6 +6,7 @@ import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
+import { roleMayOpen } from '../../lib/route-access.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
 import { LangSwitch } from '../LangSwitch.js';
@@ -139,6 +140,10 @@ export function SidebarContent({
   const t = useT();
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
+  // A page the known role cannot open is not offered (`lib/route-access`, the same table every
+  // in-app link asks); until the role is known every item shows.
+  const roleSeesItem = (item: NavItem) =>
+    role.kind !== 'known' || roleMayOpen(role.role, item.href);
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   const navRef = useRef<HTMLElement>(null);
@@ -211,7 +216,9 @@ export function SidebarContent({
 
       <nav className="sidebar-nav" aria-label="Sections" ref={navRef}>
         <NavSectionGroup titleZh="使用" titleEn="Use" testId="nav-section-use">
-          {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+          {WORK_NAV.filter(roleSeesItem).map((item) =>
+            renderNavItem(item, active, pendingCount, t),
+          )}
         </NavSectionGroup>
 
         {showGovern ? (
@@ -231,7 +238,9 @@ export function SidebarContent({
             scopeEn="This workspace"
             testId="nav-section-govern"
           >
-            {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+            {GOVERN_NAV.filter(roleSeesItem).map((item) =>
+              renderNavItem(item, active, pendingCount, t),
+            )}
             {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV, t) : null}
           </NavSectionGroup>
         ) : null}

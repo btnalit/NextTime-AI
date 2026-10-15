@@ -161,6 +161,13 @@ describe('readModelCatalog — provider health', () => {
     await expect(readModelCatalog(env)).rejects.toBeInstanceOf(ModelsCatalogUnavailableError);
   });
 
+  it('the `{}` placeholder host-env-init.sh seeds is an empty catalog; a wrong shape is still unavailable (console audit P1-3)', async () => {
+    await writeFile(path.join(dir, 'models.json'), '{}');
+    await expect(readModelCatalog(env)).resolves.toEqual([]);
+    await writeFile(path.join(dir, 'models.json'), JSON.stringify({ providers: [] }));
+    await expect(readModelCatalog(env)).rejects.toBeInstanceOf(ModelsCatalogUnavailableError);
+  });
+
   it('withHealth: false reads only models.json (the membership checks)', async () => {
     await writeFile(path.join(dir, 'provider-health.json'), JSON.stringify(VALID_HEALTH));
     const catalog = await readModelCatalog(env, { withHealth: false });

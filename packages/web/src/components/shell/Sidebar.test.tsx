@@ -17,6 +17,62 @@ const KNOWN_OWNER: WorkspaceRole = { kind: 'known', role: 'owner' };
 const KNOWN_MEMBER: WorkspaceRole = { kind: 'known', role: 'member' };
 
 describe('Sidebar', () => {
+  it('#541 acceptance: hides a 治理 page the known role cannot load at all (审计 for an operator)', () => {
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={{ kind: 'known', role: 'operator' }}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-audit')).toBeNull();
+    expect(screen.getByTestId('nav-members')).toBeTruthy();
+    expect(screen.getByTestId('nav-systems')).toBeTruthy();
+    cleanup();
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={{ kind: 'known', role: 'auditor' }}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-audit')).toBeTruthy();
+    expect(screen.queryByTestId('nav-members')).toBeNull();
+  });
+
+  it('#541 acceptance P2: 待我审批 shows only for a role that reads the queue (operator, owner)', () => {
+    for (const [role, shown] of [
+      ['owner', true],
+      ['operator', true],
+      ['builder', false],
+      ['member', false],
+      ['auditor', false],
+    ] as const) {
+      render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={{ kind: 'known', role }}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTestId('nav-approvals') !== null, role).toBe(shown);
+      expect(screen.getByTestId('nav-chats')).toBeTruthy();
+      cleanup();
+    }
+  });
+
   it('shows 治理', () => {
     for (const role of [INFERRED_UNKNOWN, INFERRED_OWNER, INFERRED_OPERATOR_PLUS, KNOWN_OWNER]) {
       const { unmount } = render(

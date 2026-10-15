@@ -4,6 +4,7 @@ import type {
   DecisionWire,
 } from '@nexttime/shared';
 import { type FormEvent, useMemo, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import {
   SINCE_PRESETS,
@@ -21,6 +22,7 @@ import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
 import { RefChip } from '../kit/ref-chip.js';
+import { RouteLink } from '../kit/route-link.js';
 import { Select } from '../kit/select.js';
 
 export interface ProvenanceToolsSectionProps {
@@ -81,6 +83,7 @@ export function ProvenanceToolsSection({ http }: ProvenanceToolsSectionProps) {
 
 function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
+  const canOpen = useCanOpen(http);
   const [kind, setKind] = useState<'fact' | 'decision'>('fact');
   const [nodeId, setNodeId] = useState('');
   const [state, setState] = useState<CausalState>(CAUSAL_IDLE);
@@ -131,7 +134,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改选“决定”。',
+            '事实的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改选“决定”。',
             'Fact suggestions come from the audit log (auditor role) — paste an id, or switch to Decision.',
           )}
           disabled={state.busy}
@@ -152,7 +155,9 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         <div className="stack-s" data-testid="causal-chain-result">
           <p className="text-3 text-small">
             {t('根节点', 'Root')}: {state.chain.rootType} ·{' '}
-            <a href={auditHrefForNode(state.chain.rootId)}>{t('在此解释', 'Explain here')}</a>
+            <RouteLink href={auditHrefForNode(state.chain.rootId)}>
+              {t('在此解释', 'Explain here')}
+            </RouteLink>
             {state.chain.truncated ? (
               <span className="text-3"> · {t('（链已截断）', '(chain truncated)')}</span>
             ) : null}
@@ -164,9 +169,9 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
                 <li key={`${link.nodeType}-${linkNodeId || index}`} className="row-wrap text-small">
                   <span className="tag mono">{link.nodeType}</span>
                   {linkNodeId ? (
-                    <a href={auditHrefForNode(linkNodeId)} className="mono">
+                    <RouteLink href={auditHrefForNode(linkNodeId)} className="mono">
                       {linkNodeId.slice(0, 8)}
-                    </a>
+                    </RouteLink>
                   ) : (
                     <span className="text-3">—</span>
                   )}
@@ -195,7 +200,9 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
                     kind="actionRequest"
                     id={ar.id}
                     name={ar.actionKindTag}
-                    href={hrefs.approval(ar.id)}
+                    href={
+                      canOpen(hrefs.approval(ar.id)) !== false ? hrefs.approval(ar.id) : undefined
+                    }
                     size="s"
                   />
                 ))}
@@ -288,11 +295,11 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
         <AuditIdPicker
           http={http}
           id="precedents-object-id"
-          label={t('对象 id', 'Object id')}
+          label={t('对象 ID', 'Object id')}
           value={objectId}
           onChange={setObjectId}
           source={objects}
-          placeholder={t('粘贴对象 id，或输入名称搜索', 'Paste an Object id or type a name')}
+          placeholder={t('粘贴对象 ID，或输入名称搜索', 'Paste an Object id or type a name')}
           disabled={state.busy}
           testId="precedents-object-id"
         />
@@ -385,9 +392,9 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
               <li key={decision.id} className="data-row" data-testid="precedent-row">
                 <div className="data-row-main">
                   <div className="data-row-title row-wrap">
-                    <a href={auditHrefForNode(decision.id)} className="mono">
+                    <RouteLink href={auditHrefForNode(decision.id)} className="mono">
                       {decision.id.slice(0, 8)}
-                    </a>
+                    </RouteLink>
                     <span className="tag mono">{decision.status}</span>
                   </div>
                   <div className="data-row-meta">

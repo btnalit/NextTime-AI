@@ -52,3 +52,22 @@ export function loginNormalizedNote(raw: string, t: Translate): string | null {
   }
   return t(`将保存为 ${normalized}`, `Will be saved as ${normalized}`);
 }
+
+/** Console audit P1-12: a login suggested from the display name, so creating a user does not mean
+ *  typing the same person twice — "Ada Lovelace" → `ada.lovelace`, "José Núñez" → `jose.nunez`.
+ *  Accents are folded, runs of anything else become one `.`, and the result is cut to 64. A name
+ *  with too little Latin text to make a valid login (a Chinese name, say) suggests nothing (`''`):
+ *  the field stays empty for the admin to fill. */
+export function suggestLoginFromDisplayName(displayName: string): string {
+  const folded = displayName
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase();
+  const login = folded
+    .replace(/[^a-z0-9._-]+/g, '.')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[._-]+/, '')
+    .slice(0, 64)
+    .replace(/[._-]+$/, '');
+  return LOGIN_PATTERN.test(login) ? login : '';
+}

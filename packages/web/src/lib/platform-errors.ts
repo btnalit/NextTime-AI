@@ -107,7 +107,7 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     en: 'That connector is not in platform-preset mode — a workspace cannot enable it from the catalog',
   },
   // P-B2a（门宿主 gate host）：管理员建实例、录入凭证的失败码。
-  gate_id_taken: { zh: '这个 gate id 已被占用', en: 'That gate id is already taken' },
+  gate_id_taken: { zh: '这个 gate ID 已被占用', en: 'That gate id is already taken' },
   gate_in_use: {
     zh: '还有工作区启用着这个实例，先禁用它们再删除',
     en: 'A workspace still has this instance enabled — disable it there first',

@@ -11,6 +11,7 @@ import type {
   UserMembershipWire,
   UserWire,
 } from '@nexttime/shared';
+import { capabilityHasSideEffects, getCapability } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
@@ -1123,6 +1124,22 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(overview.health.map((service) => service.service)).toContain('postgres');
         expect(overview.recentAudit.length).toBeGreaterThan(0);
+      });
+
+      // Console audit P1-14: 「最近平台审计」 lists changes; the reads the console polls with
+      // (this very call, `platform_audit_query`) never crowd them out.
+      it('recentAudit carries changes only, never a read', async () => {
+        await callAsAdmin('platform_audit_query', { limit: 1 });
+        await callAsAdmin<PlatformOverviewWire>('platform_overview');
+        const overview = await callAsAdmin<PlatformOverviewWire>('platform_overview');
+        expect(overview.recentAudit.length).toBeGreaterThan(0);
+        for (const row of overview.recentAudit) {
+          const capability = getCapability(row.action);
+          expect(
+            capability === undefined || capabilityHasSideEffects(capability),
+            `${row.action} is a read`,
+          ).toBe(true);
+        }
       });
     });
 

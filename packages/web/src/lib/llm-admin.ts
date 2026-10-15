@@ -342,7 +342,7 @@ export function llmAdminErrorMessage(error: unknown, t: Translate): string | nul
         'This provider comes from llm-providers.yaml on the host — disable it here, or have the operator edit the yaml.',
       );
     case 'reserved_id':
-      return t('该 id 为代理自身路由保留。', 'This id is reserved for the proxy’s own routes.');
+      return t('该 ID 为代理自身路由保留。', 'This id is reserved for the proxy’s own routes.');
     case 'token_expired':
     case 'unauthorized':
       return t(

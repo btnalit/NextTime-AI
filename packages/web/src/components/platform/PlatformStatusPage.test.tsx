@@ -192,7 +192,9 @@ describe('PlatformStatusPage', () => {
     });
     renderPage(http);
     const list = await screen.findByTestId('status-audit-list');
-    expect(list.textContent).toContain('set_active_runtime_image');
+    // P1-14: named for what happened, never the interface name.
+    expect(list.textContent).toContain('切换活动镜像');
+    expect(list.textContent).not.toContain('set_active_runtime_image');
     expect(list.textContent).toContain('admin');
   });
 

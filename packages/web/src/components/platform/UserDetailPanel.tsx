@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
+import { passwordLengthProblem } from '../../lib/password-rule.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
@@ -98,6 +99,7 @@ export function UserDetailPanel({
   const [budgetSaved, setBudgetSaved] = useState(false);
 
   const [customPassword, setCustomPassword] = useState('');
+  const customPasswordProblem = passwordLengthProblem(customPassword, t);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<unknown | null>(null);
 
@@ -218,7 +220,7 @@ export function UserDetailPanel({
       <dl className="definition-list">
         <dt>{t('登录名', 'Login')}</dt>
         <dd className="mono">{user.login}</dd>
-        <dt>Id</dt>
+        <dt>ID</dt>
         <dd>
           <CopyId id={user.id} label="user" />
         </dd>
@@ -367,9 +369,10 @@ export function UserDetailPanel({
         id="ud-password"
         label={t('重置密码', 'Reset password')}
         hint={t(
-          '留空则自动生成；新密码只显示一次，且首次登录必须修改。',
-          'Empty generates one; it is shown once and must be changed on first login.',
+          '留空则自动生成；自己填至少 8 位。新密码只显示一次，且首次登录必须修改。',
+          'Empty generates one; a typed one needs at least 8 characters. It is shown once and must be changed on first login.',
         )}
+        error={customPasswordProblem}
       >
         <Input
           id="ud-password"
@@ -377,6 +380,7 @@ export function UserDetailPanel({
           value={customPassword}
           onChange={(event) => setCustomPassword(event.target.value)}
           disabled={resetting}
+          invalid={customPasswordProblem !== null}
           autoComplete="new-password"
           placeholder={t('自动生成', 'Auto-generate')}
           mono
@@ -389,6 +393,7 @@ export function UserDetailPanel({
           icon="key"
           onClick={() => void resetPassword()}
           loading={resetting}
+          disabled={customPasswordProblem !== null}
         >
           {t('重置密码', 'Reset password')}
         </Button>

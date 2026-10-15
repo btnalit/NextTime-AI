@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -58,6 +59,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   const t = useT();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
+  const can = useRoleCan(http);
   const [selectedPrincipalId, setSelectedPrincipalId] = useState<string | undefined>(undefined);
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
@@ -77,11 +79,13 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     { kind: 'worker' },
     { autoLoadAll: true },
   );
+  // Only the owner's picker needs the roster — no other role is asked for it (#541 review M3:
+  // operator may read it, builder / member / auditor may not, and none of them gets the picker).
   const principals = useCapabilityList<PrincipalRow>(
     http,
     'list_principals',
     {},
-    { autoLoadAll: true },
+    { autoLoadAll: true, enabled: can('list_principals') === true && role.role === 'owner' },
   );
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const profile = useCapability<AgentProfile>(
@@ -120,11 +124,15 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     toast.push({ tone: 'ok', title: t('已保存', 'Saved') });
   }
 
+  // #541 review M3: a role that may not `set_agent_profile` at all (the read-only auditor) sees
+  // its configuration read-only and why, before any Save; then the workspace policy's own rule.
+  const roleForbidsEdit = role.kind === 'known' && can('set_agent_profile') === false;
   const editForbidden =
-    selectedPrincipalId === undefined &&
-    policy.state.status === 'ready' &&
-    !policy.state.data.memberCanEditProfile &&
-    role.role !== 'owner';
+    roleForbidsEdit ||
+    (selectedPrincipalId === undefined &&
+      policy.state.status === 'ready' &&
+      !policy.state.data.memberCanEditProfile &&
+      role.role !== 'owner');
 
   return (
     <div className="page">
@@ -222,6 +230,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                     : []
                 }
                 editForbidden={editForbidden}
+                forbiddenBy={roleForbidsEdit ? 'role' : 'policy'}
                 onSaved={handleSaved}
               />
             </div>

@@ -3,7 +3,7 @@ import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { roleLabel } from '../lib/labels.js';
+import { roleDescription, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
@@ -140,7 +140,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         id="cp-role"
         label={t('角色', 'Role')}
         required
-        hint={t('之后可在成员行里修改。', "Can be changed later from the member's row.")}
+        hint={`${roleDescription(role, t) ?? ''}${t('之后可在成员行里修改。', " Can be changed later from the member's row.")}`}
       >
         <Select
           id="cp-role"

@@ -5,10 +5,13 @@ import {
   useCapabilityList,
 } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import {
   type AgentPolicy,
   type AgentProfile,
   narrowByPolicyAllowList,
+  policyLetsEditOwnProfile,
 } from '../../lib/agent-profile.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { errorToastText, isForbiddenError } from '../../lib/errors.js';
@@ -77,6 +80,8 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
   const t = useT();
   const toast = useToast();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
+  const { role } = useWorkspaceIdentity(http);
   const selectId = useId();
   const profile = useCapability<AgentProfile>(http, 'get_agent_profile');
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
@@ -141,19 +146,30 @@ export function ModelSwitcher({ http, turnRunning, onRunningModel }: ModelSwitch
       : (policyData?.allowedModels ?? []).map((id) => ({ id, provider: '', model: id }));
   const override = current.model;
   const overrideOutsideAllowList = override !== null && !allowed.some((m) => m.id === override);
-  const editDenied = permissions.isDenied('set_agent_profile');
-  const disabled = turnRunning || saving || editDenied;
+  // #541 review M3: decided before the call, never by sending a switch the kernel must refuse —
+  // the role first (an auditor reads only), then the workspace policy (a member may be barred
+  // from changing their own agent), then what this session already learned from a 403.
+  const roleRefused = role.kind === 'known' && can('set_agent_profile') === false;
+  const policyRefused =
+    policyLetsEditOwnProfile(policyData, role.kind === 'known' ? role.role : null) === false ||
+    permissions.isDenied('set_agent_profile');
+  const disabled = turnRunning || saving || roleRefused || policyRefused;
   const disabledReason = turnRunning
     ? t(
         'Turn 进行中不能切换模型 — 等本轮结束。',
         'Cannot switch while a turn is running — wait for it to finish.',
       )
-    : editDenied
+    : roleRefused
       ? t(
-          '工作区策略不允许成员修改自己的模型。',
-          'Workspace policy does not let members change their model.',
+          '你的角色只能查看，不能切换模型。',
+          'Your role can only look — it cannot switch the model.',
         )
-      : undefined;
+      : policyRefused
+        ? t(
+            '工作区策略不允许成员修改自己的模型；要换模型，请找工作区所有者。',
+            'Workspace policy does not let members change their model; ask the workspace owner.',
+          )
+        : undefined;
 
   async function choose(value: string): Promise<void> {
     const model = value === WORKSPACE_DEFAULT ? null : value;

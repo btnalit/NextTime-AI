@@ -190,7 +190,7 @@ export function GateInstanceDetailPanel({
       <DrawerSections>
         <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
-            <dt>Gate id</dt>
+            <dt>{t('门 ID', 'Gate id')}</dt>
             <dd>
               {/* S8 W1-A6 (audit S10): gate ids are short human-readable slugs
                   (`gatekeeper-quickbooks`, …), not UUIDs — CopyId's default 8-char truncation
@@ -516,7 +516,7 @@ export function GateInstanceDetailPanel({
                     `Delete gate instance ${instance.displayName}`,
                   )}
                   description={t(
-                    '门宿主下一次拉取定义时会丢弃这个实例，并销毁它存储的全部凭证。凭证不在备份里，无法恢复；以后用同一个 gate id 新建也不会继承。',
+                    '门宿主下一次拉取定义时会丢弃这个实例，并销毁它存储的全部凭证。凭证不在备份里，无法恢复；以后用同一个 gate ID 新建也不会继承。',
                     'On its next definition pull the gate host drops this instance and destroys every credential it stored. The credentials are not in any backup and cannot be restored; a new instance with the same gate id does not inherit them.',
                   )}
                   target={instance.gateId}

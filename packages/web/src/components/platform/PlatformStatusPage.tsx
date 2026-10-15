@@ -2,6 +2,7 @@ import type { PlatformStatusWire, PlatformUpdatesWire } from '@nexttime/shared';
 import { useEffect } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { Resource } from '../../hooks/useResource.js';
+import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
@@ -189,26 +190,26 @@ function StatusBody({
       </Card>
 
       <Card
-        title={t('最近平台审计', 'Recent platform audit')}
+        title={t('最近平台改动', 'Recent platform changes')}
         actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
       >
         {data.recentAudit.length === 0 ? (
           <EmptyState
             icon="search"
-            title={t('暂无平台审计', 'No platform audit rows yet')}
+            title={t('最近没有平台改动', 'No recent platform changes')}
             testId="status-audit-empty"
           />
         ) : (
           <DataList
-            ariaLabel={t('最近平台审计', 'Recent platform audit')}
+            ariaLabel={t('最近平台改动', 'Recent platform changes')}
             testId="status-audit-list"
           >
             {data.recentAudit.map((row) => (
               <DataRow
                 key={row.id}
                 testId="status-audit-row"
-                title={row.action}
+                title={actionLabel(row.action, t)}
                 meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}

@@ -84,10 +84,12 @@ describe('EnableGateConfirm', () => {
     fireEvent.click(screen.getByTestId('enable-gate-1'));
     const confirm = await screen.findByTestId('enable-gate-1-confirm');
     expect(confirm.getAttribute('data-tier')).toBe('medium');
-    // Both the to-import operations render, with the execute/high one visibly marked.
+    // Both the to-import operations render; the execute one is marked by its own mode chip, with
+    // no extra 「高影响」 tag repeating the chips (audit P1-16).
     expect(within(confirm).getByText('container.restart')).toBeTruthy();
     expect(within(confirm).getByText('container.list')).toBeTruthy();
-    expect(within(confirm).getAllByTestId('enable-preview-high-impact')).toHaveLength(1);
+    expect(within(confirm).getAllByText('执行')).toHaveLength(1);
+    expect(within(confirm).queryByTestId('enable-preview-high-impact')).toBeNull();
     // No prior registration — the confirm label is the "register" one, not "link".
     expect(within(confirm).getByTestId('confirm-button').textContent).toContain('注册并启用');
 

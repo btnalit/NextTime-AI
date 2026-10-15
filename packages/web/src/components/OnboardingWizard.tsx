@@ -169,7 +169,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
                 {kind === 'mcp'
                   ? '（来自 tools/list，readOnlyHint 为 true 的算 observe，其余算 execute）'
                   : null}
-                。发布清单后，它们才会对 <code>find_operations</code> 可见。
+                。发布清单后，智能体才能找到它们。
               </>,
               <>
                 Registered gate <code>{connection.gatekeeperId.slice(0, 8)}</code>; imported{' '}
@@ -177,8 +177,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
                 {kind === 'mcp'
                   ? ' (from tools/list: readOnlyHint true counts as observe, the rest as execute)'
                   : null}
-                . They only become visible to <code>find_operations</code> once the manifest is
-                published.
+                . Agents can only find them once the manifest is published.
               </>,
             )}
           </Notice>

@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import type { UserWire } from '@nexttime/shared';
 import { useMemo, useRef, useState } from 'react';
 import type { ListEnvelope } from '../hooks/useCapability.js';
@@ -53,7 +54,7 @@ export function useUserDirectoryTap(http: CapabilityCaller, rank?: UserRank): Us
 
   const caller = useMemo<CapabilityCaller>(
     () => ({
-      async call<T>(name: string, params?: unknown): Promise<T> {
+      async call<T>(name: CapabilityName, params?: unknown): Promise<T> {
         const result = await http.call<T>(name, params);
         if (name !== 'list_users') return result;
         const envelope = result as unknown as ListEnvelope<UserWire>;

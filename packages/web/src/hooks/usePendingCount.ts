@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { usePermissions } from './usePermissions.js';
+import { useRoleCan } from './useRoleCan.js';
 
 /**
  * hooks/usePendingCount: the live badge on the Approvals nav item — `list_pending`'s row count,
@@ -14,12 +15,14 @@ import { usePermissions } from './usePermissions.js';
 export function usePendingCount(http: CapabilityCaller, pushes: PushSource): number | null {
   const [count, setCount] = useState<number | null>(null);
   const permissions = usePermissions();
-  const denied = permissions.isDenied('list_pending');
+  // Held until the reader's role is known: only an operator or the owner reads the queue.
+  const can = useRoleCan(http);
+  const reads = can('list_pending') === true;
   const inFlight = useRef(false);
   const again = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (denied) return;
+    if (!reads) return;
     if (inFlight.current) {
       again.current = true;
       return;
@@ -43,7 +46,7 @@ export function usePendingCount(http: CapabilityCaller, pushes: PushSource): num
     } finally {
       inFlight.current = false;
     }
-  }, [http, denied, permissions]);
+  }, [http, reads, permissions]);
 
   useEffect(() => {
     void refresh();
@@ -60,5 +63,5 @@ export function usePendingCount(http: CapabilityCaller, pushes: PushSource): num
     };
   }, [pushes, refresh]);
 
-  return denied ? null : count;
+  return reads ? count : null;
 }

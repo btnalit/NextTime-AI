@@ -1,3 +1,4 @@
+import type { CapabilityName } from '@nexttime/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -62,7 +63,7 @@ function pendingStateFor<T>(caller: CapabilityCaller, key: string): ResourceStat
 /** Drops every cached entry for one capability name (every param variant) on `caller` — call
  *  after a mutation that invalidates it (e.g. after `create_principal`, before navigating back to
  *  the list, so it does not flash the pre-create page from cache on remount). */
-export function invalidateCapability(caller: CapabilityCaller, name: string): void {
+export function invalidateCapability(caller: CapabilityCaller, name: CapabilityName): void {
   const byKey = cacheByCaller.get(caller);
   if (!byKey) return;
   const prefix = `${name}::`;
@@ -74,7 +75,7 @@ export function invalidateCapability(caller: CapabilityCaller, name: string): vo
 /** What a custom `load` (below) is handed for one (re)load of `key`. */
 export interface CapabilityLoadContext<T> {
   readonly caller: CapabilityCaller;
-  readonly name: string;
+  readonly name: CapabilityName;
   readonly params: unknown;
   /** The data currently cached for this exact (name, params) — what the reader is looking at —
    *  or `undefined` on a cold first load. */
@@ -91,16 +92,19 @@ export interface UseCapabilityOptions<T = unknown> {
    *  push-triggered reload never truncates a paged list back to page one). Read through a ref at
    *  call time — its identity never re-triggers a load. */
   readonly load?: (context: CapabilityLoadContext<T>) => Promise<T>;
+  /** `false` holds the read (no request; the state stays as it is, `loading` on a cold key) until
+   *  it turns `true` — for a read that waits on the reader's role (`hooks/useRoleCan`). */
+  readonly enabled?: boolean;
 }
 
 export function useCapability<T = unknown>(
   caller: CapabilityCaller,
-  name: string,
+  name: CapabilityName,
   params?: unknown,
   options: UseCapabilityOptions<T> = {},
 ): Resource<T> {
   const permissions = usePermissions();
-  const { pushes, reloadOn, load } = options;
+  const { pushes, reloadOn, load, enabled = true } = options;
   const reloadOnKey = (reloadOn ?? []).join(',');
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -133,6 +137,7 @@ export function useCapability<T = unknown>(
 
   const seq = useRef(0);
   const run = useCallback(async () => {
+    if (!enabled) return;
     const mySeq = ++seq.current;
     // Always keyed off the *current* `key`'s own cache entry, never off `prev` directly: `prev`
     // may belong to a different key (params just changed — a switched catalog tab, a different
@@ -163,7 +168,7 @@ export function useCapability<T = unknown>(
           : { status: 'error', error },
       );
     }
-  }, [caller, name, key]);
+  }, [caller, name, key, enabled]);
 
   useEffect(() => {
     void run();
@@ -274,7 +279,7 @@ export interface UseCapabilityListOptions<T = unknown>
  *  reader had loaded (`reloadLoadedPages`) instead of resetting to page one. */
 export function useCapabilityList<T = unknown>(
   caller: CapabilityCaller,
-  name: string,
+  name: CapabilityName,
   params: Readonly<Record<string, unknown>> = {},
   options: UseCapabilityListOptions<T> = {},
 ): CapabilityListResult<T> {

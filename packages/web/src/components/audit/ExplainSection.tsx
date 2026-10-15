@@ -1,5 +1,6 @@
 import type { ExplainResultWire, ExportProvResult } from '@nexttime/shared';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { type ProvenanceNodeKind, provenanceNodeSource } from '../../lib/audit-pickers.js';
 import {
@@ -52,6 +53,7 @@ const IDLE: ExplainState = { busy: false, error: null, nodeId: null, result: nul
  */
 export function ExplainSection({ http, requestedNodeId, principalNames }: ExplainSectionProps) {
   const t = useT();
+  const canOpen = useCanOpen(http);
   const toast = useToast();
   const [nodeId, setNodeId] = useState(requestedNodeId ?? '');
   // Which recent nodes the picker offers — `explain` itself takes any of the three untyped.
@@ -144,13 +146,13 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         <AuditIdPicker
           http={http}
           id="explain-node-id"
-          label={t('节点 id', 'Node id')}
-          hint={t('Fact、Decision 或 Activity 的 id。', 'A Fact, Decision, or Activity id.')}
+          label={t('节点 ID', 'Node id')}
+          hint={t('Fact、Decision 或 Activity 的 ID。', 'A Fact, Decision, or Activity id.')}
           value={nodeId}
           onChange={setNodeId}
           source={source}
           refusedNote={t(
-            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 id，或改为从最近的决定中选择。',
+            '事实与活动的候选来自审计记录（需要 auditor 角色）；请粘贴 ID，或改为从最近的决定中选择。',
             'Fact and activity suggestions come from the audit log (auditor role) — paste an id, or suggest from recent decisions.',
           )}
           disabled={state.busy}
@@ -171,8 +173,8 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         isForbiddenError(exportError) ? (
           <Notice tone="warn" testId="explain-export-forbidden">
             {t(
-              '导出需要 auditor 角色（export_prov）。',
-              'Export needs the auditor role (export_prov).',
+              '导出溯源只有审计员和工作区所有者能做；要导出，请工作区所有者把你的角色改为 auditor。',
+              'Only auditors and the workspace owner can export provenance; to export, ask the workspace owner to make you an auditor.',
             )}
           </Notice>
         ) : (
@@ -184,7 +186,12 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         )
       ) : null}
       {view ? (
-        <ExplainResultView view={view} raw={state.result} principalNames={principalNames} />
+        <ExplainResultView
+          view={view}
+          raw={state.result}
+          principalNames={principalNames}
+          canOpen={canOpen}
+        />
       ) : null}
     </section>
   );
@@ -194,10 +201,13 @@ function ExplainResultView({
   view,
   raw,
   principalNames,
+  canOpen,
 }: {
   readonly view: ExplainView;
   readonly raw: unknown;
   readonly principalNames?: ReadonlyMap<string, string>;
+  /** `hooks/useCanOpen`: a chip whose route the reader cannot open is not a link. */
+  readonly canOpen: (href: string) => boolean | null;
 }) {
   const t = useT();
   const { decision, links } = view;
@@ -293,7 +303,11 @@ function ExplainResultView({
                     kind="actionRequest"
                     id={links.actionRequestId}
                     name="ActionRequest"
-                    href={hrefs.approval(links.actionRequestId)}
+                    href={
+                      canOpen(hrefs.approval(links.actionRequestId)) !== false
+                        ? hrefs.approval(links.actionRequestId)
+                        : undefined
+                    }
                     size="s"
                     testId="explain-link-action-request"
                   />

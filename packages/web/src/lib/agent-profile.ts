@@ -125,3 +125,15 @@ export function fieldForAgentProfileError(message: string): string | undefined {
   if (lower.includes('model')) return 'model';
   return undefined;
 }
+
+/** Whether a caller of `role` may edit their own AgentProfile under `policy` — the kernel's own
+ *  rule (`application/gateway/agent-profile-handlers.ts`, `set_agent_profile` on oneself): an
+ *  owner always, anyone else only while `memberCanEditProfile` is on. `undefined` while either is
+ *  not known yet (the kernel decides). The role's own capability check is `useRoleCan`'s. */
+export function policyLetsEditOwnProfile(
+  policy: AgentPolicy | undefined,
+  role: string | null,
+): boolean | undefined {
+  if (policy === undefined || role === null) return undefined;
+  return role === 'owner' || policy.memberCanEditProfile;
+}

@@ -7,13 +7,15 @@ import {
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleDescription, roleLabel } from '../../lib/labels.js';
 import {
   loginError,
   loginNormalizedNote,
   loginRuleText,
   normalizeLoginInput,
+  suggestLoginFromDisplayName,
 } from '../../lib/login-input.js';
+import { passwordLengthProblem } from '../../lib/password-rule.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -32,9 +34,6 @@ export interface CreateUserFormProps {
  *  "omit = platform default, `null` = none, a string = that workspace"). */
 const DEFAULT_WORKSPACE = '__default__';
 const NO_WORKSPACE = '__none__';
-/** The platform setting `passwordMinLength` is validated >= 8 (PlatformSettingsPage), so 8 is a
- *  safe client-side floor; a longer platform minimum is still enforced (and explained) by the kernel. */
-const MIN_PASSWORD_FLOOR = 8;
 
 /**
  * components/platform/CreateUserForm: `create_user` (P-A1, design §6.1 "新建：登录名、显示名、
@@ -57,6 +56,12 @@ export function CreateUserForm({
   const t = useT();
   const [login, setLogin] = useState('');
   const [displayName, setDisplayName] = useState('');
+  /** Audit P1-12: the login follows the display name until the admin types in it. */
+  const [loginEdited, setLoginEdited] = useState(false);
+  function changeDisplayName(next: string): void {
+    setDisplayName(next);
+    if (!loginEdited) setLogin(suggestLoginFromDisplayName(next));
+  }
   const [platformRole, setPlatformRole] = useState<PlatformRoleWire>(defaultPlatformRole);
   const [passwordMode, setPasswordMode] = useState<'auto' | 'custom'>('auto');
   const [password, setPassword] = useState('');
@@ -81,14 +86,14 @@ export function CreateUserForm({
   const loginMessage = loginError(trimmedLogin, t);
   const loginInvalid = loginMessage !== null;
   const loginNote = loginNormalizedNote(login, t);
-  const passwordTooShort =
-    passwordMode === 'custom' && password.length > 0 && password.length < MIN_PASSWORD_FLOOR;
+  const passwordProblem = passwordMode === 'custom' ? passwordLengthProblem(password, t) : null;
+  const passwordTooShort = passwordProblem !== null;
   const joinsAWorkspace = workspaceChoice !== NO_WORKSPACE;
   const ready =
     trimmedLogin.length > 0 &&
     !loginInvalid &&
     displayName.trim().length > 0 &&
-    (passwordMode === 'auto' || password.length >= MIN_PASSWORD_FLOOR);
+    (passwordMode === 'auto' || (password.length > 0 && passwordProblem === null));
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -124,33 +129,47 @@ export function CreateUserForm({
       noValidate
       data-testid="create-user-form"
     >
+      <Field id="cu-display-name" label={t('显示名', 'Display name')} required>
+        <Input
+          id="cu-display-name"
+          value={displayName}
+          onChange={(event) => changeDisplayName(event.target.value)}
+          disabled={submitting}
+          autoFocus
+        />
+      </Field>
+
       <Field
         id="cu-login"
         label={t('登录名', 'Login')}
         required
-        hint={loginNote ? `${loginRuleText(t)} ${loginNote}` : loginRuleText(t)}
+        hint={[
+          loginEdited || login.length === 0
+            ? null
+            : t(
+                '按显示名自动填写，可以改。',
+                'Filled in from the display name; edit it if you like.',
+              ),
+          loginRuleText(t),
+          loginNote,
+        ]
+          .filter(Boolean)
+          .join(' ')}
         error={loginMessage}
       >
         <Input
           id="cu-login"
           value={login}
-          onChange={(event) => setLogin(event.target.value)}
+          onChange={(event) => {
+            setLoginEdited(true);
+            setLogin(event.target.value);
+          }}
           onBlur={() => setLogin(normalizeLoginInput(login))}
           disabled={submitting}
           invalid={loginInvalid}
           autoComplete="off"
           spellCheck={false}
           mono
-          autoFocus
-        />
-      </Field>
-
-      <Field id="cu-display-name" label={t('显示名', 'Display name')} required>
-        <Input
-          id="cu-display-name"
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-          disabled={submitting}
         />
       </Field>
 
@@ -194,14 +213,7 @@ export function CreateUserForm({
             '至少 8 位（平台设置的最短长度更高时以平台为准）；不想自己想就选“自动生成”。',
             'At least 8 characters (the platform minimum applies if it is higher); choose "Auto-generate" to skip this.',
           )}
-          error={
-            passwordTooShort
-              ? t(
-                  `密码太短：当前 ${password.length} 位，至少需要 8 位。`,
-                  `Password too short: ${password.length} characters, at least 8 are needed.`,
-                )
-              : null
-          }
+          error={passwordProblem}
         >
           <Input
             id="cu-password"
@@ -249,7 +261,12 @@ export function CreateUserForm({
       />
 
       {joinsAWorkspace ? (
-        <Field id="cu-role" label={t('工作区角色', 'Workspace role')} required>
+        <Field
+          id="cu-role"
+          label={t('工作区角色', 'Workspace role')}
+          required
+          hint={roleDescription(role, t) ?? undefined}
+        >
           <Select
             id="cu-role"
             value={role}

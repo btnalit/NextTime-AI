@@ -1,5 +1,6 @@
 import { type FormEvent, useMemo, useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
   EMPTY_PROCEDURE_FORM,
   type FieldErrors,
@@ -41,6 +42,8 @@ export interface ProcedureEditorProps {
   readonly workerDefinitions?: readonly WorkerDefinitionSummary[];
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type View = 'form' | 'json';
@@ -259,9 +262,11 @@ export function ProcedureEditor({
   workerDefinitions,
   onProposed,
   onDone,
+  onPublished,
 }: ProcedureEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<ProcedureForm>(() =>
     copyOf
       ? {
@@ -311,7 +316,7 @@ export function ProcedureEditor({
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
-    const validated = validateProcedure(form);
+    const validated = validateProcedure(form, t);
     if (!validated.ok) {
       setErrors(validated.errors);
       setView('form');
@@ -342,7 +347,7 @@ export function ProcedureEditor({
         detailHref={hrefs.catalog('procedures', proposed.id)}
         fieldNames={reviewFieldNames('procedure', t)}
         onPublish={
-          permissions.isDenied('publish_procedure')
+          can('publish_procedure') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_procedure', {
@@ -351,6 +356,7 @@ export function ProcedureEditor({
                 })
         }
         onDone={onDone}
+        onPublished={onPublished}
         reviewersSeeDraft
       />
     );
@@ -367,7 +373,7 @@ export function ProcedureEditor({
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：提交会创建一个
-              <strong>新的</strong> Procedure（新 id、v1），不是同一 Procedure 的新版本。
+              <strong>新的</strong> Procedure（新 ID、v1），不是同一 Procedure 的新版本。
             </>,
             <>
               Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: submitting creates a{' '}
@@ -396,10 +402,7 @@ export function ProcedureEditor({
 
       {view === 'json' ? (
         <JsonEditor
-          label={t(
-            'procedure（propose_procedure 的 procedure 字段）',
-            'The propose_procedure payload',
-          )}
+          label={t('流程定义（JSON）', 'Procedure definition (JSON)')}
           value={content}
           onApply={applyJson}
           disabled={busy}
