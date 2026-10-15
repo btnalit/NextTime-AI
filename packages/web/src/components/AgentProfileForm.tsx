@@ -8,9 +8,11 @@ import {
 } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
+import { shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { sameNameIds } from '../lib/same-name.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { workerDefinitionChoices } from '../lib/tasks.js';
 import { Button } from './kit/button.js';
@@ -129,6 +131,12 @@ export function AgentProfileForm({
     const name = gateNames.get(g.gatekeeperId);
     return name === undefined ? [] : [{ ...g, name }];
   });
+  // Two offered systems with the same name carry their short id (#559 acceptance).
+  const gateSame = sameNameIds(
+    allowedGatekeepers,
+    (g) => g.gatekeeperId,
+    (g) => g.name,
+  );
 
   const maxChars = policy?.maxPromptAddendumChars;
   const overLimit = maxChars !== undefined && state.promptAddendum.length > maxChars;
@@ -301,6 +309,7 @@ export function AgentProfileForm({
           options={allowedGatekeepers.map((g) => ({
             id: g.gatekeeperId,
             label: g.name,
+            ...(gateSame.has(g.gatekeeperId) ? { detail: shortId(g.gatekeeperId) } : {}),
             note: g.granted
               ? t('读写（已授权）', 'Read & write (granted)')
               : t('只读（未授权）', 'Read only (not granted)'),
@@ -329,7 +338,7 @@ export function AgentProfileForm({
         <ChecklistField
           title={t('Worker 定义', 'Worker definitions')}
           subtitle={t('已发布、可被委派的 Worker', 'Published Workers your agent can delegate to')}
-          options={workerDefinitionChoices(workerDefinitions).map((choice) => ({
+          options={workerDefinitionChoices(workerDefinitions, t).map((choice) => ({
             id: choice.id,
             label: choice.label,
             note: choice.version,

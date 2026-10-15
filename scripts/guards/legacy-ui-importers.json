@@ -2,7 +2,6 @@
   "packages/web/src/App.tsx",
   "packages/web/src/components/AccountPage.tsx",
   "packages/web/src/components/ActionRequestCard.tsx",
-  "packages/web/src/components/ActionRequestDetail.tsx",
   "packages/web/src/components/AgentPolicyForm.tsx",
   "packages/web/src/components/AgentProfilePage.tsx",
   "packages/web/src/components/ApiKeyLoginDetails.tsx",

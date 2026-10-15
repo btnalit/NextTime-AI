@@ -2,8 +2,10 @@ import { type FormEvent, type ReactNode, useState } from 'react';
 import type { AgentPolicy, SetAgentPolicyParams } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
+import { shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { sameNameIds } from '../lib/same-name.js';
 import { ModelHealthNote, ModelHealthTag, ModelOption } from './kit/model-health.js';
 import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
@@ -76,6 +78,8 @@ function AllowListField({
     readonly label: string;
     /** Shown after the label (a model's provider health). */
     readonly note?: ReactNode;
+    /** Tells an option apart from a same-named one (a gate's short id) — masked per run. */
+    readonly detail?: string;
   }[];
   readonly selected: readonly string[];
   readonly onChange: (next: readonly string[]) => void;
@@ -122,6 +126,11 @@ function AllowListField({
                 aria-label={option.note ? option.label : undefined}
               />
               <span>{option.label}</span>
+              {option.detail !== undefined ? (
+                <span className="mono text-3" title={option.id} data-volatile="">
+                  {option.detail}
+                </span>
+              ) : null}
               {option.note ?? null}
             </label>
           ))}
@@ -180,6 +189,11 @@ export function AgentPolicyForm({
   const [submitting, setSubmitting] = useState(false);
 
   const publishedSkills = skills.filter((s) => s.status === 'published');
+  const gateSame = sameNameIds(
+    gatekeepers,
+    (g) => g.id,
+    (g) => g.name,
+  );
 
   const restrictedModels = state.allowedModels.length > 0;
   const defaultModelOptions = restrictedModels ? state.allowedModels : models.map((m) => m.id);
@@ -394,7 +408,11 @@ export function AgentPolicyForm({
 
       <AllowListField
         legend={t('可选系统接入', 'Allowed connected systems')}
-        options={gatekeepers.map((g) => ({ id: g.id, label: g.name }))}
+        options={gatekeepers.map((g) => ({
+          id: g.id,
+          label: g.name,
+          ...(gateSame.has(g.id) ? { detail: shortId(g.id) } : {}),
+        }))}
         selected={state.allowedGatekeepers}
         onChange={(next) => update('allowedGatekeepers', next)}
         disabled={submitting}

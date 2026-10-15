@@ -20,6 +20,7 @@ import { type OperationChoice, useGateOperations } from '../../lib/gate-operatio
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
@@ -97,6 +98,11 @@ function OperationStepFields({
   const t = useT();
   const [manualChosen, setManualChosen] = useState(false);
   const hasDirectory = gatekeepers !== undefined && gatekeepers.length > 0;
+  const gateSame = sameNameIds(
+    gatekeepers,
+    (row) => row.id,
+    (row) => row.name,
+  );
   const gate = gatekeepers?.find((row) => row.id === step.gatekeeperId);
   // Only a gate from the directory is queried — a half-typed id would be a 400 per keystroke.
   const operations = useGateOperations(http, gate ? { gatekeeperId: gate.id } : null);
@@ -133,7 +139,7 @@ function OperationStepFields({
               <option value="">{t('选择一个门…', 'Choose a gate…')}</option>
               {gatekeepers.map((row) => (
                 <option key={row.id} value={row.id}>
-                  {row.name} · {row.kind}
+                  {withSameNameId(row.name, row.id, gateSame)} · {row.kind}
                 </option>
               ))}
             </Select>
@@ -574,7 +580,7 @@ export function ProcedureEditor({
                             <option value="">
                               {t('选择一个 Worker 定义…', 'Choose a Worker definition…')}
                             </option>
-                            {workerDefinitionChoices(latestPerDefinition(workerDefinitions)).map(
+                            {workerDefinitionChoices(latestPerDefinition(workerDefinitions), t).map(
                               (choice) => (
                                 <option key={choice.id} value={choice.id}>
                                   {[choice.label, choice.distinguisher]

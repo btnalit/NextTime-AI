@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Translate } from './i18n.js';
 import {
   type WorkerDefinitionSummary,
   definitionVersions,
@@ -8,17 +9,29 @@ import {
   workerDefinitionChoices,
 } from './tasks.js';
 
+const zh: Translate = (text) => text;
+
 /**
  * lib/tasks.test: `taskNeed` (S8 W4, audit R7 "行副标题直接显示原始 JSON 输入") — the conventional
  * `invoke_worker` input shapes `TasksPage`'s row subtitle recognizes before falling back to a raw
  * JSON excerpt of the opaque `input` blob.
  */
 describe('taskNeed', () => {
+  it("strips the kernel's turn-id routing marker from a chat message (#559 acceptance P2-2)", () => {
+    expect(taskNeed({ message: '<!--nexttime:turn_id=01HZXY-abc-->\n 帮我整理本周的告警' })).toBe(
+      '帮我整理本周的告警',
+    );
+    // A marker alone is no need at all — the page then falls back to its excerpt.
+    expect(taskNeed({ message: '<!--nexttime:turn_id=abc-->\n' })).toBeUndefined();
+    // Text that merely mentions a comment later on is left alone.
+    expect(taskNeed('see <!--nexttime:turn_id=abc-->')).toBe('see <!--nexttime:turn_id=abc-->');
+  });
+
   it('returns a bare string input as-is', () => {
     expect(taskNeed('restart web-1')).toBe('restart web-1');
   });
 
-  it.each(['need', 'intent', 'prompt', 'summary', 'task'])(
+  it.each(['need', 'intent', 'message', 'prompt', 'summary', 'task'])(
     'reads the %s key off an object input',
     (key) => {
       expect(taskNeed({ [key]: 'Inventory the Docker containers' })).toBe(
@@ -49,11 +62,14 @@ describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
   });
 
   it('tells same-name definitions apart by short id, and leaves unique names alone', () => {
-    const choices = workerDefinitionChoices([
-      row('aaaaaaaa-1111-4111-8111-111111111111', 'ops-runner'),
-      row('bbbbbbbb-2222-4222-8222-222222222222', 'ops-runner'),
-      row('cccccccc-3333-4333-8333-333333333333', 'reporter', 2),
-    ]);
+    const choices = workerDefinitionChoices(
+      [
+        row('aaaaaaaa-1111-4111-8111-111111111111', 'ops-runner'),
+        row('bbbbbbbb-2222-4222-8222-222222222222', 'ops-runner'),
+        row('cccccccc-3333-4333-8333-333333333333', 'reporter', 2),
+      ],
+      zh,
+    );
     expect(choices.map((choice) => [choice.label, choice.version, choice.distinguisher])).toEqual([
       ['ops-runner', 'v1', 'aaaaaaaa'],
       ['ops-runner', 'v1', 'bbbbbbbb'],
@@ -61,10 +77,13 @@ describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
     ]);
   });
 
-  it('falls back to the id for an unnamed definition', () => {
-    expect(workerDefinitionChoices([row('dddddddd-4444', undefined)])[0]?.label).toBe(
-      'dddddddd-4444',
-    );
+  it('an unnamed definition reads as its kind plus short id, never a bare uuid (#559 acceptance P2-3)', () => {
+    const unnamed: WorkerDefinitionSummary = {
+      ...row('dddddddd-4444-4444-8444-444444444444', undefined),
+      kind: 'entry',
+    };
+    const [choice] = workerDefinitionChoices([unnamed], zh);
+    expect([choice?.label, choice?.distinguisher]).toEqual(['未命名 入口定义', 'dddddddd']);
   });
 });
 

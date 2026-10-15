@@ -410,4 +410,50 @@ describe('GrantGateForm: audit P1-9 still-needed line', () => {
     expect(submit.disabled).toBe(false);
     expect(screen.queryByTestId('ggf-missing')).toBeNull();
   });
+  it('two members (or gates) with the same name read apart: the short id follows only the colliding names', async () => {
+    const human = (id: string, displayName: string) => ({
+      id,
+      kind: 'human',
+      role: 'member',
+      displayName,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hasApiKey: false,
+    });
+    const gate = (id: string, name: string) => ({
+      id,
+      name,
+      kind: 'cli',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+    });
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [
+          human('aaaaaaaa-1111', '张三'),
+          human('bbbbbbbb-2222', '张三'),
+          human('cccccccc-3333', '李四'),
+        ],
+      }),
+      list_gatekeepers: () => ({
+        items: [
+          gate('11111111-gate', 'orders'),
+          gate('22222222-gate', 'orders'),
+          gate('33333333-gate', 'billing'),
+        ],
+      }),
+    });
+    render(<GrantGateForm http={http} onGranted={vi.fn()} />);
+    const select = screen.getByTestId('ggf-member-select');
+    await waitFor(() => expect(select.querySelectorAll('option')).toHaveLength(4));
+    const labels = [...select.querySelectorAll('option')].slice(1).map((o) => o.textContent);
+    expect(labels).toEqual(['张三 · aaaaaaaa (成员)', '张三 · bbbbbbbb (成员)', '李四 (成员)']);
+
+    const list = await screen.findByTestId('ggf-gate-list');
+    await waitFor(() => expect(within(list).getAllByTestId('same-name-id')).toHaveLength(2));
+    const ids = within(list).getAllByTestId('same-name-id');
+    expect(ids.map((el) => el.textContent)).toEqual([' · 11111111', ' · 22222222']);
+    // Masked by the screenshot gate: the id differs per run.
+    for (const el of ids) expect(el.hasAttribute('data-volatile')).toBe(true);
+  });
 });

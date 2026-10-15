@@ -41,19 +41,19 @@ interface FileScan {
   /** Capability names called: `<caller>.call('name')` (or a variable the file pins to literal
    *  names), `useCapability(…, 'name')` / `useCapabilityList(…, 'name')`, `useExecutionReadiness(`. */
   readonly calls: ReadonlySet<string>;
-  /** Each call site: the name, where, and the file's top-level declaration it sits in. */
+  /** Each call site: the name, where, and whether a role check holds that very site. */
   readonly callSites: readonly Site[];
-  /** Each `can('name')` site, keyed the same way. */
-  readonly checkSites: readonly Site[];
-  /** `.call` used other than as the callee (`http.call.bind(http)`, `const { call } = http`): a
-   *  call the scan could not see. */
+  /** `.call` used other than as the callee (`http.call.bind(http)`, `const { call } = http`,
+   *  `http['call'](…)`): a call the scan could not see. */
   readonly aliasedCalls: readonly string[];
-  /** Modules this file imports (`'../lib/audit-pickers.js'`, as written). */
+  /** `hrefs` used other than as `hrefs.<name>(…)` (`const h = hrefs`, `const { audit } = hrefs`,
+   *  `hrefs['audit']()`): a link the scan could not see (review of #559, L3–L5). */
+  readonly aliasedHrefs: readonly string[];
+  /** `can('name')` whose `can` is not the reader's role check (`useRoleCan`) — a local
+   *  `function can() { return true }` checks nothing (review of #559, C2). */
+  readonly foreignChecks: readonly string[];
+  /** Modules this file imports, re-exports from, or `import()`s (`'../lib/audit-pickers.js'`). */
   readonly imports: readonly string[];
-  /** Each top-level declaration (by start offset): its name, whether it is exported, and the
-   *  top-level declarations of this file that refer to it — so a check in the only place that
-   *  renders a private body covers the body's calls (`LinkedApprovals` → `LinkedApprovalsList`). */
-  readonly tops: ReadonlyMap<number, TopDeclaration>;
   /** `<caller>.call(name)` whose name the file does not pin to literals: `line: <expression>`. */
   readonly dynamicCalls: readonly string[];
   /** Names checked with `can('name')` in code. */
@@ -67,20 +67,19 @@ interface FileScan {
   readonly unaskedLinks: readonly string[];
 }
 
-/** One capability call or check: its name, `line: <text>`, and the top-level declaration of the
- *  file it sits in (by start offset) — a check pairs with the calls in its own declaration only
- *  (review of #554, P3-2: one `can('x')` anywhere in a file used to cover every `call('x')`). */
+/** One capability call: its name, `line: <text>`, and whether a `can('<name>')` holds this very
+ *  site — the branch it runs in, an early return before it, the `disabled` of the control that
+ *  fires it, a read hook's own `enabled`, or every place that runs the function holding it
+ *  (review of #554 P3-2 and of #559 C1: a check computed anywhere in the same component used to
+ *  cover a call it never guarded). */
 interface Site {
   readonly name: string;
   readonly where: string;
-  readonly top: number;
+  readonly held: boolean;
 }
 
-interface TopDeclaration {
-  readonly name: string | undefined;
-  readonly exported: boolean;
-  readonly referencedFrom: ReadonlySet<number>;
-}
+/** Whether a call is a check that, when it returns true, allows what is being guarded. */
+type IsCheck = (call: ts.CallExpression) => boolean;
 
 /** The route table's checks: `useCanOpen()`'s function and the sidebar's predicate. */
 const ASKS = new Set(['canOpen', 'roleMayOpen']);
@@ -122,11 +121,19 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
   const where = (node: ts.Node) =>
     `${line(node)}: ${node.getText().replace(/\s+/g, ' ').slice(0, 60)}`;
 
-  // Declarations by name, for resolving `call(action)` and `const href = auditHref(…)`.
+  // Declarations by name, for resolving `call(action)`, `const href = auditHref(…)`, `can` and the
+  // functions a guarded call sits in.
   const declarations = new Map<string, ts.Node[]>();
   const uses = new Map<string, ts.Identifier[]>();
   const index = (node: ts.Node) => {
-    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) {
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isFunctionDeclaration(node) ||
+        ts.isBindingElement(node)) &&
+      node.name &&
+      ts.isIdentifier(node.name)
+    ) {
       declarations.set(node.name.text, [...(declarations.get(node.name.text) ?? []), node]);
     } else if (ts.isIdentifier(node)) {
       uses.set(node.text, [...(uses.get(node.text) ?? []), node]);
@@ -153,32 +160,317 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
       .sort((a, b) => b.getStart() - a.getStart())[0];
   };
 
-  /** Whether `node` contains a route-table check: `canOpen(…)`, `roleMayOpen(…)`, or a variable
-   *  computed from one (`const opensApprovals = canOpen(…) !== false`). */
-  const asksIn = (node: ts.Node, depth = 0): boolean => {
-    let found = false;
-    const visit = (child: ts.Node) => {
-      if (found) return;
-      // `canOpen(href)`, or the check itself handed on (`resourceHref(type, id, canOpen)`).
-      if (ts.isCallExpression(child) && ASKS.has(calleeName(child) ?? '')) found = true;
-      else if (ts.isIdentifier(child) && ASKS.has(child.text)) found = true;
-      else if (ts.isIdentifier(child) && depth < 2) {
-        const declaration = declarationInScope(child);
+  /** An identifier that reads a variable — not a property name (`x.href`, `{ href: … }`) or a
+   *  JSX attribute name that merely spells the same word. */
+  const isReference = (identifier: ts.Identifier) => {
+    const parent = identifier.parent;
+    if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) return false;
+    if (ts.isPropertyAssignment(parent) && parent.name === identifier) return false;
+    if (ts.isJsxAttribute(parent)) return false;
+    if (ts.isBindingElement(parent) && parent.propertyName === identifier) return false;
+    // A member of a type (`readonly onPublish: () => …`) names a property, not the variable.
+    if (
+      (ts.isPropertySignature(parent) || ts.isMethodSignature(parent)) &&
+      parent.name === identifier
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  /** Whether `expr` being truthy (`want`), or falsy, implies `isCheck` returned true — so the
+   *  direction counts: `!canOpen(href) && <a href={href}>` is no check (review of #559, L1/L2).
+   *  `x === true` / `x !== false` read as `x`; `x === false` / `x !== true` as `!x`; a variable
+   *  reads as its initializer. */
+  const implies = (
+    expr: ts.Node | undefined,
+    want: boolean,
+    isCheck: IsCheck,
+    depth = 0,
+  ): boolean => {
+    if (expr === undefined || depth > 6) return false;
+    if (
+      ts.isParenthesizedExpression(expr) ||
+      ts.isAsExpression(expr) ||
+      ts.isNonNullExpression(expr)
+    ) {
+      return implies(expr.expression, want, isCheck, depth);
+    }
+    if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
+      return implies(expr.operand, !want, isCheck, depth);
+    }
+    if (ts.isBinaryExpression(expr)) {
+      const op = expr.operatorToken.kind;
+      const { left, right } = expr;
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+        return want
+          ? implies(left, true, isCheck, depth) || implies(right, true, isCheck, depth)
+          : implies(left, false, isCheck, depth) && implies(right, false, isCheck, depth);
+      }
+      if (op === ts.SyntaxKind.BarBarToken) {
+        return want
+          ? implies(left, true, isCheck, depth) && implies(right, true, isCheck, depth)
+          : implies(left, false, isCheck, depth) || implies(right, false, isCheck, depth);
+      }
+      const equal =
+        op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+      const unequal =
+        op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsToken;
+      if (!equal && !unequal) return false;
+      const bool = (node: ts.Node) =>
+        node.kind === ts.SyntaxKind.TrueKeyword
+          ? true
+          : node.kind === ts.SyntaxKind.FalseKeyword
+            ? false
+            : undefined;
+      const value = bool(right) ?? bool(left);
+      const other = bool(right) !== undefined ? left : bool(left) !== undefined ? right : undefined;
+      if (value === undefined || other === undefined) return false;
+      return implies(other, equal === value ? want : !want, isCheck, depth);
+    }
+    if (ts.isCallExpression(expr)) return want && isCheck(expr);
+    if (ts.isIdentifier(expr)) {
+      const declaration = declarationInScope(expr);
+      if (declaration !== undefined && ts.isVariableDeclaration(declaration)) {
+        return implies(declaration.initializer, want, isCheck, depth + 1);
+      }
+      // A prop of a component this file does not export: what every `<Component prop={…}>` of
+      // the file passes (`canResolve={canResolve}` down to the private body that resolves).
+      if (declaration !== undefined && ts.isBindingElement(declaration)) {
+        const passed = propValues(declaration);
+        return (
+          passed !== undefined &&
+          passed.length > 0 &&
+          passed.every((value) => implies(value, want, isCheck, depth + 1))
+        );
+      }
+    }
+    return false;
+  };
+
+  /** The name of the component a function is (`function Row(…)`, `const Row = (…) => …`). */
+  const componentDeclaration = (
+    fn: ts.Node,
+  ): ts.FunctionDeclaration | ts.VariableDeclaration | undefined => {
+    if (ts.isFunctionDeclaration(fn) && fn.name) return fn;
+    if (
+      (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+      ts.isVariableDeclaration(fn.parent) &&
+      ts.isIdentifier(fn.parent.name)
+    ) {
+      return fn.parent;
+    }
+    return undefined;
+  };
+
+  /** For a destructured prop of a component the file does not export: the value expression of
+   *  that prop at every `<Component …>` in the file (`undefined` when one is missing or not an
+   *  expression — then nothing is implied). */
+  const propValues = (binding: ts.BindingElement): ts.Expression[] | undefined => {
+    if (!ts.isObjectBindingPattern(binding.parent) || !ts.isParameter(binding.parent.parent)) {
+      return undefined;
+    }
+    const component = componentDeclaration(binding.parent.parent.parent);
+    if (component === undefined || isExportedTop(component)) return undefined;
+    const prop = (binding.propertyName ?? binding.name).getText();
+    const name = (component.name as ts.Identifier).text;
+    const values: ts.Expression[] = [];
+    for (const use of uses.get(name) ?? []) {
+      const element = use.parent;
+      if (
+        !(ts.isJsxOpeningElement(element) || ts.isJsxSelfClosingElement(element)) ||
+        element.tagName !== use
+      ) {
+        continue;
+      }
+      const attribute = element.attributes.properties.find(
+        (each): each is ts.JsxAttribute => ts.isJsxAttribute(each) && each.name.getText() === prop,
+      );
+      const value =
+        attribute?.initializer && ts.isJsxExpression(attribute.initializer)
+          ? attribute.initializer.expression
+          : undefined;
+      if (value === undefined) return undefined;
+      values.push(value);
+    }
+    return values;
+  };
+
+  /** A statement that leaves its block: `return`, `throw`, or a block ending in one. */
+  const exits = (statement: ts.Statement): boolean =>
+    ts.isReturnStatement(statement) ||
+    ts.isThrowStatement(statement) ||
+    (ts.isBlock(statement) &&
+      statement.statements.length > 0 &&
+      exits(statement.statements[statement.statements.length - 1] as ts.Statement));
+
+  const isFunctionValue = (node: ts.Node | undefined): boolean =>
+    node !== undefined &&
+    (ts.isArrowFunction(node) ||
+      ts.isFunctionExpression(node) ||
+      // `useCallback(async () => …, deps)`
+      (ts.isCallExpression(node) && isFunctionValue(node.arguments[0])));
+
+  const isExportedTop = (declaration: ts.Node) =>
+    ts.isSourceFile(declaration.parent) ||
+    (ts.isVariableDeclarationList(declaration.parent) &&
+      ts.isSourceFile(declaration.parent.parent.parent))
+      ? exportedNames.has(
+          (declaration as ts.FunctionDeclaration | ts.VariableDeclaration).name?.getText() ?? '',
+        )
+      : false;
+
+  /**
+   * Whether `node` only runs (or, for a link's href value, only reaches the reader) where
+   * `isCheck` holds: in the branch of a condition that implies it, after an early return on its
+   * failure, as an action of a control `disabled` unless it holds, or inside a function every one
+   * of whose uses is held — an exported declaration has uses the file cannot see, so it is not.
+   * `values`: also follow a plain variable's uses (an href stored, then rendered).
+   */
+  const heldBy = (
+    node: ts.Node,
+    isCheck: IsCheck,
+    values: boolean,
+    extra: (child: ts.Node, parent: ts.Node) => boolean = () => false,
+    following = new Set<ts.Node>(),
+    capability?: string,
+  ): boolean => {
+    const followUses = (declaration: ts.Node, name: ts.Identifier): boolean => {
+      // Per path, so two uses reaching the same declaration are both followed; a cycle is not.
+      if (following.has(declaration)) return false;
+      const path = new Set(following).add(declaration);
+      if (isExportedTop(declaration)) return false;
+      const refs = (uses.get(name.text) ?? []).filter(
+        (use) =>
+          use !== name &&
+          isReference(use) &&
+          declarationInScope(use) === declaration &&
+          !runsOtherCapability(use, capability),
+      );
+      return (
+        refs.length > 0 &&
+        refs.every((use) => heldBy(use, isCheck, values, extra, path, capability))
+      );
+    };
+    for (let child = node, parent = node.parent; parent; child = parent, parent = parent.parent) {
+      if (extra(child, parent)) return true;
+      if (ts.isConditionalExpression(parent)) {
+        if (child === parent.whenTrue && implies(parent.condition, true, isCheck)) return true;
+        if (child === parent.whenFalse && implies(parent.condition, false, isCheck)) return true;
+      }
+      if (ts.isBinaryExpression(parent) && child === parent.right) {
+        const op = parent.operatorToken.kind;
+        if (op === ts.SyntaxKind.AmpersandAmpersandToken && implies(parent.left, true, isCheck))
+          return true;
+        if (op === ts.SyntaxKind.BarBarToken && implies(parent.left, false, isCheck)) return true;
+      }
+      if (ts.isIfStatement(parent)) {
+        if (child === parent.thenStatement && implies(parent.expression, true, isCheck))
+          return true;
+        if (child === parent.elseStatement && implies(parent.expression, false, isCheck))
+          return true;
+      }
+      if (ts.isBlock(parent) || ts.isSourceFile(parent)) {
+        const statements = parent.statements as ts.NodeArray<ts.Statement>;
+        const at = statements.indexOf(child as ts.Statement);
         if (
-          declaration &&
-          ts.isVariableDeclaration(declaration) &&
-          declaration.initializer &&
-          declaration.initializer !== node &&
-          asksIn(declaration.initializer, depth + 1)
+          statements
+            .slice(0, Math.max(at, 0))
+            .some(
+              (earlier) =>
+                ts.isIfStatement(earlier) &&
+                exits(earlier.thenStatement) &&
+                implies(earlier.expression, false, isCheck),
+            )
         ) {
-          found = true;
+          return true;
         }
       }
-      ts.forEachChild(child, visit);
-    };
-    visit(node);
-    return found;
+      // An action of a control that stays disabled unless the check holds.
+      if (ts.isJsxAttribute(parent) && ts.isJsxAttributes(parent.parent)) {
+        const disabled = parent.parent.properties.find(
+          (attribute): attribute is ts.JsxAttribute =>
+            ts.isJsxAttribute(attribute) && attribute.name.getText() === 'disabled',
+        );
+        const value =
+          disabled?.initializer && ts.isJsxExpression(disabled.initializer)
+            ? disabled.initializer.expression
+            : undefined;
+        if (value && implies(value, false, isCheck)) return true;
+      }
+      if (
+        ts.isVariableDeclaration(parent) &&
+        ts.isIdentifier(parent.name) &&
+        child === parent.initializer &&
+        (values || isFunctionValue(parent.initializer))
+      ) {
+        return followUses(parent, parent.name);
+      }
+      if (ts.isFunctionDeclaration(parent) && parent.name) return followUses(parent, parent.name);
+      // A function handed to a component of this file as a prop (`onPublish={() => act(…)}`):
+      // held where that component runs it — or, failing that, where the element is rendered.
+      if (ts.isJsxExpression(child) && ts.isJsxAttribute(parent) && !values) {
+        const binding = propBinding(parent);
+        if (binding && followUses(binding, binding.name as ts.Identifier)) return true;
+      }
+    }
+    return false;
   };
+
+  /** A call of a shared function that passes a different capability name than the one being
+   *  followed (`act(row, 'deprecate_skill')` when following `publish_skill`) never runs it. */
+  const runsOtherCapability = (use: ts.Identifier, capability: string | undefined) => {
+    if (capability === undefined) return false;
+    const call = use.parent;
+    if (!ts.isCallExpression(call) || call.expression !== use) return false;
+    const names = call.arguments
+      .map((argument) => literalText(argument))
+      .filter((text): text is string => text !== undefined && getCapability(text) !== undefined);
+    return names.length > 0 && !names.includes(capability);
+  };
+
+  /** The destructured prop a JSX attribute feeds, on a component this file declares and does not
+   *  export (`<SkillDetailView onPublish={…}>` → `function SkillDetailView({ onPublish })`). */
+  const propBinding = (attribute: ts.JsxAttribute): ts.BindingElement | undefined => {
+    const element = attribute.parent.parent;
+    if (!ts.isJsxOpeningElement(element) && !ts.isJsxSelfClosingElement(element)) return undefined;
+    if (!ts.isIdentifier(element.tagName)) return undefined;
+    const declaration = declarationInScope(element.tagName);
+    if (declaration === undefined || isExportedTop(declaration)) return undefined;
+    const fn = ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration;
+    if (fn === undefined || !ts.isFunctionLike(fn)) return undefined;
+    const props = fn.parameters[0]?.name;
+    if (props === undefined || !ts.isObjectBindingPattern(props)) return undefined;
+    const prop = attribute.name.getText();
+    return props.elements.find(
+      (element) =>
+        (element.propertyName ?? element.name).getText() === prop && ts.isIdentifier(element.name),
+    );
+  };
+
+  /** `can` as the reader's role check: `const can = useRoleCan(…)`, or a parameter typed as one. */
+  const isRoleCheck = (callee: ts.Expression): boolean => {
+    if (ts.isCallExpression(callee)) return calleeName(callee) === 'useRoleCan';
+    if (!ts.isIdentifier(callee)) return false;
+    const declaration = declarationInScope(callee);
+    if (declaration === undefined) return false;
+    if (ts.isVariableDeclaration(declaration)) {
+      return (
+        declaration.initializer !== undefined &&
+        ts.isCallExpression(declaration.initializer) &&
+        calleeName(declaration.initializer) === 'useRoleCan'
+      );
+    }
+    return ts.isParameter(declaration) && /\buseRoleCan\b/.test(declaration.type?.getText() ?? '');
+  };
+  /** A `can('<name>')` (or `useRoleCan(http)('<name>')`) from the reader's role. */
+  const checksCapability =
+    (name: string): IsCheck =>
+    (call) =>
+      literalText(call.arguments[0]) === name &&
+      (calleeName(call) === 'can' || ts.isCallExpression(call.expression)) &&
+      isRoleCheck(call.expression);
 
   /** Which gate an href expression leads to — the route table's requirement for its route, so a
    *  check and a link agree when they lead to the same gate (`canOpen(hrefs.audit())` covers
@@ -197,44 +489,26 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     return gatedBuilders.keyOf(node);
   };
 
-  /** Whether `node` checks the route table about the gate `key` leads to: `canOpen(<same gate>)`,
-   *  `roleMayOpen(role, <same gate>)`, or a variable computed from one. A bare `canOpen` handed
-   *  nowhere is not a check (review of #554, P3-1). */
-  const asksAbout = (node: ts.Node, key: string | undefined, depth = 0): boolean => {
-    if (key === undefined) return false;
+  /** A route-table check (`canOpen(<href>)`, `roleMayOpen(role, <href>)`) about the gate `key`. A
+   *  bare `canOpen` handed nowhere is not a check (review of #554, P3-1). */
+  const asksAbout =
+    (key: string | undefined): IsCheck =>
+    (call) => {
+      const name = calleeName(call) ?? '';
+      if (key === undefined || !ASKS.has(name)) return false;
+      return routeKey(name === 'roleMayOpen' ? call.arguments[1] : call.arguments[0]) === key;
+    };
+
+  /** Whether `node` contains the route check handed on whole (`resourceHref(type, id, canOpen)`). */
+  const handsOnCheck = (node: ts.Node): boolean => {
     let found = false;
     const visit = (child: ts.Node) => {
       if (found) return;
-      if (ts.isCallExpression(child) && ASKS.has(calleeName(child) ?? '')) {
-        const href = calleeName(child) === 'roleMayOpen' ? child.arguments[1] : child.arguments[0];
-        if (routeKey(href) === key) found = true;
-      } else if (ts.isIdentifier(child) && !ASKS.has(child.text) && depth < 2) {
-        const declaration = declarationInScope(child);
-        if (
-          declaration &&
-          ts.isVariableDeclaration(declaration) &&
-          declaration.initializer &&
-          declaration.initializer !== node &&
-          asksAbout(declaration.initializer, key, depth + 1)
-        ) {
-          found = true;
-        }
-      }
+      if (ts.isIdentifier(child) && ASKS.has(child.text)) found = true;
       ts.forEachChild(child, visit);
     };
     visit(node);
     return found;
-  };
-
-  /** An identifier that reads a variable — not a property name (`x.href`, `{ href: … }`) or a
-   *  JSX attribute name that merely spells the same word. */
-  const isReference = (identifier: ts.Identifier) => {
-    const parent = identifier.parent;
-    if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) return false;
-    if (ts.isPropertyAssignment(parent) && parent.name === identifier) return false;
-    if (ts.isJsxAttribute(parent)) return false;
-    if (ts.isBindingElement(parent) && parent.propertyName === identifier) return false;
-    return true;
   };
 
   /** `node` is the href a `canOpen` / `roleMayOpen` call asks about — the check itself. */
@@ -256,114 +530,77 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
   };
 
   /** Whether the href built at `node` only reaches the reader through the route table: at a
-   *  `RouteLink`, or under a check about the same gate (`key`). A variable holding it is asked only
-   *  when every use other than the check itself is (review of #554, P3-1). */
-  const asked = (
-    node: ts.Node,
-    key: string | undefined = routeKey(node),
-    following = new Set<ts.Node>(),
-  ): boolean => {
+   *  `RouteLink`, or where a check about the same gate holds (every use of a variable holding it,
+   *  other than the check itself — review of #554, P3-1). */
+  const asked = (node: ts.Node): boolean => {
     // `resourceHref(type, id, canOpen)` filters with the reader's check itself.
     if (
       ts.isCallExpression(node) &&
       calleeName(node) === 'resourceHref' &&
-      node.arguments.some((argument) => asksIn(argument))
+      node.arguments.some((argument) => handsOnCheck(argument))
     ) {
       return true;
     }
-    for (let child = node, parent = node.parent; parent; child = parent, parent = parent.parent) {
-      if (ts.isJsxAttribute(parent) && isRouteLinkHref(parent)) return true;
-      if (isAskedHref(child)) return true;
-      if (
-        ts.isConditionalExpression(parent) &&
-        child === parent.whenTrue &&
-        asksAbout(parent.condition, key)
-      ) {
-        return true;
-      }
-      if (
-        ts.isBinaryExpression(parent) &&
-        parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-        child === parent.right &&
-        asksAbout(parent.left, key)
-      ) {
-        return true;
-      }
-      if (
-        ts.isIfStatement(parent) &&
-        child === parent.thenStatement &&
-        asksAbout(parent.expression, key)
-      ) {
-        return true;
-      }
-      // `const href = auditHref(…)`, then `<RouteLink href={href}>` / `canOpen(href) ? … : …`.
-      if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
-        if (following.has(parent)) return false;
-        following.add(parent);
-        const declaration = parent;
-        return (uses.get(parent.name.text) ?? [])
-          .filter(
-            (use) =>
-              use !== declaration.name &&
-              isReference(use) &&
-              declarationInScope(use) === declaration &&
-              !isAskedHref(use),
-          )
-          .every((use) => asked(use, key, following));
-      }
-    }
-    return false;
+    return heldBy(
+      node,
+      asksAbout(routeKey(node)),
+      true,
+      (child, parent) =>
+        (ts.isJsxAttribute(parent) && isRouteLinkHref(parent)) || isAskedHref(child),
+    );
   };
 
-  // Top-level declarations and who refers to them, for `paired` below.
-  const topNames = new Map<number, { name: string | undefined; exported: boolean }>();
+  // Names this file exports: `export function`, `export const`, `export { … }`, `export default`.
+  const exportedNames = new Set<string>();
   for (const statement of source.statements) {
     const exported =
       ts.canHaveModifiers(statement) &&
       (ts.getModifiers(statement) ?? []).some(
         (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
       );
-    let name: string | undefined;
-    if (
-      (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
-      statement.name
-    ) {
-      name = statement.name.text;
-    } else if (ts.isVariableStatement(statement)) {
-      const [only, ...rest] = statement.declarationList.declarations;
-      if (only && rest.length === 0 && ts.isIdentifier(only.name)) name = only.name.text;
-    }
-    topNames.set(statement.getStart(), { name, exported });
-  }
-  const exportedLater = new Set<string>();
-  for (const statement of source.statements) {
-    if (
+    if (exported && ts.isFunctionDeclaration(statement) && statement.name) {
+      exportedNames.add(statement.name.text);
+    } else if (exported && ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) exportedNames.add(declaration.name.text);
+      }
+    } else if (
       ts.isExportDeclaration(statement) &&
       statement.exportClause &&
       ts.isNamedExports(statement.exportClause)
     ) {
       for (const element of statement.exportClause.elements) {
-        exportedLater.add((element.propertyName ?? element.name).text);
+        exportedNames.add((element.propertyName ?? element.name).text);
       }
     } else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
-      exportedLater.add(statement.expression.text);
+      exportedNames.add(statement.expression.text);
     }
   }
 
   const calls = new Set<string>();
   const callSites: Site[] = [];
-  const checkSites: Site[] = [];
   const aliasedCalls: string[] = [];
+  const aliasedHrefs: string[] = [];
+  const foreignChecks: string[] = [];
   const imports: string[] = [];
-  /** The file's top-level statement holding `node` (its start offset). */
-  const topOf = (node: ts.Node) => {
-    let top = node;
-    while (top.parent && !ts.isSourceFile(top.parent)) top = top.parent;
-    return top.getStart();
-  };
-  const callSite = (name: string, node: ts.Node) => {
+  /** A read hook held by its own `enabled` option (`{ enabled: can('<name>') === true }`). */
+  const enabledBy = (call: ts.CallExpression, name: string) =>
+    call.arguments.some(
+      (argument) =>
+        ts.isObjectLiteralExpression(argument) &&
+        argument.properties.some(
+          (property) =>
+            ts.isPropertyAssignment(property) &&
+            property.name.getText() === 'enabled' &&
+            implies(property.initializer, true, checksCapability(name)),
+        ),
+    );
+  const callSite = (name: string, node: ts.CallExpression, hook = false) => {
     calls.add(name);
-    callSites.push({ name, where: where(node), top: topOf(node) });
+    const held =
+      (hook && enabledBy(node, name)) ||
+      heldBy(node, checksCapability(name), false, undefined, undefined, name);
+    callSites.push({ name, where: where(node), held });
   };
   const dynamicCalls: string[] = [];
   const checked = new Set<string>();
@@ -373,17 +610,25 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
   let usesIsDenied = false;
 
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node)) {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const module = literalText(node.moduleSpecifier);
       if (module !== undefined) imports.push(module);
     }
-    // `http.call` handed on instead of called (`.bind(http)`, `const call = http.call`), or
-    // `const { call } = http`: the scan would never see what it calls (review of #554, P3-4).
+    // `import('…')` — the same module, loaded later (review of #559, I3).
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      imports.push(literalText(node.arguments[0]) ?? `<dynamic> ${where(node)}`);
+    }
+    // `http.call` handed on instead of called (`.bind(http)`, `const call = http.call`),
+    // `const { call } = http`, or `http['call'](…)`: the scan would never see what it calls
+    // (review of #554 P3-4, of #559 C3).
     if (
       ts.isPropertyAccessExpression(node) &&
       node.name.text === 'call' &&
       !(ts.isCallExpression(node.parent) && node.parent.expression === node)
     ) {
+      aliasedCalls.push(where(node));
+    }
+    if (ts.isElementAccessExpression(node) && literalText(node.argumentExpression) === 'call') {
       aliasedCalls.push(where(node));
     }
     if (
@@ -392,6 +637,23 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
       (node.propertyName ?? node.name).getText() === 'call'
     ) {
       aliasedCalls.push(where(node));
+    }
+    // `hrefs` used other than `hrefs.<name>(…)`: an aliased builder (review of #559, L3–L5).
+    if (
+      ts.isIdentifier(node) &&
+      node.text === 'hrefs' &&
+      isReference(node) &&
+      !ts.isImportSpecifier(node.parent) &&
+      !ts.isExportSpecifier(node.parent) &&
+      !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
+      !(
+        ts.isPropertyAccessExpression(node.parent) &&
+        node.parent.expression === node &&
+        ts.isCallExpression(node.parent.parent) &&
+        node.parent.parent.expression === node.parent
+      )
+    ) {
+      aliasedHrefs.push(where(node));
     }
     if (ts.isCallExpression(node)) {
       const name = calleeName(node);
@@ -414,11 +676,11 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
       } else if ((name === 'useCapability' || name === 'useCapabilityList') && node.arguments[1]) {
         const literal = literalText(node.arguments[1]);
         if (literal !== undefined) {
-          callSite(literal, node);
+          callSite(literal, node, true);
           named.push(literal);
         }
       } else if (name === 'useExecutionReadiness') {
-        callSite('execution_readiness', node);
+        callSite('execution_readiness', node, true);
       } else if (
         first &&
         (name === 'can' ||
@@ -427,8 +689,8 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
       ) {
         const literal = literalText(first);
         if (literal !== undefined) {
-          checked.add(literal);
-          checkSites.push({ name: literal, where: where(node), top: topOf(node) });
+          if (isRoleCheck(node.expression)) checked.add(literal);
+          else foreignChecks.push(where(node));
           named.push(literal);
         }
       } else if (name === 'isDenied' || name === 'markDenied' || name === 'invalidateCapability') {
@@ -445,30 +707,13 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
   };
   visit(source);
 
-  const tops = new Map<number, TopDeclaration>();
-  for (const [start, { name, exported }] of topNames) {
-    const referencedFrom = new Set<number>();
-    if (name !== undefined) {
-      for (const use of uses.get(name) ?? []) {
-        if (!isReference(use)) continue;
-        const from = topOf(use);
-        if (from !== start) referencedFrom.add(from);
-      }
-    }
-    tops.set(start, {
-      name,
-      exported: exported || (name !== undefined && exportedLater.has(name)),
-      referencedFrom,
-    });
-  }
-
   return {
     path,
-    tops,
     calls,
     callSites,
-    checkSites,
     aliasedCalls,
+    aliasedHrefs,
+    foreignChecks,
     imports,
     dynamicCalls,
     checked,
@@ -612,6 +857,22 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
   'components/chat/useActionCards.ts': {
     names: ['approve', 'reject', 'set_auto_approved_action_kind'],
     why: "ChatPage's canDecide / canAlwaysAllow",
+  },
+  'components/CatalogPage.tsx': {
+    names: ['update_operation_description'],
+    why: "saveDescription runs from the description dialog, opened only behind can('update_operation_description') && mayEditOperationDescription",
+  },
+  'components/TasksPage.tsx': {
+    names: ['cancel_task'],
+    why: "the cancel call is TaskDetail's confirm, shown only with canCancel = can('cancel_task') !== false",
+  },
+  'components/chat/ModelSwitcher.tsx': {
+    names: ['set_agent_profile'],
+    why: 'the select is disabled by roleRefused once the role is known, and before that by the policy / the 403 this session learned (isDenied)',
+  },
+  'components/graph/OntologyTypesDrawer.tsx': {
+    names: ['discard_draft', 'publish_ontology_version'],
+    why: 'the confirm opens only from the button rendered past can(x) === false; `&& !open` keeps an already opened confirm on screen',
   },
 };
 
@@ -773,23 +1034,11 @@ const DYNAMIC_CALL_ALLOWED: Readonly<Record<string, string>> = {
   'lib/users-directory.ts': 'the directory loader: its caller names the capability',
 };
 
-/** Whether the calls of `name` in the top-level declaration `top` are held by a `can('<name>')`:
- *  in that declaration itself, or — for a declaration the file does not export — in every
- *  declaration of the file that refers to it (the gated wrapper rendering its private body). */
-function paired(file: FileScan, name: string, top: number, seen = new Set<number>()): boolean {
-  if (file.checkSites.some((check) => check.name === name && check.top === top)) return true;
-  const declaration = file.tops.get(top);
-  if (declaration === undefined || declaration.exported || seen.has(top)) return false;
-  if (declaration.referencedFrom.size === 0) return false;
-  seen.add(top);
-  return [...declaration.referencedFrom].every((from) => paired(file, name, from, seen));
-}
-
-/** The role-limited names a file calls where no `can('<name>')` holds that call site. */
+/** The role-limited names a file calls at a site no `can('<name>')` holds. */
 function unpaired(file: FileScan | undefined, limited: ReadonlySet<string>): string[] {
   if (file === undefined) return [];
   const names = file.callSites
-    .filter((site) => limited.has(site.name) && !paired(file, site.name, site.top))
+    .filter((site) => limited.has(site.name) && !site.held)
     .map((site) => site.name);
   return [...new Set(names)].sort();
 }
@@ -820,7 +1069,7 @@ describe('role gating guard (#541 review M1/M3, legacy 235: read from the syntax
     expectPairedOrAllowed(
       ROLE_LIMITED_READS,
       READ_GATED_AT_ENTRY,
-      "hold it with `{ enabled: useRoleCan(http)('<name>') === true }` in the same declaration",
+      "hold it with `{ enabled: useRoleCan(http)('<name>') === true }`, or call it only where that check holds",
       'READ_GATED_AT_ENTRY',
     );
   });
@@ -829,7 +1078,7 @@ describe('role gating guard (#541 review M1/M3, legacy 235: read from the syntax
     expectPairedOrAllowed(
       ROLE_LIMITED_WRITES,
       WRITE_GATED_AT_ENTRY,
-      "offer it behind `useRoleCan(http)('<name>') !== false` in the same declaration",
+      "offer it only where `useRoleCan(http)('<name>') !== false` holds at the call (a condition, an early return or a disabled control around it)",
       'WRITE_GATED_AT_ENTRY',
     );
   });
@@ -865,6 +1114,20 @@ describe('role gating guard (#541 review M1/M3, legacy 235: read from the syntax
       (path) => (scanOf(path)?.dynamicCalls.length ?? 0) === 0,
     );
     expect(stale, 'remove these from DYNAMIC_CALL_ALLOWED').toEqual([]);
+  });
+
+  it('`hrefs` is only ever called as `hrefs.<route>(…)` (an alias or `hrefs[…]` hides the link)', () => {
+    expect(
+      FILES.flatMap(({ path, aliasedHrefs }) => aliasedHrefs.map((site) => `${path}:${site}`)),
+      'call `hrefs.<route>(…)` directly',
+    ).toEqual([]);
+  });
+
+  it('every `can(…)` is the one `useRoleCan` returns (a local `can` decides nothing)', () => {
+    expect(
+      FILES.flatMap(({ path, foreignChecks }) => foreignChecks.map((site) => `${path}:${site}`)),
+      'check with `const can = useRoleCan(http)`',
+    ).toEqual([]);
   });
 
   it('no control is gated on a past refusal (`isDenied`) outside the allow-list', () => {
@@ -943,7 +1206,7 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
     expect(scan('http.call("audit_query");').aliasedCalls).toHaveLength(0);
   });
 
-  it('a check pairs with calls in its own declaration, or a private body only it renders', () => {
+  it('a check covers a private component only where every place rendering it is held', () => {
     const limited = new Set(['audit_query']);
     const unheld = (text: string) => unpaired(scan(text), limited);
     expect(
@@ -965,5 +1228,97 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
           "function B({ http }) { http.call('audit_query'); return null; }",
       ),
     ).toEqual(['audit_query']);
+  });
+
+  // Review of #559 (the 501 reviewer's probes): each of these got a call past the guard.
+  const limited = new Set(['audit_query']);
+  const unheld = (text: string) => unpaired(scan(text), limited);
+  const inComponent = (body: string) =>
+    `export function A({ http }) {\n  const can = useRoleCan(http);\n${body}\n}`;
+
+  it('a check pairs with the call it holds, not with any call in the same component', () => {
+    expect(
+      unheld(
+        inComponent(
+          "  can('audit_query');\n  useEffect(() => { void http.call('audit_query'); }, []);\n  return null;",
+        ),
+      ),
+    ).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  return can('audit_query') !== false ? <button onClick={() => http.call('audit_query')} /> : null;",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('a check held the wrong way round holds nothing', () => {
+    expect(
+      unheld(
+        inComponent(
+          "  return can('audit_query') === false ? <button onClick={() => http.call('audit_query')} /> : null;",
+        ),
+      ),
+    ).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  return can('audit_query') !== false ? null : <button onClick={() => http.call('audit_query')} />;",
+        ),
+      ),
+    ).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  if (can('audit_query') !== false) return null;\n  return <button onClick={() => http.call('audit_query')} />;",
+        ),
+      ),
+    ).toEqual(['audit_query']);
+    expect(
+      unheld(
+        inComponent(
+          "  if (can('audit_query') === false) return null;\n  return <button onClick={() => http.call('audit_query')} />;",
+        ),
+      ),
+    ).toEqual([]);
+    expect(
+      unheld(
+        inComponent(
+          "  return <button disabled={can('audit_query') !== false} onClick={() => http.call('audit_query')} />;",
+        ),
+      ),
+    ).toEqual(['audit_query']);
+  });
+
+  it('a `can` the file defines itself holds nothing, and is reported', () => {
+    const text =
+      'function can(name) { return true; }\n' +
+      "export function A({ http }) { return can('audit_query') ? <button onClick={() => http.call('audit_query')} /> : null; }";
+    expect(unheld(text)).toEqual(['audit_query']);
+    expect(scan(text).foreignChecks).toHaveLength(1);
+  });
+
+  it("`http['call']` is reported like a bound `.call`", () => {
+    expect(scan("http['call']('audit_query');").aliasedCalls).toHaveLength(1);
+  });
+
+  it('an alias of `hrefs`, or `hrefs[…]`, is reported', () => {
+    expect(scan('const h = hrefs; h.audit();').aliasedHrefs).toHaveLength(1);
+    expect(scan("hrefs['audit']();").aliasedHrefs).toHaveLength(1);
+    expect(scan('const { audit } = hrefs; audit();').aliasedHrefs).toHaveLength(1);
+    expect(scan('hrefs.audit();').aliasedHrefs).toHaveLength(0);
+  });
+
+  it('a re-export or a dynamic `import()` counts as importing the module', () => {
+    expect(scan("export { auditActorSource } from '../lib/audit-pickers.js';").imports).toContain(
+      '../lib/audit-pickers.js',
+    );
+    expect(scan("export * from '../lib/audit-pickers.js';").imports).toContain(
+      '../lib/audit-pickers.js',
+    );
+    expect(
+      scan("async function f() { await import('../lib/audit-pickers.js'); }").imports,
+    ).toContain('../lib/audit-pickers.js');
   });
 });

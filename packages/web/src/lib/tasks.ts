@@ -6,6 +6,8 @@ import type {
 } from '@nexttime/shared';
 import { TASK_EDGES, TASK_TRANSITIONS, canTransition } from '@nexttime/shared';
 import { shortId } from './format.js';
+import type { Translate } from './i18n.js';
+import { workerDefinitionKindLabel } from './labels.js';
 
 /**
  * lib/tasks: the wire shapes `list_tasks`/`get_task` return (`toWireTask`/`toWireWorkerRun`,
@@ -78,15 +80,28 @@ export function taskFinishedAt(task: TaskSummary): string | null {
   return task.completedAt ?? task.failedAt ?? task.cancelledAt;
 }
 
-/** `invoke_worker`'s `input` is opaque JSON; the entry agent conventionally sends `{need}`, but a
- *  real run (audit R7 "行副标题直接显示原始 JSON 输入") has also sent `{intent}` — both, plus the
- *  other conventional shapes below, are tried before falling back to a raw JSON excerpt
- *  (`TasksPage`'s own `taskNeed(...) ?? excerpt(...)`). */
+/** The routing marker the kernel puts in front of an entry-agent prompt
+ *  (`<!--nexttime:turn_id=<id>-->`, see kernel `turn-started-consumer.ts`) — machine data, never
+ *  part of what the person asked. */
+const TURN_ID_MARKER = /^\s*<!--nexttime:[^>]*-->\s*/;
+
+/** `invoke_worker`'s `input` is opaque JSON; the entry agent conventionally sends `{need}`, but
+ *  real runs (audit R7 "行副标题直接显示原始 JSON 输入", #559 acceptance P2-2) have also sent
+ *  `{intent}` and `{message}` (the person's own chat message, routing marker included) — all of
+ *  them, plus the other conventional shapes below, are tried before falling back to a raw JSON
+ *  excerpt (`TasksPage`'s own `taskNeed(...) ?? excerpt(...)`). The marker is stripped. */
 export function taskNeed(input: unknown): string | undefined {
+  const text = rawTaskNeed(input);
+  if (text === undefined) return undefined;
+  const stripped = text.replace(TURN_ID_MARKER, '').trim();
+  return stripped === '' ? undefined : stripped;
+}
+
+function rawTaskNeed(input: unknown): string | undefined {
   if (typeof input === 'string') return input;
   if (input && typeof input === 'object') {
     const record = input as Record<string, unknown>;
-    for (const key of ['need', 'intent', 'prompt', 'summary', 'task']) {
+    for (const key of ['need', 'intent', 'message', 'prompt', 'summary', 'task']) {
       if (typeof record[key] === 'string') return record[key];
     }
   }
@@ -153,10 +168,10 @@ export interface WorkerDefinitionChoice {
   readonly distinguisher?: string;
 }
 
-const workerLabelOf = (row: WorkerDefinitionSummary) =>
+const workerNameOf = (row: WorkerDefinitionSummary): string | undefined =>
   typeof row.definition.name === 'string' && row.definition.name !== ''
     ? row.definition.name
-    : row.id;
+    : undefined;
 
 /** Ids of the definitions whose name another listed definition (a different id) also has. */
 export function sameNameDefinitionIds(
@@ -164,7 +179,8 @@ export function sameNameDefinitionIds(
 ): ReadonlySet<string> {
   const idsByLabel = new Map<string, Set<string>>();
   for (const row of definitions) {
-    const label = workerLabelOf(row);
+    const label = workerNameOf(row);
+    if (label === undefined) continue;
     idsByLabel.set(label, (idsByLabel.get(label) ?? new Set()).add(row.id));
   }
   return new Set([...idsByLabel.values()].filter((ids) => ids.size > 1).flatMap((ids) => [...ids]));
@@ -172,14 +188,28 @@ export function sameNameDefinitionIds(
 
 export function workerDefinitionChoices(
   definitions: readonly WorkerDefinitionSummary[],
+  t: Translate,
 ): WorkerDefinitionChoice[] {
   const sameName = sameNameDefinitionIds(definitions);
-  return definitions.map((row) => ({
-    id: row.id,
-    label: workerLabelOf(row),
-    version: `v${row.version}`,
-    ...(sameName.has(row.id) ? { distinguisher: shortId(row.id) } : {}),
-  }));
+  return definitions.map((row) => {
+    const name = workerNameOf(row);
+    // An unnamed definition (a member's own entry agent) reads as its kind, never as a bare
+    // uuid (#559 acceptance P2-3); its short id always tells it apart.
+    if (name === undefined) {
+      return {
+        id: row.id,
+        label: `${t('未命名', 'Unnamed')} ${workerDefinitionKindLabel(row.kind, t)}`,
+        version: `v${row.version}`,
+        distinguisher: shortId(row.id),
+      };
+    }
+    return {
+      id: row.id,
+      label: name,
+      version: `v${row.version}`,
+      ...(sameName.has(row.id) ? { distinguisher: shortId(row.id) } : {}),
+    };
+  });
 }
 
 /** Every listed version of one definition, newest first (`list_worker_definitions` returns each

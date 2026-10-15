@@ -4,8 +4,8 @@ import type { ActionPendingPush, ChatMessage } from './ws-client.js';
 
 /**
  * lib/action-card: normalizes the three different shapes an ActionRequest can arrive in on the
- * web client into one `ActionCardData` a single detail component (`components/ActionRequestDetail`)
- * renders (docs/development-tasks.md S2.10 deliverable 2).
+ * web client into one `ActionCardData` the chat's action card renders (docs/development-tasks.md
+ * S2.10 deliverable 2; the approval page's own detail is `approvals/ApprovalDetail`).
  *
  * The three sources, and why none of them alone is enough:
  *   - `action.pending` push (`ActionPendingPush`, ws-client.ts) — the *only* source carrying a

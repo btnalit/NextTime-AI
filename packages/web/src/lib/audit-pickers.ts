@@ -23,6 +23,7 @@ import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
 import { roleLabel } from './labels.js';
 import { ownEntry } from './own.js';
+import { sameNameIds, withSameNameId } from './same-name.js';
 
 /**
  * lib/audit-pickers: where the audit pages' id / name filters get their candidates from, so a
@@ -142,15 +143,17 @@ export function auditActorSource(t: Translate): PickerSource {
       });
       const ids = [...new Set(page.items.map((row) => row.actorPrincipalId))];
       const names = await resolveNames(http, ids);
-      return dedupe(
-        page.items.map((row) => ({
-          id: row.actorPrincipalId,
-          label: names.get(row.actorPrincipalId) ?? t('未知成员', 'Unknown member'),
-          detail: t(
-            `最近：${formatRelative(row.createdAt)}`,
-            `Last seen ${formatRelative(row.createdAt)}`,
-          ),
-        })),
+      return withSameNameIds(
+        dedupe(
+          page.items.map((row) => ({
+            id: row.actorPrincipalId,
+            label: names.get(row.actorPrincipalId) ?? t('未知成员', 'Unknown member'),
+            detail: t(
+              `最近：${formatRelative(row.createdAt)}`,
+              `Last seen ${formatRelative(row.createdAt)}`,
+            ),
+          })),
+        ),
       );
     },
   };
@@ -244,14 +247,17 @@ export function provenanceNodeSource(kind: ProvenanceNodeKind, t: Translate): Pi
 
 type SourceFactory = (t: Translate) => PickerSource;
 
-/** Two options that read the same (two Workers both named `ops-runner`) carry their short id in
- *  the label, so the picker never offers indistinguishable rows (#554 acceptance P2). */
+/** Two options that read the same (two Workers both named `ops-runner`, two members both called
+ *  张三, two gates both called `orders`) carry their short id in the label, so the picker never offers indistinguishable rows (#554 acceptance P2). */
 function withSameNameIds(options: readonly PickerOption[]): PickerOption[] {
-  const counts = new Map<string, number>();
-  for (const option of options) counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
+  const same = sameNameIds(
+    options,
+    (option) => option.id,
+    (option) => option.label,
+  );
   return options.map((option) =>
-    (counts.get(option.label) ?? 0) > 1
-      ? { ...option, label: `${option.label} · ${option.id.slice(0, 8)}` }
+    same.has(option.id)
+      ? { ...option, label: withSameNameId(option.label, option.id, same) }
       : option,
   );
 }
@@ -284,6 +290,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     {},
     (gate) => ({ id: gate.id, label: gate.name, detail: gate.kind }),
     'q',
+    withSameNameIds,
   ),
   operation: (t) => ({
     key: 'list_operations:ids',
@@ -312,6 +319,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
       detail: roleLabel(principal.role, t),
     }),
     'q',
+    withSameNameIds,
   ),
   skill: listSource<SkillSummaryWire>('list_skills', { limit: PICKER_LIMIT }, (skill) => ({
     id: skill.id,

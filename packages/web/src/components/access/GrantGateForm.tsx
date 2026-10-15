@@ -11,12 +11,14 @@ import {
 } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
+import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
+import { SameNameId } from '../kit/same-name-id.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
@@ -100,6 +102,13 @@ function GrantGateFormBody({
     principals.state.status === 'ready'
       ? principals.state.data.items.filter((row) => row.kind === 'human' && !row.disabledAt)
       : [];
+  // Two members with the same name (and role) must not read the same in the picker, or the owner
+  // could grant the wrong person (#559 acceptance).
+  const memberSame = sameNameIds(
+    memberOptions,
+    (row) => row.id,
+    (row) => row.displayName,
+  );
   const [principalId, setPrincipalId] = useState('');
   const selectedPrincipal = memberOptions.find((row) => row.id === principalId);
 
@@ -112,6 +121,11 @@ function GrantGateFormBody({
     { autoLoadAll: true, load: lockedGatekeeper ? async () => ({ items: [] }) : undefined },
   );
   const gateOptions = gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : [];
+  const gateSame = sameNameIds(
+    gateOptions,
+    (row) => row.id,
+    (row) => row.name,
+  );
   const [selectedGateIds, setSelectedGateIds] = useState<ReadonlySet<string>>(new Set());
   const [allGates, setAllGates] = useState(false);
   const [allGatesConfirmOpen, setAllGatesConfirmOpen] = useState(false);
@@ -241,7 +255,9 @@ function GrantGateFormBody({
     }
   }
 
-  const selectedGateNames = [...selectedGateIds].map((id) => gateName(id));
+  const selectedGateNames = [...selectedGateIds].map((id) =>
+    withSameNameId(gateName(id), id, gateSame),
+  );
 
   return (
     <div className="stack" data-testid={testId ?? 'grant-gate-form'}>
@@ -283,7 +299,7 @@ function GrantGateFormBody({
         </option>
         {memberOptions.map((row) => (
           <option key={row.id} value={row.id}>
-            {row.displayName} ({roleLabel(row.role, t)})
+            {withSameNameId(row.displayName, row.id, memberSame)} ({roleLabel(row.role, t)})
           </option>
         ))}
       </select>
@@ -369,7 +385,10 @@ function GrantGateFormBody({
                     disabled={submitting || allGates}
                     data-testid={`ggf-gate-${row.id}`}
                   />
-                  <span>{row.name}</span>
+                  <span>
+                    {row.name}
+                    <SameNameId id={row.id} same={gateSame} />
+                  </span>
                   <span className="text-3 text-small">{row.kind}</span>
                 </label>
               ))

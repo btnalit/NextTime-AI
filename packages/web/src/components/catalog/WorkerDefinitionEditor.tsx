@@ -35,9 +35,11 @@ import type {
 import { useT } from '../../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
+import { sameNameIds } from '../../lib/same-name.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
 import { ModelHealthNote, ModelOption } from '../kit/model-health.js';
+import { SameNameId } from '../kit/same-name-id.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -347,6 +349,15 @@ export function WorkerDefinitionEditor({
   onPublished,
 }: WorkerDefinitionEditorProps) {
   const t = useT();
+  const gateSame = useMemo(
+    () =>
+      sameNameIds(
+        gatekeepers,
+        (g) => g.id,
+        (g) => g.name,
+      ),
+    [gatekeepers],
+  );
   const permissions = usePermissions();
   const can = useRoleCan(http);
   const [form, setForm] = useState<WorkerDefinitionForm>(() =>
@@ -765,7 +776,15 @@ export function WorkerDefinitionEditor({
                   "The workspace's registered systems; none checked = no gates granted.",
                 )}
                 error={fieldError('gates')}
-                options={(gatekeepers ?? []).map((g) => ({ id: g.id, label: g.name }))}
+                options={(gatekeepers ?? []).map((g) => ({
+                  id: g.id,
+                  label: (
+                    <>
+                      {g.name}
+                      <SameNameId id={g.id} same={gateSame} />
+                    </>
+                  ),
+                }))}
                 selected={splitList(form.gates)}
                 onToggle={(id) =>
                   update('gates', joinList(toggleListItem(splitList(form.gates), id)))

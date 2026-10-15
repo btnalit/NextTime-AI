@@ -251,8 +251,8 @@ function MembershipRow({
         {confirmingRemove ? (
           <Notice tone="warn">
             {t(
-              '移出会停用该工作区的成员 Principal 并吊销其会话；Principal 行保留做审计溯源。',
-              'Removing disables the membership Principal and revokes its sessions; the row is kept for audit lineage.',
+              '移出会停用这位用户在该工作区的成员身份并吊销其会话；成员记录保留，供审计溯源。',
+              'Removing disables their member identity in this workspace and revokes its sessions; the member record is kept for audit lineage.',
             )}
           </Notice>
         ) : null}

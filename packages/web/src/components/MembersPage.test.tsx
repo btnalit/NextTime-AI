@@ -208,14 +208,17 @@ describe('MembersPage', () => {
     expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
   });
 
-  it('D3: no service Principal — the hint names the header 服务凭证 button, no self-link to this page', async () => {
+  it('D3: no service account — the notice offers 创建服务账号 itself, which opens the create sheet', async () => {
     const http = scriptedHttp({ list_principals: () => ({ items: [] }) });
     renderPage(http);
     openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const notice = await screen.findByTestId('issue-service-handle-no-principal');
-    expect(notice.textContent).toContain('服务凭证');
+    expect(notice.textContent).toContain('还没有服务账号');
+    expect(notice.textContent).not.toMatch(/Principal|上面/);
     expect(notice.querySelector('a')).toBeNull();
+    fireEvent.click(within(notice).getByTestId('issue-service-handle-create-account'));
+    expect(await screen.findByTestId('create-principal-form')).toBeTruthy();
   });
 
   it('C9: an owner session (authoritative role) keeps the owner-only buttons', async () => {

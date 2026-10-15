@@ -19,8 +19,8 @@ import { useApprovalQueue } from './approvals/useApprovalQueue.js';
 import {
   nameOf,
   resourceScopeLabel,
-  useGatekeeperNames,
-  usePrincipalNames,
+  useGatekeeperDirectory,
+  usePrincipalDirectory,
 } from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
@@ -28,6 +28,7 @@ import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
 import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { PageHeader } from './kit/page-header.js';
+import { SameNameId } from './kit/same-name-id.js';
 import { Select } from './kit/select.js';
 import { SkeletonRows } from './kit/skeleton.js';
 import { StatusChip } from './kit/status-chip.js';
@@ -82,8 +83,15 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const can = useRoleCan(http);
   const ask = useAskForAccess(http);
   const toast = useToast();
-  const principalNames = usePrincipalNames(http);
-  const gatekeeperNames = useGatekeeperNames(http);
+  const principals = usePrincipalDirectory(http);
+  const gatekeepers = useGatekeeperDirectory(http);
+  const principalNames = principals.names;
+  const gatekeeperNames = gatekeepers.names;
+  // Member and gate ids whose name another member / gate also has: the rows show their short id.
+  const sameNames = useMemo(
+    () => new Set([...principals.same, ...gatekeepers.same]),
+    [principals.same, gatekeepers.same],
+  );
   const [filter, setFilter] = useState<Filter>('pending');
   const [historyList, setHistoryList] = useState<HistoryListShape>({
     status: 'loading',
@@ -157,6 +165,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
               onSelect={onSelect}
               principalNames={principalNames}
               gatekeeperNames={gatekeeperNames}
+              sameNames={sameNames}
             />
           ) : (
             <ApprovalHistoryTab
@@ -166,6 +175,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
               onSelect={onSelect}
               principalNames={principalNames}
               gatekeeperNames={gatekeeperNames}
+              sameNames={sameNames}
             />
           )
         }
@@ -278,6 +288,7 @@ interface PendingListProps {
   readonly onSelect: (id: string | null) => void;
   readonly principalNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly sameNames: ReadonlySet<string>;
 }
 
 function PendingList({
@@ -290,6 +301,7 @@ function PendingList({
   onSelect,
   principalNames,
   gatekeeperNames,
+  sameNames,
 }: PendingListProps) {
   if (pending.state.status === 'loading') {
     return <SkeletonRows count={4} label="Loading approvals" testId="approvals-loading" />;
@@ -372,6 +384,7 @@ function PendingList({
                   longer printed as text (L8a-10) — an attribute, never visible copy. */}
               <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
                 <span>{gateName}</span>
+                <SameNameId id={row.gatekeeperId} same={sameNames} />
                 <span className="meta-sep" />
                 <span>{humanizeKind(row.actionKindTag)}</span>
                 {scopeLabel ? (
@@ -392,6 +405,7 @@ function PendingList({
                   <>
                     <span>{t('代表', 'on behalf of')}</span>
                     <span className="truncate">{principalName}</span>
+                    {row.onBehalfOf ? <SameNameId id={row.onBehalfOf} same={sameNames} /> : null}
                   </>
                 ) : null}
                 {row.awaitDecision && row.status === 'pending_approval' ? (
@@ -425,6 +439,7 @@ interface ApprovalHistoryTabProps {
   readonly onSelect: (actionRequestId: string | null) => void;
   readonly principalNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly sameNames: ReadonlySet<string>;
 }
 
 /**
@@ -447,6 +462,7 @@ function ApprovalHistoryTab({
   onSelect,
   principalNames,
   gatekeeperNames,
+  sameNames,
 }: ApprovalHistoryTabProps) {
   const t = useT();
   const ask = useAskForAccess(http);
@@ -467,30 +483,34 @@ function ApprovalHistoryTab({
 
   return (
     <div className="stack">
-      <div className="page-toolbar">
-        <Select
-          id="approval-history-status"
-          label={t('状态', 'Status')}
-          value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}
-          className="approvals-status-select"
-        >
-          <option value="all">{t('全部', 'All statuses')}</option>
-          {ACTION_REQUEST_STATUS_VALUES.map((status) => (
-            <option key={status} value={status}>
-              {labelText(statusChipStyle('actionRequest', status), t)}
-            </option>
-          ))}
-        </Select>
-        <Button
-          variant="ghost"
-          aria-busy={history.state.status === 'ready' && history.state.refreshing}
-          disabled={history.state.status === 'ready' && history.state.refreshing}
-          onClick={() => void history.reload()}
-        >
-          {t('刷新', 'Refresh')}
-        </Button>
-      </div>
+      {/* A role that may not read the history gets no filters for a list it cannot see
+          (#559 acceptance P3). */}
+      {forbidden ? null : (
+        <div className="page-toolbar" data-testid="approval-history-toolbar">
+          <Select
+            id="approval-history-status"
+            label={t('状态', 'Status')}
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}
+            className="approvals-status-select"
+          >
+            <option value="all">{t('全部', 'All statuses')}</option>
+            {ACTION_REQUEST_STATUS_VALUES.map((status) => (
+              <option key={status} value={status}>
+                {labelText(statusChipStyle('actionRequest', status), t)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="ghost"
+            aria-busy={history.state.status === 'ready' && history.state.refreshing}
+            disabled={history.state.status === 'ready' && history.state.refreshing}
+            onClick={() => void history.reload()}
+          >
+            {t('刷新', 'Refresh')}
+          </Button>
+        </div>
+      )}
 
       {history.state.status === 'loading' ? (
         <SkeletonRows
@@ -574,6 +594,7 @@ function ApprovalHistoryTab({
                   </span>
                   <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
                     <span>{gateName}</span>
+                    <SameNameId id={row.gatekeeperId} same={sameNames} />
                     <span className="meta-sep" />
                     <span>{humanizeKind(row.actionKindTag)}</span>
                     {scopeLabel ? (
@@ -594,6 +615,9 @@ function ApprovalHistoryTab({
                       <>
                         <span>{t('代表', 'on behalf of')}</span>
                         <span className="truncate">{principalName}</span>
+                        {row.onBehalfOf ? (
+                          <SameNameId id={row.onBehalfOf} same={sameNames} />
+                        ) : null}
                       </>
                     ) : null}
                   </span>

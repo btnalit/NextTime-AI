@@ -9,6 +9,7 @@ import type { ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
+import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { type WorkerDefinitionSummary, distinctDefinitionName } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
@@ -116,6 +117,11 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     principals.state.status === 'ready'
       ? principals.state.data.items.filter((p) => p.kind === 'human')
       : [];
+  const humanSame = sameNameIds(
+    humanPrincipals,
+    (p) => p.id,
+    (p) => p.displayName,
+  );
 
   function handleSaved(saved: AgentProfile): void {
     invalidateCapability(http, 'get_agent_profile');
@@ -154,7 +160,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
                 <option value="">{t('我自己', 'Myself')}</option>
                 {humanPrincipals.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.displayName}
+                    {withSameNameId(p.displayName, p.id, humanSame)}
                   </option>
                 ))}
               </Select>

@@ -350,8 +350,8 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
             <SheetTitle>{t('服务凭证', 'Service credential (API key)')}</SheetTitle>
             <SheetDescription>
               {t(
-                "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。",
-                "Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person.",
+                '创建一个服务账号及其 API key——给脚本与验收工具，不给人。',
+                'Creates a service account and its API key — for scripts and harnesses, never for a person.',
               )}
             </SheetDescription>
           </SheetHeader>
@@ -389,6 +389,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               http={http}
               principals={allPrincipals}
               onDone={() => setDrawer({ kind: 'closed' })}
+              onCreateServiceAccount={() => setDrawer({ kind: 'create' })}
             />
           ) : null}
         </SheetContent>
