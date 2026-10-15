@@ -53,7 +53,8 @@
 #
 # Output follows apply-release.sh: one "STEP <name> …" line per step, "FAIL <name>" on a stop, and
 # a last line "RESULT ok" or "RESULT failed-at=<step>" / "RESULT acceptance-failures=<n>" /
-# "RESULT real-model-failures=<n>". Exit status 0 only for "RESULT ok".
+# "RESULT degraded=<step>[,…]" (apply-release.sh's, passed on) / "RESULT real-model-failures=<n>".
+# Exit status 0 only for "RESULT ok".
 #
 # What it does NOT reproduce (and why, see the runbook): the production database's own data, the
 # RagFlow upstream (gatekeeper-ragflow is moved to an unused compose profile by the staging overlay,
@@ -407,7 +408,7 @@ if [ -n "$pull_flag" ]; then
 fi
 case "$apply_result" in
   ok) step "apply ok $(git describe --tags --always HEAD)" ;;
-  acceptance-failures=*) echo "RESULT $apply_result"; exit 1 ;;
+  acceptance-failures=* | degraded=*) echo "RESULT $apply_result"; exit 1 ;;
   *) fail apply "${apply_result:-no RESULT line} — see $apply_log" ;;
 esac
 
@@ -568,6 +569,18 @@ EOF
     from llm_usage where started_at >= '$real_since' and provider <> 'fake'")
   printf '%s\n' "$usage" | awk -F'|' '{ printf "STEP real-usage calls=%s input_tokens=%s output_tokens=%s cache_read_tokens=%s cache_write_tokens=%s cost_usd=%s\n", $1, $2, $3, $4, $5, $6 }'
   if [ "$real_fail" -gt 0 ]; then echo "RESULT real-model-failures=$real_fail"; exit 1; fi
+fi
+
+# 13. legacy 236: nothing a client sent as a credential reached caddy's logs. The apply's S1–S4,
+#     the console calls above and (with --real) the real-model suites all went through caddy with
+#     their keys and Handles; the script adds synthetic Handle-shaped probes. Counts only.
+if [ -f scripts/check-caddy-log-redaction.sh ]; then
+  sh scripts/check-caddy-log-redaction.sh >"$LOGS/caddy-log-redaction.log" 2>&1
+  redaction_rc=$?
+  sed 's/^/STEP caddy-log-redaction /' "$LOGS/caddy-log-redaction.log"
+  [ "$redaction_rc" -eq 0 ] || fail caddy-log-redaction "see $LOGS/caddy-log-redaction.log"
+else
+  step "caddy-log-redaction skipped — $TO_TAG predates scripts/check-caddy-log-redaction.sh"
 fi
 
 step done

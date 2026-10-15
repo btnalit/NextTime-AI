@@ -347,7 +347,12 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('a dry run reports the seeded rows and writes nothing', async () => {
       const before = await snapshot();
-      const result = await scrubRawSecrets(pool, { confirm: false, batchSize: 3 });
+      const counted: { category: string; id: string }[] = [];
+      const result = await scrubRawSecrets(pool, {
+        confirm: false,
+        batchSize: 3,
+        onCounted: (category, row) => counted.push({ category, id: row.id }),
+      });
       expect(result.executed).toBe(false);
       expect(result.auditRecordId).toBeNull();
       expect(await snapshot()).toEqual(before);
@@ -369,6 +374,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         if (result.categories[name].affected <= 20) expect(listed(name)).toContain(id);
+        // onCounted is not capped: every seeded row is named, however crowded the database.
+        expect(counted).toContainEqual({ category: name, id });
+      }
+      for (const name of [
+        'taskInputs',
+        'connectionTargets',
+        'gatekeeperAddresses',
+        'gateInstanceAddresses',
+        'factProperties',
+        'objectProperties',
+        'auditResults',
+      ] as const) {
+        expect(counted.filter((row) => row.category === name)).toHaveLength(
+          result.categories[name].affected,
+        );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
     });
