@@ -102,7 +102,7 @@ sh /tmp/apply-release-vX.Y.Z.sh vX.Y.Z             # 仅显式需要时：源码
 
 上生产主机之前，先按 §1 第 5 步在 Actions → `staging` 对同一个 tag 跑一次预演，绿了再动主机。
 
-跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走；v0.46.0 → v0.48.0 按 §3.27（v0.47.0 不单独上主机）。
+跨越的每个版本在下面 §3.1 起各有一小节；标明"维护窗口前"的核对（如 §3.13）和 `--prefetch` 同时做，结论记 `docs/private/`，有需要主人确认的先确认再进窗口。一次跨多个版本的窗口按 §3.23 的总清单走；v0.46.0 → v0.49.0 按 §3.27（v0.47.0、v0.48.0 不单独上主机）。
 
 **本节命令的执行方式**：所有命令都在主机检出目录下执行。SQL 一律经
 `docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1` 交给 psql，并包在
@@ -1101,7 +1101,7 @@ docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js -
 预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag：
 
 ```sh
-ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.48.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
+ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.49.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
 ```
 
 ```sh
@@ -1174,26 +1174,26 @@ SQL
 Caddyfile，日志重新记录请求头与查询串原文；不要为了「生效」去主动重建 caddy（没被重建的 caddy 继续遮蔽，更安全）。回滚期间不要用
 API key 经 caddy 调接口。
 
-### 3.27 升级窗口总清单：v0.46.0 → v0.48.0
+### 3.27 升级窗口总清单：v0.46.0 → v0.49.0
 
-v0.47.0 不单独上主机（#554 不在里面），一次窗口直接到 v0.48.0。v0.48.0 收齐：#541（只改控制台渲染与两个只读查询）、#549（§3.25）、
-#554 与 #559（只改控制台与 CI 守卫，无主机步骤）、#556（§3.26）。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，不需要排空 Worker。
+v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的修复 #561 不在 v0.48.0 里），一次窗口直接到 v0.49.0。v0.49.0 收齐：#541（只改控制台渲染
+与两个只读查询）、#549（§3.25）、#554、#559 与 #561（只改控制台与 CI 守卫，无主机步骤）、#556（§3.26）；v0.49.0 只比 v0.48.0 多 #561 与 STATUS。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，不需要排空 Worker。
 先确认起点：`git describe --tags --exact-match </dev/null` 应输出 `v0.46.0`；上主机前按 §1 第 5 步对同一个 tag 跑一次 `staging` 预演。
 
 窗口开始前告诉维护者：执行会话被本地权限检查拦下时会停下等他批准（§3 开头，遗留 231），请他在场或提前加好允许规则。
 
 主机直连 GitHub 不稳定：`git fetch` 拿不到 tag 时，从维护者电脑用 git bundle 导入 tag（bundle 的具体路径记在 `docs/private/`，不入库），
-导入后核对 `git rev-parse 'v0.48.0^{commit}'` 等于发版 commit，再做第 1 步。
+导入后核对 `git rev-parse 'v0.49.0^{commit}'` 等于发版 commit，再做第 1 步。
 
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
-| 1 | 窗口前 | `--prefetch v0.48.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
+| 1 | 窗口前 | `--prefetch v0.49.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
 | 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
-| 3 | 窗口内 | `--pull v0.48.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
+| 3 | 窗口内 | `--pull v0.49.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
 | 6 | 应用后 | §3.26「应用后」：owner API key 是否轮换、旧 caddy 日志副本是否清理 | victor 决定 |
-| 7 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应说明由谁启用、给出一句可复制发给所有者的申请、能退回，没有死路（#541 验收盲区，#554）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名；(d) 打开任一新建 / 添加表单先不填，提交按钮灰掉时旁边写着「还差：…」（#554） | **victor 手动** |
+| 7 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应说明由谁启用、给出一句可复制发给所有者的申请、能退回，没有死路（#541 验收盲区，#554）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名；(d) 打开任一新建 / 添加表单先不填，提交按钮灰掉时旁边写着「还差：…」（#554）；(e) 在授权表单里选成员时，两个同名成员各带短 id、能分开（遗留 259，#561） | **victor 手动** |
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
