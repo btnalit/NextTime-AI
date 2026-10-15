@@ -18,6 +18,19 @@
 			intermediate_lifetime 2400h
 		}
 	}
+	# Legacy 236 (#549 security review C1): Caddy's own error entries — `http.log.error.*`, e.g.
+	# every 502 while the kernel restarts during an upgrade — carry the whole request, headers
+	# included, and they go to this default logger, not through the site `log` block below. The
+	# same two redactions as the site's access log apply here; keep the two lists equal. Entries
+	# without those fields pass through unchanged.
+	log default {
+		output stderr
+		format filter {
+			request>headers delete
+			request>uri regexp "=[^&#]*" "=REDACTED"
+			wrap json
+		}
+	}
 }
 
 # The scheme prefix is required, not decorative: a bare ":8443" (no scheme, no hostname, non-
@@ -50,12 +63,28 @@ https://:8443 {
 		on_demand
 	}
 
-	# Access log to stdout as JSON. Caddy's access log never includes request/response bodies
-	# (there is no body-logging directive to accidentally enable) — only method/path/status/
-	# duration/size-shaped fields.
+	# Access log to stdout as JSON. It never includes request/response bodies, but Caddy's JSON
+	# entry does carry every request header, the full URI with its query string and the response
+	# headers. Out of the box Caddy masks only Authorization, Cookie, Set-Cookie and
+	# Proxy-Authorization; `X-API-Key` (the Explorer endpoints, scripts/accept_s3.sh, an SDK on
+	# /llm/*) was logged as sent (legacy 236, verified on caddy 2.10.2). These logs are readable
+	# beyond this host's operators — the docker gate's `container.logs_tail` reaches platform
+	# containers — so the filter fails closed:
+	#   - `request>headers delete`: no request header is logged, whatever its name; a credential
+	#     header added later is covered without touching this file.
+	#   - `request>uri regexp`: every query value becomes REDACTED, parameter names stay.
+	#   - `resp_headers>Set-Cookie delete`: rather than relying on Caddy's own masking.
+	# The global `log default` block above applies the same request redactions to Caddy's error
+	# entries. The CI e2e job and scripts/staging-rehearsal.sh send synthetic Handle-shaped values
+	# through this site and fail if any of them reaches caddy's output.
 	log {
 		output stdout
-		format json
+		format filter {
+			request>headers delete
+			request>uri regexp "=[^&#]*" "=REDACTED"
+			resp_headers>Set-Cookie delete
+			wrap json
+		}
 	}
 
 	# Baseline security headers reasonable for an internal tool. No Strict-Transport-Security:

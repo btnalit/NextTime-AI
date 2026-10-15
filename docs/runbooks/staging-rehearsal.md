@@ -44,7 +44,7 @@ overlay，这不影响它们（它们从不启动 RagFlow 门）。
 
 PR 改到发布路径（`packages/kernel/migrations/**`、`docker-compose.yml`、
 `scripts/{apply-release,pull-images,build-images,host-*,accept_s*,staging-rehearsal}.sh` 及它们调用的
-脚本（`check-backup-freshness`、`prune-images`、`delete-workspaces-matching` 等）、`scripts/lib/**`、
+脚本（`check-backup-freshness`、`check-caddy-log-redaction`、`prune-images`、`delete-workspaces-matching` 等）、`scripts/lib/**`、
 compose 构建或挂载的 `deploy/{accept,accept-s2,backup,caddy,fake-llm,update-feed,worker-runtime}/**`、
 本 workflow）时自动跑。这份清单由 `scripts/guards/staging-paths.mjs` 按依赖闭包核对（`pnpm ci:guards`
 与 CI `quality`），漏一个就红。产品代码（`packages/`、`gatekeepers/`、`collectors/`）不触发：它们每个 PR

@@ -530,6 +530,24 @@ jobs:
       - name: S1 lite acceptance (scripts/accept_s1.sh --lite)
         run: sudo sh scripts/accept_s1.sh --lite
 
+      # Legacy 236 (#549 security review C1): nothing a client sends as a credential reaches
+      # caddy's logs. Every request of the suites above went through caddy with this job's own API
+      # keys and passwords (checked as forbidden values, read from a 0600 file), and the script
+      # adds synthetic Handle-shaped probes in headers and query strings. llm-proxy is not running
+      # in this job, so the script's /api/llm-admin/* probe answers 502 and caddy writes an error
+      # entry — EXPECT_ERROR_ENTRY=1 makes sure the default (error) log's redaction is exercised
+      # too, not only the access log's.
+      - name: Caddy logs carry no credentials (scripts/check-caddy-log-redaction.sh)
+        run: |
+          set -euo pipefail
+          forbidden="$RUNNER_TEMP/caddy-forbidden-values"
+          (umask 077 && printf '%s\n' "${WEB_E2E_API_KEY:-}" "${WEB_E2E_API_KEY_B:-}" \
+            "${WEB_E2E_ADMIN_INITIAL_PASSWORD:-}" "${WEB_E2E_OWNER_PASSWORD:-}" \
+            "${WEB_E2E_TEMP_PASSWORD:-}" >"$forbidden")
+          COMPOSE="sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml" \
+            FORBIDDEN_VALUES_FILE="$forbidden" EXPECT_ERROR_ENTRY=1 \
+            sh scripts/check-caddy-log-redaction.sh
+
       # `always()`, not `failure()`: a retried-then-passed ("flaky") test only shows up in the
       # report, never in the job's conclusion — uploading it every time is how a flake stays
       # visible now that this workflow is meant to become a required check.

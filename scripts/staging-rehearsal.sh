@@ -570,5 +570,17 @@ EOF
   if [ "$real_fail" -gt 0 ]; then echo "RESULT real-model-failures=$real_fail"; exit 1; fi
 fi
 
+# 13. legacy 236: nothing a client sent as a credential reached caddy's logs. The apply's S1–S4,
+#     the console calls above and (with --real) the real-model suites all went through caddy with
+#     their keys and Handles; the script adds synthetic Handle-shaped probes. Counts only.
+if [ -f scripts/check-caddy-log-redaction.sh ]; then
+  sh scripts/check-caddy-log-redaction.sh >"$LOGS/caddy-log-redaction.log" 2>&1
+  redaction_rc=$?
+  sed 's/^/STEP caddy-log-redaction /' "$LOGS/caddy-log-redaction.log"
+  [ "$redaction_rc" -eq 0 ] || fail caddy-log-redaction "see $LOGS/caddy-log-redaction.log"
+else
+  step "caddy-log-redaction skipped — $TO_TAG predates scripts/check-caddy-log-redaction.sh"
+fi
+
 step done
 echo "RESULT ok"
