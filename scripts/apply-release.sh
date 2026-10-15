@@ -344,20 +344,33 @@ fi
 #     differs. scripts/validate-compose.mjs fails when docker-compose.yml gains a mount not listed
 #     here. Entries: <service>:<file in the checkout>:<path in the container>.
 MOUNT_REFRESH="caddy:deploy/caddy/Caddyfile:/etc/caddy/Caddyfile backup:deploy/backup/backup.sh:/backup.sh update-feed:deploy/update-feed/update-feed.sh:/update-feed.sh"
-for m in $MOUNT_REFRESH; do
-  svc=${m%%:*}
-  rest=${m#*:}
-  src=${rest%%:*}
-  dst=${rest#*:}
-  [ -f "$src" ] || continue
-  docker compose exec -T "$svc" cat "$dst" </dev/null 2>/dev/null | cmp -s - "$src" && continue
-  if docker compose up -d --no-deps --no-build --force-recreate "$svc" </dev/null; then
-    echo "STEP mount-refresh $svc recreated — it was not reading this checkout's $src"
-  else
-    echo "STEP mount-refresh WARNING could not recreate $svc — it still reads an old $src; run: docker compose up -d --no-deps --no-build --force-recreate $svc"
-    degrade mount-refresh
-  fi
-done
+# The service is already up here, so a failure degrades the apply instead of failing it.
+if mounted=$(mktemp /tmp/apply-release-mount.XXXXXX); then
+  for m in $MOUNT_REFRESH; do
+    svc=${m%%:*}
+    rest=${m#*:}
+    src=${rest%%:*}
+    dst=${rest#*:}
+    [ -f "$src" ] || continue
+    # Two reasons to recreate, logged apart: the content differs, or it could not be read at all.
+    if docker compose exec -T "$svc" cat "$dst" </dev/null >"$mounted" 2>/dev/null; then
+      cmp -s "$mounted" "$src" && continue
+      why="its $dst differs from this checkout's $src"
+    else
+      why="could not read its $dst (exec failed: not running, restarting, or no cat) — recreated to be sure"
+    fi
+    if docker compose up -d --no-deps --no-build --force-recreate "$svc" </dev/null; then
+      echo "STEP mount-refresh $svc recreated — $why"
+    else
+      echo "STEP mount-refresh WARNING could not recreate $svc ($why) — it may still read an old $src; run: docker compose up -d --no-deps --no-build --force-recreate $svc"
+      degrade mount-refresh
+    fi
+  done
+  rm -f "$mounted"
+else
+  echo "STEP mount-refresh WARNING could not create a temp file to compare the mounts — recreate them by hand: docker compose up -d --no-deps --no-build --force-recreate caddy backup update-feed"
+  degrade mount-refresh
+fi
 sleep 30
 echo "STEP up"
 docker compose ps --format '{{.Service}} {{.Status}}'
@@ -389,14 +402,16 @@ docker compose --profile test stop fake-llm >/dev/null 2>&1 ||
 # 7b. No acceptance fixture may outlive the apply: they are unauthenticated test endpoints (fake-llm,
 #     an sshd, an OpenAPI and an MCP server, two test gates) on the control network, and a suite
 #     that failed or aborted part-way — or accept_s2.sh's cleanup, which only warns when `rm -sf`
-#     fails — leaves them up. Fixtures are the services only these profiles enable; the build-only
-#     profile (an image, never a running service) is not one.
+#     fails — leaves them up. Fixtures are the services these profiles add to the default set —
+#     never a service the default set (or a COMPOSE_PROFILES the host may set; the --profile flags
+#     override it) already has, so the printed `rm -sf` can never name a real service. The
+#     build-only profile (an image, never a running service) is not one.
 FIXTURE_PROFILES="--profile test --profile accept-s2 --profile accept-s3"
 # shellcheck disable=SC2086 # FIXTURE_PROFILES is a list of flags on purpose
-if base=$(docker compose config --services </dev/null 2>/dev/null) &&
+if base=$(docker compose config --services </dev/null 2>/dev/null) && [ -n "$base" ] &&
   all=$(docker compose $FIXTURE_PROFILES config --services </dev/null 2>/dev/null) &&
   running=$(docker compose $FIXTURE_PROFILES ps --status running --services </dev/null 2>/dev/null); then
-  fixtures=$(printf '%s\n%s\n' "$base" "$all" | sort | uniq -u)
+  fixtures=$(printf '%s\n' "$all" | grep -vxF "$base")
   left=
   [ -z "$fixtures" ] || left=$(printf '%s\n' "$running" | grep -xF "$fixtures" | tr '\n' ' ' | sed 's/ $//')
   if [ -n "$left" ]; then
@@ -415,6 +430,8 @@ fi
 #     suites' own API-key traffic. Read-only apart from the probes (401 / 404 answers).
 if [ -f scripts/check-caddy-log-redaction.sh ]; then
   bind=$(sed -n 's/^KERNEL_BIND_ADDR=//p' .env | tail -n 1)
+  # An IPv6 literal goes in brackets in a URL.
+  case "$bind" in \[*) ;; *:*) bind="[$bind]" ;; esac
   if [ -z "$bind" ]; then
     echo "STEP caddy-log-redaction WARNING KERNEL_BIND_ADDR is not set in .env — could not check"
     degrade caddy-log-redaction

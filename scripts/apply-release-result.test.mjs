@@ -39,13 +39,15 @@ file(
 echo "docker $*" >>"$STUB_CALLS"
 case "$*" in
   *"exec -T "*" cat "*)
+    case "$*" in *"exec -T \${STUB_EXEC_FAIL:-none} cat"*) exit 1 ;; esac
     case "$*" in *"exec -T \${STUB_STALE_MOUNT:-none} cat"*) echo stale ;; *) echo current ;; esac ;;
   *--force-recreate*) exit "\${STUB_RECREATE_RC:-0}" ;;
   *"stop fake-llm"*) exit "\${STUB_FAKE_LLM_STOP_RC:-0}" ;;
   *"config --services"*)
     [ -z "\${STUB_CONFIG_RC:-}" ] || exit "$STUB_CONFIG_RC"
     printf 'kernel\ncaddy\n'
-    case "$*" in *--profile*) printf 'fake-llm\naccept-s2-sshd\naccept-s3-ephemeral\n' ;; esac ;;
+    # --profile flags override COMPOSE_PROFILES: what it adds shows up in the default set only.
+    case "$*" in *--profile*) printf 'fake-llm\naccept-s2-sshd\naccept-s3-ephemeral\n' ;; *) printf '%s' "\${STUB_COMPOSE_PROFILES_SERVICES:-}" ;; esac ;;
   *"ps --status running --services"*) printf 'kernel\ncaddy\n%s' "\${STUB_FIXTURES_RUNNING:-}" ;;
   *pg_dump*) echo dump ;;
   *"pg_restore --list"*) echo toc ;;
@@ -144,7 +146,7 @@ test('a container reading an old single-file mount is recreated before acceptanc
   assert.equal(r.result, 'RESULT ok');
   assert.match(
     r.log,
-    /^STEP mount-refresh caddy recreated — it was not reading this checkout's deploy\/caddy\/Caddyfile$/m,
+    /^STEP mount-refresh caddy recreated — its \/etc\/caddy\/Caddyfile differs from this checkout's deploy\/caddy\/Caddyfile$/m,
   );
   assert.match(r.calls, /^docker compose up -d --no-deps --no-build --force-recreate caddy$/m);
   assert.doesNotMatch(r.calls, /--force-recreate (backup|update-feed)/);
@@ -159,8 +161,23 @@ test('a stale mount that cannot be refreshed: degraded, with the command', () =>
   assert.equal(r.result, 'RESULT degraded=mount-refresh');
   assert.match(
     r.log,
-    /^STEP mount-refresh WARNING could not recreate backup — .* docker compose up -d --no-deps --no-build --force-recreate backup$/m,
+    /^STEP mount-refresh WARNING could not recreate backup \(its \/backup\.sh differs .*\) — .* docker compose up -d --no-deps --no-build --force-recreate backup$/m,
   );
+});
+
+test('a mount that cannot be read is recreated too, and logged apart from a content difference', () => {
+  const r = apply({ STUB_EXEC_FAIL: 'update-feed' });
+  assert.equal(r.result, 'RESULT ok');
+  assert.match(
+    r.log,
+    /^STEP mount-refresh update-feed recreated — could not read its \/update-feed\.sh \(exec failed: .*\) — recreated to be sure$/m,
+  );
+  assert.doesNotMatch(r.log, /differs from this checkout/);
+  assert.match(
+    r.calls,
+    /^docker compose up -d --no-deps --no-build --force-recreate update-feed$/m,
+  );
+  assert.doesNotMatch(r.calls, /--force-recreate (caddy|backup)$/m);
 });
 
 test('acceptance fixtures left running (fake-llm included): degraded, with the command to remove them', () => {
@@ -177,6 +194,27 @@ test('acceptance fixtures left running (fake-llm included): degraded, with the c
   );
 });
 
+test('a service COMPOSE_PROFILES adds to the default set is never taken for a fixture', () => {
+  // With COMPOSE_PROFILES=build-only on the host, the default set holds worker-runtime, which the
+  // fixture profiles do not: a symmetric difference would print `rm -sf` for it.
+  const r = apply({
+    STUB_COMPOSE_PROFILES_SERVICES: 'worker-runtime\n',
+    STUB_FIXTURES_RUNNING: 'worker-runtime\naccept-s2-sshd\n',
+  });
+  assert.equal(r.result, 'RESULT degraded=acceptance-fixtures');
+  assert.match(
+    r.log,
+    /^STEP acceptance-fixtures WARNING still running: accept-s2-sshd — remove them: docker compose --profile test --profile accept-s2 --profile accept-s3 rm -sf accept-s2-sshd$/m,
+  );
+  assert.doesNotMatch(r.log, /worker-runtime/);
+  const quiet = apply({
+    STUB_COMPOSE_PROFILES_SERVICES: 'worker-runtime\n',
+    STUB_FIXTURES_RUNNING: 'worker-runtime\n',
+  });
+  assert.equal(quiet.result, 'RESULT ok');
+  assert.match(quiet.log, /^STEP acceptance-fixtures none left running$/m);
+});
+
 test('the fixtures cannot be listed: degraded rather than assumed gone', () => {
   const r = apply({ STUB_CONFIG_RC: '1' });
   assert.equal(r.result, 'RESULT degraded=acceptance-fixtures');
@@ -191,6 +229,27 @@ test('the caddy log check fails: degraded, with the commands to recreate caddy a
     r.log,
     /^STEP caddy-log-redaction WARNING .* docker compose up -d --no-deps --no-build --force-recreate caddy && sh scripts\/check-caddy-log-redaction\.sh https:\/\/127\.0\.0\.1:8443$/m,
   );
+});
+
+test('an IPv6 KERNEL_BIND_ADDR goes in brackets in the caddy check URL', () => {
+  const env = path.join(repo, '.env');
+  const original = readFileSync(env, 'utf8');
+  try {
+    for (const addr of ['::1', '[::1]']) {
+      writeFileSync(
+        env,
+        original.replace('KERNEL_BIND_ADDR=127.0.0.1', `KERNEL_BIND_ADDR=${addr}`),
+      );
+      const r = apply({ STUB_CADDY_CHECK_RC: '1' });
+      assert.match(
+        r.log,
+        /^STEP caddy-log-redaction PASS logged url=https:\/\/\[::1\]:8443 since=/m,
+      );
+      assert.match(r.log, /check-caddy-log-redaction\.sh https:\/\/\[::1\]:8443$/m);
+    }
+  } finally {
+    writeFileSync(env, original);
+  }
 });
 
 test('backups/last-success is a non-empty directory: degraded, with the command to move it aside', () => {

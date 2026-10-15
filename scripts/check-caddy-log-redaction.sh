@@ -46,7 +46,7 @@ nonce=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
 probe="eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzeW50aGV0aWMiOnRydWV9.caddyprobe${nonce}"
 
 probe_request() {
-	curl -sk -o /dev/null --max-time 10 "$@" \
+	curl -gsk -o /dev/null --max-time 10 "$@" \
 		-H "X-API-Key: $probe" \
 		-H "Authorization: Bearer $probe" \
 		-H "Proxy-Authorization: Bearer $probe" \
