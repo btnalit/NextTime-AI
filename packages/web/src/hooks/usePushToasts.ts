@@ -1,34 +1,68 @@
 import { useEffect } from 'react';
 import { useToast } from '../components/ui/Toast.js';
-import type { PushSource } from '../lib/clients.js';
-import { humanizeKind, shortId } from '../lib/format.js';
+import type { CapabilityCaller, PushSource } from '../lib/clients.js';
+import { shortId } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { type NavSection, hrefs, navigate } from '../lib/router.js';
-import { type ChipStyle, statusChipStyle } from '../lib/status-tone.js';
-
-/** `actionRequest`/`task` are still English-only machines (out of this lane's scope), so this is
- *  always the plain-string branch at runtime — narrows `ChipStyle.label`'s S8 W1-A9 union type for
- *  the toast copy below, which stays English either way. */
-function chipLabelText(label: ChipStyle['label']): string {
-  return typeof label === 'string' ? label : label.en;
-}
+import { labelText, statusChipStyle } from '../lib/status-tone.js';
+import { useCanOpen } from './useCanOpen.js';
 
 /**
  * hooks/usePushToasts: turns the three principal-scoped pushes into toasts. `action.pending` is
  * always announced (it asks for a human decision); `action.updated`/`task.updated` are announced
  * only when the reader is not already looking at that section — the page itself shows the change.
+ *
+ * #541 review N2: the kernel also pushes `action.pending`/`action.updated` to the member an action
+ * was requested for, who may not open approvals — for that reader the toast says who decides and
+ * carries no action onto a page they cannot read (`hooks/useCanOpen`).
  */
-export function usePushToasts(pushes: PushSource, active: NavSection): void {
+export function usePushToasts(
+  pushes: PushSource,
+  active: NavSection,
+  http: CapabilityCaller | undefined,
+): void {
   const toast = useToast();
+  const t = useT();
+  const canOpen = useCanOpen(http);
+  const opensApprovals = canOpen(hrefs.approvals()) !== false;
   useEffect(() => {
     const unsubPending = pushes.onActionPending((event) => {
-      toast.push({
-        tone: 'warn',
-        key: `action:${event.actionRequestId}`,
-        title: event.title || `Approval needed: ${event.actionKind.label}`,
-        description: event.awaitDecision ? 'A Worker is blocked until you decide.' : undefined,
-        action: { label: 'Review', onClick: () => navigate(hrefs.approval(event.actionRequestId)) },
-        durationMs: 8000,
-      });
+      toast.push(
+        opensApprovals
+          ? {
+              tone: 'warn',
+              key: `action:${event.actionRequestId}`,
+              title:
+                event.title ||
+                t(
+                  `待审批：${event.actionKind.label}`,
+                  `Approval needed: ${event.actionKind.label}`,
+                ),
+              description: event.awaitDecision
+                ? t('有一个 Worker 在等你决定。', 'A Worker is blocked until you decide.')
+                : undefined,
+              action: {
+                label: t('去审批', 'Review'),
+                onClick: () => navigate(hrefs.approval(event.actionRequestId)),
+              },
+              durationMs: 8000,
+            }
+          : {
+              tone: 'info',
+              key: `action:${event.actionRequestId}`,
+              title:
+                event.title ||
+                t(
+                  `已提交审批：${event.actionKind.label}`,
+                  `Sent for approval: ${event.actionKind.label}`,
+                ),
+              description: t(
+                '等待 operator 或工作区所有者处理；结果会显示在对话里。',
+                'Waiting for an operator or the workspace owner; the result shows up in the chat.',
+              ),
+              durationMs: 8000,
+            },
+      );
     });
     const unsubUpdated = pushes.onActionUpdated((event) => {
       if (active === 'approvals') return;
@@ -36,8 +70,18 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'info',
         key: `action:${event.id}`,
-        title: `Action ${shortId(event.id)}: ${chipLabelText(style.label).toLowerCase()}`,
-        action: { label: 'Open', onClick: () => navigate(hrefs.approval(event.id)) },
+        title: t(
+          `审批请求 ${shortId(event.id)}：${labelText(style, t)}`,
+          `Action ${shortId(event.id)}: ${labelText(style, t).toLowerCase()}`,
+        ),
+        ...(opensApprovals
+          ? {
+              action: {
+                label: t('打开', 'Open'),
+                onClick: () => navigate(hrefs.approval(event.id)),
+              },
+            }
+          : {}),
       });
     });
     const unsubTask = pushes.onTaskUpdated((event) => {
@@ -47,8 +91,11 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'warn',
         key: `task:${event.id}`,
-        title: `Task ${shortId(event.id)} ${humanizeKind(chipLabelText(style.label)).toLowerCase()}`,
-        action: { label: 'Open', onClick: () => navigate(hrefs.task(event.id)) },
+        title: t(
+          `任务 ${shortId(event.id)}：${labelText(style, t)}`,
+          `Task ${shortId(event.id)}: ${labelText(style, t).toLowerCase()}`,
+        ),
+        action: { label: t('打开', 'Open'), onClick: () => navigate(hrefs.task(event.id)) },
       });
     });
     return () => {
@@ -56,5 +103,5 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       unsubUpdated();
       unsubTask();
     };
-  }, [pushes, active, toast]);
+  }, [pushes, active, toast, t, opensApprovals]);
 }

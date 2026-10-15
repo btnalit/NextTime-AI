@@ -34,6 +34,7 @@ export * from './release-channel.js';
 export * from './provider-health.js';
 export * from './secret-field-name.js';
 export * from './address-credential.js';
+export * from './roles.js';
 export * from './wire/index.js';
 
 export const VERSION = '0.1.0';

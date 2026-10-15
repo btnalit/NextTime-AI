@@ -1,4 +1,4 @@
-import { CAPABILITY_REGISTRY, type Capability } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, type Capability, type CapabilityName } from '@nexttime/shared';
 
 /**
  * lib/entry-ceiling: S8 W4 item 2 (leftover "接 Claude Code / MCP 仍要手写 curl") — the console's
@@ -22,7 +22,7 @@ import { CAPABILITY_REGISTRY, type Capability } from '@nexttime/shared';
  * was revoked on 2026-09-27 — "只读调用不需要授权" — and `scope.resources.gatekeeper`, which the
  * console offers as a separate gate picker, narrows only the execute-side grant).
  */
-const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly string[] = [
+const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly CapabilityName[] = [
   'get_task',
   'get_entry_context',
   'report_turn',

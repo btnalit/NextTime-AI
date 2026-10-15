@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { type ActionCardData, isDecidable } from '../lib/action-card.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -98,15 +99,17 @@ export function ActionRequestDetail({
       ) : null}
 
       <dl className="definition-list">
-        <dt>Gatekeeper</dt>
+        <dt>{t('门', 'Gatekeeper')}</dt>
         <dd>{card.gatekeeperId ? <CopyId id={card.gatekeeperId} label="gatekeeper" /> : '—'}</dd>
-        <dt>Scope</dt>
+        <dt>{t('范围', 'Scope')}</dt>
         <dd className="mono">{card.resourceScope ?? '—'}</dd>
         {card.onBehalfOf !== undefined ? (
           <>
-            <dt>Requested by</dt>
+            <dt>{t('提议人', 'Requested by')}</dt>
             <dd className="row-wrap">
-              {card.actorRuntime ? <span className="tag">{card.actorRuntime}</span> : null}
+              {card.actorRuntime ? (
+                <span className="tag">{actorRuntimeLabel(card.actorRuntime, t)}</span>
+              ) : null}
               <span className="text-3">{t('代表', 'on behalf of')}</span>
               <CopyId id={card.onBehalfOf} label="principal" />
             </dd>
@@ -114,13 +117,13 @@ export function ActionRequestDetail({
         ) : null}
         {card.policyDecision ? (
           <>
-            <dt>Policy</dt>
-            <dd>{card.policyDecision}</dd>
+            <dt>{t('策略', 'Policy')}</dt>
+            <dd>{card.policyDecision ? policyDecisionLabel(card.policyDecision, t) : null}</dd>
           </>
         ) : null}
         {!compact && card.requestedAt ? (
           <>
-            <dt>Requested</dt>
+            <dt>{t('请求于', 'Requested')}</dt>
             <dd>
               <time title={formatDateTime(card.requestedAt)}>
                 {formatRelative(card.requestedAt)}
@@ -130,13 +133,13 @@ export function ActionRequestDetail({
         ) : null}
         {!compact && card.executedAt ? (
           <>
-            <dt>Executed</dt>
+            <dt>{t('执行于', 'Executed')}</dt>
             <dd>{formatDateTime(card.executedAt)}</dd>
           </>
         ) : null}
         {!compact && card.failedAt ? (
           <>
-            <dt>Failed</dt>
+            <dt>{t('失败于', 'Failed')}</dt>
             <dd>{formatDateTime(card.failedAt)}</dd>
           </>
         ) : null}
@@ -144,14 +147,14 @@ export function ActionRequestDetail({
 
       {card.params && Object.keys(card.params).length > 0 ? (
         <div className="stack-s">
-          <span className="section-title">Parameters</span>
+          <span className="section-title">{t('参数', 'Parameters')}</span>
           <pre className="code-block params-block">{prettyJson(redactSensitive(card.params))}</pre>
         </div>
       ) : null}
 
       {card.simulated !== undefined ? (
         <div className="stack-s">
-          <span className="section-title">Simulated effect</span>
+          <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
           <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
         </div>
       ) : null}

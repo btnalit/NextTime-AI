@@ -22,6 +22,7 @@ export function WorkerEditorHost({
   capabilityNames,
   onProposed,
   onDone,
+  onPublished,
 }: {
   readonly http: CapabilityCaller;
   readonly newVersionOf?: WorkerDefinitionSummary;
@@ -29,6 +30,7 @@ export function WorkerEditorHost({
   readonly capabilityNames?: readonly CapabilityNameRow[];
   readonly onProposed: () => void;
   readonly onDone: () => void;
+  readonly onPublished?: () => void;
 }) {
   const models = useCapabilityList<ModelRow>(http, 'list_models');
   // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
@@ -46,6 +48,7 @@ export function WorkerEditorHost({
       skills={skills.state.status === 'ready' ? skills.state.data.items : undefined}
       onProposed={onProposed}
       onDone={onDone}
+      onPublished={onPublished}
     />
   );
 }

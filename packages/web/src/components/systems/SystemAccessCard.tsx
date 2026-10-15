@@ -29,7 +29,16 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { gateReasonHref, gateReasonLink, gateReasonText } from '../readiness/readiness-copy.js';
+import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
+import {
+  type ReadinessReader,
+  type ReasonSubject,
+  gateReasonAsk,
+  gateReasonHref,
+  gateReasonLink,
+  gateReasonText,
+} from '../readiness/readiness-copy.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 /** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
  *  trigger only needs `kit/button`'s bare label slot, not `components/ui/Icon` (which would add a
@@ -197,10 +206,17 @@ function RefusedOperationsChip({ gate }: { readonly gate: ExecutionReadinessGate
 }
 
 /** The drawer's own, fuller rendering of the same reachability — full sentence + a fix-it link
- *  when it points somewhere actually useful (see `isSelfPageHref`). */
-function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
+ *  when it points somewhere actually useful (see `isSelfPageHref`) and the reader can make the
+ *  fix, else who to ask (audit P1-5). */
+function MyReachabilityDetail({
+  gate,
+  reader,
+}: {
+  readonly gate: ExecutionReadinessGateWire;
+  readonly reader: ReadinessReader;
+}) {
   const t = useT();
-  const href = gate.reason !== undefined ? gateReasonHref(gate.reason) : undefined;
+  const href = gate.reason !== undefined ? gateReasonHref(gate.reason, reader) : undefined;
   return (
     <div className="row-wrap" data-testid="system-access-my-reachability">
       <span className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}>
@@ -209,10 +225,12 @@ function MyReachabilityDetail({ gate }: { readonly gate: ExecutionReadinessGateW
       {gate.status === 'unreachable' ? (
         <>
           <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
-          {gate.reason !== undefined && href !== undefined && !isSelfPageHref(href) ? (
-            <a href={href} className="link-inline">
-              {gateReasonLink(gate.reason, t)}
-            </a>
+          {gate.reason !== undefined ? (
+            <FixHint
+              href={isSelfPageHref(href) ? undefined : href}
+              label={gateReasonLink(gate.reason, t)}
+              ask={gateReasonAsk(gate.reason, reader, t)}
+            />
           ) : null}
         </>
       ) : null}
@@ -258,6 +276,7 @@ export function SystemAccessCard({
   platformAdmin = false,
 }: SystemAccessCardProps) {
   const t = useT();
+  const reader = useReadinessReader(http);
   const [grantOpen, setGrantOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -274,6 +293,7 @@ export function SystemAccessCard({
     setPublishError(null);
     try {
       await http.call('publish_manifest', { gatekeeperId: gate.gateId });
+      announceReadinessChange(http);
       onPublished();
     } catch (err) {
       setPublishError(err);
@@ -349,9 +369,11 @@ export function SystemAccessCard({
         </div>
         <div className="data-row-meta" data-testid="gatekeeper-ops-summary">
           <span>
+            {/* The short id differs on every run: data-volatile masks it in the screenshot gate. */}
+            gate <span data-volatile="">{shortId(gate.gateId)}</span>
             {t(
-              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
-              `gate ${shortId(gate.gateId)} · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
+              ` · ${gate.observeOperationCount} 个只读操作 · ${gate.executeOperationCount} 个写操作`,
+              ` · ${gate.observeOperationCount} read op(s) · ${gate.executeOperationCount} write op(s)`,
             )}
           </span>
           {healthInfo.linked && healthInfo.health !== undefined ? (
@@ -474,7 +496,7 @@ export function SystemAccessCard({
             />
             <div className="stack-s">
               <span className="field-label">{t('你的可达性', 'Your reachability')}</span>
-              <MyReachabilityDetail gate={gate} />
+              <MyReachabilityDetail gate={gate} reader={reader} />
             </div>
 
             <div className="stack-s" data-testid="system-access-list">
@@ -486,7 +508,7 @@ export function SystemAccessCard({
               </span>
               <p className="field-hint" data-testid="system-access-approver-hint">
                 {t(
-                  '授权给 operator 时，他同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
+                  '授权给 operator 时，这位成员同时成为这个门上所有动作的审批者，能批准或驳回其他成员的写操作；owner 本来就能审批一切。',
                   'A grant to an operator also makes them an approver of every action on this gate — they can approve or reject other members’ writes. Owners can approve everything anyway.',
                 )}
               </p>
@@ -583,8 +605,12 @@ function GranteeRow({
   readonly onRevoke: (grantId: string) => Promise<void>;
 }) {
   const t = useT();
+  const reader = useReadinessReader(http);
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const gateStatus = readiness?.gates.find((entry) => entry.gateId === gateId);
+  // #541 review R2: another member's reasons are about their entry agent, not the reader's — a
+  // setting only they change gets no link to the reader's own page.
+  const about: ReasonSubject = isSelf ? 'me' : 'them';
   const approver = row.principalRole !== undefined && gateGrantMakesApprover(row.principalRole);
 
   return (
@@ -601,7 +627,7 @@ function GranteeRow({
         <span
           className="tag"
           title={t(
-            '这份授权也让他成为这个门上所有动作的审批者',
+            '这份授权也让这位成员成为这个门上所有动作的审批者',
             'This grant also makes them an approver of every action on this gate',
           )}
           data-testid="system-access-approver-tag"
@@ -624,13 +650,17 @@ function GranteeRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t)}</span>
-          {gateStatus.reason !== undefined &&
-          gateReasonHref(gateStatus.reason) !== undefined &&
-          !isSelfPageHref(gateReasonHref(gateStatus.reason)) ? (
-            <a href={gateReasonHref(gateStatus.reason)} className="link-inline">
-              {gateReasonLink(gateStatus.reason, t)}
-            </a>
+          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t, about)}</span>
+          {gateStatus.reason !== undefined ? (
+            <FixHint
+              href={
+                isSelfPageHref(gateReasonHref(gateStatus.reason, reader, about))
+                  ? undefined
+                  : gateReasonHref(gateStatus.reason, reader, about)
+              }
+              label={gateReasonLink(gateStatus.reason, t)}
+              ask={gateReasonAsk(gateStatus.reason, reader, t, about)}
+            />
           ) : null}
         </>
       )}

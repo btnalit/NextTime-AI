@@ -1040,6 +1040,12 @@ li[aria-current="true"] {
   color: var(--border-strong);
 }
 
+/* Audit P1-13: inside running text (a `.truncate` span, not a flex row with its own gap) the dot
+ * needs its own spacing, or "门名·动作" runs together. */
+.truncate > .meta-sep {
+  margin-inline: var(--space-1);
+}
+
 .data-row-trailing {
   flex-shrink: 0;
   display: flex;

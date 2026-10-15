@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-10（**v0.46.0 上主机，验收全部通过**：主机从 v0.44.0 直接升到 v0.46.0（v0.45.0 未单独应用），按 `release.md` §3.23 一个窗口走完：排空 Worker、`--pull`、governance 0018 / 0019，应用后 S1–S4 全部零失败，入口自检 `handle_binding` 通过；第 9 步控制台核对与第 10 步（#538 的平台采用 → 工作区对齐 → 发布修订）由维护者完成。v0.46.0 收齐 #537 / #538 / #542，真实模型候选 run 38030885497 通过，缓存读写比 14.8。新遗留 230、231）。
+最后更新：2026-10-15（**控制台审计剩余 P1 收口（#541，6a0c1e4，无迁移，契约快照更新，未发版）**：关闭审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16；控制台请求层按角色预检、一张路由权限表决定侧栏与站内链接，旅程 08（四个非所有者角色零 403、零死链）随 web-e2e 进 CI；随 v0.47.0 上主机。2026-10-10 约 11:00Z 到 10-15 15:00Z 周用量上限，全部线程暂停。新遗留 242–246）。 上一版 2026-10-10（**v0.46.0 上主机，验收全部通过**：主机从 v0.44.0 直接升到 v0.46.0（v0.45.0 未单独应用），按 `release.md` §3.23 一个窗口走完：排空 Worker、`--pull`、governance 0018 / 0019，应用后 S1–S4 全部零失败，入口自检 `handle_binding` 通过；第 9 步控制台核对与第 10 步（#538 的平台采用 → 工作区对齐 → 发布修订）由维护者完成。v0.46.0 收齐 #537 / #538 / #542，真实模型候选 run 38030885497 通过，缓存读写比 14.8。新遗留 230、231）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -108,6 +108,8 @@
 | 2026-10-10 | v0.46.0 发布（#539，tag 在 9f09ae0；主机未应用）：收齐 #537、#538、#542；迁移只有 governance 0019（加一列可空列）。release PR 落后 main 一个 docs 提交，用 update-branch 触发 CI，全绿后合入；发版运行 38030559814：11 个镜像签名、扫描通过，频道已发布 |
 | 2026-10-10 | v0.46.0 真实模型候选回归（staging run 38030885497，从 main，v0.45.0 → v0.46.0，runs=10，非 extended，每工作区 token 日预算 6M，维护者同意的唯一一轮）：apply `RESULT ok`；控制台供应商路径 completion / tool_call 通过；S2 52 PASS / 0 FAIL，S3 32 / 0；docker 10/10（入口工具调用 108 次，worker 40 次）、observe 10/10、ssh_approve 10/10、ssh_auto 1/1、dependency_chat 10/10，工具错误 0，没有 401。用量 197 次调用：未缓存输入 740,281、输出 38,837、缓存读 2,641,959、缓存写 178,738，读写比 14.8（v0.45.0 候选 38020630262：168 次调用，读 1,756,324、写 1,703,360，比 1.03）。每次调用缓存写从约 10.1k 降到约 0.9k token，缓存读从约 10.5k 升到约 13.4k；同一 Turn 内的后续调用（174 次）读写比 17.7，每个 Turn 首次调用（23 次）3.5。费用按输入 $2 / 输出 $10 / 缓存读 $0.20 / 缓存写 $2.50 每百万 token 估算约 $2.84（上一轮 $4.96，且上一轮在 docker 场景耗尽预算没跑完），单次调用约 $0.014（上一轮约 $0.030）。现在最大的一块是入口每次调用末尾约 4.5–5k token 的注入按普通输入计（约 $1.48，占一半，遗留 229）。本轮场景每个会话只有一个 Turn，跨 Turn 的缓存失效（遗留 228）没有测到。遗留 213 关闭 |
 | 2026-10-10 | v0.46.0 应用到主机（起点 v0.44.0，v0.45.0 未单独应用；`release.md` §3.23 的十步一个窗口走完）：窗口前 `--prefetch v0.46.0` 与只读核对（§3.20、§3.22、§3.24），排空 Worker 后 `--pull v0.46.0`，governance 0018 / 0019 随之应用；应用后主机验收 S1–S4 全部零失败，S1 的 `env-no-handle` / `env-workers-plane` / `env-source-binding` 与入口自检 `handle_binding` 通过；第 9 步控制台核对与第 10 步（#538：平台采用新清单 → 工作区与门公告对齐 → 发布修订）由维护者完成。核对中看到 44 个待激活用户，都是验收测试账号（遗留 230）。窗口内主机会话的 `--pull` 被本地权限检查拦下后，会话没有等维护者批准就重新发起了（遗留 231）。记录在 `docs/private/` |
+| 2026-10-10 – 10-15 | 周用量上限：2026-10-10 约 11:00Z 起全部线程暂停，10-15 15:00Z 恢复；期间无合入、无主机操作。之后并发不超过 3 个线程，先收完在途 PR 再开新线程 | — |
+| 2026-10-15 | 控制台审计剩余 P1 收口（#541，6a0c1e4，无迁移，契约快照更新，未发版）：关闭审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16，加上此前合入的 P0-1–4 与 P1-1 / 6 / 10 / 11，审计 20 项 P0 / P1 有 19 项已在 main；P1-15（刷新后回看工具调用）本 PR 未做，#520 / #523 已让工具调用落库并显示，是否已满足待核实（遗留 245）。要点：能力与审计动作显示中文名（`lib/capability-labels.ts`，测试保证覆盖注册表每个能力）；就绪卡与修复链接按读者角色给链接，做不了的写明找谁；控制台请求层按角色预检（`HttpClient.roleGate`，与内核 `roleMayUseCapability` 同一判定，内核仍是唯一裁决者）；一张路由权限表（`lib/route-access.ts`）决定侧栏、站内链接与推送提示；`@nexttime/shared` 新增 `CapabilityName`，手写能力名写错编译不过；守卫 `role-gating.guard.test.ts`；新旅程 08 用 operator / builder / member / auditor 四个账户走遍可见页面和链接，零 403、零本地拦截、零死链，在 CI 的 web-e2e 里跑。线上契约：`platform_overview.modelsCatalog` 新字段，`recentAudit`（概览与 `platform_status`）只含改动；`models.json` 为 `{}` 时视为空目录，不再 503。审查 #501 四轮通过，体验验收（项目共享目录 `console-ux/acceptance-541.md`）通过。验收盲区：接入向导里「尚未在本工作区启用的实例」那一步只做了代码核对、没有实测（本地没有这种数据），随 v0.47.0 上主机时补看 | PR #541 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -146,9 +148,9 @@
 ## 3. 当前波次
 
 **当前阶段（2026-10-10 起）：控制台产品化可用，随后治理 P1 收口**。S10 W1 已全部完成并随 v0.43.0–v0.46.0 上主机（下文 W1 段是完成记录）；维护者 2026-10-09 定了先把控制台做到产品化可用、再推进总目标，新能力也要说明控制台怎么显示。阶段出口标准（四条都满足才算关闭）：
-1. #541（审计剩余 P1）合入，并随下一版（v0.47.0）上主机；
-2. 一个 PR 收掉「死路 / 403 / 露出接口名」三类问题（含 auditor 看不到也进不去的「待我审批」）；
-3. 控制台 DoD 入库、PR 模板加 UX 条目、旅程 08（最小权限）进 CI 且零 403（遗留 212）；
+1. #541（审计剩余 P1）合入，并随下一版（v0.47.0）上主机；**进度**：2026-10-15 合入（6a0c1e4），待 v0.47.0 上主机；
+2. 一个 PR 收掉「死路 / 403 / 露出接口名」三类问题（含 auditor 看不到也进不去的「待我审批」）；**进度**：#541 收掉了已知实例（旅程 08 四个非所有者角色零 403、零死链；auditor 不再看到「待我审批」；审计与能力显示中文名），剩下的措辞与出路问题见遗留 242；
+3. 控制台 DoD 入库、PR 模板加 UX 条目、旅程 08（最小权限）进 CI 且零 403（遗留 212）；**进度**：旅程 08 已随 #541 进 CI（web-e2e）；DoD 与 PR 模板 UX 条目未做；
 4. 本节记「阶段关闭」，剩下的 P2 与字段缺口挂到 S10 W2–W4 的控制台车道。
 
 **路线（按顺序）**：
@@ -238,11 +240,11 @@
 | 180 | 审计里的参数副本脱敏不全（审查 #493 发现）：`dispatch.ts` 写 AuditRecord 前的 `redactSecrets` 只按值模式匹配，没有用 #526 共享的字段名规则（`namesASecretField`），名字是密钥名、值不像密钥的参数会原样入审计；人通道（控制台）的参数完全不脱敏，人粘贴的密码原样进审计。与遗留 175 同一个内核 PR | P1 | 下一版 | **已关闭（#532，40b6c9e，未发版）**：审计参数副本在 Handle、人、平台三个通道都用 #526 的规则（字段名规则 + 值模式）；approve / reject reason、`chat.rename`、`connection.request_cancelled` 审计行里 `params` 以外的调用方字段同规则 |
 | 181 | 第三方镜像钉 digest 后不再自动拿到安全补丁（#531 起；`pgvector:pg17`、`postgres:17-alpine` 的钉值已落后上游当前 tag）。不留给「按波次手动升」：每周工作流比对 `deploy/image-mirrors.json` 的钉值与上游 tag 当前 digest，叠加 Trivy 结果，有差异就开 PR 改清单（同仓 PR 触发 `image-mirror` 先复制，再改引用，守卫校验引用与清单一致），走正常审查与合并。不改 Dependabot / Renovate 决定（2026-09-25、2026-10-02） | P1 | 下一波 | 开放（#531 审查记录） |
 | 182 | 镜像守卫的两处缺口：`uses: docker://…` 形式的 action 镜像不在扫描范围；runbook 里人工执行的命令（如 `host-gatekeepers.md` 的 `docker run … alpine sleep 1d`）不扫 | P2 | 下一波 | 开放（#531 审查记录） |
-| 183 | agent 文本的 `record_decision` summary、`report_turn` summary / decisions 原样存储，与 assistant 回复的值模式脱敏不一致（#532 审查 B）。照搬 assistant 回复的做法 | P1 | 下一批 | 开放（#532 记录） |
-| 184 | `tasks.input`（`invoke_worker` 的 input）原样存储，没有计数和展示遮蔽；agent 写、喂给另一个 agent（#532 审查 C）。先做计数和显示遮蔽，不改写 input | P1 | 下一批 | 开放（#532 记录） |
-| 185 | tool_call 记录的 result 预览只做值模式：能力结果回显参数时，args 里被遮蔽的字段会在 result 里重现，破坏 #526「隐藏 == 计数 == 遮蔽」（#532 审查 D） | P1 | 下一批 | 开放（#532 记录） |
-| 186 | `create_connection` / `request_connection` 的 endpoint 与 target 不拒绝 URL userinfo 或查询串里的凭据，会落进内核 DB（#532 审查 G）。可复用 llm-proxy Base URL 的 userinfo 校验 | P1 | 下一批 | 开放（#532 记录） |
-| 187 | 门输出进审计的副本（`action_request.complete` 的 `resultMetadata`）原样存储，门返回签发的凭据时会落进审计（#532 审查 H1）。套用 #532 的审计副本规则 | P1 | 下一批 | 开放（#532 记录） |
+| 183 | agent 文本的 `record_decision` summary、`report_turn` summary / decisions 原样存储，与 assistant 回复的值模式脱敏不一致（#532 审查 B）。照搬 assistant 回复的做法 | P1 | 下一批 | 进行中（#549 修复中：2026-10-10 审查 #501 安全审查在 fad0998 要求修改 B1–B5，其中 B1（N4 地址规则覆盖全部入口：`create_gate_instance` / 门公告 `upsertAnnouncement` / `registerGatekeeper` / `manifestSource`，及 SAS / 预签名查询参数漏网）与 B2（`assert_fact` / `supersede_fact` 的 `properties` 原样入库）为 P1，均在 #549 内修；控制台体验验收未通过，3 项必修） |
+| 184 | `tasks.input`（`invoke_worker` 的 input）原样存储，没有计数和展示遮蔽；agent 写、喂给另一个 agent（#532 审查 C）。先做计数和显示遮蔽，不改写 input | P1 | 下一批 | 进行中（#549 修复中：2026-10-10 审查 #501 安全审查在 fad0998 要求修改 B1–B5，其中 B1（N4 地址规则覆盖全部入口：`create_gate_instance` / 门公告 `upsertAnnouncement` / `registerGatekeeper` / `manifestSource`，及 SAS / 预签名查询参数漏网）与 B2（`assert_fact` / `supersede_fact` 的 `properties` 原样入库）为 P1，均在 #549 内修；控制台体验验收未通过，3 项必修） |
+| 185 | tool_call 记录的 result 预览只做值模式：能力结果回显参数时，args 里被遮蔽的字段会在 result 里重现，破坏 #526「隐藏 == 计数 == 遮蔽」（#532 审查 D） | P1 | 下一批 | 进行中（#549 修复中：2026-10-10 审查 #501 安全审查在 fad0998 要求修改 B1–B5，其中 B1（N4 地址规则覆盖全部入口：`create_gate_instance` / 门公告 `upsertAnnouncement` / `registerGatekeeper` / `manifestSource`，及 SAS / 预签名查询参数漏网）与 B2（`assert_fact` / `supersede_fact` 的 `properties` 原样入库）为 P1，均在 #549 内修；控制台体验验收未通过，3 项必修） |
+| 186 | `create_connection` / `request_connection` 的 endpoint 与 target 不拒绝 URL userinfo 或查询串里的凭据，会落进内核 DB（#532 审查 G）。可复用 llm-proxy Base URL 的 userinfo 校验 | P1 | 下一批 | 进行中（#549 修复中：2026-10-10 审查 #501 安全审查在 fad0998 要求修改 B1–B5，其中 B1（N4 地址规则覆盖全部入口：`create_gate_instance` / 门公告 `upsertAnnouncement` / `registerGatekeeper` / `manifestSource`，及 SAS / 预签名查询参数漏网）与 B2（`assert_fact` / `supersede_fact` 的 `properties` 原样入库）为 P1，均在 #549 内修；控制台体验验收未通过，3 项必修） |
+| 187 | 门输出进审计的副本（`action_request.complete` 的 `resultMetadata`）原样存储，门返回签发的凭据时会落进审计（#532 审查 H1）。套用 #532 的审计副本规则 | P1 | 下一批 | 进行中（#549 修复中：2026-10-10 审查 #501 安全审查在 fad0998 要求修改 B1–B5，其中 B1（N4 地址规则覆盖全部入口：`create_gate_instance` / 门公告 `upsertAnnouncement` / `registerGatekeeper` / `manifestSource`，及 SAS / 预签名查询参数漏网）与 B2（`assert_fact` / `supersede_fact` 的 `properties` 原样入库）为 P1，均在 #549 内修；控制台体验验收未通过，3 项必修） |
 | 188 | 内核 `publishOperation`（`publish_operation`、`publish_manifest`、`enable_gate_instance`、CLI 的共同入口）对声明了门拥有的 header / query 参数的手写 Operation 做标记或拒绝；门侧已在请求时拒绝，这条补治理可见性（#532 审查 J） | P1 | 下一批（与 189 同一 PR，#532 作者线程） | 已关闭（#538：`publish_operation` 返回 400 `gate_owned_params`，批量入口跳过并报告） |
 | 189 | 门的 host 在 build 时自己 `importOpenApi(fetch(manifestSource))`，R-18「管理员确认后才生效」只约束内核副本：已发布 Operation 名下的新参数或新路径会在门下次 build 时直接生效，execute 类会出现「批的是 X，跑的是 Y」（#532 审查 K，审查第三轮已证实） | P1 | 下一批（与 188 同一 PR；v0.45.0 不等） | 已关闭（#538：调用带 `operationDigest`，门失配即 409；自连门的同步路径另列 214） |
 | 190 | person 写的理由原样存进领域记录（`decisions.rationale.reason`、`conflicts.resolution`、`facts.invalidation_reason`），控制台审批历史的 `decisionReason` 显示原文（#532 审查 A）。在显示层遮蔽，不改写记录 | P2 | 下一波 | 开放（#532 记录） |
@@ -267,7 +269,7 @@
 | 209 | 概览「最近平台审计」列出读操作和接口名，应与审计页一致默认只显示变更（#537 审计；协调方已定审计流默认只显示变更） | P2 | 控制台整改下一批 | 开放（#537 审计） |
 | 210 | 能力目录编辑器的本地校验显示 zod 默认英文提示（#537 审计） | P3 | 控制台整改下一批 | 开放（#537 审计） |
 | 211 | #537 的错误码文案要与 K（遗留 189）定下的码名对齐：`operation_refused`、`connection_target_refused` 与 MCP 重定向的错误码，K 合入后补文案 | P2 | 与 189 同批 | 已关闭（#538 G3：`lib/errors.ts` 补了 `operation_definition_mismatch` / `operation_definition_unavailable` / `gate_owned_params`；`operation_refused`、`connection_target_refused` 已有；重定向在内核映射为 502 `gatekeeper_error`，报错文本写明状态码与目标） |
-| 212 | 控制台 DoD 文档、PR 模板里的 UX 条目、旅程 08（最小权限）；提示气泡没有「技术细节」（精编文案时不显示原文，可考虑可展开详情） | P2 | 控制台整改下一批 | 开放（#537 记录） |
+| 212 | 控制台 DoD 文档、PR 模板里的 UX 条目、旅程 08（最小权限）；提示气泡没有「技术细节」（精编文案时不显示原文，可考虑可展开详情） | P2 | 控制台整改下一批 | 部分关闭（旅程 08 随 #541 进 CI；DoD、PR 模板 UX 条目与提示气泡「技术细节」未做） |
 | 213 | v0.45.0 真实模型轮的提示缓存命中下降：run 38020630262 的缓存读写比约 1.0（v0.44.0 最终候选 37978520467 约 1.9），docker_restart 的入口工具调用 124 次（上一轮 74 次），同样场景更费 token；推断是每次请求里有变化的内容破坏了前缀缓存，未核实。#524 / #532 的作者线程排查 | P2 | 下一批 | 已关闭（#542；v0.46.0 候选 run 38030885497：读写比 1.03 → 14.8，每次调用缓存写约 10.1k → 0.9k token） |
 | 214 | 自连门（无平台实例链接）没有产品内同步路径：门用新 base 重建、清单与 `manifestSource` 导入副本不一致时调用一律 409，只能按 `add-gatekeeper.md` §12 手工处理；需要一条「重新描述 → 预览差异 → 开修订」的路径（#538 遗留提议） | P1 | 下一批 | 开放（#538 记录） |
 | 215 | 基于旧 gatekeeper-base 的自连门不校验摘要，失效开放（照旧执行门那份定义）；考虑内核侧要求门在描述里声明支持摘要，否则标记或拒绝（#538 遗留提议） | P2 | 下一批 | 开放（#538 记录） |
@@ -287,6 +289,21 @@
 | 229 | 入口每次调用末尾的实时上下文注入约 4.5–5k token（run 38030885497 里 135 次入口调用的未缓存输入），#542 之后按普通输入计、不缓存，已是真实模型费用的最大一块（约一半）；可考虑压缩注入内容，或内容未变时并入可缓存前缀 | P2 | 下一批 | 开放（v0.46.0 候选记录） |
 | 230 | 主机上有 44 个待激活用户，都是验收脚本建的测试账号；需要决定清理 / 归档方式，或让测试账号可区分（如固定前缀、单独工作区、验收后清理） | P3 | 下一批 | 开放（v0.46.0 上主机记录） |
 | 231 | 主机操作被本地权限检查拦下时，执行会话必须停下等维护者在该会话里批准，不得自行重新发起（v0.46.0 窗口里 `--pull` 被拦后被重新发起）；下一个改 runbook 的 docs PR 在 `release.md` §3 窗口前说明里加一条：窗口前维护者在本地会话批准，或预先加允许规则 | P2 | 下一个改 runbook 的 docs PR | 开放（v0.46.0 上主机记录） |
+| 232 | `request_action` 收下不存在的动作名并原样回显：应在边界以结构化错误拒绝未知动作名，并确认回显值在控制台与审计里经转义、限长，不能成为反射 / 注入入口（#541 验收发现） | P2 | 内核，下一个治理批次 | 开放（#541 验收记录） |
+| 233 | 本地跑测试时出现的 I11 不变量告警尚未追查（#541 验收发现） | P3 | 内核不变量清查（与 206 同批） | 开放（#541 验收记录） |
+| 234 | 字段清单里约 13 个纯前端缺口（可推导 / 可选择却要手填等），清单见项目共享目录 `console-ux/field-inventory.md`；需要后端的另见 150 / 225 | P2 | 控制台易用性整改，属控制台阶段出口 | 开放（#541 验收记录） |
+| 235 | #541 的控制台角色门控守卫测试用正则匹配，只认直接的 `call(...)` / `can(...)` 写法：嵌套泛型（如 `call<Page<T>>('…')`）、用变量名调用的会漏掉，注释里出现 `can('x')` 会被误判为「已门控」；改成基于 AST（TS 编译器 API 或 ESLint 规则）。目前没有漏判实例（审查 #501 第四轮 N3） | P2 | 控制台易用性整改，下一个控制台 PR | 开放（#541 审查记录） |
+| 236 | Caddy JSON 访问日志可能记录 `X-API-Key` 原文：`format json` 输出的 `request.headers` 默认只遮 Authorization / Cookie / Set-Cookie（依据 Caddy 文档，未在主机实测），`deploy/caddy/Caddyfile` 旁注「只有 method/path/status」有误；docker 门的 `container.logs_tail` 能读平台服务容器（含 caddy）日志，owner 的长期 key 可能经智能体到达模型供应商。修法：`format filter` 去掉 `request>headers>X-Api-Key`（或整个 headers）并改正注释；需要主机应用（#549 安全审查 C 项） | P1 | #549 之后由作者单独开小 PR | 开放（#549 审查记录） |
+| 237 | Worker observe 的输出原样写进 `observations.content`（`request-action-handler` → `gate-observation` → `sources`），execute 分支用的是遮蔽副本，两边不一致；目前没有 API 读这一列，但每次 dump 都会带上（#549 安全审查 C 项） | P2 | 下一批 | 开放（#549 审查记录） |
+| 238 | 门 apply 的 `observedFacts` 写图不遮蔽（Operation 的 result_mapping 映射到秘密字段时）；若 #549 的 B2 在图写入收口处（`assertFact` / `upsertObject`）修，这条一并关闭（#549 安全审查 C 项） | P2 | 随 #549 核对 | 开放（#549 审查记录） |
+| 239 | 门的幂等存储用默认权限，里面是原始 apply data 与失败信息；`host-env-init.sh` 只收紧了 `gate-host/`，其他门目录没收紧；scrub CLI 不碰门数据卷（扩大原 N8）；修复前写入幂等存储的 ssh 整行失败信息重试时会原样回放（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
+| 240 | 主机上 pi 会话转录是原文，entry 会话没有保留期限，并进每日备份（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
+| 241 | 内核 Fastify 没有自定义 `setErrorHandler`：4xx 时把 JSON 解析错误的 message 记进日志，V8 的错误信息会引用一段输入；与 236 叠加有放大效应（推断）（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
+| 242 | #541 体验验收 P3：① **最重要**：接入向导「在本工作区启用」这一步对非所有者只说「在本工作区启用是 owner 专属操作。」，用了英文 owner（全站叫「工作区所有者」），也没给出路（可加「申请连接」）；这一路径只做了代码核对、未实测；② 平台实例区对非平台管理员显示「去启用：X（只有平台管理员能打开）」，动作句却不可点，应改成「请平台管理员启用：X」；③ builder 的「审核 Operation 分类」里同一个 Operation 的多个版本各占一行（存量）；④ 失联 / 不可达的门同时写着「你的智能体已经可以直接调用」，自相矛盾（存量） | P3 | 控制台下一批（①先做） | 开放（#541 验收记录） |
+| 243 | 审查 #501 对 #541 的非阻塞建议：① 接入向导工作区那一步的三种角色分支（builder 只看到审核、operator / member 只看到说明、`workspaceReady` 不等授予）没有直接测试，补一个按角色渲染 `WorkspaceEnableSection` 的单测；② 「跳到受限路由必须问表」守卫按文件判定，文件里问过一次表，再加一条没包的链接也能通过，与 235 同类，随 235 改成 AST；③ 申请人推送提示里「operator 或工作区所有者」是写死的，应由路由表派生（`whoCanOpen(routeRequirement(hrefs.approvals()))`） | P3 | 控制台下一批（②随 235） | 开放（#541 审查记录） |
+| 244 | #541 扫到但未改的灰按钮：13 个多字段表单（AddMemberForm、CreateWorkspaceForm、CreateGateInstanceForm、CreateUserForm、AttestFactDialog、PlatformSettingsPage、UserDetailPanel、WorkspaceDetailPanel、PurgeUsersDialog、PurgeWorkspaceDrawer、GateCredentialEntry、ProviderSecretForm、CreatePrincipalForm）的提交按钮灰着，不说还差什么；做成 ux-lint 规则（灰按钮必须有「还差」或可见原因） | P2 | 控制台 DoD / ux-lint 批次（与 212、154 同批） | 开放（#541 记录） |
+| 245 | #541 记录的控制台 P2 / P3：审计 P1-15（刷新后回看工具调用）是否已由 #520 / #523 满足，核实后关闭；审计页动作筛选候选 `auditActionSuggestions()` 少 8 个工作区审计动作（`operation.description_updated`、`operation.governance_refreshed`、`draft.expired` 与 5 个迁移写入的一次性动作）；配额编辑抽屉同一错误显示两行、「必须是0 到 3」缺空格；同名 Worker 在「我的智能体」里无法区分；就绪卡可以写出所有者名字；对话审批卡缺策略行（`system.action_pending` 未带 `policyDecision`）；系统抽屉成员行用了「主体」一词；系统卡摘要「X 可直接调用」有歧义；Worker 弃用后详情面板显示「未找到」而不是「已弃用 v1」；一次发布触发两次 `execution_readiness` 与 `list_worker_definitions` | P2 | 控制台下一批 | 开放（#541 验收记录） |
+| 246 | 审查 #501 对 #541 的 P3：`platform.llm_provider_models_listed` / `_probed` 等不在注册表里的审计事件没有在 shared 声明种类，被当成改动显示在「最近平台改动」；模型管理令牌签发一次写两行审计；「最近平台改动」空态应说明只看最近 1000 条记录；成员被移出工作区时没有角色变化广播；`ModelsPage` 的 `isOwner` 应改为 `can('set_agent_policy')`；`get_workspace` 重复读取的开销 | P3 | 控制台下一批 | 开放（#541 审查记录） |
 
 ## 5. 更新规则
 

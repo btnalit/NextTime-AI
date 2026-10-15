@@ -4,7 +4,7 @@ import type {
   LlmProviderWire,
   PlatformWorkspaceWire,
 } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -40,12 +40,11 @@ import { ProviderForm } from './providers/ProviderForm.js';
 import { ProviderSecretForm } from './providers/ProviderSecretForm.js';
 import { ProviderTestResult } from './providers/ProviderTestResult.js';
 
-/** The statuses the provider's last test decided (`lib/provider-status`). */
-const TEST_DECIDED_STATUSES: ReadonlySet<string> = new Set([
-  'key_rejected',
-  'test_failed',
-  'tools_failed',
-]);
+/** The statuses the provider's last test decided whose reason the status label does not already
+ *  say (`lib/provider-status`): `key_rejected`'s own detail already is "the provider refused the
+ *  key", so the explained 401 would only repeat it. */
+const TEST_DECIDED_STATUSES: ReadonlySet<string> = new Set(['test_failed', 'tools_failed']);
+
 export interface PlatformModelsPageProps {
   readonly http: CapabilityCaller;
   /** Test seam: the `fetch` the llm-admin client uses for `/api/llm-admin/*`. */
@@ -541,7 +540,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         )}
       </section>
 
-      <WorkspaceModelMatrix http={http} />
+      <WorkspaceModelMatrix
+        http={http}
+        catalogKey={list.state.status === 'ready' ? catalogKey(providers) : null}
+        onAddProvider={() => setDrawer({ kind: 'create' })}
+      />
 
       <Drawer
         open={drawer.kind === 'create'}
@@ -600,7 +603,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               <dl className="definition-list">
                 <dt>API</dt>
                 <dd>{t(API_LABEL[drawerProvider.api].zh, API_LABEL[drawerProvider.api].en)}</dd>
-                <dt>Base URL</dt>
+                <dt>{t('接口地址', 'Base URL')}</dt>
                 <dd className="mono">{drawerProvider.upstreamBaseUrl}</dd>
                 <dt>{t('鉴权头', 'Auth header')}</dt>
                 <dd className="mono">
@@ -773,13 +776,33 @@ function ProviderTestPanel({
  * written in (`<providerId>/<modelId>`, `ModelRow.id`) — using the admin list's own, differently
  * shaped ids here would silently never match.
  */
-function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
+function WorkspaceModelMatrix({
+  http,
+  catalogKey,
+  onAddProvider,
+}: {
+  readonly http: CapabilityCaller;
+  /** Changes whenever a provider, its models or its switch change on this page (`catalogKey`):
+   *  the catalog this matrix reads is regenerated from them, so it reloads (audit P1-3). */
+  readonly catalogKey: string | null;
+  readonly onAddProvider: () => void;
+}) {
   const t = useT();
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces', {
     status: 'active',
     includeExpired: false,
   });
   const models = useCapabilityList<ModelRow>(http, 'list_platform_models');
+  const reloadModels = models.reload;
+  // `null` until the providers list first loads: the first key is what the catalog was already
+  // read from, so only a later change reloads it.
+  const seenCatalogKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (catalogKey === null) return;
+    const seen = seenCatalogKey.current;
+    seenCatalogKey.current = catalogKey;
+    if (seen !== null && seen !== catalogKey) void reloadModels();
+  }, [catalogKey, reloadModels]);
 
   const workspaceRows = workspaces.state.status === 'ready' ? workspaces.state.data.items : [];
   const modelRows = models.state.status === 'ready' ? models.state.data.items : [];
@@ -860,9 +883,24 @@ function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
           testId="workspace-model-matrix-empty"
         />
       ) : modelRows.length === 0 ? (
-        <p className="text-3" style={{ padding: 'var(--space-4)' }}>
-          {t('模型目录还没有可用模型。', 'No models in the catalog yet.')}
-        </p>
+        <EmptyState
+          icon="grid"
+          title={t('还没有模型', 'No models yet')}
+          body={t(
+            '先添加一个模型供应商，它的模型会出现在这里，再按工作区勾选允许使用哪些。',
+            'Add a model provider first; its models show up here, then pick which ones each workspace may use.',
+          )}
+          action={
+            <Button
+              variant="primary"
+              onClick={onAddProvider}
+              data-testid="workspace-model-matrix-add-provider"
+            >
+              {t('添加供应商', 'Add a provider')}
+            </Button>
+          }
+          testId="workspace-model-matrix-no-models"
+        />
       ) : (
         <DataTable
           columns={columns}
@@ -876,4 +914,16 @@ function WorkspaceModelMatrix({ http }: { readonly http: CapabilityCaller }) {
       )}
     </DashboardCard>
   );
+}
+
+/** What the workspace × model matrix's catalog is generated from: every provider's id, switch and
+ *  model ids. A save, a removal or a switch on this page changes it. */
+function catalogKey(providers: readonly LlmProviderWire[]): string {
+  return providers
+    .map((provider) =>
+      [provider.id, provider.enabled ? '1' : '0', ...provider.models.map((model) => model.id)].join(
+        ',',
+      ),
+    )
+    .join('|');
 }

@@ -217,11 +217,19 @@ export interface AuditRecordRow {
 }
 
 /** The console route an audit row's `resourceType:resourceId` opens, when the console has a page
- *  for that resource; `undefined` otherwise (the chip stays a plain reference). */
+ *  for that resource and the reader may open it (`canOpen`, `hooks/useCanOpen` — the route table;
+ *  an auditor may not open an ActionRequest, #541 acceptance); `undefined` otherwise (the chip
+ *  stays a plain reference). */
 export function resourceHref(
   resourceType: string | null,
   resourceId: string | null,
+  canOpen: (href: string) => boolean | null = () => true,
 ): string | undefined {
+  const href = resourceRoute(resourceType, resourceId);
+  return href !== undefined && canOpen(href) !== false ? href : undefined;
+}
+
+function resourceRoute(resourceType: string | null, resourceId: string | null): string | undefined {
   if (!resourceId) return undefined;
   switch (resourceType) {
     case 'action_request':

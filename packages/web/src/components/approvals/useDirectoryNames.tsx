@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useResource } from '../../hooks/useResource.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, PrincipalRow } from '../../lib/governance.js';
@@ -46,10 +47,14 @@ interface PrincipalLoad {
  *  actor selector). See the module doc for why this read is guarded, and walks every page. */
 export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirectory {
   const permissions = usePermissions();
-  const denied = permissions.isDenied('list_principals');
+  // Held until the reader's role is known (a never-settling load), so a role that may not read
+  // the roster never asks for it (#541 review M3); a known refusal is the `failed` fallback.
+  const can = useRoleCan(http);
+  const reads = can('list_principals');
   const markDenied = permissions.markDenied;
   const load = useCallback(async (): Promise<PrincipalLoad> => {
-    if (denied) return { items: [], failed: true };
+    if (reads === null) return new Promise<never>(() => undefined);
+    if (reads === false) return { items: [], failed: true };
     try {
       let items: readonly PrincipalRow[] = [];
       let cursor: string | undefined;
@@ -66,7 +71,7 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
       if (isForbiddenError(err)) markDenied('list_principals');
       return { items: [], failed: true };
     }
-  }, [http, denied, markDenied]);
+  }, [http, reads, markDenied]);
   const principals = useResource(load);
   const loaded = principals.state.status === 'ready' ? principals.state.data : undefined;
   const names = useRefNames(loaded?.items);

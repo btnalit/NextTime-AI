@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
-import { HttpClient, HttpError } from './http-client.js';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CALLER_ROLE_CHANGED_EVENT,
+  type CallerRoleChange,
+  HttpClient,
+  HttpError,
+} from './http-client.js';
 
 /**
  * http-client.test.ts: exercises `HttpClient` (lib/http-client.ts) against an injected `fetch`
@@ -156,5 +162,146 @@ describe('HttpClient (cookie auth, S4.1)', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers['x-workspace-id']).toBeUndefined();
     expect(init.credentials).toBe('same-origin');
+  });
+});
+
+describe('HttpClient roleGate (#541 acceptance must-fix 2)', () => {
+  function roleClient(role: string | null) {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === '/api/cap/get_workspace') {
+        return role === null
+          ? jsonResponse(403, { ok: false, error: { code: 'workspace_required', message: 'x' } })
+          : jsonResponse(200, { ok: true, result: { id: 'ws-1', caller: { id: 'p-1', role } } });
+      }
+      return jsonResponse(200, { ok: true, result: { items: [] } });
+    });
+    const client = new HttpClient({
+      auth: { kind: 'apiKey', apiKey: 'sk-test' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      roleGate: true,
+    });
+    const sent = () => fetchImpl.mock.calls.map(([url]) => url);
+    return { client, sent };
+  }
+
+  it('refuses locally, without a request, what the role may not use — the kernel predicate', async () => {
+    const { client, sent } = roleClient('auditor');
+    const err = await client.call('execution_readiness', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe('forbidden');
+    expect((err as HttpError).details).toEqual({ checkedLocally: true });
+    expect(sent()).toEqual(['/api/cap/get_workspace']);
+    // An auditor's own reads still go out; the role was read once.
+    await client.call('audit_query', {});
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/audit_query']);
+  });
+
+  it('sends a capability every role may use without reading the role first', async () => {
+    const { client, sent } = roleClient('member');
+    await client.call('list_gatekeepers', {});
+    expect(sent()).toEqual(['/api/cap/list_gatekeepers']);
+  });
+
+  it('sends everything when the role cannot be read (no workspace selected)', async () => {
+    const { client, sent } = roleClient(null);
+    await client.call('list_pending', {});
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/list_pending']);
+  });
+
+  it('a get_workspace made through the client refreshes the role it gates with', async () => {
+    const { client, sent } = roleClient('operator');
+    await client.call('get_workspace', {});
+    await client.call('list_pending', {});
+    const err = await client.call('list_connection_requests', {}).catch((e: unknown) => e);
+    expect((err as HttpError).code).toBe('forbidden');
+    expect(sent()).toEqual(['/api/cap/get_workspace', '/api/cap/list_pending']);
+  });
+});
+
+describe('HttpClient roleGate follows a role change (#541 review M2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function changingRoleClient(initial: string) {
+    const state = { role: initial, kernelRole: initial };
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === '/api/cap/get_workspace') {
+        return jsonResponse(200, {
+          ok: true,
+          result: { id: 'ws-1', caller: { id: 'p-1', role: state.role } },
+        });
+      }
+      // The kernel decides by the role it holds now, whatever the client last read.
+      if (url === '/api/cap/list_pending' && state.kernelRole === 'member') {
+        return jsonResponse(403, { ok: false, error: { code: 'forbidden', message: 'no' } });
+      }
+      return jsonResponse(200, { ok: true, result: { items: [] } });
+    });
+    const client = new HttpClient({
+      auth: { kind: 'apiKey', apiKey: 'sk-test' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      roleGate: true,
+    });
+    const sent = () => fetchImpl.mock.calls.map(([url]) => url);
+    const changes: CallerRoleChange[] = [];
+    const listener = (event: Event) =>
+      changes.push((event as CustomEvent<CallerRoleChange>).detail);
+    window.addEventListener(CALLER_ROLE_CHANGED_EVENT, listener);
+    const stop = () => window.removeEventListener(CALLER_ROLE_CHANGED_EVENT, listener);
+    return { client, sent, state, changes, stop };
+  }
+
+  it('announces a changed role from any get_workspace read, once, with the read itself', async () => {
+    const { client, state, changes, stop } = changingRoleClient('member');
+    await client.call('get_workspace', {});
+    await client.call('get_workspace', {});
+    expect(changes).toEqual([]);
+    state.role = 'builder';
+    await client.call('get_workspace', {});
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ client, from: 'member', to: 'builder' });
+    expect((changes[0]?.workspace as { caller: { role: string } }).caller.role).toBe('builder');
+    stop();
+  });
+
+  it('re-reads an old role before refusing on it, and sends when the new role may', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const { client, sent, state, changes, stop } = changingRoleClient('member');
+    await client.call('get_workspace', {});
+    state.role = 'operator';
+    state.kernelRole = 'operator';
+    // Within a few seconds of the read: refused on it, no extra request.
+    now.mockReturnValue(1_002_000);
+    await expect(client.call('list_pending', {})).rejects.toMatchObject({ code: 'forbidden' });
+    expect(sent()).toEqual(['/api/cap/get_workspace']);
+    // Later: the role is read again first, and the call goes out under the new one.
+    now.mockReturnValue(1_010_000);
+    await client.call('list_pending', {});
+    expect(sent()).toEqual([
+      '/api/cap/get_workspace',
+      '/api/cap/get_workspace',
+      '/api/cap/list_pending',
+    ]);
+    expect(changes.map((change) => change.to)).toEqual(['operator']);
+    stop();
+  });
+
+  it('a kernel refusal of what the last read allowed re-reads the role right away', async () => {
+    const { client, sent, state, changes, stop } = changingRoleClient('operator');
+    await client.call('get_workspace', {});
+    state.role = 'member';
+    state.kernelRole = 'member';
+    await expect(client.call('list_pending', {})).rejects.toMatchObject({ code: 'forbidden' });
+    await vi.waitFor(() => expect(changes.map((change) => change.to)).toEqual(['member']));
+    expect(sent()).toEqual([
+      '/api/cap/get_workspace',
+      '/api/cap/list_pending',
+      '/api/cap/get_workspace',
+    ]);
+    // Now refused locally, without a request.
+    await expect(client.call('list_pending', {})).rejects.toMatchObject({
+      details: { checkedLocally: true },
+    });
+    expect(sent()).toHaveLength(3);
+    stop();
   });
 });

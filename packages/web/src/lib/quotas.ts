@@ -36,7 +36,7 @@ export interface QuotaKeyInfo {
 export const QUOTA_KEY_INFO: Readonly<Record<QuotaKey, QuotaKeyInfo>> = {
   'task.max_depth': {
     zh: '派生链深度上限',
-    en: 'Max invoke_worker depth',
+    en: 'Max delegation depth',
     unit: '',
     min: 0,
     max: 3,

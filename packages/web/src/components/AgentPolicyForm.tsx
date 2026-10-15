@@ -5,6 +5,7 @@ import { describeError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { ModelHealthNote, ModelHealthTag, ModelOption } from './kit/model-health.js';
+import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, describedBy } from './ui/Field.js';
@@ -261,6 +262,7 @@ export function AgentPolicyForm({
     setSubmitting(true);
     try {
       const saved = await http.call<AgentPolicy>('set_agent_policy', params);
+      announceReadinessChange(http);
       onSaved(saved);
     } catch (err) {
       const described = describeError(err);

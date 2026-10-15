@@ -1,5 +1,6 @@
 import type { ExplainResultWire } from '@nexttime/shared';
 import { memo, useEffect, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -71,6 +72,7 @@ export const MessageReferences = memo(function MessageReferences({
   text,
 }: MessageReferencesProps) {
   const t = useT();
+  const canOpen = useCanOpen();
   const idsKey = extractIdCandidates(text).join(',');
   const [resolved, setResolved] = useState<readonly ResolvedReference[]>([]);
 
@@ -119,7 +121,7 @@ export const MessageReferences = memo(function MessageReferences({
           id={ref.id}
           name={ref.name ?? ref.nodeType}
           typeName={ref.typeName}
-          href={auditHrefForNode(ref.id)}
+          href={canOpen(auditHrefForNode(ref.id)) !== false ? auditHrefForNode(ref.id) : undefined}
           size="s"
           testId={`message-reference-${ref.id}`}
         />

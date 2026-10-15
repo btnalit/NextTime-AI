@@ -183,7 +183,7 @@ describe('AuditPage entry points', () => {
     );
     expect(row.textContent).toContain('[redacted]');
     expect(row.textContent).not.toContain('sk-1');
-    expect((screen.getByLabelText('资源 id') as HTMLInputElement).value).toBe('ar-1');
+    expect((screen.getByLabelText('资源 ID') as HTMLInputElement).value).toBe('ar-1');
     expect((screen.getByTestId('audit-actor-select') as HTMLSelectElement).value).toBe('');
 
     fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
@@ -217,6 +217,30 @@ describe('AuditPage entry points', () => {
     window.history.replaceState(null, '', '#/');
   });
 
+  it('#541 acceptance: an auditor opening an approval is told who may open it — no get_action, no dead link', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-a', role: 'auditor' } }),
+      list_principals: () => {
+        throw new HttpError('capability_error', 'no', 'forbidden');
+      },
+      list_gatekeepers: () => ({ items: [] }),
+      audit_query: () => ({
+        items: [
+          auditRow({ action: 'approve', resourceType: 'action_request', resourceId: 'ar-1' }),
+        ],
+      }),
+      resolve_refs: () => ({ items: [] }),
+      list_decisions: () => ({ items: [] }),
+      query_decisions: () => ({ items: [] }),
+    });
+    renderPage(http, { actionRequestId: 'ar-1' });
+    const notice = await screen.findByTestId('approval-context-unavailable');
+    expect(notice.textContent).toContain('operator 和工作区所有者');
+    const chip = await screen.findByText((_, el) => el?.getAttribute('data-ref-id') === 'ar-1');
+    expect(chip.querySelector('a')).toBeNull();
+    expect(http.calls.some((c) => c.name === 'get_action')).toBe(false);
+  });
+
   it('?actionRequestId= shows the approval context, explains its decision node and filters the audit log on the request', async () => {
     const http = scriptedHttp({
       get_action: () => ({
@@ -230,6 +254,7 @@ describe('AuditPage entry points', () => {
         params: {},
         onBehalfOf: 'p-1',
         actorRuntime: 'worker',
+        policyDecision: 'require_approval',
         requestedAt: '2026-09-03T00:00:00.000Z',
         executedAt: '2026-09-03T00:02:00.000Z',
         parentWorkerRunId: 'run-1',
@@ -272,6 +297,8 @@ describe('AuditPage entry points', () => {
     await waitFor(() => expect(card.textContent).toContain('docker-prod'));
     expect(within(card).getByTestId('approval-context-decided-by').textContent).toContain('Alice');
     expect(card.textContent).toContain('change window');
+    // #541 review R3: the policy decision reads as its label, the raw value only as a tooltip.
+    expect(within(card).getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
     expect(within(card).getByTestId('approval-open-page').getAttribute('href')).toBe(
       '#/work/approvals/ar-1',
     );
@@ -342,7 +369,7 @@ describe('AuditPage degraded states', () => {
     await screen.findByTestId('audit-actor-input');
     expect(screen.queryByTestId('audit-actor-select')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('节点 id'), { target: { value: 'nope' } });
+    fireEvent.change(screen.getByLabelText('节点 ID'), { target: { value: 'nope' } });
     fireEvent.submit(screen.getByTestId('explain-form'));
     const banner = await screen.findByTestId('explain-error');
     expect(banner.getAttribute('data-error-code')).toBe('not_found');
@@ -431,7 +458,7 @@ describe('AuditPage pickers', () => {
     expect(pick.textContent).toContain('docker-prod');
 
     fireEvent.change(pick, { target: { value: 'gk-1' } });
-    expect((screen.getByLabelText('资源 id') as HTMLInputElement).value).toBe('gk-1');
+    expect((screen.getByLabelText('资源 ID') as HTMLInputElement).value).toBe('gk-1');
     expect(screen.getByTestId('audit-resource-id-picked').textContent).toContain('docker-prod');
 
     fireEvent.click(screen.getByTestId('audit-apply'));
@@ -504,9 +531,9 @@ describe('AuditPage pickers', () => {
     const pick = await screen.findByTestId('audit-resource-id-pick');
     await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-1', 'f-2']));
 
-    fireEvent.change(screen.getByLabelText('资源 id'), { target: { value: 'verify' } });
+    fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: 'verify' } });
     await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-2']));
-    fireEvent.change(screen.getByLabelText('资源 id'), { target: { value: 'zzz' } });
+    fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: 'zzz' } });
     await screen.findByTestId('audit-resource-id-empty');
   });
 
@@ -525,7 +552,7 @@ describe('AuditPage pickers', () => {
     });
     renderPage(http);
     const input = await screen.findByTestId('audit-actor-input');
-    expect(screen.getByText(/list_principals/)).toBeTruthy();
+    expect(screen.getByText(/看不到成员名单/)).toBeTruthy();
     const pick = await screen.findByTestId('audit-actor-input-pick');
     await waitFor(() => expect(pick.textContent).toContain('Grace'));
 
@@ -553,7 +580,7 @@ describe('AuditPage pickers', () => {
     expect(http.calls.find((c) => c.name === 'query_decisions')?.params).toEqual({ limit: 50 });
 
     fireEvent.change(pick, { target: { value: 'dec-7' } });
-    expect((screen.getByLabelText('节点 id') as HTMLInputElement).value).toBe('dec-7');
+    expect((screen.getByLabelText('节点 ID') as HTMLInputElement).value).toBe('dec-7');
     fireEvent.submit(screen.getByTestId('explain-form'));
     await screen.findByTestId('explain-result');
     expect(http.calls.find((c) => c.name === 'explain')?.params).toEqual({ nodeId: 'dec-7' });
@@ -583,7 +610,7 @@ describe('AuditPage pickers', () => {
     await waitFor(() => expect(pick.textContent).toContain('db-01'));
     expect(searches[0]).toEqual({ query: '', limit: 50 });
 
-    fireEvent.change(screen.getByLabelText('实体 id'), { target: { value: 'web' } });
+    fireEvent.change(screen.getByLabelText('实体 ID'), { target: { value: 'web' } });
     await waitFor(() => expect(pick.textContent).toContain('web-01'));
     expect(searches).toContainEqual({ query: 'web', limit: 50 });
 

@@ -107,3 +107,30 @@ describe('IssueServiceHandleSection — picked, not typed', () => {
     expect(isNameList('   ')).toBe(false);
   });
 });
+
+describe('IssueServiceHandleSection: audit P1-9 still-needed line', () => {
+  it('names each unmet condition next to a disabled 签发, in the form labels’ words', () => {
+    renderSection([service('p-a', 'A'), service('p-b', 'B')]);
+    expect(screen.getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('ish-missing').textContent).toBe('还差：选择服务主体、勾选能力');
+
+    fireEvent.change(screen.getByLabelText(/服务主体/), { target: { value: 'p-a' } });
+    fireEvent.change(screen.getByLabelText(/有效期/), { target: { value: '0' } });
+    expect(screen.getByTestId('ish-missing').textContent).toMatch(
+      /^还差：填写 1 到 \d+ 的有效期（天）、勾选能力$/,
+    );
+
+    fireEvent.change(screen.getByLabelText(/有效期/), { target: { value: '30' } });
+    fireEvent.change(nameBox(), { target: { value: 'get_task, list_users' } });
+    expect(screen.getByTestId('ish-missing').textContent).toBe('还差：去掉不可签发的能力名');
+
+    fireEvent.change(nameBox(), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByTestId('ish-missing')).toBeNull();
+  });
+
+  it('says to create a service principal first when there is none', () => {
+    renderSection([]);
+    expect(screen.getByTestId('ish-missing').textContent).toContain('先创建服务主体');
+  });
+});

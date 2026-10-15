@@ -30,15 +30,20 @@ function resolveModelsJsonFile(env: NodeJS.ProcessEnv): string {
   return configured && configured.length > 0 ? configured : DEFAULT_MODELS_JSON_FILE;
 }
 
+/** `providers` defaults to empty: `scripts/host-env-init.sh` seeds the file as `{}` before any
+ *  provider is configured, and that is an empty catalog ("no model yet"), not a broken file
+ *  (console audit P1-3). */
 const ModelsJsonSchema = z.object({
-  providers: z.record(
-    z.string(),
-    z
-      .object({
-        models: z.array(z.object({ id: z.string().min(1) }).passthrough()),
-      })
-      .passthrough(),
-  ),
+  providers: z
+    .record(
+      z.string(),
+      z
+        .object({
+          models: z.array(z.object({ id: z.string().min(1) }).passthrough()),
+        })
+        .passthrough(),
+    )
+    .default({}),
 });
 
 /**

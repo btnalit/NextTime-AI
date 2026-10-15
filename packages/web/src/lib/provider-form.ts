@@ -169,7 +169,7 @@ export function providerIdFromUrl(url: string): string {
 }
 
 export function providerIdProblem(id: string, t: Translate): string | null {
-  if (id.length === 0) return t('需要一个 id', 'An id is required');
+  if (id.length === 0) return t('需要一个 ID', 'An id is required');
   if (RESERVED_PROVIDER_IDS.has(id)) {
     return t(`「${id}」是代理自身路由的保留名，换一个`, `"${id}" is reserved by the proxy`);
   }
@@ -388,7 +388,7 @@ export function explainUpstreamError(
   }
   if (status === 404) {
     return t(
-      '上游返回 404：多半是模型 id 拼错，或 Base URL 不对（应为不带 /v1 的源站）。',
+      '上游返回 404：多半是模型 ID 拼错，或 Base URL 不对（应为不带 /v1 的源站）。',
       'The upstream answered 404 — usually a misspelt model id or a wrong Base URL (the origin, without /v1).',
     );
   }

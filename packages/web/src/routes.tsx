@@ -1,13 +1,16 @@
+import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { lazy, useCallback, useEffect, useState } from 'react';
 import { AccountPage } from './components/AccountPage.js';
 import { RouteBoundary } from './components/RouteBoundary.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { EmptyState } from './components/ui/EmptyState.js';
 import { useToast } from './components/ui/Toast.js';
+import { RouteAccessProvider, useCanOpen } from './hooks/useCanOpen.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
 import { errorToastText } from './lib/errors.js';
 import { type Translate, useT } from './lib/i18n.js';
+import { roleMayOpen } from './lib/route-access.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import type { Session } from './session/types.js';
 import type { WorkspaceSwitchFailure } from './session/useSessionMachine.js';
@@ -206,9 +209,12 @@ export function Routed({
 }: RoutedProps) {
   const t = useT();
   const active = sectionOf(route);
-  usePushToasts(session.ws, active);
+  usePushToasts(session.ws, active, session.http);
   useWorkspaceSwitchFailureToast(workspaceSwitchFailure ?? null, session.generation, t);
-  const openApproval = (id: string) => navigate(hrefs.approval(id));
+  // #541 review N2: an entry into an approval is only offered to a reader who can open one.
+  const canOpen = useCanOpen(session.http);
+  const openApproval =
+    canOpen(hrefs.approvals()) !== false ? (id: string) => navigate(hrefs.approval(id)) : undefined;
   const openTask = (id: string) => navigate(hrefs.task(id));
 
   // A stray `#/login` while already signed in (a leftover tab, a manually-typed hash) has nowhere
@@ -368,9 +374,14 @@ export function Routed({
           currentUserId={session.user?.id}
           onMembershipsChanged={onMembershipsChanged}
           onOpenWorkspaceConfig={(workspaceId) => {
-            // Already in it (the switcher would no-op) — just go to the owner pages.
-            if (workspaceId === session.selectedWorkspaceId) navigate(hrefs.members());
-            else onSwitchWorkspace(workspaceId, hrefs.members());
+            // The governance page the admin's role there opens (#541 review N2: the members page
+            // only for a role that reads it, by the route table) — already in it (the switcher
+            // would no-op), just go there.
+            const destination = workspaceConfigHref(
+              session.memberships?.find((m) => m.workspaceId === workspaceId)?.role,
+            );
+            if (workspaceId === session.selectedWorkspaceId) navigate(destination);
+            else onSwitchWorkspace(workspaceId, destination);
           }}
         />,
         t,
@@ -426,7 +437,12 @@ export function Routed({
       platformRole={session.user?.platformRole}
       user={session.user}
     >
-      <RouteBoundary key={route.kind}>{page}</RouteBoundary>
+      <RouteAccessProvider
+        http={session.http}
+        platformAdmin={session.user?.platformRole === 'admin'}
+      >
+        <RouteBoundary key={route.kind}>{page}</RouteBoundary>
+      </RouteAccessProvider>
     </AppShell>
   );
 }
@@ -474,4 +490,14 @@ function requireAdmin(session: Session, page: JSX.Element, t: Translate): JSX.El
       />
     </div>
   );
+}
+
+/** Where "configure this workspace" lands for the admin's role in it: 成员与授权 when that role
+ *  may open it (`lib/route-access`), else 系统与授权 (every member opens it). */
+function workspaceConfigHref(role: string | undefined): string {
+  return role !== undefined &&
+    (ROLE_VALUES as readonly string[]).includes(role) &&
+    roleMayOpen(role as Role, hrefs.members())
+    ? hrefs.members()
+    : hrefs.systems();
 }

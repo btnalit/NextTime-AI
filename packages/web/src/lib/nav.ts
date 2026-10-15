@@ -11,6 +11,8 @@ export interface NavItem {
    *  (`scripts/guards/legacy-ui-importers.json` only shrinks, S8 §5e risk ①). Sidebar.tsx, already
    *  on that allowlist, casts back to `IconName` at the one place it renders `<Icon>`. */
   readonly icon: string;
+  /** What the page needs is the route's own declaration (`lib/route-access`), not the item's: the
+   *  sidebar hides an item whose route the reader's role cannot open. */
   readonly href: string;
 }
 
@@ -62,6 +64,8 @@ export const WORK_NAV: readonly NavItem[] = [
     sub: 'Approvals',
     icon: 'approvals',
     href: hrefs.approvals(),
+    // Only an operator or the owner reads the queue: for every other role the page could only
+    // say "not you" (#541 acceptance P2 — a dead end for the read-only auditor first of all).
   },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
   // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
@@ -80,7 +84,13 @@ export const WORK_NAV: readonly NavItem[] = [
  *  apiKey session always has one implicitly; a cookie session needs `selectedWorkspaceId`, since a
  *  platform admin with zero memberships has nothing here to configure). */
 export const GOVERN_NAV: readonly NavItem[] = [
-  { section: 'members', label: '成员与授权', sub: 'Members', icon: 'users', href: hrefs.members() },
+  {
+    section: 'members',
+    label: '成员与授权',
+    sub: 'Members',
+    icon: 'users',
+    href: hrefs.members(),
+  },
   // Console redesign P2 (docs/console-redesign-plan-2026-09-25.md §4): 访问's per-member grant
   // half merged into this page (`components/systems/SystemsPage.tsx`) — no separate 访问 nav item
   // any more; `#/govern/access` still works (`lib/router.ts`'s `sectionOf`) for old links/bookmarks.
@@ -93,7 +103,13 @@ export const GOVERN_NAV: readonly NavItem[] = [
   },
   { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'inbox', href: hrefs.catalog() },
   { section: 'models', label: '模型与配额', sub: 'Models', icon: 'sparkle', href: hrefs.models() },
-  { section: 'audit', label: '审计', sub: 'Audit', icon: 'clock', href: hrefs.audit() },
+  {
+    section: 'audit',
+    label: '审计',
+    sub: 'Audit',
+    icon: 'clock',
+    href: hrefs.audit(),
+  },
 ];
 
 /** 平台 Platform (S6-A0 §5.9) — platform-admin only (`platformRole === 'admin'`), independent of

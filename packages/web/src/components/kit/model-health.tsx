@@ -3,6 +3,7 @@ import { useT } from '../../lib/i18n.js';
 import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from './notice.js';
+import { RouteLink } from './route-link.js';
 
 /** A model row as the pickers hold it: `list_models` / `list_platform_models` items. */
 export interface HealthAwareModel {
@@ -80,9 +81,9 @@ function NextStep({
           ? t('去模型与供应商检查', 'Check Models & providers')
           : t('去模型与供应商修复', 'Fix it in Models & providers');
     return (
-      <a href={href} className="link-inline" data-testid={`${testId}-fix`}>
+      <RouteLink href={href} className="link-inline" testId={`${testId}-fix`}>
         {label}
-      </a>
+      </RouteLink>
     );
   }
   return (

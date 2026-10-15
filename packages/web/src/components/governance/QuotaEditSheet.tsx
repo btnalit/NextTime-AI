@@ -112,6 +112,15 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
   }
 
   const label = t(info.zh, info.en);
+  // Audit P1-9: a disabled 保存 says what it still waits for, next to the button (the field's own
+  // error says why the value is wrong; this line names the gap in the label's words).
+  const missing = valueValid
+    ? []
+    : [
+        cleaned === ''
+          ? t(`填写${label}`, `enter a value for ${label}`)
+          : t(`改正${label}`, `fix the value for ${label}`),
+      ];
 
   return (
     <Sheet open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
@@ -203,6 +212,11 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('取消', 'Cancel')}
           </Button>
+          {missing.length > 0 && !submitting ? (
+            <span className="text-small text-3" data-testid="quota-edit-missing">
+              {t(`还差：${missing.join('、')}`, `Still needed: ${missing.join(', ')}`)}
+            </span>
+          ) : null}
         </SheetFooter>
       </SheetContent>
     </Sheet>

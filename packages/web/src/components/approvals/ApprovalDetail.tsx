@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { isDecidable } from '../../lib/action-card.js';
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
@@ -11,6 +12,7 @@ import {
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { actorRuntimeLabel, policyDecisionLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -118,6 +120,8 @@ export function ApprovalDetail({
   const suspectedSecretPaths = row.suspectedSecretPaths ?? credentialReviewPaths(error);
   const reviewed = suspectedSecretValues > 0 && credentialsReviewed;
   const approveBlocked = suspectedSecretValues > 0 && !credentialsReviewed;
+  // #541 review N2: an operator works this page but cannot read the audit log.
+  const canOpen = useCanOpen();
   const provenance = auditHref({
     actionRequestId: row.id,
     ...(row.approvalDecisionId ? { nodeId: row.approvalDecisionId } : {}),
@@ -238,8 +242,8 @@ export function ApprovalDetail({
       key: 'policy',
       label: t('策略', 'Policy'),
       value: (
-        <span className="mono" data-testid="approval-policy">
-          {row.policyDecision}
+        <span data-testid="approval-policy" title={row.policyDecision}>
+          {policyDecisionLabel(row.policyDecision, t)}
         </span>
       ),
     });
@@ -285,23 +289,27 @@ export function ApprovalDetail({
             size="s"
             testId="approval-status"
           />
-          <RefChip kind="actionRequest" id={row.id} name={null} size="s" />
+          {/* Audit P1-13: this request's own reference, named as such — `name={null}` read as
+           *  「未知 / 已删除」 about the very request on screen. */}
+          <RefChip kind="actionRequest" id={row.id} name={t('本请求', 'This request')} size="s" />
         </div>
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
           <h2 className="approval-detail-title">
             {humanizeKind(row.actionKindTag)}
             {scopeLabel ? <span className="mono text-2"> · {scopeLabel}</span> : null}
           </h2>
-          <Button variant="secondary" size="s" asChild>
-            <a href={provenance} data-testid="approval-provenance-link">
-              {t('查看溯源', 'View provenance')}
-            </a>
-          </Button>
+          {canOpen(provenance) !== false ? (
+            <Button variant="secondary" size="s" asChild>
+              <a href={provenance} data-testid="approval-provenance-link">
+                {t('查看溯源', 'View provenance')}
+              </a>
+            </Button>
+          ) : null}
         </div>
         <div className="row-wrap text-3">
           <span>{t('由', 'Proposed by')}</span>
           {row.actorRuntime ? (
-            <span className="tag">{row.actorRuntime}</span>
+            <span className="tag">{actorRuntimeLabel(row.actorRuntime, t)}</span>
           ) : (
             <span>{t('未知来源', 'an unknown source')}</span>
           )}

@@ -4,6 +4,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
 import { isReadAuditAction } from '../../lib/audit.js';
+import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import {
@@ -149,7 +150,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             hint={
               usersRefused
                 ? t(
-                    '无权读取用户目录，请粘贴用户 id。',
+                    '无权读取用户目录，请粘贴用户 ID。',
                     'The user directory is not readable — paste a user id.',
                   )
                 : undefined
@@ -159,7 +160,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
               id="platform-audit-actor"
               value={actorUserIdInput}
               onChange={(event) => setActorUserIdInput(event.target.value)}
-              placeholder={t('粘贴用户 id', 'Paste a user id')}
+              placeholder={t('粘贴用户 ID', 'Paste a user id')}
               mono
               data-testid="platform-audit-actor-input"
             />
@@ -310,7 +311,8 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                 <div className="data-row-main">
                   <div className="data-row-title">
                     <span className="mono text-small">{formatDateTime(row.createdAt)}</span> —{' '}
-                    {row.action}
+                    {actionLabel(row.action, t)}{' '}
+                    <span className="mono text-3 text-small">{row.action}</span>
                   </div>
                   <div className="data-row-meta">
                     {(row.actorUserId ? userName(row.actorUserId) : undefined) ??

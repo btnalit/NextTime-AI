@@ -102,7 +102,7 @@ describe('UserMembershipsPanel', () => {
       'Beta',
       'Gamma',
     ]);
-    expect(screen.queryByLabelText(/工作区 id/)).toBeNull();
+    expect(screen.queryByLabelText(/工作区 ID/)).toBeNull();
 
     const add = screen.getByRole('button', { name: '加入' });
     expect(add.hasAttribute('disabled')).toBe(true);

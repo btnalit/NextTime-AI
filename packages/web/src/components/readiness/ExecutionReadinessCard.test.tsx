@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { ExecutionReadinessCard } from './ExecutionReadinessCard.js';
+import { announceReadinessChange } from './useExecutionReadiness.js';
 
 afterEach(cleanup);
 
@@ -69,7 +70,9 @@ describe('ExecutionReadinessCard', () => {
     });
     render(<ExecutionReadinessCard http={http} />);
     await screen.findByTestId('execution-readiness-body');
-    expect(http.calls).toEqual([{ name: 'execution_readiness', params: {} }]);
+    expect(http.calls.filter((call) => call.name === 'execution_readiness')).toEqual([
+      { name: 'execution_readiness', params: {} },
+    ]);
   });
 
   it('no systems at all: one line pointing at 系统接入, no chips, no toggle', async () => {
@@ -238,6 +241,78 @@ describe('ExecutionReadinessCard', () => {
     expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/catalog/workers');
   });
 
+  // Audit P1-5: a fix is a link only for a role that can make it; anyone else is told who to ask.
+  it('a member is told who to ask instead of being sent to a page they cannot act on', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        caller: { id: 'p-1', role: 'member', displayName: 'Mia', kind: 'human' },
+      }),
+      execution_readiness: () =>
+        readiness({
+          ready: false,
+          gates: [gate({ gateId: 'g-1', name: 'CRM' })],
+          missing: [{ code: 'no_published_worker' }, { code: 'no_grant' }],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId('execution-readiness-ask').map((node) => node.textContent),
+      ).toEqual([
+        '这一步要构建者或工作区所有者来做，请联系他们。',
+        '这一步要工作区所有者来做，请联系他们。',
+      ]),
+    );
+    const missing = screen.getByTestId('execution-readiness-missing');
+    expect(missing.querySelector('a')).toBeNull();
+    // Audit P1-4: reads need no grant — the no-grant line says it is about writes.
+    expect(missing.textContent).toContain('写操作授权（只读操作不需要授权');
+  });
+
+  it('an owner gets the fix link, except to the page the card is already on', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        caller: { id: 'p-1', role: 'owner', displayName: 'Olu', kind: 'human' },
+      }),
+      execution_readiness: () =>
+        readiness({
+          ready: false,
+          gates: [gate({ gateId: 'g-1', name: 'CRM' })],
+          missing: [{ code: 'no_published_worker' }, { code: 'no_grant' }],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} currentHref="#/govern/catalog/workers" />);
+    await waitFor(() =>
+      expect(
+        [...screen.getByTestId('execution-readiness-missing').querySelectorAll('a')].map((a) =>
+          a.getAttribute('href'),
+        ),
+      ).toEqual(['#/govern/access']),
+    );
+    expect(screen.queryByTestId('execution-readiness-ask')).toBeNull();
+  });
+
+  it('re-reads when a page announces a change (a Worker published under the card)', async () => {
+    let published = false;
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          ready: published,
+          gates: [gate({ gateId: 'g-1', name: 'CRM' })],
+          missing: published ? [] : [{ code: 'no_published_worker' }],
+        }),
+    });
+    render(<ExecutionReadinessCard http={http} />);
+    await screen.findByTestId('execution-readiness-missing');
+    published = true;
+    announceReadinessChange(http);
+    expect(await screen.findByTestId('execution-readiness-ready')).toBeTruthy();
+  });
+
   it('surfaces a load error with retry', async () => {
     let attempt = 0;
     const http = scriptedHttp({
@@ -251,5 +326,18 @@ describe('ExecutionReadinessCard', () => {
     await screen.findByTestId('execution-readiness-error');
     screen.getByRole('button', { name: /retry|重试/i }).click();
     await waitFor(() => expect(screen.getByTestId('execution-readiness-body')).toBeTruthy());
+  });
+});
+
+describe('ExecutionReadinessCard — by role (#541 acceptance must-fix 2)', () => {
+  it('an auditor, who may not read readiness, gets no card and no request', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-a', role: 'auditor' } }),
+      get_agent_policy: () => ({ memberCanEditProfile: true }),
+    });
+    const { container } = render(<ExecutionReadinessCard http={http} />);
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await waitFor(() => expect(container.innerHTML).toBe(''));
+    expect(http.calls.some((c) => c.name === 'execution_readiness')).toBe(false);
   });
 });

@@ -13,11 +13,13 @@ export function ProcedureEditorHost({
   copyOf,
   onProposed,
   onDone,
+  onPublished,
 }: {
   readonly http: CapabilityCaller;
   readonly copyOf?: ProcedureRow;
   readonly onProposed: () => void;
   readonly onDone: () => void;
+  readonly onPublished?: () => void;
 }) {
   // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
   // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
@@ -40,6 +42,7 @@ export function ProcedureEditorHost({
       }
       onProposed={onProposed}
       onDone={onDone}
+      onPublished={onPublished}
     />
   );
 }

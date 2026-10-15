@@ -6,6 +6,8 @@ import {
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import { type EgressDenyNormalization, normalizeEgressDenyText } from '../../lib/catalog-input.js';
 import {
   capabilityModeLabel,
@@ -65,6 +67,8 @@ export interface WorkerDefinitionEditorProps {
   readonly skills?: readonly SkillRow[];
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
+  /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
+  readonly onPublished?: () => void;
 }
 
 type View = 'form' | 'json';
@@ -181,7 +185,9 @@ function CapabilityPickerField({
   const extraRows = selected
     .filter((name) => !known.has(name))
     .map((name) => ({ name, mode: '__unlisted__' }));
-  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter);
+  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter, (name) =>
+    actionLabel(name, t),
+  );
   const filtering = filter.trim() !== '';
 
   function setGroup(names: readonly string[], on: boolean): void {
@@ -282,7 +288,12 @@ function CapabilityPickerField({
                           onChange={() => setGroup([row.name], !selected.includes(row.name))}
                           disabled={disabled}
                         />
-                        <span className="mono">{row.name}</span>
+                        {/* Audit P1-8: what it does first, the registry name as the secondary
+                         *  text a builder recognizes from docs and errors. */}
+                        <span title={actionHint(row.name, t) ?? undefined}>
+                          {actionLabel(row.name, t)}{' '}
+                          <span className="mono text-3 text-small">{row.name}</span>
+                        </span>
                       </label>
                     ))
                   : null}
@@ -333,9 +344,11 @@ export function WorkerDefinitionEditor({
   skills,
   onProposed,
   onDone,
+  onPublished,
 }: WorkerDefinitionEditorProps) {
   const t = useT();
   const permissions = usePermissions();
+  const can = useRoleCan(http);
   const [form, setForm] = useState<WorkerDefinitionForm>(() =>
     newVersionOf
       ? workerDefinitionFormFromWire(
@@ -389,7 +402,7 @@ export function WorkerDefinitionEditor({
     if (busy) return;
     const normalizedForm = normalizeEgressDeny(form);
     if (normalizedForm !== form) setForm(normalizedForm);
-    const validated = validateWorkerDefinition(normalizedForm);
+    const validated = validateWorkerDefinition(normalizedForm, t);
     if (!validated.ok) {
       setErrors(validated.errors);
       setView('form');
@@ -421,7 +434,7 @@ export function WorkerDefinitionEditor({
         draft={proposed}
         detailHref={hrefs.catalog('workers', `${proposed.id}@${proposed.version}`)}
         onPublish={
-          permissions.isDenied('publish_worker_definition')
+          can('publish_worker_definition') === false
             ? undefined
             : (review) =>
                 http.call<{ status: string }>('publish_worker_definition', {
@@ -431,6 +444,7 @@ export function WorkerDefinitionEditor({
                 })
         }
         onDone={onDone}
+        onPublished={onPublished}
         unpublishedConsequence={t(
           '不发布的话，这份草稿只会留在 Worker 目录的「我的草稿」里，工作区其他成员都看不到、也无法委派给它，且 30 天未更新会被自动清理（也可以随时手动丢弃）——确认无误就现在点击「发布」。',
           'Left unpublished, this draft only sits under “My drafts” on the Workers tab — no one ' +
@@ -520,10 +534,7 @@ export function WorkerDefinitionEditor({
 
       {view === 'json' ? (
         <JsonEditor
-          label={t(
-            'definition（propose_worker_definition 的 definition 字段）',
-            'The definition record',
-          )}
+          label={t('Worker 定义（JSON）', 'Worker definition (JSON)')}
           value={content}
           onApply={applyJson}
           disabled={busy}
@@ -766,6 +777,16 @@ export function WorkerDefinitionEditor({
                   'No systems registered in this workspace yet.',
                 )}
               />
+              {/* Audit P1-7: an empty gate list is legal but almost never meant — say what it
+               *  means before the draft is proposed, not after the Worker fails to reach anything. */}
+              {(gatekeepers ?? []).length > 0 && splitList(form.gates).length === 0 ? (
+                <Notice tone="warn" testId="wd-gates-none-warning">
+                  {t(
+                    '没有勾选门：这个 Worker 碰不到任何系统，委派给它的任务只能做不需要系统的事。',
+                    'No gate ticked: this Worker reaches no system, so delegated tasks can only do work that needs none.',
+                  )}
+                </Notice>
+              ) : null}
               <CheckboxListField
                 legend={t('使用的 Skill', 'skills')}
                 hint={t(

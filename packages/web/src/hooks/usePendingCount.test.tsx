@@ -16,12 +16,14 @@ function deferredCaller(): CapabilityCaller & {
   const waiting: ((value: unknown) => void)[] = [];
   const caller = {
     calls: 0,
-    call: vi.fn(
-      () =>
-        new Promise((resolve) => {
-          caller.calls += 1;
-          waiting.push(resolve);
-        }),
+    call: vi.fn((name: string) =>
+      // The reader's role (`useRoleCan`) stays unread here: the count is read as before.
+      name === 'get_workspace'
+        ? Promise.reject(new Error('not scripted'))
+        : new Promise((resolve) => {
+            caller.calls += 1;
+            waiting.push(resolve);
+          }),
     ) as CapabilityCaller['call'],
     answer: (count: number) => {
       const resolve = waiting.shift();
