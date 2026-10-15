@@ -1079,6 +1079,17 @@ SQL 列出的自连门清单就是要逐个确认的范围。
   备份里。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
 - 要逐行读 `audit_records` 等表，表大时会拉长窗口。
+- 只计数的类别在报告里每类最多列 20 个行 id（超出时以 `,…` 结尾），dry run 也一样；超过 20 条时按预检 SQL 把对应的 `count(*)` 改成
+  `select id`（只读，同样包在只读事务里）列出全部。
+
+**清洗没跑成时补跑**：apply 日志里是 `STEP raw-secret-scrub skipped`（`backup-now` 失败）或 `exit` 不为 0（清洗中途失败，失败之前的批次
+已提交）时，`RESULT ok` 照样会出现（遗留 252），要人看这一行。补跑前先要一次新的、成功的备份，再带 `--yes` 跑清洗；经 SSH 时两条都用
+`ssh -n`，补跑结果同样记 `docs/private/`：
+
+```sh
+docker compose run --rm -e BACKUP_NOW=1 backup </dev/null        # 确认 backups/last-success 已更新
+docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js --yes </dev/null
+```
 
 **维护窗口前**（在当前版本上跑，只读，主机执行）：用目标 tag 里的预检 SQL 估上限，再记下相关表的行数用来估耗时，结果记 `docs/private/`。
 预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag：
@@ -1092,7 +1103,8 @@ docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 
 begin transaction read only;
 select relname, n_live_tup, pg_size_pretty(pg_total_relation_size(relid)) as size
   from pg_stat_user_tables
- where relname in ('audit_records', 'activities', 'decisions', 'chat_messages', 'tasks', 'links', 'objects')
+ where relname in ('audit_records', 'activities', 'decisions', 'chat_messages', 'tasks', 'links', 'objects',
+                   'connection_requests', 'gate_instances')
  order by relname;
 rollback;
 SQL
@@ -1109,7 +1121,9 @@ SQL
 
 **回滚**（§5）：代码切回 v0.46.0 即可，core 0043 只放宽约束（§6）。回滚后：
 - 已遮蔽的行**保持遮蔽**：清洗是单向的，旧代码读到的是 `[redacted]` 文本，无害。
-- 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。恢复后再升级，清洗会再跑一遍。
+- 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。在 v0.47.0 上恢复备份之后，按上面「补跑」
+  的命令再跑一次清洗。
+- 升级前后的这两份 dump 里都有原文，保留期内按凭据材料对待，不拷离主机。
 - v0.46.0 的入口重新接受带凭据的地址（即遗留 186 本身），回滚期间不要新建带凭据的连接或门实例。
 
 ### 3.26 升级窗口总清单：v0.46.0 → v0.47.0
@@ -1124,9 +1138,9 @@ v0.47.0 收齐 #541（只改控制台渲染与两个只读查询，无主机步�
 |---|---|---|---|
 | 1 | 窗口前 | `--prefetch v0.47.0`，日志最后一行 `RESULT ok`（§3） | 主机 |
 | 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
-| 3 | 窗口内 | `--pull v0.47.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；日志里 `STEP backup-now exit=0` 在前，`STEP raw-secret-scrub exit=0` 在后 | 主机 |
+| 3 | 窗口内 | `--pull v0.47.0`，`RESULT ok` 或 `RESULT acceptance-failures=<n>`；日志里 `STEP backup-now exit=0` 在前，`STEP raw-secret-scrub exit=0` 在后；是 `skipped` 或 `exit` 不为 0 时按 §3.25「补跑」，补跑结果同样记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id，记 `docs/private/` | 主机 |
-| 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时逐条决定 | victor 决定 |
+| 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时逐条决定（超过 20 条按 §3.25 列全） | victor 决定 |
 | 6 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应是一句说明、能退回，没有死路（#541 验收盲区）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名 | **victor 手动** |
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 的回滚说明；不需要排空 Worker。

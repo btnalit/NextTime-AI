@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-15（**敏感值不再原样落库与回显（#549，9c7f8bf，core 0043，未发版；遗留 183–187、238 关闭）**：智能体写的 Turn 报告与 Decision、Task 输入的读回、工具调用结果、门输出与失败原因、Fact 与观察对象属性、Worker 检索、llm-proxy 转发的上游错误体都在边界按同一套规则遮蔽；带凭据的地址在全部写入入口拒绝；存量由 `--pull` 在备份之后的 `STEP raw-secret-scrub` 改写 3 类、计数 7 类（`release.md` §3.25）。v0.47.0（#541 + #549）即将发版，上主机按 §3.26。新遗留 247–251）。 上一版 2026-10-15（**控制台审计剩余 P1 收口（#541，6a0c1e4，无迁移，契约快照更新，未发版）**：关闭审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16；控制台请求层按角色预检、一张路由权限表决定侧栏与站内链接，旅程 08（四个非所有者角色零 403、零死链）随 web-e2e 进 CI；随 v0.47.0 上主机。2026-10-10 约 11:00Z 到 10-15 15:00Z 周用量上限，全部线程暂停。新遗留 242–246）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-10-15（**敏感值不再原样落库与回显（#549，9c7f8bf，core 0043，未发版；遗留 183–187、238 关闭）**：智能体写的 Turn 报告与 Decision、Task 输入的读回、工具调用结果、门输出与失败原因、Fact 与观察对象属性、Worker 检索、llm-proxy 转发的上游错误体都在边界按同一套规则遮蔽；带凭据的地址在全部写入入口拒绝；存量由 `--pull` 在备份之后的 `STEP raw-secret-scrub` 改写 3 类、计数 7 类（`release.md` §3.25）。v0.47.0（#541 + #549）即将发版，上主机按 §3.26。新遗留 247–252）。 上一版 2026-10-15（**控制台审计剩余 P1 收口（#541，6a0c1e4，无迁移，契约快照更新，未发版）**：关闭审计 P1-2 / 3 / 4 / 5 / 7 / 8 / 9 / 12 / 13 / 14 / 16；控制台请求层按角色预检、一张路由权限表决定侧栏与站内链接，旅程 08（四个非所有者角色零 403、零死链）随 web-e2e 进 CI；随 v0.47.0 上主机。2026-10-10 约 11:00Z 到 10-15 15:00Z 周用量上限，全部线程暂停。新遗留 242–246）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -241,11 +241,11 @@
 | 180 | 审计里的参数副本脱敏不全（审查 #493 发现）：`dispatch.ts` 写 AuditRecord 前的 `redactSecrets` 只按值模式匹配，没有用 #526 共享的字段名规则（`namesASecretField`），名字是密钥名、值不像密钥的参数会原样入审计；人通道（控制台）的参数完全不脱敏，人粘贴的密码原样进审计。与遗留 175 同一个内核 PR | P1 | 下一版 | **已关闭（#532，40b6c9e，未发版）**：审计参数副本在 Handle、人、平台三个通道都用 #526 的规则（字段名规则 + 值模式）；approve / reject reason、`chat.rename`、`connection.request_cancelled` 审计行里 `params` 以外的调用方字段同规则 |
 | 181 | 第三方镜像钉 digest 后不再自动拿到安全补丁（#531 起；`pgvector:pg17`、`postgres:17-alpine` 的钉值已落后上游当前 tag）。不留给「按波次手动升」：每周工作流比对 `deploy/image-mirrors.json` 的钉值与上游 tag 当前 digest，叠加 Trivy 结果，有差异就开 PR 改清单（同仓 PR 触发 `image-mirror` 先复制，再改引用，守卫校验引用与清单一致），走正常审查与合并。不改 Dependabot / Renovate 决定（2026-09-25、2026-10-02） | P1 | 下一波 | 开放（#531 审查记录） |
 | 182 | 镜像守卫的两处缺口：`uses: docker://…` 形式的 action 镜像不在扫描范围；runbook 里人工执行的命令（如 `host-gatekeepers.md` 的 `docker run … alpine sleep 1d`）不扫 | P2 | 下一波 | 开放（#531 审查记录） |
-| 183 | agent 文本的 `record_decision` summary、`report_turn` summary / decisions 原样存储，与 assistant 回复的值模式脱敏不一致（#532 审查 B）。照搬 assistant 回复的做法 | P1 | 下一批 | 关闭（#549，9c7f8bf） |
-| 184 | `tasks.input`（`invoke_worker` 的 input）原样存储，没有计数和展示遮蔽；agent 写、喂给另一个 agent（#532 审查 C）。先做计数和显示遮蔽，不改写 input | P1 | 下一批 | 关闭（#549，9c7f8bf） |
-| 185 | tool_call 记录的 result 预览只做值模式：能力结果回显参数时，args 里被遮蔽的字段会在 result 里重现，破坏 #526「隐藏 == 计数 == 遮蔽」（#532 审查 D） | P1 | 下一批 | 关闭（#549，9c7f8bf） |
-| 186 | `create_connection` / `request_connection` 的 endpoint 与 target 不拒绝 URL userinfo 或查询串里的凭据，会落进内核 DB（#532 审查 G）。可复用 llm-proxy Base URL 的 userinfo 校验 | P1 | 下一批 | 关闭（#549，9c7f8bf） |
-| 187 | 门输出进审计的副本（`action_request.complete` 的 `resultMetadata`）原样存储，门返回签发的凭据时会落进审计（#532 审查 H1）。套用 #532 的审计副本规则 | P1 | 下一批 | 关闭（#549，9c7f8bf） |
+| 183 | agent 文本的 `record_decision` summary、`report_turn` summary / decisions 原样存储，与 assistant 回复的值模式脱敏不一致（#532 审查 B）。照搬 assistant 回复的做法 | P1 | 下一批 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0） |
+| 184 | `tasks.input`（`invoke_worker` 的 input）原样存储，没有计数和展示遮蔽；agent 写、喂给另一个 agent（#532 审查 C）。先做计数和显示遮蔽，不改写 input | P1 | 下一批 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0） |
+| 185 | tool_call 记录的 result 预览只做值模式：能力结果回显参数时，args 里被遮蔽的字段会在 result 里重现，破坏 #526「隐藏 == 计数 == 遮蔽」（#532 审查 D） | P1 | 下一批 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0） |
+| 186 | `create_connection` / `request_connection` 的 endpoint 与 target 不拒绝 URL userinfo 或查询串里的凭据，会落进内核 DB（#532 审查 G）。可复用 llm-proxy Base URL 的 userinfo 校验 | P1 | 下一批 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0） |
+| 187 | 门输出进审计的副本（`action_request.complete` 的 `resultMetadata`）原样存储，门返回签发的凭据时会落进审计（#532 审查 H1）。套用 #532 的审计副本规则 | P1 | 下一批 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0） |
 | 188 | 内核 `publishOperation`（`publish_operation`、`publish_manifest`、`enable_gate_instance`、CLI 的共同入口）对声明了门拥有的 header / query 参数的手写 Operation 做标记或拒绝；门侧已在请求时拒绝，这条补治理可见性（#532 审查 J） | P1 | 下一批（与 189 同一 PR，#532 作者线程） | 已关闭（#538：`publish_operation` 返回 400 `gate_owned_params`，批量入口跳过并报告） |
 | 189 | 门的 host 在 build 时自己 `importOpenApi(fetch(manifestSource))`，R-18「管理员确认后才生效」只约束内核副本：已发布 Operation 名下的新参数或新路径会在门下次 build 时直接生效，execute 类会出现「批的是 X，跑的是 Y」（#532 审查 K，审查第三轮已证实） | P1 | 下一批（与 188 同一 PR；v0.45.0 不等） | 已关闭（#538：调用带 `operationDigest`，门失配即 409；自连门的同步路径另列 214） |
 | 190 | person 写的理由原样存进领域记录（`decisions.rationale.reason`、`conflicts.resolution`、`facts.invalidation_reason`），控制台审批历史的 `decisionReason` 显示原文（#532 审查 A）。在显示层遮蔽，不改写记录 | P2 | 下一波 | 开放（#532 记录） |
@@ -296,7 +296,7 @@
 | 235 | #541 的控制台角色门控守卫测试用正则匹配，只认直接的 `call(...)` / `can(...)` 写法：嵌套泛型（如 `call<Page<T>>('…')`）、用变量名调用的会漏掉，注释里出现 `can('x')` 会被误判为「已门控」；改成基于 AST（TS 编译器 API 或 ESLint 规则）。目前没有漏判实例（审查 #501 第四轮 N3） | P2 | 控制台易用性整改，下一个控制台 PR | 开放（#541 审查记录） |
 | 236 | Caddy JSON 访问日志可能记录 `X-API-Key` 原文：`format json` 输出的 `request.headers` 默认只遮 Authorization / Cookie / Set-Cookie（依据 Caddy 文档，未在主机实测），`deploy/caddy/Caddyfile` 旁注「只有 method/path/status」有误；docker 门的 `container.logs_tail` 能读平台服务容器（含 caddy）日志，owner 的长期 key 可能经智能体到达模型供应商。修法：`format filter` 去掉 `request>headers>X-Api-Key`（或整个 headers）并改正注释；需要主机应用（#549 安全审查 C 项）。2026-10-15 统筹核实（项目共享目录 `security/c1-caddy-log-headers.md`）：JSON 访问日志记全部请求头与完整 URI，`X-Api-Key` 不在默认遮蔽名单（据源码推断，未在 2.10 上实测）；Explorer 与 `accept_s3.sh` 经 caddy 发 `X-API-Key`。计划修法：`format filter` 删掉整个 `request>headers`（失败即关闭）、`request>uri` 加 query 过滤，`e2e.yml` 与 `staging-rehearsal.sh` 加合成值 grep 断言；同一个 PR 带上审查 #501 对 #549 增量审查的非阻塞建议 1：llm-proxy 改写非 2xx 错误体时删掉上游的 `content-encoding`（undici 已解压，继续转发会出现「明文 JSON 却标着 gzip」，SDK 解码失败）。需要主机应用；主机上已有的 caddy 日志（可能含 owner key）是否清理属破坏性主机操作，由维护者决定。#549 作者在 #549 合入后从 main 新开分支做；赶不上 v0.47.0 就进下一版 | P1 | #549 之后由作者单独开小 PR | 开放（#549 审查记录） |
 | 237 | Worker observe 的输出原样写进 `observations.content`（`request-action-handler` → `gate-observation` → `sources`），execute 分支用的是遮蔽副本，两边不一致；目前没有 API 读这一列，但每次 dump 都会带上（#549 安全审查 C 项） | P2 | 下一批 | 开放（#549 审查记录） |
-| 238 | 门 apply 的 `observedFacts` 写图不遮蔽（Operation 的 result_mapping 映射到秘密字段时）；若 #549 的 B2 在图写入收口处（`assertFact` / `upsertObject`）修，这条一并关闭（#549 安全审查 C 项） | P2 | 随 #549 核对 | 关闭（#549，9c7f8bf：B2 在图写入收口 `SqlGraphStore.upsertObject` / `assertFact` / `supersedeFact` 修复，有集成测试） |
+| 238 | 门 apply 的 `observedFacts` 写图不遮蔽（Operation 的 result_mapping 映射到秘密字段时）；若 #549 的 B2 在图写入收口处（`assertFact` / `upsertObject`）修，这条一并关闭（#549 安全审查 C 项） | P2 | 随 #549 核对 | 关闭（#549，9c7f8bf，未发版，随 v0.47.0：B2 在图写入收口 `SqlGraphStore.upsertObject` / `assertFact` / `supersedeFact` 修复，有集成测试） |
 | 239 | 门的幂等存储用默认权限，里面是原始 apply data 与失败信息；`host-env-init.sh` 只收紧了 `gate-host/`，其他门目录没收紧；scrub CLI 不碰门数据卷（扩大原 N8）；修复前写入幂等存储的 ssh 整行失败信息重试时会原样回放（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
 | 240 | 主机上 pi 会话转录是原文，entry 会话没有保留期限，并进每日备份（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
 | 241 | 内核 Fastify 没有自定义 `setErrorHandler`：4xx 时把 JSON 解析错误的 message 记进日志，V8 的错误信息会引用一段输入；与 236 叠加有放大效应（推断）（#549 安全审查 C 项） | P3 | 下一批 | 开放（#549 审查记录） |
@@ -310,6 +310,7 @@
 | 249 | #549 审查 (3) 的次要项：`tasks` 的幂等键是未加盐的 sha256(input)（可对已知候选做离线比对）；`tasks.result` 只过值模式、不按秘密字段名遮蔽 | P3 | 下一批 | 开放（#549 审查记录） |
 | 250 | 审查 #501 对 #549 增量审查的余量：图对象的 `identity` 不遮蔽（它是去重键）；Task input 是字符串时，`toSearchQuery` 的 200 字截断点落在带引号的值里，值的前缀仍可能进审计；llm-proxy 错误 message 里 24 个字符以上的模型名、路径会被打成 `***`，可把 `param`、`model` 加进保留键 | P3 | 下一批 | 开放（#549 审查记录） |
 | 251 | #549 验收后续：申请表单的副标题仍写英文 owner（全站叫「工作区所有者」，与 242 ① 同类）；启用一个存量地址已带凭据的平台门实例只做了代码核对（应返回字段级说明、不建链接），v0.47.0 上主机后核对（`release.md` §3.26） | P3 | 控制台下一批；主机核对随 v0.47.0 | 开放（#549 验收记录） |
+| 252 | `apply-release.sh` 在 `STEP raw-secret-scrub` 被跳过（`backup-now` 失败）或失败时仍以 `RESULT ok` 结束：应给出非 ok 的结果（如 `RESULT degraded`）并写明要补跑什么；同批处理清洗报告每类最多列 20 个行 id 的上限（`MAX_EXAMPLES`），超出时拿不到完整清单。现在靠 `release.md` §3.25「补跑」与人看日志（审查 #484 对 #555） | P2 | 随 236（C1）的 PR，#549 作者 | 开放（#555 审查记录） |
 
 ## 5. 更新规则
 
