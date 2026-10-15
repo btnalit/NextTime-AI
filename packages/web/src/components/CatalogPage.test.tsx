@@ -307,6 +307,75 @@ describe('CatalogPage', () => {
     expect(screen.queryByTestId('operation-revision-diff')).toBeNull();
   });
 
+  it('console G4 (legacy 219): a draft held back for a gate-owned param says why before anyone clicks Publish, and offers the rewrite on a platform gate', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.reserve',
+            status: 'draft',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-1',
+            connector: 'openapi',
+            displayName: 'Stock',
+            transportKind: 'http',
+            target: 'https://stock.example',
+            status: 'enabled',
+            trust: 'trusted',
+            health: 'healthy',
+            operationCount: 2,
+            gatekeeperId: 'gk-1',
+          },
+        ],
+      }),
+    });
+    // The same key the bulk publish's held-drafts notice links to.
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const detail = await screen.findByTestId('catalog-detail');
+    const notice = await within(detail).findByTestId('operation-gate-owned-params');
+    expect(notice.textContent).toContain('发布不了');
+    expect(notice.textContent).toContain('Authorization（请求头）');
+    // Publishing could only end in 400 gate_owned_params: no button that leads there.
+    expect(within(detail).queryByRole('button', { name: '发布' })).toBeNull();
+    const rewrite = await within(notice).findByTestId('operation-gate-owned-rewrite');
+    expect(rewrite.textContent).toBe('按门的最新清单重写');
+    expect(notice.textContent).toContain('与门公告对齐');
+  });
+
+  it('console G4: on a gate the workspace connected itself, the held draft is told to connect again — no rewrite offered', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.reserve',
+            status: 'draft',
+            gateOwnedParams: [{ param: 'access_token', location: 'query' }],
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [] }),
+    });
+    // The same key the bulk publish's held-drafts notice links to.
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('重新接入'));
+    expect(notice.textContent).not.toContain('与门公告对齐');
+    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+  });
+
   it('legacy K: a revision draft whose definition and classification match says so', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

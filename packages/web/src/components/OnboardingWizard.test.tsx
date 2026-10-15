@@ -121,6 +121,10 @@ describe('OnboardingWizard', () => {
     // Step ④ review
     const reviewTable = await screen.findByTestId('wizard-review-table');
     expect(reviewTable.textContent).toContain('accept_s2_mcp_echo');
+    expect(screen.getByTestId('wizard-publish-result-published').textContent).toContain(
+      '已发布 2 个',
+    );
+    expect(screen.queryByTestId('wizard-publish-result-held')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
     // Step ⑤ done
@@ -130,6 +134,45 @@ describe('OnboardingWizard', () => {
 
     expect(http.calls.some((c) => c.name === 'create_connection')).toBe(true);
     expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true);
+  });
+
+  it('console G4: the publish step says which drafts it held back for a gate-owned param, and that this self-connected system is connected again once the gate is fixed', async () => {
+    const http = scriptedHttp({
+      create_connection: () => ({
+        gatekeeperId: 'gk-1',
+        importedOperationNames: ['accept_s2_mcp_echo', 'accept_s2_mcp_note'],
+        connectionRequestId: null,
+      }),
+      publish_manifest: () => ({
+        gatekeeperId: 'gk-1',
+        publishedOperationNames: ['accept_s2_mcp_echo'],
+        gateOwnedParamDrafts: [
+          { name: 'accept_s2_mcp_note', params: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      search: () => [operationObject()],
+    });
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'MCP' }));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+    const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
+      target: { value: 'accept_s2_mcp' },
+    });
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
+      target: { value: 'http://accept-s2-mcp:8080' },
+    });
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
+    const publishStep = await screen.findByTestId('wizard-step-publish');
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
+
+    const held = await screen.findByTestId('wizard-publish-result-held');
+    expect(screen.getByTestId('wizard-publish-result-published').textContent).toContain(
+      '已发布 1 个',
+    );
+    expect(held.textContent).toContain('accept_s2_mcp_note：Authorization（请求头）');
+    expect(held.textContent).toContain('重新接入');
   });
 
   it('review step: "propose reclassification" proposes, shows old → new behind a confirm, and publishes only on confirm (R-19, D-17)', async () => {

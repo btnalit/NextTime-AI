@@ -260,9 +260,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '发起请求时这个 Operation 还没有发布，也没有草稿，所以批准时没有对应的定义，调用没有执行。先在能力目录发布它，再重新发起。',
     en: 'When this was requested the Operation was neither published nor drafted, so no definition was approved and nothing ran. Publish it in the catalog first, then request again.',
   },
+  // Console G4: a gate's own draft is fixed in the gate's manifest, not here — the old copy said
+  // "remove them from the parameters and publish again", which no console form can do.
   gate_owned_params: {
-    zh: '这个 Operation 的参数里声明了门自己设置的请求头、凭据类查询参数或 cookie，门每次都会拒绝，所以没有发布。从参数定义里去掉它们（门用自己配置的凭据认证）后再发布。',
-    en: 'This Operation declares parameters the gate sets itself (a header, a credential query parameter or a cookie); the gate would refuse every call, so it was not published. Remove them from the parameters (the gate authenticates with its own credential) and publish again.',
+    zh: '这个 Operation 声明了只能由门自己设置的参数（说明调用者或去向的请求头、查询参数里的凭据、cookie，或调用地址已经固定的查询参数），门每次都会拒绝，所以没有发布。要门的维护者从门的清单里去掉它们：平台提供的系统去掉后到「系统与授权」点「与门公告对齐」重写草稿再发布，工作区自己接入的系统要重新接入。',
+    en: 'This Operation declares params only the gate sets (a header saying who calls or where the call goes, a credential in the query, a cookie, or a query parameter the call address fixes); the gate would refuse every call, so it was not published. The gate’s maintainer has to drop them from the gate’s manifest: for a platform-provided system, then align it under Systems & access to rewrite the draft and publish it; a system the workspace connected itself has to be connected again.',
   },
   not_proposer: {
     zh: '只有它的提议人或工作区所有者能做这一步。',

@@ -1306,6 +1306,27 @@ export interface RefreshOperationGovernanceResult {
  * leave the workspace a draft it can never call under. A proposal of an agent or a person is
  * theirs and is left alone.
  */
+/**
+ * Whether `refresh_operation_governance` rewrites `draft` to the `announced` entry: it is the
+ * gate's own (`import`-origin) draft — an agent's or person's proposal is never overwritten — and
+ * the announcement differs from it in definition or governance fields. `preview_gate_instance_
+ * enable` reports the same judgment (`pendingDraft.rewritable`), so the console's align lists
+ * exactly the drafts this would rewrite (console G4, legacy 219).
+ */
+export function importDraftDiffersFromAnnounced(
+  draft: OperationRecord,
+  announced: Operation,
+): boolean {
+  if (draft.status !== 'draft' || draft.origin !== 'import') return false;
+  return (
+    operationDefinitionDiffers(draft, announced) ||
+    diffOperationGovernanceFields(
+      operationGovernanceFieldsOf(draft.operation),
+      operationGovernanceFieldsOf(announced),
+    ).differs
+  );
+}
+
 async function rewriteImportDraft(
   client: PoolClient,
   workspaceId: string,
@@ -1313,14 +1334,7 @@ async function rewriteImportDraft(
   draft: OperationRecord,
   announced: Operation,
 ): Promise<OperationRevisionDraft | null> {
-  if (draft.origin !== 'import') return null;
-  const differs =
-    operationDefinitionDiffers(draft, announced) ||
-    diffOperationGovernanceFields(
-      operationGovernanceFieldsOf(draft.operation),
-      operationGovernanceFieldsOf(announced),
-    ).differs;
-  if (!differs) return null;
+  if (!importDraftDiffersFromAnnounced(draft, announced)) return null;
   // Carried forward as `importManifest` does (R-08): replacing a revision keeps it a revision.
   const draftOf =
     draft.draftOf ??

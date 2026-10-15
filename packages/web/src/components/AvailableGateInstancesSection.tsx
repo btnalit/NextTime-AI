@@ -13,6 +13,7 @@ import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
+import { HeldDraftsNotice } from './connect/GateOwnedParams.js';
 // Bugfix (PR #324 review): "待启用的平台实例" was still the legacy dashed-border EmptyState —
 // `kit/empty-state` (block variant, no dashed border) instead, matching V9. The rest of this
 // file's `components/ui/*` imports are unchanged (this file stays on
@@ -20,6 +21,10 @@ import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 import { EmptyState } from './kit/empty-state.js';
 import { RouteLink } from './kit/route-link.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
+import {
+  hiddenFromWorkspaces,
+  useConnectorsByName,
+} from './platform/integrations/connector-visibility.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -167,7 +172,44 @@ export function AvailableGateInstancesSection({
           </table>
         </div>
       )}
+      {platformAdmin && rows.length > 0 ? <HiddenInstancesForAdmin http={http} /> : null}
     </div>
+  );
+}
+
+/**
+ * UX acceptance of #538 (out of scope there): the empty catalog already says when enabled
+ * instances are missing because their connector is not platform preset (`EmptyCatalogForAdmin`);
+ * a catalog that lists some instances said nothing about the others. For a platform administrator
+ * only — the one who can change it — and silent when the platform reads fail.
+ */
+function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
+  const instances = useCapabilityList<GateInstanceWire>(
+    http,
+    'list_gate_instances',
+    ALL_GATE_INSTANCES,
+  );
+  const connectors = useConnectorsByName(http);
+  const hidden =
+    instances.state.status === 'ready'
+      ? instances.state.data.items.filter((row) => hiddenFromWorkspaces(row, connectors) !== null)
+      : [];
+  if (hidden.length === 0) return null;
+  return (
+    <Notice testId="available-gates-hidden">
+      {t(
+        `平台上另有 ${hidden.length} 个已启用的门实例这里看不到：${hidden.map((row) => row.displayName).join('、')}。它们的接入包不是「平台预置」。`,
+        `${hidden.length} more enabled gate instance(s) on the platform do not show up here: ${hidden.map((row) => row.displayName).join(', ')}. Their connectors are not platform preset.`,
+      )}{' '}
+      <RouteLink
+        href={hrefs.platformIntegrations()}
+        testId="available-gates-hidden-link"
+        whenRefused="hide"
+      >
+        {t('打开平台集成', 'Open platform integrations')}
+      </RouteLink>
+    </Notice>
   );
 }
 
@@ -188,14 +230,15 @@ function AvailableGateRow({
 }) {
   const t = useT();
   const toast = useToast();
-  const [publishedCount, setPublishedCount] = useState<number | null>(null);
+  const [enabledResult, setEnabledResult] = useState<EnableGateInstanceResultWire | null>(null);
 
   // S8 W2-U1 (audit J4): `EnableGateConfirm` cannot import `components/ui/Toast` itself (S8 risk
   // ① — a new file under `components/kit`-adjacent boundaries may not reach into legacy
   // `components/ui/*`), so this already-allowlisted caller reports `linkedExisting` instead.
   function handleEnabled(result: EnableGateInstanceResultWire): void {
-    setPublishedCount(result.publishedOperationNames.length);
+    setEnabledResult(result);
     const skipped = result.skippedOperationNames.length;
+    const held = result.gateOwnedParamDrafts?.length ?? 0;
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
@@ -208,8 +251,8 @@ function AvailableGateRow({
             `Enabled in this workspace: ${row.displayName}`,
           ),
       description: t(
-        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}。`,
-        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}.`,
+        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}${held > 0 ? `，${held} 个没有发布（见下方）` : ''}。`,
+        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}${held > 0 ? `, ${held} not published (see below)` : ''}.`,
       ),
     });
     onEnabled(result);
@@ -278,10 +321,21 @@ function AvailableGateRow({
             testId={`available-gate-ask-owner-${row.gateId}`}
           />
         )}
-        {publishedCount !== null ? (
+        {enabledResult !== null ? (
           <Notice>
-            {t(`已发布 ${publishedCount} 个 Operation`, `Published ${publishedCount} operation(s)`)}
+            {t(
+              `已发布 ${enabledResult.publishedOperationNames.length} 个 Operation`,
+              `Published ${enabledResult.publishedOperationNames.length} operation(s)`,
+            )}
           </Notice>
+        ) : null}
+        {enabledResult !== null ? (
+          <HeldDraftsNotice
+            drafts={enabledResult.gateOwnedParamDrafts}
+            gatekeeperId={enabledResult.gatekeeperId}
+            fix="align"
+            testId={`available-gate-held-${row.gateId}`}
+          />
         ) : null}
       </td>
     </tr>

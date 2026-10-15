@@ -413,6 +413,149 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('console G4 (legacy 219): drafts held back for a gate-owned param', () => {
+      function withGateOwnedParams(name: string): Operation {
+        return testOperation({
+          name,
+          binding: { kind: 'http', method: 'GET', path: '/stock' },
+          params_schema: {
+            type: 'object',
+            properties: {
+              sku: { type: 'string', 'x-in': 'query' },
+              Authorization: { type: 'string', 'x-in': 'header' },
+            },
+          },
+        });
+      }
+
+      /** A workspace linked to an enabled platform instance (its own preset connector, so no
+       *  other test's connector mode is touched) holding `held` as an unpublished import draft. */
+      async function seedHeldDraft(
+        held: Operation,
+        announced: Operation,
+      ): Promise<{ gatekeeperId: string; gateId: string }> {
+        const act = await newActivity();
+        // One endpoint for both, as `enable_gate_instance` registers it — the preview finds the
+        // workspace's Gatekeeper by the instance's endpoint.
+        const endpoint = `https://gate-${randomUUID()}.example.invalid`;
+        const registered = await inTx((client) =>
+          registerGatekeeper(client, workspaceId, {
+            name: `g4-gate-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'example-system',
+            endpoint,
+            activityId: act,
+            registeredBy: { id: ownerId, kind: 'human' },
+          }),
+        );
+        await inTx((client) =>
+          importManifest(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            operations: [held],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        );
+        const gateId = `g4-instance-${randomUUID().slice(0, 8)}`;
+        await asAdmin(async (client) => {
+          await upsertAnnouncement(
+            client,
+            {
+              gateId,
+              connector: `g4-${randomUUID().slice(0, 8)}`,
+              transportKind: 'http',
+              endpoint,
+              operations: [announced],
+            },
+            'gate',
+          );
+          await client.query(`update gate_instances set status = 'enabled' where gate_id = $1`, [
+            gateId,
+          ]);
+        });
+        await inTx((client) =>
+          insertGateLink(client, {
+            workspaceId,
+            gateId,
+            gatekeeperObjectId: registered.gatekeeperId,
+            enabledBy: ownerId,
+          }),
+        );
+        return { gatekeeperId: registered.gatekeeperId, gateId };
+      }
+
+      interface PreviewRow {
+        name: string;
+        gateOwnedParams?: { param: string; location: string }[];
+        pendingDraft?: { rewritable: boolean };
+      }
+
+      it('the preview names the held params and says the held draft is not rewritable yet; the catalog row carries them', async () => {
+        const held = withGateOwnedParams(`g4.held.${randomUUID()}`);
+        const { gatekeeperId, gateId } = await seedHeldDraft(held, held);
+
+        const preview = await callAs<{ operationsToImport: PreviewRow[] }>(
+          ownerId,
+          'owner',
+          'preview_gate_instance_enable',
+          { gateId },
+        );
+        expect(preview.operationsToImport).toEqual([
+          expect.objectContaining({
+            name: held.name,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            pendingDraft: { rewritable: false },
+          }),
+        ]);
+
+        const listed = await callAs<{
+          items: { name: string; status: string; gateOwnedParams?: unknown }[];
+        }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        expect(listed.items.find((row) => row.name === held.name)).toMatchObject({
+          status: 'draft',
+          gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+        });
+      });
+
+      it('once the gate drops the param, the preview marks the held draft rewritable and align rewrites it', async () => {
+        const held = withGateOwnedParams(`g4.fixed.${randomUUID()}`);
+        const fixed: Operation = {
+          ...held,
+          params_schema: {
+            type: 'object',
+            properties: { sku: { type: 'string', 'x-in': 'query' } },
+          },
+        };
+        const { gatekeeperId, gateId } = await seedHeldDraft(held, fixed);
+
+        const preview = await callAs<{ operationsToImport: PreviewRow[]; manifestDigest: string }>(
+          ownerId,
+          'owner',
+          'preview_gate_instance_enable',
+          { gateId },
+        );
+        const row = preview.operationsToImport.find((entry) => entry.name === held.name);
+        expect(row?.pendingDraft).toEqual({ rewritable: true });
+        expect(row?.gateOwnedParams).toBeUndefined();
+
+        const result = await callAs<{
+          revisionDrafts: readonly { name: string; version: number }[];
+        }>(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          operationNames: [held.name],
+          manifestDigest: preview.manifestDigest,
+        });
+        // Rewritten at its own version: it was never published.
+        expect(result.revisionDrafts).toEqual([{ name: held.name, version: 1 }]);
+        const listed = await callAs<{
+          items: { name: string; gateOwnedParams?: unknown }[];
+        }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        expect(listed.items.find((entry) => entry.name === held.name)?.gateOwnedParams).toBe(
+          undefined,
+        );
+      });
+    });
+
     describe('update_operation_description', () => {
       /** A Gatekeeper with one gate-imported (owner-proposed) Operation, published. */
       async function seedImportedOperation(): Promise<{ gatekeeperId: string; op: Operation }> {

@@ -14,6 +14,7 @@ import {
   type OperationRecord,
   type OperationViewer,
   countOperationsByGatekeeper,
+  gateOwnedParamsOfDefinition,
   getGatekeeper,
   listGatekeepers,
   listOperations,
@@ -151,6 +152,10 @@ function toWireGatekeeperSummary(entry: GatekeeperListEntry, operationCount: num
  * legacy K: `definitionChange` beside it says what it changes in the definition the gate runs.
  */
 function toWireOperationSummary(record: OperationRecord, revision?: RevisionChange) {
+  // Legacy J (console G4, legacy 219): the judgment `publish_operation` refuses with, so the
+  // catalog says why a held draft cannot be published (and why a gate refuses an older published
+  // row's param) before anyone clicks.
+  const gateOwnedParams = gateOwnedParamsOfDefinition(record.operation);
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -175,6 +180,9 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     ...(revision !== undefined ? { governanceChange: revision.governanceChange } : {}),
     ...(revision?.definitionChange !== undefined
       ? { definitionChange: revision.definitionChange }
+      : {}),
+    ...(gateOwnedParams.length > 0
+      ? { gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })) }
       : {}),
   };
 }

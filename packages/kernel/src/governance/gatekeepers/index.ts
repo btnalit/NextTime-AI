@@ -45,6 +45,7 @@ export {
   publishImportedDrafts,
   deprecateOperation,
   updateOperationDescription,
+  importDraftDiffersFromAnnounced,
   refreshOperationGovernance,
   operationGovernanceFieldsOf,
   diffOperationGovernanceFields,

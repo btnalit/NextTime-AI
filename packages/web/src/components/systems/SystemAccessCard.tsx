@@ -1,6 +1,7 @@
 import type {
   ExecutionReadinessGateWire,
   ExecutionReadinessWire,
+  PublishManifestResultWire,
   RefreshOperationGovernanceResultWire,
   Role,
   RotateConnectionSecretResultWire,
@@ -15,6 +16,7 @@ import { hrefs } from '../../lib/router.js';
 import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
 import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
 import { DefinitionMismatchNotice } from '../connect/DefinitionDrift.js';
+import { ManifestPublishResultNotice } from '../connect/GateOwnedParams.js';
 import { RefreshOperationGovernanceConfirm } from '../connect/RefreshOperationGovernanceConfirm.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -281,6 +283,7 @@ export function SystemAccessCard({
   const [detailOpen, setDetailOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
+  const [publishResult, setPublishResult] = useState<PublishManifestResultWire | null>(null);
   // R-01 (D-01): a gate the workspace connected itself (not a catalog instance) authenticates the
   // kernel with its own connection secret; the owner can issue a new one here — also how a gate
   // connected before per-connection secrets gets its first. Shown once, in the sheet below.
@@ -291,8 +294,13 @@ export function SystemAccessCard({
   async function publish(): Promise<void> {
     setPublishing(true);
     setPublishError(null);
+    setPublishResult(null);
     try {
-      await http.call('publish_manifest', { gatekeeperId: gate.gateId });
+      setPublishResult(
+        await http.call<PublishManifestResultWire>('publish_manifest', {
+          gatekeeperId: gate.gateId,
+        }),
+      );
       announceReadinessChange(http);
       onPublished();
     } catch (err) {
@@ -441,6 +449,13 @@ export function SystemAccessCard({
         <ErrorBanner
           error={publishError}
           title={t('无法发布清单', 'Could not publish the manifest')}
+        />
+      ) : null}
+      {publishResult !== null ? (
+        <ManifestPublishResultNotice
+          result={publishResult}
+          fix={healthInfo.linked ? 'align' : 'reconnect'}
+          testId="gatekeeper-publish-result"
         />
       ) : null}
 

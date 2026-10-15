@@ -744,6 +744,18 @@ export const GateInstanceEnablePreviewOperationWireSchema = z
     /** Absent when the announced Operation itself has no description (`OperationSchema.description`
      *  is optional — see that schema's own doc comment). */
     description: z.string().optional(),
+    /** Legacy J (console G4, legacy 219): the params the announced definition declares that only
+     *  the gate sets. Present only when there are some: enabling (or a bulk publish) leaves this
+     *  Operation an unpublished draft, listed in `gateOwnedParamDrafts`, until the gate's manifest
+     *  drops them. */
+    gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** Present when this workspace already holds an unpublished draft of this Operation for the
+     *  linked Gatekeeper — e.g. one a bulk publish held back for a gate-owned param. `rewritable`
+     *  is `true` when `refresh_operation_governance` would rewrite it to the announced entry: it is
+     *  the gate's own (`import`-origin) draft and the announcement differs from it (the same
+     *  judgment, `importDraftDiffersFromAnnounced`). An agent's or person's proposal is never
+     *  rewritten. */
+    pendingDraft: z.object({ rewritable: z.boolean() }).strict().optional(),
   })
   .strict();
 export type GateInstanceEnablePreviewOperationWire = z.infer<

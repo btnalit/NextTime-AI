@@ -261,6 +261,94 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() => expect(select.value).toBe('platform_preset'));
   });
 
+  // UX acceptance of #538 (out of scope there): an enabled instance of a connector that is not a
+  // platform preset is invisible to every workspace — the connector row says how many, and the
+  // switch away from preset says they will disappear before it happens.
+  it('self-service visibility: the connector row counts enabled instances no workspace can see', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({ status: 'enabled' }),
+          gateInstance({ gateId: 'gate-2', status: 'discovered' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    const hint = await screen.findByTestId('connector-hidden-instances-docker');
+    expect(hint.textContent).toContain('1 个已启用的实例工作区看不到');
+  });
+
+  it('self-service visibility: switching a preset with enabled instances away says they will disappear from workspaces', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'platform_preset' })] }),
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({ status: 'enabled' }),
+          gateInstance({ gateId: 'gate-2', status: 'enabled' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    const table = await screen.findByTestId('connectors-table');
+    expect(screen.queryByTestId('connector-hidden-instances-docker')).toBeNull();
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'list_gate_instances')).toBe(true),
+    );
+    const select = within(table).getByTestId('connector-mode-docker') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'self_serve' } });
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    await waitFor(() =>
+      expect(confirm.textContent).toContain(
+        '这个接入包有 2 个已启用的实例，切换后它们会从各工作区',
+      ),
+    );
+  });
+
+  it('self-service visibility: the instance list flags an enabled instance no workspace can see, its drawer says why and leads to the connector', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({ status: 'enabled' }),
+          gateInstance({ gateId: 'gate-2', displayName: 'Docker staging', status: 'discovered' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    await waitFor(() =>
+      expect(within(table).getAllByTestId('gate-hidden-from-workspaces-badge')).toHaveLength(1),
+    );
+    fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
+    const detail = await screen.findByTestId('gate-instance-detail');
+    const notice = within(detail).getByTestId('gate-instance-hidden-from-workspaces');
+    expect(notice.textContent).toContain('工作区看不到这个实例。');
+    expect(notice.textContent).toContain('到「接入包」把「docker」改成「平台预置」');
+    fireEvent.click(within(notice).getByTestId('gate-instance-show-connectors'));
+    expect(await screen.findByTestId('connectors-table')).toBeTruthy();
+  });
+
+  it('self-service visibility: a cli instance is never offered the preset switch — the drawer says workspaces connect it themselves', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [connector({ name: 'cli', packaged: false, mode: 'self_serve' })],
+      }),
+      list_gate_instances: () => ({
+        items: [gateInstance({ connector: 'cli', status: 'enabled' })],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    await within(table).findByTestId('gate-hidden-from-workspaces-badge');
+    fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
+    const notice = await screen.findByTestId('gate-instance-hidden-from-workspaces');
+    expect(notice.textContent).toContain('这一类接入包不能设为「平台预置」');
+    expect(screen.queryByTestId('gate-instance-show-connectors')).toBeNull();
+  });
+
   it('P3-6 V8 (390px overflow): the connectors table scrolls inside its own box, never the page', async () => {
     const http = scriptedHttp({
       list_connectors: () => ({ items: [connector()] }),
@@ -327,7 +415,15 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
     );
-    expect(http.calls.some((call) => call.name === 'list_gate_instances')).toBe(false);
+    // The deny-list read (`list_gate_instances {connector}`) only runs with the opt-in; the tab's
+    // own unfiltered read for the hidden-instance hint is not it.
+    expect(
+      http.calls.some(
+        (call) =>
+          call.name === 'list_gate_instances' &&
+          (call.params as { connector?: string } | undefined)?.connector !== undefined,
+      ),
+    ).toBe(false);
   });
 
   it('R-41: ticking "also disable all operations" sends every announced and already-refused name with the mode, in one call', async () => {

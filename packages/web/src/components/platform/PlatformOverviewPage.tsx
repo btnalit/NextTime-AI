@@ -27,6 +27,11 @@ import { Icon, type IconName } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { UpdateReminder } from './UpdateReminder.js';
+import {
+  hiddenFromWorkspaces,
+  hiddenInstanceTitle,
+  useConnectorsByName,
+} from './integrations/connector-visibility.js';
 
 export interface PlatformOverviewPageProps {
   readonly http: CapabilityCaller;
@@ -229,6 +234,10 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   const allGates = gateInstances.state.status === 'ready' ? gateInstances.state.data.items : [];
   const discoveredGates = allGates.filter((gate) => gate.status === 'discovered');
   const pendingManifestGates = allGates.filter((gate) => gate.pendingManifest);
+  // UX acceptance of #538 (out of scope there): an enabled instance whose connector is not
+  // platform preset is in no workspace's catalog — a decision only an administrator can make.
+  const connectors = useConnectorsByName(http);
+  const hiddenGates = allGates.filter((gate) => hiddenFromWorkspaces(gate, connectors) !== null);
   const residue =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
@@ -287,6 +296,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
           discoveredGates={discoveredGates}
           pendingManifestGates={pendingManifestGates}
+          hiddenGates={hiddenGates}
           nonResidueWorkspaceCount={nonResidueWorkspaceCount}
           onKeyBound={(result) => {
             onKeyBound?.(result);
@@ -308,6 +318,7 @@ function PlatformOverviewBody({
   defaultWorkspaceRowsReady,
   discoveredGates,
   pendingManifestGates,
+  hiddenGates,
   nonResidueWorkspaceCount,
   onKeyBound,
 }: {
@@ -319,6 +330,8 @@ function PlatformOverviewBody({
   readonly discoveredGates: readonly GateInstanceWire[];
   /** Gate instances holding a new manifest that waits to be adopted (`pendingManifest`). */
   readonly pendingManifestGates: readonly GateInstanceWire[];
+  /** Enabled gate instances no workspace can see (connector not platform preset). */
+  readonly hiddenGates: readonly GateInstanceWire[];
   /** ui-audit O3 — `undefined` while `list_workspaces` is still loading; falls back to the
    *  kernel's raw `counts.workspaces` for that one frame (see this file's own module doc
    *  comment). */
@@ -326,7 +339,13 @@ function PlatformOverviewBody({
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
-  const attentionItems = buildAttentionItems(data, discoveredGates, pendingManifestGates, t);
+  const attentionItems = buildAttentionItems(
+    data,
+    discoveredGates,
+    pendingManifestGates,
+    hiddenGates,
+    t,
+  );
   const recentAudit = data.recentAudit.slice(0, RECENT_AUDIT_LIMIT);
   return (
     <>
@@ -591,6 +610,7 @@ function buildAttentionItems(
   data: PlatformOverviewWire,
   discoveredGates: readonly GateInstanceWire[],
   pendingManifestGates: readonly GateInstanceWire[],
+  hiddenGates: readonly GateInstanceWire[],
   t: Translate,
 ): readonly AttentionItem[] {
   const items: AttentionItem[] = [];
@@ -619,6 +639,13 @@ function buildAttentionItems(
         `门实例「${gate.displayName}」已发现，等待启用`,
         `Gate instance "${gate.displayName}" was discovered and awaits enabling`,
       ),
+      href: hrefs.platformGateInstance(gate.gateId),
+    });
+  }
+  for (const gate of hiddenGates) {
+    items.push({
+      key: `gate-hidden-${gate.gateId}`,
+      title: hiddenInstanceTitle(gate.displayName, t),
       href: hrefs.platformGateInstance(gate.gateId),
     });
   }
