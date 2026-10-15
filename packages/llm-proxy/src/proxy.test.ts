@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import { HANDLE_SIGNING_ALG } from '@nexttime/shared';
 import { SignJWT, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -1705,6 +1706,31 @@ describe('createProxyServer — upstream error bodies (review of #549, B5)', () 
     expect(JSON.parse(text)).toEqual({
       type: 'error',
       error: { type: 'authentication_error', message: 'invalid x-api-key: ***' },
+    });
+    expect(Number(res.headers['content-length'])).toBe(res.body.byteLength);
+  });
+
+  it('forwards a compressed error body decoded, without the upstream content-encoding', async () => {
+    // Delta review of #549: fetch decodes a gzip body, so passing the upstream's
+    // `content-encoding: gzip` on would label plain JSON as gzip and the SDK would fail to read it.
+    const port = await proxyTo(
+      http.createServer((_req, res) => {
+        const body = zlib.gzipSync(
+          JSON.stringify({ error: { type: 'rate_limit_error', message: 'slow down' } }),
+        );
+        res.writeHead(429, {
+          'content-type': 'application/json',
+          'content-encoding': 'gzip',
+          'content-length': body.byteLength,
+        });
+        res.end(body);
+      }),
+    );
+    const res = await call(port);
+    expect(res.status).toBe(429);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(JSON.parse(res.body.toString('utf8'))).toEqual({
+      error: { type: 'rate_limit_error', message: 'slow down' },
     });
     expect(Number(res.headers['content-length'])).toBe(res.body.byteLength);
   });

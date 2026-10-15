@@ -48,6 +48,7 @@ on:
       - scripts/gen-handle-keys.sh
       - scripts/derive-internal-tokens.sh
       - scripts/check-backup-freshness.sh
+      - scripts/check-caddy-log-redaction.sh
       - scripts/prune-images.sh
       - scripts/delete-workspaces-matching.sh
       - scripts/accept_s*.sh

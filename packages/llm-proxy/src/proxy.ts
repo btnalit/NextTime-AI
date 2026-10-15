@@ -93,6 +93,7 @@ const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
 };
 
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
+const REWRITTEN_BODY_STRIPPED_HEADERS: ReadonlySet<string> = new Set(['content-encoding']);
 
 /** `response`'s body as text, read until it ends or passes `maxBytes` (then `tooLarge`, the rest
  *  cancelled unread). `onChunk` runs per chunk (the idle timeout); a read error ends it early. */
@@ -124,10 +125,14 @@ async function readBoundedBody(
   }
 }
 
-function upstreamHeadersToNodeHeaders(headers: Headers): http.OutgoingHttpHeaders {
+function upstreamHeadersToNodeHeaders(
+  headers: Headers,
+  alsoStripped: ReadonlySet<string> = new Set(),
+): http.OutgoingHttpHeaders {
   const result: http.OutgoingHttpHeaders = {};
   headers.forEach((value, key) => {
-    if (!STRIPPED_RESPONSE_HEADERS.has(key.toLowerCase())) result[key] = value;
+    const name = key.toLowerCase();
+    if (!STRIPPED_RESPONSE_HEADERS.has(name) && !alsoStripped.has(name)) result[key] = value;
   });
   return result;
 }
@@ -656,7 +661,12 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       const body = read.tooLarge
         ? oversizedUpstreamErrorBody()
         : scrubUpstreamErrorBody(read.text, keyCheck.key);
-      const headers = upstreamHeadersToNodeHeaders(upstreamRes.headers);
+      // The body is this proxy's own plain re-serialization (fetch already decoded whatever the
+      // upstream compressed), so the upstream's content-encoding no longer describes it.
+      const headers = upstreamHeadersToNodeHeaders(
+        upstreamRes.headers,
+        REWRITTEN_BODY_STRIPPED_HEADERS,
+      );
       headers['content-length'] = Buffer.byteLength(body);
       if (read.tooLarge) headers['content-type'] = 'application/json';
       res.writeHead(upstreamRes.status, headers);

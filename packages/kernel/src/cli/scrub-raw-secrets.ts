@@ -10,7 +10,11 @@ import {
   envAdminLogins,
   scrubRawSecrets,
 } from '../application/platform/index.js';
-import type { ScrubRawSecretsResult } from '../application/platform/index.js';
+import type {
+  CountedRawSecretCategory,
+  CountedRawSecretRow,
+  ScrubRawSecretsResult,
+} from '../application/platform/index.js';
 
 /**
  * Operator CLI for the rows written before STATUS legacy 183–187 were fixed — what it rewrites and
@@ -22,8 +26,10 @@ import type { ScrubRawSecretsResult } from '../application/platform/index.js';
  * Without `--yes` it is a dry run (the default): every row is read and classified, and nothing is
  * written. `--yes` rewrites, one short transaction per window of `--batch-size` rows, and writes
  * one `cli.raw_secrets_scrubbed` platform audit row attributed to `--actor <login>`, else the first
- * `NEXTTIME_PLATFORM_ADMINS` login, else unattributed. The report names counted rows by id, never
- * a value.
+ * `NEXTTIME_PLATFORM_ADMINS` login, else unattributed. Every counted row is printed by id, never
+ * by value, one `counted <category> <workspace>/<id>` line each (`<id>` alone for a platform row),
+ * uncapped — the operator goes through them row by row; the per-category report lines and the
+ * audit row carry only the first few.
  *
  * `scripts/apply-release.sh` runs `--yes` right after the release's `BACKUP_NOW` — that dump is the
  * recovery point. The last stdout line is a one-line summary the script echoes as its
@@ -108,6 +114,14 @@ async function resolveActor(
   return user ? { id: user.id, login: user.login } : undefined;
 }
 
+/** One counted row, as the CLI prints it while it scans. */
+export function formatCountedRow(
+  category: CountedRawSecretCategory,
+  row: CountedRawSecretRow,
+): string {
+  return `counted ${category} ${row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id}`;
+}
+
 /** The report; its last line is the one-line summary `apply-release.sh` echoes. */
 export function formatScrubReport(
   result: ScrubRawSecretsResult,
@@ -127,8 +141,9 @@ export function formatScrubReport(
   for (const name of COUNTED_CATEGORIES) {
     const c = result.categories[name];
     const ids = c.examples.map((e) => (e.workspaceId ? `${e.workspaceId}/${e.id}` : e.id));
-    const listed =
-      ids.length > 0 ? ` ids=${ids.join(',')}${c.affected > ids.length ? ',…' : ''}` : '';
+    const more =
+      c.affected > ids.length ? `,… (all ${c.affected}: the "counted ${name}" lines)` : '';
+    const listed = ids.length > 0 ? ` ids=${ids.join(',')}${more}` : '';
     lines.push(
       `${name} (counted, not rewritten): examined=${c.examined} carrying=${c.affected}${listed}`,
     );
@@ -164,6 +179,7 @@ async function run(): Promise<void> {
         confirm: args.confirm,
         batchSize: args.batchSize,
         ...(actor !== undefined ? { actorUserId: actor.id } : {}),
+        onCounted: (category, row) => console.log(formatCountedRow(category, row)),
       });
     } catch (err) {
       if (err instanceof RawSecretScrubFailedError) {

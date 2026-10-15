@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ScrubRawSecretsResult } from '../application/platform/index.js';
 import {
   ScrubRawSecretsUsageError,
+  formatCountedRow,
   formatScrubReport,
   parseScrubRawSecretsArgs,
 } from './scrub-raw-secrets.js';
@@ -83,9 +84,18 @@ describe('formatScrubReport', () => {
       'factProperties (counted, not rewritten): examined=10 carrying=1 ids=ws-1/fact-1',
     );
     expect(lines).toContain(
-      'auditResults (counted, not rewritten): examined=10 carrying=2 ids=audit-1,…',
+      'auditResults (counted, not rewritten): examined=10 carrying=2 ids=audit-1,… (all 2: the "counted auditResults" lines)',
     );
     expect(lines.some((line) => line.startsWith('audit:'))).toBe(false);
+  });
+
+  it('prints each counted row by id, one line per row', () => {
+    expect(formatCountedRow('taskInputs', { workspaceId: 'ws-1', id: 'task-1' })).toBe(
+      'counted taskInputs ws-1/task-1',
+    );
+    expect(
+      formatCountedRow('gateInstanceAddresses', { workspaceId: null, id: 'billing-api' }),
+    ).toBe('counted gateInstanceAddresses billing-api');
   });
 
   it('an executing run names its audit row and who it is attributed to', () => {

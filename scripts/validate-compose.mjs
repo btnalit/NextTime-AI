@@ -9,7 +9,8 @@
 //
 // Usage: node scripts/validate-compose.mjs
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
@@ -286,5 +287,48 @@ if (!feed) {
   }
   if (problems.length === 0) {
     console.log('source binding (I19): tmpfs bindings, one writer, two read-only verifiers');
+  }
+}
+
+// legacy 236 follow-up: a single-file bind mount from the checkout keeps the inode its container
+// started with, so after `git checkout` the container reads the old file until it is recreated —
+// and `up -d` recreates only on a changed definition or image. scripts/apply-release.sh compares
+// and recreates every such mount of an always-on service (MOUNT_REFRESH); a mount missing from that
+// list would silently keep running old content. Directory mounts see new files and are not listed;
+// profile-only services (acceptance fixtures) are recreated by their own suites.
+{
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  const applyRelease = readFileSync(new URL('./apply-release.sh', import.meta.url), 'utf8');
+  const listed = (/^MOUNT_REFRESH="([^"]*)"$/m.exec(applyRelease)?.[1] ?? '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort();
+  const expected = [];
+  for (const [name, service] of Object.entries(doc.services ?? {})) {
+    if ((service.profiles ?? []).length > 0) continue;
+    for (const entry of service.volumes ?? []) {
+      const [source, target] =
+        typeof entry === 'string' ? entry.split(':') : [entry?.source, entry?.target];
+      if (!source?.startsWith('./') || !target) continue;
+      const file = source.slice(2);
+      let isFile = false;
+      try {
+        isFile = statSync(path.join(repoRoot, file)).isFile();
+      } catch {
+        isFile = false;
+      }
+      if (isFile) expected.push(`${name}:${file}:${target}`);
+    }
+  }
+  expected.sort();
+  if (JSON.stringify(listed) !== JSON.stringify(expected)) {
+    console.error(
+      `mount refresh (legacy 236): apply-release.sh MOUNT_REFRESH is ${JSON.stringify(listed)}, docker-compose.yml's single-file mounts of always-on services are ${JSON.stringify(expected)}`,
+    );
+    process.exitCode = 1;
+  } else {
+    console.log(
+      `mount refresh (legacy 236): ${expected.length} single-file mounts, all refreshed by apply-release.sh`,
+    );
   }
 }

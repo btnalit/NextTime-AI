@@ -50,6 +50,8 @@ export {
   compactObservations,
 } from './compact-observations.js';
 export type {
+  CountedRawSecretCategory,
+  CountedRawSecretRow,
   RawSecretCategory,
   RawSecretCategoryCounts,
   ScrubRawSecretsInput,
