@@ -36,6 +36,7 @@ import {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
   OntologyViolationError,
+  PrincipalOperationRefusedError,
   SupersedeIdentityMismatchError,
   WorkerResultValidationError,
   hashApiKey,
@@ -365,6 +366,21 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(mapped).toMatchObject({ status: 409, code: 'conflict' });
     expect(mapped.message).toContain('container.restart');
   });
+
+  // A member-management refusal keeps the 409 `conflict` code every client already handles, and
+  // says which refusal it was in `details.reason` (additive) so the console can explain it.
+  it.each(['last_owner', 'self_disable', 'platform_managed', 'human_api_key', 'reserved_name'])(
+    'PrincipalOperationRefusedError(%s) → 409 conflict with details.reason',
+    (reason) => {
+      const mapped = mapCapabilityError(new PrincipalOperationRefusedError(reason, 'refused'));
+      expect(mapped).toEqual({
+        status: 409,
+        code: 'conflict',
+        message: 'refused',
+        details: { reason },
+      });
+    },
+  );
 
   it('maps a Postgres 22P02 (malformed uuid from the caller) to 400 invalid_params, not 500', () => {
     const pgError = Object.assign(new Error('invalid input syntax for type uuid: "d54af0"'), {

@@ -4,6 +4,7 @@ import {
   CODE_TITLES,
   CODE_TITLES_ZH,
   ERROR_NEXT_STEPS,
+  composerUnstorableTextStep,
   errorToastText,
   gateReasonNextStep,
   presentError,
@@ -341,5 +342,160 @@ describe('legacy 287: not sent, or outcome unknown', () => {
   it('the gate’s own error code inside another word is not a reason', () => {
     expect(gateReasonNextStep('{"code":"apply_outcome_unknown"}', zh)).toBeNull();
     expect(gateReasonNextStep('outcome unknown: the gate may still complete it', zh)).toBeNull();
+  });
+});
+
+// Legacy 333 (UX review of #605, P3-1): WS -32016 read as the generic 「出错了」.
+describe('legacy 333: worker_definition_not_enabled', () => {
+  it('has a Chinese title and says who turns the Worker back on, and where', () => {
+    const err = new RpcError(
+      -32016,
+      'invoke_worker: WorkerDefinition "wd-1" is excluded by the calling principal\'s AgentProfile (excludedWorkerDefinitions)',
+    );
+    const shown = presentError(err, zh);
+    expect(shown).toMatchObject({
+      code: 'worker_definition_not_enabled',
+      title: '这个 Worker 没有对你的智能体启用',
+      curated: true,
+    });
+    expect(shown.title).not.toBe('出错了');
+    expect(shown.message).toContain('「我的智能体」的「Worker 定义」里重新勾选');
+    expect(shown.message).not.toContain('excludedWorkerDefinitions');
+    expect(shown.raw).toContain('excludedWorkerDefinitions');
+    expect(presentError(err, en).title).toBe('Worker not enabled for your agent');
+  });
+});
+
+// Legacy 334 (UX review of #605, P3-2): the composer names the message, not the param `text`.
+describe('legacy 334: unstorable_text in the chat composer', () => {
+  it('names the message content and says nothing about an agent’s call', () => {
+    const message = new UnstorableTextError('capability "send_chat_message"', {
+      path: ['text'],
+      in: 'value',
+    }).message;
+    const shown = presentError(new RpcError(-32017, message), zh, {
+      unstorable_text: composerUnstorableTextStep(zh),
+    });
+    expect(shown.message).toMatch(/^消息内容里有一个看不见的 U\+0000（空字符）/);
+    expect(shown.message).toContain('这条消息没有发出');
+    expect(shown.message).not.toContain('「text」');
+    expect(shown.message).not.toContain('agent');
+    expect(composerUnstorableTextStep(en)).toMatch(/^The message holds an invisible U\+0000/);
+    expect(composerUnstorableTextStep(en)).not.toContain('agent');
+  });
+});
+
+// Legacy 336 (review #493, recorded in #605): WS -32014 stands for three HTTP codes.
+describe('legacy 336: WS UPSTREAM_ERROR told apart by its message', () => {
+  it.each([
+    [
+      'create_connection: failed to fetch manifestSource https://gate.example/manifest: HTTP 404',
+      'manifest_fetch_failed',
+      '拉取清单失败',
+      '拿不到接口清单',
+    ],
+    [
+      'gatekeeper client: gate/observe timed out after 10000ms',
+      'gatekeeper_timeout',
+      '门响应超时',
+      '没有及时响应',
+    ],
+    [
+      'gate_connection_lost: gatekeeper client: gate/apply: the connection to the gate failed after the request may have been sent (ECONNRESET) — the gate may have received it',
+      'gatekeeper_error',
+      '门返回了错误',
+      '目标系统返回了错误',
+    ],
+    // A gate's own message that happens to mention a timeout is still the gate's error.
+    [
+      'upstream_failed: gatekeeper client: gate/observe timed out after 5ms, said the gate',
+      'gatekeeper_error',
+      '门返回了错误',
+      '目标系统返回了错误',
+    ],
+    ['something else entirely', 'gatekeeper_error', '门返回了错误', '目标系统返回了错误'],
+  ])('%j reads as %s', (message, code, title, step) => {
+    const shown = presentError(new RpcError(-32014, message), zh);
+    expect(shown).toMatchObject({ code, title, curated: true });
+    expect(shown.message).toContain(step);
+    expect(shown.raw).toBe(message);
+  });
+});
+
+// Sweep (legacy 333 follow-up): kernel codes that reached the console as 「出错了」 and the
+// generic pointer at the technical details.
+describe('kernel codes with no console copy before', () => {
+  it.each([
+    ['endpoint_is_platform_gate', '能力目录启用这个平台门'],
+    ['connector_not_self_serve', '在「集成」里开放'],
+    ['module_not_found', '模块索引里没有它'],
+    ['not_a_draft', '只有草稿才能丢弃'],
+    ['invalid_scope', '重新选择范围'],
+    ['service_principal_required', '启用中的服务账号'],
+    ['worker_definition_not_enabled', '「我的智能体」'],
+    ['ontology_violation', '提议本体修订'],
+    ['source_identity_conflict', '换一个名称'],
+    ['image_not_allowed', '允许列表'],
+    ['image_not_in_inventory', '先在主机或 CI 上构建它'],
+    ['runtime_unreachable', '「运行状态」'],
+    ['no_previous_settings_version', '没有另一个活动镜像可以回滚'],
+    ['depth_exceeded', '「派生链深度上限」'],
+    ['concurrency_exceeded', '「每用户并发 WorkerRun 数」'],
+    ['daily_cost_exceeded', '「每工作区日成本」'],
+  ])('%s has a Chinese title and a next step', (code, step) => {
+    const err = new HttpError('capability_error', 'kernel text in English', code);
+    const shown = presentError(err, zh);
+    expect(shown).toMatchObject({ code, curated: true });
+    expect(shown.title).toBe(CODE_TITLES_ZH[code]);
+    expect(shown.title).not.toBe('出错了');
+    expect(shown.message).toContain(step);
+    expect(shown.message).not.toContain('kernel text');
+    expect(shown.message).not.toContain('技术细节');
+    expect(shown.raw).toBe('kernel text in English');
+    const english = presentError(err, en);
+    expect(english.title).toBe(CODE_TITLES[code]);
+    expect(english.message.length).toBeGreaterThan(0);
+    expect(english.message).not.toContain('kernel text');
+  });
+});
+
+// A member-management refusal (`PrincipalOperationRefusedError`) is a 409 `conflict` whose
+// `details.reason` says which one; without it, it reads as any other conflict.
+describe('member-management refusals', () => {
+  it.each([
+    ['last_owner', '最后一个所有者', '先把另一位成员设为所有者'],
+    ['self_disable', '不能停用自己', '请另一位所有者来停用'],
+    ['platform_managed', '由平台管理', '平台自己管理的身份'],
+    ['human_api_key', '真人成员用密码登录', '创建一个服务账号'],
+    ['reserved_name', '名称被保留', '换一个名字'],
+  ])('%s reads as its own refusal, not a generic conflict', (reason, title, step) => {
+    const err = new HttpError('capability_error', 'kernel text in English', 'conflict', {
+      reason,
+    });
+    const shown = presentError(err, zh);
+    expect(shown).toMatchObject({ code: reason, title, curated: true });
+    expect(shown.message).toContain(step);
+    expect(shown.message).not.toContain('可能有人刚改过');
+    expect(presentError(err, en).title).toBe(CODE_TITLES[reason]);
+  });
+
+  it('a conflict without a known reason stays a conflict', () => {
+    for (const details of [undefined, { reason: 'something_new' }, { reason: 7 }]) {
+      const shown = presentError(new HttpError('capability_error', 'x', 'conflict', details), zh);
+      expect(shown).toMatchObject({ code: 'conflict', title: '和现有数据冲突' });
+    }
+    // A reason on another code is not read.
+    expect(
+      presentError(
+        new HttpError('capability_error', 'x', 'illegal_transition', { reason: 'last_owner' }),
+        zh,
+      ).code,
+    ).toBe('illegal_transition');
+  });
+
+  it('the platform plane’s own last_owner keeps its copy, with the shared title', () => {
+    const shown = presentError(new HttpError('capability_error', 'x', 'last_owner'), zh);
+    expect(shown.message).toBe('不能移出或降级工作区的最后一个所有者');
+    expect(shown.title).toBe('最后一个所有者');
   });
 });

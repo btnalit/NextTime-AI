@@ -231,7 +231,7 @@ function OperationStepFields({
       {gate && notOnList && choices.length > 0 ? (
         <Notice tone="warn" testId="procedure-step-unknown-operation">
           {t(
-            `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个 Procedure 时会失败。请从列表选择，或检查拼写。`,
+            `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个流程时会失败。请从列表选择，或检查拼写。`,
             `Gate “${gate.name}” publishes no “${actionKindTagText(name)}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
           )}
         </Notice>
@@ -387,7 +387,7 @@ export function ProcedureEditor({
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：提交会创建一个
-              <strong>新的</strong> Procedure（新 ID、v1），不是同一 Procedure 的新版本。
+              <strong>新的</strong>流程（新 ID、v1），不是同一流程的新版本。
             </>,
             <>
               Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: submitting creates a{' '}
@@ -405,7 +405,7 @@ export function ProcedureEditor({
       )}
 
       <Tabs<View>
-        ariaLabel={t('Procedure 视图', 'Procedure view')}
+        ariaLabel={t('流程视图', 'Procedure view')}
         value={view}
         onChange={setView}
         options={[
@@ -478,7 +478,7 @@ export function ProcedureEditor({
             ) : null}
             {form.steps.length === 0 ? (
               <span className="text-3 text-small">
-                {t('还没有步骤；一个 Procedure 至少描述一个有序动作。', 'No steps yet.')}
+                {t('还没有步骤；一个流程至少描述一个有序动作。', 'No steps yet.')}
               </span>
             ) : null}
             {form.steps.map((step, index) => {
