@@ -54,7 +54,7 @@ describe('buildFindMeansQuery', () => {
     expect(q.text).toContain('and true');
     expect(q.text).toContain('order by updated_at desc, id desc');
     expect(q.text).not.toContain('case when');
-    expect(q.values).toEqual(['ws1', 'WorkerDefinition', false, 20]);
+    expect(q.values).toEqual(['ws1', 'WorkerDefinition', false, 20, 0]);
   });
 
   it('one token: matches name/description, one rank term, one bound ILIKE pattern', () => {
@@ -62,7 +62,7 @@ describe('buildFindMeansQuery', () => {
     expect(q.text).toContain("properties ->> 'name' ilike $3");
     expect(q.text).toContain("properties ->> 'description' ilike $3");
     expect(q.text).toContain('case when');
-    expect(q.values).toEqual(['ws1', 'WorkerDefinition', '%docker%', false, 20]);
+    expect(q.values).toEqual(['ws1', 'WorkerDefinition', '%docker%', false, 20, 0]);
   });
 
   it('ranking order: the rank expression sums one case-when term per token (more distinct hits ranks higher)', () => {
@@ -73,7 +73,7 @@ describe('buildFindMeansQuery', () => {
     expect((rankLine?.match(/case when/g) ?? []).length).toBe(2);
     // Equal rank and equal updated_at fall back to id, so which rows fit under `limit` is stable.
     expect(rankLine).toMatch(/desc, updated_at desc, id desc$/);
-    expect(q.values).toEqual(['ws1', 'Procedure', '%restart%', '%container%', false, 10]);
+    expect(q.values).toEqual(['ws1', 'Procedure', '%restart%', '%container%', false, 10, 0]);
   });
 
   it("Operation additionally matches `mode` (kind) and, via a correlated exists, its Gatekeeper's own name", () => {
@@ -85,9 +85,15 @@ describe('buildFindMeansQuery', () => {
 
   it('Operation is published-only; WorkerDefinition/Procedure are not filtered by status', () => {
     const op = buildFindMeansQuery('Operation', 'ws1', [], 20);
-    expect(op.values).toEqual(['ws1', 'Operation', true, 20]);
+    expect(op.values).toEqual(['ws1', 'Operation', true, 20, 0]);
     const wd = buildFindMeansQuery('WorkerDefinition', 'ws1', [], 20);
-    expect(wd.values).toEqual(['ws1', 'WorkerDefinition', false, 20]);
+    expect(wd.values).toEqual(['ws1', 'WorkerDefinition', false, 20, 0]);
+  });
+
+  it('legacy 291: offset is a bound parameter after limit, so callers can page past filtered candidates', () => {
+    const q = buildFindMeansQuery('WorkerDefinition', 'ws1', ['docker'], 50, 100);
+    expect(q.text).toMatch(/limit \$5\s+offset \$6$/);
+    expect(q.values).toEqual(['ws1', 'WorkerDefinition', '%docker%', false, 50, 100]);
   });
 
   it('no-hit shape: a token that matches nothing is still a normal bound parameter (no special-casing)', () => {

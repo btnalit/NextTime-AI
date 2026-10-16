@@ -449,12 +449,15 @@ async function withWaitingState(
 /** The two `action` values `readTerminalOutcome` trusts as carrying a real terminal payload
  *  (`resultMetadata`/`reason`) — `execution.ts`'s `markActionRequestExecuted`/
  *  `markActionRequestFailed`, which write it in the same transaction as the status transition
- *  itself (see that module's own doc comment). P2-7 fix: `queryAudit`'s own filter takes a single
- *  exact `action`, not a set, so this reads a small page of the most recent audit rows for the
- *  resource and picks the first one whose `action` is one of these two — never the row a *later*,
- *  unrelated transition (`verify`/`compensate`) happened to also touch this resource with. */
-const TERMINAL_OUTCOME_ACTIONS = new Set(['action_request.complete', 'action_request.fail']);
-const TERMINAL_OUTCOME_SCAN_LIMIT = 10;
+ *  itself (see that module's own doc comment). P2-7 fix: never the row a *later*, unrelated
+ *  transition (`verify`/`compensate`) happened to also touch this resource with. Legacy 291: the
+ *  query itself is narrowed to these two actions — it used to read the newest ten rows for the
+ *  resource and pick from them, and every `get_action` poll is audited on the same resource, so
+ *  ten polls after completion pushed the terminal row out and the outcome came back empty. */
+const TERMINAL_OUTCOME_ACTIONS: readonly string[] = [
+  'action_request.complete',
+  'action_request.fail',
+];
 
 /** Resolves the Gatekeeper service Principal via one short admin transaction (bootstrapped with
  *  `SYSTEM_ACTOR_PLACEHOLDER`, then reused for every later admin transaction in this phase-2
@@ -485,10 +488,11 @@ export async function readTerminalOutcome(
     queryAudit(client, workspaceId, {
       resourceType: 'action_request',
       resourceId: actionRequestId,
-      limit: TERMINAL_OUTCOME_SCAN_LIMIT,
+      actions: TERMINAL_OUTCOME_ACTIONS,
+      limit: 1,
     }),
   );
-  const terminalRow = rows.find((row) => TERMINAL_OUTCOME_ACTIONS.has(row.action));
+  const terminalRow = rows.find((row) => TERMINAL_OUTCOME_ACTIONS.includes(row.action));
   const payload = terminalRow?.payload as
     | { resultMetadata?: { data?: unknown }; reason?: string }
     | undefined;

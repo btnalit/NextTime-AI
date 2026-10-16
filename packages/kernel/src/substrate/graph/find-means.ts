@@ -55,6 +55,12 @@ import type { GraphObject } from './store.js';
  * still covered. An empty/blank `need` still matches every candidate (S2.7's own "list everything
  * of this kind" default), bounded by `limit`.
  *
+ * **`limit` here bounds candidates, not results (legacy 291):** every caller narrows these rows
+ * afterwards (kind, current published status, the caller's Grant/Handle scope, AgentProfile
+ * exclusions — `application/task/service.ts`), so a caller that wants "the first N usable
+ * matches" must not pass N here and filter once; it pages with `offset` (stable order: rank,
+ * `updated_at`, `id`) until it has N usable rows or the candidates run out.
+ *
  * **Why bigrams for CJK, not just whole runs:** Chinese has no whitespace between words, so a
  * `need` like "重启容器" (“restart the container”) tokenises as one 4-character run with no
  * segmenter available (no new dependency — see this task's own scope note). Matching only the
@@ -81,6 +87,11 @@ import type { GraphObject } from './store.js';
 export interface FindMeansInput {
   readonly need: string;
   readonly limit?: number;
+  /** Rows to skip in this query's own ranked order (default 0). Legacy 291: the handler-side
+   *  Grant/status/exclusion filters (`application/task/service.ts`) run *after* this query, so a
+   *  row cap here alone would let filtered-out candidates take result slots — those callers page
+   *  through candidates with `offset` until they have `limit` usable ones (`collectUsable`). */
+  readonly offset?: number;
 }
 
 export const DEFAULT_FIND_MEANS_LIMIT = 20;
@@ -202,6 +213,7 @@ export function buildFindMeansQuery(
   workspaceId: string,
   tokens: readonly string[],
   limit: number,
+  offset = 0,
 ): SqlQuery {
   const values: unknown[] = [workspaceId, objectType];
   const fields: readonly string[] =
@@ -249,6 +261,8 @@ export function buildFindMeansQuery(
   const publishedParam = values.length;
   values.push(limit);
   const limitParam = values.length;
+  values.push(offset);
+  const offsetParam = values.length;
 
   const orderBy =
     rankExpr !== null ? `(${rankExpr}) desc, updated_at desc, id desc` : 'updated_at desc, id desc';
@@ -259,7 +273,8 @@ export function buildFindMeansQuery(
        and ${whereMatch}
        and (not $${publishedParam}::boolean or properties ->> 'status' = 'published')
      order by ${orderBy}
-     limit $${limitParam}`;
+     limit $${limitParam}
+     offset $${offsetParam}`;
 
   return { text, values };
 }
@@ -272,7 +287,7 @@ async function findMetaOntologyObjects(
 ): Promise<readonly GraphObject[]> {
   const tokens = tokenizeNeed(input.need);
   const limit = input.limit ?? DEFAULT_FIND_MEANS_LIMIT;
-  const query = buildFindMeansQuery(objectType, workspaceId, tokens, limit);
+  const query = buildFindMeansQuery(objectType, workspaceId, tokens, limit, input.offset ?? 0);
   const result = await client.query<ObjectRow>(query.text, [...query.values]);
   return result.rows.map(mapObjectRow);
 }

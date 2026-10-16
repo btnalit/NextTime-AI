@@ -349,19 +349,24 @@ export async function listDecisionsForExplorer(
   const skip = Math.max(params.skip ?? 0, 0);
   const limit = clamp(params.limit ?? 50, 1, 500);
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+    // Legacy 291: `category` filters while collecting, so `skip + limit` counts matching rows —
+    // filtering the collected batch afterwards let non-matching decisions fill it and the page
+    // came back short or empty although later matches existed. `scanned` keeps the old bound on
+    // how many decisions one call reads.
     const collected: DecisionRow[] = [];
+    let scanned = 0;
     let cursor: string | undefined;
-    while (collected.length < skip + limit && collected.length < EXPLORER_MAX_FETCH) {
+    while (collected.length < skip + limit && scanned < EXPLORER_MAX_FETCH) {
       const page = await queryDecisions(client, workspaceId, { limit: 100, cursor });
       if (page.items.length === 0) break;
-      collected.push(...page.items);
+      scanned += page.items.length;
+      for (const row of page.items) {
+        if (!params.category || row.rationale?.category === params.category) collected.push(row);
+      }
       if (!page.nextCursor) break;
       cursor = page.nextCursor;
     }
-    const filtered = params.category
-      ? collected.filter((row) => row.rationale?.category === params.category)
-      : collected;
-    return filtered.slice(skip, skip + limit);
+    return collected.slice(skip, skip + limit);
   });
 }
 

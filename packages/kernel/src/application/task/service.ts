@@ -11,11 +11,12 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import {
+  DEFAULT_FIND_MEANS_LIMIT,
   findOperationCandidates,
   findProcedureCandidates,
   findWorkerDefinitionCandidates,
 } from '../../substrate/graph/index.js';
-import type { GraphObject } from '../../substrate/graph/index.js';
+import type { FindMeansInput, GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import type { ObserveExclusions } from '../gates/index.js';
 import { observeRefusal, readGateLinkPolicy } from '../gates/index.js';
@@ -529,6 +530,44 @@ function toWorkerDefinitionMatch(object: GraphObject): WorkerDefinitionMatch | u
   };
 }
 
+/** Candidate rows read per page by `collectUsable` — independent of the result `limit`, so a
+ *  catalog whose first matches are mostly filtered out costs a few pages, not one query per row. */
+export const FIND_MEANS_CANDIDATE_PAGE_SIZE = 50;
+
+/**
+ * Legacy 291: the first `limit` candidates `accept` keeps, in the candidate query's own ranked
+ * order. `find_workers` / `find_operations` / `find_procedures` used to cap the candidate query at
+ * `limit` and filter afterwards, so candidates the caller could not use (wrong kind, no longer
+ * published, outside the caller's scope, excluded by its AgentProfile, a step it cannot run) took
+ * result slots — a caller could get fewer matches than `limit`, even none, while usable ones sat
+ * further down. This pages through candidates (`FindMeansInput.offset`) until `limit` are accepted
+ * or the candidates run out; the filter is the cap's input, never the other way round. A
+ * candidate seen twice (a row moving between pages under a concurrent write) is kept once.
+ */
+async function collectUsable<T>(
+  fetchPage: (
+    page: Required<Pick<FindMeansInput, 'limit' | 'offset'>>,
+  ) => Promise<readonly GraphObject[]>,
+  accept: (candidate: GraphObject) => Promise<T | undefined> | T | undefined,
+  limit: number = DEFAULT_FIND_MEANS_LIMIT,
+): Promise<T[]> {
+  const accepted: T[] = [];
+  if (limit <= 0) return accepted;
+  const seen = new Set<string>();
+  for (let offset = 0; ; offset += FIND_MEANS_CANDIDATE_PAGE_SIZE) {
+    const page = await fetchPage({ limit: FIND_MEANS_CANDIDATE_PAGE_SIZE, offset });
+    for (const candidate of page) {
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      const usable = await accept(candidate);
+      if (usable === undefined) continue;
+      accepted.push(usable);
+      if (accepted.length >= limit) return accepted;
+    }
+    if (page.length < FIND_MEANS_CANDIDATE_PAGE_SIZE) return accepted;
+  }
+}
+
 /** Whether `definitionId` is not excluded by `caller`'s own `AgentProfile.excludedWorkerDefinitions`
  *  (S3.13; exclusion semantics since governance 0012) — see
  *  `FindMeansCaller.excludedWorkerDefinitionIds`'s own doc comment. Shared by `findWorkers` (below) and
@@ -561,6 +600,8 @@ function isWorkerDefinitionEnabledForCaller(
  * (`InvokeWorkerDefinitionNotEnabledError`, `invoke.ts`), applied here so a definition the caller
  * could never successfully invoke never even surfaces as a candidate, same reasoning as the
  * attenuation filter just above.
+ *
+ * `limit` counts usable matches, not candidates (legacy 291, `collectUsable` above).
  */
 export async function findWorkers(
   client: PoolClient,
@@ -569,38 +610,39 @@ export async function findWorkers(
   need: string,
   limit?: number,
 ): Promise<readonly WorkerDefinitionMatch[]> {
-  const candidates = await findWorkerDefinitionCandidates(client, workspaceId, { need, limit });
-  const matches: WorkerDefinitionMatch[] = [];
+  return collectUsable(
+    (page) => findWorkerDefinitionCandidates(client, workspaceId, { need, ...page }),
+    async (candidate) => {
+      const match = toWorkerDefinitionMatch(candidate);
+      if (!match || match.kind !== 'worker') return undefined;
+      // Cheapest check first: an excluded definition needs no read.
+      if (!isWorkerDefinitionEnabledForCaller(caller, match.definitionId)) return undefined;
 
-  for (const candidate of candidates) {
-    const match = toWorkerDefinitionMatch(candidate);
-    if (!match || match.kind !== 'worker') continue;
-
-    const definition = await getWorkerDefinition(client, workspaceId, {
-      definitionId: match.definitionId,
-      version: match.version,
-    });
-    if (!definition || definition.status !== 'published') continue;
-
-    const content = definition.definition as { capabilities?: string[]; gates?: string[] };
-    try {
-      // Same default as invoke.ts's own minting path (handle-mint.ts's `defaultWorkerCapabilities`
-      // — see its own doc comment for why the two must never independently guess at this) — a
-      // definition declaring no `capabilities` needs the full observe/propose ceiling, not none.
-      computeChildHandleScope({
-        parentAuthority: caller.parentAuthority,
-        declaredCapabilities:
-          content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
-        declaredGates: content.gates ?? [],
+      const definition = await getWorkerDefinition(client, workspaceId, {
+        definitionId: match.definitionId,
+        version: match.version,
       });
-    } catch (err) {
-      if (err instanceof InvokeWorkerAttenuationError) continue;
-      throw err;
-    }
-    matches.push(match);
-  }
+      if (!definition || definition.status !== 'published') return undefined;
 
-  return matches.filter((match) => isWorkerDefinitionEnabledForCaller(caller, match.definitionId));
+      const content = definition.definition as { capabilities?: string[]; gates?: string[] };
+      try {
+        // Same default as invoke.ts's own minting path (handle-mint.ts's `defaultWorkerCapabilities`
+        // — see its own doc comment for why the two must never independently guess at this) — a
+        // definition declaring no `capabilities` needs the full observe/propose ceiling, not none.
+        computeChildHandleScope({
+          parentAuthority: caller.parentAuthority,
+          declaredCapabilities:
+            content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+          declaredGates: content.gates ?? [],
+        });
+      } catch (err) {
+        if (err instanceof InvokeWorkerAttenuationError) return undefined;
+        throw err;
+      }
+      return match;
+    },
+    limit,
+  );
 }
 
 /**
@@ -629,15 +671,24 @@ export async function findOperations(
   need: string,
   limit?: number,
 ): Promise<readonly GraphObject[]> {
-  const candidates = await findOperationCandidates(client, workspaceId, { need, limit });
-  if (caller.parentAuthority === 'unconstrained') return candidates;
-
-  const allowedGatekeepers = new Set(caller.parentAuthority.resources.gatekeeper ?? []);
-  return candidates.filter((candidate) => {
-    if (candidate.properties.mode !== 'execute') return true;
-    const gatekeeperId = candidate.identityKey?.gatekeeperId;
-    return typeof gatekeeperId === 'string' && allowedGatekeepers.has(gatekeeperId);
-  });
+  const { parentAuthority } = caller;
+  const allowedGatekeepers =
+    parentAuthority === 'unconstrained'
+      ? undefined
+      : new Set(parentAuthority.resources.gatekeeper ?? []);
+  return collectUsable(
+    (page) => findOperationCandidates(client, workspaceId, { need, ...page }),
+    (candidate) => {
+      if (allowedGatekeepers === undefined || candidate.properties.mode !== 'execute') {
+        return candidate;
+      }
+      const gatekeeperId = candidate.identityKey?.gatekeeperId;
+      return typeof gatekeeperId === 'string' && allowedGatekeepers.has(gatekeeperId)
+        ? candidate
+        : undefined;
+    },
+    limit,
+  );
 }
 
 export interface ProcedureMatch {
@@ -768,28 +819,23 @@ export async function findProcedures(
   need: string,
   limit?: number,
 ): Promise<readonly ProcedureMatch[]> {
-  const candidates = await findProcedureCandidates(client, workspaceId, { need, limit });
-  const matches: ProcedureMatch[] = [];
+  return collectUsable(
+    (page) => findProcedureCandidates(client, workspaceId, { need, ...page }),
+    async (candidate) => {
+      const match = toProcedureMatch(candidate);
+      if (!match) return undefined;
 
-  for (const candidate of candidates) {
-    const match = toProcedureMatch(candidate);
-    if (!match) continue;
+      const procedure = await getProcedure(client, workspaceId, {
+        procedureId: match.procedureId,
+        version: match.version,
+      });
+      if (!procedure || procedure.status !== 'published') return undefined;
 
-    const procedure = await getProcedure(client, workspaceId, {
-      procedureId: match.procedureId,
-      version: match.version,
-    });
-    if (!procedure || procedure.status !== 'published') continue;
-
-    let usable = true;
-    for (const step of procedure.steps) {
-      if (!(await stepUsableByCaller(client, workspaceId, caller, step))) {
-        usable = false;
-        break;
+      for (const step of procedure.steps) {
+        if (!(await stepUsableByCaller(client, workspaceId, caller, step))) return undefined;
       }
-    }
-    if (usable) matches.push(match);
-  }
-
-  return matches;
+      return match;
+    },
+    limit,
+  );
 }
